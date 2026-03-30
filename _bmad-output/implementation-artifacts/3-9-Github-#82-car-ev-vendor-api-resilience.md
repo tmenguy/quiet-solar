@@ -20,13 +20,15 @@ The Renault Twingo APIs sometimes "stall" for hours or days — the car's HA sen
 4. **Problem**: SOC is stale/wrong, but the system doesn't know it — charges to wrong target
 5. **Need**: When Magali manually assigns charger to a stale car, the system should (a) infer the car IS home and plugged, (b) enter "stale percent" mode (init at 0%, progress via charger energy only), (c) show a red border around the entire car card
 
-## Two Complementary Detection Features
+## Two Complementary Detection Features (Both Require Charger Context)
 
-**Feature A — Automatic staleness detection**: Monitor all car API sensors (`car_tracker`, `car_plugged`, `car_charge_percent_sensor`, `car_odometer_sensor`). When *none* of them have updated within the threshold (default ~4 hours), mark the car as stale.
+Staleness detection **only happens when the car is attached to a charger** (manually or automatically). A car that's "out there" — not connected to anything — cannot be meaningfully flagged as stale, because there's no charging decision to protect. Detecting staleness without a charger just adds noise.
 
-**Feature B — Manual assignment contradiction detection**: When a user manually assigns a car to a plugged charger, and the car's API reports `not_home` or `not_plugged`, the manual action itself is evidence the data is wrong. Flag the car as stale **immediately** — no need to wait for the 4-hour threshold.
+**Feature A — Long-term charger attachment with frozen sensors**: A car has been attached to a charger for a while, AND its API sensors (`car_tracker`, `car_plugged`, `car_charge_percent_sensor`, `car_odometer_sensor`) haven't changed within the threshold (default ~4 hours). The car is on the charger but its API data is frozen → stale.
 
-Both features converge on the same outcome: `binary_sensor.qs_<car>_api_ok` turns off, the car enters **stale-percent mode**, and the card gets a red border with `+XX%` display.
+**Feature B — Manual assignment contradiction detection**: A user manually assigns a car to a plugged charger, AND the car's API reports `not_home` or `not_plugged`. The manual action itself is evidence the data is wrong → flag as stale **immediately** (no threshold wait).
+
+Both features converge on the same outcome: the car enters **stale-percent mode**, and the card gets a red border with `+XX%` display.
 
 ## Key Design: Stale-Percent Mode
 
@@ -42,14 +44,17 @@ This is better than energy mode because users think in battery percentages, and 
 
 ## Acceptance Criteria
 
-### AC1: Stale Car API Detection (Feature A)
+### AC1: Stale Car API Detection (Feature A — Charger-Scoped)
 
-**Given** a car entity's API data stops updating (all tracked sensors haven't changed for longer than `CAR_API_STALE_THRESHOLD_S`, default 4 hours)
+**Given** a car is attached to a charger (manually or automatically), AND all its API sensors haven't changed for longer than `CAR_API_STALE_THRESHOLD_S` (default 4 hours)
 **When** the system detects staleness
-**Then** the car is flagged as stale, `binary_sensor.qs_<car>_api_ok` turns off
+**Then** the car is flagged as stale, `binary_sensor.qs_<car>_stale` turns on
 **And** the car card gets a red border around the entire card
 **And** the SOC widget in the dashboard header shows an error/warning state
 **And** the car enters stale-percent mode: percent constraints with initial SOC = 0%, display shows `+XX%`
+
+**Given** a car is NOT attached to any charger and its API sensors are stale
+**Then** no staleness flag is raised — there's no charging decision to protect
 
 ### AC2: Contradiction Detection on Manual Assignment (Feature B)
 
@@ -90,7 +95,7 @@ This is better than energy mode because users think in battery percentages, and 
 ### AC5: Notifications (CC-001)
 
 Three notification events:
-1. **Car goes stale** (Feature A): Notify TheAdmin with specific stale sensors. Notify assigned person: "Your {car_name}'s data is stale — charging will use conservative estimates."
+1. **Car goes stale on charger** (Feature A): Notify TheAdmin with specific stale sensors. Notify assigned person: "Your {car_name}'s data is stale — charging will use conservative estimates."
 2. **Stale car manually assigned** (Feature B): Notify assigned person: "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
 3. **API recovers** (and stale mode select is "Auto"): Notify assigned person: "Your {car_name}'s API has recovered. Switching back to normal charging mode."
 
@@ -105,18 +110,23 @@ Three notification events:
   - **Supplementary**: `car_charge_percent_sensor`, `car_odometer_sensor`, `car_estimated_range_sensor`
   - All are tracked for staleness entry (ALL must be stale). Only critical are checked for recovery exit.
 
-### Task 2: Staleness Detection — Feature A (AC: #1)
+### Task 2: Staleness Detection — Feature A (AC: #1, Charger-Scoped)
 
-- [ ] 2.1 Implement `is_car_api_stale(self, time) -> bool`:
+- [ ] 2.1 Implement `_are_car_api_sensors_frozen(self, time) -> bool` (pure sensor check):
   - For each API sensor (both tiers), get `last_updated` via `get_sensor_latest_possible_valid_time_value_attr()`
   - If ALL sensors have `last_updated` older than `CAR_API_STALE_THRESHOLD_S` -> return True
   - For invited/generic cars (no API) -> always return False
-- [ ] 2.2 Add `is_car_api_ok(self, time) -> bool` (inverse)
-- [ ] 2.3 Add `car_api_ok_sensor_state_getter()` following the pattern of `car_use_percent_mode_sensor_state_getter()` (car.py:536) — drives the binary sensor
-- [ ] 2.4 Track `_was_car_api_stale` for transition detection (same pattern as solar `_was_stale`)
-- [ ] 2.5 Track `_car_api_stale_since` timestamp for notification detail
-- [ ] 2.6 Call staleness check from `update_current_metrics()` (every state cycle)
-- [ ] 2.7 Tests: fresh data, all stale, partial stale (should NOT trigger), threshold boundary, invited cars
+- [ ] 2.2 Implement the charger-scoped stale check in `_check_car_api_staleness(self, time)`:
+  - **Only evaluate if car is currently attached to a charger** (check `self.attached_charger is not None` or equivalent)
+  - If not attached to any charger: `_car_api_stale = False` (no charger context = no staleness)
+  - If attached AND `_are_car_api_sensors_frozen(time)`: `_car_api_stale = True`
+  - Note: Feature B (contradiction) is a separate trigger in Task 3, independent of this threshold
+- [ ] 2.3 Add `is_car_api_ok(self, time) -> bool` (inverse of `_are_car_api_sensors_frozen` — reflects raw API health regardless of charger attachment)
+- [ ] 2.4 Add `car_api_ok_sensor_state_getter()` following the pattern of `car_use_percent_mode_sensor_state_getter()` (car.py:536)
+- [ ] 2.5 Track `_was_car_api_stale` for transition detection (same pattern as solar `_was_stale`)
+- [ ] 2.6 Track `_car_api_stale_since` timestamp for notification detail
+- [ ] 2.7 Call `_check_car_api_staleness()` from `update_current_metrics()` (every state cycle)
+- [ ] 2.8 Tests: car on charger + all stale → stale; car on charger + partial stale → NOT stale; car NOT on charger + all stale → NOT stale; car attaches to charger while sensors frozen → stale detected on next cycle; invited cars → never stale
 
 ### Task 3: Contradiction Detection — Feature B (AC: #2)
 
@@ -237,8 +247,8 @@ Three notification events:
   - Restore select: persists across HA restarts
   - On change: immediately re-evaluate stale state
 - [ ] 6.3 Implement select-aware stale evaluation in `_check_car_api_staleness()`:
-  - **Auto**: normal Feature A detection (all sensors stale > threshold)
-  - **Force Stale**: `_car_api_stale = True` unconditionally, `_stale_percent_mode = True`
+  - **Auto**: Feature A (charger-scoped: attached to charger + all sensors frozen > threshold) + Feature B (contradiction on manual assign)
+  - **Force Stale**: `_car_api_stale = True` unconditionally, `_stale_percent_mode = True` (even without charger — this is an explicit admin override)
   - **Force Not Stale**: `_car_api_stale = False` unconditionally, `_stale_percent_mode = False` — trust whatever API reports
 - [ ] 6.4 Create `binary_sensor.qs_<car>_stale` — shows the **effective** stale status:
   - ON when car is in stale-percent mode (auto-detected, contradiction-detected, or forced)
@@ -357,7 +367,7 @@ Note: `binary_sensor.qs_<car>_stale` is created in Task 6. `binary_sensor.qs_<ca
 3. **Do NOT change the target percent handler** — user sets target % normally, even in stale mode.
 4. **Do NOT modify `home_model/` imports** — staleness detection uses HA entity timestamps (HA-layer concern).
 5. **Do NOT auto-exit stale when select is "Force Stale"** — the select holds stale mode. Do NOT auto-enter stale when select is "Force Not Stale" — the select overrides detection.
-6. **Do NOT treat "some sensors stale" as "API stale"** — ALL sensors must be stale for Feature A. Feature B (contradiction) is the immediate trigger.
+6. **Do NOT detect staleness without a charger** — a car not attached to any charger cannot be flagged stale (no charging decision to protect). Feature A requires charger attachment + all sensors frozen. Feature B requires manual charger assignment + API contradiction.
 7. **Do NOT use inferred flags in recovery check** — `can_exit_stale_percent_mode()` must read raw sensor values (not the inferred overrides) to verify the API is actually reporting correctly.
 8. **Do NOT modify the charger scoring algorithm** — manual assignment override already works. This story adds inference on top.
 9. **Do NOT create new JS card files** — modify existing `qs-car-card.js`.
@@ -377,7 +387,7 @@ From **Story 3.3** (Grid Outage):
 ### Testing Strategy
 
 - **Unit tests** (`@pytest.mark.unit`): stale detection logic (Feature A + B), flag transitions, inferred state, recovery tiering, `can_exit_stale_percent_mode()`
-- **Integration tests** (`@pytest.mark.integration`): binary sensor state, force-stale switch entity, notification triggers, dashboard template wiring
+- **Integration tests** (`@pytest.mark.integration`): binary sensor state, stale mode select entity, notification triggers, dashboard template wiring
 - **Scenario tests**: full Magali flow — car goes stale → detected as guest → Magali manually assigns → contradiction triggers stale-percent mode (init=0%, +XX%) → charger delivers energy → API recovers (plug sensor fresh) → normal percent mode resumes with real SOC
 - Use `freezegun` for time-dependent staleness threshold tests
 - Use FakeHass for domain logic tests, real HA fixtures for entity integration tests
