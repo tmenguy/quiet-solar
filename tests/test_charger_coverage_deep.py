@@ -165,10 +165,6 @@ def _make_real_car(
     if has_soc_sensor:
         kwargs[CONF_CAR_CHARGE_PERCENT_SENSOR] = f"sensor.{name.lower().replace(' ', '_')}_soc"
     car = QSCar(**kwargs)
-    # Force percent mode on if SOC sensor is set (the real __init__ may fail to
-    # auto-detect because hass.states returns None during construction)
-    if has_soc_sensor and battery_capacity is not None:
-        car._use_percent_mode = True
     home._cars.append(car)
     return car
 

@@ -22,6 +22,7 @@ from custom_components.quiet_solar.const import (
     BINARY_SENSOR_CAR_API_OK,
     BINARY_SENSOR_CAR_IS_STALE,
     CAR_API_STALE_THRESHOLD_S,
+    CAR_SOC_STALE_THRESHOLD_S,
     CAR_STALE_MODE_AUTO,
     CAR_STALE_MODE_FORCE_NOT_STALE,
     CAR_STALE_MODE_FORCE_STALE,
@@ -338,6 +339,14 @@ class TestStalenessTransitions:
         assert real_car._car_api_stale is False
         assert real_car._was_car_api_stale is False
 
+    def test_stale_sensor_details_never_updated(self, real_car, current_time):
+        """_get_stale_sensor_details reports 'never updated' for sensors with no data."""
+        # Clear all sensor data
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = None
+        result = real_car._get_stale_sensor_details(current_time)
+        assert "never updated" in result
+
 
 # ── Task 3: Contradiction Detection — Feature B ─────────────────────────
 
@@ -474,26 +483,40 @@ class TestStalePercentMode:
         real_car.car_api_stale_percent_mode = True
         assert real_car.can_use_charge_percent_constraints() is True
 
-    def test_can_use_charge_percent_constraints_respects_normal_logic(self, real_car):
-        """Without stale mode, normal logic applies."""
+    def test_can_use_charge_percent_constraints_equals_static_when_not_stale(self, real_car):
+        """Without stale mode, returns same as static check."""
         real_car.car_api_stale_percent_mode = False
-        real_car._use_percent_mode = False
+        assert real_car.can_use_charge_percent_constraints() is True
+        # Invited car: static check fails
+        real_car.car_is_invited = True
         assert real_car.can_use_charge_percent_constraints() is False
 
-    def test_percent_mode_sensor_returns_on_when_stale(self, real_car, current_time):
-        """car_use_percent_mode_sensor_state_getter returns 'on' in stale-percent mode."""
-        real_car.car_api_stale_percent_mode = True
-        result = real_car.car_use_percent_mode_sensor_state_getter("test_entity", current_time)
-        assert result[1] == "on"
-        assert real_car._use_percent_mode is True
+    def test_is_soc_sensor_stale_fresh(self, real_car, current_time):
+        """SOC sensor with recent data is not stale."""
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (
+            current_time - timedelta(seconds=60),
+            50.0,
+            {},
+        )
+        assert real_car._is_soc_sensor_stale(current_time) is False
 
-    def test_percent_mode_sensor_normal_when_not_stale(self, real_car, current_time):
-        """car_use_percent_mode_sensor_state_getter follows normal logic when not stale."""
-        real_car.car_api_stale_percent_mode = False
-        # No sensor data — should return "off"
+    def test_is_soc_sensor_stale_old(self, real_car, current_time):
+        """SOC sensor older than threshold is stale."""
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (
+            current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1),
+            50.0,
+            {},
+        )
+        assert real_car._is_soc_sensor_stale(current_time) is True
+
+    def test_is_soc_sensor_stale_no_data(self, real_car, current_time):
+        """SOC sensor with no data is stale."""
         real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = None
-        result = real_car.car_use_percent_mode_sensor_state_getter("test_entity", current_time)
-        assert result[1] == "off"
+        assert real_car._is_soc_sensor_stale(current_time) is True
+
+    def test_is_soc_sensor_stale_invited_car(self, real_invited_car, current_time):
+        """Invited car is never SOC-stale."""
+        assert real_invited_car._is_soc_sensor_stale(current_time) is False
 
     def test_stale_percent_mode_activated_on_stale_transition(self, real_car, current_time):
         """When car goes stale and can use percent, stale-percent mode activates."""
@@ -636,6 +659,118 @@ class TestRecoveryLogic:
 
         # Even though inferred flags are True, can't exit because raw sensors are stale
         assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+
+# ── SOC-only Staleness ──────────────────────────────────────────────────
+
+
+class TestSocOnlyStaleness:
+    """Test SOC-only stale entry, recovery, and edge cases."""
+
+    def _make_soc_only_stale(self, car, current_time):
+        """Make only the SOC sensor stale, keep other sensors fresh."""
+        fresh_time = current_time - timedelta(seconds=60)
+        soc_stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+
+        for sensor_id in car._car_api_all_sensors:
+            car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        car._entity_probed_last_valid_state[car.car_charge_percent_sensor] = (soc_stale_time, 50.0, {})
+
+    def test_soc_only_stale_enters_stale_percent_mode(self, real_car, current_time):
+        """When only SOC sensor is stale, car enters stale-percent mode."""
+        self._make_soc_only_stale(real_car, current_time)
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car.car_api_stale_percent_mode is True
+        assert real_car._car_api_stale is False  # not full stale
+        assert real_car.is_car_effectively_stale(current_time) is True
+
+    def test_soc_only_stale_sends_notification(self, real_car, current_time):
+        """SOC-only stale triggers a notification mentioning SOC sensor."""
+        real_car.hass = MagicMock()
+        real_car.home = MagicMock()
+        self._make_soc_only_stale(real_car, current_time)
+        real_car._update_car_api_staleness(current_time)
+
+        real_car.hass.async_create_task.assert_called_once()
+
+    def test_soc_only_recovery_when_soc_refreshes(self, real_car, current_time):
+        """SOC-only stale recovers when SOC sensor becomes fresh."""
+        self._make_soc_only_stale(real_car, current_time)
+        real_car._update_car_api_staleness(current_time)
+        assert real_car.car_api_stale_percent_mode is True
+
+        # SOC sensor becomes fresh
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh_time, 55.0, {})
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car.car_api_stale_percent_mode is False
+        assert real_car._was_car_api_stale is False
+
+    def test_soc_only_recovery_does_not_need_critical_sensor(self, real_car, current_time):
+        """SOC-only recovery doesn't require home/plugged confirmation."""
+        self._make_soc_only_stale(real_car, current_time)
+        real_car._update_car_api_staleness(current_time)
+
+        # Make SOC fresh, but car is not home and not plugged
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh_time, 55.0, {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_soc_only_stale_not_for_invited_cars(self, real_invited_car, current_time):
+        """Invited cars never enter SOC-only stale mode."""
+        real_invited_car._update_car_api_staleness(current_time)
+        assert real_invited_car.car_api_stale_percent_mode is False
+
+    def test_soc_only_stale_escalates_to_full_stale(self, real_car, current_time):
+        """SOC-only stale escalates to full stale when all sensors go stale."""
+        self._make_soc_only_stale(real_car, current_time)
+        real_car._update_car_api_staleness(current_time)
+        assert real_car.car_api_stale_percent_mode is True
+        assert real_car._car_api_stale is False
+
+        # Now all sensors go stale
+        stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (stale_time, "value", {})
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car._car_api_stale is True
+        assert real_car.car_api_stale_percent_mode is True
+
+    def test_full_stale_degraded_blocks_recovery_while_soc_stale(self, real_car, current_time):
+        """Full stale with non-SOC recovery blocks exit while SOC is still stale."""
+        # Enter full stale
+        stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (stale_time, "value", {})
+        real_car._update_car_api_staleness(current_time)
+        assert real_car._car_api_stale is True
+        assert real_car.car_api_stale_percent_mode is True
+
+        # Non-SOC sensors recover, but SOC stays stale
+        fresh_time = current_time - timedelta(seconds=60)
+        soc_stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (soc_stale_time, 50.0, {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+
+        real_car._update_car_api_staleness(current_time)
+
+        # Still in stale-percent mode because SOC is stale
+        assert real_car.car_api_stale_percent_mode is True
+
+    def test_effectively_stale_includes_soc_only(self, real_car, current_time):
+        """is_car_effectively_stale returns True for SOC-only stale."""
+        real_car._car_api_stale = False
+        real_car.car_api_stale_percent_mode = True
+        assert real_car.is_car_effectively_stale(current_time) is True
 
 
 # ── Task 6: Select + Binary Sensor Entities ─────────────────────────────

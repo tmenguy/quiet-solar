@@ -19,10 +19,10 @@ from ..const import (
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CAR_EFFICIENCY_KM_PER_KWH,
     CAR_HARD_WIRED_CHARGER,
+    CAR_SOC_STALE_THRESHOLD_S,
     CAR_STALE_MODE_AUTO,
     CAR_STALE_MODE_FORCE_NOT_STALE,
     CAR_STALE_MODE_FORCE_STALE,
-    CAR_USE_PERCENT_MODE_SENSOR,
     CHARGE_TIME_CONSTRAINTS_CLEARED,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
@@ -63,8 +63,6 @@ CAR_DEFAULT_CAPACITY = 100000  # 100 kWh
 
 CAR_MINIMUM_LEFT_RANGE_KM = 40.0
 
-CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S = 3600
-
 
 class QSCar(HADeviceMixin, AbstractDevice):
     conf_type_name = CONF_TYPE_NAME_QSCar
@@ -87,7 +85,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_minimum_ok_charge = kwargs.pop(CONF_MINIMUM_OK_CAR_CHARGE, 30.0)
 
         self.car_efficiency_km_per_kwh_sensor: str = CAR_EFFICIENCY_KM_PER_KWH
-        self.car_use_percent_mode_sensor: str = CAR_USE_PERCENT_MODE_SENSOR
 
         self.car_is_invited = kwargs.pop(CONF_CAR_IS_INVITED, False)
 
@@ -233,9 +230,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._car_api_inferred_home: bool = False
         self._car_api_inferred_plugged: bool = False
 
-        self._use_percent_mode = True  # to have a default value, overriden by the call below if necessary
-        self._use_percent_mode = self.can_use_charge_percent_constraints()
-
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor, is_numerical=True, reload_from_history=True)
 
         self.attach_ha_state_to_probe(self.car_plugged, is_numerical=False, reload_from_history=True)
@@ -255,12 +249,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.car_efficiency_km_per_kwh_sensor,
             is_numerical=True,
             non_ha_entity_get_state=self.car_efficiency_km_per_kwh_sensor_state_getter,
-        )
-
-        self.attach_ha_state_to_probe(
-            self.car_use_percent_mode_sensor,
-            is_numerical=True,
-            non_ha_entity_get_state=self.car_use_percent_mode_sensor_state_getter,
         )
 
     def _car_person_option(self, person_name: str):
@@ -560,42 +548,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         return (None, None, None, None)
 
-    def car_use_percent_mode_sensor_state_getter(
-        self, entity_id: str, time: datetime | None
-    ) -> tuple[datetime | None, float | str | None, dict | None] | None:
-
-        if time is None:
-            time = datetime.now(tz=pytz.UTC)
-
-        # Stale-percent mode: force percent mode on
-        if self.car_api_stale_percent_mode:
-            self._use_percent_mode = True
-            return (time, "on", {})
-
-        res = "on"
-
-        if self.can_use_charge_percent_constraints_static() is False:
-            res = "off"
-
-        if res == "on":
-            # now we have to check that the sensor is either invalid for a long time
-            last_valid_time, last_valid_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
-                self.car_charge_percent_sensor, tolerance_seconds=None, time=time
-            )
-
-            if last_valid_value is None or last_valid_time is None:
-                res = "off"
-            elif (
-                last_valid_time is None
-                or (time - last_valid_time).total_seconds() > CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S
-            ):
-                res = "off"
-            else:
-                res = "on"
-
-        self._use_percent_mode = res == "on"
-
-        return (time, res, {})
+    def _is_soc_sensor_stale(self, time: datetime) -> bool:
+        """Return True if the SOC percent sensor is stale beyond the SOC threshold."""
+        if self.car_is_invited or self.car_charge_percent_sensor is None:
+            return False
+        last_time, last_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
+            self.car_charge_percent_sensor, tolerance_seconds=None, time=time
+        )
+        if last_time is None or last_value is None:
+            return True
+        return (time - last_time).total_seconds() > CAR_SOC_STALE_THRESHOLD_S
 
     def _get_time_for_sensor(self) -> datetime:
         """Return current UTC time for sensor state getters."""
@@ -641,8 +603,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
             return True
-        # auto mode: raw stale detection
-        return self._car_api_stale
+        # auto mode: raw stale detection or stale-percent mode (includes SOC-only)
+        return self._car_api_stale or self.car_api_stale_percent_mode
 
     def _update_car_api_staleness(self, time: datetime) -> None:
         """Check and update car API staleness state. Called each state cycle."""
@@ -666,26 +628,47 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._exit_stale_mode()
             self._was_car_api_stale = False
 
+        # SOC-only stale entry: SOC sensor stale but not full API stale
+        if (
+            not self._car_api_stale
+            and not self.car_api_stale_percent_mode
+            and self.can_use_charge_percent_constraints_static()
+            and self._is_soc_sensor_stale(time)
+        ):
+            self.car_api_stale_percent_mode = True
+
         effectively_stale = self.is_car_effectively_stale(time)
 
         # Transition: not stale -> stale
         if effectively_stale and not self._was_car_api_stale:
             self._car_api_stale_since = time
-            stale_sensors = self._get_stale_sensor_details(time)
-            _LOGGER.warning(
-                "Car %s API data is stale (all sensors older than %s hours): %s",
-                self.name,
-                CAR_API_STALE_THRESHOLD_S / 3600,
-                stale_sensors,
-            )
+            if self._car_api_stale:
+                # Full API stale — all sensors older than threshold
+                stale_sensors = self._get_stale_sensor_details(time)
+                _LOGGER.warning(
+                    "Car %s API data is stale (all sensors older than %s hours): %s",
+                    self.name,
+                    CAR_API_STALE_THRESHOLD_S / 3600,
+                    stale_sensors,
+                )
+                self._schedule_notification(
+                    f"Car {self.name} API stale",
+                    f"Your {self.name}'s data is stale — charging will use conservative estimates",
+                )
+            else:
+                # SOC-only stale — SOC sensor specifically is stale
+                _LOGGER.warning(
+                    "Car %s SOC sensor is stale (older than %s hours) — entering stale-percent mode",
+                    self.name,
+                    CAR_SOC_STALE_THRESHOLD_S / 3600,
+                )
+                self._schedule_notification(
+                    f"Car {self.name} SOC sensor stale",
+                    f"Your {self.name}'s SOC sensor is stale — charging will estimate progress from 0%",
+                )
             # Activate stale-percent mode if car can use percent constraints
             if self.can_use_charge_percent_constraints_static():
                 self.car_api_stale_percent_mode = True
-            # Notify on stale transition (Feature A)
-            self._schedule_notification(
-                f"Car {self.name} API stale",
-                f"Your {self.name}'s data is stale — charging will use conservative estimates",
-            )
 
         # Transition: stale -> not stale (from select change or non-percent recovery)
         elif not effectively_stale and self._was_car_api_stale:
@@ -789,9 +772,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         - Car is currently in stale-percent mode
         - Select is not "Force Stale" (blocks recovery)
         - If select is "Force Not Stale", always allow exit
-        - In auto mode: raw sensors must be fresh, and at least one critical
-          sensor must confirm physical state. If car was manually assigned
-          (inferred_plugged), the plug sensor specifically must be fresh.
+        - SOC sensor must be fresh (blocks exit for both SOC-only and full stale)
+        - If not in full API stale (_car_api_stale is False), SOC recovery suffices
+        - If in full API stale: all sensors fresh + critical sensor confirmation
         """
         if not self.car_api_stale_percent_mode:
             return False
@@ -799,10 +782,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return True
-        # Auto mode: check real sensor state
-        if self.is_car_api_stale(time):
+        # Auto mode: SOC must always be fresh for exit
+        if self._is_soc_sensor_stale(time):
             return False
-        # At least one critical sensor must confirm physical state
+        # If not in full API stale, SOC recovery alone is sufficient
+        if not self._car_api_stale:
+            return True
+        # Full API stale: at least one critical sensor must confirm physical state
         home = self._get_raw_is_car_home(time)
         plugged = self._get_raw_is_car_plugged(time)
         if self._car_api_inferred_plugged:
@@ -1909,16 +1895,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 await self.charger.update_charger_for_user_change()
 
     def can_use_charge_percent_constraints(self):
-        # Stale-percent mode: keep percent mode active even with stale SOC
         if self.car_api_stale_percent_mode:
             return True
-
-        r = self.can_use_charge_percent_constraints_static()
-
-        if r is False:
-            return False
-
-        return self._use_percent_mode
+        return self.can_use_charge_percent_constraints_static()
 
     def can_use_charge_percent_constraints_static(self):
 

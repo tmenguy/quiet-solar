@@ -27,10 +27,6 @@ from custom_components.quiet_solar.const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
 )
-from custom_components.quiet_solar.ha_model.car import (
-    CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S,
-)
-
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
 
@@ -1437,19 +1433,20 @@ async def test_car_charge_percent_constraints_flags(
     assert car_device.can_use_charge_percent_constraints() is False
 
     car_device.car_charge_percent_sensor = "sensor.car_soc"
-    car_device._use_percent_mode = True
     assert car_device.can_use_charge_percent_constraints() is True
 
     car_device.car_is_invited = True
     assert car_device.can_use_charge_percent_constraints() is False
 
 
-async def test_car_use_percent_mode_sensor_updates_constraint_flag(
+async def test_soc_stale_triggers_stale_percent_mode_via_ha(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Test percent mode sensor toggles charge percent constraints."""
+    """Test that SOC sensor staleness triggers stale-percent mode via HA integration."""
     from .const import MOCK_CAR_CONFIG
+
+    from custom_components.quiet_solar.const import CAR_SOC_STALE_THRESHOLD_S
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -1457,9 +1454,9 @@ async def test_car_use_percent_mode_sensor_updates_constraint_flag(
     car_entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_CAR_CONFIG,
-        entry_id="car_percent_mode_sensor_test",
+        entry_id="car_soc_stale_test",
         title=f"car: {MOCK_CAR_CONFIG['name']}",
-        unique_id="quiet_solar_car_percent_mode_sensor_test",
+        unique_id="quiet_solar_car_soc_stale_test",
     )
     car_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(car_entry.entry_id)
@@ -1471,27 +1468,32 @@ async def test_car_use_percent_mode_sensor_updates_constraint_flag(
     time_now = datetime(2026, 1, 20, 15, 0, tzinfo=pytz.UTC)
     soc_entity = car_device.car_charge_percent_sensor
 
+    # Fresh SOC — percent constraints work normally
     car_device._entity_probed_last_valid_state[soc_entity] = (
         time_now - timedelta(minutes=5),
         55.0,
         {},
     )
-
-    result = car_device.car_use_percent_mode_sensor_state_getter("sensor.car_use_percent_mode", time_now)
-
-    assert result == (time_now, "on", {})
     assert car_device.can_use_charge_percent_constraints() is True
+    assert car_device.car_api_stale_percent_mode is False
 
+    # Make other sensors fresh but SOC stale
+    for sensor_id in car_device._car_api_all_sensors:
+        car_device._entity_probed_last_valid_state[sensor_id] = (
+            time_now - timedelta(seconds=60),
+            "value",
+            {},
+        )
     car_device._entity_probed_last_valid_state[soc_entity] = (
-        time_now - timedelta(seconds=CAR_INVALID_DURATION_PERCENT_SENSOR_FOR_ENERGY_MODE_S + 1),
+        time_now - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1),
         55.0,
         {},
     )
 
-    result = car_device.car_use_percent_mode_sensor_state_getter("sensor.car_use_percent_mode", time_now)
+    car_device._update_car_api_staleness(time_now)
 
-    assert result == (time_now, "off", {})
-    assert car_device.can_use_charge_percent_constraints() is False
+    assert car_device.car_api_stale_percent_mode is True
+    assert car_device.can_use_charge_percent_constraints() is True
 
 
 async def test_car_user_add_default_charge_time_validation(
