@@ -1,6 +1,6 @@
 # Bug Fix: bistate/pool target and actual hours display sums across days instead of current day only
 
-Status: dev-complete
+Status: done
 issue: 78
 branch: "QS_78"
 
