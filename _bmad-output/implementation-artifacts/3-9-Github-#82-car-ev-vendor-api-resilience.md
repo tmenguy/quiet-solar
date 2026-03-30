@@ -93,7 +93,7 @@ flowchart TD
 **Then** the system flags the car as stale **immediately** (contradiction = proof that API is wrong)
 **And** the system infers: car IS home, car IS plugged (overriding stale sensor data)
 **And** the car enters stale-percent mode with `+XX%` display and red card border
-**And** the assigned person is notified (CC-001): "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
+**And** the car's assigned person is notified (error-level): "Warning: {car_name} data is not available, check the car card"
 
 ### AC3: Stale Mode Select + Status Binary Sensor
 
@@ -117,14 +117,14 @@ flowchart TD
 **When** the system detects recovery via context-aware exit logic
 **Then** `binary_sensor.qs_<car>_api_ok` turns on, red border removed
 **And** stale-percent mode is exited: real SOC is re-read, constraints reassessed with actual SOC as initial value
-**And** the assigned person is notified (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
+**And** the car's assigned person is notified (info-level): "Your {car_name}'s data is available again"
 **And** if stale mode select is "Force Stale", recovery is blocked — stays stale until TheAdmin changes the select
 
 **Recovery rules** — exit branches on charger connection state (`self.charger is not None`):
 
 Common conditions (both paths):
 1. At least one API sensor moved within `CAR_API_STALE_THRESHOLD_S` (`not is_car_api_stale(time)`)
-2. All API sensors have valid readings (`_are_all_api_sensors_available(time)`)
+2. All API sensors have valid readings (`_have_all_api_sensors_reported(time)`)
 3. SOC sensor is fresh — not unavailable >1h (`not _is_soc_sensor_stale(time)`) — prevents enter/exit flip-flop since `CAR_SOC_STALE_THRESHOLD_S` (1h) < `CAR_API_STALE_THRESHOLD_S` (6h)
 
 Connected to charger path: common + plug=plugged AND home=home
@@ -132,13 +132,14 @@ Not connected path: common + plug=unplugged
 
 Missing sensors (`car_plugged=None`, `car_tracker=None`) are gracefully skipped — their checks default to True.
 
-### AC5: Notifications (CC-001)
+### AC5: Notifications — Person-Targeted
 
-Four notification events:
-1. **Car goes stale** (Feature A): Notify TheAdmin with specific stale sensors. Notify assigned person: "Your {car_name}'s data is stale — charging will use conservative estimates."
-2. **Stale car manually assigned** (Feature B): Notify assigned person: "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
-3. **API recovers** (and stale mode select is "Auto"): Notify assigned person: "Your {car_name}'s API has recovered. Switching back to normal charging mode."
-4. **API recovers while select is "Force Stale"**: Notify TheAdmin: "Car {car_name} API has recovered. Consider switching stale mode back to Auto." (Do NOT auto-change the select.)
+Notifications target the **person attached to the car** (via `person.on_device_state_change()`), not all mobile apps. User-initiated transitions (Force Stale) do not send notifications.
+
+Three notification events:
+1. **Car goes stale** (Feature A or SOC-only): Error-level to car's person: "Warning: {car_name} data is not available, check the car card"
+2. **Stale car manually assigned** (Feature B, contradiction): Error-level to car's person: "Warning: {car_name} data is not available, check the car card"
+3. **API recovers** (auto mode): Info-level to car's person: "Your {car_name}'s data is available again"
 
 ## Tasks / Subtasks
 
@@ -223,7 +224,7 @@ Four notification events:
           sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
   ```
   This forces fallback to `result = result_calculus` (line 4575) which uses `_compute_added_charge_update()` — energy-based delta from charger power sensor.
-- [x]4.9 The `is_car_charge_growing()` check (line 4604) is inside the `else` branch of `if sensor_result is None`, so it's naturally skipped. **No change needed.**
+- [x]4.9 `is_car_charge_growing()` now has an explicit stale-percent guard: returns `None` when `car_api_stale_percent_mode` is True, preventing stale SOC history from producing false growth signals.
 - [x]4.10 Guard the power-check block (lines 4622-4656): `is_car_charge_growing()` (line 4633) reads SOC history and may produce false warnings in stale mode. Add guard:
   ```python
   if (is_target_percent and result is not None
@@ -244,7 +245,7 @@ Four notification events:
 | car.py:595 | Person mileage/range forecast | Returns None → conservative defaults | No |
 | car.py:568 | `car_efficiency_km_per_kwh_sensor_state_getter` | Returns None → efficiency learning suspended | No |
 | car.py:951 | `get_car_charge_percent()` core accessor | **Returns None at source** (Task 4.3) | **YES — primary bypass point** |
-| car.py:993 | `is_car_charge_growing()` | Returns False (flat probe history) | No (not called in stale paths) |
+| car.py:1284 | `is_car_charge_growing()` | Returns None when `car_api_stale_percent_mode` | **YES — early return None** |
 | car.py:1034 | Car state checks | Returns None → handled | No |
 | car.py:1129 | Autonomy to target SOC | Returns None → autonomy unknown | No |
 | car.py:1431 | Dynamic charging priority | Returns None → 0.0 (conservative) | No |
@@ -268,7 +269,7 @@ Four notification events:
       if self.is_car_api_stale(time):
           return False
       # Common: all sensors must have valid readings
-      if not self._are_all_api_sensors_available(time):
+      if not self._have_all_api_sensors_reported(time):
           return False
       # Common: SOC must be fresh (anti-flip-flop with 1h threshold)
       if self._is_soc_sensor_stale(time):
@@ -294,7 +295,7 @@ Four notification events:
   - SOC freshness check prevents enter/exit flip-flop: `CAR_SOC_STALE_THRESHOLD_S` (1h) < `CAR_API_STALE_THRESHOLD_S` (6h)
   - Missing sensors (`car_plugged=None`, `car_tracker=None`) gracefully skipped
   - Uses `_get_raw_is_car_plugged()` / `_get_raw_is_car_home()` to read API directly, not inferred overrides
-- [x]5.1b Implement `_are_all_api_sensors_available(self, time) -> bool` — checks every sensor in `_car_api_all_sensors` has a valid reading (not None/never reported)
+- [x]5.1b Implement `_have_all_api_sensors_reported(self, time) -> bool` — checks every sensor in `_car_api_all_sensors` has a valid reading (not None/never reported)
 - [x]5.1c Add periodic contradiction check in `_update_car_api_staleness()` — for attached cars, calls `check_manual_assignment_contradiction()` on every cycle (guarded: only fires when not already stale and not force-not-stale)
 - [x]5.1d Add early-return guard in `check_manual_assignment_contradiction()` — skips when `_car_api_stale` or `car_api_stale_percent_mode` already True, preventing duplicate notifications
 - [x]5.1e `charger.detach_car()` now calls `car.clear_inferred_flags()` before clearing the reference — ensures inferred flags don't persist after charger-side detach
@@ -417,7 +418,7 @@ Note: `binary_sensor.qs_<car>_is_stale` is created in Task 6. `binary_sensor.qs_
 
 | File | Lines | What |
 |------|-------|------|
-| `ha_model/car.py` | ~562 | `_are_all_api_sensors_available()` — checks every API sensor has a valid reading |
+| `ha_model/car.py` | ~562 | `_have_all_api_sensors_reported()` — checks every API sensor has a valid reading |
 | `ha_model/car.py` | ~556 | `_is_soc_sensor_stale()` — SOC unavailable >1h entry + anti-flip-flop exit check |
 | `ha_model/car.py` | ~649 | Periodic contradiction check in `_update_car_api_staleness()` |
 | `ha_model/car.py` | ~768 | `can_exit_stale_percent_mode()` — context-aware exit branching on charger state |
@@ -500,7 +501,7 @@ From **Story 3.3** (Grid Outage):
 ### Completion Notes List
 
 - **Redesigned recovery exit (Task 5)**: Replaced `_car_api_inferred_plugged`-based branching with context-aware exit branching on `self.charger is not None`. Both paths now require all sensors available + at least one fresh + SOC fresh. Connected path requires plug=plugged AND home=home. Not-connected path requires plug=unplugged.
-- **Added `_are_all_api_sensors_available()`**: New method checks every tracked API sensor has a valid reading. Used as common exit condition in both recovery paths.
+- **Added `_have_all_api_sensors_reported()`**: New method checks every tracked API sensor has a valid reading. Used as common exit condition in both recovery paths.
 - **Added periodic contradiction check**: `_update_car_api_staleness()` now calls `check_manual_assignment_contradiction()` for attached cars on every cycle, catching contradictions that develop after initial assignment.
 - **Added early-return guard in `check_manual_assignment_contradiction()`**: Prevents duplicate notifications when car is already stale or in stale-percent mode.
 - **Charger `detach_car()` clears inferred flags**: Calls `car.clear_inferred_flags()` before clearing the car reference, preventing stale inferred flags from persisting after charger-side detach.
@@ -510,7 +511,7 @@ From **Story 3.3** (Grid Outage):
 
 ### File List
 
-- `custom_components/quiet_solar/ha_model/car.py` — staleness logic, recovery exit, periodic contradiction, `_are_all_api_sensors_available()`
+- `custom_components/quiet_solar/ha_model/car.py` — staleness logic, recovery exit, periodic contradiction, `_have_all_api_sensors_reported()`
 - `custom_components/quiet_solar/ha_model/charger.py` — `detach_car()` clears inferred flags
 - `custom_components/quiet_solar/sensor.py` — uses `can_use_charge_percent_constraints()` (removed `_static()`)
 - `tests/test_car_api_staleness.py` — 103 tests covering all staleness scenarios
