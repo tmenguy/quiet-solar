@@ -44,6 +44,12 @@ class QSPool(QSOnOffDuration):
         modes = super().get_bistate_modes()
         return modes + ["pool_winter_mode"]
 
+    def _is_calendar_based_mode(self, bistate_mode: str) -> bool:
+        """Pool overrides auto and winter modes to not use calendar."""
+        if bistate_mode in ("bistate_mode_auto", "pool_winter_mode"):
+            return False
+        return super()._is_calendar_based_mode(bistate_mode)
+
     @property
     def current_water_temperature(self) -> float | None:
         temp = self.get_sensor_latest_possible_valid_value(entity_id=self.pool_temperature_sensor)

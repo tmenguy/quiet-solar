@@ -10,7 +10,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_END_TIME
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import CMD_IDLE, LoadCommand
-from ..home_model.constraints import DATETIME_MAX_UTC, DATETIME_MIN_UTC, TimeBasedSimplePowerLoadConstraint
+from ..home_model.constraints import DATETIME_MAX_UTC, TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
 
 bistate_modes = [
@@ -53,42 +53,59 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.qs_bistate_current_duration_h: float = 0.0
         self.qs_bistate_current_on_h: float = 0.0
 
-    def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
-        """Update bistate UI metrics from active or last-completed constraint.
+        # Calendar metrics pre-computed by check_load_activity_and_constraints
+        self._is_current_calendar_mode: bool = False
+        self._today_calendar_target_s: float = 0.0
+        self._today_calendar_past_actual_s: float = 0.0
 
-        Active constraints are always included — they are current by definition.
-        Day-window filtering only applies to _last_completed_constraint fallback,
-        preventing stale metrics from a previous day cycle.
+    def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
+        """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
+        tomorrow_utc = self.get_proper_local_adapted_tomorrow(time)
+        local_now = time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
+        local_today = datetime(local_now.year, local_now.month, local_now.day)
+        today_utc = local_today.replace(tzinfo=None).astimezone(tz=pytz.UTC)
+        return today_utc, tomorrow_utc
+
+    def _is_calendar_based_mode(self, bistate_mode: str) -> bool:
+        """Return True if the current mode uses calendar events for daily metrics."""
+        return bistate_mode in ("bistate_mode_auto", "bistate_mode_exact_calendar") and self.calendar is not None
+
+    def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
+        """Update bistate UI metrics with today-only values.
+
+        Two distinct paths depending on mode:
+        - Calendar path: uses pre-computed calendar metrics for today only
+        - Default path: day-filters _constraints and _last_completed_constraint
         """
         duration_s = 0.0
         run_s = 0.0
 
-        if self._constraints:
+        if self._is_current_calendar_mode:
+            # Calendar path: pre-computed target + past actuals + active constraint
+            duration_s = self._today_calendar_target_s
+            run_s = self._today_calendar_past_actual_s
+            today_utc, tomorrow_utc = self._get_today_boundaries(time)
             for ct in self._constraints:
-                duration_s += ct.target_value
-                run_s += ct.current_value
-        elif self._last_completed_constraint is not None:
-            if end_range is None:
-                end_range = self.default_on_finish_time or dt_time(hour=0, minute=0, second=0)
+                if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc:
+                    run_s += ct.current_value
+        else:
+            # Default/pool path: day-filter constraints + last-completed
+            today_utc, tomorrow_utc = self._get_today_boundaries(time)
 
-            end_day = self.get_next_time_from_hours(local_hours=end_range, time_utc_now=time, output_in_utc=True)
+            for ct in self._constraints:
+                if ct.end_of_constraint <= tomorrow_utc:
+                    duration_s += ct.target_value
+                    run_s += ct.current_value
 
-            if end_day is not None:
-                start_day = self.get_next_time_from_hours(
-                    local_hours=end_range,
-                    time_utc_now=end_day - timedelta(hours=26),
-                    output_in_utc=True,
-                )
-
-                ct = self._last_completed_constraint
-                if ct.end_of_constraint <= end_day or (
-                    ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint <= end_day
+            if self._last_completed_constraint is not None:
+                lcc = self._last_completed_constraint
+                if (
+                    lcc.end_of_constraint != DATETIME_MAX_UTC
+                    and lcc.end_of_constraint > today_utc
+                    and lcc.end_of_constraint <= tomorrow_utc
                 ):
-                    if ct.end_of_constraint > start_day or (
-                        ct.start_of_constraint != DATETIME_MIN_UTC and ct.start_of_constraint > start_day
-                    ):
-                        duration_s += ct.target_value
-                        run_s += ct.current_value
+                    duration_s += lcc.target_value
+                    run_s += lcc.current_value
 
         self.qs_bistate_current_on_h = run_s / 3600.0
         self.qs_bistate_current_duration_h = duration_s / 3600.0
@@ -530,6 +547,45 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}"
                         )
+
+        # Pre-compute calendar metrics for today if in calendar-based mode
+        if self._is_calendar_based_mode(bistate_mode):
+            today_start_utc, tomorrow_utc = self._get_today_boundaries(time)
+            events = await self.get_next_scheduled_events(time=today_start_utc, give_currently_running_event=True)
+            target_s = 0.0
+            past_actual_s = 0.0
+            for ev_start, ev_end in events:
+                if ev_end > tomorrow_utc:
+                    continue
+                duration = (ev_end - ev_start).total_seconds()
+                target_s += duration
+                if ev_end <= time:
+                    past_actual_s += duration
+
+            self._today_calendar_target_s = target_s
+            self._today_calendar_past_actual_s = past_actual_s
+            self._is_current_calendar_mode = True
+
+            # AC5: Sanity-check _last_completed_constraint against calendar
+            if self._last_completed_constraint is not None:
+                lcc = self._last_completed_constraint
+                if (
+                    lcc.end_of_constraint != DATETIME_MAX_UTC
+                    and lcc.end_of_constraint > today_start_utc
+                    and lcc.end_of_constraint <= tomorrow_utc
+                    and abs(lcc.current_value - past_actual_s) > 300
+                ):
+                    _LOGGER.info(
+                        "Calendar metrics sync-check: last completed constraint "
+                        "current_value=%s differs from inferred past actual=%s "
+                        "for %s (expected when multiple calendar events complete "
+                        "in one day since only the last constraint is retained)",
+                        lcc.current_value,
+                        past_actual_s,
+                        self.name,
+                    )
+        else:
+            self._is_current_calendar_mode = False
 
         self.update_current_metrics(time)
 

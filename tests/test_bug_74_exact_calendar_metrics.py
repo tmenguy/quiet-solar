@@ -1,9 +1,11 @@
 """Tests for bug #74: exact-calendar constraint beyond day-window shows 0h target.
 
 Verifies that update_current_metrics in bistate_duration.py:
-- Always includes active constraints (no day-window filter)
-- Only applies day-window filter to _last_completed_constraint fallback
+- Day-filters active constraints to today only (bug #78 fix)
+- Day-filters _last_completed_constraint to today only
 - Preserves existing behavior for pool constraints (regression guard)
+
+Note: After bug #78, active constraints beyond today's boundary are excluded.
 """
 
 from __future__ import annotations
@@ -80,25 +82,30 @@ def _make_constraint(device, time, target_s, current_s, start, end):
     )
 
 
+def _set_day_boundaries(device, today_utc, tomorrow_utc):
+    """Mock _get_today_boundaries to return explicit day boundaries."""
+    device._get_today_boundaries = MagicMock(return_value=(today_utc, tomorrow_utc))
+
+
 # =============================================================================
 # Task 3.1: Active constraint beyond day-window boundary (THE BUG)
 # =============================================================================
 
 
 def test_active_constraint_beyond_day_window_shows_target():
-    """Active calendar constraint starting after day-window boundary must appear in metrics.
+    """Tomorrow-only constraint is excluded from today's metrics (bug #78 fix).
 
-    Scenario from bug #74:
+    Scenario from bug #74 (updated by bug #78):
     - Current time: 10:23
-    - default_on_finish_time: midnight (00:00)
-    - end_day = next midnight = tomorrow 00:00
     - Calendar constraint: tomorrow 06:30-10:00 (3h30 target)
-    - BUG: both start and end are after end_day, so the filter excluded it
-    - FIX: active constraints skip the day-window filter entirely
+    - Bug #74 FIX: active constraints skipped the day-window filter
+    - Bug #78 FIX: day-filter constraints to today only — tomorrow constraint = 0h
     """
     device = _create_bistate_device()
-    # March 30 at 10:23 UTC
     now = datetime(2026, 3, 30, 10, 23, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
 
     # Calendar constraint: tomorrow 06:30 to 10:00
     tomorrow_start = datetime(2026, 3, 31, 6, 30, 0, tzinfo=pytz.UTC)
@@ -112,8 +119,9 @@ def test_active_constraint_beyond_day_window_shows_target():
 
     device.update_current_metrics(now)
 
-    assert device.qs_bistate_current_duration_h == pytest.approx(target_s / 3600.0), (
-        f"Should show 3.5h target, got {device.qs_bistate_current_duration_h}"
+    # Bug #78: tomorrow constraint excluded from today's target
+    assert device.qs_bistate_current_duration_h == pytest.approx(0.0), (
+        f"Should show 0h target for tomorrow constraint, got {device.qs_bistate_current_duration_h}"
     )
     assert device.qs_bistate_current_on_h == 0.0
 
@@ -127,6 +135,9 @@ def test_active_constraint_within_day_window_still_works():
     """Active constraint within the day window should still show in metrics."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 10, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
 
     # Constraint today: 14:00-17:00 (well within next midnight boundary)
     start = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
@@ -153,10 +164,13 @@ def test_last_completed_within_day_window_shows_completed():
     """Completed constraint within day window should show as fallback."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
 
-    # Completed constraint: started 6h ago, ends in 6h (within day window)
-    start = now - timedelta(hours=6)
-    end = now + timedelta(hours=6)
+    # Completed constraint within today
+    start = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    end = datetime(2026, 3, 30, 21, 0, 0, tzinfo=pytz.UTC)
 
     ct = _make_constraint(device, now, target_s=3 * 3600.0, current_s=3 * 3600.0, start=start, end=end)
 
@@ -178,6 +192,9 @@ def test_last_completed_outside_day_window_shows_zero():
     """Completed constraint outside day window should show 0 (stale data filtered)."""
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
 
     # Completed constraint from 2 days ago — entirely outside the day window
     old_start = now - timedelta(days=2)
