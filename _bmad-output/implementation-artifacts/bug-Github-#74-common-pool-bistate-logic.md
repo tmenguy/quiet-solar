@@ -2,7 +2,7 @@
 
 issue: 74
 branch: "QS_74"
-Status: ready-for-dev
+Status: done
 
 ## Story
 
