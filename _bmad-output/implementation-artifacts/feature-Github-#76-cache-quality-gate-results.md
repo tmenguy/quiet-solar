@@ -7,14 +7,14 @@ branch: "QS_76"
 ## Story
 
 As a developer using the QS workflow,
-I want quality gate results to be cached based on file content hashes,
+I want quality gate results to be cached based on git state (branch + commit),
 so that redundant gate runs are skipped when no code has changed between skills.
 
 ## Acceptance Criteria
 
-1. **Cache on pass**: When `quality_gate.py` runs with `--cache` and all gates pass, it writes a JSON cache file (`.quality_gate_cache`) containing the SHA-256 content hash and gate results.
-2. **Cache hit**: On next run with `--cache`, if the content hash matches, return cached results without running any gates. Output includes a `"cached": true` indicator.
-3. **Cache invalidation**: If any tracked file changed (source, tests, strings.json, pyproject.toml), the cache is invalidated and all gates run fresh.
+1. **Cache on pass**: When `quality_gate.py` runs with `--cache` and all gates pass, it writes a JSON cache file (`.quality_gate_cache`) containing the branch name, commit hash, and gate results.
+2. **Cache hit**: On next run with `--cache`, if the branch and commit match and the working tree is clean, return cached results without running any gates. Output includes a `"cached": true` indicator.
+3. **Cache invalidation**: If the commit changed, the branch changed, or the working tree is dirty, the cache is invalidated and all gates run fresh.
 4. **Fix bypasses cache**: `--fix` always runs fresh regardless of cache state (fixes modify files, so caching is meaningless).
 5. **No-cache override**: `--no-cache` forces a fresh run even when `--cache` is also present.
 6. **Git-ignored**: `.quality_gate_cache` is added to `.gitignore`.

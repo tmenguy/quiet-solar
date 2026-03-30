@@ -237,8 +237,7 @@ def main() -> None:
     if use_cache:
         branch, commit, is_clean = _get_git_state()
         cache = _read_cache()
-        if _is_cache_valid(cache, branch, commit, is_clean):
-            assert cache is not None  # guaranteed by _is_cache_valid
+        if cache is not None and _is_cache_valid(cache, branch, commit, is_clean):
             _output_results(
                 cache["results"],
                 all_passed=True,
