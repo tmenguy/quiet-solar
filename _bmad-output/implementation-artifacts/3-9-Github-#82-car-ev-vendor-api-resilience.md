@@ -60,19 +60,21 @@ This is better than energy mode because users think in battery percentages, and 
 **And** the car enters stale-percent mode with `+XX%` display and red card border
 **And** the assigned person is notified (CC-001): "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
 
-### AC3: Force-Stale Switch
+### AC3: Stale Mode Select + Status Binary Sensor
 
-**Given** TheAdmin knows the car API is unreliable (e.g., Renault servers down, or wants to pre-emptively protect against stale data)
-**When** TheAdmin toggles `switch.qs_<car>_force_stale` ON
-**Then** the car is immediately forced into stale-percent mode (same behavior as Feature A/B detection)
-**And** `binary_sensor.qs_<car>_api_ok` turns off, card gets red border, display shows `+XX%`
-**And** the switch reflects current stale state: ON when stale (auto-detected or forced), OFF when healthy
-**And** person forecast for this car uses conservative defaults (always assume full charge needed)
+**Given** TheAdmin wants to control how the system handles car API staleness
+**When** TheAdmin uses `select.qs_<car>_stale_mode` (restore select, persists across restarts)
+**Then** the select has three options:
+  - **Auto** (default): staleness is detected automatically (Feature A + B). Auto-recovery when API resumes.
+  - **Force Stale**: car is immediately forced into stale-percent mode regardless of API sensor freshness. Blocks auto-recovery. Useful when TheAdmin knows the API is unreliable (e.g., Renault servers down).
+  - **Force Not Stale**: car is forced out of stale mode regardless of sensor freshness. Useful as an escape hatch if auto-detection is wrong. The system trusts whatever the API reports.
 
-**Given** the force-stale switch is ON and the API recovers
-**When** sensors start updating again
-**Then** the system does NOT auto-exit stale mode — the switch holds it in stale mode until TheAdmin explicitly turns it OFF
-**And** when TheAdmin turns the switch OFF, normal recovery flow proceeds (re-read SOC, reassess constraints)
+**And** `binary_sensor.qs_<car>_stale` shows the **effective stale status** the car is currently in:
+  - ON when car is in stale-percent mode (whether auto-detected, contradiction-detected, or forced)
+  - OFF when car is operating normally (whether healthy or force-not-stale)
+  - This is the binary sensor the card reads for red border / `+XX%` display
+
+**And** person forecast uses conservative defaults when effective stale status is ON
 
 ### AC4: Auto-Recovery When API Resumes
 
@@ -81,7 +83,7 @@ This is better than energy mode because users think in battery percentages, and 
 **Then** `binary_sensor.qs_<car>_api_ok` turns on, red border removed
 **And** stale-percent mode is exited: real SOC is re-read, constraints reassessed with actual SOC as initial value
 **And** the assigned person is notified (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
-**And** if force-stale switch is ON, recovery is blocked — the switch holds stale mode until TheAdmin explicitly turns it OFF
+**And** if stale mode select is "Force Stale", recovery is blocked — stays stale until TheAdmin changes the select
 
 **Recovery sensor tiers**: Not all sensors carry the same weight. An odometer update alone does NOT exit stale mode — home/plug are "critical" because they directly affect charger assignment and constraint behavior.
 
@@ -90,14 +92,14 @@ This is better than energy mode because users think in battery percentages, and 
 Three notification events:
 1. **Car goes stale** (Feature A): Notify TheAdmin with specific stale sensors. Notify assigned person: "Your {car_name}'s data is stale — charging will use conservative estimates."
 2. **Stale car manually assigned** (Feature B): Notify assigned person: "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
-3. **API recovers** (and force-stale switch is OFF): Notify assigned person: "Your {car_name}'s API has recovered. Switching back to normal charging mode."
+3. **API recovers** (and stale mode select is "Auto"): Notify assigned person: "Your {car_name}'s API has recovered. Switching back to normal charging mode."
 
 ## Tasks / Subtasks
 
 ### Task 1: Constants and Sensor Classification (AC: #1, #2)
 
 - [ ] 1.1 Add `CAR_API_STALE_THRESHOLD_S = 4 * 3600` to `car.py` — code-level tunable constant
-- [ ] 1.2 Add `BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"` to `const.py`
+- [ ] 1.2 Add to `const.py`: `BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"`, `BINARY_SENSOR_CAR_STALE = "qs_car_stale"`, `SELECT_CAR_STALE_MODE = "qs_car_stale_mode"` + option constants
 - [ ] 1.3 Classify sensors on QSCar into two tiers:
   - **Critical** (required for recovery): `car_tracker`, `car_plugged`
   - **Supplementary**: `car_charge_percent_sensor`, `car_odometer_sensor`, `car_estimated_range_sensor`
@@ -196,8 +198,11 @@ Three notification events:
   def can_exit_stale_percent_mode(self, time):
       if not self._stale_percent_mode:
           return False
-      if self._force_stale:
-          return False  # force-stale switch holds stale mode
+      if self._stale_mode_select == CAR_STALE_MODE_FORCE_STALE:
+          return False  # forced stale — user must change select
+      if self._stale_mode_select == CAR_STALE_MODE_FORCE_NOT_STALE:
+          return True  # forced not stale — always allow exit
+      # Auto mode: check real sensor state
       if self.is_car_api_stale(time):
           return False  # sensors still stale
       # At least one critical sensor must confirm physical state
@@ -220,37 +225,51 @@ Three notification events:
   - Constraint reassessment with real SOC on recovery
   - Recovery call must use raw sensor values, not inferred overrides
 
-### Task 6: Force-Stale Switch (AC: #3)
+### Task 6: Stale Mode Select + Stale Binary Sensor (AC: #3)
 
-- [ ] 6.1 Add `SWITCH_CAR_FORCE_STALE = "qs_car_force_stale"` constant to `const.py`
-- [ ] 6.2 Create `switch.qs_<car>_force_stale` entity in `switch.py`:
-  - **Reading state**: reflects current stale status (ON when stale — auto-detected or forced, OFF when healthy)
-  - **Turning ON**: forces the car into stale-percent mode immediately (sets `_car_api_stale = True`, `_stale_percent_mode = True`)
-  - **Turning OFF**: if API sensors are actually fresh, proceeds with normal recovery flow (clear flags, re-read SOC, reassess constraints). If API is still genuinely stale, turning OFF has no effect (auto-detection re-flags it immediately on next cycle).
-- [ ] 6.3 When force-stale is ON, block auto-recovery: `can_exit_stale_percent_mode()` returns False if the switch is ON, regardless of sensor freshness
-- [ ] 6.4 When force-stale is ON: person forecast uses conservative defaults (full charge needed)
-- [ ] 6.5 Tests: force ON → enters stale mode; force OFF with fresh API → recovery; force OFF with stale API → stays stale; auto-detection while switch is OFF; switch reflects auto-detected stale state
+- [ ] 6.1 Add constants to `const.py`:
+  - `SELECT_CAR_STALE_MODE = "qs_car_stale_mode"`
+  - `BINARY_SENSOR_CAR_STALE = "qs_car_stale"`
+  - `CAR_STALE_MODE_AUTO = "auto"`, `CAR_STALE_MODE_FORCE_STALE = "force_stale"`, `CAR_STALE_MODE_FORCE_NOT_STALE = "force_not_stale"`
+- [ ] 6.2 Create `select.qs_<car>_stale_mode` as a **restore select** in `select.py`:
+  - Options: `["auto", "force_stale", "force_not_stale"]`
+  - Default: `"auto"`
+  - Restore select: persists across HA restarts
+  - On change: immediately re-evaluate stale state
+- [ ] 6.3 Implement select-aware stale evaluation in `_check_car_api_staleness()`:
+  - **Auto**: normal Feature A detection (all sensors stale > threshold)
+  - **Force Stale**: `_car_api_stale = True` unconditionally, `_stale_percent_mode = True`
+  - **Force Not Stale**: `_car_api_stale = False` unconditionally, `_stale_percent_mode = False` — trust whatever API reports
+- [ ] 6.4 Create `binary_sensor.qs_<car>_stale` — shows the **effective** stale status:
+  - ON when car is in stale-percent mode (auto-detected, contradiction-detected, or forced)
+  - OFF when operating normally
+  - This is the entity the card reads for red border / `+XX%` display
+- [ ] 6.5 When effective stale is ON: person forecast uses conservative defaults (full charge needed)
+- [ ] 6.6 Tests: Auto mode with fresh/stale API; Force Stale overrides fresh API; Force Not Stale overrides stale API; select persists across restart; binary sensor reflects effective state
 
-### Task 7: Binary Sensor + Dashboard (AC: #1, #4)
+### Task 7: Dashboard Wiring (AC: #1, #4)
 
-- [ ] 7.1 Register `binary_sensor.qs_<car>_api_ok` in `binary_sensor.py` following existing pattern (line 76-81):
-  - State driven by `car_api_ok_sensor_state_getter()`
+Note: `binary_sensor.qs_<car>_stale` is created in Task 6. `binary_sensor.qs_<car>_api_ok` (raw API health, inverse of `is_car_api_stale()`) is also useful for TheAdmin to distinguish auto-detected vs forced stale — register it too.
+
+- [ ] 7.1 Register `binary_sensor.qs_<car>_api_ok` in `binary_sensor.py` (line 76-81 pattern):
+  - State: `is_car_api_ok(time)` (raw API sensor health, ignores select override)
   - Device class: `connectivity`
   - Attributes: `stale_since`, `stale_sensors`
-- [ ] 7.2 Wire `api_ok` entity in dashboard template (`ui/quiet_solar_dashboard_template.yaml.j2`, lines 43-83):
+- [ ] 7.2 Wire entities in dashboard template (`ui/quiet_solar_dashboard_template.yaml.j2`, lines 43-83):
   ```jinja2
-  {%- set e = ha.get("qs_car_api_ok") %}
-  {% if e %}api_ok: {{ e.entity_id }}{% endif %}
+  {%- set e = ha.get("qs_car_stale") %}
+  {% if e %}car_stale: {{ e.entity_id }}{% endif %}
   ```
-- [ ] 7.3 Dashboard SOC badge: simplest option — when stale, the existing SOC sensor can expose a `stale` attribute that HA can use for conditional styling, or return `unavailable` so HA renders the badge with warning style
-- [ ] 7.4 Tests: sensor state transitions, attribute values
+  The card reads `car_stale` (effective stale status from Task 6) for red border / `+XX%`.
+- [ ] 7.3 Dashboard SOC badge: when `qs_car_stale` is ON, SOC sensor can expose a `stale` attribute or return `unavailable` for HA warning style
+- [ ] 7.4 Tests: both binary sensors reflect correct states; dashboard template wiring
 
 ### Task 8: Car Card UI (AC: #1, #2)
 
-- [ ] 8.1 Read `api_ok` entity in JS entity discovery:
+- [ ] 8.1 Read `car_stale` entity in JS entity discovery:
   ```javascript
-  const sApiOk = this._entity(e.api_ok);
-  const isApiStale = sApiOk?.state === 'off';
+  const sCarStale = this._entity(e.car_stale);
+  const isStale = sCarStale?.state === 'on';
   ```
 - [ ] 8.2 Red border on entire card when stale — add CSS class `stale` to `<ha-card>`:
   ```css
@@ -258,7 +277,7 @@ Three notification events:
   ```
 - [ ] 8.3 `+XX%` display: add a third branch in the percent/energy display logic (lines 143-188):
   ```javascript
-  const isStalePercentMode = isApiStale && !useEnergyMode;
+  const isStalePercentMode = isStale && !useEnergyMode;
   if (isStalePercentMode) {
       const energyWh = Number(sCurrentInputedEnergy?.state || 0);
       const batteryWh = (e.car_battery_capacity_kwh || 100) * 1000;
@@ -272,19 +291,19 @@ Three notification events:
   }
   ```
 - [ ] 8.4 Distinct ring gradient for stale mode (amber/warning, different from fault-red and disconnected-grey)
-- [ ] 8.5 When `api_ok` returns to `on`: remove `stale` CSS class, revert to normal `XX%` display
+- [ ] 8.5 When `car_stale` returns to `off`: remove `stale` CSS class, revert to normal `XX%` display
 
 ### Task 9: Notifications — CC-001 (AC: #5)
 
 - [ ] 9.1 On stale transition (Feature A): notify TheAdmin with stale sensor details; notify assigned person with plain-language message
 - [ ] 9.2 On contradiction detection (Feature B): notify assigned person that car is in stale +% mode
-- [ ] 9.3 On recovery (force-stale switch OFF): notify assigned person that data is fresh
+- [ ] 9.3 On recovery (stale mode select is "Auto"): notify assigned person that data is fresh
 - [ ] 9.4 Use existing `async_notify_all_mobile_apps()` pattern (per-app failure isolation, catch specific exceptions)
 - [ ] 9.5 Tests: notification triggers for all three events
 
 ### Task 10: Translations
 
-- [ ] 10.1 Add translation keys for `BINARY_SENSOR_CAR_API_OK` and `SWITCH_CAR_FORCE_STALE` in `strings.json` under their respective sections
+- [ ] 10.1 Add translation keys in `strings.json`: `BINARY_SENSOR_CAR_API_OK`, `BINARY_SENSOR_CAR_STALE`, `SELECT_CAR_STALE_MODE` (with option labels for auto/force_stale/force_not_stale)
 - [ ] 10.2 Run `bash scripts/generate-translations.sh` (never edit `translations/en.json` directly)
 
 ## Dev Notes
@@ -337,7 +356,7 @@ Three notification events:
 2. **Do NOT read the car SOC sensor anywhere in stale mode** — the SOC sensor is poisoned. The ONLY source of charge progress is `_compute_added_charge_update()`. Every call to `get_car_charge_percent()` returns None when stale.
 3. **Do NOT change the target percent handler** — user sets target % normally, even in stale mode.
 4. **Do NOT modify `home_model/` imports** — staleness detection uses HA entity timestamps (HA-layer concern).
-5. **Do NOT auto-exit stale when force-stale switch is ON** — the switch holds stale mode until TheAdmin explicitly turns it OFF.
+5. **Do NOT auto-exit stale when select is "Force Stale"** — the select holds stale mode. Do NOT auto-enter stale when select is "Force Not Stale" — the select overrides detection.
 6. **Do NOT treat "some sensors stale" as "API stale"** — ALL sensors must be stale for Feature A. Feature B (contradiction) is the immediate trigger.
 7. **Do NOT use inferred flags in recovery check** — `can_exit_stale_percent_mode()` must read raw sensor values (not the inferred overrides) to verify the API is actually reporting correctly.
 8. **Do NOT modify the charger scoring algorithm** — manual assignment override already works. This story adds inference on top.
@@ -367,7 +386,7 @@ From **Story 3.3** (Grid Outage):
 ### Project Structure Notes
 
 - New constants in `const.py` — follow `CONF_CAR_*` / `BINARY_SENSOR_*` naming pattern
-- New entities in `switch.py`, `binary_sensor.py` — follow existing car entity registration patterns
+- New entities in `select.py`, `binary_sensor.py` — follow existing car entity registration patterns
 - Car card changes in `ui/resources/qs-car-card.js` — no new JS files
 - Dashboard template changes in `ui/quiet_solar_dashboard_template.yaml.j2` — wire `api_ok`
 - Translations in `strings.json` — never edit `translations/en.json` directly
