@@ -317,6 +317,11 @@ class TestBistateMetricsFallback(unittest.TestCase):
             end_of_constraint=end,
         )
 
+    @staticmethod
+    def _set_day_boundaries(device, today_utc, tomorrow_utc):
+        """Mock _get_today_boundaries to return explicit day boundaries."""
+        device._get_today_boundaries = MagicMock(return_value=(today_utc, tomorrow_utc))
+
     def test_metrics_show_completed_hours_after_constraint_removal(self):
         """After constraint removal, metrics should fall back to _last_completed_constraint.
 
@@ -325,6 +330,10 @@ class TestBistateMetricsFallback(unittest.TestCase):
         """
         device = self._create_bistate_device()
         time = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
+        today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+        # Wide window to include constraint ending at time + 12h
+        tomorrow_utc = datetime(2026, 3, 31, 12, 0, 0, tzinfo=pytz.UTC)
+        self._set_day_boundaries(device, today_utc, tomorrow_utc)
 
         completed_ct = self._create_time_constraint(
             device, time, target_seconds=3 * 3600.0, current_seconds=3 * 3600.0, start_offset_h=6
@@ -347,6 +356,10 @@ class TestBistateMetricsFallback(unittest.TestCase):
         """When an active constraint exists, metrics should show its current progress."""
         device = self._create_bistate_device()
         time = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
+        today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+        # Use wide window to include constraint ending at time + 12h
+        tomorrow_utc = datetime(2026, 3, 31, 12, 0, 0, tzinfo=pytz.UTC)
+        self._set_day_boundaries(device, today_utc, tomorrow_utc)
 
         active_ct = self._create_time_constraint(
             device, time, target_seconds=3 * 3600.0, current_seconds=1.5 * 3600.0, start_offset_h=3
@@ -368,6 +381,9 @@ class TestBistateMetricsFallback(unittest.TestCase):
         """When no constraints exist and no completed constraint, metrics should be zero."""
         device = self._create_bistate_device()
         time = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
+        today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+        tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+        self._set_day_boundaries(device, today_utc, tomorrow_utc)
 
         device._constraints = []
         device._last_completed_constraint = None

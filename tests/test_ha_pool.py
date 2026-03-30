@@ -29,6 +29,11 @@ class FakeQSPool:
         self.default_on_finish_time = kwargs.get("default_on_finish_time", dt_time(hour=0, minute=0, second=0))
         self.is_load_time_sensitive = False
 
+        # Calendar metrics (bug #78)
+        self._is_current_calendar_mode = False
+        self._today_calendar_target_s = 0.0
+        self._today_calendar_past_actual_s = 0.0
+
         # Pool steps configuration
         self.pool_steps = []
         for min_temp, max_temp, default in POOL_TEMP_STEPS:
@@ -173,64 +178,68 @@ def test_pool_power_use():
     assert pool.power_use == 2000
 
 
-def _make_pool_with_day_bounds(now, end_day_offset_h=24, start_day_offset_h=0):
-    """Create a FakeQSPool with get_next_time_from_hours mocked for DST-safe day bounds.
+def _make_pool_with_day_bounds(now, today_utc=None, tomorrow_utc=None):
+    """Create a FakeQSPool with mocked day boundaries for update_current_metrics.
 
-    Returns (pool, end_day, start_day).
+    Returns (pool, today_utc, tomorrow_utc).
     """
-    end_day = now + timedelta(hours=end_day_offset_h)
-    start_day = now - timedelta(hours=start_day_offset_h)
+    if today_utc is None:
+        today_utc = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if tomorrow_utc is None:
+        tomorrow_utc = today_utc + timedelta(days=1)
     pool = FakeQSPool()
     pool.qs_bistate_current_on_h = 0.0
     pool.qs_bistate_current_duration_h = 0.0
-    # First call: end_day; second call: start_day (DST-safe boundary)
-    pool.get_next_time_from_hours = MagicMock(side_effect=[end_day, start_day])
-    return pool, end_day, start_day
+    pool._get_today_boundaries = MagicMock(return_value=(today_utc, tomorrow_utc))
+    return pool, today_utc, tomorrow_utc
 
 
-def test_pool_update_current_metrics_completed_and_active_shows_only_active():
-    """Test that active constraints exclude completed constraint from metrics."""
+def test_pool_update_current_metrics_completed_and_active_sums_both():
+    """Test that active + completed constraints from today are both counted."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
-    now = datetime.now(tz=pytz.UTC)
-    end = now + timedelta(hours=1)
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
 
     completed_ct = MagicMock()
-    completed_ct.end_of_constraint = end
-    completed_ct.start_of_constraint = now - timedelta(hours=1)
+    completed_ct.end_of_constraint = datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC)
+    completed_ct.start_of_constraint = datetime(2026, 3, 30, 7, 0, 0, tzinfo=pytz.UTC)
     completed_ct.target_value = 3600.0
     completed_ct.current_value = 1800.0
 
     active_ct = MagicMock()
-    active_ct.end_of_constraint = end
-    active_ct.start_of_constraint = now
+    active_ct.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+    active_ct.start_of_constraint = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
     active_ct.target_value = 7200.0
     active_ct.current_value = 3600.0
 
-    pool, _, _ = _make_pool_with_day_bounds(now)
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
     pool._last_completed_constraint = completed_ct
     pool._constraints = [active_ct]
 
     QSBiStateDuration.update_current_metrics(pool, now)
 
-    assert pool.qs_bistate_current_on_h == 3600.0 / 3600.0
-    assert pool.qs_bistate_current_duration_h == 7200.0 / 3600.0
+    # Both constraints from today are summed
+    assert pool.qs_bistate_current_on_h == (3600.0 + 1800.0) / 3600.0
+    assert pool.qs_bistate_current_duration_h == (7200.0 + 3600.0) / 3600.0
 
 
 def test_pool_update_current_metrics_completed_only_shows_completed():
     """Test that completed constraint values display when no active constraints."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
-    now = datetime.now(tz=pytz.UTC)
-    end = now + timedelta(hours=1)
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
 
     completed_ct = MagicMock()
-    completed_ct.end_of_constraint = end
-    completed_ct.start_of_constraint = now - timedelta(hours=1)
+    completed_ct.end_of_constraint = datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC)
+    completed_ct.start_of_constraint = datetime(2026, 3, 30, 7, 0, 0, tzinfo=pytz.UTC)
     completed_ct.target_value = 3600.0
     completed_ct.current_value = 3600.0
 
-    pool, _, _ = _make_pool_with_day_bounds(now)
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
     pool._last_completed_constraint = completed_ct
     pool._constraints = []
 
@@ -244,7 +253,7 @@ def test_pool_update_current_metrics_after_reset_shows_zero():
     """Test that metrics are zero when no constraints and no completed constraint."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
-    now = datetime.now(tz=pytz.UTC)
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
 
     pool, _, _ = _make_pool_with_day_bounds(now)
     pool._last_completed_constraint = None
@@ -262,15 +271,17 @@ def test_pool_update_current_metrics_partial_completion():
     """Test metrics with partial completion (target_value != current_value)."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
-    now = datetime.now(tz=pytz.UTC)
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
 
     ct = MagicMock()
-    ct.end_of_constraint = now + timedelta(hours=2)
-    ct.start_of_constraint = now - timedelta(hours=1)
+    ct.end_of_constraint = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
+    ct.start_of_constraint = datetime(2026, 3, 30, 11, 0, 0, tzinfo=pytz.UTC)
     ct.target_value = 7200.0  # 2h target
     ct.current_value = 2700.0  # 0.75h done
 
-    pool, _, _ = _make_pool_with_day_bounds(now)
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
     pool._last_completed_constraint = None
     pool._constraints = [ct]
 
@@ -283,20 +294,18 @@ def test_pool_update_current_metrics_partial_completion():
 def test_pool_update_current_metrics_day_boundary_excludes_old():
     """Test that constraints outside the current day window are excluded."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+    from custom_components.quiet_solar.home_model.constraints import DATETIME_MAX_UTC
 
-    now = datetime.now(tz=pytz.UTC)
-    end_day = now + timedelta(hours=12)
-    start_day = end_day - timedelta(hours=24)
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
 
-    # Constraint entirely before the day window
+    # Completed constraint from 2 days ago
     old_ct = MagicMock()
-    old_ct.end_of_constraint = start_day - timedelta(hours=1)
-    old_ct.start_of_constraint = start_day - timedelta(hours=5)
+    old_ct.end_of_constraint = datetime(2026, 3, 28, 10, 0, 0, tzinfo=pytz.UTC)
+    old_ct.start_of_constraint = datetime(2026, 3, 28, 7, 0, 0, tzinfo=pytz.UTC)
 
-    pool = FakeQSPool()
-    pool.qs_bistate_current_on_h = 0.0
-    pool.qs_bistate_current_duration_h = 0.0
-    pool.get_next_time_from_hours = MagicMock(side_effect=[end_day, start_day])
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
     pool._last_completed_constraint = old_ct
     pool._constraints = []
 
@@ -307,24 +316,26 @@ def test_pool_update_current_metrics_day_boundary_excludes_old():
 
 
 def test_pool_update_current_metrics_multiple_active_constraints_sum():
-    """Test that multiple active constraints are all summed (by design)."""
+    """Test that multiple active constraints within today are all summed."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
-    now = datetime.now(tz=pytz.UTC)
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
 
     ct1 = MagicMock()
-    ct1.end_of_constraint = now + timedelta(hours=4)
-    ct1.start_of_constraint = now
+    ct1.end_of_constraint = datetime(2026, 3, 30, 16, 0, 0, tzinfo=pytz.UTC)
+    ct1.start_of_constraint = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
     ct1.target_value = 3600.0
     ct1.current_value = 1800.0
 
     ct2 = MagicMock()
-    ct2.end_of_constraint = now + timedelta(hours=8)
-    ct2.start_of_constraint = now + timedelta(hours=4)
+    ct2.end_of_constraint = datetime(2026, 3, 30, 20, 0, 0, tzinfo=pytz.UTC)
+    ct2.start_of_constraint = datetime(2026, 3, 30, 16, 0, 0, tzinfo=pytz.UTC)
     ct2.target_value = 7200.0
     ct2.current_value = 0.0
 
-    pool, _, _ = _make_pool_with_day_bounds(now)
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
     pool._last_completed_constraint = None
     pool._constraints = [ct1, ct2]
 
@@ -334,57 +345,49 @@ def test_pool_update_current_metrics_multiple_active_constraints_sum():
     assert pool.qs_bistate_current_duration_h == (3600.0 + 7200.0) / 3600.0
 
 
-def test_pool_update_current_metrics_with_end_range_parameter():
-    """Test update_current_metrics with explicit end_range on completed constraint fallback."""
+def test_pool_update_current_metrics_tomorrow_constraint_excluded():
+    """Test that constraints ending tomorrow are excluded from today's metrics."""
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
-    now = datetime.now(tz=pytz.UTC)
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
 
     ct = MagicMock()
-    ct.end_of_constraint = now + timedelta(hours=2)
-    ct.start_of_constraint = now
+    ct.end_of_constraint = datetime(2026, 3, 31, 7, 0, 0, tzinfo=pytz.UTC)  # tomorrow
+    ct.start_of_constraint = datetime(2026, 3, 31, 6, 0, 0, tzinfo=pytz.UTC)
+    ct.target_value = 3600.0
+    ct.current_value = 0.0
+
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
+    pool._last_completed_constraint = None
+    pool._constraints = [ct]
+
+    QSBiStateDuration.update_current_metrics(pool, now)
+
+    assert pool.qs_bistate_current_on_h == 0.0
+    assert pool.qs_bistate_current_duration_h == 0.0
+
+
+def test_pool_update_current_metrics_completed_from_today_included():
+    """Test that completed constraint from today is counted in metrics."""
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+
+    now = datetime(2026, 3, 30, 18, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+
+    ct = MagicMock()
+    ct.end_of_constraint = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
+    ct.start_of_constraint = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
     ct.target_value = 5400.0
     ct.current_value = 1800.0
 
-    pool, _, _ = _make_pool_with_day_bounds(now)
-    pool._last_completed_constraint = ct
-    pool._constraints = []
-
-    # Call with explicit end_range (6:30 AM) — used in day-window filter for completed constraint
-    QSBiStateDuration.update_current_metrics(pool, now, end_range=dt_time(hour=6, minute=30))
-
-    assert pool.qs_bistate_current_on_h == 1800.0 / 3600.0
-    assert pool.qs_bistate_current_duration_h == 5400.0 / 3600.0
-    # Verify get_next_time_from_hours was called with the custom end_range
-    first_call_args = pool.get_next_time_from_hours.call_args_list[0]
-    assert first_call_args[1]["local_hours"] == dt_time(hour=6, minute=30)
-
-
-def test_pool_update_current_metrics_dst_safe_day_boundary():
-    """Test that DST-safe day boundary uses get_next_time_from_hours, not raw 24h."""
-    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
-
-    now = datetime.now(tz=pytz.UTC)
-    # Simulate spring-forward: 23h local day
-    end_day = now + timedelta(hours=12)
-    start_day = end_day - timedelta(hours=23)  # 23h day, not 24h
-
-    ct = MagicMock()
-    ct.end_of_constraint = now + timedelta(hours=1)
-    ct.start_of_constraint = now
-    ct.target_value = 3600.0
-    ct.current_value = 1800.0
-
-    pool = FakeQSPool()
-    pool.qs_bistate_current_on_h = 0.0
-    pool.qs_bistate_current_duration_h = 0.0
-    pool.get_next_time_from_hours = MagicMock(side_effect=[end_day, start_day])
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
     pool._last_completed_constraint = ct
     pool._constraints = []
 
     QSBiStateDuration.update_current_metrics(pool, now)
 
     assert pool.qs_bistate_current_on_h == 1800.0 / 3600.0
-    # Verify the second call uses end_day - 26h (DST-safe offset)
-    second_call = pool.get_next_time_from_hours.call_args_list[1]
-    assert second_call[1]["time_utc_now"] == end_day - timedelta(hours=26)
+    assert pool.qs_bistate_current_duration_h == 5400.0 / 3600.0
