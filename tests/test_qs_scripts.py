@@ -37,7 +37,9 @@ class TestClaudeLaunchCommand:
         """Read the generated launch script contents."""
         from pathlib import Path
 
-        return Path(script_path).read_text()
+        # claude_launch_command returns "sh /path/to/script.sh"
+        path = script_path.removeprefix("sh ")
+        return Path(path).read_text()
 
     def test_without_prompt_unchanged(self):
         """No prompt arg produces script without positional arg."""
@@ -101,7 +103,8 @@ class TestNextStep:
         """Read the launch script pointed to by new_context."""
         from pathlib import Path
 
-        path = data["new_context"]
+        # new_context is "sh /path/to/script.sh"
+        path = data["new_context"].removeprefix("sh ")
         return Path(path).read_text()
 
     def test_review_story_transition(self):

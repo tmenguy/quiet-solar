@@ -424,7 +424,7 @@ def test_phase_report_success():
         "validate": {"quality_gate": {"passed": True}, "ci": {"all_passed": True}},
         "merge": {"merge": {"merged": True}},
     }
-    report = phase_report(steps, changed_files=["custom_components/quiet_solar/foo.py"])
+    report = phase_report(steps, main_dir="/tmp/main", changed_files=["custom_components/quiet_solar/foo.py"])
     assert report["success"] is True
     assert report["release_suggestion"] == "release"
 
@@ -435,7 +435,7 @@ def test_phase_report_failure_with_recovery():
         "prepare": {"commit": {"committed": True}, "pr": {"pr_number": 10}},
         "validate": {"quality_gate": {"passed": False}},
     }
-    report = phase_report(steps, changed_files=[], failed_phase="validate")
+    report = phase_report(steps, main_dir="/tmp/main", changed_files=[], failed_phase="validate")
     assert report["success"] is False
     assert "recovery" in report
 
@@ -447,7 +447,7 @@ def test_phase_report_no_release_for_process_only():
         "validate": {"quality_gate": {"passed": True}, "ci": {"all_passed": True}},
         "merge": {"merge": {"merged": True}},
     }
-    report = phase_report(steps, changed_files=["scripts/qs/utils.py"])
+    report = phase_report(steps, main_dir="/tmp/main", changed_files=["scripts/qs/utils.py"])
     assert report["release_suggestion"] == "no-release"
 
 
