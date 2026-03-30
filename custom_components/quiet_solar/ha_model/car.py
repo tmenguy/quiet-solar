@@ -39,6 +39,8 @@ from ..const import (
     CONF_CAR_TRACKER,
     CONF_DEFAULT_CAR_CHARGE,
     CONF_MINIMUM_OK_CAR_CHARGE,
+    DEVICE_STATUS_CHANGE_ERROR,
+    DEVICE_STATUS_CHANGE_NOTIFY,
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
     MAX_POSSIBLE_AMPERAGE,
@@ -559,8 +561,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return True
         return (time - last_time).total_seconds() > CAR_SOC_STALE_THRESHOLD_S
 
-    def _are_all_api_sensors_available(self, time: datetime) -> bool:
-        """Return True if every tracked API sensor has a valid reading."""
+    def _have_all_api_sensors_reported(self, time: datetime) -> bool:
+        """Return True if every tracked API sensor has ever reported a valid value."""
         for sensor_id in self._car_api_all_sensors:
             last_time, last_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
                 sensor_id, tolerance_seconds=None, time=time
@@ -631,9 +633,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 self.name,
                 self._car_api_stale_since,
             )
-            self._schedule_notification(
-                f"Car {self.name} API recovered",
-                f"Your {self.name}'s API has recovered. Switching back to normal charging mode",
+            self._schedule_person_notification(
+                f"Car {self.name} recovered",
+                f"Your {self.name}'s data is available again",
             )
             self._exit_stale_mode()
             self._was_car_api_stale = False
@@ -642,6 +644,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if (
             not self._car_api_stale
             and not self.car_api_stale_percent_mode
+            and self.car_stale_mode_override != CAR_STALE_MODE_FORCE_NOT_STALE
             and self.can_use_charge_percent_constraints()
             and self._is_soc_sensor_stale(time)
         ):
@@ -670,10 +673,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     CAR_API_STALE_THRESHOLD_S / 3600,
                     stale_sensors,
                 )
-                self._schedule_notification(
-                    f"Car {self.name} API stale",
-                    f"Your {self.name}'s data is stale — charging will use conservative estimates",
-                )
             else:
                 # SOC-only stale — SOC sensor specifically is stale
                 _LOGGER.warning(
@@ -681,9 +680,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     self.name,
                     CAR_SOC_STALE_THRESHOLD_S / 3600,
                 )
-                self._schedule_notification(
-                    f"Car {self.name} SOC sensor stale",
-                    f"Your {self.name}'s SOC sensor is stale — charging will estimate progress from 0%",
+            # Notify only for automatic stale detection, not user-initiated Force Stale
+            if self.car_stale_mode_override != CAR_STALE_MODE_FORCE_STALE:
+                self._schedule_person_notification(
+                    f"Warning: {self.name}",
+                    f"Warning: {self.name} data is not available, check the car card",
+                    error=True,
                 )
             # Activate stale-percent mode if car can use percent constraints
             if self.can_use_charge_percent_constraints():
@@ -700,14 +702,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self._was_car_api_stale = effectively_stale
 
-    def _schedule_notification(self, title: str, message: str) -> None:
-        """Schedule an async notification via home. Non-blocking."""
-        if self.home is not None and hasattr(self.home, "async_notify_all_mobile_apps"):
-            if self.hass is not None:
-                self.hass.async_create_task(
-                    self.home.async_notify_all_mobile_apps(title, message),
-                    f"qs_stale_notify_{self.name}",
-                )
+    def _schedule_person_notification(self, title: str, message: str, error: bool = False) -> None:
+        """Notify the person attached to this car. Non-blocking."""
+        person = self.current_forecasted_person
+        if person is None or self.hass is None:
+            return
+        change_type = DEVICE_STATUS_CHANGE_ERROR if error else DEVICE_STATUS_CHANGE_NOTIFY
+        time = datetime.now(tz=pytz.UTC)
+        self.hass.async_create_task(
+            person.on_device_state_change(time, device_change_type=change_type, title=title, message=message),
+            f"qs_stale_notify_{self.name}",
+        )
 
     def _get_stale_sensor_details(self, time: datetime) -> str:
         """Return a string listing each sensor and how long since its last update."""
@@ -770,9 +775,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 self.car_api_stale_percent_mode = True
             self._was_car_api_stale = True
             # Notify on contradiction (Feature B)
-            self._schedule_notification(
-                f"Car {self.name} stale API",
-                f"Your {self.name} has stale API data. Charging in +% mode (starting from 0%)",
+            self._schedule_person_notification(
+                f"Warning: {self.name}",
+                f"Warning: {self.name} data is not available, check the car card",
+                error=True,
             )
 
     def clear_inferred_flags(self) -> None:
@@ -783,6 +789,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
     async def user_set_stale_mode(self, option: str, for_init: bool = False) -> None:
         """Handle stale mode select change. Immediately re-evaluate stale state."""
         self.car_stale_mode_override = option
+        if for_init and option == CAR_STALE_MODE_FORCE_STALE:
+            # Restore stale-percent mode immediately so get_car_charge_percent()
+            # returns None before the first update_states cycle runs
+            if self.can_use_charge_percent_constraints():
+                self.car_api_stale_percent_mode = True
         if not for_init:
             time = datetime.now(tz=pytz.UTC)
             self._update_car_api_staleness(time)
@@ -805,7 +816,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.is_car_api_stale(time):
             return False
         # Common: all sensors must have valid readings
-        if not self._are_all_api_sensors_available(time):
+        if not self._have_all_api_sensors_reported(time):
             return False
         # Common: SOC must be fresh (prevents re-entry flip-flop with 1h threshold)
         if self._is_soc_sensor_stale(time):
@@ -1123,7 +1134,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def detach_charger(self):
         if self.charger is not None:
             _LOGGER.info("Car %s detached charger %s", self.name, self.charger.name)
-            self.clear_inferred_flags()
             self.charger.detach_car()
 
     def get_continuous_plug_duration(self, time: datetime) -> float | None:
@@ -1272,7 +1282,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         )
 
     def is_car_charge_growing(self, num_seconds: float, time: datetime) -> bool | None:
-
+        if self.car_api_stale_percent_mode:
+            return None
         return self.is_sensor_growing(entity_id=self.car_charge_percent_sensor, num_seconds=num_seconds, time=time)
 
     def _get_delta_from_graph(self, deltas, deltas_graph, from_v, to_v):

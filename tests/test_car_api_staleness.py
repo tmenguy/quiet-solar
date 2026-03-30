@@ -332,6 +332,7 @@ class TestStalenessTransitions:
         # Track notification count
         real_car.hass = MagicMock()
         real_car.home = MagicMock()
+        real_car.current_forecasted_person = MagicMock()
 
         real_car._update_car_api_staleness(current_time)
 
@@ -731,10 +732,17 @@ class TestSocOnlyStaleness:
         assert real_car._car_api_stale is False  # not full stale
         assert real_car.is_car_effectively_stale(current_time) is True
 
+    def test_is_car_charge_growing_returns_none_when_stale(self, real_car, current_time):
+        """is_car_charge_growing returns None when in stale-percent mode."""
+        real_car.car_api_stale_percent_mode = True
+        result = real_car.is_car_charge_growing(300.0, current_time)
+        assert result is None
+
     def test_soc_only_stale_sends_notification(self, real_car, current_time):
         """SOC-only stale triggers a notification mentioning SOC sensor."""
         real_car.hass = MagicMock()
         real_car.home = MagicMock()
+        real_car.current_forecasted_person = MagicMock()
         self._make_soc_only_stale(real_car, current_time)
         real_car._update_car_api_staleness(current_time)
 
@@ -950,7 +958,7 @@ class TestContextAwareExit:
         # Make home and plug return None by having no valid value
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = None
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = None
-        # _are_all_api_sensors_available returns False → blocked
+        # _have_all_api_sensors_reported returns False → blocked
         assert real_car.can_exit_stale_percent_mode(current_time) is False
 
 
@@ -1022,18 +1030,18 @@ class TestPeriodicContradiction:
         assert real_car._car_api_stale is False
 
 
-# ── _are_all_api_sensors_available ─────────────────────────────────────
+# ── _have_all_api_sensors_reported ─────────────────────────────────────
 
 
 class TestAllApiSensorsAvailable:
-    """Test _are_all_api_sensors_available() helper."""
+    """Test _have_all_api_sensors_reported() helper."""
 
     def test_all_valid(self, real_car, current_time):
         """All sensors have valid readings → True."""
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
-        assert real_car._are_all_api_sensors_available(current_time) is True
+        assert real_car._have_all_api_sensors_reported(current_time) is True
 
     def test_one_missing(self, real_car, current_time):
         """One sensor has no valid reading → False."""
@@ -1041,12 +1049,12 @@ class TestAllApiSensorsAvailable:
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
         real_car._entity_probed_last_valid_state[real_car.car_odometer_sensor] = None
-        assert real_car._are_all_api_sensors_available(current_time) is False
+        assert real_car._have_all_api_sensors_reported(current_time) is False
 
     def test_empty_sensor_list(self, real_invited_car, current_time):
         """No sensors tracked → True (vacuously)."""
         real_invited_car._car_api_all_sensors = []
-        assert real_invited_car._are_all_api_sensors_available(current_time) is True
+        assert real_invited_car._have_all_api_sensors_reported(current_time) is True
 
 
 # ── Task 6: Select + Binary Sensor Entities ─────────────────────────────
@@ -1105,6 +1113,7 @@ class TestNotifications:
         # Setup hass with async_create_task
         real_car.hass = MagicMock()
         real_car.home = MagicMock()
+        real_car.current_forecasted_person = MagicMock()
 
         stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
         for sensor_id in real_car._car_api_all_sensors:
@@ -1118,6 +1127,7 @@ class TestNotifications:
         """Contradiction detection schedules a notification."""
         real_car.hass = MagicMock()
         real_car.home = MagicMock()
+        real_car.current_forecasted_person = MagicMock()
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
 
@@ -1128,9 +1138,33 @@ class TestNotifications:
     def test_no_notification_when_no_hass(self, real_car, current_time):
         """No crash when hass is None during notification."""
         real_car.hass = None
-        real_car.home = MagicMock()
+        real_car.current_forecasted_person = MagicMock()
         # Should not raise
-        real_car._schedule_notification("title", "message")
+        real_car._schedule_person_notification("title", "message")
+
+    def test_no_notification_when_no_person(self, real_car, current_time):
+        """No crash when person is None during notification."""
+        real_car.hass = MagicMock()
+        real_car.current_forecasted_person = None
+        # Should not raise
+        real_car._schedule_person_notification("title", "message")
+        real_car.hass.async_create_task.assert_not_called()
+
+    def test_force_stale_skips_notification(self, real_car, current_time):
+        """User-initiated Force Stale does not send a notification."""
+        real_car.hass = MagicMock()
+        real_car.home = MagicMock()
+        real_car.current_forecasted_person = MagicMock()
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_STALE
+
+        stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (stale_time, "value", {})
+
+        real_car._update_car_api_staleness(current_time)
+
+        # Force Stale is user-initiated, no notification expected
+        real_car.hass.async_create_task.assert_not_called()
 
 
 class TestBinarySensorEntities:
