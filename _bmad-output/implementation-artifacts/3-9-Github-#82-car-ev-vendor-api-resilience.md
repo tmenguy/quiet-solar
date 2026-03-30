@@ -7,7 +7,7 @@ branch: "QS_82"
 ## Story
 
 As TheAdmin,
-I want the system to detect stale car API data, infer correct state from manual user actions, offer a manual car mode when the API is unreliable for days, and handle the cascading impact across charging, prediction, and person tracking,
+I want the system to detect stale car API data, infer correct state from manual user actions, allow me to force stale mode when I know the API is unreliable, and handle the cascading impact across charging, prediction, and person tracking,
 So that an unreliable car vendor API doesn't silently degrade the entire household optimization.
 
 ## Real-World Problem (Magali's Scenario)
@@ -60,15 +60,19 @@ This is better than energy mode because users think in battery percentages, and 
 **And** the car enters stale-percent mode with `+XX%` display and red card border
 **And** the assigned person is notified (CC-001): "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
 
-### AC3: Manual Mode for Extended Staleness
+### AC3: Force-Stale Switch
 
-**Given** the car API has been stale for an extended period
-**When** TheAdmin toggles `switch.qs_<car>_manual_mode`
-**Then** the system bypasses the vendor API entirely
-**And** TheAdmin can enter current SOC via `number.qs_<car>_manual_soc`
-**And** the system tracks SOC by accumulating charger energy delivery (kWh to % using battery capacity)
-**And** car presence is inferred from charger state (plugged = home, unplugged = away)
+**Given** TheAdmin knows the car API is unreliable (e.g., Renault servers down, or wants to pre-emptively protect against stale data)
+**When** TheAdmin toggles `switch.qs_<car>_force_stale` ON
+**Then** the car is immediately forced into stale-percent mode (same behavior as Feature A/B detection)
+**And** `binary_sensor.qs_<car>_api_ok` turns off, card gets red border, display shows `+XX%`
+**And** the switch reflects current stale state: ON when stale (auto-detected or forced), OFF when healthy
 **And** person forecast for this car uses conservative defaults (always assume full charge needed)
+
+**Given** the force-stale switch is ON and the API recovers
+**When** sensors start updating again
+**Then** the system does NOT auto-exit stale mode — the switch holds it in stale mode until TheAdmin explicitly turns it OFF
+**And** when TheAdmin turns the switch OFF, normal recovery flow proceeds (re-read SOC, reassess constraints)
 
 ### AC4: Auto-Recovery When API Resumes
 
@@ -77,7 +81,7 @@ This is better than energy mode because users think in battery percentages, and 
 **Then** `binary_sensor.qs_<car>_api_ok` turns on, red border removed
 **And** stale-percent mode is exited: real SOC is re-read, constraints reassessed with actual SOC as initial value
 **And** the assigned person is notified (CC-001): "Your {car_name}'s data has recovered — charging will resume using live data"
-**And** if manual mode (switch) is on, TheAdmin is notified suggesting to exit manual mode (not auto-disabled)
+**And** if force-stale switch is ON, recovery is blocked — the switch holds stale mode until TheAdmin explicitly turns it OFF
 
 **Recovery sensor tiers**: Not all sensors carry the same weight. An odometer update alone does NOT exit stale mode — home/plug are "critical" because they directly affect charger assignment and constraint behavior.
 
@@ -86,7 +90,7 @@ This is better than energy mode because users think in battery percentages, and 
 Three notification events:
 1. **Car goes stale** (Feature A): Notify TheAdmin with specific stale sensors. Notify assigned person: "Your {car_name}'s data is stale — charging will use conservative estimates."
 2. **Stale car manually assigned** (Feature B): Notify assigned person: "Your {car_name} has stale API data. Charging in +% mode (starting from 0%)."
-3. **API recovers**: Notify assigned person: "Your {car_name}'s API has recovered. Switching back to normal charging mode." If manual mode is on, additionally notify TheAdmin: "Consider disabling manual mode."
+3. **API recovers** (and force-stale switch is OFF): Notify assigned person: "Your {car_name}'s API has recovered. Switching back to normal charging mode."
 
 ## Tasks / Subtasks
 
@@ -192,22 +196,23 @@ Three notification events:
   def can_exit_stale_percent_mode(self, time):
       if not self._stale_percent_mode:
           return False
+      if self._force_stale:
+          return False  # force-stale switch holds stale mode
       if self.is_car_api_stale(time):
           return False  # sensors still stale
       # At least one critical sensor must confirm physical state
-      home = self.is_car_home(time)  # uses raw sensor, not inferred
-      plugged = self.is_car_plugged(time)  # uses raw sensor, not inferred
+      home = self._raw_is_car_home(time)  # raw sensor, not inferred
+      plugged = self._raw_is_car_plugged(time)  # raw sensor, not inferred
       if self._car_api_inferred_plugged:
           return plugged is True  # plug sensor must specifically recover
       return home is True or plugged is True
   ```
-  **Important**: The `is_car_home()`/`is_car_plugged()` calls here must check the **raw sensor**, not the inferred overrides, to verify the API is actually reporting correctly.
+  **Important**: The home/plug checks here must use **raw sensor methods** (not the inferred overrides) to verify the API is actually reporting correctly.
 - [ ] 5.2 Call `can_exit_stale_percent_mode()` each cycle in `check_load_activity_and_constraints()`
 - [ ] 5.3 On recovery:
   - Clear `_car_api_stale`, `_stale_percent_mode`, `_car_api_inferred_home`, `_car_api_inferred_plugged`
   - Re-read real SOC via `get_car_charge_percent()` — constraint continues as `MultiStepsPowerLoadConstraintChargePercent` but update callback now reads real sensor
   - Notify assigned person (CC-001)
-  - If manual mode switch is on: notify TheAdmin suggesting exit (don't auto-disable)
 - [ ] 5.4 Tests:
   - Odometer-only update does NOT clear stale
   - Home tracker update clears stale (when no inferred plug)
@@ -215,17 +220,16 @@ Three notification events:
   - Constraint reassessment with real SOC on recovery
   - Recovery call must use raw sensor values, not inferred overrides
 
-### Task 6: Manual Mode Entities (AC: #3)
+### Task 6: Force-Stale Switch (AC: #3)
 
-- [ ] 6.1 Add `CONF_CAR_MANUAL_MODE` and `CONF_CAR_MANUAL_SOC` constants to `const.py`
-- [ ] 6.2 Create `switch.qs_<car>_manual_mode` entity in `switch.py`
-  - When on: bypass all API sensor readings, use manual SOC + charger inference
-  - When off: resume normal API-based operation
-- [ ] 6.3 Create `number.qs_<car>_manual_soc` entity in `number.py` (range 0-100, step 1, only effective when manual mode on)
-- [ ] 6.4 SOC tracking by energy accumulation: `delta_soc = (energy_kwh / battery_capacity_kwh) * 100`
-- [ ] 6.5 In manual mode: `is_car_home()`/`is_car_plugged()` infer from charger state
-- [ ] 6.6 In manual mode: person forecast uses conservative defaults (full charge needed)
-- [ ] 6.7 Tests: enable/disable, SOC accumulation, charger-based inference
+- [ ] 6.1 Add `SWITCH_CAR_FORCE_STALE = "qs_car_force_stale"` constant to `const.py`
+- [ ] 6.2 Create `switch.qs_<car>_force_stale` entity in `switch.py`:
+  - **Reading state**: reflects current stale status (ON when stale — auto-detected or forced, OFF when healthy)
+  - **Turning ON**: forces the car into stale-percent mode immediately (sets `_car_api_stale = True`, `_stale_percent_mode = True`)
+  - **Turning OFF**: if API sensors are actually fresh, proceeds with normal recovery flow (clear flags, re-read SOC, reassess constraints). If API is still genuinely stale, turning OFF has no effect (auto-detection re-flags it immediately on next cycle).
+- [ ] 6.3 When force-stale is ON, block auto-recovery: `can_exit_stale_percent_mode()` returns False if the switch is ON, regardless of sensor freshness
+- [ ] 6.4 When force-stale is ON: person forecast uses conservative defaults (full charge needed)
+- [ ] 6.5 Tests: force ON → enters stale mode; force OFF with fresh API → recovery; force OFF with stale API → stays stale; auto-detection while switch is OFF; switch reflects auto-detected stale state
 
 ### Task 7: Binary Sensor + Dashboard (AC: #1, #4)
 
@@ -274,13 +278,13 @@ Three notification events:
 
 - [ ] 9.1 On stale transition (Feature A): notify TheAdmin with stale sensor details; notify assigned person with plain-language message
 - [ ] 9.2 On contradiction detection (Feature B): notify assigned person that car is in stale +% mode
-- [ ] 9.3 On recovery: notify assigned person that data is fresh; if manual mode on, notify TheAdmin suggesting exit
+- [ ] 9.3 On recovery (force-stale switch OFF): notify assigned person that data is fresh
 - [ ] 9.4 Use existing `async_notify_all_mobile_apps()` pattern (per-app failure isolation, catch specific exceptions)
 - [ ] 9.5 Tests: notification triggers for all three events
 
 ### Task 10: Translations
 
-- [ ] 10.1 Add translation key for `BINARY_SENSOR_CAR_API_OK` in `strings.json` under binary_sensor section
+- [ ] 10.1 Add translation keys for `BINARY_SENSOR_CAR_API_OK` and `SWITCH_CAR_FORCE_STALE` in `strings.json` under their respective sections
 - [ ] 10.2 Run `bash scripts/generate-translations.sh` (never edit `translations/en.json` directly)
 
 ## Dev Notes
@@ -333,7 +337,7 @@ Three notification events:
 2. **Do NOT read the car SOC sensor anywhere in stale mode** — the SOC sensor is poisoned. The ONLY source of charge progress is `_compute_added_charge_update()`. Every call to `get_car_charge_percent()` returns None when stale.
 3. **Do NOT change the target percent handler** — user sets target % normally, even in stale mode.
 4. **Do NOT modify `home_model/` imports** — staleness detection uses HA entity timestamps (HA-layer concern).
-5. **Do NOT auto-disable manual mode on recovery** — only notify. The user explicitly enabled it.
+5. **Do NOT auto-exit stale when force-stale switch is ON** — the switch holds stale mode until TheAdmin explicitly turns it OFF.
 6. **Do NOT treat "some sensors stale" as "API stale"** — ALL sensors must be stale for Feature A. Feature B (contradiction) is the immediate trigger.
 7. **Do NOT use inferred flags in recovery check** — `can_exit_stale_percent_mode()` must read raw sensor values (not the inferred overrides) to verify the API is actually reporting correctly.
 8. **Do NOT modify the charger scoring algorithm** — manual assignment override already works. This story adds inference on top.
@@ -354,7 +358,7 @@ From **Story 3.3** (Grid Outage):
 ### Testing Strategy
 
 - **Unit tests** (`@pytest.mark.unit`): stale detection logic (Feature A + B), flag transitions, inferred state, recovery tiering, `can_exit_stale_percent_mode()`
-- **Integration tests** (`@pytest.mark.integration`): binary sensor state, switch/number entities, notification triggers, dashboard template wiring
+- **Integration tests** (`@pytest.mark.integration`): binary sensor state, force-stale switch entity, notification triggers, dashboard template wiring
 - **Scenario tests**: full Magali flow — car goes stale → detected as guest → Magali manually assigns → contradiction triggers stale-percent mode (init=0%, +XX%) → charger delivers energy → API recovers (plug sensor fresh) → normal percent mode resumes with real SOC
 - Use `freezegun` for time-dependent staleness threshold tests
 - Use FakeHass for domain logic tests, real HA fixtures for entity integration tests
@@ -363,7 +367,7 @@ From **Story 3.3** (Grid Outage):
 ### Project Structure Notes
 
 - New constants in `const.py` — follow `CONF_CAR_*` / `BINARY_SENSOR_*` naming pattern
-- New entities in `switch.py`, `number.py`, `binary_sensor.py` — follow existing car entity registration patterns
+- New entities in `switch.py`, `binary_sensor.py` — follow existing car entity registration patterns
 - Car card changes in `ui/resources/qs-car-card.js` — no new JS files
 - Dashboard template changes in `ui/quiet_solar_dashboard_template.yaml.j2` — wire `api_ok`
 - Translations in `strings.json` — never edit `translations/en.json` directly
