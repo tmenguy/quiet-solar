@@ -316,11 +316,12 @@ class TestStalenessTransitions:
 
     def test_no_double_exit_on_percent_recovery(self, real_car, current_time):
         """Recovery via can_exit_stale_percent_mode doesn't trigger duplicate transition (F3)."""
-        # Setup: stale with percent mode, then sensors recover
+        # Setup: stale with percent mode, connected to charger
         real_car._car_api_stale = True
         real_car._was_car_api_stale = True
         real_car.car_api_stale_percent_mode = True
         real_car._car_api_stale_since = current_time - timedelta(hours=2)
+        real_car.charger = MagicMock(name="Test Charger")
 
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
@@ -582,44 +583,48 @@ class TestRecoveryLogic:
             real_car._entity_probed_last_valid_state[sensor_id] = (stale_time, "value", {})
         assert real_car.can_exit_stale_percent_mode(current_time) is False
 
-    def test_odometer_only_update_does_not_clear_stale(self, real_car, current_time):
-        """Odometer-only recovery doesn't clear stale (not a critical sensor)."""
+    def test_connected_car_needs_home_and_plugged(self, real_car, current_time):
+        """Connected car can't exit if home or plug sensors don't confirm."""
         self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
         fresh_time = current_time - timedelta(seconds=60)
-        stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
 
-        # Make all sensors fresh (to pass is_car_api_stale check)
+        # Make all sensors fresh
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
 
-        # But critical sensors don't confirm physical state (not "home", not "on")
+        # Plugged but not home — blocked
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
-        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
-
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
         assert real_car.can_exit_stale_percent_mode(current_time) is False
 
-    def test_home_tracker_recovery_clears_stale(self, real_car, current_time):
-        """Home tracker reporting 'home' clears stale (when no inferred plug)."""
+        # Home but not plugged — blocked
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_not_connected_plug_off_allows_exit(self, real_car, current_time):
+        """Not-connected car with plug=off and SOC fresh can exit stale."""
         self._setup_stale_car(real_car, current_time)
         fresh_time = current_time - timedelta(seconds=60)
 
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
-        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
 
         assert real_car.can_exit_stale_percent_mode(current_time) is True
 
-    def test_plug_required_for_inferred_plug_recovery(self, real_car, current_time):
-        """When car was manually assigned (inferred_plugged), plug sensor must recover."""
+    def test_connected_car_plug_on_home_home_allows_exit(self, real_car, current_time):
+        """Connected car exits stale when plug=on and home=home."""
         self._setup_stale_car(real_car, current_time)
-        real_car._car_api_inferred_plugged = True
+        real_car.charger = MagicMock(name="Test Charger")
         fresh_time = current_time - timedelta(seconds=60)
 
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
 
-        # Home is home but plugged is off — not enough for inferred-plug recovery
+        # Home is home but plugged is off — blocked (connected path needs both)
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
         assert real_car.can_exit_stale_percent_mode(current_time) is False
@@ -631,6 +636,7 @@ class TestRecoveryLogic:
     def test_recovery_via_update_clears_all_flags(self, real_car, current_time):
         """Full recovery cycle through _update_car_api_staleness clears everything."""
         self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
         fresh_time = current_time - timedelta(seconds=60)
 
         for sensor_id in real_car._car_api_all_sensors:
@@ -695,25 +701,26 @@ class TestSocOnlyStaleness:
         real_car.hass.async_create_task.assert_called_once()
 
     def test_soc_only_recovery_when_soc_refreshes(self, real_car, current_time):
-        """SOC-only stale recovers when SOC sensor becomes fresh."""
+        """SOC-only stale recovers when SOC sensor becomes fresh and plug confirms unplugged."""
         self._make_soc_only_stale(real_car, current_time)
         real_car._update_car_api_staleness(current_time)
         assert real_car.car_api_stale_percent_mode is True
 
-        # SOC sensor becomes fresh
+        # SOC sensor becomes fresh, plug confirms unplugged (not-connected path)
         fresh_time = current_time - timedelta(seconds=60)
         real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh_time, 55.0, {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
         real_car._update_car_api_staleness(current_time)
 
         assert real_car.car_api_stale_percent_mode is False
         assert real_car._was_car_api_stale is False
 
-    def test_soc_only_recovery_does_not_need_critical_sensor(self, real_car, current_time):
-        """SOC-only recovery doesn't require home/plugged confirmation."""
+    def test_soc_only_recovery_not_connected_plug_off(self, real_car, current_time):
+        """SOC-only stale + not-connected + plug=off + SOC fresh → exit allowed."""
         self._make_soc_only_stale(real_car, current_time)
         real_car._update_car_api_staleness(current_time)
 
-        # Make SOC fresh, but car is not home and not plugged
+        # Make SOC fresh, car is not home and not plugged (not-connected path)
         fresh_time = current_time - timedelta(seconds=60)
         real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh_time, 55.0, {})
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
@@ -752,6 +759,9 @@ class TestSocOnlyStaleness:
         assert real_car._car_api_stale is True
         assert real_car.car_api_stale_percent_mode is True
 
+        # Connect to charger for connected exit path
+        real_car.charger = MagicMock(name="Test Charger")
+
         # Non-SOC sensors recover, but SOC stays stale
         fresh_time = current_time - timedelta(seconds=60)
         soc_stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
@@ -771,6 +781,232 @@ class TestSocOnlyStaleness:
         real_car._car_api_stale = False
         real_car.car_api_stale_percent_mode = True
         assert real_car.is_car_effectively_stale(current_time) is True
+
+
+# ── Context-Aware Exit Logic ───────────────────────────────────────────
+
+
+class TestContextAwareExit:
+    """Test can_exit_stale_percent_mode with charger-based branching."""
+
+    def _setup_stale_car(self, car, current_time):
+        """Helper to put car into stale-percent mode with fresh sensors."""
+        car._car_api_stale = True
+        car._was_car_api_stale = True
+        car.car_api_stale_percent_mode = True
+        car._car_api_stale_since = current_time - timedelta(hours=2)
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in car._car_api_all_sensors:
+            car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+
+    def test_exit_connected_plugged_and_home(self, real_car, current_time):
+        """Connected car + plug=on + home=home → exit."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_exit_connected_home_false_blocks(self, real_car, current_time):
+        """Connected car + home≠home → blocked."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_exit_connected_plug_off_blocks(self, real_car, current_time):
+        """Connected car + plug=off → blocked."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_exit_not_connected_plug_false(self, real_car, current_time):
+        """Not-connected car + plug=off + SOC fresh → exit."""
+        self._setup_stale_car(real_car, current_time)
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_exit_not_connected_plug_true_blocks(self, real_car, current_time):
+        """Not-connected car + plug=on → blocked."""
+        self._setup_stale_car(real_car, current_time)
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_exit_soc_stale_blocks_both_paths(self, real_car, current_time):
+        """SOC >1h blocks exit regardless of path."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
+        fresh_time = current_time - timedelta(seconds=60)
+        soc_stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (soc_stale_time, 50.0, {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+        # Also blocks not-connected path
+        real_car.charger = None
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_exit_all_sensors_must_be_available(self, real_car, current_time):
+        """One sensor never updated → blocked."""
+        self._setup_stale_car(real_car, current_time)
+        # Clear one sensor's data
+        real_car._entity_probed_last_valid_state[real_car.car_odometer_sensor] = None
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (
+            current_time - timedelta(seconds=60), "off", {}
+        )
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_exit_all_sensors_stale_blocks(self, real_car, current_time):
+        """No sensor moved in 4h → blocked."""
+        self._setup_stale_car(real_car, current_time)
+        stale_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (stale_time, "value", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_exit_no_plug_sensor_connected(self, real_car, current_time):
+        """No plug sensor + connected → exit (plug check skipped)."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
+        real_car.car_plugged = None
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_exit_no_plug_sensor_not_connected(self, real_car, current_time):
+        """No plug sensor + not connected → exit (plug check skipped)."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.car_plugged = None
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_exit_no_home_sensor_connected(self, real_car, current_time):
+        """No home sensor + connected + plug=on → exit (home check skipped)."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
+        real_car.car_tracker = None
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_exit_both_sensors_none_connected_blocks(self, real_car, current_time):
+        """Connected car with plug=None + home=None from sensor → blocked."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.charger = MagicMock(name="Test Charger")
+        # Sensors exist but return None (unavailable)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (
+                current_time - timedelta(seconds=60), "value", {}
+            )
+        # Make home and plug return None by having no valid value
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = None
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = None
+        # _are_all_api_sensors_available returns False → blocked
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+
+# ── Periodic Contradiction Check ───────────────────────────────────────
+
+
+class TestPeriodicContradiction:
+    """Test periodic contradiction check for attached cars."""
+
+    def test_periodic_contradiction_attached_car(self, real_car, current_time):
+        """Attached car with plug=off triggers stale via update cycle."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+
+        real_car.charger = MagicMock(name="Test Charger")
+        real_car.charger.name = "Test Charger"
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car._car_api_stale is True
+        assert real_car._car_api_inferred_plugged is True
+
+    def test_periodic_contradiction_not_attached(self, real_car, current_time):
+        """Not-attached car doesn't trigger contradiction check."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car._car_api_stale is False
+        assert real_car._car_api_inferred_plugged is False
+
+    def test_periodic_contradiction_already_stale_no_repeat(self, real_car, current_time):
+        """Already-stale car doesn't re-trigger contradiction."""
+        real_car._car_api_stale = True
+        real_car._was_car_api_stale = True
+        real_car.car_api_stale_percent_mode = True
+        real_car.charger = MagicMock(name="Test Charger")
+
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+
+        real_car.hass = MagicMock()
+        real_car.home = MagicMock()
+
+        # Guard prevents check_manual_assignment_contradiction from being called
+        with patch.object(real_car, "check_manual_assignment_contradiction") as mock_check:
+            real_car._update_car_api_staleness(current_time)
+            mock_check.assert_not_called()
+
+    def test_periodic_contradiction_skipped_force_not_stale(self, real_car, current_time):
+        """Force Not Stale skips periodic contradiction check."""
+        real_car.charger = MagicMock(name="Test Charger")
+        real_car.charger.name = "Test Charger"
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
+
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+
+        real_car._update_car_api_staleness(current_time)
+        assert real_car._car_api_stale is False
+
+
+# ── _are_all_api_sensors_available ─────────────────────────────────────
+
+
+class TestAllApiSensorsAvailable:
+    """Test _are_all_api_sensors_available() helper."""
+
+    def test_all_valid(self, real_car, current_time):
+        """All sensors have valid readings → True."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        assert real_car._are_all_api_sensors_available(current_time) is True
+
+    def test_one_missing(self, real_car, current_time):
+        """One sensor has no valid reading → False."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_odometer_sensor] = None
+        assert real_car._are_all_api_sensors_available(current_time) is False
+
+    def test_empty_sensor_list(self, real_invited_car, current_time):
+        """No sensors tracked → True (vacuously)."""
+        real_invited_car._car_api_all_sensors = []
+        assert real_invited_car._are_all_api_sensors_available(current_time) is True
 
 
 # ── Task 6: Select + Binary Sensor Entities ─────────────────────────────

@@ -559,6 +559,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return True
         return (time - last_time).total_seconds() > CAR_SOC_STALE_THRESHOLD_S
 
+    def _are_all_api_sensors_available(self, time: datetime) -> bool:
+        """Return True if every tracked API sensor has a valid reading."""
+        for sensor_id in self._car_api_all_sensors:
+            last_time, last_value, _ = self.get_sensor_latest_possible_valid_time_value_attr(
+                sensor_id, tolerance_seconds=None, time=time
+            )
+            if last_time is None or last_value is None:
+                return False
+        return True
+
     def _get_time_for_sensor(self) -> datetime:
         """Return current UTC time for sensor state getters."""
         return datetime.now(tz=pytz.UTC)
@@ -636,6 +646,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
             and self._is_soc_sensor_stale(time)
         ):
             self.car_api_stale_percent_mode = True
+
+        # Periodic contradiction check for attached cars
+        if (
+            self.charger is not None
+            and not self._car_api_stale
+            and not self.car_api_stale_percent_mode
+            and self.car_stale_mode_override != CAR_STALE_MODE_FORCE_NOT_STALE
+        ):
+            self.check_manual_assignment_contradiction(self.charger.name, time)
 
         effectively_stale = self.is_car_effectively_stale(time)
 
@@ -766,15 +785,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._update_car_api_staleness(time)
 
     def can_exit_stale_percent_mode(self, time: datetime) -> bool:
-        """Return True if the car can exit stale-percent mode.
+        """Context-aware exit from stale-percent mode.
 
-        Recovery requires:
-        - Car is currently in stale-percent mode
-        - Select is not "Force Stale" (blocks recovery)
-        - If select is "Force Not Stale", always allow exit
-        - SOC sensor must be fresh (blocks exit for both SOC-only and full stale)
-        - If not in full API stale (_car_api_stale is False), SOC recovery suffices
-        - If in full API stale: all sensors fresh + critical sensor confirmation
+        Common: at least one sensor moved in 4h, all sensors available, SOC fresh.
+        Connected path: plug=plugged + home=home.
+        Not-connected path: plug=unplugged.
         """
         if not self.car_api_stale_percent_mode:
             return False
@@ -782,19 +797,30 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return True
-        # Auto mode: SOC must always be fresh for exit
+        # Common: at least one sensor moved in 4h
+        if self.is_car_api_stale(time):
+            return False
+        # Common: all sensors must have valid readings
+        if not self._are_all_api_sensors_available(time):
+            return False
+        # Common: SOC must be fresh (prevents re-entry flip-flop with 1h threshold)
         if self._is_soc_sensor_stale(time):
             return False
-        # If not in full API stale, SOC recovery alone is sufficient
-        if not self._car_api_stale:
-            return True
-        # Full API stale: at least one critical sensor must confirm physical state
-        home = self._get_raw_is_car_home(time)
-        plugged = self._get_raw_is_car_plugged(time)
-        if self._car_api_inferred_plugged:
-            # Plug sensor must specifically recover when car was manually assigned
-            return plugged is True
-        return home is True or plugged is True
+
+        # Branch on charger connection state
+        if self.charger is not None:
+            # Connected: plug=plugged AND home=home
+            raw_plugged = self._get_raw_is_car_plugged(time)
+            raw_home = self._get_raw_is_car_home(time)
+            plugged_ok = raw_plugged is True if self.car_plugged is not None else True
+            home_ok = raw_home is True if self.car_tracker is not None else True
+            return plugged_ok and home_ok
+        else:
+            # Not connected: plug=unplugged
+            raw_plugged = self._get_raw_is_car_plugged(time)
+            if self.car_plugged is None:
+                return True  # No plug sensor — other checks sufficient
+            return raw_plugged is False
 
     def car_efficiency_km_per_kwh_sensor_state_getter(
         self, entity_id: str, time: datetime | None
