@@ -411,6 +411,31 @@ class TestContradictionDetection:
 
         assert real_car._car_api_stale_since == current_time
 
+    def test_contradiction_skipped_when_already_stale(self, real_car, current_time):
+        """Already-stale car skips contradiction check to avoid duplicate notifications."""
+        real_car._car_api_stale = True
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
+
+        real_car.hass = MagicMock()
+        real_car.home = MagicMock()
+        real_car.check_manual_assignment_contradiction("Test Charger", current_time)
+
+        # No notification sent — early return
+        real_car.hass.async_create_task.assert_not_called()
+
+    def test_contradiction_skipped_when_stale_percent_mode(self, real_car, current_time):
+        """Stale-percent mode skips contradiction check."""
+        real_car.car_api_stale_percent_mode = True
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
+
+        real_car.hass = MagicMock()
+        real_car.home = MagicMock()
+        real_car.check_manual_assignment_contradiction("Test Charger", current_time)
+
+        real_car.hass.async_create_task.assert_not_called()
+
 
 class TestInferredFlagOverrides:
     """Test that inferred flags override is_car_home/is_car_plugged."""
@@ -448,6 +473,22 @@ class TestInferredFlagOverrides:
         assert real_car._car_api_inferred_home is False
         assert real_car._car_api_inferred_plugged is False
 
+    def test_charger_detach_car_clears_inferred_flags(self, real_car):
+        """charger.detach_car() clears inferred flags on the car."""
+        from custom_components.quiet_solar.ha_model.charger import QSChargerGeneric
+
+        real_car._car_api_inferred_home = True
+        real_car._car_api_inferred_plugged = True
+
+        charger = MagicMock(spec=QSChargerGeneric)
+        charger.car = real_car
+        # Call the real detach_car logic
+        QSChargerGeneric.detach_car(charger)
+
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False
+        assert real_car.charger is None
+
     def test_is_car_home_no_inferred_reads_api(self, real_car, current_time):
         """Without inferred flag, is_car_home reads the actual API."""
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "home", {})
@@ -479,17 +520,16 @@ class TestStalePercentMode:
         real_car.car_api_stale_percent_mode = False
         assert real_car.get_car_charge_percent(current_time) == 50.0
 
-    def test_can_use_charge_percent_constraints_true_in_stale_mode(self, real_car):
-        """can_use_charge_percent_constraints returns True in stale-percent mode."""
+    def test_can_use_charge_percent_constraints_always_static(self, real_car):
+        """can_use_charge_percent_constraints always delegates to static check."""
+        # Non-invited car with valid config → True regardless of stale mode
         real_car.car_api_stale_percent_mode = True
         assert real_car.can_use_charge_percent_constraints() is True
-
-    def test_can_use_charge_percent_constraints_equals_static_when_not_stale(self, real_car):
-        """Without stale mode, returns same as static check."""
         real_car.car_api_stale_percent_mode = False
         assert real_car.can_use_charge_percent_constraints() is True
-        # Invited car: static check fails
+        # Invited car: static check fails even when stale
         real_car.car_is_invited = True
+        real_car.car_api_stale_percent_mode = True
         assert real_car.can_use_charge_percent_constraints() is False
 
     def test_is_soc_sensor_stale_fresh(self, real_car, current_time):

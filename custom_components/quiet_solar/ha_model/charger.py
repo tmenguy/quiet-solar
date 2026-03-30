@@ -3777,6 +3777,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
     def detach_car(self):
         if self.car is not None:
+            self.car.clear_inferred_flags()
             self.car.charger = None
 
         self.car = None

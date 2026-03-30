@@ -740,6 +740,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         """
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return
+        # Already stale — don't re-notify
+        if self._car_api_stale or self.car_api_stale_percent_mode:
+            return
 
         raw_home = self._get_raw_is_car_home(time)
         raw_plugged = self._get_raw_is_car_plugged(time)
@@ -1921,8 +1924,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 await self.charger.update_charger_for_user_change()
 
     def can_use_charge_percent_constraints(self):
-        if self.car_api_stale_percent_mode:
-            return True
         return self.can_use_charge_percent_constraints_static()
 
     def can_use_charge_percent_constraints_static(self):
