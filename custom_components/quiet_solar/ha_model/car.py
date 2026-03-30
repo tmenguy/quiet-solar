@@ -642,7 +642,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if (
             not self._car_api_stale
             and not self.car_api_stale_percent_mode
-            and self.can_use_charge_percent_constraints_static()
+            and self.can_use_charge_percent_constraints()
             and self._is_soc_sensor_stale(time)
         ):
             self.car_api_stale_percent_mode = True
@@ -686,7 +686,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     f"Your {self.name}'s SOC sensor is stale — charging will estimate progress from 0%",
                 )
             # Activate stale-percent mode if car can use percent constraints
-            if self.can_use_charge_percent_constraints_static():
+            if self.can_use_charge_percent_constraints():
                 self.car_api_stale_percent_mode = True
 
         # Transition: stale -> not stale (from select change or non-percent recovery)
@@ -766,7 +766,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if self._car_api_stale_since is None:
                 self._car_api_stale_since = time
             # Activate stale-percent mode if possible
-            if self.can_use_charge_percent_constraints_static():
+            if self.can_use_charge_percent_constraints():
                 self.car_api_stale_percent_mode = True
             self._was_car_api_stale = True
             # Notify on contradiction (Feature B)
@@ -1924,17 +1924,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 await self.charger.update_charger_for_user_change()
 
     def can_use_charge_percent_constraints(self):
-        return self.can_use_charge_percent_constraints_static()
-
-    def can_use_charge_percent_constraints_static(self):
-
         if self.car_is_invited:
             return False
         if self.car_battery_capacity is None:
             return False
         if self.car_charge_percent_sensor is None:
             return False
-
         return True
 
     def _reset_charge_targets(self):
