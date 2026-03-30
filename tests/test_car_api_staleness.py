@@ -86,7 +86,7 @@ class TestSensorClassification:
         assert real_car._car_api_stale is False
         assert real_car._was_car_api_stale is False
         assert real_car._car_api_stale_since is None
-        assert real_car._car_stale_mode_override == CAR_STALE_MODE_AUTO
+        assert real_car.car_stale_mode_override == CAR_STALE_MODE_AUTO
         assert real_car.car_api_stale_percent_mode is False
         assert real_car._car_api_inferred_home is False
         assert real_car._car_api_inferred_plugged is False
@@ -190,25 +190,25 @@ class TestEffectiveStaleState:
 
     def test_auto_mode_fresh_api(self, real_car, current_time):
         """Auto mode + fresh API = not effectively stale."""
-        real_car._car_stale_mode_override = CAR_STALE_MODE_AUTO
+        real_car.car_stale_mode_override = CAR_STALE_MODE_AUTO
         real_car._car_api_stale = False
         assert real_car.is_car_effectively_stale(current_time) is False
 
     def test_auto_mode_stale_api(self, real_car, current_time):
         """Auto mode + stale API = effectively stale."""
-        real_car._car_stale_mode_override = CAR_STALE_MODE_AUTO
+        real_car.car_stale_mode_override = CAR_STALE_MODE_AUTO
         real_car._car_api_stale = True
         assert real_car.is_car_effectively_stale(current_time) is True
 
     def test_force_stale_overrides_fresh_api(self, real_car, current_time):
         """Force Stale overrides fresh API data."""
-        real_car._car_stale_mode_override = CAR_STALE_MODE_FORCE_STALE
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_STALE
         real_car._car_api_stale = False
         assert real_car.is_car_effectively_stale(current_time) is True
 
     def test_force_not_stale_overrides_stale_api(self, real_car, current_time):
         """Force Not Stale overrides stale API data."""
-        real_car._car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
         real_car._car_api_stale = True
         assert real_car.is_car_effectively_stale(current_time) is False
 
@@ -383,7 +383,7 @@ class TestContradictionDetection:
 
     def test_contradiction_skipped_when_force_not_stale(self, real_car, current_time):
         """Force Not Stale mode skips contradiction detection."""
-        real_car._car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
 
@@ -537,7 +537,7 @@ class TestRecoveryLogic:
     def test_force_stale_blocks_recovery(self, real_car, current_time):
         """Force Stale select blocks recovery even with fresh data."""
         self._setup_stale_car(real_car, current_time)
-        real_car._car_stale_mode_override = CAR_STALE_MODE_FORCE_STALE
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_STALE
         # Make sensors fresh
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
@@ -548,7 +548,7 @@ class TestRecoveryLogic:
     def test_force_not_stale_allows_immediate_exit(self, real_car, current_time):
         """Force Not Stale allows immediate recovery."""
         self._setup_stale_car(real_car, current_time)
-        real_car._car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
         assert real_car.can_exit_stale_percent_mode(current_time) is True
 
     def test_auto_mode_sensors_still_stale_blocks_exit(self, real_car, current_time):
@@ -673,15 +673,15 @@ class TestStaleSelectEntity:
         assert stale_select.entity_description.qs_default_option == CAR_STALE_MODE_AUTO
 
     async def test_user_set_stale_mode_updates_override(self, real_car, current_time):
-        """user_set_stale_mode updates the _car_stale_mode_override."""
+        """user_set_stale_mode updates the car_stale_mode_override."""
         await real_car.user_set_stale_mode(CAR_STALE_MODE_FORCE_STALE)
-        assert real_car._car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE
+        assert real_car.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE
 
     async def test_user_set_stale_mode_for_init_skips_reevaluate(self, real_car, current_time):
         """user_set_stale_mode with for_init=True skips staleness re-evaluation."""
         real_car._car_api_stale = False
         await real_car.user_set_stale_mode(CAR_STALE_MODE_FORCE_STALE, for_init=True)
-        assert real_car._car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE
+        assert real_car.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE
         # for_init doesn't trigger _update_car_api_staleness, so _was_car_api_stale stays False
         assert real_car._was_car_api_stale is False
 

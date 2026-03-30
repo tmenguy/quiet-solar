@@ -228,7 +228,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._car_api_stale: bool = False
         self._was_car_api_stale: bool = False
         self._car_api_stale_since: datetime | None = None
-        self._car_stale_mode_override: str = CAR_STALE_MODE_AUTO
+        self.car_stale_mode_override: str = CAR_STALE_MODE_AUTO
         self.car_api_stale_percent_mode: bool = False
         self._car_api_inferred_home: bool = False
         self._car_api_inferred_plugged: bool = False
@@ -637,9 +637,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         This is the main method all UI and behavioral logic reads.
         """
-        if self._car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return False
-        if self._car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
             return True
         # auto mode: raw stale detection
         return self._car_api_stale
@@ -649,7 +649,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         raw_stale = self.is_car_api_stale(time)
 
         # In auto mode, update the raw stale flag
-        if self._car_stale_mode_override == CAR_STALE_MODE_AUTO:
+        if self.car_stale_mode_override == CAR_STALE_MODE_AUTO:
             self._car_api_stale = raw_stale
 
         # Check if recovery from stale-percent mode is possible
@@ -736,7 +736,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         not_home or not_plugged, the manual action proves the API is wrong.
         Flag the car as stale immediately.
         """
-        if self._car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return
 
         raw_home = self._get_raw_is_car_home(time)
@@ -777,7 +777,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
     async def user_set_stale_mode(self, option: str, for_init: bool = False) -> None:
         """Handle stale mode select change. Immediately re-evaluate stale state."""
-        self._car_stale_mode_override = option
+        self.car_stale_mode_override = option
         if not for_init:
             time = datetime.now(tz=pytz.UTC)
             self._update_car_api_staleness(time)
@@ -795,9 +795,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         """
         if not self.car_api_stale_percent_mode:
             return False
-        if self._car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE:
             return False
-        if self._car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return True
         # Auto mode: check real sensor state
         if self.is_car_api_stale(time):

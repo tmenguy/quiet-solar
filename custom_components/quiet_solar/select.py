@@ -105,7 +105,7 @@ def create_ha_select_for_QSCar(device: QSCar):
         async_set_current_option_fn=lambda device, key, option, for_init: device.user_set_stale_mode(
             option, for_init=for_init
         ),
-        get_current_option_fn=lambda device, key: device._car_stale_mode_override,
+        get_current_option_fn=lambda device, key: device.car_stale_mode_override,
     )
     entities.append(
         QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=stale_mode_description)
