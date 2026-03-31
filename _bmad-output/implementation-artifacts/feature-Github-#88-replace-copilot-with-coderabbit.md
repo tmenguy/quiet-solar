@@ -2,7 +2,7 @@
 title: "Replace GitHub Copilot with CodeRabbit in review workflow"
 issue: 88
 branch: "QS_88"
-status: draft
+status: implemented
 story_type: feature
 ---
 
@@ -16,11 +16,11 @@ CodeRabbit is a GitHub App that automatically reviews PRs when they are opened o
 
 ## Acceptance Criteria
 
-- [ ] `scripts/qs/review_pr.py` no longer references Copilot
-- [ ] `scripts/qs/review_pr.py` can detect and fetch CodeRabbit review comments
-- [ ] `_qsprocess/skills/review-story.md` references CodeRabbit instead of Copilot
-- [ ] CLI flags updated: `--trigger-copilot` removed, `--wait-copilot` renamed to `--wait-coderabbit`
-- [ ] A test PR confirms CodeRabbit activates and posts comments
+- [x] `scripts/qs/review_pr.py` no longer references Copilot
+- [x] `scripts/qs/review_pr.py` can detect and fetch CodeRabbit review comments
+- [x] `_qsprocess/skills/review-story.md` references CodeRabbit instead of Copilot
+- [x] CLI flags updated: `--trigger-copilot` removed, `--wait-copilot` renamed to `--wait-coderabbit`
+- [x] A test PR confirms CodeRabbit activates and posts comments
 
 ## Tasks
 
@@ -49,3 +49,5 @@ CodeRabbit is a GitHub App that automatically reviews PRs when they are opened o
 - CodeRabbit is a GitHub App, not a GitHub user. Its bot username is `coderabbitai[bot]`.
 - CodeRabbit auto-reviews on PR creation and push events — no API trigger needed.
 - The `trigger_copilot_review()` function used `POST requested_reviewers` which is Copilot-specific and can be fully removed.
+- GraphQL API returns `author.login` as `"coderabbitai"` (no `[bot]` suffix); REST returns `"coderabbitai[bot]"`. Use prefix match `startswith("coderabbitai")` to handle both.
+- Residual Copilot references in `CLAUDE.md`, SKILL.md files, and `development-lifecycle.md` were also updated (beyond original AC scope).

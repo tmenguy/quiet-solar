@@ -38,9 +38,9 @@ Runs inside the worktree. TDD cycle with enforced quality gates.
 
 ## Phase 4: Review (`/review-story`)
 
-Code review + GitHub Copilot review.
+Code review + CodeRabbit review.
 
-- Triggers Copilot review via `scripts/qs/review_pr.py`
+- CodeRabbit auto-reviews on PR creation/push (no trigger needed)
 - Runs local adversarial review on the diff
 - Fetches and processes all review comments interactively
 - Quality gates re-run after fixes
