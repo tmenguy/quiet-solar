@@ -1428,12 +1428,18 @@ class TestDepartureAutoReset:
         assert real_car._car_not_home_since == current_time
         assert real_car.has_user_originated("charger_name")  # Not yet cleared
 
-        # 15 minutes later — should trigger reset
+        # 15 minutes later — should trigger reset (once)
         later_time = current_time + timedelta(seconds=CAR_NOT_HOME_AUTO_RESET_S)
         with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
             await real_car._check_departure_auto_reset(later_time)
             mock_reset.assert_called_once()
-        assert real_car._car_not_home_since is None
+        assert real_car._departure_auto_reset_done is True
+
+        # Subsequent cycles should NOT re-trigger the reset
+        even_later = later_time + timedelta(seconds=CAR_NOT_HOME_AUTO_RESET_S)
+        with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
+            await real_car._check_departure_auto_reset(even_later)
+            mock_reset.assert_not_called()
 
     async def test_departure_10min_preserves_state(self, real_car, current_time):
         """Car home → car leaves → only 10 min → user-originated state preserved."""
@@ -1473,6 +1479,7 @@ class TestDepartureAutoReset:
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (later_time, "home", {})
         await real_car._check_departure_auto_reset(later_time)
         assert real_car._car_not_home_since is None
+        assert real_car._departure_auto_reset_done is False  # Re-armed for next departure
         assert real_car.has_user_originated("charger_name")  # State preserved
 
     async def test_no_tracker_skips_reset(self, real_car, current_time):
