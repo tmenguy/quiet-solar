@@ -234,8 +234,8 @@ N/A
 
 ### Completion Notes List
 - Task 1: Fixed `can_exit_stale_percent_mode()` to allow exit when plugged+home but not attached. Added safety check: plugged-but-not-home still blocks. Updated existing test and added 3 new tests.
-- Task 2: Changed scoring fallback to trigger on `False` (not just `None`). Instant-check gives reduced weight (plug: 2 vs 5, home: 0.5 vs 1.0). 4 new tests including reduced-weight verification.
-- Task 3: Added `CAR_NOT_HOME_AUTO_RESET_S = 900` constant, `_car_not_home_since` tracking, and `_check_departure_auto_reset()` that calls `user_clean_and_reset()` after 15 min confirmed departure. 4 new tests.
+- Task 2: Changed scoring fallback to trigger on `False` (not just `None`). Instant-check gives reduced weight (plug: 2 vs 5, home: 0.5 vs 1.0). Cached fallback flags for consistent multi-charger scoring (review fix). 5 new tests including reduced-weight verification and cache consistency.
+- Task 3: Added `CAR_NOT_HOME_AUTO_RESET_S = 900` constant, `_car_not_home_since` tracking, and `_check_departure_auto_reset()` that calls `user_clean_and_reset()` after 15 min confirmed departure. Added `_departure_auto_reset_done` flag to prevent re-triggering (review fix). 4 new tests + no-retrigger test.
 - Task 4: Added debug logging for instant-check fallback, zero-score-with-positive-sub-scores, and generic-car-fallback-with-real-cars-available. Departure info logging included in Task 3.
 - Task 5: 3 integration tests covering guest-to-known-car swap, FORCE flag cleared after departure, and manual selection override. Edge case test for plug=None in not-connected path. All gates green: 100% coverage.
 
