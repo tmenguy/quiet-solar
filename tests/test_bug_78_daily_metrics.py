@@ -593,3 +593,167 @@ async def test_non_calendar_mode_uses_default_path():
     # No calendar, no constraints: metrics should be from the default path
     assert device.qs_bistate_current_duration_h >= 0.0
     assert device.qs_bistate_current_on_h >= 0.0
+
+
+# =============================================================================
+# Bug #95: same-end-date guard and day lower bound on generic bistate device
+# =============================================================================
+
+
+async def test_default_mode_same_end_date_lcc_not_double_counted():
+    """Default mode skips lcc when active constraint shares same end date.
+
+    Bug #95: push_live_constraint carries runtime from completed to new constraint.
+    Counting both the lcc and the active constraint double-counts.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # Active constraint ending at 17:00 with carried-over runtime
+    active_ct = _make_constraint(
+        device,
+        now,
+        target_s=36000.0,
+        current_s=28800.0,
+        start=datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
+    )
+
+    # lcc with same end date — already absorbed into active_ct
+    lcc = _make_constraint(
+        device,
+        now,
+        target_s=28800.0,
+        current_s=28800.0,
+        start=datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
+    )
+
+    device._constraints = [active_ct]
+    device._last_completed_constraint = lcc
+
+    await device.update_current_metrics(now)
+
+    # Only active constraint counted — lcc absorbed
+    assert device.qs_bistate_current_duration_h == pytest.approx(36000.0 / 3600.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(28800.0 / 3600.0)
+
+
+async def test_default_mode_yesterday_active_constraint_excluded():
+    """Default mode excludes active constraints from yesterday (lower bound).
+
+    Bug #95: Active constraints loop only had upper bound (end <= tomorrow),
+    missing lower bound (end > today).
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 10, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # Old constraint from yesterday
+    old_ct = _make_constraint(
+        device,
+        now,
+        target_s=3600.0,
+        current_s=3600.0,
+        start=datetime(2026, 3, 29, 12, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 29, 17, 0, 0, tzinfo=pytz.UTC),
+    )
+
+    # Today's constraint
+    today_ct = _make_constraint(
+        device,
+        now,
+        target_s=7200.0,
+        current_s=900.0,
+        start=datetime(2026, 3, 30, 9, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
+    )
+
+    device._constraints = [old_ct, today_ct]
+    device._last_completed_constraint = None
+
+    await device.update_current_metrics(now)
+
+    # Only today's constraint counted
+    assert device.qs_bistate_current_duration_h == pytest.approx(7200.0 / 3600.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(900.0 / 3600.0)
+
+
+async def test_default_mode_exact_midnight_lcc_included():
+    """Default mode includes lcc ending exactly at midnight (>= boundary).
+
+    Bug #95: Using > instead of >= excluded lcc ending exactly at today_utc.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 10, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # lcc ending exactly at midnight (today_utc boundary)
+    lcc = _make_constraint(
+        device,
+        now,
+        target_s=3600.0,
+        current_s=3600.0,
+        start=datetime(2026, 3, 29, 23, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC),
+    )
+
+    device._constraints = []
+    device._last_completed_constraint = lcc
+
+    await device.update_current_metrics(now)
+
+    # lcc at exact midnight boundary should be included
+    assert device.qs_bistate_current_duration_h == pytest.approx(1.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(1.0)
+
+
+async def test_default_mode_extended_lcc_absorbed_via_initial_end():
+    """Default mode absorbs lcc when active constraint matches initial_end_of_constraint.
+
+    Bug #95 review: When lcc's end was extended (initial_end != end_of_constraint),
+    an active constraint matching the initial end should still trigger absorption.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # Active constraint ending at 15:00 (matches lcc's initial_end, not current end)
+    active_ct = _make_constraint(
+        device,
+        now,
+        target_s=21600.0,
+        current_s=14400.0,
+        start=datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 15, 0, 0, tzinfo=pytz.UTC),
+    )
+
+    # lcc was extended: initial_end=15:00, current end=17:00
+    lcc = _make_constraint(
+        device,
+        now,
+        target_s=14400.0,
+        current_s=14400.0,
+        start=datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 15, 0, 0, tzinfo=pytz.UTC),
+    )
+    # Simulate extension: end moved to 17:00 but initial_end stays 15:00
+    lcc.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+
+    device._constraints = [active_ct]
+    device._last_completed_constraint = lcc
+
+    await device.update_current_metrics(now)
+
+    # lcc absorbed via initial_end match — only active counted
+    assert device.qs_bistate_current_duration_h == pytest.approx(21600.0 / 3600.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(14400.0 / 3600.0)
