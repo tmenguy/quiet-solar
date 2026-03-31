@@ -1,6 +1,6 @@
 # Bug #92: Stale car state prevents automatic charger association after API reconnect
 
-Status: dev-complete
+Status: done
 issue: 92
 branch: "QS_92"
 
