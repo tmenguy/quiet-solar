@@ -439,24 +439,27 @@ async def test_pool_update_current_metrics_same_end_date_no_double_count():
     the new constraint. Counting both would double-count.
     """
     from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
 
     now = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
     today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
     tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
 
     # Completed constraint ending at 17:00 — runtime was carried into new constraint
-    completed_ct = MagicMock()
-    completed_ct.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
-    completed_ct.initial_end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
-    completed_ct.target_value = 28800.0  # 8h old target
-    completed_ct.current_value = 28800.0  # 8h ran
+    completed_ct = TimeBasedSimplePowerLoadConstraint(
+        type=1, time=now, power=1500, initial_value=0,
+        target_value=28800.0, current_value=28800.0,
+        start_of_constraint=datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC),
+        end_of_constraint=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
+    )
 
     # New active constraint with SAME end date — already absorbed lcc's runtime
-    active_ct = MagicMock()
-    active_ct.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
-    active_ct.initial_end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
-    active_ct.target_value = 36000.0  # 10h new target
-    active_ct.current_value = 28800.0  # 8h carried over from lcc
+    active_ct = TimeBasedSimplePowerLoadConstraint(
+        type=1, time=now, power=1500, initial_value=0,
+        target_value=36000.0, current_value=28800.0,
+        start_of_constraint=datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC),
+        end_of_constraint=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
+    )
 
     pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
     pool._last_completed_constraint = completed_ct
@@ -467,3 +470,45 @@ async def test_pool_update_current_metrics_same_end_date_no_double_count():
     # Only the active constraint should be counted — lcc is already absorbed
     assert pool.qs_bistate_current_duration_h == 36000.0 / 3600.0  # 10h
     assert pool.qs_bistate_current_on_h == 28800.0 / 3600.0  # 8h
+
+
+async def test_pool_update_current_metrics_extended_lcc_absorbed_via_initial_end():
+    """Test that lcc absorbed via initial_end_of_constraint is not double-counted.
+
+    Bug #95 review: When lcc's end was extended (initial_end != end_of_constraint),
+    an active constraint matching the initial end should still trigger absorption.
+    """
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
+
+    now = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+
+    # lcc created with end=15:00, then extended to 17:00
+    completed_ct = TimeBasedSimplePowerLoadConstraint(
+        type=1, time=now, power=1500, initial_value=0,
+        target_value=14400.0, current_value=14400.0,
+        start_of_constraint=datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC),
+        end_of_constraint=datetime(2026, 3, 30, 15, 0, 0, tzinfo=pytz.UTC),
+    )
+    # Simulate extension: end moved to 17:00 but initial_end stays 15:00
+    completed_ct.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+
+    # Active constraint matching lcc's INITIAL end (15:00), not current end (17:00)
+    active_ct = TimeBasedSimplePowerLoadConstraint(
+        type=1, time=now, power=1500, initial_value=0,
+        target_value=21600.0, current_value=14400.0,
+        start_of_constraint=datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC),
+        end_of_constraint=datetime(2026, 3, 30, 15, 0, 0, tzinfo=pytz.UTC),
+    )
+
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
+    pool._last_completed_constraint = completed_ct
+    pool._constraints = [active_ct]
+
+    await QSBiStateDuration.update_current_metrics(pool, now)
+
+    # lcc absorbed via initial_end match — only active counted
+    assert pool.qs_bistate_current_duration_h == 21600.0 / 3600.0  # 6h
+    assert pool.qs_bistate_current_on_h == 14400.0 / 3600.0  # 4h
