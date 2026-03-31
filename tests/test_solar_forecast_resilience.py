@@ -203,6 +203,17 @@ class TestProviderSelection:
         solar.auto_select_best_provider()
         assert solar.active_provider_name == "B"
 
+    def test_set_provider_mode_none_falls_back_to_auto(self, fake_hass):
+        """Test that None or unknown provider name falls back to auto."""
+        providers_config = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "A"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers_config)
+        solar.set_provider_mode(None)
+        assert solar.provider_mode == SOLAR_PROVIDER_MODE_AUTO
+        solar.set_provider_mode("nonexistent")
+        assert solar.provider_mode == SOLAR_PROVIDER_MODE_AUTO
+
     def test_auto_tiebreak_by_freshness(self, fake_hass):
         """Test auto mode tie-breaking by freshest forecast."""
         providers_config = [
