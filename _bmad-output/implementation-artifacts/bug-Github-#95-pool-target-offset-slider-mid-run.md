@@ -193,13 +193,17 @@ Claude Opus 4.6
 - Related issues: #64/#68 (original same-end-date guard), #78 (daily metrics), #80 (calendar refactor)
 - Implementation complete (2026-03-31): all 3 bugs fixed in `update_current_metrics()` default path
 - Bug 1 fix: added `ct.end_of_constraint > today_utc` lower bound to active constraints loop (line 121)
-- Bug 2 fix: added `already_absorbed` guard using `initial_end_of_constraint` to skip lcc when active constraint shares end date (lines 127-134)
-- Bug 3 fix: changed `>` to `>=` for lcc today_utc boundary check (line 138)
+- Bug 2 fix: added `already_absorbed` guard using `type()` + `initial_end_of_constraint` to skip lcc when active constraint of same type shares end date (lines 127-135)
+- Bug 3 fix: changed `>` to `>=` for lcc today_utc boundary check (line 139)
 - Added 5 new tests: 2 in test_ha_pool.py (yesterday leak, same-end-date), 3 in test_bug_78_daily_metrics.py (same-end-date, yesterday leak, exact-midnight boundary)
-- All 46 pool/bistate tests pass, all quality gates green, 100% coverage maintained
+- All quality gates green, 100% coverage maintained
+- Review (2026-03-31): tightened `already_absorbed` with `type(ct) == type(lcc)` to mirror push_live_constraint preconditions
+- Review: added divergent `initial_end_of_constraint` tests (1 pool, 1 bistate) for extended-lcc scenario
+- Review: converted pool absorption tests from MagicMock to real TimeBasedSimplePowerLoadConstraint
+- Review: updated PR risk assessment from LOW to CRITICAL
 
 ### File List
 
 - `custom_components/quiet_solar/ha_model/bistate_duration.py` — fixed `update_current_metrics()` default path
-- `tests/test_ha_pool.py` — added 2 regression tests for bug #95
-- `tests/test_bug_78_daily_metrics.py` — added 3 regression tests for bug #95
+- `tests/test_ha_pool.py` — added 3 regression tests for bug #95
+- `tests/test_bug_78_daily_metrics.py` — added 4 regression tests for bug #95
