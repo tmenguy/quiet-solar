@@ -1,6 +1,6 @@
 # Bug #86: Saved Forecast Data Can't Be Restored (Numpy Types)
 
-Status: draft
+Status: review
 issue: 86
 branch: "QS_86"
 
@@ -86,12 +86,12 @@ Values extracted from forecast tuples are stored in `_stored_values` and later s
 
 ## Acceptance Criteria
 
-- [ ] AC1: All `native_value` values returned by forecast sensors are native Python `int` or `float`, never numpy scalars
-- [ ] AC2: All `_qs_prober_data` attribute values are native Python types
-- [ ] AC3: `serialize_stored_values()` produces JSON-serializable output with no numpy types
-- [ ] AC4: No "Bad data" errors in HA logs related to numpy types after restart
-- [ ] AC5: Existing forecast accuracy and behavior is unchanged (values are numerically identical)
-- [ ] AC6: All quality gates pass (pytest 100% coverage, ruff, mypy, translations)
+- [x] AC1: All `native_value` values returned by forecast sensors are native Python `int` or `float`, never numpy scalars
+- [x] AC2: All `_qs_prober_data` attribute values are native Python types
+- [x] AC3: `serialize_stored_values()` produces JSON-serializable output with no numpy types
+- [x] AC4: No "Bad data" errors in HA logs related to numpy types after restart
+- [x] AC5: Existing forecast accuracy and behavior is unchanged (values are numerically identical)
+- [x] AC6: All quality gates pass (pytest 100% coverage, ruff, mypy, translations)
 
 ## Technical Design
 
@@ -139,13 +139,13 @@ In the sensor property that returns `native_value`, add a conversion guard for t
 
 ## Tasks
 
-- [ ] T1: Identify all exact locations in `ha_model/home.py` where numpy scalars enter forecast tuples and `_stored_values`
-- [ ] T2: Add `int()` conversion at forecast tuple construction points in `compute_now_forecast()`
-- [ ] T3: Add `int()` conversion in `push_and_get()` when storing values
-- [ ] T4: Update `serialize_stored_values()` to convert numpy types as safety net
-- [ ] T5: Verify `native_value` property returns native Python types
-- [ ] T6: Write/update tests covering numpy type conversion at each fix point
-- [ ] T7: Run quality gates (`python scripts/qs/quality_gate.py`)
+- [x] T1: Identify all exact locations in `ha_model/home.py` where numpy scalars enter forecast tuples and `_stored_values`
+- [x] T2: Add `int()` conversion at forecast tuple construction points in `compute_now_forecast()`
+- [x] T3: Add `int()` conversion in `push_and_get()` when storing values
+- [x] T4: Update `serialize_stored_values()` to convert numpy types as safety net
+- [x] T5: Verify `native_value` property returns native Python types
+- [x] T6: Write/update tests covering numpy type conversion at each fix point
+- [x] T7: Run quality gates (`python scripts/qs/quality_gate.py`)
 
 ## Files to Modify
 
