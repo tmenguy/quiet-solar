@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 
 from utils import output_json, run_gh
@@ -77,7 +76,7 @@ def fetch_pr_comments(pr_number: int) -> list[dict]:
             comments.append({
                 "path": first.get("path", ""),
                 "line": first.get("line"),
-                "author": first.get("author", {}).get("login", "unknown"),
+                "author": (first.get("author") or {}).get("login", "unknown"),
                 "body": first["body"],
                 "diff_context": (first.get("diffHunk", "") or "")[-200:],
                 "replies": replies,
@@ -116,7 +115,7 @@ def wait_for_coderabbit(pr_number: int, timeout: int = 120) -> list[dict]:
     start = time.time()
     while time.time() - start < timeout:
         comments = fetch_pr_comments(pr_number)
-        coderabbit_comments = [c for c in comments if c.get("author") == "coderabbitai[bot]"]
+        coderabbit_comments = [c for c in comments if c.get("author", "").startswith("coderabbitai")]
         if coderabbit_comments:
             return coderabbit_comments
         time.sleep(10)

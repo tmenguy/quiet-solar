@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import json
-import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -35,8 +33,8 @@ def _import_review_pr():
 class TestWaitForCoderabbit:
     """Tests for wait_for_coderabbit() function."""
 
-    def test_returns_coderabbit_comments_immediately(self):
-        """When CodeRabbit comments exist, return them without waiting."""
+    def test_matches_rest_author_with_bot_suffix(self):
+        """REST API author 'coderabbitai[bot]' is matched."""
         mod = _import_review_pr()
         comments = [
             {"author": "coderabbitai[bot]", "body": "Suggestion", "resolved": False},
@@ -46,6 +44,17 @@ class TestWaitForCoderabbit:
             result = mod.wait_for_coderabbit(1, timeout=5)
         assert len(result) == 1
         assert result[0]["author"] == "coderabbitai[bot]"
+
+    def test_matches_graphql_author_without_bot_suffix(self):
+        """GraphQL API author 'coderabbitai' (no [bot]) is also matched."""
+        mod = _import_review_pr()
+        comments = [
+            {"author": "coderabbitai", "body": "Review", "resolved": False},
+        ]
+        with patch.object(mod, "fetch_pr_comments", return_value=comments):
+            result = mod.wait_for_coderabbit(1, timeout=5)
+        assert len(result) == 1
+        assert result[0]["author"] == "coderabbitai"
 
     def test_returns_empty_on_timeout(self):
         """When no CodeRabbit comments appear, return empty after timeout."""
