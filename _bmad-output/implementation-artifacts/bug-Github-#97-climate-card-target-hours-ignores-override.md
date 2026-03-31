@@ -1,6 +1,6 @@
 # Bug Fix: Climate card target hours ignores user override duration
 
-Status: dev-complete
+Status: done
 issue: 97
 branch: "QS_97"
 
