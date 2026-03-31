@@ -175,7 +175,9 @@ class QSforecastValueSensor:
 
     def serialize_stored_values(self) -> list[list]:
         """Serialize stored values for persistence across restarts."""
-        return [[t.isoformat(), v] for t, v in self._stored_values]
+        return [
+            [t.isoformat(), int(v) if isinstance(v, (int, np.integer)) else float(v)] for t, v in self._stored_values
+        ]
 
     def restore_stored_values(self, data: list[list] | None) -> None:
         """Restore stored values from serialized data."""
@@ -204,7 +206,7 @@ class QSforecastValueSensor:
             if future_val is not None:
                 t, v, found, _ = get_value_from_time_series(self._stored_values, future_time)
                 if found is False:
-                    self._stored_values.append((future_time, future_val))
+                    self._stored_values.append((future_time, float(future_val)))
 
             if not self._stored_values:
                 return None
@@ -216,6 +218,8 @@ class QSforecastValueSensor:
             if value is not None and idx > 0 and idx < len(self._stored_values):
                 self._stored_values = self._stored_values[idx - 1 :]
 
+        if value is not None and isinstance(value, (np.integer, np.floating)):
+            value = int(value) if isinstance(value, np.integer) else float(value)
         return value
 
 
@@ -4004,18 +4008,20 @@ class QSSolarHistoryVals:
                 # and this value can be real
                 if prev_val is None:
                     prev_val = forecast_values[0]
-                forecast.append((time_now_from_idx - timedelta(minutes=INTERVALS_MN - INTERVALS_MN // 2), prev_val))
+                forecast.append(
+                    (time_now_from_idx - timedelta(minutes=INTERVALS_MN - INTERVALS_MN // 2), int(prev_val))
+                )
 
             for i in range(past_days.shape[0]):
                 if past_days[i] == 0:
                     continue
                 # adding INTERVALS_MN//2 has we have a mean on INTERVALS_MN
                 forecast_time = time_now_from_idx + timedelta(minutes=i * INTERVALS_MN + INTERVALS_MN // 2)
-                forecast.append((forecast_time, forecast_values[i]))
+                forecast.append((forecast_time, int(forecast_values[i])))
 
             # complement with the future if there is not enough data at the end
             if forecast[-1][0] < time_now + timedelta(hours=future_needed_in_hours):
-                forecast.append((time_now + timedelta(hours=future_needed_in_hours), forecast[-1][1]))
+                forecast.append((time_now + timedelta(hours=future_needed_in_hours), int(forecast[-1][1])))
 
             _LOGGER.debug("compute_now_forecast A GOOD ONE  %s", past_days.shape[0])
 
