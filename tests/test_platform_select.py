@@ -14,10 +14,8 @@ from homeassistant.helpers import entity_registry as er
 from custom_components.quiet_solar.const import DOMAIN
 from custom_components.quiet_solar.select import (
     QSBaseSelect,
-    QSExtraStoredDataSelect,
     QSSelectEntityDescription,
     QSSimpleSelectRestore,
-    QSUserOverrideSelectRestore,
     async_unload_entry,
 )
 
@@ -188,76 +186,6 @@ async def test_select_setter_handles_attribute_error():
 
     await entity.async_select_option("option_2")
     entity.async_write_ha_state.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_user_override_select_restore():
-    """Test QSUserOverrideSelectRestore restores user selection."""
-    handler = MagicMock()
-    handler.hass = MagicMock()
-    device = _make_device()
-    device.mode = "option_1"
-
-    description = QSSelectEntityDescription(
-        key="mode",
-        translation_key="mode",
-        options=["option_1", "option_2"],
-    )
-
-    entity = QSUserOverrideSelectRestore(handler, device, description)
-    entity.async_write_ha_state = MagicMock()
-
-    extra = QSExtraStoredDataSelect("option_2")
-    with patch.object(entity, "async_get_last_extra_data", return_value=extra):
-        await entity.async_added_to_hass()
-
-    assert entity.user_selected_option == "option_2"
-
-
-@pytest.mark.asyncio
-async def test_user_override_select_no_restore_data():
-    """Test user override select with no restore data."""
-    handler = MagicMock()
-    handler.hass = MagicMock()
-    device = _make_device()
-
-    description = QSSelectEntityDescription(
-        key="test_key",
-        translation_key="test_key",
-        options=["option_1", "option_2"],
-    )
-
-    entity = QSUserOverrideSelectRestore(handler, device, description)
-    entity.async_get_last_extra_data = AsyncMock(return_value=None)
-    entity.async_select_option = AsyncMock()
-
-    await entity.async_added_to_hass()
-
-    assert entity.user_selected_option is None
-    entity.async_select_option.assert_called_once()
-
-
-def test_user_override_select_extra_restore_data():
-    """Test user override select extra restore data."""
-    handler = MagicMock()
-    handler.hass = MagicMock()
-    device = _make_device()
-
-    description = QSSelectEntityDescription(
-        key="test_key",
-        translation_key="test_key",
-        options=["option_1", "option_2"],
-    )
-
-    entity = QSUserOverrideSelectRestore(handler, device, description)
-    extra = entity.extra_restore_state_data
-
-    assert isinstance(extra, QSExtraStoredDataSelect)
-
-
-def test_extra_stored_data_from_dict_error():
-    """Test QSExtraStoredDataSelect.from_dict handles errors."""
-    assert QSExtraStoredDataSelect.from_dict({}) is None
 
 
 @pytest.mark.asyncio

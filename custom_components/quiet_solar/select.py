@@ -1,6 +1,6 @@
 import logging
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -8,7 +8,7 @@ from homeassistant.components.select import SelectEntity, SelectEntityDescriptio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
     CAR_STALE_MODE_AUTO,
@@ -205,9 +205,7 @@ def create_ha_select_for_QSSolar(device: QSSolar):
         qs_default_option=SOLAR_PROVIDER_MODE_AUTO,
     )
     entities.append(
-        QSUserOverrideSelectRestore(
-            data_handler=device.data_handler, device=device, description=provider_mode_description
-        )
+        QSSimpleSelectRestore(data_handler=device.data_handler, device=device, description=provider_mode_description)
     )
     return entities
 
@@ -397,63 +395,3 @@ class QSSimpleSelectRestore(QSBaseSelectRestore):
             new_option = self.options[0]
 
         await self.async_select_option(new_option, for_init=True)
-
-
-@dataclass
-class QSExtraStoredDataSelect(ExtraStoredData):
-    """Object to hold extra stored data."""
-
-    user_selected_option: str | None
-
-    def as_dict(self) -> dict[str, Any]:
-        """Return a dict representation of the text data."""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, restored: dict[str, Any]):
-        """Initialize a stored text state from a dict."""
-        try:
-            return cls(
-                restored["user_selected_option"],
-            )
-        except Exception as e:
-            _LOGGER.error(
-                "QSExtraStoredDataSelect.from_dict exception %s %s", restored, e, exc_info=True, stack_info=True
-            )
-            return None
-
-
-class QSUserOverrideSelectRestore(QSBaseSelectRestore):
-    user_selected_option: str | None = None
-
-    @property
-    def extra_restore_state_data(self) -> QSExtraStoredDataSelect:
-        """Return sensor specific state data to be restored."""
-        return QSExtraStoredDataSelect(self.user_selected_option)
-
-    async def async_get_last_select_data(self) -> QSExtraStoredDataSelect | None:
-        """Restore native_value and native_unit_of_measurement."""
-        if (restored_last_extra_data := await self.async_get_last_extra_data()) is None:
-            return None
-        return QSExtraStoredDataSelect.from_dict(restored_last_extra_data.as_dict())
-
-    async def async_added_to_hass(self) -> None:
-        """When entity is added to Home Assistant."""
-        await super().async_added_to_hass()
-
-        last_sensor_state = await self.async_get_last_select_data()
-
-        if not last_sensor_state:
-            user_option = None
-        else:
-            user_option = last_sensor_state.user_selected_option
-
-        self.user_selected_option = user_option
-        self._attr_current_option = self.user_selected_option
-
-        await self.async_select_option(self.user_selected_option, for_init=True)
-
-    async def async_select_option(self, option: str, for_init=False) -> None:
-        """Select an option."""
-        self.user_selected_option = option
-        await super().async_select_option(option, for_init=for_init)
