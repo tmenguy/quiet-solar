@@ -121,7 +121,7 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
     - When raw home transitions from `True` to `False`: record `_car_not_home_since = time`
     - When raw home is `True`: reset `_car_not_home_since = None`
     - When `_car_not_home_since` is set and `time - _car_not_home_since > CAR_NOT_HOME_AUTO_RESET_S`: perform auto-reset
-  - [ ] 3.4: The auto-reset should call `clear_all_user_originated()` and `clear_inferred_flags()`. Do NOT call `reset()` or `detach_car()` — the car is already away, no charger interaction needed. Log at info level when this happens.
+  - [ ] 3.4: The auto-reset should perform a full car reset — same as the red button (`user_clean_and_reset()`). This clears user-originated state, inferred flags, constraints, charge targets, detaches charger (no-op if car is away), and recomputes person allocation. One mechanism, clean slate for the next arrival. Log at info level when this happens.
   - [ ] 3.5: Handle edge case: if `car_tracker` is None (no home sensor), skip this mechanism entirely — cannot detect departure
   - [ ] 3.6: Write test: car home → car leaves → 15 min passes → user-originated state cleared (including `FORCE_CAR_NO_CHARGER_CONNECTED`)
   - [ ] 3.7: Write test: car home → car leaves → only 10 min → user-originated state preserved
