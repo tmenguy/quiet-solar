@@ -945,3 +945,166 @@ class TestQSBiStateDurationBestEffortLoad:
         assert result
 
         assert constraint.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+
+
+class TestUpdateCurrentMetricsOverride:
+    """Test update_current_metrics with user override constraints (#97)."""
+
+    async def test_active_override_default_mode_shows_override_metrics(
+        self,
+        hass: HomeAssistant,
+        bistate_setup,
+        bistate_device: ConcreteBiStateDevice,
+    ):
+        """Active user override in default mode -> metrics reflect override values."""
+        bistate_device.bistate_mode = "bistate_mode_default"
+        bistate_device.calendar = None
+
+        now = datetime.datetime(2026, 3, 31, 21, 0, 0, tzinfo=pytz.UTC)
+        override_end = now + datetime.timedelta(hours=2)
+
+        override_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=now,
+            load=bistate_device,
+            load_param="on",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=now,
+            end_of_constraint=override_end,
+            power=bistate_device.power_use,
+            initial_value=0,
+            target_value=7200.0,  # 2h in seconds
+        )
+        # Simulate 30 minutes of runtime
+        override_ct.current_value = 1800.0
+
+        bistate_device._constraints = [override_ct]
+        bistate_device._last_completed_constraint = None
+
+        await bistate_device.update_current_metrics(now)
+
+        assert bistate_device.qs_bistate_current_duration_h == pytest.approx(2.0)
+        assert bistate_device.qs_bistate_current_on_h == pytest.approx(0.5)
+
+    async def test_active_override_calendar_mode_shows_override_metrics(
+        self,
+        hass: HomeAssistant,
+        bistate_setup,
+        bistate_device: ConcreteBiStateDevice,
+    ):
+        """Active user override in calendar mode -> metrics reflect override, not calendar events."""
+        bistate_device.bistate_mode = "bistate_mode_auto"
+        bistate_device.calendar = "calendar.test"
+
+        now = datetime.datetime(2026, 3, 31, 21, 0, 0, tzinfo=pytz.UTC)
+        override_end = now + datetime.timedelta(hours=2)
+
+        # Calendar event that would normally contribute 1h
+        cal_start = now - datetime.timedelta(hours=3)
+        cal_end = now - datetime.timedelta(hours=2)
+        bistate_device.get_next_scheduled_events = AsyncMock(return_value=[(cal_start, cal_end)])
+
+        override_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=now,
+            load=bistate_device,
+            load_param="on",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=now,
+            end_of_constraint=override_end,
+            power=bistate_device.power_use,
+            initial_value=0,
+            target_value=7200.0,  # 2h
+        )
+        override_ct.current_value = 900.0  # 15 minutes runtime
+
+        bistate_device._constraints = [override_ct]
+        bistate_device._last_completed_constraint = None
+
+        await bistate_device.update_current_metrics(now)
+
+        assert bistate_device.qs_bistate_current_duration_h == pytest.approx(2.0)
+        assert bistate_device.qs_bistate_current_on_h == pytest.approx(0.25)
+
+    async def test_completed_override_falls_through_to_normal_metrics(
+        self,
+        hass: HomeAssistant,
+        bistate_setup,
+        bistate_device: ConcreteBiStateDevice,
+    ):
+        """Completed (met) override -> short-circuit skipped, normal default metrics used.
+
+        When an override constraint is met (completed), is_constraint_active_for_time_period
+        returns False, so the short-circuit does not fire and normal metric logic applies.
+        In practice, completed constraints are moved to _last_completed_constraint.
+        """
+        bistate_device.bistate_mode = "bistate_mode_default"
+        bistate_device.calendar = None
+
+        now = datetime.datetime(2026, 3, 31, 12, 0, 0, tzinfo=pytz.UTC)
+        today_utc = datetime.datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+        tomorrow_utc = datetime.datetime(2026, 4, 1, 0, 0, 0, tzinfo=pytz.UTC)
+        bistate_device._get_today_boundaries = MagicMock(return_value=(today_utc, tomorrow_utc))
+
+        # Normal constraint for today (override already completed and removed from _constraints)
+        normal_end = datetime.datetime(2026, 3, 31, 23, 0, 0, tzinfo=pytz.UTC)
+        normal_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now,
+            load=bistate_device,
+            start_of_constraint=now,
+            end_of_constraint=normal_end,
+            power=bistate_device.power_use,
+            initial_value=0,
+            target_value=3600.0,  # 1h
+        )
+        normal_ct.current_value = 600.0  # 10 min
+
+        bistate_device._constraints = [normal_ct]
+        bistate_device._last_completed_constraint = None
+
+        await bistate_device.update_current_metrics(now)
+
+        # Normal metrics: no override short-circuit fires
+        assert bistate_device.qs_bistate_current_duration_h == pytest.approx(1.0)
+        assert bistate_device.qs_bistate_current_on_h == pytest.approx(600.0 / 3600.0)
+
+    async def test_no_override_normal_metrics_unchanged(
+        self,
+        hass: HomeAssistant,
+        bistate_setup,
+        bistate_device: ConcreteBiStateDevice,
+    ):
+        """No override present -> normal metrics unchanged."""
+        bistate_device.bistate_mode = "bistate_mode_default"
+        bistate_device.calendar = None
+
+        now = datetime.datetime(2026, 3, 31, 12, 0, 0, tzinfo=pytz.UTC)
+        today_utc = datetime.datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+        tomorrow_utc = datetime.datetime(2026, 4, 1, 0, 0, 0, tzinfo=pytz.UTC)
+        bistate_device._get_today_boundaries = MagicMock(return_value=(today_utc, tomorrow_utc))
+
+        normal_end = datetime.datetime(2026, 3, 31, 23, 0, 0, tzinfo=pytz.UTC)
+        normal_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=now,
+            load=bistate_device,
+            start_of_constraint=now,
+            end_of_constraint=normal_end,
+            power=bistate_device.power_use,
+            initial_value=0,
+            target_value=3600.0,
+        )
+        normal_ct.current_value = 1800.0
+
+        bistate_device._constraints = [normal_ct]
+        bistate_device._last_completed_constraint = None
+
+        await bistate_device.update_current_metrics(now)
+
+        assert bistate_device.qs_bistate_current_duration_h == pytest.approx(1.0)
+        assert bistate_device.qs_bistate_current_on_h == pytest.approx(0.5)
