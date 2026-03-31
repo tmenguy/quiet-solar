@@ -2,7 +2,7 @@
 title: "Replace GitHub Copilot with CodeRabbit in review workflow"
 issue: 88
 branch: "QS_88"
-status: draft
+status: implemented
 story_type: feature
 ---
 
@@ -16,10 +16,10 @@ CodeRabbit is a GitHub App that automatically reviews PRs when they are opened o
 
 ## Acceptance Criteria
 
-- [ ] `scripts/qs/review_pr.py` no longer references Copilot
-- [ ] `scripts/qs/review_pr.py` can detect and fetch CodeRabbit review comments
-- [ ] `_qsprocess/skills/review-story.md` references CodeRabbit instead of Copilot
-- [ ] CLI flags updated: `--trigger-copilot` removed, `--wait-copilot` renamed to `--wait-coderabbit`
+- [x] `scripts/qs/review_pr.py` no longer references Copilot
+- [x] `scripts/qs/review_pr.py` can detect and fetch CodeRabbit review comments
+- [x] `_qsprocess/skills/review-story.md` references CodeRabbit instead of Copilot
+- [x] CLI flags updated: `--trigger-copilot` removed, `--wait-copilot` renamed to `--wait-coderabbit`
 - [ ] A test PR confirms CodeRabbit activates and posts comments
 
 ## Tasks

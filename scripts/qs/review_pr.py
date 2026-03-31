@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Fetch PR review comments and optionally trigger Copilot review.
+"""Fetch PR review comments and optionally wait for CodeRabbit review.
 
 Usage:
-    python scripts/qs/review_pr.py <pr_number> [--trigger-copilot] [--fetch-comments]
+    python scripts/qs/review_pr.py <pr_number> [--fetch-comments] [--wait-coderabbit N]
 
 Output: JSON with structured review comments.
 """
@@ -15,19 +15,6 @@ import sys
 import time
 
 from utils import output_json, run_gh
-
-
-def trigger_copilot_review(pr_number: int) -> dict:
-    """Request a GitHub Copilot review on the PR."""
-    result = run_gh([
-        "api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/requested_reviewers",
-        "--method", "POST",
-        "--field", "reviewers[]=copilot",
-    ], check=False)
-
-    if result.returncode != 0:
-        return {"triggered": False, "detail": result.stderr.strip()}
-    return {"triggered": True}
 
 
 def get_repo_owner_name() -> tuple[str, str]:
@@ -124,33 +111,29 @@ def fetch_pr_comments_simple(pr_number: int) -> list[dict]:
     return comments
 
 
-def wait_for_copilot(pr_number: int, timeout: int = 120) -> list[dict]:
-    """Wait for Copilot review to appear, then fetch its comments."""
+def wait_for_coderabbit(pr_number: int, timeout: int = 120) -> list[dict]:
+    """Wait for CodeRabbit review to appear, then fetch its comments."""
     start = time.time()
     while time.time() - start < timeout:
         comments = fetch_pr_comments(pr_number)
-        copilot_comments = [c for c in comments if c.get("author") in ("copilot", "github-actions")]
-        if copilot_comments:
-            return copilot_comments
+        coderabbit_comments = [c for c in comments if c.get("author") == "coderabbitai[bot]"]
+        if coderabbit_comments:
+            return coderabbit_comments
         time.sleep(10)
     return []
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Review PR")
     parser.add_argument("pr_number", type=int, help="PR number")
-    parser.add_argument("--trigger-copilot", action="store_true", help="Request Copilot review")
     parser.add_argument("--fetch-comments", action="store_true", help="Fetch existing comments")
-    parser.add_argument("--wait-copilot", type=int, default=0, help="Wait N seconds for Copilot review")
-    args = parser.parse_args()
+    parser.add_argument("--wait-coderabbit", type=int, default=0, help="Wait N seconds for CodeRabbit review")
+    args = parser.parse_args(argv)
 
     result_data: dict = {"pr_number": args.pr_number}
 
-    if args.trigger_copilot:
-        result_data["copilot"] = trigger_copilot_review(args.pr_number)
-
-    if args.wait_copilot > 0:
-        result_data["copilot_comments"] = wait_for_copilot(args.pr_number, args.wait_copilot)
+    if args.wait_coderabbit > 0:
+        result_data["coderabbit_comments"] = wait_for_coderabbit(args.pr_number, args.wait_coderabbit)
 
     if args.fetch_comments:
         all_comments = fetch_pr_comments(args.pr_number)
