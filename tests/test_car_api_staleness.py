@@ -1567,6 +1567,10 @@ class TestGuestToKnownCarTransition:
         charger, real_car, guest_car, home = self._make_charger_and_car()
         now = datetime.now(pytz.UTC)
 
+        # Guest car is currently attached to the charger (simulates the initial state)
+        charger.car = guest_car
+        charger.car_attach_time = now - timedelta(hours=2)
+
         # Car API just started reporting plugged (instant only, duration < 15s)
         real_car.is_car_plugged = MagicMock(side_effect=lambda time, for_duration=None: (
             False if for_duration == 15 else True
