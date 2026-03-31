@@ -20,7 +20,7 @@ CodeRabbit is a GitHub App that automatically reviews PRs when they are opened o
 - [x] `scripts/qs/review_pr.py` can detect and fetch CodeRabbit review comments
 - [x] `_qsprocess/skills/review-story.md` references CodeRabbit instead of Copilot
 - [x] CLI flags updated: `--trigger-copilot` removed, `--wait-copilot` renamed to `--wait-coderabbit`
-- [ ] A test PR confirms CodeRabbit activates and posts comments
+- [x] A test PR confirms CodeRabbit activates and posts comments
 
 ## Tasks
 
