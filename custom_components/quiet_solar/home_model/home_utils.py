@@ -411,9 +411,8 @@ def align_time_series_and_values(
         else:
             timings[tv[0]] = [None, i]
 
-    timings = [(k, v) for k, v in timings.items()]
-    timings.sort(key=lambda x: x[0])
-    t_only = [t for t, _ in timings]
+    sorted_timings = sorted(timings.items(), key=lambda x: x[0])
+    t_only = [t for t, _ in sorted_timings]
 
     object_len = 3
     object_len = min(object_len, len(tsv1[0]), len(tsv2[0]))
@@ -439,7 +438,7 @@ def align_time_series_and_values(
             tsv = tsv2
 
         last_real_idx = None
-        for i, (t, idxs) in enumerate(timings):
+        for i, (t, idxs) in enumerate(sorted_timings):
             attr_to_put = None
             if idxs[vi] is not None:
                 # ok an exact value
