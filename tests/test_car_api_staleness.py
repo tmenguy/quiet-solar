@@ -13,7 +13,7 @@ Tests cover:
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytz
 import pytest
@@ -22,10 +22,12 @@ from custom_components.quiet_solar.const import (
     BINARY_SENSOR_CAR_API_OK,
     BINARY_SENSOR_CAR_IS_STALE,
     CAR_API_STALE_THRESHOLD_S,
+    CAR_NOT_HOME_AUTO_RESET_S,
     CAR_SOC_STALE_THRESHOLD_S,
     CAR_STALE_MODE_AUTO,
     CAR_STALE_MODE_FORCE_NOT_STALE,
     CAR_STALE_MODE_FORCE_STALE,
+    FORCE_CAR_NO_CHARGER_CONNECTED,
     SELECT_CAR_STALE_MODE,
 )
 
@@ -881,12 +883,29 @@ class TestContextAwareExit:
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
         assert real_car.can_exit_stale_percent_mode(current_time) is True
 
-    def test_exit_not_connected_plug_true_blocks(self, real_car, current_time):
-        """Not-connected car + plug=on → blocked."""
+    def test_exit_not_connected_plug_true_home_true_allows_exit(self, real_car, current_time):
+        """Not-connected car + plug=on + home=home → exit (car at charger, not yet attached)."""
         self._setup_stale_car(real_car, current_time)
         fresh_time = current_time - timedelta(seconds=60)
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_exit_not_connected_plug_true_not_home_blocks(self, real_car, current_time):
+        """Not-connected car + plug=on + home≠home → blocked (might be plugged elsewhere)."""
+        self._setup_stale_car(real_car, current_time)
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
         assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_exit_not_connected_plug_true_no_tracker_allows_exit(self, real_car, current_time):
+        """Not-connected car + plug=on + no tracker → exit (can't verify home, trust plug)."""
+        self._setup_stale_car(real_car, current_time)
+        real_car.car_tracker = None
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "on", {})
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
 
     def test_exit_soc_stale_blocks_both_paths(self, real_car, current_time):
         """SOC >1h blocks exit regardless of path."""
@@ -936,6 +955,15 @@ class TestContextAwareExit:
         self._setup_stale_car(real_car, current_time)
         real_car.car_plugged = None
         assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_exit_not_connected_plug_none_blocks(self, real_car, current_time):
+        """Not-connected car + plug sensor exists but returns None → blocked."""
+        self._setup_stale_car(real_car, current_time)
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+        # Sensor reported (passes common checks) but raw read returns None
+        with patch.object(real_car, "_get_raw_is_car_plugged", return_value=None):
+            assert real_car.can_exit_stale_percent_mode(current_time) is False
 
     def test_exit_no_home_sensor_connected(self, real_car, current_time):
         """No home sensor + connected + plug=on → exit (home check skipped)."""
@@ -1263,3 +1291,351 @@ def real_car_with_home(fake_hass, mock_data_handler, current_time):
     car = QSCar(**config)
     home_mock._cars.append(car)
     return car
+
+
+# ── Scoring Instant-Check Fallback (Bug #92, Root Cause 2) ───────────
+
+
+class TestScoringInstantCheckFallback:
+    """Test get_car_score falls back to instant check when for_duration returns False."""
+
+    def _make_charger(self):
+        """Create a charger for scoring tests."""
+        from tests.test_charger_additional_coverage import (
+            create_charger_generic,
+            create_mock_hass,
+            create_mock_home,
+        )
+
+        hass = create_mock_hass()
+        home = create_mock_home(hass)
+        charger = create_charger_generic(hass, home)
+        charger.car = None
+        charger.car_attach_time = None
+        return charger
+
+    def test_plug_duration_false_instant_true_gives_reduced_score(self):
+        """Car API just started reporting plugged (duration < 15s) → reduced score_plug_bump=2."""
+        car = MagicMock()
+        car.name = "TestCar"
+        car.car_is_invited = False
+        car.get_user_originated = MagicMock(return_value=None)
+        # for_duration=15 returns False (just started), instant returns True
+        car.is_car_plugged = MagicMock(side_effect=lambda time, for_duration=None: (
+            False if for_duration == 15 else True
+        ))
+        car.is_car_home = MagicMock(return_value=True)
+        car.get_continuous_plug_duration = MagicMock(return_value=5.0)
+        car.get_car_coordinates = MagicMock(return_value=(None, None))
+
+        charger = self._make_charger()
+        now = datetime.now(pytz.UTC)
+        score_instant = charger.get_car_score(car, now, {})
+        assert score_instant > 0, f"Expected non-zero score from instant fallback, got {score_instant}"
+
+        # Compare with full-duration score to verify reduced weight
+        car2 = MagicMock()
+        car2.name = "TestCar2"
+        car2.car_is_invited = False
+        car2.get_user_originated = MagicMock(return_value=None)
+        car2.is_car_plugged = MagicMock(return_value=True)
+        car2.is_car_home = MagicMock(return_value=True)
+        car2.get_continuous_plug_duration = MagicMock(return_value=5.0)
+        car2.get_car_coordinates = MagicMock(return_value=(None, None))
+        score_full = charger.get_car_score(car2, now, {})
+        assert score_instant < score_full, (
+            f"Instant fallback score ({score_instant}) should be less than full score ({score_full})"
+        )
+
+    def test_plug_duration_true_gives_full_score(self):
+        """Car API reports plugged for > 15s → full score_plug_bump=5."""
+        car = MagicMock()
+        car.name = "TestCar"
+        car.car_is_invited = False
+        car.get_user_originated = MagicMock(return_value=None)
+        car.is_car_plugged = MagicMock(return_value=True)
+        car.is_car_home = MagicMock(return_value=True)
+        car.get_continuous_plug_duration = MagicMock(return_value=120.0)
+        car.get_car_coordinates = MagicMock(return_value=(None, None))
+
+        charger = self._make_charger()
+        now = datetime.now(pytz.UTC)
+        score = charger.get_car_score(car, now, {})
+        assert score > 0
+
+    def test_home_duration_false_instant_true_gives_score(self):
+        """Car home sensor just started (duration < 15s) → instant home fallback contributes."""
+        car = MagicMock()
+        car.name = "TestCar"
+        car.car_is_invited = False
+        car.get_user_originated = MagicMock(return_value=None)
+        # Plug is confirmed (for_duration returns True)
+        car.is_car_plugged = MagicMock(return_value=True)
+        # Home: for_duration=15 returns False, instant returns True
+        car.is_car_home = MagicMock(side_effect=lambda time, for_duration=None: (
+            False if for_duration == 15 else True
+        ))
+        car.get_continuous_plug_duration = MagicMock(return_value=120.0)
+        car.get_car_coordinates = MagicMock(return_value=(None, None))
+
+        charger = self._make_charger()
+        now = datetime.now(pytz.UTC)
+        with patch.object(charger, "get_continuous_plug_duration", return_value=100.0):
+            score = charger.get_car_score(car, now, {})
+        assert score > 0, f"Expected non-zero score from home instant fallback, got {score}"
+
+    def test_plug_instant_false_gives_zero_score(self):
+        """Car not plugged at all → score stays 0."""
+        car = MagicMock()
+        car.name = "TestCar"
+        car.car_is_invited = False
+        car.get_user_originated = MagicMock(return_value=None)
+        car.is_car_plugged = MagicMock(return_value=False)
+        car.is_car_home = MagicMock(return_value=True)
+        car.get_car_coordinates = MagicMock(return_value=(None, None))
+
+        charger = self._make_charger()
+        now = datetime.now(pytz.UTC)
+        score = charger.get_car_score(car, now, {})
+        assert score == 0.0
+
+    def test_cache_preserves_instant_fallback_flags(self):
+        """Second charger reading from cache gets correct reduced weights."""
+        car = MagicMock()
+        car.name = "TestCar"
+        car.car_is_invited = False
+        car.get_user_originated = MagicMock(return_value=None)
+        # for_duration=15 returns False, instant returns True
+        car.is_car_plugged = MagicMock(side_effect=lambda time, for_duration=None: (
+            False if for_duration == 15 else True
+        ))
+        car.is_car_home = MagicMock(side_effect=lambda time, for_duration=None: (
+            False if for_duration == 15 else True
+        ))
+        car.get_continuous_plug_duration = MagicMock(return_value=5.0)
+        car.get_car_coordinates = MagicMock(return_value=(None, None))
+
+        charger1 = self._make_charger()
+        charger2 = self._make_charger()
+        now = datetime.now(pytz.UTC)
+        shared_cache: dict = {}
+
+        # First charger populates cache
+        score1 = charger1.get_car_score(car, now, shared_cache)
+        assert score1 > 0
+
+        # Second charger reads from cache — should get same reduced weights
+        score2 = charger2.get_car_score(car, now, shared_cache)
+        assert score2 == score1, (
+            f"Cache hit score ({score2}) should match cache miss score ({score1})"
+        )
+
+
+# ── Departure Auto-Reset (Bug #92, Root Cause 3) ─────────────────────
+
+
+class TestDepartureAutoReset:
+    """Test auto-reset of car state after confirmed departure."""
+
+    async def test_departure_15min_clears_user_originated(self, real_car, current_time):
+        """Car home → car leaves → 15 min passes → user-originated state cleared."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+
+        # Set some user-originated state
+        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+        assert real_car.has_user_originated("charger_name")
+
+        # Car is home
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
+        await real_car._check_departure_auto_reset(current_time)
+        assert real_car._car_not_home_since is None
+        assert real_car.has_user_originated("charger_name")
+
+        # Car leaves home
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        await real_car._check_departure_auto_reset(current_time)
+        assert real_car._car_not_home_since == current_time
+        assert real_car.has_user_originated("charger_name")  # Not yet cleared
+
+        # 15 minutes later — should trigger reset (once)
+        later_time = current_time + timedelta(seconds=CAR_NOT_HOME_AUTO_RESET_S)
+        with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
+            await real_car._check_departure_auto_reset(later_time)
+            mock_reset.assert_called_once()
+        assert real_car._departure_auto_reset_done is True
+
+        # Subsequent cycles should NOT re-trigger the reset
+        even_later = later_time + timedelta(seconds=CAR_NOT_HOME_AUTO_RESET_S)
+        with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
+            await real_car._check_departure_auto_reset(even_later)
+            mock_reset.assert_not_called()
+
+    async def test_departure_10min_preserves_state(self, real_car, current_time):
+        """Car home → car leaves → only 10 min → user-originated state preserved."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+
+        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+
+        # Car leaves
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        await real_car._check_departure_auto_reset(current_time)
+        assert real_car._car_not_home_since == current_time
+
+        # Only 10 minutes later — should NOT trigger reset
+        later_time = current_time + timedelta(minutes=10)
+        with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
+            await real_car._check_departure_auto_reset(later_time)
+            mock_reset.assert_not_called()
+        assert real_car.has_user_originated("charger_name")
+
+    async def test_gps_glitch_preserves_state(self, real_car, current_time):
+        """Car home → brief GPS glitch (not-home for 5 min then back) → state preserved."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+
+        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+
+        # Car appears to leave (GPS glitch)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        await real_car._check_departure_auto_reset(current_time)
+        assert real_car._car_not_home_since == current_time
+
+        # 5 minutes later, car comes back home
+        later_time = current_time + timedelta(minutes=5)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (later_time, "home", {})
+        await real_car._check_departure_auto_reset(later_time)
+        assert real_car._car_not_home_since is None
+        assert real_car._departure_auto_reset_done is False  # Re-armed for next departure
+        assert real_car.has_user_originated("charger_name")  # State preserved
+
+    async def test_no_tracker_skips_reset(self, real_car, current_time):
+        """Car with no tracker → no auto-reset attempted."""
+        real_car.car_tracker = None
+        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+
+        await real_car._check_departure_auto_reset(current_time)
+        assert real_car._car_not_home_since is None
+        assert real_car.has_user_originated("charger_name")
+
+
+# ── Integration: Guest-to-Known-Car Transition (Bug #92) ─────────────
+
+
+class TestGuestToKnownCarTransition:
+    """End-to-end scenario tests for the guest-to-real-car swap."""
+
+    def _make_charger_and_car(self):
+        """Create charger with a real car and guest car for integration testing."""
+        from tests.test_charger_additional_coverage import (
+            create_charger_generic,
+            create_mock_hass,
+            create_mock_home,
+        )
+
+        hass = create_mock_hass()
+        home = create_mock_home(hass)
+        charger = create_charger_generic(hass, home)
+
+        # Real car — not invited, plugged+home via instant check
+        real_car = MagicMock()
+        real_car.name = "Twingo"
+        real_car.car_is_invited = False
+        real_car.get_user_originated = MagicMock(return_value=None)
+        real_car.get_car_coordinates = MagicMock(return_value=(None, None))
+        real_car.charger = None
+
+        # Guest car — invited
+        guest_car = MagicMock()
+        guest_car.name = "TestCharger generic car"
+        guest_car.car_is_invited = True
+        guest_car.get_user_originated = MagicMock(return_value=None)
+
+        home._cars = [real_car]
+        home.get_car_by_name = MagicMock(return_value=None)
+        charger.car = None
+        charger.car_attach_time = None
+
+        return charger, real_car, guest_car, home
+
+    def test_known_car_replaces_guest_via_scoring(self):
+        """Charger plugged → guest car attached → API reports plugged+home → known car selected."""
+        charger, real_car, guest_car, home = self._make_charger_and_car()
+        now = datetime.now(pytz.UTC)
+
+        # Guest car is currently attached to the charger (simulates the initial state)
+        charger.car = guest_car
+        charger.car_attach_time = now - timedelta(hours=2)
+
+        # Car API just started reporting plugged (instant only, duration < 15s)
+        real_car.is_car_plugged = MagicMock(side_effect=lambda time, for_duration=None: (
+            False if for_duration == 15 else True
+        ))
+        real_car.is_car_home = MagicMock(return_value=True)
+        real_car.get_continuous_plug_duration = MagicMock(return_value=5.0)
+
+        # Charger has been plugged for hours (with guest car)
+        with patch.object(charger, "is_plugged", return_value=True):
+            best = charger.get_best_car(now)
+
+        # Known car should be selected (not the guest)
+        assert best is not None
+        assert best.name == "Twingo", f"Expected Twingo, got {best.name}"
+
+    def test_force_no_charger_cleared_after_departure(self):
+        """Car had FORCE_NO_CHARGER → left home 15 min → came back → scores normally."""
+        charger, real_car, guest_car, home = self._make_charger_and_car()
+        now = datetime.now(pytz.UTC)
+
+        # Car has FORCE_NO_CHARGER set — should be skipped
+        real_car.get_user_originated = MagicMock(
+            side_effect=lambda key, default=None: (
+                FORCE_CAR_NO_CHARGER_CONNECTED if key == "charger_name" else default
+            )
+        )
+        real_car.is_car_plugged = MagicMock(return_value=True)
+        real_car.is_car_home = MagicMock(return_value=True)
+        real_car.get_continuous_plug_duration = MagicMock(return_value=120.0)
+
+        with patch.object(charger, "is_plugged", return_value=True):
+            best = charger.get_best_car(now)
+        # Car should get generic fallback because FORCE flag blocks the real car
+        assert best.name == charger._default_generic_car.name
+
+        # After departure reset, FORCE flag is cleared
+        real_car.get_user_originated = MagicMock(return_value=None)
+        with patch.object(charger, "is_plugged", return_value=True):
+            best = charger.get_best_car(now)
+        assert best.name == "Twingo"
+
+    def test_manual_selection_overrides_scoring(self):
+        """User manual selection takes priority over scoring while car is home."""
+        charger, real_car, guest_car, home = self._make_charger_and_car()
+        now = datetime.now(pytz.UTC)
+
+        # Another car is also available
+        other_car = MagicMock()
+        other_car.name = "OtherCar"
+        other_car.car_is_invited = False
+        other_car.get_user_originated = MagicMock(return_value=None)
+        other_car.is_car_plugged = MagicMock(return_value=True)
+        other_car.is_car_home = MagicMock(return_value=True)
+        other_car.get_continuous_plug_duration = MagicMock(return_value=120.0)
+        other_car.get_car_coordinates = MagicMock(return_value=(None, None))
+        other_car.charger = None
+        home._cars.append(other_car)
+
+        real_car.is_car_plugged = MagicMock(return_value=True)
+        real_car.is_car_home = MagicMock(return_value=True)
+        real_car.get_continuous_plug_duration = MagicMock(return_value=120.0)
+
+        # User manually selects Twingo
+        charger.set_user_originated("car_name", "Twingo")
+        home.get_car_by_name = MagicMock(return_value=real_car)
+
+        best = charger.get_best_car(now)
+        assert best.name == "Twingo"

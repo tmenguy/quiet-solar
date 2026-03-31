@@ -19,6 +19,7 @@ from ..const import (
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CAR_EFFICIENCY_KM_PER_KWH,
     CAR_HARD_WIRED_CHARGER,
+    CAR_NOT_HOME_AUTO_RESET_S,
     CAR_SOC_STALE_THRESHOLD_S,
     CAR_STALE_MODE_AUTO,
     CAR_STALE_MODE_FORCE_NOT_STALE,
@@ -231,6 +232,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_api_stale_percent_mode: bool = False
         self._car_api_inferred_home: bool = False
         self._car_api_inferred_plugged: bool = False
+        self._car_not_home_since: datetime | None = None
+        self._departure_auto_reset_done: bool = False
 
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor, is_numerical=True, reload_from_history=True)
 
@@ -579,6 +582,36 @@ class QSCar(HADeviceMixin, AbstractDevice):
         """Update states and check car API staleness each cycle."""
         await super().update_states(time)
         self._update_car_api_staleness(time)
+        await self._check_departure_auto_reset(time)
+
+    async def _check_departure_auto_reset(self, time: datetime) -> None:
+        """Auto-reset car state after confirmed departure (not-home for CAR_NOT_HOME_AUTO_RESET_S)."""
+        if self.car_tracker is None:
+            return  # No home sensor — cannot detect departure
+
+        raw_home = self._get_raw_is_car_home(time)
+        if raw_home is True:
+            # Car is home — reset the departure timer and re-arm for next departure
+            self._car_not_home_since = None
+            self._departure_auto_reset_done = False
+            return
+
+        if raw_home is False:
+            if self._car_not_home_since is None:
+                # Home→not-home transition: start departure timer
+                self._car_not_home_since = time
+            elif (
+                not self._departure_auto_reset_done
+                and (time - self._car_not_home_since).total_seconds() >= CAR_NOT_HOME_AUTO_RESET_S
+            ):
+                # Confirmed departure — perform full reset (once per departure)
+                _LOGGER.info(
+                    "Car %s confirmed not home for %s minutes — performing departure auto-reset",
+                    self.name,
+                    int(CAR_NOT_HOME_AUTO_RESET_S / 60),
+                )
+                self._departure_auto_reset_done = True
+                await self.user_clean_and_reset()
 
     # ── Car API staleness detection (Story 3.9) ──────────────────────────
 
@@ -831,11 +864,18 @@ class QSCar(HADeviceMixin, AbstractDevice):
             home_ok = raw_home is True if self.car_tracker is not None else True
             return plugged_ok and home_ok
         else:
-            # Not connected: plug=unplugged
+            # Not connected to a QS charger
             raw_plugged = self._get_raw_is_car_plugged(time)
             if self.car_plugged is None:
                 return True  # No plug sensor — other checks sufficient
-            return raw_plugged is False
+            if raw_plugged is False:
+                return True  # Unplugged — safe to exit
+            # Plugged but not attached: allow exit if also home (at our charger)
+            if raw_plugged is True:
+                raw_home = self._get_raw_is_car_home(time)
+                home_ok = raw_home is True if self.car_tracker is not None else True
+                return home_ok
+            return False
 
     def car_efficiency_km_per_kwh_sensor_state_getter(
         self, entity_id: str, time: datetime | None

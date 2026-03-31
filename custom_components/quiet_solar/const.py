@@ -103,6 +103,7 @@ SOLAR_FORECAST_STALE_THRESHOLD_S = 6 * 3600
 
 CAR_API_STALE_THRESHOLD_S = 6 * 3600
 CAR_SOC_STALE_THRESHOLD_S = 3600
+CAR_NOT_HOME_AUTO_RESET_S = 15 * 60  # 15 minutes — auto-reset car state after confirmed departure
 SOLAR_ORCHESTRATOR_REPROBE_CYCLES = 5
 CONF_SOLAR_MAX_OUTPUT_POWER_VALUE = "solar_max_output_power_value"
 CONF_SOLAR_MAX_PHASE_AMPS = "solar_max_phase_amps"
