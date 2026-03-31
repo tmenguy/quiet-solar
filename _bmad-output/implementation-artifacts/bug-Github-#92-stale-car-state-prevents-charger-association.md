@@ -66,9 +66,9 @@ Combined with the **charger plug duration mismatch** (lines 2748-2757): the char
 
 Result: the known car scores 0 on every cycle until both plug and home durations exceed 15 seconds. If both stay at 0, the gate at line 2794 (`score_plug_bump > 0 AND (score_dist_bump > 0 OR score_plug_time_bump > 0)`) blocks the car permanently. The scoring entirely depends on `score_dist_bump` (GPS distance), which requires the `for_duration` home check to pass — same issue.
 
-### Root Cause 3: Stale `FORCE_CAR_NO_CHARGER_CONNECTED` persisted across reboots
+### Root Cause 3: Stale user-originated state persisted across reboots — no lifecycle reset
 
-**Location:** `ha_model/charger.py`, `get_best_car()` (lines 2874-2877)
+**Location:** `ha_model/charger.py`, `get_best_car()` (lines 2874-2877), `home_model/load.py` (lines ~420-423)
 
 ```python
 if car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED:
@@ -76,11 +76,13 @@ if car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED:
     continue  # Car is permanently skipped!
 ```
 
-The `_user_originated` dict is persisted across reboots (via `load.py` lines ~420-423). If a previous session set `FORCE_CAR_NO_CHARGER_CONNECTED` on a car, it persists indefinitely. The car is skipped entirely in `get_best_car()` even if the API now reports the car as plugged+home.
+The `_user_originated` dict is persisted across reboots (via `load.py` lines ~420-423). If a previous session set `FORCE_CAR_NO_CHARGER_CONNECTED` on a car (or any other manual override), it persists indefinitely — even after the car has left home and come back. There is no lifecycle mechanism to auto-reset stale user state when the car starts a new "at home" session.
+
+More broadly, ALL user-originated state (`FORCE_CAR_NO_CHARGER_CONNECTED`, manual charger assignments, inferred flags) should be treated as session-scoped to one "at home" period. When the car leaves home for real, those overrides are stale and should be cleared before the car's next arrival.
 
 ### Why manual reset fixes it
 
-`user_clean_and_reset()` calls `clear_all_user_originated()`, which removes the persisted `FORCE_CAR_NO_CHARGER_CONNECTED` and all inferred flags. The next 7-second cycle re-evaluates from scratch with fresh API data, and the known car can finally score > 0.
+`user_clean_and_reset()` calls `clear_all_user_originated()`, which removes persisted flags (including `FORCE_CAR_NO_CHARGER_CONNECTED`) and inferred flags. The next 7-second cycle re-evaluates from scratch with fresh API data, and the known car can finally score > 0. The fix is to automate this same cleanup on departure.
 
 ### Scoring Context (not a bug, but relevant)
 
@@ -91,10 +93,11 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
 1. **AC1**: When a charger has a guest car attached and the car API reports a known car as plugged+home, the system automatically replaces the guest car with the known car within 2 solver cycles
 2. **AC2**: A car in stale-percent mode that is plugged+home but not yet attached to a charger can exit stale mode
 3. **AC3**: A car whose API just started reporting `plugged=True` (duration < 15s) gets a non-zero score via instant-check fallback
-4. **AC4**: A stale `FORCE_CAR_NO_CHARGER_CONNECTED` is auto-cleared when the API contradicts it (reports plugged+home)
-5. **AC5**: Manual car selection (user-originated) still takes highest priority and is NOT affected by these changes
-6. **AC6**: Existing stale mode behavior (inferred flags during genuine API outage) continues to work correctly
-7. **AC7**: All existing tests pass; new tests cover the guest-to-known-car transition scenarios
+4. **AC4**: When a car has been confirmed not-home for 15 minutes (home→not-home transition), all user-originated state and inferred flags are automatically cleared, so the car starts fresh on its next arrival
+5. **AC5**: User-originated state is NOT cleared while the car is still home (even if unplugged) — the user's manual overrides remain valid for the current "at home" session
+6. **AC6**: Manual car selection (user-originated) still takes highest priority while the car is home and is NOT affected by these changes
+7. **AC7**: Existing stale mode behavior (inferred flags during genuine API outage) continues to work correctly
+8. **AC8**: All existing tests pass; new tests cover the guest-to-known-car transition scenarios
 
 ## Tasks / Subtasks
 
@@ -110,19 +113,31 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
   - [ ] 2.3: Write tests: car API just started reporting plugged (duration < 15s) → instant fallback gives non-zero score
   - [ ] 2.4: Write tests: car API reports plugged for > 15s → full score (no change to existing behavior)
 
-- [ ] Task 3: Auto-clear stale `FORCE_CAR_NO_CHARGER_CONNECTED` when API contradicts (AC: 4)
-  - [ ] 3.1: In `get_best_car()` (charger.py lines 2874-2877), before the `continue`, check if the car's raw API reports plugged+home. If so, log a warning and clear the stale flag instead of skipping
-  - [ ] 3.2: Write test: car with `FORCE_CAR_NO_CHARGER_CONNECTED` + API reports plugged+home → flag auto-cleared, car participates in scoring
-  - [ ] 3.3: Write test: car with `FORCE_CAR_NO_CHARGER_CONNECTED` + API reports NOT plugged → flag preserved, car still skipped (correct behavior)
+- [ ] Task 3: Auto-reset car on departure — clear stale user-originated state (AC: 4, 5)
+  - [ ] 3.1: Add a new constant `CAR_NOT_HOME_AUTO_RESET_S = 15 * 60` (15 minutes) in `const.py`
+  - [ ] 3.2: Add tracking state in car.py: `_car_not_home_since: datetime | None = None` to record the home→not-home transition timestamp
+  - [ ] 3.3: In `_update_car_api_staleness()` (or `update_states()`), add departure detection logic:
+    - Use `_get_raw_is_car_home(time)` (NOT the inferred version) to check actual API state
+    - When raw home transitions from `True` to `False`: record `_car_not_home_since = time`
+    - When raw home is `True`: reset `_car_not_home_since = None`
+    - When `_car_not_home_since` is set and `time - _car_not_home_since > CAR_NOT_HOME_AUTO_RESET_S`: perform auto-reset
+  - [ ] 3.4: The auto-reset should call `clear_all_user_originated()` and `clear_inferred_flags()`. Do NOT call `reset()` or `detach_car()` — the car is already away, no charger interaction needed. Log at info level when this happens.
+  - [ ] 3.5: Handle edge case: if `car_tracker` is None (no home sensor), skip this mechanism entirely — cannot detect departure
+  - [ ] 3.6: Write test: car home → car leaves → 15 min passes → user-originated state cleared (including `FORCE_CAR_NO_CHARGER_CONNECTED`)
+  - [ ] 3.7: Write test: car home → car leaves → only 10 min → user-originated state preserved
+  - [ ] 3.8: Write test: car home → brief GPS glitch (not-home for 5 min then back) → user-originated state preserved
+  - [ ] 3.9: Write test: car with no tracker → no auto-reset attempted
 
 - [ ] Task 4: Add diagnostic logging (AC: all)
   - [ ] 4.1: Add debug-level logging in `get_best_car()` when the generic/guest car is returned as fallback despite real cars existing
   - [ ] 4.2: Add debug-level logging in `get_car_score()` when a car's score is 0 despite having some positive sub-scores, and when instant-check fallback is used
+  - [ ] 4.3: Add info-level logging when departure auto-reset triggers
 
-- [ ] Task 5: Integration test — full guest-to-known-car transition (AC: 1, 7)
+- [ ] Task 5: Integration test — full guest-to-known-car transition (AC: 1, 8)
   - [ ] 5.1: Write an end-to-end scenario test: charger plugged → guest car attached → car API reports plugged+home → known car replaces guest car automatically
-  - [ ] 5.2: Verify manual selection still overrides everything
-  - [ ] 5.3: Run full quality gate (`python scripts/qs/quality_gate.py`)
+  - [ ] 5.2: Write scenario: car had FORCE_NO_CHARGER from previous session → car left home for 15 min → came back → flag cleared → car scores normally
+  - [ ] 5.3: Verify manual selection still overrides everything while car is home
+  - [ ] 5.4: Run full quality gate (`python scripts/qs/quality_gate.py`)
 
 ## Dev Notes
 
@@ -131,7 +146,7 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
 - **Solver step**: `SOLVER_STEP_S = 900` — do not change.
 - **Logging**: Use lazy `%s` formatting, no f-strings in log calls, no periods at end.
 - **Async**: No blocking calls in async code.
-- **Constants**: All config keys in `const.py`. No new config keys needed for this fix.
+- **Constants**: All config keys in `const.py`. One new constant needed: `CAR_NOT_HOME_AUTO_RESET_S`.
 
 ### Key Code Locations
 
@@ -154,6 +169,9 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
 | Attach/detach car | `ha_model/charger.py` | 3755-3785 | `attach_car()`, `detach_car()` |
 | Guest car creation | `ha_model/charger.py` | 2055-2057 | `__init__()` |
 | User originated persist | `home_model/load.py` | ~420-423 | persistence logic |
+| Clear all user originated | `home_model/load.py` | 169-170 | `clear_all_user_originated()` |
+| Car user_clean_and_reset | `ha_model/car.py` | 2209-2224 | `user_clean_and_reset()` |
+| Base user_clean_and_reset | `home_model/load.py` | 304-307 | `user_clean_and_reset()` |
 | Reset button | `button.py` | 162-174, 263-277 | `async_press()` |
 
 ### Key Constants
@@ -165,6 +183,7 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
 | `CAR_CHARGER_LONG_RELATIONSHIP_S` | 3600 (1h) | `charger.py` ~190 |
 | `CHARGER_LONG_CONNECTION_S` | 1200 (20min) | `charger.py` ~191 |
 | `CHARGER_CHECK_STATE_WINDOW_S` | 15 (s) | `charger.py` ~178 |
+| `CAR_NOT_HOME_AUTO_RESET_S` | 900 (15min) | `const.py` (NEW) |
 
 ### Testing Approach
 - Use `create_test_car_double()` and `create_test_charger_double()` from `tests/factories.py` for lightweight test doubles
@@ -175,21 +194,24 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
   - Stale-percent car, not connected, API reports plugged but NOT home → stays stale
   - Car API just started reporting plugged (duration < 15s) → instant fallback gives reduced score > 0
   - Car API reports plugged for > 15s → full score (unchanged behavior)
-  - `FORCE_CAR_NO_CHARGER_CONNECTED` + API contradicts → flag cleared
-  - `FORCE_CAR_NO_CHARGER_CONNECTED` + API agrees → flag preserved
+  - Car leaves home for 15 min → all user-originated state auto-cleared
+  - Car leaves home for < 15 min (GPS glitch) → state preserved
+  - Car still home but unplugged → state preserved (not-home is the trigger, not unplugged)
+  - Car with no tracker → auto-reset skipped
   - Full guest-to-real-car swap scenario end-to-end
-  - Manual selection still overrides everything
+  - Manual selection still overrides everything while car is home
 - 100% coverage required
 
 ### Risk Assessment
-- **Low risk**: Task 3 (clear stale force-disconnect flag) — targeted conditional before an existing `continue`
+- **Low risk**: Task 3 (departure auto-reset) — only triggers after 15 min confirmed not-home; uses raw API (no inferred override); clears state that would be cleared by manual reset anyway
 - **Medium risk**: Task 1 (stale percent exit) — changes a state machine exit condition; must not allow exit when car is plugged at a different location (hence the plugged+home double-check)
 - **Medium risk**: Task 2 (scoring fallback) — changes score weights; the reduced weight (2 vs 5) ensures instant-only confirmation doesn't dominate duration-confirmed results
 - **Regression risk**: Ensure cars with no plug sensor (`car_plugged is None`) still use the existing `None` fallback path unchanged
+- **Regression risk**: Ensure cars with no tracker (`car_tracker is None`) skip the departure auto-reset entirely
 
 ### Project Structure Notes
 - All changes confined to `ha_model/` layer (car.py, charger.py) — no architecture boundary violations
-- No new config keys needed — this is a logic fix, not a feature
+- One new constant in `const.py`: `CAR_NOT_HOME_AUTO_RESET_S`
 - No translation changes needed
 
 ### References
@@ -198,6 +220,8 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
 - [Source: ha_model/charger.py:2783-2788 - `get_car_score()` home duration fallback]
 - [Source: ha_model/charger.py:2874-2877 - `get_best_car()` FORCE_CAR_NO_CHARGER_CONNECTED skip]
 - [Source: ha_model/car.py:731-737 - `_exit_stale_mode()` flag clearing]
+- [Source: home_model/load.py:169-170 - `clear_all_user_originated()`]
+- [Source: ha_model/car.py:2209-2224 - `user_clean_and_reset()` — reference for what a full reset does]
 - [Source: Cursor plan analysis - cross-validated root causes]
 
 ## Dev Agent Record
