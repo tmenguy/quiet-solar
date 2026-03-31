@@ -49,3 +49,5 @@ CodeRabbit is a GitHub App that automatically reviews PRs when they are opened o
 - CodeRabbit is a GitHub App, not a GitHub user. Its bot username is `coderabbitai[bot]`.
 - CodeRabbit auto-reviews on PR creation and push events — no API trigger needed.
 - The `trigger_copilot_review()` function used `POST requested_reviewers` which is Copilot-specific and can be fully removed.
+- GraphQL API returns `author.login` as `"coderabbitai"` (no `[bot]` suffix); REST returns `"coderabbitai[bot]"`. Use prefix match `startswith("coderabbitai")` to handle both.
+- Residual Copilot references in `CLAUDE.md`, SKILL.md files, and `development-lifecycle.md` were also updated (beyond original AC scope).
