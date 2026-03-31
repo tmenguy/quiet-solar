@@ -5,27 +5,28 @@ This document describes the development pipeline. Each phase is implemented by a
 ## Pipeline Overview
 
 ```
-/create-story → /setup-story → /implement-story → /review-story → /finish-story → /release
+/setup-task → /create-plan → /implement-story → /review-story → /finish-story → /release
 ```
 
 Each skill runs in its own context. The output of one skill gives you the command to launch the next.
 
-## Phase 1: Story Creation (`/create-story`)
+## Phase 1: Task Setup (`/setup-task`)
 
-Creates a story artifact file and commits it on a feature branch `QS_N`.
+Creates a GitHub issue (if needed), feature branch, and worktree — without touching main's checkout state. This is fast and can be run multiple times in parallel to set up several tasks.
 
-- Creates GitHub issue via `scripts/qs/create_issue.py`
-- Creates branch `QS_N` (not on main — main is protected)
-- Writes story file to `_bmad-output/implementation-artifacts/`
-- Commits and pushes
+- Creates GitHub issue via `scripts/qs/create_issue.py` (if not provided)
+- Creates branch `QS_N` from `origin/main` (main is never checked out)
+- Creates worktree via `scripts/worktree-setup.sh` (unless `--no-worktree`)
+- Outputs tool-appropriate launch instructions for `/create-plan`
 
-## Phase 2: Setup (`/setup-story`)
+## Phase 2: Plan Creation (`/create-plan`)
 
-Sets up a worktree for parallel development.
+Runs inside the worktree (or on `QS_N` branch). Creates the story artifact file.
 
-- Creates worktree via `scripts/worktree-setup.sh`
-- Outputs tool-appropriate launch instructions via `build_next_step()` from `scripts/qs/utils.py` (auto-detects Cursor vs Claude Code)
-- The implementation context is isolated from the main worktree
+- Fetches issue details for context
+- Writes story file to `_bmad-output/implementation-artifacts/` via `bmad-create-story`
+- Commits and pushes the story file
+- Outputs tool-appropriate launch instructions for `/implement-story`
 
 ## Phase 3: Implementation (`/implement-story`)
 

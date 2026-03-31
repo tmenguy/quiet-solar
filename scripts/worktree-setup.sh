@@ -36,6 +36,10 @@ if [ -d "$WORKTREE_DIR" ]; then
     exit 1
 fi
 
+# Fetch latest so origin/main is up to date (safe even if main is not checked out)
+echo "Fetching latest from origin..."
+git -C "$MAIN_DIR" fetch origin
+
 # Create worktrees parent directory if needed
 mkdir -p "$WORKTREES_DIR"
 
@@ -49,7 +53,7 @@ if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/nu
     git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" "$BRANCH"
 else
     echo "Creating worktree at ${WORKTREE_DIR} on new branch ${BRANCH}..."
-    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH"
+    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH" origin/main
 fi
 
 # P2: Symlink venv using derived basename (not hardcoded)

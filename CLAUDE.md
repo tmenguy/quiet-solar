@@ -3,8 +3,8 @@
 Read `_qsprocess/rules/project-rules.md` before doing any work.
 
 Use these skills for development workflows:
-- `/create-story` — create story artifact + GitHub issue + feature branch
-- `/setup-story` — set up worktree, output launch command for implementation
+- `/setup-task` — create GitHub issue + feature branch + worktree (never touches main checkout)
+- `/create-plan` — create story artifact in worktree, commit and push
 - `/implement-story` — TDD implementation with enforced quality gates
 - `/review-story` — code review + CodeRabbit + process feedback
 - `/finish-story` — merge PR, cleanup worktree, update epics

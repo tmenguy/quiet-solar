@@ -17,7 +17,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 ## Development Lifecycle
 
 The development pipeline uses skill commands that orchestrate BMad skills + Python scripts:
-- **`/create-story`** → **`/setup-story`** → **`/implement-story`** → **`/review-story`** → **`/finish-story`** → **`/release`**
+- **`/setup-task`** → **`/create-plan`** → **`/implement-story`** → **`/review-story`** → **`/finish-story`** → **`/release`**
 
 Skills are defined in `_qsprocess/skills/`. They delegate creative work to BMad skills (bmad-create-story, bmad-dev-story, bmad-code-review) and mechanical work to Python scripts in `scripts/qs/`.
 

@@ -7,8 +7,8 @@ This document describes the end-to-end development workflow for the quiet-solar 
 | You say | What happens |
 |---------|-------------|
 | "Fix this bug where..." | Issue → worktree → quick-dev → quality gates → PR |
-| "I want to add a feature that..." | create-story → commit → issue → worktree → dev-story → quality gates → PR |
-| "Create story 3.2" | create-story → commit story file. Stops here. |
+| "I want to add a feature that..." | setup-task → worktree → create-plan → dev-story → quality gates → PR |
+| "Setup task 3.2" | setup-task → issue + branch + worktree. Then /create-plan. |
 | "Implement story 3.2" | Issue → worktree → dev-story → quality gates → PR |
 | "Work on issue #N" | Fetches issue → routes to bug or feature flow |
 | "Process PR feedback" | Pull review comments → interactive fix/discuss/reject |
@@ -23,11 +23,11 @@ This document describes the end-to-end development workflow for the quiet-solar 
 
 Every piece of work starts with:
 
-1. **Story creation** (features only): `/bmad-create-story` generates a comprehensive story file with acceptance criteria, tasks, dev notes, and guardrails. The story file is committed to main.
+1. **Task setup** (`/setup-task`): Creates a GitHub issue, feature branch `QS_N`, and worktree — without touching main's checkout. Fast and parallelizable.
 
-2. **GitHub issue**: Created automatically with a link to the story file.
+2. **Plan creation** (`/create-plan`): Runs inside the worktree. Generates the story file via `/bmad-create-story`, commits and pushes it.
 
-3. **Worktree**: A git worktree is created at `../quiet-solar-worktrees/QS_<issue_number>/` with shared venv and config via symlinks. This lets you work on multiple stories in parallel. The main worktree stays on main.
+3. **Worktree**: Created by `/setup-task` at `../quiet-solar-worktrees/QS_<issue_number>/` with shared venv and config via symlinks. This lets you work on multiple stories in parallel. The main worktree stays on main.
 
 ### Phase 2: Development
 

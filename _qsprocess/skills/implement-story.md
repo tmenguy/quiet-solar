@@ -6,7 +6,7 @@ Implement a story following TDD, enforce quality gates, create PR.
 
 - `--issue N` (required): GitHub issue number. Branch is `QS_N`.
 
-The story file is discovered automatically via `find_story_file(issue_number)` which looks for `*Github-#N*` in `_bmad-output/implementation-artifacts/`. If no story file is found, STOP and ask the user to run `/create-story` first.
+The story file is discovered automatically via `find_story_file(issue_number)` which looks for `*Github-#N*` in `_bmad-output/implementation-artifacts/`. If no story file is found, STOP and ask the user to run `/create-plan` first.
 
 ## Prerequisites
 

@@ -21,6 +21,7 @@ def build_skill_prompt(
     pr: int | None = None,
     story_file: str | None = None,
     story_key: str | None = None,
+    plan: str | None = None,
 ) -> str:
     """Build the /skill --args string for same-context use."""
     parts = [f"/{skill}"]
@@ -32,6 +33,8 @@ def build_skill_prompt(
         parts.append(f"--story-file {story_file}")
     if story_key is not None:
         parts.append(f"--story-key {story_key}")
+    if plan is not None:
+        parts.append(f"--plan {plan}")
     return " ".join(parts)
 
 
@@ -42,6 +45,7 @@ def main() -> None:
     parser.add_argument("--pr", type=int, default=None, help="PR number")
     parser.add_argument("--story-file", default=None, help="Path to story file")
     parser.add_argument("--story-key", default=None, help="Story key (e.g., 3.2)")
+    parser.add_argument("--plan", default=None, help="Path to external plan .md file")
     parser.add_argument("--work-dir", required=True, help="Worktree directory path")
     parser.add_argument("--title", required=True, help="Issue/story title for display")
     parser.add_argument("--tool", default=None, choices=["cursor", "claude"], help="Override tool detection")
@@ -55,6 +59,7 @@ def main() -> None:
         pr=args.pr,
         story_file=args.story_file,
         story_key=args.story_key,
+        plan=args.plan,
     )
 
     result = build_next_step(

@@ -44,13 +44,13 @@ Use skills (`/command`) for all development work. Do NOT ask which to use — in
 
 | You say | Skill |
 |---------|-------|
-| "Create story 3.2" or describe feature | `/create-story` |
-| "Setup story 42" or "work on issue #42" | `/setup-story` |
+| "Setup task 3.2" or describe feature or "work on issue #42" | `/setup-task` |
+| "Create plan" (inside worktree) | `/create-plan` |
 | "Implement story" (inside worktree) | `/implement-story` |
 | "Review PR #5" or "review story" | `/review-story` |
 | "Merge PR #5" or "finish story" | `/finish-story` |
 | "Create a release" | `/release` |
-| Bug fix / small fix | `/create-story` (skip story file, create issue + branch directly) |
+| Bug fix / small fix | `/setup-task` (create issue + branch + worktree directly) |
 
 Each skill is defined in `_qsprocess/skills/` and handles all steps including quality gates.
 
