@@ -1,6 +1,6 @@
 # Bug #86: Saved Forecast Data Can't Be Restored (Numpy Types)
 
-Status: review
+Status: done
 issue: 86
 branch: "QS_86"
 
