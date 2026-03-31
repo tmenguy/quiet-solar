@@ -1399,6 +1399,37 @@ class TestScoringInstantCheckFallback:
         score = charger.get_car_score(car, now, {})
         assert score == 0.0
 
+    def test_cache_preserves_instant_fallback_flags(self):
+        """Second charger reading from cache gets correct reduced weights."""
+        car = MagicMock()
+        car.name = "TestCar"
+        car.car_is_invited = False
+        car.get_user_originated = MagicMock(return_value=None)
+        # for_duration=15 returns False, instant returns True
+        car.is_car_plugged = MagicMock(side_effect=lambda time, for_duration=None: (
+            False if for_duration == 15 else True
+        ))
+        car.is_car_home = MagicMock(side_effect=lambda time, for_duration=None: (
+            False if for_duration == 15 else True
+        ))
+        car.get_continuous_plug_duration = MagicMock(return_value=5.0)
+        car.get_car_coordinates = MagicMock(return_value=(None, None))
+
+        charger1 = self._make_charger()
+        charger2 = self._make_charger()
+        now = datetime.now(pytz.UTC)
+        shared_cache: dict = {}
+
+        # First charger populates cache
+        score1 = charger1.get_car_score(car, now, shared_cache)
+        assert score1 > 0
+
+        # Second charger reads from cache — should get same reduced weights
+        score2 = charger2.get_car_score(car, now, shared_cache)
+        assert score2 == score1, (
+            f"Cache hit score ({score2}) should match cache miss score ({score1})"
+        )
+
 
 # ── Departure Auto-Reset (Bug #92, Root Cause 3) ─────────────────────
 

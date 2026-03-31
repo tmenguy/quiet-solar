@@ -2720,13 +2720,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             score_plug_bump = 0
             plug_instant_fallback = False
-            car_plug_res = cache.get(car, {}).get("car_plug_res", "NOT_FOUND")
+            car_cache = cache.setdefault(car, {})
+            car_plug_res = car_cache.get("car_plug_res", "NOT_FOUND")
             if car_plug_res == "NOT_FOUND":
                 car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S)
                 if car_plug_res is None or car_plug_res is False:
                     plug_instant_fallback = car_plug_res is False
                     car_plug_res = car.is_car_plugged(time=time)
-                cache.setdefault(car, {})["car_plug_res"] = car_plug_res
+                car_cache["car_plug_res"] = car_plug_res
+                car_cache["car_plug_instant_fallback"] = plug_instant_fallback
+            else:
+                plug_instant_fallback = car_cache.get("car_plug_instant_fallback", False)
 
             if car_plug_res:
                 score_plug_bump = 2 if plug_instant_fallback else 5
@@ -2747,12 +2751,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         charger_plugged_duration = -1.0
                     cache.setdefault(self, {})["charger_plugged_duration"] = charger_plugged_duration
 
-                car_plugged_duration = cache.get(car, {}).get("car_plugged_duration")
+                car_plugged_duration = car_cache.get("car_plugged_duration")
                 if car_plugged_duration is None:
                     car_plugged_duration = car.get_continuous_plug_duration(time)
                     if car_plugged_duration is None:
                         car_plugged_duration = -1.0
-                    cache.setdefault(self, {})["car_plugged_duration"] = car_plugged_duration
+                    car_cache["car_plugged_duration"] = car_plugged_duration
 
                 if charger_plugged_duration >= 0 and car_plugged_duration >= 0:
                     # check they have been roughly connected at the same time
@@ -2790,14 +2794,17 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         score_plug_bump += 1
 
             home_instant_fallback = False
-            car_home_res = cache.get(car, {}).get("car_home_res", "NOT_FOUND")
+            car_home_res = car_cache.get("car_home_res", "NOT_FOUND")
             if car_home_res == "NOT_FOUND":
                 # check if the car is home
                 car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S)
                 if car_home_res is None or car_home_res is False:
                     home_instant_fallback = car_home_res is False
                     car_home_res = car.is_car_home(time=time)
-                cache.setdefault(car, {})["car_home_res"] = car_home_res
+                car_cache["car_home_res"] = car_home_res
+                car_cache["car_home_instant_fallback"] = home_instant_fallback
+            else:
+                home_instant_fallback = car_cache.get("car_home_instant_fallback", False)
 
             if car_home_res and score_dist_bump == 0:
                 score_dist_bump = 0.5 if home_instant_fallback else 1.0
