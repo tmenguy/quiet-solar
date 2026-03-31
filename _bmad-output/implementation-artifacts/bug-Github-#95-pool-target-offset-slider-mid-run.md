@@ -35,68 +35,45 @@ When the pool is running and the user adjusts the target hours slider, the displ
 4. **Constraint build** (`ha_model/bistate_duration.py:272-287`): For `bistate_mode_default`, creates `ConstraintItemType(target_value=self.default_on_duration * 3600.0)` -- this is correct (10h = 36000s)
 5. **Constraint creation** (`ha_model/bistate_duration.py:546-562`): Creates `TimeBasedSimplePowerLoadConstraint(target_value=36000, initial_value=0)` and calls `push_live_constraint()`
 6. **Push** (`home_model/load.py:1305-1373`): Processes the new constraint against existing ones
+7. **Metrics** (`ha_model/bistate_duration.py:576`): `update_current_metrics(time)` computes sensor values from constraints
+8. **UI reads** `qs_bistate_current_duration_h` sensor (mapped as `duration_limit` in dashboard YAML) as the displayed "target"
 
-### Bug Location: `push_live_constraint()` carry-over + `update_current_metrics()` double-counting
+### Exact Mechanism: UNKNOWN -- investigation required
 
-The bug involves an interaction between two code sections:
+Static code analysis traced all paths through `push_live_constraint()` and `update_current_metrics()` but could NOT conclusively reproduce the `slider + already_run` offset pattern. The naive trace suggests the correct result (target=slider_value), yet the user consistently observes the offset. This means the bug involves a runtime interaction not visible through static reading.
 
-**Section A -- Carry-over in `push_live_constraint()` (`home_model/load.py:1331-1345`):**
-```python
-# Carry current_value from completed constraint for same day cycle
-if (
-    self._last_completed_constraint is not None
-    and type(self._last_completed_constraint) == type(constraint)
-    and self._last_completed_constraint.current_value > constraint.current_value
-    and (same end_of_constraint check)
-):
-    constraint.current_value = min(
-        self._last_completed_constraint.current_value,
-        constraint.target_value,
-    )
-```
+**What we know for certain:**
+- The symptom is `qs_bistate_current_duration_h = slider_value + already_run_hours`
+- The constraint is created with the correct `target_value = slider_value * 3600`
+- The UI reads the sensor directly -- no client-side addition
 
-This carry-over was added to preserve accumulated runtime when extending a completed target. But when the user sets a NEW absolute target, carrying over current_value creates a mismatch: the new constraint looks partially done before it starts.
+**Hypotheses to investigate (none confirmed):**
 
-**Section B -- Replacement in `push_live_constraint()` (`home_model/load.py:1347-1367`):**
-```python
-if c.end_of_constraint == constraint.end_of_constraint:
-    if c.score(time) == constraint.score(time):
-        c.carry_info_from_other_constraint(constraint)
-        return False  # keeps OLD constraint, discards new target!
-    else:
-        self._constraints[i] = None  # remove old
-        if type(c) == type(constraint) and c.current_value > constraint.current_value:
-            constraint.current_value = min(c.current_value, constraint.target_value)
-```
+**Hypothesis A -- Constraint coexistence (old + new both survive):**
+If the old active constraint and new constraint have different `end_of_constraint` values, the replacement check at `load.py:1351` would fail and BOTH would survive in `self._constraints`. Then `update_current_metrics()` would sum both targets. This could happen if:
+- The old constraint's `end_of_constraint` was modified during its lifetime
+- `get_next_time_from_hours()` returns a different end time at slider-adjustment time vs original constraint creation time (e.g., if `default_on_finish_time` falls between the two times, it would jump a day)
+- Timezone edge cases in end-time computation
 
-When scores differ (different target_value), the old constraint is removed and its `current_value` is carried to the new one. When scores are the same, `carry_info_from_other_constraint()` only carries power steps (NOT `target_value`), so the old target is preserved.
+**Hypothesis B -- Score equality causing stale target:**
+If the old and new constraints have equal `score()` values (despite different `target_value`), `carry_info_from_other_constraint()` is called but only carries power steps, NOT `target_value`. The old constraint keeps its original target. This wouldn't produce the exact `slider + already_run` pattern, but could cause the target to appear wrong.
 
-**Section C -- Metrics in `update_current_metrics()` (`ha_model/bistate_duration.py:116-136`):**
-```python
-for ct in self._constraints:
-    if ct.end_of_constraint <= tomorrow_utc:
-        duration_s += ct.target_value
-        run_s += ct.current_value
+**Hypothesis C -- Double constraint evaluation:**
+`user_set_default_on_duration()` calls both `do_run_check_load_activity_and_constraints(time)` and then `home.update_all_states(time)`. If `update_all_states` triggers another constraint rebuild (via `device.update_states()` or periodic cycle interleaving), the constraint could be processed twice with different intermediate states.
 
-if self._last_completed_constraint is not None:
-    lcc = self._last_completed_constraint
-    if (lcc for today):
-        duration_s += lcc.target_value   # <-- adds old target
-        run_s += lcc.current_value        # <-- adds old run time
-```
+**Hypothesis D -- `_last_completed_constraint` from earlier same-day cycle:**
+If the pool had a PREVIOUS constraint cycle today that completed (e.g., pool met an earlier shorter target, then user bumped the target up), `_last_completed_constraint` would be from today and pass the date filter in `update_current_metrics()`. Its `target_value` would be added to the active constraint's target.
 
-If `_last_completed_constraint` is set for today (from a previous cycle or from the old constraint being completed), its `target_value` and `current_value` are ADDED to the active constraint's values, causing double-counting that produces the slider_value + already_run_hours effect.
+### Suspect Code Sections
 
-### Exact Bug Mechanism (most likely scenario)
+**Section A -- `push_live_constraint()` carry-over (`home_model/load.py:1331-1345`):**
+Carries `current_value` from `_last_completed_constraint` to the new constraint. The end-date guard should prevent cross-day carry, but runtime state needs verification.
 
-When the user adjusts the slider mid-run:
-1. Old active constraint (target=12h, current=8h) exists in `self._constraints`
-2. New constraint (target=10h, current=0) is created
-3. In `push_live_constraint()`, old is replaced by new. Current_value (8h) is carried over to new constraint
-4. But `_last_completed_constraint` still holds a reference with accumulated runtime from the same day cycle
-5. `update_current_metrics()` sums BOTH the active constraint AND the `_last_completed_constraint`, producing the offset
+**Section B -- `push_live_constraint()` replacement (`home_model/load.py:1347-1367`):**
+When replacing an existing active constraint, carries `current_value` from old to new. Also the `eq_no_current` / same-score paths may keep the OLD constraint and discard the new target.
 
-The displayed target = new_constraint.target + lcc.target = slider_value + previous_accumulated.
+**Section C -- `update_current_metrics()` summation (`ha_model/bistate_duration.py:116-136`):**
+Sums `target_value` from ALL active constraints + `_last_completed_constraint` for today. If multiple sources contribute, the total inflates.
 
 ## Acceptance Criteria
 
@@ -112,15 +89,17 @@ The displayed target = new_constraint.target + lcc.target = slider_value + previ
 ## Tasks / Subtasks
 
 - [ ] Task 1: Reproduce and diagnose exact mechanism (AC: 1)
-  - [ ] 1.1: Write a failing test that sets up a pool in `bistate_mode_default` with an active constraint (target=12h, current=8h), then calls `user_set_default_on_duration(10.0)` and asserts `qs_bistate_current_duration_h == 10.0`
-  - [ ] 1.2: Add debug logging in `push_live_constraint()` to trace carry-over and replacement decisions
-  - [ ] 1.3: Verify whether the bug comes from Section A (lcc carry-over), Section B (active constraint replacement), Section C (metrics double-counting), or a combination
+  - [ ] 1.1: Write a test that sets up a pool in `bistate_mode_default` with an active constraint (target=12h, current=8h), then calls `user_set_default_on_duration(10.0)` and inspects: (a) `self._constraints` list contents, (b) `_last_completed_constraint` state, (c) `qs_bistate_current_duration_h` value
+  - [ ] 1.2: Add temporary `_LOGGER.debug` in `push_live_constraint()` to log EVERY decision: lcc state, end-date comparisons, score comparisons, carry-over triggers, replacement triggers
+  - [ ] 1.3: Add temporary `_LOGGER.debug` in `update_current_metrics()` to log each source's contribution to `duration_s` and `run_s`
+  - [ ] 1.4: From test output, determine which hypothesis (A-D above) explains the offset. The test MUST reproduce the exact `slider + already_run` pattern before proceeding to fix
 
-- [ ] Task 2: Fix the carry-over / metrics interaction (AC: 1, 2, 3, 4, 5, 6)
-  - [ ] 2.1: When a new constraint replaces an old one in `push_live_constraint()` due to a user-initiated target change (different `requested_target_value`), either:
-    - (a) Clear `_last_completed_constraint` if the new constraint supersedes it for the same day cycle, OR
-    - (b) Skip the lcc contribution in `update_current_metrics()` when an active constraint for the same day already exists, OR
-    - (c) Don't carry over `current_value` when the target has changed (the carry-over is for extending a completed constraint to continue, not for resetting the target)
+- [ ] Task 2: Fix the identified mechanism (AC: 1, 2, 3, 4, 5, 6)
+  - [ ] 2.1: Based on Task 1 findings, apply the minimal targeted fix. Possible approaches depending on root cause:
+    - If coexistence (Hyp A): ensure old constraint is properly removed/replaced when target changes
+    - If stale target (Hyp B): ensure `carry_info_from_other_constraint()` also updates `target_value` and `requested_target_value`
+    - If double eval (Hyp C): prevent redundant constraint rebuilds during slider update
+    - If lcc double-count (Hyp D): clear or skip lcc when the active constraint supersedes it for the same cycle
   - [ ] 2.2: Ensure the fix correctly handles all slider adjustment scenarios (increase, decrease, set to 0)
 
 - [ ] Task 3: Preserve legitimate carry-over (AC: 6)
@@ -184,12 +163,15 @@ The displayed target = new_constraint.target + lcc.target = slider_value + previ
 - Pool-specific test fixtures may be needed -- check `tests/` for existing pool tests
 - asyncio_mode=auto -- no `@pytest.mark.asyncio` decorator needed
 
-### Debugging Strategy
+### Critical Investigation Notes
 
-If the exact mechanism is unclear during implementation:
-1. Add `_LOGGER.debug` in `push_live_constraint()` to log: constraint target, current_value before/after carry, lcc state, replacement decision
-2. Add `_LOGGER.debug` in `update_current_metrics()` to log: each constraint's contribution to duration_s and run_s, lcc contribution
-3. Write a test that simulates the exact scenario and check intermediate values
+The exact bug mechanism was NOT identified through static analysis. Naive code tracing suggests the correct result (target=slider_value), yet users consistently observe `slider + already_run`. **Task 1 (reproduce + diagnose) is a hard prerequisite before any fix.** Do NOT guess at a fix -- write the diagnostic test first, confirm the offset pattern, then read intermediate state to identify the actual cause.
+
+Key questions the diagnostic test must answer:
+1. After `push_live_constraint()`, how many constraints are in `self._constraints`? (One or two?)
+2. What are the `end_of_constraint` values on old vs new constraint? (Same or different?)
+3. Is `_last_completed_constraint` set? If so, what are its target/current/end values?
+4. In `update_current_metrics()`, what does `duration_s` equal after each source is added?
 
 ### Project Structure Notes
 
@@ -214,6 +196,7 @@ Claude Opus 4.6
 ### Completion Notes List
 
 - Story created from GitHub issue #95 analysis
-- Root cause analysis identifies three interacting code sections (carry-over, replacement, metrics)
-- Fix strategy prioritizes approach (c) -- don't carry over current_value when target has changed
+- Root cause NOT conclusively identified through static analysis -- four hypotheses documented
+- Task 1 (diagnostic test + logging) is a hard prerequisite before any fix attempt
+- Data flow from UI slider to constraint to sensor is fully mapped
 - Related issues #78, #80, #68 provide historical context on the constraint carry-over evolution
