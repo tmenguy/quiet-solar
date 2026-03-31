@@ -1,6 +1,6 @@
 # Bug Fix: Pool target offset by already-run hours when slider is adjusted mid-run
 
-Status: review
+Status: done
 issue: 95
 branch: "QS_95"
 
