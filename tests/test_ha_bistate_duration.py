@@ -950,7 +950,6 @@ class TestQSBiStateDurationBestEffortLoad:
 class TestUpdateCurrentMetricsOverride:
     """Test update_current_metrics with user override constraints (#97)."""
 
-    @pytest.mark.asyncio
     async def test_active_override_default_mode_shows_override_metrics(
         self,
         hass: HomeAssistant,
@@ -989,7 +988,6 @@ class TestUpdateCurrentMetricsOverride:
         assert bistate_device.qs_bistate_current_duration_h == pytest.approx(2.0)
         assert bistate_device.qs_bistate_current_on_h == pytest.approx(0.5)
 
-    @pytest.mark.asyncio
     async def test_active_override_calendar_mode_shows_override_metrics(
         self,
         hass: HomeAssistant,
@@ -1032,7 +1030,6 @@ class TestUpdateCurrentMetricsOverride:
         assert bistate_device.qs_bistate_current_duration_h == pytest.approx(2.0)
         assert bistate_device.qs_bistate_current_on_h == pytest.approx(0.25)
 
-    @pytest.mark.asyncio
     async def test_completed_override_falls_through_to_normal_metrics(
         self,
         hass: HomeAssistant,
@@ -1076,7 +1073,6 @@ class TestUpdateCurrentMetricsOverride:
         assert bistate_device.qs_bistate_current_duration_h == pytest.approx(1.0)
         assert bistate_device.qs_bistate_current_on_h == pytest.approx(600.0 / 3600.0)
 
-    @pytest.mark.asyncio
     async def test_no_override_normal_metrics_unchanged(
         self,
         hass: HomeAssistant,
