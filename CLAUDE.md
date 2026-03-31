@@ -6,7 +6,7 @@ Use these skills for development workflows:
 - `/create-story` — create story artifact + GitHub issue + feature branch
 - `/setup-story` — set up worktree, output launch command for implementation
 - `/implement-story` — TDD implementation with enforced quality gates
-- `/review-story` — code review + Copilot + process feedback
+- `/review-story` — code review + CodeRabbit + process feedback
 - `/finish-story` — merge PR, cleanup worktree, update epics
 - `/release` — tag and ship
 
