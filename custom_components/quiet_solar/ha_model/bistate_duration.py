@@ -73,6 +73,17 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         duration_s = 0.0
         run_s = 0.0
 
+        # Short-circuit: during a running user override, show override progress only
+        for ct in self._constraints:
+            if (
+                ct.is_constraint_active_for_time_period(time)
+                and ct.load_info is not None
+                and ct.load_info.get("originator", "") == "user_override"
+            ):
+                self.qs_bistate_current_on_h = ct.current_value / 3600.0
+                self.qs_bistate_current_duration_h = ct.target_value / 3600.0
+                return
+
         if self._is_calendar_based_mode(self.bistate_mode):
             # Calendar path: fetch events and compute today target + past actuals
             today_utc, tomorrow_utc = self._get_today_boundaries(time)

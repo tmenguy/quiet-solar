@@ -1,6 +1,6 @@
 # Bug Fix: Climate card target hours ignores user override duration
 
-Status: ready-for-dev
+Status: dev-complete
 issue: 97
 branch: "QS_97"
 
@@ -74,15 +74,15 @@ No card-side changes needed -- the card already reads `qs_bistate_current_durati
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add override short-circuit in `update_current_metrics()` (AC: 1, 2, 4, 5)
-  - [ ] Insert override detection loop before calendar/default branching
-  - [ ] Use `is_constraint_active_for_time_period(time)` + `load_info["originator"] == "user_override"` to identify active override
-  - [ ] Set `qs_bistate_current_on_h` and `qs_bistate_current_duration_h` from constraint values and return early
-- [ ] Task 2: Add tests for override metrics (AC: 1, 2, 4, 5, 6)
-  - [ ] Test: active user override in default mode -> metrics reflect override values
-  - [ ] Test: active user override in calendar mode -> metrics reflect override values (not calendar events)
-  - [ ] Test: completed (met) override -> falls through to normal metrics
-  - [ ] Test: no override present -> normal metrics unchanged
+- [x] Task 1: Add override short-circuit in `update_current_metrics()` (AC: 1, 2, 4, 5)
+  - [x] Insert override detection loop before calendar/default branching
+  - [x] Use `is_constraint_active_for_time_period(time)` + `load_info["originator"] == "user_override"` to identify active override
+  - [x] Set `qs_bistate_current_on_h` and `qs_bistate_current_duration_h` from constraint values and return early
+- [x] Task 2: Add tests for override metrics (AC: 1, 2, 4, 5, 6)
+  - [x] Test: active user override in default mode -> metrics reflect override values
+  - [x] Test: active user override in calendar mode -> metrics reflect override values (not calendar events)
+  - [x] Test: completed (met) override -> falls through to normal metrics
+  - [x] Test: no override present -> normal metrics unchanged
 
 ## Dev Notes
 
