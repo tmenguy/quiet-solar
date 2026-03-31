@@ -118,15 +118,24 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             today_utc, tomorrow_utc = self._get_today_boundaries(time)
 
             for ct in self._constraints:
-                if ct.end_of_constraint <= tomorrow_utc:
+                if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc:
                     duration_s += ct.target_value
                     run_s += ct.current_value
 
             if self._last_completed_constraint is not None:
                 lcc = self._last_completed_constraint
+                lcc_end = getattr(lcc, "initial_end_of_constraint", lcc.end_of_constraint)
+                # Skip lcc when an active today-constraint shares its end date
+                # (same-day-cycle: push_live_constraint already carried over runtime)
+                already_absorbed = any(
+                    ct.end_of_constraint == lcc.end_of_constraint or ct.end_of_constraint == lcc_end
+                    for ct in self._constraints
+                    if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
+                )
                 if (
-                    lcc.end_of_constraint != DATETIME_MAX_UTC
-                    and lcc.end_of_constraint > today_utc
+                    not already_absorbed
+                    and lcc.end_of_constraint != DATETIME_MAX_UTC
+                    and lcc.end_of_constraint >= today_utc
                     and lcc.end_of_constraint <= tomorrow_utc
                 ):
                     duration_s += lcc.target_value

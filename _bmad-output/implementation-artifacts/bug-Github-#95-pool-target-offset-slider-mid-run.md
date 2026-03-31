@@ -1,6 +1,6 @@
 # Bug Fix: Pool target offset by already-run hours when slider is adjusted mid-run
 
-Status: ready-for-dev
+Status: review
 issue: 95
 branch: "QS_95"
 
@@ -82,29 +82,29 @@ Bug #64 (`bug-Github-#68-carry-from-completed-constraint.md`) fixed the exact sa
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix active constraints loop -- add day lower bound (AC: 1, 2)
-  - [ ] 1.1: In `update_current_metrics()` default path (~line 120), change the active constraint filter from `ct.end_of_constraint <= tomorrow_utc` to `ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc`
+- [x] Task 1: Fix active constraints loop -- add day lower bound (AC: 1, 2)
+  - [x] 1.1: In `update_current_metrics()` default path (~line 120), change the active constraint filter from `ct.end_of_constraint <= tomorrow_utc` to `ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc`
 
-- [ ] Task 2: Restore #64 same-end-date guard for lcc (AC: 1, 2, 6)
-  - [ ] 2.1: In `update_current_metrics()` default path (~line 125), add an `already_absorbed` guard: skip lcc when any active today-constraint shares its `end_of_constraint` or `initial_end_of_constraint`
-  - [ ] 2.2: Use `getattr(lcc, "initial_end_of_constraint", lcc.end_of_constraint)` for safe access
+- [x] Task 2: Restore #64 same-end-date guard for lcc (AC: 1, 2, 6)
+  - [x] 2.1: In `update_current_metrics()` default path (~line 125), add an `already_absorbed` guard: skip lcc when any active today-constraint shares its `end_of_constraint` or `initial_end_of_constraint`
+  - [x] 2.2: Use `getattr(lcc, "initial_end_of_constraint", lcc.end_of_constraint)` for safe access
 
-- [ ] Task 3: Fix boundary condition `>` vs `>=` for lcc (AC: 1)
-  - [ ] 3.1: Change `lcc.end_of_constraint > today_utc` to `lcc.end_of_constraint >= today_utc` to handle exact-midnight boundary
-  - [ ] 3.2: Note: DST fix for `get_next_time_from_hours` (`timedelta(days=1)` to calendar-day arithmetic in `device.py:451`) is deferred to a separate task
+- [x] Task 3: Fix boundary condition `>` vs `>=` for lcc (AC: 1)
+  - [x] 3.1: Change `lcc.end_of_constraint > today_utc` to `lcc.end_of_constraint >= today_utc` to handle exact-midnight boundary
+  - [x] 3.2: Note: DST fix for `get_next_time_from_hours` (`timedelta(days=1)` to calendar-day arithmetic in `device.py:451`) is deferred to a separate task
 
-- [ ] Task 4: Tests -- same-end-date double-count (AC: 1, 2, 8)
-  - [ ] 4.1: In `test_ha_pool.py`: test that completed + active constraints with the same end date do NOT double-count target
-  - [ ] 4.2: In `test_ha_pool.py`: test that old active constraint from previous day does not leak through missing lower bound
-  - [ ] 4.3: In `test_bug_78_daily_metrics.py`: test same-end-date scenario on generic bistate device
+- [x] Task 4: Tests -- same-end-date double-count (AC: 1, 2, 8)
+  - [x] 4.1: In `test_ha_pool.py`: test that completed + active constraints with the same end date do NOT double-count target
+  - [x] 4.2: In `test_ha_pool.py`: test that old active constraint from previous day does not leak through missing lower bound
+  - [x] 4.3: In `test_bug_78_daily_metrics.py`: test same-end-date scenario on generic bistate device
 
-- [ ] Task 5: Verify existing tests pass (AC: 6, 7, 8)
-  - [ ] 5.1: Verify these existing tests still pass (different end dates, both counted -- not absorbed):
+- [x] Task 5: Verify existing tests pass (AC: 6, 7, 8)
+  - [x] 5.1: Verify these existing tests still pass (different end dates, both counted -- not absorbed):
     - `test_pool_update_current_metrics_completed_and_active_sums_both`
     - `test_default_mode_includes_last_completed_from_today`
     - `test_pool_update_current_metrics_completed_only_shows_completed`
     - `test_pool_update_current_metrics_completed_from_today_included`
-  - [ ] 5.2: Run full quality gate: `python scripts/qs/quality_gate.py`
+  - [x] 5.2: Run full quality gate: `python scripts/qs/quality_gate.py`
 
 ## Dev Notes
 
@@ -191,3 +191,15 @@ Claude Opus 4.6
 - Root cause identified via Cursor plan: two bugs in `update_current_metrics()` default path -- (1) missing day lower bound on active constraints loop, (2) #64 same-end-date lcc guard lost in #78/#80 refactoring
 - All three fixes are scoped to `update_current_metrics()` in `bistate_duration.py` -- no constraint lifecycle or solver changes
 - Related issues: #64/#68 (original same-end-date guard), #78 (daily metrics), #80 (calendar refactor)
+- Implementation complete (2026-03-31): all 3 bugs fixed in `update_current_metrics()` default path
+- Bug 1 fix: added `ct.end_of_constraint > today_utc` lower bound to active constraints loop (line 121)
+- Bug 2 fix: added `already_absorbed` guard using `initial_end_of_constraint` to skip lcc when active constraint shares end date (lines 127-134)
+- Bug 3 fix: changed `>` to `>=` for lcc today_utc boundary check (line 138)
+- Added 5 new tests: 2 in test_ha_pool.py (yesterday leak, same-end-date), 3 in test_bug_78_daily_metrics.py (same-end-date, yesterday leak, exact-midnight boundary)
+- All 46 pool/bistate tests pass, all quality gates green, 100% coverage maintained
+
+### File List
+
+- `custom_components/quiet_solar/ha_model/bistate_duration.py` — fixed `update_current_metrics()` default path
+- `tests/test_ha_pool.py` — added 2 regression tests for bug #95
+- `tests/test_bug_78_daily_metrics.py` — added 3 regression tests for bug #95

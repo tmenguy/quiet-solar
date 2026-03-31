@@ -392,3 +392,78 @@ async def test_pool_update_current_metrics_completed_from_today_included():
 
     assert pool.qs_bistate_current_on_h == 1800.0 / 3600.0
     assert pool.qs_bistate_current_duration_h == 5400.0 / 3600.0
+
+
+async def test_pool_update_current_metrics_yesterday_active_constraint_excluded():
+    """Test that an active constraint from yesterday does not leak into today's metrics.
+
+    Bug #95: The active constraints loop only had an upper bound (end <= tomorrow),
+    missing a lower bound (end > today), so yesterday's constraints leaked through.
+    """
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+
+    now = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+
+    # Active constraint from yesterday (end < today) — should be excluded
+    yesterday_ct = MagicMock()
+    yesterday_ct.end_of_constraint = datetime(2026, 3, 29, 17, 0, 0, tzinfo=pytz.UTC)
+    yesterday_ct.start_of_constraint = datetime(2026, 3, 29, 12, 0, 0, tzinfo=pytz.UTC)
+    yesterday_ct.target_value = 3600.0
+    yesterday_ct.current_value = 3600.0
+
+    # Active constraint from today — should be included
+    today_ct = MagicMock()
+    today_ct.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+    today_ct.start_of_constraint = datetime(2026, 3, 30, 12, 0, 0, tzinfo=pytz.UTC)
+    today_ct.target_value = 7200.0
+    today_ct.current_value = 1800.0
+
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
+    pool._last_completed_constraint = None
+    pool._constraints = [yesterday_ct, today_ct]
+
+    await QSBiStateDuration.update_current_metrics(pool, now)
+
+    # Only today's constraint should count
+    assert pool.qs_bistate_current_duration_h == 7200.0 / 3600.0
+    assert pool.qs_bistate_current_on_h == 1800.0 / 3600.0
+
+
+async def test_pool_update_current_metrics_same_end_date_no_double_count():
+    """Test that lcc with same end date as active constraint does not double-count.
+
+    Bug #95: When push_live_constraint replaces a completed constraint with a new one
+    sharing the same end date, the completed constraint's runtime is carried over into
+    the new constraint. Counting both would double-count.
+    """
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+
+    now = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+
+    # Completed constraint ending at 17:00 — runtime was carried into new constraint
+    completed_ct = MagicMock()
+    completed_ct.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+    completed_ct.initial_end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+    completed_ct.target_value = 28800.0  # 8h old target
+    completed_ct.current_value = 28800.0  # 8h ran
+
+    # New active constraint with SAME end date — already absorbed lcc's runtime
+    active_ct = MagicMock()
+    active_ct.end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+    active_ct.initial_end_of_constraint = datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC)
+    active_ct.target_value = 36000.0  # 10h new target
+    active_ct.current_value = 28800.0  # 8h carried over from lcc
+
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
+    pool._last_completed_constraint = completed_ct
+    pool._constraints = [active_ct]
+
+    await QSBiStateDuration.update_current_metrics(pool, now)
+
+    # Only the active constraint should be counted — lcc is already absorbed
+    assert pool.qs_bistate_current_duration_h == 36000.0 / 3600.0  # 10h
+    assert pool.qs_bistate_current_on_h == 28800.0 / 3600.0  # 8h
