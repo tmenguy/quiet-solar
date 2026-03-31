@@ -27,53 +27,47 @@ When the pool is running and the user adjusts the target hours slider, the displ
 
 ## Root Cause Analysis
 
+### Confirmed state
+
+Pool completed its full target **yesterday**, so `_last_completed_constraint` IS set from the previous day's completed constraint. Today the pool is running under a new active constraint.
+
+### Two independent bugs in `update_current_metrics()` (default/pool path)
+
+Both bugs are in `ha_model/bistate_duration.py` lines 116-136.
+
+**Bug 1 -- Active constraints loop has NO day lower bound:**
+
+```python
+for ct in self._constraints:
+    if ct.end_of_constraint <= tomorrow_utc:       # <-- only upper bound!
+        duration_s += ct.target_value
+        run_s += ct.current_value
+```
+
+This counts ANY constraint with `end <= tomorrow_utc`, including constraints from previous days that haven't been cleaned up (e.g., after storage restore, missed cleanup cycle, or constraint replacement race). The `_last_completed_constraint` check (lines 125-133) has both a lower bound (`> today_utc`) and upper bound, but the active loop only has the upper bound.
+
+**Fix:** Add `ct.end_of_constraint > today_utc` to the active loop filter.
+
+**Bug 2 -- #64 same-end-date guard lost in #78/#80 refactoring:**
+
+Bug #64 (`bug-Github-#68-carry-from-completed-constraint.md`) fixed the exact same double-count scenario: when `_last_completed_constraint` shares its `end_of_constraint` with an active constraint, the active constraint already absorbed the completed one's runtime via `push_live_constraint` carry-over (`load.py:1331-1345`). The #78/#80 refactoring moved `update_current_metrics` into `bistate_duration.py` and dropped this guard.
+
+**Fix:** Add an `already_absorbed` check -- skip lcc when an active constraint shares its end date (same-day-cycle scenario).
+
+**Bug 3 (minor) -- Boundary condition `>` vs `>=` near midnight/DST:**
+
+`get_next_time_from_hours(0:00)` in `device.py:451` uses `timedelta(days=1)` which adds 24 wall-clock hours rather than advancing the calendar date. On DST spring-forward days, this shifts the result by 1h, making yesterday's constraint end fall inside today's window. Using `>=` for `today_utc` would include the exact-midnight case. The proper DST fix (`timedelta(days=1)` to calendar-day arithmetic) is a broader change for a separate task.
+
 ### Data Flow When Slider Changes
 
 1. **UI** (`ui/resources/qs-pool-card.js:571`): `_setNumber(e.default_on_duration, dragValue)` sends slider value to HA number entity
 2. **Number entity** (`number.py:130-146`): `async_set_native_value()` calls `user_set_default_on_duration()`
 3. **Setter** (`ha_model/bistate_duration.py:138-144`): Sets `self.default_on_duration = new_value`, calls `do_run_check_load_activity_and_constraints(time)`
-4. **Constraint build** (`ha_model/bistate_duration.py:272-287`): For `bistate_mode_default`, creates `ConstraintItemType(target_value=self.default_on_duration * 3600.0)` -- this is correct (10h = 36000s)
-5. **Constraint creation** (`ha_model/bistate_duration.py:546-562`): Creates `TimeBasedSimplePowerLoadConstraint(target_value=36000, initial_value=0)` and calls `push_live_constraint()`
-6. **Push** (`home_model/load.py:1305-1373`): Processes the new constraint against existing ones
-7. **Metrics** (`ha_model/bistate_duration.py:576`): `update_current_metrics(time)` computes sensor values from constraints
-8. **UI reads** `qs_bistate_current_duration_h` sensor (mapped as `duration_limit` in dashboard YAML) as the displayed "target"
-
-### Exact Mechanism: UNKNOWN -- investigation required
-
-Static code analysis traced all paths through `push_live_constraint()` and `update_current_metrics()` but could NOT conclusively reproduce the `slider + already_run` offset pattern. The naive trace suggests the correct result (target=slider_value), yet the user consistently observes the offset. This means the bug involves a runtime interaction not visible through static reading.
-
-**What we know for certain:**
-- The symptom is `qs_bistate_current_duration_h = slider_value + already_run_hours`
-- The constraint is created with the correct `target_value = slider_value * 3600`
-- The UI reads the sensor directly -- no client-side addition
-
-**Hypotheses to investigate (none confirmed):**
-
-**Hypothesis A -- Constraint coexistence (old + new both survive):**
-If the old active constraint and new constraint have different `end_of_constraint` values, the replacement check at `load.py:1351` would fail and BOTH would survive in `self._constraints`. Then `update_current_metrics()` would sum both targets. This could happen if:
-- The old constraint's `end_of_constraint` was modified during its lifetime
-- `get_next_time_from_hours()` returns a different end time at slider-adjustment time vs original constraint creation time (e.g., if `default_on_finish_time` falls between the two times, it would jump a day)
-- Timezone edge cases in end-time computation
-
-**Hypothesis B -- Score equality causing stale target:**
-If the old and new constraints have equal `score()` values (despite different `target_value`), `carry_info_from_other_constraint()` is called but only carries power steps, NOT `target_value`. The old constraint keeps its original target. This wouldn't produce the exact `slider + already_run` pattern, but could cause the target to appear wrong.
-
-**Hypothesis C -- Double constraint evaluation:**
-`user_set_default_on_duration()` calls both `do_run_check_load_activity_and_constraints(time)` and then `home.update_all_states(time)`. If `update_all_states` triggers another constraint rebuild (via `device.update_states()` or periodic cycle interleaving), the constraint could be processed twice with different intermediate states.
-
-**Hypothesis D -- `_last_completed_constraint` from earlier same-day cycle:**
-If the pool had a PREVIOUS constraint cycle today that completed (e.g., pool met an earlier shorter target, then user bumped the target up), `_last_completed_constraint` would be from today and pass the date filter in `update_current_metrics()`. Its `target_value` would be added to the active constraint's target.
-
-### Suspect Code Sections
-
-**Section A -- `push_live_constraint()` carry-over (`home_model/load.py:1331-1345`):**
-Carries `current_value` from `_last_completed_constraint` to the new constraint. The end-date guard should prevent cross-day carry, but runtime state needs verification.
-
-**Section B -- `push_live_constraint()` replacement (`home_model/load.py:1347-1367`):**
-When replacing an existing active constraint, carries `current_value` from old to new. Also the `eq_no_current` / same-score paths may keep the OLD constraint and discard the new target.
-
-**Section C -- `update_current_metrics()` summation (`ha_model/bistate_duration.py:116-136`):**
-Sums `target_value` from ALL active constraints + `_last_completed_constraint` for today. If multiple sources contribute, the total inflates.
+4. **Constraint build** (`ha_model/bistate_duration.py:272-287`): Creates `ConstraintItemType(target_value=self.default_on_duration * 3600.0)` -- correct (10h = 36000s)
+5. **Constraint creation** (`ha_model/bistate_duration.py:546-562`): Creates `TimeBasedSimplePowerLoadConstraint(target_value=36000, initial_value=0)`, calls `push_live_constraint()`
+6. **Push** (`home_model/load.py:1305-1373`): Carries over `current_value` from old constraint, replaces it
+7. **Metrics** (`ha_model/bistate_duration.py:576`): `update_current_metrics(time)` sums constraints -- **this is where the double-count happens**
+8. **UI reads** `qs_bistate_current_duration_h` sensor as the displayed "target"
 
 ## Acceptance Criteria
 
@@ -88,33 +82,29 @@ Sums `target_value` from ALL active constraints + `_last_completed_constraint` f
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Reproduce and diagnose exact mechanism (AC: 1)
-  - [ ] 1.1: Write a test that sets up a pool in `bistate_mode_default` with an active constraint (target=12h, current=8h), then calls `user_set_default_on_duration(10.0)` and inspects: (a) `self._constraints` list contents, (b) `_last_completed_constraint` state, (c) `qs_bistate_current_duration_h` value
-  - [ ] 1.2: Add temporary `_LOGGER.debug` in `push_live_constraint()` to log EVERY decision: lcc state, end-date comparisons, score comparisons, carry-over triggers, replacement triggers
-  - [ ] 1.3: Add temporary `_LOGGER.debug` in `update_current_metrics()` to log each source's contribution to `duration_s` and `run_s`
-  - [ ] 1.4: From test output, determine which hypothesis (A-D above) explains the offset. The test MUST reproduce the exact `slider + already_run` pattern before proceeding to fix
+- [ ] Task 1: Fix active constraints loop -- add day lower bound (AC: 1, 2)
+  - [ ] 1.1: In `update_current_metrics()` default path (~line 120), change the active constraint filter from `ct.end_of_constraint <= tomorrow_utc` to `ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc`
 
-- [ ] Task 2: Fix the identified mechanism (AC: 1, 2, 3, 4, 5, 6)
-  - [ ] 2.1: Based on Task 1 findings, apply the minimal targeted fix. Possible approaches depending on root cause:
-    - If coexistence (Hyp A): ensure old constraint is properly removed/replaced when target changes
-    - If stale target (Hyp B): ensure `carry_info_from_other_constraint()` also updates `target_value` and `requested_target_value`
-    - If double eval (Hyp C): prevent redundant constraint rebuilds during slider update
-    - If lcc double-count (Hyp D): clear or skip lcc when the active constraint supersedes it for the same cycle
-  - [ ] 2.2: Ensure the fix correctly handles all slider adjustment scenarios (increase, decrease, set to 0)
+- [ ] Task 2: Restore #64 same-end-date guard for lcc (AC: 1, 2, 6)
+  - [ ] 2.1: In `update_current_metrics()` default path (~line 125), add an `already_absorbed` guard: skip lcc when any active today-constraint shares its `end_of_constraint` or `initial_end_of_constraint`
+  - [ ] 2.2: Use `getattr(lcc, "initial_end_of_constraint", lcc.end_of_constraint)` for safe access
 
-- [ ] Task 3: Preserve legitimate carry-over (AC: 6)
-  - [ ] 3.1: Verify that extending a completed constraint (same target, extending end time after it completed early) still works
-  - [ ] 3.2: Test that a constraint that naturally completes and gets a new cycle constraint still tracks correctly
+- [ ] Task 3: Fix boundary condition `>` vs `>=` for lcc (AC: 1)
+  - [ ] 3.1: Change `lcc.end_of_constraint > today_utc` to `lcc.end_of_constraint >= today_utc` to handle exact-midnight boundary
+  - [ ] 3.2: Note: DST fix for `get_next_time_from_hours` (`timedelta(days=1)` to calendar-day arithmetic in `device.py:451`) is deferred to a separate task
 
-- [ ] Task 4: Test coverage (AC: 7, 8)
-  - [ ] 4.1: Test: slider adjustment mid-run shows correct target (the failing test from 1.1, now passing)
-  - [ ] 4.2: Test: slider to value below already-run hours
-  - [ ] 4.3: Test: slider to 0 while pool has run
-  - [ ] 4.4: Test: slider increase above already-run
-  - [ ] 4.5: Test: multiple rapid slider adjustments
-  - [ ] 4.6: Test: calendar-mode pool unaffected
-  - [ ] 4.7: Test: constraint extension (same target) still carries over correctly
-  - [ ] 4.8: Run full quality gate: `python scripts/qs/quality_gate.py`
+- [ ] Task 4: Tests -- same-end-date double-count (AC: 1, 2, 8)
+  - [ ] 4.1: In `test_ha_pool.py`: test that completed + active constraints with the same end date do NOT double-count target
+  - [ ] 4.2: In `test_ha_pool.py`: test that old active constraint from previous day does not leak through missing lower bound
+  - [ ] 4.3: In `test_bug_78_daily_metrics.py`: test same-end-date scenario on generic bistate device
+
+- [ ] Task 5: Verify existing tests pass (AC: 6, 7, 8)
+  - [ ] 5.1: Verify these existing tests still pass (different end dates, both counted -- not absorbed):
+    - `test_pool_update_current_metrics_completed_and_active_sums_both`
+    - `test_default_mode_includes_last_completed_from_today`
+    - `test_pool_update_current_metrics_completed_only_shows_completed`
+    - `test_pool_update_current_metrics_completed_from_today_included`
+  - [ ] 5.2: Run full quality gate: `python scripts/qs/quality_gate.py`
 
 ## Dev Notes
 
@@ -163,15 +153,17 @@ Sums `target_value` from ALL active constraints + `_last_completed_constraint` f
 - Pool-specific test fixtures may be needed -- check `tests/` for existing pool tests
 - asyncio_mode=auto -- no `@pytest.mark.asyncio` decorator needed
 
-### Critical Investigation Notes
+### Fix Scope
 
-The exact bug mechanism was NOT identified through static analysis. Naive code tracing suggests the correct result (target=slider_value), yet users consistently observe `slider + already_run`. **Task 1 (reproduce + diagnose) is a hard prerequisite before any fix.** Do NOT guess at a fix -- write the diagnostic test first, confirm the offset pattern, then read intermediate state to identify the actual cause.
+All three changes are in `update_current_metrics()` default/pool path (`bistate_duration.py:116-136`). No changes to `push_live_constraint()`, constraint classes, or UI. This is a metrics-display-only fix -- the constraint lifecycle and solver are unaffected.
 
-Key questions the diagnostic test must answer:
-1. After `push_live_constraint()`, how many constraints are in `self._constraints`? (One or two?)
-2. What are the `end_of_constraint` values on old vs new constraint? (Same or different?)
-3. Is `_last_completed_constraint` set? If so, what are its target/current/end values?
-4. In `update_current_metrics()`, what does `duration_s` equal after each source is added?
+### Regression Risk
+
+The existing tests that MUST still pass use **different** end dates for completed vs active constraints (e.g., 8:00 vs 17:00). The `already_absorbed` guard only skips lcc when it shares an end date with an active constraint, so these different-end-date scenarios are unaffected.
+
+### Deferred Work
+
+DST fix for `get_next_time_from_hours()` in `device.py:451` -- replacing `timedelta(days=1)` with calendar-day arithmetic like `get_proper_local_adapted_tomorrow` uses. This affects all constraint end-date computation, not just metrics, and should be a separate task.
 
 ### Project Structure Notes
 
@@ -196,7 +188,6 @@ Claude Opus 4.6
 ### Completion Notes List
 
 - Story created from GitHub issue #95 analysis
-- Root cause NOT conclusively identified through static analysis -- four hypotheses documented
-- Task 1 (diagnostic test + logging) is a hard prerequisite before any fix attempt
-- Data flow from UI slider to constraint to sensor is fully mapped
-- Related issues #78, #80, #68 provide historical context on the constraint carry-over evolution
+- Root cause identified via Cursor plan: two bugs in `update_current_metrics()` default path -- (1) missing day lower bound on active constraints loop, (2) #64 same-end-date lcc guard lost in #78/#80 refactoring
+- All three fixes are scoped to `update_current_metrics()` in `bistate_duration.py` -- no constraint lifecycle or solver changes
+- Related issues: #64/#68 (original same-end-date guard), #78 (daily metrics), #80 (calendar refactor)
