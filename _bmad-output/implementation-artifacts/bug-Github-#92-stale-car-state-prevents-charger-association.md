@@ -1,6 +1,6 @@
 # Bug #92: Stale car state prevents automatic charger association after API reconnect
 
-Status: ready-for-dev
+Status: dev-complete
 issue: 92
 branch: "QS_92"
 
@@ -101,43 +101,43 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix `can_exit_stale_percent_mode` deadlock (AC: 2)
-  - [ ] 1.1: In `can_exit_stale_percent_mode()` (car.py lines 825-838), change the `else` (not connected) branch to also allow exit when the car reports both `plugged=True` AND `home=True` — this means the car is at a charger but not yet attached in QS
-  - [ ] 1.2: Update existing test `test_exit_not_connected_plug_true_blocks` to verify the new "plugged+home allows exit" behavior
-  - [ ] 1.3: Add test: car in stale-percent mode, not connected, API reports plugged+home → can exit stale
-  - [ ] 1.4: Add test: car in stale-percent mode, not connected, API reports plugged but NOT home → cannot exit stale (safety: car might be plugged elsewhere)
+- [x] Task 1: Fix `can_exit_stale_percent_mode` deadlock (AC: 2)
+  - [x]1.1: In `can_exit_stale_percent_mode()` (car.py lines 825-838), change the `else` (not connected) branch to also allow exit when the car reports both `plugged=True` AND `home=True` — this means the car is at a charger but not yet attached in QS
+  - [x]1.2: Update existing test `test_exit_not_connected_plug_true_blocks` to verify the new "plugged+home allows exit" behavior
+  - [x]1.3: Add test: car in stale-percent mode, not connected, API reports plugged+home → can exit stale
+  - [x]1.4: Add test: car in stale-percent mode, not connected, API reports plugged but NOT home → cannot exit stale (safety: car might be plugged elsewhere)
 
-- [ ] Task 2: Fix `for_duration` scoring gap with instant-check fallback (AC: 1, 3)
-  - [ ] 2.1: In `get_car_score()` (charger.py lines 2722-2727), change the `car_plug_res` fallback to trigger on `False` as well (not just `None`). When `for_duration` returns `False` but instant check returns `True`, set `score_plug_bump = 2` (reduced weight, lower than the duration-confirmed `5`)
-  - [ ] 2.2: Apply the same pattern for `car_home_res` (lines 2783-2788): fall back to instant check on `False`, use reduced `score_dist_bump` weight
-  - [ ] 2.3: Write tests: car API just started reporting plugged (duration < 15s) → instant fallback gives non-zero score
-  - [ ] 2.4: Write tests: car API reports plugged for > 15s → full score (no change to existing behavior)
+- [x] Task 2: Fix `for_duration` scoring gap with instant-check fallback (AC: 1, 3)
+  - [x]2.1: In `get_car_score()` (charger.py lines 2722-2727), change the `car_plug_res` fallback to trigger on `False` as well (not just `None`). When `for_duration` returns `False` but instant check returns `True`, set `score_plug_bump = 2` (reduced weight, lower than the duration-confirmed `5`)
+  - [x]2.2: Apply the same pattern for `car_home_res` (lines 2783-2788): fall back to instant check on `False`, use reduced `score_dist_bump` weight
+  - [x]2.3: Write tests: car API just started reporting plugged (duration < 15s) → instant fallback gives non-zero score
+  - [x]2.4: Write tests: car API reports plugged for > 15s → full score (no change to existing behavior)
 
-- [ ] Task 3: Auto-reset car on departure — clear stale user-originated state (AC: 4, 5)
-  - [ ] 3.1: Add a new constant `CAR_NOT_HOME_AUTO_RESET_S = 15 * 60` (15 minutes) in `const.py`
-  - [ ] 3.2: Add tracking state in car.py: `_car_not_home_since: datetime | None = None` to record the home→not-home transition timestamp
-  - [ ] 3.3: In `_update_car_api_staleness()` (or `update_states()`), add departure detection logic:
+- [x] Task 3: Auto-reset car on departure — clear stale user-originated state (AC: 4, 5)
+  - [x]3.1: Add a new constant `CAR_NOT_HOME_AUTO_RESET_S = 15 * 60` (15 minutes) in `const.py`
+  - [x]3.2: Add tracking state in car.py: `_car_not_home_since: datetime | None = None` to record the home→not-home transition timestamp
+  - [x]3.3: In `_update_car_api_staleness()` (or `update_states()`), add departure detection logic:
     - Use `_get_raw_is_car_home(time)` (NOT the inferred version) to check actual API state
     - When raw home transitions from `True` to `False`: record `_car_not_home_since = time`
     - When raw home is `True`: reset `_car_not_home_since = None`
     - When `_car_not_home_since` is set and `time - _car_not_home_since > CAR_NOT_HOME_AUTO_RESET_S`: perform auto-reset
-  - [ ] 3.4: The auto-reset should perform a full car reset — same as the red button (`user_clean_and_reset()`). This clears user-originated state, inferred flags, constraints, charge targets, detaches charger (no-op if car is away), and recomputes person allocation. One mechanism, clean slate for the next arrival. Log at info level when this happens.
-  - [ ] 3.5: Handle edge case: if `car_tracker` is None (no home sensor), skip this mechanism entirely — cannot detect departure
-  - [ ] 3.6: Write test: car home → car leaves → 15 min passes → user-originated state cleared (including `FORCE_CAR_NO_CHARGER_CONNECTED`)
-  - [ ] 3.7: Write test: car home → car leaves → only 10 min → user-originated state preserved
-  - [ ] 3.8: Write test: car home → brief GPS glitch (not-home for 5 min then back) → user-originated state preserved
-  - [ ] 3.9: Write test: car with no tracker → no auto-reset attempted
+  - [x]3.4: The auto-reset should perform a full car reset — same as the red button (`user_clean_and_reset()`). This clears user-originated state, inferred flags, constraints, charge targets, detaches charger (no-op if car is away), and recomputes person allocation. One mechanism, clean slate for the next arrival. Log at info level when this happens.
+  - [x]3.5: Handle edge case: if `car_tracker` is None (no home sensor), skip this mechanism entirely — cannot detect departure
+  - [x]3.6: Write test: car home → car leaves → 15 min passes → user-originated state cleared (including `FORCE_CAR_NO_CHARGER_CONNECTED`)
+  - [x]3.7: Write test: car home → car leaves → only 10 min → user-originated state preserved
+  - [x]3.8: Write test: car home → brief GPS glitch (not-home for 5 min then back) → user-originated state preserved
+  - [x]3.9: Write test: car with no tracker → no auto-reset attempted
 
-- [ ] Task 4: Add diagnostic logging (AC: all)
-  - [ ] 4.1: Add debug-level logging in `get_best_car()` when the generic/guest car is returned as fallback despite real cars existing
-  - [ ] 4.2: Add debug-level logging in `get_car_score()` when a car's score is 0 despite having some positive sub-scores, and when instant-check fallback is used
-  - [ ] 4.3: Add info-level logging when departure auto-reset triggers
+- [x] Task 4: Add diagnostic logging (AC: all)
+  - [x]4.1: Add debug-level logging in `get_best_car()` when the generic/guest car is returned as fallback despite real cars existing
+  - [x]4.2: Add debug-level logging in `get_car_score()` when a car's score is 0 despite having some positive sub-scores, and when instant-check fallback is used
+  - [x]4.3: Add info-level logging when departure auto-reset triggers
 
-- [ ] Task 5: Integration test — full guest-to-known-car transition (AC: 1, 8)
-  - [ ] 5.1: Write an end-to-end scenario test: charger plugged → guest car attached → car API reports plugged+home → known car replaces guest car automatically
-  - [ ] 5.2: Write scenario: car had FORCE_NO_CHARGER from previous session → car left home for 15 min → came back → flag cleared → car scores normally
-  - [ ] 5.3: Verify manual selection still overrides everything while car is home
-  - [ ] 5.4: Run full quality gate (`python scripts/qs/quality_gate.py`)
+- [x] Task 5: Integration test — full guest-to-known-car transition (AC: 1, 8)
+  - [x]5.1: Write an end-to-end scenario test: charger plugged → guest car attached → car API reports plugged+home → known car replaces guest car automatically
+  - [x]5.2: Write scenario: car had FORCE_NO_CHARGER from previous session → car left home for 15 min → came back → flag cleared → car scores normally
+  - [x]5.3: Verify manual selection still overrides everything while car is home
+  - [x]5.4: Run full quality gate (`python scripts/qs/quality_gate.py`)
 
 ## Dev Notes
 
@@ -227,9 +227,20 @@ The long-relationship bonus (line 2711-2716) already correctly excludes invited/
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Task 1: Fixed `can_exit_stale_percent_mode()` to allow exit when plugged+home but not attached. Added safety check: plugged-but-not-home still blocks. Updated existing test and added 3 new tests.
+- Task 2: Changed scoring fallback to trigger on `False` (not just `None`). Instant-check gives reduced weight (plug: 2 vs 5, home: 0.5 vs 1.0). 4 new tests including reduced-weight verification.
+- Task 3: Added `CAR_NOT_HOME_AUTO_RESET_S = 900` constant, `_car_not_home_since` tracking, and `_check_departure_auto_reset()` that calls `user_clean_and_reset()` after 15 min confirmed departure. 4 new tests.
+- Task 4: Added debug logging for instant-check fallback, zero-score-with-positive-sub-scores, and generic-car-fallback-with-real-cars-available. Departure info logging included in Task 3.
+- Task 5: 3 integration tests covering guest-to-known-car swap, FORCE flag cleared after departure, and manual selection override. Edge case test for plug=None in not-connected path. All gates green: 100% coverage.
 
 ### File List
+- `custom_components/quiet_solar/const.py` — added `CAR_NOT_HOME_AUTO_RESET_S`
+- `custom_components/quiet_solar/ha_model/car.py` — fixed `can_exit_stale_percent_mode()`, added `_check_departure_auto_reset()`
+- `custom_components/quiet_solar/ha_model/charger.py` — fixed `get_car_score()` instant-check fallback, added diagnostic logging
+- `tests/test_car_api_staleness.py` — updated and added tests for all 5 tasks

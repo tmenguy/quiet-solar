@@ -2719,15 +2719,24 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             score = 0.0
 
             score_plug_bump = 0
+            plug_instant_fallback = False
             car_plug_res = cache.get(car, {}).get("car_plug_res", "NOT_FOUND")
             if car_plug_res == "NOT_FOUND":
                 car_plug_res = car.is_car_plugged(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S)
-                if car_plug_res is None:
+                if car_plug_res is None or car_plug_res is False:
+                    plug_instant_fallback = car_plug_res is False
                     car_plug_res = car.is_car_plugged(time=time)
                 cache.setdefault(car, {})["car_plug_res"] = car_plug_res
 
             if car_plug_res:
-                score_plug_bump = 5
+                score_plug_bump = 2 if plug_instant_fallback else 5
+                if plug_instant_fallback:
+                    _LOGGER.debug(
+                        "get_car_score: %s for %s using plug instant-check fallback (reduced weight %s)",
+                        car.name,
+                        self.name,
+                        score_plug_bump,
+                    )
 
             score_plug_time_bump = 0
             if score_plug_bump > 0:
@@ -2780,21 +2789,40 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         # we are very very close to the charger, we can assume it is plugged
                         score_plug_bump += 1
 
+            home_instant_fallback = False
             car_home_res = cache.get(car, {}).get("car_home_res", "NOT_FOUND")
             if car_home_res == "NOT_FOUND":
                 # check if the car is home
                 car_home_res = car.is_car_home(time=time, for_duration=CHARGER_CHECK_STATE_WINDOW_S)
-                if car_home_res is None:
+                if car_home_res is None or car_home_res is False:
+                    home_instant_fallback = car_home_res is False
                     car_home_res = car.is_car_home(time=time)
                 cache.setdefault(car, {})["car_home_res"] = car_home_res
 
             if car_home_res and score_dist_bump == 0:
-                score_dist_bump = 1.0
+                score_dist_bump = 0.5 if home_instant_fallback else 1.0
+                if home_instant_fallback:
+                    _LOGGER.debug(
+                        "get_car_score: %s for %s using home instant-check fallback (reduced weight %s)",
+                        car.name,
+                        self.name,
+                        score_dist_bump,
+                    )
 
             if score_plug_bump > 0 and (score_dist_bump > 0 or score_plug_time_bump > 0):
                 # only if plugged .... then if home or a very compatible plug time
                 score = (
                     score_plug_bump + plug_span * score_plug_time_bump + plug_span * plug_time_span * score_dist_bump
+                )
+            elif score_plug_bump > 0 or score_dist_bump > 0 or score_plug_time_bump > 0:
+                _LOGGER.debug(
+                    "get_car_score: %s for %s score is 0 despite sub-scores: "
+                    "plug_bump=%s dist_bump=%s plug_time_bump=%s",
+                    car.name,
+                    self.name,
+                    score_plug_bump,
+                    score_dist_bump,
+                    score_plug_time_bump,
                 )
 
             _LOGGER.debug(
@@ -2937,6 +2965,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # there is no good car for this charger: get teh charger invited one
                 best_car = self._default_generic_car
                 _LOGGER.info("get_best_car: Default car used: %s", best_car.name)
+                if self.home and self.home._cars:
+                    _LOGGER.debug(
+                        "get_best_car: generic car fallback despite %s real cars existing for charger %s",
+                        len(self.home._cars),
+                        self.name,
+                    )
         else:
             if (
                 self._boot_car is not None
