@@ -1,7 +1,7 @@
 {
   "domain": "quiet_solar",
   "name": "Quiet Solar",
-  "version": "2026.03.31.2",
+  "version": "2026.03.31.3",
   "after_dependencies": ["lovelace"],
   "codeowners": ["@tmenguy"],
   "config_flow": true,
