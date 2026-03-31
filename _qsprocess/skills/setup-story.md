@@ -35,6 +35,22 @@ Worktree ready at {{worktree_path}}
   {{same_context}}
 ```
 
+If the JSON includes `pycharm_context`, also show:
+
+```
+**Option C — PyCharm + clipboard:**
+  {{pycharm_context}}
+  (Opens PyCharm on the worktree. In PyCharm: ⌥F12 → ⌘V → Enter)
+```
+
+If the JSON includes `pycharm_applescript_context`, also show:
+
+```
+**Option D — PyCharm + auto-type (experimental):**
+  {{pycharm_applescript_context}}
+  (Like C but tries to auto-type via AppleScript. Needs Accessibility permissions.)
+```
+
 #### Tool-specific behavior
 
 - **Claude Code**: `new_context` is a ready-to-paste `sh /tmp/...` command that opens a new Claude session in the worktree with the implement skill pre-loaded.

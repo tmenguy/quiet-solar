@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import platform
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -182,6 +184,132 @@ def claude_launch_command(
     return f"sh {script_path}"
 
 
+def detect_pycharm() -> str | None:
+    """Detect PyCharm installation on macOS.
+
+    Returns the pycharm command/path or None if not found.
+    Checks: pycharm on PATH (Toolbox), then known .app locations.
+    """
+    if platform.system() != "Darwin":
+        return None
+
+    # Toolbox or manual symlink on PATH
+    pycharm_bin = shutil.which("pycharm")
+    if pycharm_bin:
+        return pycharm_bin
+
+    # Direct .app installations
+    app_candidates = [
+        "/Applications/PyCharm.app",
+        "/Applications/PyCharm Professional.app",
+        "/Applications/PyCharm CE.app",
+    ]
+    for app in app_candidates:
+        if Path(app).exists():
+            return app
+
+    return None
+
+
+def _is_worktree(work_dir: str) -> bool:
+    """Check if work_dir is a git worktree (not the main repo)."""
+    try:
+        main = get_main_worktree()
+        return Path(work_dir).resolve() != main.resolve()
+    except (subprocess.CalledProcessError, OSError):
+        return False
+
+
+def _pycharm_open_cmd(pycharm_bin: str, work_dir: str) -> str:
+    """Build the shell command to open PyCharm on a directory."""
+    safe_dir = shlex.quote(work_dir)
+    if pycharm_bin.endswith(".app"):
+        return f"open -na {shlex.quote(pycharm_bin)} --args {safe_dir}"
+    return f"{shlex.quote(pycharm_bin)} {safe_dir}"
+
+
+def pycharm_launch_command(
+    work_dir: str,
+    issue: int | str,
+    *,
+    claude_cmd: str,
+    pycharm_bin: str,
+) -> str:
+    """Build Option C: open PyCharm + copy Claude command to clipboard.
+
+    Writes a temp script that copies the Claude launch command to the
+    clipboard via pbcopy, opens PyCharm on the worktree, and prints
+    instructions for the user.
+
+    Returns ``sh /path/to/qs_pycharm_<issue>.sh``.
+    """
+    safe_claude_cmd = shlex.quote(claude_cmd)
+    open_cmd = _pycharm_open_cmd(pycharm_bin, work_dir)
+
+    script_body = (
+        "#!/bin/sh\n"
+        f"echo {safe_claude_cmd} | pbcopy\n"
+        f"{open_cmd}\n"
+        'echo "PyCharm opening on worktree. Command copied to clipboard."\n'
+        'echo "In PyCharm: Option+F12 (terminal) -> Cmd+V (paste) -> Enter"\n'
+    )
+
+    script_path = Path(tempfile.gettempdir()) / f"qs_pycharm_{issue}.sh"
+    script_path.write_text(script_body)
+    script_path.chmod(0o755)
+
+    return f"sh {script_path}"
+
+
+def pycharm_applescript_launch_command(
+    work_dir: str,
+    issue: int | str,
+    *,
+    claude_cmd: str,
+    pycharm_bin: str,
+) -> str:
+    """Build Option D: open PyCharm + AppleScript to auto-type in terminal.
+
+    Like Option C but attempts to automate the paste via AppleScript
+    keystroke injection. Requires macOS Accessibility permissions.
+
+    Returns ``sh /path/to/qs_pycharm_as_<issue>.sh``.
+    """
+    safe_claude_cmd = shlex.quote(claude_cmd)
+    open_cmd = _pycharm_open_cmd(pycharm_bin, work_dir)
+
+    # AppleScript: wait for PyCharm, open terminal, type the command
+    applescript = (
+        'tell application "PyCharm" to activate\n'
+        "delay 3\n"
+        'tell application "System Events"\n'
+        "    -- Option+F12 opens the integrated terminal\n"
+        "    key code 111 using {option down}\n"
+        "    delay 1\n"
+        f'    keystroke "{claude_cmd}"\n'
+        "    keystroke return\n"
+        "end tell\n"
+    )
+    safe_applescript = shlex.quote(applescript)
+
+    script_body = (
+        "#!/bin/sh\n"
+        f"echo {safe_claude_cmd} | pbcopy\n"
+        f"{open_cmd}\n"
+        'echo "PyCharm opening. Attempting to auto-type command in terminal..."\n'
+        'echo "(Requires Accessibility permissions for this terminal app)"\n'
+        'echo "Fallback: Option+F12 -> Cmd+V -> Enter"\n'
+        f"sleep 4\n"
+        f"osascript -e {safe_applescript}\n"
+    )
+
+    script_path = Path(tempfile.gettempdir()) / f"qs_pycharm_as_{issue}.sh"
+    script_path.write_text(script_body)
+    script_path.chmod(0o755)
+
+    return f"sh {script_path}"
+
+
 def build_next_step(
     work_dir: str,
     issue: int | str,
@@ -193,10 +321,9 @@ def build_next_step(
 ) -> dict:
     """Build tool-appropriate next-step instructions.
 
-    Returns a dict with keys: same_context, new_context, tool.
-    - For Claude Code: new_context is a ready-to-paste ``sh /tmp/...`` command.
-    - For Cursor: new_context is human-readable instructions to open a
-      new Cursor workspace at the worktree and run the skill.
+    Returns a dict with keys: same_context, new_context, tool, and
+    optionally pycharm_context / pycharm_applescript_context when
+    PyCharm is detected and work_dir is a worktree.
     """
     detected = tool or detect_tool()
 
@@ -211,11 +338,28 @@ def build_next_step(
             tab_title=tab_title,
         )
 
-    return {
+    result: dict = {
         "same_context": skill_prompt,
         "new_context": new_context,
         "tool": detected,
     }
+
+    # PyCharm options — only when worktree exists
+    pycharm_bin = detect_pycharm()
+    if pycharm_bin and _is_worktree(work_dir):
+        # The Claude command that will be pasted/typed in PyCharm's terminal
+        claude_cmd = claude_launch_command(
+            work_dir, issue, title, prompt=skill_prompt,
+            tab_title=tab_title,
+        )
+        result["pycharm_context"] = pycharm_launch_command(
+            work_dir, issue, claude_cmd=claude_cmd, pycharm_bin=pycharm_bin,
+        )
+        result["pycharm_applescript_context"] = pycharm_applescript_launch_command(
+            work_dir, issue, claude_cmd=claude_cmd, pycharm_bin=pycharm_bin,
+        )
+
+    return result
 
 
 def detect_risk_level(changed_files: list[str]) -> list[str]:

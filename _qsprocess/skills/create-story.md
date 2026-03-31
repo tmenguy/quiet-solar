@@ -119,3 +119,19 @@ Story created on branch QS_{{issue_number}}.
 **Option B — Same context:**
   {{same_context}}
 ```
+
+If the JSON includes `pycharm_context`, also show:
+
+```
+**Option C — PyCharm + clipboard:**
+  {{pycharm_context}}
+  (Opens PyCharm on the worktree. In PyCharm: ⌥F12 → ⌘V → Enter)
+```
+
+If the JSON includes `pycharm_applescript_context`, also show:
+
+```
+**Option D — PyCharm + auto-type (experimental):**
+  {{pycharm_applescript_context}}
+  (Like C but tries to auto-type the command via AppleScript. Needs Accessibility permissions.)
+```
