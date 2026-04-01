@@ -73,15 +73,23 @@ Two changes in `ha_model/charger.py`:
 The fix is in the **caller** (`probe_if_command_set`), not in `_probe_and_enforce_stopped_charge_command_state` itself. The `probe_only` contract on `_probe_and_enforce_stopped_charge_command_state` is correct -- it controls whether expected state is updated. The bug is that `probe_if_command_set` asks to NOT update state (`probe_only=True`) and then expects `_ensure_correct_state` to give a meaningful answer based on that stale state.
 
 The semantic split should be:
-- `_probe_and_enforce_stopped_charge_command_state(probe_only=False)` -- declare desired state for the command being probed
+- `_probe_and_enforce_stopped_charge_command_state(probe_only=False)` -- declare desired state for idle/off commands
+- `_probe_and_enforce_stopped_charge_command_state(probe_only=True)` -- keep for ON/AUTO commands (no state mutation needed)
 - `_ensure_correct_state(probe_only=True)` -- compare desired vs. reality, no hardware commands
+
+**Important**: the `probe_only` flag must be command-gated, not unconditionally False. `is_in_state_reset()` (line 4837) forces `handled=True` for ALL commands including ON/AUTO. Without the guard, ON/AUTO would falsely declare idle target state and be acked without executing.
 
 ```python
 # Before (line 4900):
 self._probe_and_enforce_stopped_charge_command_state(time, command=command, probe_only=True)
 
 # After:
-self._probe_and_enforce_stopped_charge_command_state(time, command=command)
+declare_idle_target = command is None or command.is_off_or_idle()
+self._probe_and_enforce_stopped_charge_command_state(
+    time,
+    command=command,
+    probe_only=not declare_idle_target,
+)
 ```
 
 ### Change 2: Gate amps/phases update on actual charge-state transition (line 4843-4846)
@@ -110,9 +118,10 @@ if probe_only is False and handled is True:
 
 1. **`execute_command`** (line 4878): already `probe_only=False`. After `_reset_state_machine()`, `_expected_charge_state.value` is `None`, so `set(False)` returns `True` -- amps/phases still set. No behavior change.
 2. **`ensure_correct_state`** (line 4335): always called with `probe_only=False` from `dyn_handle` -- no change
-3. **`probe_if_command_set`** (line 4900): **change 1** -- now `probe_only=False`
-   - For `auto`/`on` commands: `handled=False`, guarded block never executes -- no impact
-   - For `idle`/`off` commands: `handled=True`, charge state declared. Amps/phases only set on actual transition (**change 2**).
+3. **`probe_if_command_set`** (line 4900): **change 1** -- now command-gated `probe_only`
+   - For `idle`/`off` commands: `probe_only=False`, `handled=True`, charge state declared. Amps/phases only set on actual transition (**change 2**).
+   - For `auto`/`on` commands: `probe_only=True` (preserved), guarded block never executes -- no impact
+   - **Edge case**: `is_in_state_reset()` forces `handled=True` for ON/AUTO too, but the command-based guard keeps `probe_only=True` for those, preventing false idle-state declaration
    - `QSStateCmd.set()` is a no-op when value unchanged (no side effects on retry counters or `is_ok_to_set` rate limiting)
 4. **`get_stable_dynamic_charge_status`** (line 2310): keeps `probe_only=True` -- always preceded by `ensure_correct_state(probe_only=False)` in the `dyn_handle` loop, so expected state is already set; the `.set()` call would be a no-op anyway
 
