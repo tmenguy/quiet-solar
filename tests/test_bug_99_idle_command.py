@@ -186,6 +186,61 @@ class TestProbeOnAutoUnchanged:
         assert charger._expected_charge_state.value == charge_state_before
         assert charger._expected_amperage.value == amperage_before
 
+    @pytest.mark.asyncio
+    async def test_probe_on_during_state_reset_no_false_ack(self):
+        """ON command during state reset must NOT falsely ack as idle.
+
+        is_in_state_reset() forces handled=True inside
+        _probe_and_enforce_stopped_charge_command_state. Without the
+        command-based guard, probe_only=False would declare idle target
+        for an ON command, causing a false ack.
+        """
+        charger, now = _setup_charging_charger(amperage=6, num_phases=3)
+
+        # Charger is idle after a reset
+        idle_charge = charger.charger_default_idle_charge
+        _init_charger_states(charger, charge_state=False, amperage=idle_charge, num_phases=3)
+        charger.is_charge_enabled = MagicMock(return_value=False)
+        charger.is_charge_disabled = MagicMock(return_value=True)
+        charger.get_charging_current = MagicMock(return_value=idle_charge)
+        charger.is_in_state_reset = MagicMock(return_value=True)
+
+        charge_state_before = charger._expected_charge_state.value
+        amperage_before = charger._expected_amperage.value
+
+        with patch.object(
+            type(charger), "current_num_phases", new_callable=PropertyMock, return_value=3
+        ):
+            result = await charger.probe_if_command_set(now, copy_command(CMD_ON))
+
+        # Must NOT return True (that would skip execute_command)
+        assert result is not True, "ON command must not be falsely acked during state reset"
+        # Expected state must NOT have been set to idle values
+        assert charger._expected_charge_state.value == charge_state_before
+        assert charger._expected_amperage.value == amperage_before
+
+    @pytest.mark.asyncio
+    async def test_probe_auto_during_state_reset_no_false_ack(self):
+        """AUTO command during state reset must NOT falsely ack as idle."""
+        charger, now = _setup_charging_charger(amperage=6, num_phases=3)
+
+        idle_charge = charger.charger_default_idle_charge
+        _init_charger_states(charger, charge_state=False, amperage=idle_charge, num_phases=3)
+        charger.is_charge_enabled = MagicMock(return_value=False)
+        charger.is_charge_disabled = MagicMock(return_value=True)
+        charger.get_charging_current = MagicMock(return_value=idle_charge)
+        charger.is_in_state_reset = MagicMock(return_value=True)
+
+        charge_state_before = charger._expected_charge_state.value
+
+        with patch.object(
+            type(charger), "current_num_phases", new_callable=PropertyMock, return_value=3
+        ):
+            result = await charger.probe_if_command_set(now, copy_command(CMD_AUTO_GREEN_ONLY))
+
+        assert result is not True, "AUTO command must not be falsely acked during state reset"
+        assert charger._expected_charge_state.value == charge_state_before
+
 
 class TestRepeatedIdleProbeCounters:
     """AC6: repeated idle probes do NOT reset retry counters."""
