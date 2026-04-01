@@ -4841,9 +4841,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             handled = True
 
         if probe_only is False and handled is True:
-            self._expected_charge_state.set(False, time)
-            self._expected_amperage.set(self.charger_default_idle_charge, time)
-            self._expected_num_active_phases.set(self.current_num_phases, time)
+            if self._expected_charge_state.set(False, time):
+                self._expected_amperage.set(self.charger_default_idle_charge, time)
+                self._expected_num_active_phases.set(self.current_num_phases, time)
 
         return handled
 
@@ -4897,7 +4897,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         result = None
         if is_plugged and self.car is not None:
             _LOGGER.info("probe_if_command_set: command %s for %s", command, self.car.name)
-            self._probe_and_enforce_stopped_charge_command_state(time, command=command, probe_only=True)
+            self._probe_and_enforce_stopped_charge_command_state(time, command=command)
             result = await self._ensure_correct_state(time, probe_only=True)
         else:
             if command.is_off_or_idle():

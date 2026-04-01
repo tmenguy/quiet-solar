@@ -1,6 +1,6 @@
 # Bug Fix: Car does not stop charging at target SOC -- idle command not physically enforced on OCPP charger
 
-Status: draft
+Status: implemented
 issue: 99
 branch: "QS_99"
 
@@ -142,19 +142,19 @@ After fix, when idle command arrives while charging at 28A:
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix `probe_if_command_set` -- declare desired state before probing (AC: 1, 2, 5)
-  - [ ] Change line 4900: remove `probe_only=True` (defaults to False)
-  - [ ] Keep `_ensure_correct_state(probe_only=True)` on line 4901 unchanged (compare only, no hardware commands)
-- [ ] Task 2: Gate amps/phases update on actual charge-state transition (AC: 6)
-  - [ ] Change lines 4843-4846: use `_expected_charge_state.set()` return value to gate `_expected_amperage` and `_expected_num_active_phases` updates
-- [ ] Task 3: Add tests for idle command probe path (AC: 2, 3, 4, 5, 6)
-  - [ ] Test: probe idle command while charger is actively charging at 28A -> returns False (command NOT already set)
-  - [ ] Test: probe idle command while charger is already idle -> returns True (command already set, optimization works)
-  - [ ] Test: probe ON/AUTO command -> behavior unchanged (handled=False, no state update)
-  - [ ] Test: repeated idle probe does not reset amperage/phases retry counters (AC6)
-  - [ ] Test: after probe returns False, execute_command correctly sends stop command
-- [ ] Task 4: Integration test for full SOC-reached flow (AC: 1)
-  - [ ] Test: car reaches target SOC -> constraint met -> idle command -> charger stops (end-to-end)
+- [x] Task 1: Fix `probe_if_command_set` -- declare desired state before probing (AC: 1, 2, 5)
+  - [x] Change line 4900: remove `probe_only=True` (defaults to False)
+  - [x] Keep `_ensure_correct_state(probe_only=True)` on line 4901 unchanged (compare only, no hardware commands)
+- [x] Task 2: Gate amps/phases update on actual charge-state transition (AC: 6)
+  - [x] Change lines 4843-4846: use `_expected_charge_state.set()` return value to gate `_expected_amperage` and `_expected_num_active_phases` updates
+- [x] Task 3: Add tests for idle command probe path (AC: 2, 3, 4, 5, 6)
+  - [x] Test: probe idle command while charger is actively charging at 28A -> returns False (command NOT already set)
+  - [x] Test: probe idle command while charger is already idle -> returns True (command already set, optimization works)
+  - [x] Test: probe ON/AUTO command -> behavior unchanged (handled=False, no state update)
+  - [x] Test: repeated idle probe does not reset amperage/phases retry counters (AC6)
+  - [x] Test: after probe returns False, execute_command correctly sends stop command
+- [x] Task 4: Integration test for full SOC-reached flow (AC: 1)
+  - [x] Test: car reaches target SOC -> constraint met -> idle command -> charger stops (end-to-end)
 
 ## Dev Notes
 
