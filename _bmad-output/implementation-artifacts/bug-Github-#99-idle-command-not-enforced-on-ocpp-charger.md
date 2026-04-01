@@ -1,6 +1,6 @@
 # Bug Fix: Car does not stop charging at target SOC -- idle command not physically enforced on OCPP charger
 
-Status: implemented
+Status: done
 issue: 99
 branch: "QS_99"
 
