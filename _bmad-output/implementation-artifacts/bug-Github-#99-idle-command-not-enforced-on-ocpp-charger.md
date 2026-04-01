@@ -60,39 +60,47 @@ When `execute_command` runs (the path that works), it calls `_reset_state_machin
 
 The probe path skips all of this because expected state is never updated, so the stale "charging at 28A" expected state matches the actual "charging at 28A" state.
 
-## Fix Plan
+## Fix Plan (from Cursor plan -- primary authority)
 
-### Single change: always update expected state in `_probe_and_enforce_stopped_charge_command_state`
+### Single change in `probe_if_command_set`: declare desired state before probing
 
-The `probe_only` flag should only control whether hardware commands are sent (already handled by `_ensure_correct_state`'s `probe_only` parameter). It should NOT prevent expected state from being updated, because `_ensure_correct_state` needs correct expected values to determine whether the command is already set.
+The fix is in the **caller** (`probe_if_command_set`), not in `_probe_and_enforce_stopped_charge_command_state` itself. The `probe_only` contract on `_probe_and_enforce_stopped_charge_command_state` is correct -- it controls whether expected state is updated. The bug is that `probe_if_command_set` asks to NOT update state (`probe_only=True`) and then expects `_ensure_correct_state` to give a meaningful answer based on that stale state.
 
-**Change location:** `ha_model/charger.py` line 4843
+The semantic split should be:
+- `_probe_and_enforce_stopped_charge_command_state(probe_only=False)` -- declare desired state for the command being probed
+- `_ensure_correct_state(probe_only=True)` -- compare desired vs. reality, no hardware commands
+
+**Change location:** `ha_model/charger.py` line 4900
 
 ```python
-# Before:
-if probe_only is False and handled is True:
+# Before (line 4900):
+self._probe_and_enforce_stopped_charge_command_state(time, command=command, probe_only=True)
 
 # After:
-if handled is True:
+self._probe_and_enforce_stopped_charge_command_state(time, command=command)
 ```
 
-### Why this is safe
+### Safety analysis (all 4 call sites of `_probe_and_enforce_stopped_charge_command_state`)
 
-- **When probe returns False** (command NOT already set): `execute_command` is called next, which calls `_reset_state_machine()` (line 4874) clearing all expected state, then re-sets it via `_probe_and_enforce_stopped_charge_command_state(probe_only=False)`. The probe's temporary state update is overwritten. No side effect.
-- **When probe returns True** (command genuinely already set): expected state correctly reflects idle values, and `_ensure_correct_state(probe_only=True)` confirms the charger is actually idle. Correct behavior.
-- **For ON/AUTO commands**: `handled = False` (line 4835), so the guarded block never executes regardless of `probe_only`. No change in behavior.
+1. **`execute_command`** (line 4878): already `probe_only=False` -- no change
+2. **`ensure_correct_state`** (line 4335): always called with `probe_only=False` from `dyn_handle` -- no change
+3. **`probe_if_command_set`** (line 4900): **the fix** -- changed to `probe_only=False`
+   - For `auto`/`on` commands: `handled=False`, expected state not changed -- no impact
+   - For `idle`/`off` commands: `handled=True`, expected state correctly set to "not charging"
+   - `QSStateCmd.set()` is a no-op when value unchanged (no side effects on retry counters or `is_ok_to_set` rate limiting)
+4. **`get_stable_dynamic_charge_status`** (line 2310): keeps `probe_only=True` -- always preceded by `ensure_correct_state(probe_only=False)` in the `dyn_handle` loop, so expected state is already set; the `.set()` call would be a no-op anyway
 
 ### Verification of fix with bug scenario
 
 After fix, when idle command arrives while charging at 28A:
-1. `_probe_and_enforce_stopped_charge_command_state(probe_only=True)`:
+1. `_probe_and_enforce_stopped_charge_command_state(probe_only=False)`:
    - `handled = True` (idle command)
-   - **Now executes**: `_expected_charge_state.set(False)`, `_expected_amperage.set(idle_charge)` (e.g., 6A)
+   - Sets `_expected_charge_state = False`, `_expected_amperage = idle_charge` (e.g., 6A)
 2. `_ensure_correct_state(probe_only=True)`:
    - `want_charge = False`, `currently_charging = True` -> TRANSITION branch
    - `amps_confirmed = (28A == 6A)` -> False
    - `one_bad = True`
-   - Returns `False`
+   - Returns `False` (no hardware commands sent because `probe_only=True`)
 3. `launch_command`: `is_command_set = False` -> calls `execute_command`
 4. `execute_command`: `_reset_state_machine()` -> `_probe_and_enforce_stopped_charge_command_state(probe_only=False)` -> `_ensure_correct_state(probe_only=False)` -> sends OCPP stop/reduce command
 
@@ -106,9 +114,9 @@ After fix, when idle command arrives while charging at 28A:
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix `_probe_and_enforce_stopped_charge_command_state` (AC: 1, 2, 5)
-  - [ ] Remove `probe_only is False` guard on line 4843 so expected state is always updated when `handled is True`
-  - [ ] Verify `_reset_state_machine` in `execute_command` clears probe's temporary state (already confirmed: line 2631-2636)
+- [ ] Task 1: Fix `probe_if_command_set` to declare desired state before probing (AC: 1, 2, 5)
+  - [ ] Change line 4900: `probe_only=True` -> remove `probe_only` param (defaults to False)
+  - [ ] Keep `_ensure_correct_state(probe_only=True)` on line 4901 unchanged (compare only, no hardware commands)
 - [ ] Task 2: Add tests for idle command probe path (AC: 2, 3, 4, 5)
   - [ ] Test: probe idle command while charger is actively charging at 28A -> returns False (command NOT already set)
   - [ ] Test: probe idle command while charger is already idle -> returns True (command already set, optimization works)
@@ -121,8 +129,8 @@ After fix, when idle command arrives while charging at 28A:
 
 ### Key file locations
 
-- **Bug location**: `ha_model/charger.py:4843` (`_probe_and_enforce_stopped_charge_command_state`, the `probe_only` guard)
-- **Probe caller**: `ha_model/charger.py:4893-4911` (`probe_if_command_set`)
+- **Bug location**: `ha_model/charger.py:4900` (`probe_if_command_set`, the `probe_only=True` call)
+- **Probe method**: `ha_model/charger.py:4893-4911` (`probe_if_command_set`)
 - **Execute path (working)**: `ha_model/charger.py:4850-4891` (`execute_command`)
 - **State machine reset**: `ha_model/charger.py:2631-2636` (`_reset_state_machine`)
 - **Launch command (trigger)**: `home_model/load.py:548-604` (`launch_command`)
@@ -144,7 +152,7 @@ After fix, when idle command arrives while charging at 28A:
 ### Related work
 
 - This is a correctness bug in the charger state machine, not a regression from recent changes
-- The `probe_only` parameter was likely added as an optimization to avoid sending redundant commands, but the state-update skip was an unintended side effect
+- The `probe_only` parameter contract is correct -- it controls state updates in `_probe_and_enforce_stopped_charge_command_state`. The bug was the caller (`probe_if_command_set`) passing `probe_only=True` when it should declare desired state before probing
 
 ### References
 
@@ -154,6 +162,8 @@ After fix, when idle command arrives while charging at 28A:
 - [Source: ha_model/charger.py#_reset_state_machine] -- lines 2631-2636
 - [Source: home_model/load.py#launch_command] -- lines 548-604
 - [Source: ha_model/charger.py#_ensure_correct_state] -- lines 4340-4505
+- [Source: ha_model/charger.py#get_stable_dynamic_charge_status] -- line 2310 (4th call site, keeps probe_only=True)
+- [External plan: fix_charger_not_stopping_350bd288.plan.md] -- Cursor plan used as primary authority
 
 ## Dev Agent Record
 
@@ -163,12 +173,14 @@ Claude Opus 4.6
 
 ### Completion Notes List
 
-- Root cause confirmed by tracing the exact code path: `probe_only=True` prevents expected-state update, causing stale state comparison to return True
-- Fix is a 1-line change: remove `probe_only is False` from the guard condition on line 4843
-- Safety verified: `execute_command` calls `_reset_state_machine()` before re-setting state, so probe's temporary state update has no lasting side effect
+- Root cause confirmed by tracing the exact code path: `probe_only=True` in `probe_if_command_set` prevents expected-state update, causing stale state comparison to return True
+- Fix is a 1-line change in the caller: remove `probe_only=True` from line 4900 so desired state is declared before the probe check
+- Preserves the contract of `_probe_and_enforce_stopped_charge_command_state` -- `probe_only` still controls state updates for other callers (e.g., `get_stable_dynamic_charge_status`)
+- All 4 call sites analyzed for safety (see fix plan); `QSStateCmd.set()` is a no-op when value unchanged
 - ON/AUTO commands unaffected because `handled=False` for those, so the guarded block never executes regardless
+- Cursor plan used as primary authority for fix approach
 
 ### File List
 
-- `custom_components/quiet_solar/ha_model/charger.py` (modify -- line 4843)
+- `custom_components/quiet_solar/ha_model/charger.py` (modify -- line 4900)
 - `tests/` (add tests for probe path with idle command)
