@@ -60,17 +60,21 @@ When `execute_command` runs (the path that works), it calls `_reset_state_machin
 
 The probe path skips all of this because expected state is never updated, so the stale "charging at 28A" expected state matches the actual "charging at 28A" state.
 
+### Secondary effect (filler constraint)
+
+After the bad ack, `running_command` is cleared and `current_command` is idle. A filler constraint at 95/95 is immediately met, so the SOC callback (and `dyn_handle`) may never run again for that load -- no second chance to call `execute_command`.
+
 ## Fix Plan (from Cursor plan -- primary authority)
 
-### Single change in `probe_if_command_set`: declare desired state before probing
+Two changes in `ha_model/charger.py`:
+
+### Change 1: `probe_if_command_set` -- declare desired state before probing (line 4900)
 
 The fix is in the **caller** (`probe_if_command_set`), not in `_probe_and_enforce_stopped_charge_command_state` itself. The `probe_only` contract on `_probe_and_enforce_stopped_charge_command_state` is correct -- it controls whether expected state is updated. The bug is that `probe_if_command_set` asks to NOT update state (`probe_only=True`) and then expects `_ensure_correct_state` to give a meaningful answer based on that stale state.
 
 The semantic split should be:
 - `_probe_and_enforce_stopped_charge_command_state(probe_only=False)` -- declare desired state for the command being probed
 - `_ensure_correct_state(probe_only=True)` -- compare desired vs. reality, no hardware commands
-
-**Change location:** `ha_model/charger.py` line 4900
 
 ```python
 # Before (line 4900):
@@ -80,13 +84,35 @@ self._probe_and_enforce_stopped_charge_command_state(time, command=command, prob
 self._probe_and_enforce_stopped_charge_command_state(time, command=command)
 ```
 
+### Change 2: Gate amps/phases update on actual charge-state transition (line 4843-4846)
+
+`QSStateCmd.set()` returns `True` only when the value **changes**; if `_expected_charge_state` is already `False`, calling `set(False, ...)` is a no-op and returns `False`. Use that return value to avoid resetting `_expected_amperage` and `_expected_num_active_phases` when we are not actually entering a new "want stop" expectation (repeated probes, double calls, etc.). This prevents `set()` from calling `reset()` on the amperage/phases `QSStateCmd` objects, which would wipe their retry counters (`_num_launched`) and success tracking.
+
+```python
+# Before (lines 4843-4846):
+if probe_only is False and handled is True:
+    self._expected_charge_state.set(False, time)
+    self._expected_amperage.set(self.charger_default_idle_charge, time)
+    self._expected_num_active_phases.set(self.current_num_phases, time)
+
+# After:
+if probe_only is False and handled is True:
+    if self._expected_charge_state.set(False, time):
+        self._expected_amperage.set(self.charger_default_idle_charge, time)
+        self._expected_num_active_phases.set(self.current_num_phases, time)
+```
+
+**Why this is safe for `execute_command` after `_reset_state_machine()`:** reset clears inner `QSStateCmd` objects; the next access recreates them with `value = None`. Then `set(False, time)` is a real change (`None` != `False`), returns `True`, so amps and phases are still set on the first stop after reset -- same as today.
+
+**Trade-off:** if `_expected_charge_state` were already `False` but `_expected_amperage` were inconsistent (bug or partial state), this would not "repair" amps/phases on a later idle probe. That situation should be rare; the preference is to avoid unnecessary churn on the other two registers.
+
 ### Safety analysis (all 4 call sites of `_probe_and_enforce_stopped_charge_command_state`)
 
-1. **`execute_command`** (line 4878): already `probe_only=False` -- no change
+1. **`execute_command`** (line 4878): already `probe_only=False`. After `_reset_state_machine()`, `_expected_charge_state.value` is `None`, so `set(False)` returns `True` -- amps/phases still set. No behavior change.
 2. **`ensure_correct_state`** (line 4335): always called with `probe_only=False` from `dyn_handle` -- no change
-3. **`probe_if_command_set`** (line 4900): **the fix** -- changed to `probe_only=False`
-   - For `auto`/`on` commands: `handled=False`, expected state not changed -- no impact
-   - For `idle`/`off` commands: `handled=True`, expected state correctly set to "not charging"
+3. **`probe_if_command_set`** (line 4900): **change 1** -- now `probe_only=False`
+   - For `auto`/`on` commands: `handled=False`, guarded block never executes -- no impact
+   - For `idle`/`off` commands: `handled=True`, charge state declared. Amps/phases only set on actual transition (**change 2**).
    - `QSStateCmd.set()` is a no-op when value unchanged (no side effects on retry counters or `is_ok_to_set` rate limiting)
 4. **`get_stable_dynamic_charge_status`** (line 2310): keeps `probe_only=True` -- always preceded by `ensure_correct_state(probe_only=False)` in the `dyn_handle` loop, so expected state is already set; the `.set()` call would be a no-op anyway
 
@@ -95,7 +121,8 @@ self._probe_and_enforce_stopped_charge_command_state(time, command=command)
 After fix, when idle command arrives while charging at 28A:
 1. `_probe_and_enforce_stopped_charge_command_state(probe_only=False)`:
    - `handled = True` (idle command)
-   - Sets `_expected_charge_state = False`, `_expected_amperage = idle_charge` (e.g., 6A)
+   - `_expected_charge_state.set(False, time)` returns `True` (was `True` -> `False`)
+   - Sets `_expected_amperage = idle_charge` (e.g., 6A), `_expected_num_active_phases = current`
 2. `_ensure_correct_state(probe_only=True)`:
    - `want_charge = False`, `currently_charging = True` -> TRANSITION branch
    - `amps_confirmed = (28A == 6A)` -> False
@@ -111,26 +138,32 @@ After fix, when idle command arrives while charging at 28A:
 3. **AC3**: `probe_if_command_set` returns True when charger is already idle and idle command is re-sent (optimization preserved)
 4. **AC4**: ON/AUTO command probe behavior is unchanged (no regression)
 5. **AC5**: The `_expected_amperage`, `_expected_charge_state`, and `_expected_num_active_phases` are correctly set to idle values when probing an idle command on an active charger
+6. **AC6**: Repeated idle probes when already idle do NOT reset `_expected_amperage` / `_expected_num_active_phases` retry counters
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix `probe_if_command_set` to declare desired state before probing (AC: 1, 2, 5)
-  - [ ] Change line 4900: `probe_only=True` -> remove `probe_only` param (defaults to False)
+- [ ] Task 1: Fix `probe_if_command_set` -- declare desired state before probing (AC: 1, 2, 5)
+  - [ ] Change line 4900: remove `probe_only=True` (defaults to False)
   - [ ] Keep `_ensure_correct_state(probe_only=True)` on line 4901 unchanged (compare only, no hardware commands)
-- [ ] Task 2: Add tests for idle command probe path (AC: 2, 3, 4, 5)
+- [ ] Task 2: Gate amps/phases update on actual charge-state transition (AC: 6)
+  - [ ] Change lines 4843-4846: use `_expected_charge_state.set()` return value to gate `_expected_amperage` and `_expected_num_active_phases` updates
+- [ ] Task 3: Add tests for idle command probe path (AC: 2, 3, 4, 5, 6)
   - [ ] Test: probe idle command while charger is actively charging at 28A -> returns False (command NOT already set)
   - [ ] Test: probe idle command while charger is already idle -> returns True (command already set, optimization works)
   - [ ] Test: probe ON/AUTO command -> behavior unchanged (handled=False, no state update)
+  - [ ] Test: repeated idle probe does not reset amperage/phases retry counters (AC6)
   - [ ] Test: after probe returns False, execute_command correctly sends stop command
-- [ ] Task 3: Integration test for full SOC-reached flow (AC: 1)
+- [ ] Task 4: Integration test for full SOC-reached flow (AC: 1)
   - [ ] Test: car reaches target SOC -> constraint met -> idle command -> charger stops (end-to-end)
 
 ## Dev Notes
 
 ### Key file locations
 
-- **Bug location**: `ha_model/charger.py:4900` (`probe_if_command_set`, the `probe_only=True` call)
+- **Bug location 1**: `ha_model/charger.py:4900` (`probe_if_command_set`, the `probe_only=True` call)
+- **Bug location 2**: `ha_model/charger.py:4843-4846` (`_probe_and_enforce_stopped_charge_command_state`, unconditional amps/phases overwrite)
 - **Probe method**: `ha_model/charger.py:4893-4911` (`probe_if_command_set`)
+- **QSStateCmd.set()**: `ha_model/charger.py:246-259` (returns True only on value change; calls reset() which wipes retry counters)
 - **Execute path (working)**: `ha_model/charger.py:4850-4891` (`execute_command`)
 - **State machine reset**: `ha_model/charger.py:2631-2636` (`_reset_state_machine`)
 - **Launch command (trigger)**: `home_model/load.py:548-604` (`launch_command`)
@@ -174,13 +207,13 @@ Claude Opus 4.6
 ### Completion Notes List
 
 - Root cause confirmed by tracing the exact code path: `probe_only=True` in `probe_if_command_set` prevents expected-state update, causing stale state comparison to return True
-- Fix is a 1-line change in the caller: remove `probe_only=True` from line 4900 so desired state is declared before the probe check
+- Two-part fix: (1) remove `probe_only=True` from line 4900, (2) gate amps/phases on `set()` return value at line 4843
 - Preserves the contract of `_probe_and_enforce_stopped_charge_command_state` -- `probe_only` still controls state updates for other callers (e.g., `get_stable_dynamic_charge_status`)
-- All 4 call sites analyzed for safety (see fix plan); `QSStateCmd.set()` is a no-op when value unchanged
+- All 4 call sites analyzed for safety (see fix plan); `QSStateCmd.set()` is a no-op when value unchanged but calls `reset()` (wiping retry counters) when value changes -- hence the gate
 - ON/AUTO commands unaffected because `handled=False` for those, so the guarded block never executes regardless
 - Cursor plan used as primary authority for fix approach
 
 ### File List
 
-- `custom_components/quiet_solar/ha_model/charger.py` (modify -- line 4900)
+- `custom_components/quiet_solar/ha_model/charger.py` (modify -- lines 4843-4846 and 4900)
 - `tests/` (add tests for probe path with idle command)
