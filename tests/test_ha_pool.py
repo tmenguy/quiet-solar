@@ -512,3 +512,50 @@ async def test_pool_update_current_metrics_extended_lcc_absorbed_via_initial_end
     # lcc absorbed via initial_end match — only active counted
     assert pool.qs_bistate_current_duration_h == 21600.0 / 3600.0  # 6h
     assert pool.qs_bistate_current_on_h == 14400.0 / 3600.0  # 4h
+
+
+async def test_pool_update_current_metrics_day_rollover_lcc_not_double_counted():
+    """Test that lcc from previous day rollover is not double-counted with today's active.
+
+    Bug #101: Pool with default_on_finish_time=00:00 has yesterday's completed
+    constraint ending at today_utc (midnight) and today's active constraint ending
+    at tomorrow_utc (next midnight). The lcc passes the day-window check but
+    represents yesterday's cycle — counting it inflates target by lcc.target and
+    actual by lcc.current.
+    """
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
+
+    now = datetime(2026, 3, 30, 14, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+
+    # Yesterday's completed constraint ending exactly at today_utc (midnight rollover)
+    # This simulates a pool that ran yesterday with default_on_finish_time=00:00
+    lcc = TimeBasedSimplePowerLoadConstraint(
+        type=1, time=now, power=1500, initial_value=0,
+        target_value=28800.0,   # 8h target (yesterday)
+        current_value=28800.0,  # 8h actual (yesterday)
+        start_of_constraint=datetime(2026, 3, 29, 16, 0, 0, tzinfo=pytz.UTC),
+        end_of_constraint=today_utc,  # midnight — exact rollover boundary
+    )
+
+    # Today's active constraint ending at tomorrow_utc (next midnight)
+    # User set slider to 10h target, pool has run 3h so far today
+    active_ct = TimeBasedSimplePowerLoadConstraint(
+        type=1, time=now, power=1500, initial_value=0,
+        target_value=36000.0,   # 10h target (slider value)
+        current_value=10800.0,  # 3h actual (today's runtime)
+        start_of_constraint=datetime(2026, 3, 30, 8, 0, 0, tzinfo=pytz.UTC),
+        end_of_constraint=tomorrow_utc,  # next midnight
+    )
+
+    pool, _, _ = _make_pool_with_day_bounds(now, today_utc, tomorrow_utc)
+    pool._last_completed_constraint = lcc
+    pool._constraints = [active_ct]
+
+    await QSBiStateDuration.update_current_metrics(pool, now)
+
+    # Only today's active constraint should count — lcc is a previous-day rollover
+    assert pool.qs_bistate_current_duration_h == 36000.0 / 3600.0  # 10h (AC1)
+    assert pool.qs_bistate_current_on_h == 10800.0 / 3600.0  # 3h (AC2)

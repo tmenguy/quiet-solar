@@ -145,8 +145,17 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     for ct in self._constraints
                     if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
                 )
+                # Bug #101: skip lcc when it ended exactly at local midnight
+                # (previous day's rollover) and a same-type active constraint
+                # represents today's cycle — avoids double-counting yesterday
+                rollover_from_previous_day = lcc.end_of_constraint == today_utc and any(
+                    type(ct) == type(lcc)
+                    for ct in self._constraints
+                    if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
+                )
                 if (
                     not already_absorbed
+                    and not rollover_from_previous_day
                     and lcc.end_of_constraint != DATETIME_MAX_UTC
                     and lcc.end_of_constraint >= today_utc  # >= includes exact-midnight boundary (DST)
                     and lcc.end_of_constraint <= tomorrow_utc
