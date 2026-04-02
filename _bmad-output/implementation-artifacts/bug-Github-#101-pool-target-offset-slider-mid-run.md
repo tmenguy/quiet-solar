@@ -1,6 +1,6 @@
 # Bug Fix: Pool target offset by already-run hours when slider is adjusted mid-run (regression)
 
-Status: in-progress
+Status: done
 issue: 101
 branch: "QS_101"
 
@@ -87,21 +87,21 @@ Keep the change localized to `update_current_metrics` (per project boundary: no 
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Implement rollover skip in `update_current_metrics` default path (AC: 1, 2, 3)
-  - [ ] 1.1: Next to the existing `already_absorbed` check (~line 142), add a `rollover_from_previous_day` guard: skip lcc when `lcc.end_of_constraint == today_utc` AND an active same-type constraint exists in the day window
-  - [ ] 1.2: Combine with existing `already_absorbed` as: `if not already_absorbed and not rollover_from_previous_day:`
+- [x] Task 1: Implement rollover skip in `update_current_metrics` default path (AC: 1, 2, 3)
+  - [x] 1.1: Next to the existing `already_absorbed` check (~line 142), add a `rollover_from_previous_day` guard: skip lcc when `lcc.end_of_constraint == today_utc` AND an active same-type constraint exists in the day window
+  - [x] 1.2: Combine with existing `already_absorbed` as: `if not already_absorbed and not rollover_from_previous_day:`
 
-- [ ] Task 2: Add regression test — lcc.end==today_utc + active.end==tomorrow_utc (AC: 1, 2, 3)
-  - [ ] 2.1: In `tests/test_ha_pool.py` (or `test_bug_78_daily_metrics.py`): lcc with `end_of_constraint = today_utc`, non-zero target/current (yesterday's completed cycle). Active constraint with `end_of_constraint = tomorrow_utc`, target = slider value, current = some runtime.
-  - [ ] 2.2: Assert `qs_bistate_current_duration_h == active.target / 3600` and `qs_bistate_current_on_h == active.current / 3600` (lcc NOT included)
+- [x] Task 2: Add regression test — lcc.end==today_utc + active.end==tomorrow_utc (AC: 1, 2, 3)
+  - [x] 2.1: In `tests/test_ha_pool.py`: lcc with `end_of_constraint = today_utc`, non-zero target/current (yesterday's completed cycle). Active constraint with `end_of_constraint = tomorrow_utc`, target = slider value, current = some runtime.
+  - [x] 2.2: Assert `qs_bistate_current_duration_h == active.target / 3600` and `qs_bistate_current_on_h == active.current / 3600` (lcc NOT included)
 
-- [ ] Task 3: Verify existing tests pass — no regression on intra-day cases (AC: 3, 4, 5)
-  - [ ] 3.1: `test_pool_update_current_metrics_completed_and_active_sums_both` — lcc at 08:00, active at 17:00, both counted (lcc.end ≠ today_utc)
-  - [ ] 3.2: `test_default_mode_exact_midnight_lcc_included` — lcc at exact midnight, no active → lcc counted
-  - [ ] 3.3: All 48 existing regression tests pass
+- [x] Task 3: Verify existing tests pass — no regression on intra-day cases (AC: 3, 4, 5)
+  - [x] 3.1: `test_pool_update_current_metrics_completed_and_active_sums_both` — lcc at 08:00, active at 17:00, both counted (lcc.end ≠ today_utc)
+  - [x] 3.2: `test_default_mode_exact_midnight_lcc_included` — lcc at exact midnight, no active → lcc counted
+  - [x] 3.3: All 49 tests pass (23 pool + 26 daily metrics)
 
-- [ ] Task 4: Run full quality gate (AC: 6)
-  - [ ] 4.1: `python scripts/qs/quality_gate.py`
+- [x] Task 4: Run full quality gate (AC: 6)
+  - [x] 4.1: `python scripts/qs/quality_gate.py` — all gates green, 100% coverage
 
 ## Dev Notes
 
