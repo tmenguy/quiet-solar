@@ -29,135 +29,79 @@ Regression of #95. When the pool is running and the user adjusts the target hour
 
 ## Root Cause Analysis
 
-### Status of #95 fix
+### Confirmed root cause: day-rollover lcc double-count
 
-All three #95 fixes in `update_current_metrics()` are still in place:
+GitHub #95 fixed same-end-date and yesterday-active leaks in `update_current_metrics`, but a **day-rollover case** remains.
+
+`update_current_metrics()` default path sums:
+- All **active** constraints with `today_utc < end <= tomorrow_utc`
+- `_last_completed_constraint` (lcc) in the same window when not `already_absorbed`
+
+`already_absorbed` (lines 142-147) is true only if some active constraint shares `end_of_constraint` (or `initial_end_of_constraint`) with lcc.
+
+For pools with `default_on_finish_time = 00:00` (common setup):
+- **Yesterday's** completed constraint ends at **local midnight** → `lcc.end_of_constraint == today_utc`
+- **Today's** active constraint ends at **next local midnight** → `active.end_of_constraint == tomorrow_utc`
+
+Those two instants are **never equal**, so `already_absorbed` is false while **both** pass the day-window checks:
+- lcc: `end >= today_utc` (midnight >= midnight) ✓ AND `end <= tomorrow_utc` ✓
+- active: `end > today_utc` ✓ AND `end <= tomorrow_utc` ✓
+
+Result: `qs_bistate_current_duration_h = lcc.target + active.target` and `qs_bistate_current_on_h = lcc.current + active.current`.
+
+This matches the user description of `target = new_target + current` when the lcc's values line up numerically with the already-run hours.
+
+### Why #95 didn't catch this
+
+The #95 fix assumed "same cycle" implies **identical end timestamps**. The day-rollover case has lcc ending at `today_utc` and the active constraint ending at `tomorrow_utc` — different timestamps but representing consecutive daily cycles of the same pool.
+
+### Status of #95 fixes
+
+All three fixes are still in place and correct for their intended scenarios:
 1. Day lower bound on active constraints loop (line 132): `ct.end_of_constraint > today_utc` ✓
 2. `already_absorbed` guard for lcc (lines 142-147) ✓
 3. `>=` boundary for lcc (line 151) ✓
 
-Existing regression tests (22 pool + 26 bistate) all pass. The symptom must originate from a code path not covered by the #95 tests.
-
-### Investigation areas (ranked by likelihood)
-
-**Area 1 — `carry_info_from_other_constraint` does not update `target_value`**
-
-When `push_live_constraint` finds the old and new constraints have the same `score()` and same `end_of_constraint`, it takes the "carry_info" path (line 1349):
-```python
-c.carry_info_from_other_constraint(constraint)
-return False
-```
-
-`carry_info_from_other_constraint` for `MultiStepsPowerLoadConstraint` only copies `power_steps` — it does NOT update `target_value`, `current_value`, or `_degraded_type`. The old constraint stays unchanged.
-
-This happens when:
-- Pool switches from `bistate_mode_auto` to `bistate_mode_default` (UI drag triggers `_select` then `_setNumber`)
-- The restored `default_on_duration` happens to produce the same `energy_score` as the auto constraint's target (same `score()`)
-- The old auto constraint retains its target, ignoring the mode change
-
-**Impact:** The old constraint's `target_value` (auto/temperature-based) is displayed instead of the slider value. This alone doesn't produce `target = slider + current`, but combined with other constraint state it could.
-
-**Area 2 — Two-step UI flow creates intermediate constraint state**
-
-The UI drag handler (`qs-pool-card.js:569-571`) sends two sequential service calls:
-```javascript
-await this._select(e.pool_mode, 'bistate_mode_default');
-await this._setNumber(e.default_on_duration, dragValue);
-```
-
-Step 1 rebuilds constraints with the OLD `default_on_duration` (restored from HA state). Step 2 rebuilds with the new value. Between these steps:
-- A periodic `update_loads_constraints` cycle could run (HA event loop yields during `await`)
-- The intermediate constraint might be completed by `update_live_constraints` if its `target_value` is small and `current_value >= target_value` after carry-over
-- This completed constraint becomes `_last_completed_constraint`
-- When step 2 runs, the new constraint is pushed, but `_last_completed_constraint` from the intermediate step may contribute its `target_value` to `duration_s` if `already_absorbed` doesn't fire (different end dates due to constraint extension in `update_live_constraints`)
-
-**Area 3 — `push_live_constraint` replacement carry-over adds `current_value` to `target_value` via constraint chain**
-
-When a constraint is replaced (lines 1360-1367):
-```python
-self._constraints[i] = None
-if type(c) == type(constraint) and c.current_value > constraint.current_value:
-    constraint.current_value = min(c.current_value, constraint.target_value)
-```
-
-If the lcc carry-over (lines 1331-1345) ALSO fired on the same new constraint:
-```python
-constraint.current_value = min(lcc.current_value, constraint.target_value)
-```
-
-The `current_value` is set twice — first from lcc, then potentially from the replaced active constraint. The second assignment is `min(c.current_value, constraint.target_value)` which uses the NEW target, so it's capped correctly. BUT if the lcc check and active-replacement check produce conflicting state, the metrics computation could be wrong.
-
-**Area 4 — `already_absorbed` guard doesn't fire when constraint `degraded_type` differs**
-
-The `already_absorbed` check uses `type(ct) == type(lcc)` — Python `type()`, which checks the class. Both auto and default constraints are `TimeBasedSimplePowerLoadConstraint`, so the type check passes. However, the check compares `end_of_constraint` dates:
-
-```python
-already_absorbed = any(
-    type(ct) == type(lcc)
-    and (ct.end_of_constraint == lcc.end_of_constraint or ct.end_of_constraint == lcc_end)
-    for ct in self._constraints
-    if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
-)
-```
-
-If `update_live_constraints` extended the old constraint's `end_of_constraint` (mandatory push at line 1476: `c.end_of_constraint = new_constraint_end`), the lcc's `end_of_constraint` would differ from the new active constraint's `end_of_constraint`. The `initial_end_of_constraint` check covers some cases, but a pushed constraint's `end_of_constraint` could be a new value that doesn't match either.
-
-### Data Flow When Slider Changes (while pool is ON)
-
-1. **UI** (`qs-pool-card.js:569`): `_select(pool_mode, 'bistate_mode_default')` — may change mode
-2. **Select entity** → `user_set_bistate_mode('bistate_mode_default')` → `check_load_activity_and_constraints(time)`:
-   - Rebuilds constraint with OLD `default_on_duration` value
-   - `push_live_constraint()`: may carry-info (same score) or replace (different score)
-   - `update_current_metrics(time)` — intermediate state published
-3. **UI** (`qs-pool-card.js:571`): `_setNumber(default_on_duration, dragValue)` — sets new target
-4. **Number entity** → `user_set_default_on_duration(dragValue)` → `check_load_activity_and_constraints(time)`:
-   - Rebuilds constraint with NEW `default_on_duration`
-   - `push_live_constraint()`: should replace old constraint
-   - `update_current_metrics(time)` — final state published
-5. **Periodic cycle**: `update_loads_constraints()` → `check_load_activity_and_constraints()` → `update_live_constraints()` — may complete constraints, set lcc
-
 ## Acceptance Criteria
 
-1. **AC1**: When user adjusts ring handle to X hours while pool is running, `qs_bistate_current_duration_h` = X (not X + already_run)
-2. **AC2**: `qs_bistate_current_on_h` (actual run hours) remains accurate and reflects real accumulated runtime for the day
-3. **AC3**: Pool continues running correctly after slider adjustment (remaining hours = max(0, X - already_run))
-4. **AC4**: Setting target below already-run hours shows correct target (e.g., 4h target with 8h run → target=4h, actual=8h, pool stops)
-5. **AC5**: Setting target to 0h → target=0h, actual=N (whatever already ran)
-6. **AC6**: Carry-over logic for constraint extension (same target, extending end time) still works
-7. **AC7**: Mode transition (auto→default via drag) preserves runtime correctly
-8. **AC8**: Calendar-mode pools (`bistate_mode_auto`, `bistate_mode_exact_calendar`) are unaffected
-9. **AC9**: 100% test coverage maintained
+1. **AC1**: When user adjusts ring handle to X hours while pool is running, `qs_bistate_current_duration_h` = X (not X + lcc.target)
+2. **AC2**: `qs_bistate_current_on_h` (actual run hours) = only today's active constraint runtime (not + lcc.current)
+3. **AC3**: Intra-day multi-segment metrics still work: lcc completed at 08:00 + active until 17:00 → both counted (lcc.end ≠ today_utc rollover boundary)
+4. **AC4**: Existing tests pass: `test_pool_update_current_metrics_completed_and_active_sums_both` (different end dates, both counted)
+5. **AC5**: Existing midnight-boundary test passes: `test_default_mode_exact_midnight_lcc_included`
+6. **AC6**: 100% test coverage maintained
+
+## Fix Plan
+
+### Proposed fix (metrics only, localized to `update_current_metrics`)
+
+**File:** `custom_components/quiet_solar/ha_model/bistate_duration.py`
+
+Extend the "skip lcc" logic alongside existing `already_absorbed` so that lcc is **not counted** when it represents the **previous local day's rollover** and a same-type active constraint represents today's cycle:
+
+**Condition:** `lcc.end_of_constraint == today_utc` (exact rollover boundary) AND there exists an active constraint of `type(ct) == type(lcc)` with `end_of_constraint > today_utc` in the today/tomorrow window.
+
+**Effect:** Metrics show only today's target/actual for the running constraint, while intra-day "completed at 08:00 + active until 17:00" cases stay valid because lcc.end is NOT the `today_utc` rollover boundary.
+
+Keep the change localized to `update_current_metrics` (per project boundary: no HA imports in `home_model/load.py`).
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add debug logging for constraint state during slider adjustment (AC: all)
-  - [ ] 1.1: In `push_live_constraint()`, log old constraint state (target, current, end, type, degraded_type) and new constraint state before and after carry-over/replacement
-  - [ ] 1.2: In `update_current_metrics()` default path, log constraint list, lcc state, and `already_absorbed` result
-  - [ ] 1.3: In `user_set_default_on_duration()`, log the before/after `default_on_duration` and constraint count
+- [ ] Task 1: Implement rollover skip in `update_current_metrics` default path (AC: 1, 2, 3)
+  - [ ] 1.1: Next to the existing `already_absorbed` check (~line 142), add a `rollover_from_previous_day` guard: skip lcc when `lcc.end_of_constraint == today_utc` AND an active same-type constraint exists in the day window
+  - [ ] 1.2: Combine with existing `already_absorbed` as: `if not already_absorbed and not rollover_from_previous_day:`
 
-- [ ] Task 2: Write reproduction test — pool running, slider adjusted mid-run (AC: 1, 2, 3)
-  - [ ] 2.1: Test pool in `bistate_mode_default`, running with 8h done / 12h target, slider changed to 10h → verify `qs_bistate_current_duration_h = 10.0` and `qs_bistate_current_on_h = 8.0`
-  - [ ] 2.2: Test pool in `bistate_mode_auto`, running with 8h done / 12h target (temp-based), UI triggers mode switch to default + slider set to 10h → verify same result
-  - [ ] 2.3: Test two-step flow: `user_set_bistate_mode('bistate_mode_default')` followed by `user_set_default_on_duration(10.0)` with a running pool — verify no intermediate lcc leaks
+- [ ] Task 2: Add regression test — lcc.end==today_utc + active.end==tomorrow_utc (AC: 1, 2, 3)
+  - [ ] 2.1: In `tests/test_ha_pool.py` (or `test_bug_78_daily_metrics.py`): lcc with `end_of_constraint = today_utc`, non-zero target/current (yesterday's completed cycle). Active constraint with `end_of_constraint = tomorrow_utc`, target = slider value, current = some runtime.
+  - [ ] 2.2: Assert `qs_bistate_current_duration_h == active.target / 3600` and `qs_bistate_current_on_h == active.current / 3600` (lcc NOT included)
 
-- [ ] Task 3: Write reproduction test — target below already-run hours (AC: 4, 5)
-  - [ ] 3.1: Pool running, 8h done, slider set to 4h → `qs_bistate_current_duration_h = 4.0`, `qs_bistate_current_on_h` reflects actual (carried current capped at 4h)
-  - [ ] 3.2: Pool running, 8h done, slider set to 0h → `qs_bistate_current_duration_h = 0.0`
+- [ ] Task 3: Verify existing tests pass — no regression on intra-day cases (AC: 3, 4, 5)
+  - [ ] 3.1: `test_pool_update_current_metrics_completed_and_active_sums_both` — lcc at 08:00, active at 17:00, both counted (lcc.end ≠ today_utc)
+  - [ ] 3.2: `test_default_mode_exact_midnight_lcc_included` — lcc at exact midnight, no active → lcc counted
+  - [ ] 3.3: All 48 existing regression tests pass
 
-- [ ] Task 4: Write test for carry_info path (same-score constraint replacement) (AC: 7)
-  - [ ] 4.1: Pool in auto mode with target T, switch to default with `default_on_duration` producing same `energy_score` as T → verify the active constraint's `target_value` is updated (not stale)
-  - [ ] 4.2: If carry_info path is the root cause, fix `carry_info_from_other_constraint` to also propagate `target_value` and `_degraded_type` from the new constraint
-
-- [ ] Task 5: Write test for intermediate constraint completion during two-step flow (AC: 1, 7)
-  - [ ] 5.1: Pool in auto (target=12h, current=8h), `default_on_duration` restored to 1h. Mode switch creates constraint with target=1h, current=1h (capped). Verify this constraint doesn't leak into lcc after `update_live_constraints`
-  - [ ] 5.2: If this is the root cause, fix by either: (a) making the UI send a single atomic "set mode + value" service, or (b) guarding `update_current_metrics` against constraints where `current_value >= target_value` (about to be completed)
-
-- [ ] Task 6: Fix the identified root cause (AC: 1-9)
-  - [ ] 6.1: Implement fix based on findings from Tasks 2-5
-  - [ ] 6.2: Verify all existing tests pass (no regressions)
-
-- [ ] Task 7: Run full quality gate (AC: 9)
-  - [ ] 7.1: `python scripts/qs/quality_gate.py`
+- [ ] Task 4: Run full quality gate (AC: 6)
+  - [ ] 4.1: `python scripts/qs/quality_gate.py`
 
 ## Dev Notes
 
@@ -165,71 +109,41 @@ If `update_live_constraints` extended the old constraint's `end_of_constraint` (
 
 | File | Lines | Role |
 |------|-------|------|
-| `custom_components/quiet_solar/ha_model/bistate_duration.py` | 66-158 | `update_current_metrics()` — metrics summation (contains #95 fix) |
-| `custom_components/quiet_solar/ha_model/bistate_duration.py` | 160-166 | `user_set_default_on_duration()` — slider entry point |
-| `custom_components/quiet_solar/ha_model/bistate_duration.py` | 168-177 | `user_set_bistate_mode()` — mode change entry point |
-| `custom_components/quiet_solar/ha_model/bistate_duration.py` | 294-312 | `_build_mode_constraint_items()` default mode — constraint creation |
-| `custom_components/quiet_solar/ha_model/bistate_duration.py` | 349-598 | `check_load_activity_and_constraints()` — orchestrator |
-| `custom_components/quiet_solar/ha_model/pool.py` | 89-119 | Pool override of `_build_mode_constraint_items()` (auto/winter modes) |
-| `custom_components/quiet_solar/home_model/load.py` | 1305-1373 | `push_live_constraint()` — carry-over and replacement logic |
-| `custom_components/quiet_solar/home_model/load.py` | 1375-1500 | `update_live_constraints()` — periodic constraint completion |
-| `custom_components/quiet_solar/home_model/constraints.py` | 191-192 | `carry_info_from_other_constraint()` base (no-op) |
-| `custom_components/quiet_solar/home_model/constraints.py` | 672-675 | `carry_info_from_other_constraint()` MultiSteps (power_steps only) |
-| `custom_components/quiet_solar/home_model/constraints.py` | 249-259 | `eq_no_current()` — constraint equality check |
-| `custom_components/quiet_solar/home_model/constraints.py` | 292-314 | `score()` — constraint priority scoring |
-| `custom_components/quiet_solar/ui/resources/qs-pool-card.js` | 556-587 | `onUp` drag release — two sequential service calls |
-| `custom_components/quiet_solar/ui/resources/qs-pool-card.js` | 42-48 | `set hass()` — re-render guard during interaction |
-| `custom_components/quiet_solar/number.py` | 130-146 | Number entity `async_set_native_value()` |
-| `tests/test_ha_pool.py` | all | Pool-specific regression tests |
-| `tests/test_bug_78_daily_metrics.py` | all | Daily metrics regression tests |
+| `custom_components/quiet_solar/ha_model/bistate_duration.py` | 127-158 | `update_current_metrics()` default path — **fix goes here** |
+| `custom_components/quiet_solar/ha_model/bistate_duration.py` | 142-147 | `already_absorbed` guard — rollover guard added alongside |
+| `tests/test_ha_pool.py` | all | Pool regression tests — new test added here |
+| `tests/test_bug_78_daily_metrics.py` | all | Bistate daily metrics tests — verify no regression |
 
 ### Architecture Constraints
 
-- **Two-layer boundary**: `home_model/load.py` is domain logic (no HA imports). `ha_model/bistate_duration.py` bridges HA. Fix must respect this.
-- `push_live_constraint()` is in the domain layer — no HA-specific signals.
-- `update_current_metrics()` is in the HA layer — can use `_last_completed_constraint` and `_constraints` from domain.
-- Do NOT modify `SOLVER_STEP_S` or solver logic.
+- **Two-layer boundary**: `home_model/load.py` NEVER imports `homeassistant.*`. Fix stays in `ha_model/bistate_duration.py`.
+- Do NOT modify `push_live_constraint()`, constraint classes, or solver.
 - Lazy logging: `_LOGGER.debug("msg %s", var)` — no f-strings in log calls.
+
+### Risk Note
+
+Tie the skip to `lcc.end == today_utc` (and same constraint type) so multi-segment same-day metrics from different wall-clock ends remain unchanged. The exact `today_utc` comparison avoids catching intra-day completions (e.g., lcc.end = 08:00 UTC).
 
 ### Constraint Lifecycle Reference
 
 1. **Created**: `TimeBasedSimplePowerLoadConstraint(target_value=N, initial_value=0)`
-2. **Pushed**: `push_live_constraint()` — may carry `current_value` from lcc or replaced constraint, may merge via `carry_info`
-3. **Updated**: `update_live_constraints()` — increments `current_value` as pool runs, may complete constraint
-4. **Completed**: When `current_value >= target_value`, `ack_completed_constraint()` sets `_last_completed_constraint`
-5. **Metrics**: `update_current_metrics()` sums active constraints + lcc for today
-
-### `push_live_constraint` Decision Tree
-
-```
-For each existing constraint c:
-  eq_no_current(constraint)?
-    → YES: carry_info (power_steps only), return False
-    → NO: same end_of_constraint?
-      → NO: continue loop
-      → YES: same score?
-        → YES: carry_info (power_steps only), return False
-        → NO: REPLACE c with constraint, carry current_value
-```
-
-**Key insight**: The `carry_info` path does NOT update `target_value`. If the mode changes but the score happens to match, the old constraint retains its stale `target_value`.
+2. **Pushed**: `push_live_constraint()` — carry-over and replacement logic
+3. **Updated**: `update_live_constraints()` — increments `current_value`
+4. **Completed**: `ack_completed_constraint()` sets `_last_completed_constraint`
+5. **Metrics**: `update_current_metrics()` sums active + lcc for today — **double-count bug is here**
 
 ### Test Infrastructure
 
-- Use `MinimalTestHome` / `MinimalTestLoad` from `tests/factories.py` for constraint tests
-- Use `create_constraint()` factory for creating test constraints
+- Use `MinimalTestHome` / `MinimalTestLoad` from `tests/factories.py`
+- Use `create_constraint()` factory with `TimeBasedSimplePowerLoadConstraint`
 - Use `freezegun` for time-dependent scenarios
-- Pool-specific fixtures in `tests/test_ha_pool.py`
 - asyncio_mode=auto — no `@pytest.mark.asyncio` decorator needed
-- Need mock for `user_set_bistate_mode` + `user_set_default_on_duration` to simulate two-step UI flow
 
 ### Related Bug Story References
 
 - `bug-Github-#95-pool-target-offset-slider-mid-run.md` — original fix (three bugs in `update_current_metrics`)
 - `bug-Github-#78-fix-bistate-daily-target-actual-hours.md` — daily target/actual metrics
-- `bug-Github-#80-bistate-calendar-precompute-refactor.md` — calendar event metrics refactor
 - `bug-Github-#68-carry-from-completed-constraint.md` — carry-over logic for completed constraints
-- `bug-Github-#64-pool-target-double-count-and-missing-handle.md` — original double-count fix
 
 ## Dev Agent Record
 
@@ -240,20 +154,12 @@ Claude Opus 4.6
 ### Completion Notes List
 
 - Story created from GitHub issue #101 (regression of #95)
-- Confirmed #95 fix is still in place: day lower bound, already_absorbed guard, >= boundary
+- Root cause identified via Cursor plan: day-rollover lcc double-count — lcc.end == today_utc while active.end == tomorrow_utc, so `already_absorbed` never fires
+- Confirmed #95 fix is still in place but doesn't cover this cross-day boundary case
+- Fix is localized to `update_current_metrics()` default path — add rollover guard alongside `already_absorbed`
 - All 48 existing regression tests pass (22 pool, 26 bistate daily metrics)
-- Root cause NOT yet pinpointed — multiple hypotheses requiring test-driven investigation
-- Primary hypothesis: `carry_info_from_other_constraint` path doesn't propagate `target_value` when mode changes but constraint scores match
-- Secondary hypothesis: two-step UI flow (mode change + number set) creates intermediate constraint state that leaks via lcc
-- User confirms bug occurs specifically while pool is ON (running)
-- User describes: moving handle sets target to handle_position + current_value (already-run hours)
 
 ### File List
 
-- `custom_components/quiet_solar/ha_model/bistate_duration.py` — primary investigation target (`update_current_metrics`, `user_set_default_on_duration`, constraint building)
-- `custom_components/quiet_solar/home_model/load.py` — `push_live_constraint()` carry-over and replacement logic
-- `custom_components/quiet_solar/home_model/constraints.py` — `carry_info_from_other_constraint`, `eq_no_current`, `score`
-- `custom_components/quiet_solar/ha_model/pool.py` — pool-specific constraint building for auto/winter modes
-- `custom_components/quiet_solar/ui/resources/qs-pool-card.js` — two-step drag release flow
-- `tests/test_ha_pool.py` — pool regression tests (to extend)
-- `tests/test_bug_78_daily_metrics.py` — bistate daily metrics tests (to extend)
+- `custom_components/quiet_solar/ha_model/bistate_duration.py` — fix in `update_current_metrics()` default path
+- `tests/test_ha_pool.py` — new regression test for day-rollover lcc
