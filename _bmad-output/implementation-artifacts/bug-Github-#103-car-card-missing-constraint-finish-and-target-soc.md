@@ -6,152 +6,129 @@ branch: "QS_103"
 
 ## Story
 
-As a Quiet Solar user with a forecast person assigned to a car,
-I want the car card to show the person's forecasted departure time as the charge finish deadline and compute the minimum SOC needed for the trip,
-so that forced charging reflects the real need rather than defaulting to 100% with no visible deadline.
+As a Quiet Solar user who manually assigns a charger to a car with a forecast person,
+I want the car card to show the person's forecasted departure time and compute the minimum SOC needed for the trip,
+so that charging reflects the real need even when the car's SOC sensor is stale.
 
 ## Bug Description
 
-When a charger is forced onto a car (e.g., Twingo) and a forecast user (e.g., Arthur Menguy) is associated:
+When a charger is manually assigned to a car (e.g., Twingo) while the plug sensor is unplugged and the car device tracker is not home, the car enters **stale-percent mode**. A forecast user (e.g., Arthur Menguy) is associated with a forecasted departure at 07:29 for 94km:
 
-1. **No constraint finish time**: The card shows `--:--` for the Finish field, but should display the forecasted departure time (07:29) since Arthur is forecasted to leave at 7:29 for 94km.
-2. **Questionable 100% target SOC**: The Target SOC shows 100% (95 km range displayed). A 94km trip need may not require charging to 100% — the solver should compute the minimum SOC needed for the forecasted trip.
+1. **No constraint finish time**: The card shows `--:--` for the Finish field, but should display the forecasted departure time (07:29).
+2. **Questionable 100% target SOC**: The Target SOC shows 100% (95 km range displayed). A 94km trip may not require 100% — the solver should compute the minimum SOC needed.
 
 **Steps to reproduce:**
-1. Force a charger onto a car (e.g., wallbox 1 maison -> Twingo)
-2. Associate a forecast user (Arthur Menguy) who has a forecasted departure at 07:29 for 94km
-3. Observe the car card
+1. Manually assign a charger to a car (e.g., wallbox 1 maison -> Twingo) while car is not home/not plugged
+2. Car enters stale-percent mode (API contradiction detected)
+3. A forecast user (Arthur Menguy) is forecasted to depart at 07:29 for 94km
+4. Observe the car card
 
 **Expected:** Finish shows 07:29 (departure time), Target SOC reflects minimum needed for 94km trip.
 **Actual:** Finish shows `--:--`, Target SOC shows 100% / 95 km.
 
-**Related issues:** None directly; this is a new bug in the force-charge + person interaction path.
-
 ## Root Cause Analysis
 
-### Root Cause 1: Force constraint created without `end_of_constraint`
+### Actual scenario: stale-percent mode, NOT force_charge
 
-**File:** `custom_components/quiet_solar/ha_model/charger.py`, lines 3369-3381
+The user manually assigns the charger to the car. Since the plug sensor is unplugged and the car tracker is not home, `flag_stale_for_manual_charger` (car.py:793-809) detects the contradiction and enters stale mode:
+- `_car_api_stale = True`
+- `car_api_stale_percent_mode = True`
+- `_car_api_inferred_home = True`, `_car_api_inferred_plugged = True`
 
-When `force_charge=True`, a `force_constraint` is created WITHOUT the `end_of_constraint` parameter:
+`force_charge` is **NOT** True in this scenario — the user assigned the charger, not pressed a "force charge" button.
 
-```python
-force_constraint = ConstraintClass(
-    total_capacity_wh=self.car.car_battery_capacity,
-    type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
-    degraded_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    time=time,
-    load=self,
-    load_param=self.car.name,
-    from_user=True,
-    initial_value=car_initial_value,
-    target_value=target_charge,
-    power_steps=self._power_steps,
-    support_auto=True,
-    # NO end_of_constraint → defaults to DATETIME_MAX_UTC
-)
-```
+### Root Cause: `get_adapt_target_percent_soc_to_reach_range_km` bails on null SOC
 
-Without `end_of_constraint`, it defaults to `DATETIME_MAX_UTC` (constraints.py line 121). The display chain is:
+**File:** `custom_components/quiet_solar/ha_model/car.py`, lines 1395-1412
 
+In stale-percent mode, `get_car_charge_percent()` returns `None` (car.py:1283). This cascades:
+
+1. **car.py:1405** — `current_soc = self.get_car_charge_percent(time)` → `None`
+2. **car.py:1408** — Guard `current_soc is None` → returns `(None, None, None, None)`
+3. **car.py:552** — `get_best_person_next_need()` returns: `is_person_covered=None`, `next_usage_time=07:29` (valid! from person forecast), `person_min_target_charge=None`, `person=<valid person>`
+4. **charger.py:3559** — `person_min_target_charge is None` → **person is nullified** (`person = None`)
+5. **charger.py:3571** — Enters person block but `person is None` → no person constraint created
+6. **charger.py:3678** — `realized_charge_target is None` → filler constraint at 100% with no `end_of_constraint`
+
+The key insight: the person's forecast data (departure time, trip distance) IS available — it comes from `person.update_person_forecast(time)`, not from the SOC sensor. Only the current SOC is unknown, which prevents computing `needed_soc` and `is_person_covered`. But `needed_soc` can be computed from trip data + `km_per_percent` alone (which has fallbacks to efficiency history and `_km_per_kwh` from config that don't require live SOC).
+
+### Display chain (why `--:--` appears)
+
+Without a person constraint, only a filler constraint exists (no `end_of_constraint`):
 1. `car.get_car_charge_time_readable_name()` (car.py:954) → gets active constraint
 2. `constraint.get_readable_next_target_date_string()` (constraints.py:436) → calls `get_readable_date_string()`
 3. `get_readable_date_string()` (constraints.py:40-43) → returns `"--:--"` for `DATETIME_MAX_UTC`
 
-### Root Cause 2: Guard prevents person logic when force_constraint exists
+### Why target SOC shows 100%
 
-**File:** `custom_components/quiet_solar/ha_model/charger.py`, line 3571
-
-The guard condition:
-
-```python
-if user_timed_constraint is None and force_constraint is None:
-```
-
-prevents the entire person-based constraint logic from executing when `force_constraint` exists. This means:
-
-- `set_next_charge_target_percent(person_min_target_charge)` (line 3638) is **never called**
-- `_next_charge_target` stays at `car_default_charge` (100%) via `get_car_target_SOC()` (car.py:2112-2115)
-- The car card Target SOC shows 100%
-
-### Why person data IS available but unused
-
-Person data is computed **before** the force_constraint block:
-
-- Line 3323-3329: `get_best_person_next_need(time)` returns `person`, `next_usage_time`, `person_min_target_charge`, `is_person_covered`
-- Line 3357: `if force_charge is True:` creates force_constraint using `target_charge` (which is still the car's default, not the person's minimum)
-
-The person data is fully available — it's just never used when force_charge is true.
-
-### Constraint type semantics
-
-`CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE` means "charge at maximum power immediately." Setting `end_of_constraint` on an ASAP constraint serves as a display deadline and solver planning horizon, but doesn't change the "charge now at max" behavior. The `degraded_type=CONSTRAINT_TYPE_MANDATORY_END_TIME` means if the solver can't charge ASAP, it falls back to time-based planning toward the end_of_constraint — making the departure time even more useful as a fallback deadline.
+Without person constraint creation, `set_next_charge_target_percent(person_min_target_charge)` (charger.py:3638) is never called. So `_next_charge_target` stays at `car_default_charge` (100%) via `get_car_target_SOC()` (car.py:2112-2115).
 
 ## Acceptance Criteria
 
-1. **AC1**: When force-charging a car with a forecasted person, `get_car_charge_time_readable_name()` returns the person's departure time (e.g., "07:29"), not `--:--`
-2. **AC2**: When force-charging a car with a forecasted person (and no explicit user target override), Target SOC reflects `person_min_target_charge` (the minimum SOC for the forecasted trip), not 100%
-3. **AC3**: When force-charging a car with a forecasted person AND the user explicitly set a charge target, the explicit target takes priority over the person's minimum
-4. **AC4**: When force-charging a car WITHOUT a forecasted person, behavior is unchanged: finish shows `--:--`, target stays at car_default_charge
-5. **AC5**: When a non-forced person constraint is created (existing path at line 3640-3654), behavior is unchanged
-6. **AC6**: Existing active ASAP constraint with person info (re-entry path at line 3389-3409) preserves person-specific target correctly
+1. **AC1**: When a stale car has a forecasted person with valid departure time, the person constraint is created with `end_of_constraint = next_usage_time` — card shows departure time, not `--:--`
+2. **AC2**: When a stale car has a forecasted person with a computable trip need, Target SOC reflects `person_min_target_charge` (the minimum SOC for the forecasted trip), not 100%
+3. **AC3**: When `km_per_percent` is also unavailable (no efficiency data at all), graceful fallback — no person constraint, behavior unchanged
+4. **AC4**: When SOC is available (non-stale), behavior is unchanged — existing `get_adapt_target_percent_soc_to_reach_range_km` logic untouched
+5. **AC5**: Non-stale person constraint creation path (charger.py:3640-3654) is unaffected
+6. **AC6**: `is_car_charged` with `current_charge=None` (stale) correctly returns `(False, None)` — person constraint is not incorrectly skipped
 7. **AC7**: 100% test coverage maintained
 
 ## Fix Plan
 
-### Fix 1: Enrich force_constraint with person data when available
+### Fix 1: Handle stale SOC in `get_adapt_target_percent_soc_to_reach_range_km`
 
-**File:** `custom_components/quiet_solar/ha_model/charger.py`
+**File:** `custom_components/quiet_solar/ha_model/car.py`, lines 1395-1435
 
-**Location:** After the force_constraint creation block (lines 3369-3381), before the push at line 3383.
+Currently the method bails at line 1408 when `current_soc is None`. But `needed_soc` (the minimum SOC for the trip) only requires `km_per_percent` and `target_range_km` — it does NOT need `current_soc`.
 
-When `force_charge=True` AND `person is not None` AND `next_usage_time is not None` AND `person_min_target_charge is not None`:
+**Restructure the method:**
 
-1. Set `force_constraint.end_of_constraint = next_usage_time` — shows departure time in the card
-2. Set `force_constraint.load_info = {"person": person.name}` — marks the constraint as person-aware (enables re-entry path at line 3398-3401 to preserve person target)
-3. If the user did NOT explicitly set a target (`user_target is None`): set `target_charge = person_min_target_charge` and update `force_constraint.target_value = target_charge` — uses the computed minimum SOC instead of 100%
-4. Call `await self.car.set_next_charge_target_percent(target_charge)` — updates `_next_charge_target` so the UI shows the correct Target SOC
+1. Early-exit if `km_per_percent is None` or `target_range_km is None` (can't compute anything) → return `(None, None, None, None)`
+2. Compute `needed_soc` from `km_per_percent` and `target_range_km` (lines 1414-1428 — unchanged logic)
+3. If `current_soc is None` or `current_range_km is None` (stale): can't determine coverage → return `(False, current_soc, needed_soc, None)` — `is_person_covered=False` (safe assumption), `person_min_target_charge=needed_soc` (computed)
+4. Otherwise (normal path): existing coverage check using `current_soc` and `current_range_km` (lines 1430-1435 — unchanged)
 
-**Key design decisions:**
-- The constraint type stays `MANDATORY_AS_FAST_AS_POSSIBLE` — the user forced the charge, so charging urgency is preserved
-- `end_of_constraint` serves as both display deadline and degraded-type fallback
-- Explicit user target (`user_target is not None`) takes priority over person minimum
-- `load_info={"person": ...}` enables the re-entry path (line 3398-3401) to recognize person-originated ASAP constraints on subsequent cycles
+**Effect on downstream:**
+- `get_best_person_next_need()` returns `is_person_covered=False` (not None!), valid `person_min_target_charge`, valid `next_usage_time`
+- Charger line 3559: `is_person_covered is False` (not None) → person survives filtering
+- Charger line 3559: `person_min_target_charge` is a valid number → person survives
+- Charger line 3571: `force_constraint is None` and `user_timed_constraint is None` → enters person block
+- Charger line 3593: `is_car_charged(current_charge=None)` returns `(False, None)` → person constraint IS created
+- Charger line 3640-3654: Person constraint created with `end_of_constraint=next_usage_time` and `target_value=person_min_target_charge`
+- Charger line 3638: `set_next_charge_target_percent(target_charge)` updates `_next_charge_target`
 
-### Fix 2: Update realized_charge_target for force + person
+Both issues are fixed with this single change, and the entire existing person constraint path handles it correctly.
 
-**File:** `custom_components/quiet_solar/ha_model/charger.py`
+### Why this is the right fix location
 
-**Location:** Line 3430-3431, where `realized_charge_target = target_charge` is set for `force_charge is True`.
-
-After the enrichment in Fix 1, `target_charge` may have been updated to `person_min_target_charge`. The existing code `realized_charge_target = target_charge` will naturally pick up the updated value — no additional change needed here, but verify the interaction.
+The bug is a **data availability problem**, not a constraint creation problem. The person constraint creation logic at charger.py:3571+ is correct — it just never gets valid input because `get_adapt_target_percent_soc_to_reach_range_km` unnecessarily requires `current_soc` to compute the trip's `needed_soc`. Fixing at the data source means all consumers (including potential future ones) benefit.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Enrich force_constraint with person data (AC: 1, 2, 3, 4)
-  - [ ] 1.1: After force_constraint creation (line 3381) and before the push (line 3383), add a block: if `person is not None and next_usage_time is not None and person_min_target_charge is not None`, set `force_constraint.end_of_constraint = next_usage_time` and `force_constraint.load_info = {"person": person.name}`
-  - [ ] 1.2: In the same block, if `user_target is None`: update `target_charge = person_min_target_charge`, `force_constraint.target_value = target_charge`, and call `await self.car.set_next_charge_target_percent(target_charge)`
-  - [ ] 1.3: If `user_target is not None` (explicit target), do NOT override `target_charge` — keep the user's explicit target but still set `end_of_constraint` and `load_info`
+- [ ] Task 1: Restructure `get_adapt_target_percent_soc_to_reach_range_km` for stale SOC (AC: 1, 2, 3, 4)
+  - [ ] 1.1: Move `km_per_percent` and `target_range_km` validation to early exit (both required for any computation)
+  - [ ] 1.2: Compute `needed_soc` (lines 1414-1428) before the coverage check — this only needs `km_per_percent` and `target_range_km`
+  - [ ] 1.3: Add stale branch: if `current_soc is None or current_range_km is None`, return `(False, current_soc, needed_soc, None)` — can't determine coverage, assume not covered
+  - [ ] 1.4: Existing coverage check (lines 1430-1435) remains for the normal (non-stale) path
 
-- [ ] Task 2: Add regression test — force charge + forecasted person shows departure time (AC: 1, 2)
-  - [ ] 2.1: In `tests/ha_tests/test_charger.py` or new test file: set up a charger with a car, a forecasted person with `next_usage_time` and `person_min_target_charge`, force the charge
-  - [ ] 2.2: Assert the active constraint has `end_of_constraint == next_usage_time` (not `DATETIME_MAX_UTC`)
-  - [ ] 2.3: Assert `car.get_car_target_SOC() == person_min_target_charge` (not 100%)
-  - [ ] 2.4: Assert `car.get_car_charge_time_readable_name()` returns the formatted departure time (not `--:--`)
+- [ ] Task 2: Add regression test — stale car + person creates constraint with departure time (AC: 1, 2)
+  - [ ] 2.1: Set up a car in stale-percent mode (SOC returns None) with a forecasted person
+  - [ ] 2.2: Verify `get_adapt_target_percent_soc_to_reach_range_km` returns `(False, None, needed_soc, None)` — not all Nones
+  - [ ] 2.3: Verify person constraint is created with `end_of_constraint == next_usage_time`
+  - [ ] 2.4: Verify `car.get_car_target_SOC()` returns computed minimum, not 100%
 
-- [ ] Task 3: Add regression test — force charge + forecasted person + explicit user target (AC: 3)
-  - [ ] 3.1: Same setup as Task 2 but with `user_target` explicitly set (e.g., 80%)
-  - [ ] 3.2: Assert `force_constraint.target_value == 80` (user target, not person minimum)
-  - [ ] 3.3: Assert `force_constraint.end_of_constraint == next_usage_time` (departure still shown)
+- [ ] Task 3: Add regression test — stale car without km_per_percent (AC: 3)
+  - [ ] 3.1: Set up stale car with no efficiency data (km_per_percent returns None)
+  - [ ] 3.2: Verify `get_adapt_target_percent_soc_to_reach_range_km` returns `(None, None, None, None)` — graceful fallback
+  - [ ] 3.3: Verify no person constraint created (person nullified at charger.py:3559)
 
-- [ ] Task 4: Add regression test — force charge WITHOUT person (AC: 4)
-  - [ ] 4.1: Set up a charger with a car but no forecasted person, force the charge
-  - [ ] 4.2: Assert constraint has `end_of_constraint == DATETIME_MAX_UTC` (unchanged behavior)
-  - [ ] 4.3: Assert `car.get_car_target_SOC() == car_default_charge` (100%)
+- [ ] Task 4: Add regression test — non-stale car behavior unchanged (AC: 4, 5)
+  - [ ] 4.1: Verify `get_adapt_target_percent_soc_to_reach_range_km` with valid SOC returns same results as before
+  - [ ] 4.2: Verify person constraint path unchanged for normal (non-stale) scenario
 
-- [ ] Task 5: Verify existing tests pass — no regression (AC: 5, 6)
-  - [ ] 5.1: All existing charger and car tests pass
-  - [ ] 5.2: The re-entry path for person-originated ASAP constraints (line 3398-3401) still works
+- [ ] Task 5: Verify existing tests pass — no regression (AC: 6)
+  - [ ] 5.1: All existing charger, car, and constraint tests pass
+  - [ ] 5.2: `is_car_charged` with `current_charge=None` returns `(False, None)` — already correct (charger.py:4780-4782)
 
 - [ ] Task 6: Run full quality gate (AC: 7)
   - [ ] 6.1: `python scripts/qs/quality_gate.py` — all gates green, 100% coverage
@@ -162,43 +139,59 @@ After the enrichment in Fix 1, `target_charge` may have been updated to `person_
 
 | File | Lines | Role |
 |------|-------|------|
-| `custom_components/quiet_solar/ha_model/charger.py` | 3369-3381 | `force_constraint` creation — **fix goes here** |
-| `custom_components/quiet_solar/ha_model/charger.py` | 3571 | Guard that blocks person logic when force exists (no change needed, fix is upstream) |
-| `custom_components/quiet_solar/ha_model/charger.py` | 3640-3654 | Person constraint creation (existing path, verify no regression) |
-| `custom_components/quiet_solar/ha_model/charger.py` | 3389-3409 | Re-entry path for active ASAP constraints with person info |
-| `custom_components/quiet_solar/ha_model/car.py` | 526-554 | `get_best_person_next_need()` — person data source |
-| `custom_components/quiet_solar/ha_model/car.py` | 954-967 | `get_car_charge_time_readable_name()` — finish time display |
-| `custom_components/quiet_solar/ha_model/car.py` | 2080-2107 | `set_next_charge_target_percent()` — SOC target setter |
-| `custom_components/quiet_solar/ha_model/car.py` | 2112-2115 | `get_car_target_SOC()` — defaults to `car_default_charge` |
-| `custom_components/quiet_solar/home_model/constraints.py` | 40-43 | `get_readable_date_string()` — returns `--:--` for `DATETIME_MAX_UTC` |
-| `custom_components/quiet_solar/home_model/constraints.py` | 118-121 | Default `end_of_constraint = DATETIME_MAX_UTC` |
-| `tests/ha_tests/test_charger.py` | all | Charger tests — new regression tests go here |
-| `tests/ha_tests/test_car.py` | all | Car tests — verify no regression |
+| `custom_components/quiet_solar/ha_model/car.py` | 1395-1435 | `get_adapt_target_percent_soc_to_reach_range_km()` — **fix goes here** |
+| `custom_components/quiet_solar/ha_model/car.py` | 1283-1284 | `get_car_charge_percent()` returns None in stale mode |
+| `custom_components/quiet_solar/ha_model/car.py` | 1359-1393 | `get_computed_range_efficiency_km_per_percent()` — has fallbacks beyond SOC |
+| `custom_components/quiet_solar/ha_model/car.py` | 526-554 | `get_best_person_next_need()` — returns person data (departure time from forecast) |
+| `custom_components/quiet_solar/ha_model/car.py` | 793-809 | `flag_stale_for_manual_charger()` — triggers stale mode |
+| `custom_components/quiet_solar/ha_model/charger.py` | 3557-3566 | Person filtering — nullifies person when `person_min_target_charge is None` |
+| `custom_components/quiet_solar/ha_model/charger.py` | 3571-3662 | Person constraint creation block — works correctly once it gets valid input |
+| `custom_components/quiet_solar/ha_model/charger.py` | 4780-4782 | `is_car_charged(current_charge=None)` returns `(False, None)` — already correct |
+| `tests/ha_tests/test_car.py` | all | Car tests — new regression tests |
 
 ### Architecture Constraints
 
-- **Two-layer boundary**: `home_model/` NEVER imports `homeassistant.*`. Fix stays in `ha_model/charger.py`.
+- **Two-layer boundary**: `home_model/` NEVER imports `homeassistant.*`. Fix stays in `ha_model/car.py`.
 - Do NOT modify constraint class internals, `get_readable_date_string()`, or `get_car_target_SOC()` default logic.
 - Lazy logging: `_LOGGER.debug("msg %s", var)` — no f-strings in log calls.
 
 ### Risk Notes
 
-- The force_constraint type stays `MANDATORY_AS_FAST_AS_POSSIBLE` — only display/planning metadata changes, not charging urgency.
-- `end_of_constraint` on ASAP constraints serves as degraded fallback deadline: if solver can't maintain max power, it plans toward this time.
-- `load_info={"person": ...}` must be set for the re-entry path (line 3398-3401) to recognize the constraint on subsequent cycles and preserve the person-specific target.
-- If `person_min_target_charge` is very low (e.g., 15% for a short trip), the force charge will target that low SOC. This is intentional — the user can set an explicit target to override.
+- `km_per_percent` has three fallback sources (car.py:1359-1393): live SOC+range sensors → efficiency segment history → `_km_per_kwh` from config. In stale mode, fallback #1 fails but #2/#3 are available if the car has any driving history or a configured efficiency.
+- If `km_per_percent` is also None (brand new car, no config), the method correctly returns all Nones — no person constraint, same as today.
+- In stale mode, `is_person_covered=False` is the safe assumption: we can't verify coverage, so we always create the constraint. If the car IS already charged enough, the solver handles it gracefully (constraint met → no action).
+- The `is_car_charged` call at charger.py:3593 with `current_charge=None` returns `(False, None)` — confirmed safe (charger.py:4780-4782). The person constraint will be created even though we can't verify current charge level.
 
-### Data Flow Summary
+### Data Flow Summary (stale mode — before fix)
 
 ```
 check_load_activity_and_constraints()
-├─ get_best_person_next_need(time) → person, next_usage_time, person_min_target_charge
-├─ force_charge is True?
-│  ├─ YES → create force_constraint
-│  │  ├─ [FIX] if person data available: enrich with end_of_constraint + load_info + target
-│  │  └─ push_live_constraint()
-│  └─ NO → user_timed_constraint? → person constraint? → agenda constraint?
-└─ get_car_charge_time_readable_name() → reads active constraint's end_of_constraint
+├─ get_best_person_next_need(time)
+│  ├─ person.update_person_forecast(time) → next_usage_time=07:29, p_mileage=94km ✓
+│  └─ get_adapt_target_percent_soc_to_reach_range_km(94km, time)
+│     ├─ current_soc = get_car_charge_percent(time) → None (stale!)
+│     └─ returns (None, None, None, None) ← BUG: bails entirely
+├─ charger.py:3559 — person_min_target_charge is None → person = None
+├─ charger.py:3571 — person is None → no person constraint
+└─ charger.py:3678 — filler at 100%, no end_of_constraint → --:--
+```
+
+### Data Flow Summary (stale mode — after fix)
+
+```
+check_load_activity_and_constraints()
+├─ get_best_person_next_need(time)
+│  ├─ person.update_person_forecast(time) → next_usage_time=07:29, p_mileage=94km ✓
+│  └─ get_adapt_target_percent_soc_to_reach_range_km(94km, time)
+│     ├─ current_soc = None (stale), km_per_percent = from history/config ✓
+│     ├─ needed_soc = computed from km_per_percent + trip data ✓
+│     └─ returns (False, None, needed_soc, None) ← FIX: safe assumption
+├─ charger.py:3559 — is_person_covered=False, person_min_target_charge=needed_soc → person survives ✓
+├─ charger.py:3571 — person valid → enters person constraint block
+├─ charger.py:3593 — is_car_charged(None) = False → proceed
+├─ charger.py:3640-3654 — person constraint created with end_of_constraint=07:29
+├─ charger.py:3638 — set_next_charge_target_percent(needed_soc)
+└─ card shows "07:29" finish, target SOC = needed_soc ✓
 ```
 
 ### Test Infrastructure
