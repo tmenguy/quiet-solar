@@ -2345,6 +2345,8 @@ class QSHome(QSDynamicGroup):
                         score = -2.0
                     elif is_covered is True:
                         score = -3.0
+                    elif diff_energy is None:
+                        score = -2.0
                     else:
                         E_max = max(E_max, diff_energy)
                         score = diff_energy

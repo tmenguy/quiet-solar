@@ -514,6 +514,100 @@ async def test_adapt_target_soc_none_target(
 
 
 # ===========================================================================
+# get_adapt_target_percent_soc_to_reach_range_km – stale SOC (GH-103)
+# ===========================================================================
+
+
+async def test_adapt_target_soc_stale_soc_computes_needed(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Stale car (SOC=None) with valid km_per_percent still computes needed_soc."""
+    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="stale_soc")
+    time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
+
+    # Stale mode: SOC and range are unknown
+    car.get_car_charge_percent = MagicMock(return_value=None)
+    car.get_estimated_range_km = MagicMock(return_value=None)
+    # But km_per_percent IS available (from history/config fallback)
+    car.get_computed_range_efficiency_km_per_percent = MagicMock(return_value=4.0)
+
+    is_covered, current_soc, needed_soc, diff_energy = (
+        car.get_adapt_target_percent_soc_to_reach_range_km(94.0, time)
+    )
+
+    # Can't verify coverage without current SOC → assume not covered
+    assert is_covered is False
+    assert current_soc is None
+    # needed_soc computed from trip data: max((94+40)/4, min_ok + 94/4)
+    assert needed_soc is not None
+    assert needed_soc > 0
+    # diff_energy can't be computed without current_soc
+    assert diff_energy is None
+
+
+async def test_adapt_target_soc_stale_soc_no_efficiency_data(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Stale car with no efficiency data at all returns all Nones gracefully."""
+    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="stale_no_eff")
+    time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
+
+    car.get_car_charge_percent = MagicMock(return_value=None)
+    car.get_estimated_range_km = MagicMock(return_value=None)
+    car.get_computed_range_efficiency_km_per_percent = MagicMock(return_value=None)
+
+    result = car.get_adapt_target_percent_soc_to_reach_range_km(94.0, time)
+    assert result == (None, None, None, None)
+
+
+async def test_adapt_target_soc_stale_range_only(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """SOC available but range is None — stale branch returns needed_soc."""
+    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="stale_range")
+    time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
+
+    car.get_car_charge_percent = MagicMock(return_value=50.0)
+    car.get_estimated_range_km = MagicMock(return_value=None)
+    car.get_computed_range_efficiency_km_per_percent = MagicMock(return_value=4.0)
+
+    is_covered, current_soc, needed_soc, diff_energy = (
+        car.get_adapt_target_percent_soc_to_reach_range_km(94.0, time)
+    )
+
+    assert is_covered is False
+    assert current_soc == 50.0
+    assert needed_soc is not None
+    assert diff_energy is None
+
+
+async def test_adapt_target_soc_non_stale_unchanged(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Non-stale car with all data returns same results as before (no regression)."""
+    car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="non_stale")
+    time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
+
+    car.get_car_charge_percent = MagicMock(return_value=80.0)
+    car.get_estimated_range_km = MagicMock(return_value=320.0)
+    car.get_computed_range_efficiency_km_per_percent = MagicMock(return_value=4.0)
+
+    is_covered, current_soc, needed_soc, diff_energy = (
+        car.get_adapt_target_percent_soc_to_reach_range_km(94.0, time)
+    )
+
+    # 80% SOC with 320km range covers (94+40)/4 = 33.5% needed
+    assert is_covered is True
+    assert current_soc == 80.0
+    assert needed_soc is not None
+    assert diff_energy is not None
+
+
+# ===========================================================================
 # find_path / _get_delta_from_graph
 # ===========================================================================
 

@@ -87,34 +87,34 @@
   <state sensor.qs_test_home_home_device_information_storage=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=home Test Home Device Information Storage @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_home_available_power-state]
-  <state sensor.qs_test_home_home_home_available_power=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_home_extra_available_power @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_home_available_power=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_home_extra_available_power @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_home_consumption-state]
-  <state sensor.qs_test_home_home_home_consumption=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_home_consumption_power @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_home_consumption=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_home_consumption_power @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_home_non_controlled_consumption-state]
-  <state sensor.qs_test_home_home_home_non_controlled_consumption=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_home_non_controlled_consumption_power @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_home_non_controlled_consumption=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_home_non_controlled_consumption_power @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_load_current_command-state]
   <state sensor.qs_test_home_home_load_current_command=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=home Test Home Load Current Command @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_15mn-state]
-  <state sensor.qs_test_home_home_qs_no_control_forecast_15mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_15mn @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_qs_no_control_forecast_15mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_no_control_forecast_15mn @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_1h-state]
-  <state sensor.qs_test_home_home_qs_no_control_forecast_1h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_1h @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_qs_no_control_forecast_1h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_no_control_forecast_1h @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_30mn-state]
-  <state sensor.qs_test_home_home_qs_no_control_forecast_30mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_30mn @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_qs_no_control_forecast_30mn=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_no_control_forecast_30mn @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_3h-state]
-  <state sensor.qs_test_home_home_qs_no_control_forecast_3h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_3h @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_qs_no_control_forecast_3h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_no_control_forecast_3h @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_6h-state]
-  <state sensor.qs_test_home_home_qs_no_control_forecast_6h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_6h @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_qs_no_control_forecast_6h=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_no_control_forecast_6h @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_now-state]
-  <state sensor.qs_test_home_home_qs_no_control_forecast_now=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=qs_no_control_forecast_now @ 2025-01-01T12:00:00-08:00>
+  <state sensor.qs_test_home_home_qs_no_control_forecast_now=unknown; state_class=measurement, unit_of_measurement=W, attribution=Data provided by QuietSolarAbstraction, device_class=power, friendly_name=home Test Home qs_no_control_forecast_now @ 2025-01-01T12:00:00-08:00>
 # ---
 # name: test_person_sensors[sensor.qs_test_person_person_device_information_storage-state]
   <state sensor.qs_test_person_person_device_information_storage=unknown; attribution=Data provided by QuietSolarAbstraction, friendly_name=person Test Person Device Information Storage @ 2025-01-01T12:00:00-08:00>
