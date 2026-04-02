@@ -7,11 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
-from homeassistant.const import STATE_UNAVAILABLE
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import DOMAIN
 from custom_components.quiet_solar.sensor import (
     QSBaseSensor,
+    QSBaseSensorForecastRestore,
     QSBaseSensorRestore,
     QSLoadSensorCurrentConstraints,
     async_setup_entry,
@@ -473,3 +474,87 @@ def test_solar_sensors_use_restore_class():
     assert isinstance(forecast_age[0], QSBaseSensorRestore), "Forecast age sensor must use QSBaseSensorRestore"
     assert isinstance(scores[0], QSBaseSensorRestore), "Score sensor must use QSBaseSensorRestore"
     assert isinstance(active_provider[0], QSBaseSensorRestore), "Active provider sensor must use QSBaseSensorRestore"
+
+
+# --- Tests for QSBaseSensorRestore filtering unavailable/unknown on restore ---
+
+
+def _make_restore_sensor(cls=QSBaseSensorRestore):
+    """Create a minimal sensor instance for restore testing."""
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+
+    mock_device = MagicMock()
+    mock_device.device_id = "test_restore"
+    mock_device.device_type = "home"
+    mock_device.name = "Test Restore"
+    mock_device.qs_enable_device = True
+
+    description = QSSensorEntityDescription(
+        key="test_restore_key",
+        translation_key="test",
+    )
+
+    return cls(mock_handler, mock_device, description)
+
+
+async def _restore_with_value(native_value, cls=QSBaseSensorRestore):
+    """Helper: restore a sensor with given native_value, return the sensor."""
+    from custom_components.quiet_solar.sensor import QSExtraStoredData
+
+    sensor = _make_restore_sensor(cls)
+    stored_data = QSExtraStoredData(
+        native_value=native_value,
+        native_attr={"some_attr": "val"},
+    )
+
+    with patch.object(sensor, "async_get_last_extra_data", new_callable=AsyncMock) as mock_extra:
+        mock_extra.return_value = MagicMock()
+        mock_extra.return_value.as_dict.return_value = stored_data.as_dict()
+        await sensor.async_added_to_hass()
+
+    return sensor
+
+
+@pytest.mark.asyncio
+async def test_restore_sensor_unavailable_becomes_none():
+    """Restoring 'unavailable' native_value must result in None, not the string."""
+    sensor = await _restore_with_value(STATE_UNAVAILABLE)
+    assert sensor._attr_native_value is None
+
+
+@pytest.mark.asyncio
+async def test_restore_sensor_unknown_becomes_none():
+    """Restoring 'unknown' native_value must result in None, not the string."""
+    sensor = await _restore_with_value(STATE_UNKNOWN)
+    assert sensor._attr_native_value is None
+
+
+@pytest.mark.asyncio
+async def test_restore_sensor_normal_value_unchanged():
+    """Restoring a normal numeric value passes through unchanged."""
+    sensor = await _restore_with_value("42.5")
+    assert sensor._attr_native_value == "42.5"
+
+
+@pytest.mark.asyncio
+async def test_restore_sensor_none_value_unchanged():
+    """Restoring None native_value stays None."""
+    sensor = await _restore_with_value(None)
+    assert sensor._attr_native_value is None
+
+
+@pytest.mark.asyncio
+async def test_restore_sensor_extra_attrs_preserved():
+    """Extra state attributes are always restored regardless of native_value filtering."""
+    sensor = await _restore_with_value(STATE_UNAVAILABLE)
+    assert sensor._attr_extra_state_attributes == {"some_attr": "val"}
+
+
+@pytest.mark.asyncio
+async def test_forecast_restore_sensor_filters_unavailable():
+    """QSBaseSensorForecastRestore inherits the unavailable filtering via super()."""
+    sensor = await _restore_with_value(STATE_UNAVAILABLE, cls=QSBaseSensorForecastRestore)
+    assert sensor._attr_native_value is None
