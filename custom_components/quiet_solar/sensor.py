@@ -379,7 +379,9 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         value_fn=lambda device, key: device.get_forecast_age_hours(),
         qs_is_none_unavailable=True,
     )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=forecast_age_sensor))
+    entities.append(
+        QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=forecast_age_sensor)
+    )
 
     # Per-provider forecast accuracy score sensor (MAE vs actuals)
     for provider_name, provider in device.solar_forecast_providers.items():
@@ -394,7 +396,7 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
             value_fn=lambda device, key, prov=provider: prov.score,
             qs_is_none_unavailable=True,
         )
-        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=score_sensor))
+        entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=score_sensor))
 
     # Active solar provider sensor
     active_provider_sensor = QSSensorEntityDescription(
@@ -404,7 +406,9 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         value_fn=lambda device, key: device.active_provider_name,
         qs_is_none_unavailable=True,
     )
-    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=active_provider_sensor))
+    entities.append(
+        QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=active_provider_sensor)
+    )
 
     for name in QSForecastSolarSensors:
         home_forecast_power = QSSensorEntityDescription(
