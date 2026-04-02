@@ -18,6 +18,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
     EntityCategory,
     UnitOfEnergy,
     UnitOfLength,
@@ -614,7 +615,8 @@ class QSBaseSensorRestore(QSBaseSensor, RestoreEntity):
         if not last_sensor_state:
             return
 
-        self._attr_native_value = last_sensor_state.native_value
+        if last_sensor_state.native_value not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            self._attr_native_value = last_sensor_state.native_value
         self._attr_extra_state_attributes = last_sensor_state.native_attr
 
     # @property

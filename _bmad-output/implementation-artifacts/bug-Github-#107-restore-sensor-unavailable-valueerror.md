@@ -3,7 +3,7 @@
 issue: 107
 branch: "QS_107"
 
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 
@@ -55,16 +55,16 @@ No check for `STATE_UNAVAILABLE` or `STATE_UNKNOWN` — the raw string is assign
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Filter unavailable/unknown in `async_added_to_hass` (AC: #1, #2, #3)
-  - [ ] 1.1 Add `STATE_UNKNOWN` to the imports from `homeassistant.const` in `sensor.py` (line 18-26). `STATE_UNAVAILABLE` is already imported.
-  - [ ] 1.2 In `QSBaseSensorRestore.async_added_to_hass()` (line 617), add a guard: if `last_sensor_state.native_value` is in `(STATE_UNAVAILABLE, STATE_UNKNOWN)`, set `self._attr_native_value = None` instead.
-- [ ] Task 2: Add tests (AC: #4, #5)
-  - [ ] 2.1 Test: restoring `"unavailable"` native_value results in `None`
-  - [ ] 2.2 Test: restoring `"unknown"` native_value results in `None`
-  - [ ] 2.3 Test: restoring a normal value (e.g., `"42.5"`) works unchanged
-  - [ ] 2.4 Test: restoring `None` works unchanged
-  - [ ] 2.5 Test: `QSBaseSensorForecastRestore` also filters (inherits via super)
-- [ ] Task 3: Run quality gates and verify
+- [x] Task 1: Filter unavailable/unknown in `async_added_to_hass` (AC: #1, #2, #3)
+  - [x] 1.1 Add `STATE_UNKNOWN` to the imports from `homeassistant.const` in `sensor.py` (line 18-26). `STATE_UNAVAILABLE` is already imported.
+  - [x] 1.2 In `QSBaseSensorRestore.async_added_to_hass()` (line 617), add a guard: if `last_sensor_state.native_value` is in `(STATE_UNAVAILABLE, STATE_UNKNOWN)`, set `self._attr_native_value = None` instead.
+- [x] Task 2: Add tests (AC: #4, #5)
+  - [x] 2.1 Test: restoring `"unavailable"` native_value results in `None`
+  - [x] 2.2 Test: restoring `"unknown"` native_value results in `None`
+  - [x] 2.3 Test: restoring a normal value (e.g., `"42.5"`) works unchanged
+  - [x] 2.4 Test: restoring `None` works unchanged
+  - [x] 2.5 Test: `QSBaseSensorForecastRestore` also filters (inherits via super)
+- [x] Task 3: Run quality gates and verify
 
 ## Dev Notes
 
@@ -144,6 +144,9 @@ Claude Opus 4.6
 - Story created from GitHub issue #107 analysis + codebase exploration
 - Root cause identified: no filtering in async_added_to_hass restore path
 - Fix is minimal (2-line change + import), low regression risk
+- Implementation complete: added STATE_UNKNOWN import + guard clause in async_added_to_hass
+- 6 new tests added covering all restore paths (unavailable, unknown, normal, None, attrs, forecast subclass)
+- All quality gates pass: 100% coverage, ruff, mypy, translations
 
 ### File List
 
