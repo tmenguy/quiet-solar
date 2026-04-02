@@ -1405,9 +1405,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
             current_soc = self.get_car_charge_percent(time)
             km_per_percent = self.get_computed_range_efficiency_km_per_percent(time)
 
-        if km_per_percent is None or current_soc is None or current_range_km is None or target_range_km is None:
+        if km_per_percent is None or target_range_km is None:
             _LOGGER.warning(
-                f"get_adapt_target_percent_soc_to_reach_range_km: {self.name} error: km_per_percent {km_per_percent}, current_soc {current_soc}, current_range_km {current_range_km}, target_range_km {target_range_km}"
+                "get_adapt_target_percent_soc_to_reach_range_km: %s error: km_per_percent %s, current_soc %s, current_range_km %s, target_range_km %s",
+                self.name,
+                km_per_percent,
+                current_soc,
+                current_range_km,
+                target_range_km,
             )
             return None, None, None, None
 
@@ -1426,6 +1431,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         else:
             needed_soc = needed_soc_b
             target_range_km = target_range_km_b
+
+        # Stale mode: SOC or range unknown — can't determine coverage
+        if current_soc is None or current_range_km is None:
+            return False, current_soc, needed_soc, None
 
         diff_energy = (abs(needed_soc - current_soc) * self.car_battery_capacity) / 100.0
 
