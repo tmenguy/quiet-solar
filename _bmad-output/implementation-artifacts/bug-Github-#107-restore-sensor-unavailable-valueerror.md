@@ -16,7 +16,7 @@ so that numeric sensors don't crash with ValueError when HA restores a non-numer
 At boot time, solar forecast sensors using `QSBaseSensorRestore` fail with `ValueError` because the restored state is the string `"unavailable"` instead of `None`/numeric.
 
 **Traceback:**
-```
+```text
 ValueError: could not convert string to float: 'unavailable'
 ValueError: Sensor sensor.qs_peyrebelle_home_qs_no_control_forecast_now has device class 'power',
 state class 'measurement' unit 'W' and suggested precision 'None' thus indicating it has a numeric
