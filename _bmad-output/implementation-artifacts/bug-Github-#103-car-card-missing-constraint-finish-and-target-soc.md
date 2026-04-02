@@ -164,7 +164,7 @@ The bug is a **data availability problem**, not a constraint creation problem. T
 
 ### Data Flow Summary (stale mode — before fix)
 
-```
+```text
 check_load_activity_and_constraints()
 ├─ get_best_person_next_need(time)
 │  ├─ person.update_person_forecast(time) → next_usage_time=07:29, p_mileage=94km ✓
@@ -178,7 +178,7 @@ check_load_activity_and_constraints()
 
 ### Data Flow Summary (stale mode — after fix)
 
-```
+```text
 check_load_activity_and_constraints()
 ├─ get_best_person_next_need(time)
 │  ├─ person.update_person_forecast(time) → next_usage_time=07:29, p_mileage=94km ✓
