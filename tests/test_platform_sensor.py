@@ -12,12 +12,14 @@ from homeassistant.const import STATE_UNAVAILABLE
 from custom_components.quiet_solar.const import DOMAIN
 from custom_components.quiet_solar.sensor import (
     QSBaseSensor,
+    QSBaseSensorRestore,
     QSLoadSensorCurrentConstraints,
     async_setup_entry,
     async_unload_entry,
     create_ha_sensor_for_Load,
     create_ha_sensor_for_QSCar,
     create_ha_sensor_for_QSHome,
+    create_ha_sensor_for_QSSolar,
 )
 from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
@@ -434,3 +436,40 @@ def test_qs_load_sensor_current_constraints_update_with_last_completed():
     stored = sensor._attr_extra_state_attributes[HA_CONSTRAINT_SENSOR_LAST_EXECUTED_CONSTRAINT]
     assert stored == {"type": "mandatory", "value": 42}
     mock_completed.to_dict.assert_called_once()
+
+
+def test_solar_sensors_use_restore_class():
+    """Test that forecast age, score, and active provider sensors use QSBaseSensorRestore."""
+    from custom_components.quiet_solar.const import (
+        SENSOR_SOLAR_ACTIVE_PROVIDER,
+        SENSOR_SOLAR_FORECAST_AGE,
+        SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.score = 100.0
+
+    mock_device = create_mock_device("solar", name="Test Solar")
+    mock_device.data_handler = MagicMock()
+    mock_device.solar_forecast_providers = {"TestProvider": mock_provider}
+    mock_device.get_forecast_age_hours = MagicMock(return_value=1.5)
+    mock_device.active_provider_name = "TestProvider"
+    mock_device.solar_forecast_sensor_values = {}
+    mock_device.solar_forecast_sensor_values_probers = {}
+    mock_device.solar_forecast_sensor_values_per_provider = {}
+    mock_device.solar_forecast_sensor_values_per_provider_probers = {}
+
+    entities = create_ha_sensor_for_QSSolar(mock_device)
+
+    # Find the three sensors by key
+    forecast_age = [e for e in entities if e.entity_description.key == SENSOR_SOLAR_FORECAST_AGE]
+    scores = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_SCORE_PREFIX)]
+    active_provider = [e for e in entities if e.entity_description.key == SENSOR_SOLAR_ACTIVE_PROVIDER]
+
+    assert len(forecast_age) == 1
+    assert len(scores) == 1
+    assert len(active_provider) == 1
+
+    assert isinstance(forecast_age[0], QSBaseSensorRestore), "Forecast age sensor must use QSBaseSensorRestore"
+    assert isinstance(scores[0], QSBaseSensorRestore), "Score sensor must use QSBaseSensorRestore"
+    assert isinstance(active_provider[0], QSBaseSensorRestore), "Active provider sensor must use QSBaseSensorRestore"

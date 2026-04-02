@@ -1,6 +1,6 @@
 # Bug Fix: Solar forecast score sensors unknown after reboot
 
-Status: ready
+Status: done
 issue: 104
 branch: "QS_104"
 
@@ -83,9 +83,9 @@ entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=dev
 ## Tasks
 
 - [x] 1. Analyze root cause and confirm affected sensors
-- [ ] 2. Change `QSBaseSensor` → `QSBaseSensorRestore` for the three sensor instantiations in `create_ha_sensor_for_QSSolar()`
-- [ ] 3. Add tests verifying that the three sensors are instances of `QSBaseSensorRestore`
-- [ ] 4. Run quality gates (`python scripts/qs/quality_gate.py`)
+- [x] 2. Change `QSBaseSensor` → `QSBaseSensorRestore` for the three sensor instantiations in `create_ha_sensor_for_QSSolar()`
+- [x] 3. Add tests verifying that the three sensors are instances of `QSBaseSensorRestore`
+- [x] 4. Run quality gates (`python scripts/qs/quality_gate.py`)
 
 ## Dev Notes
 
