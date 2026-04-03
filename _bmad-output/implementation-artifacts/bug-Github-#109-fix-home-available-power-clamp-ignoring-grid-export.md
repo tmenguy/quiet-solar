@@ -3,7 +3,7 @@
 issue: 109
 branch: "QS_109"
 
-Status: dev-complete
+Status: review-complete
 
 ## Story
 
@@ -193,6 +193,9 @@ Claude Opus 4.6
 - Secondary clamp at line 1701 verified — `min(max_available_home_power, solar_max)` still correct, caps redirectable power at inverter max
 - Updated existing test_available_power_clamped assertion (210→250) to reflect correct post-fix behavior
 - 5 new tests added, all quality gates pass, 100% coverage maintained
+- Review: DC-coupled battery charge modeled as DC bus physics — `dc_battery_redirectable = min(charge, inverter_headroom)` since charge beyond headroom is DC overflow
+- Review: AC-coupled branch now has symmetric secondary cap `min(max_available, solar_max + max_battery_discharge)`
+- Review: no-export regression test rewritten to use DC battery + import to actually exercise clamp block (CodeRabbit finding)
 
 ### File List
 
