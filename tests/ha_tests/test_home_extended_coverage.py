@@ -3131,10 +3131,27 @@ class TestNonControlledConsumptionBranches:
         hass: HomeAssistant,
         home_config_entry: ConfigEntry,
     ):
-        """Regression guard: when importing (grid <= 0), clamp behavior unchanged."""
-        from .const import MOCK_SOLAR_CONFIG
+        """Regression guard: when importing, grid export does not inflate clamp.
+
+        Uses DC-coupled battery charging to make home_available_power > 0
+        while grid_consumption <= 0, so the clamp block is actually exercised
+        with grid_export_redirectable = 0.
+        """
+        from .const import MOCK_BATTERY_CONFIG, MOCK_SOLAR_CONFIG
 
         home = await _get_home(hass, home_config_entry)
+
+        bat_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=MOCK_BATTERY_CONFIG,
+            entry_id="bat_no_export",
+            title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
+            unique_id="quiet_solar_bat_no_export",
+        )
+        bat_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(bat_entry.entry_id)
+        await hass.async_block_till_done()
+
         sol_entry = MockConfigEntry(
             domain=DOMAIN,
             data=MOCK_SOLAR_CONFIG,
@@ -3146,18 +3163,24 @@ class TestNonControlledConsumptionBranches:
         await hass.config_entries.async_setup(sol_entry.entry_id)
         await hass.async_block_till_done()
 
-        home.physical_battery = None
         now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
 
-        # Importing from grid: grid_consumption = -200 (negative = importing)
-        home.solar_plant.solar_max_output_power_value = 1000.0
-        _inject_sensor_value(home.solar_plant, home.solar_plant.solar_inverter_active_power, now, 800.0)
-        _inject_sensor_value(home, home.grid_active_power_sensor, now, -200.0)
+        # DC-coupled battery charging 600W while importing 100W from grid
+        # home_available = grid(-100) + battery(600) = 500 → enters clamp block
+        # grid_export_redirectable = max(0, -100) = 0 → no grid export boost
+        home.solar_plant.solar_max_output_power_value = 3000.0
+        _inject_sensor_value(home.solar_plant, home.solar_plant.solar_inverter_active_power, now, 2800.0)
+        _inject_sensor_value(home.battery, home.battery.charge_discharge_sensor, now, 600.0)
+        _inject_sensor_value(home, home.grid_active_power_sensor, now, -100.0)
 
         result = home.home_non_controlled_consumption_sensor_state_getter("s", now)
         assert result is not None
-        # home_available_power = grid(-200) + battery(0) = -200 → clamp block skipped
-        assert home.home_available_power == pytest.approx(-200.0, rel=0.01)
+        # home_available_power = grid(-100) + battery(600) = 500
+        # DC-coupled: inverter_headroom = max(0, 3000 - 2800) = 200
+        # battery charging (600 > 0): dc_redirectable = min(600, 200) = 200
+        # max_available = 0 + 200 = 200, min(200, 3000) = 200
+        # 500 > 1.05 * 200 = 210 → clamp fires → max(0, 210) = 210
+        assert home.home_available_power == pytest.approx(210.0, rel=0.01)
 
     @pytest.mark.asyncio
     async def test_available_power_clamp_boundary_inverter_equals_solar_max(
