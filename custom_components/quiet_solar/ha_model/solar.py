@@ -298,6 +298,11 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         self._last_scoring_half_day = None
         self._run_scoring_cycle(time)
 
+        if self._provider_mode == SOLAR_PROVIDER_MODE_AUTO:
+            self.auto_select_best_provider()
+
+        self.solar_forecast_provider_handler = self.active_provider
+
     @staticmethod
     def _scoring_half_day(time: datetime) -> tuple:
         """Return (local_date, half_day_slot) — 0 for 00:00-11:59, 1 for 12:00-23:59."""
