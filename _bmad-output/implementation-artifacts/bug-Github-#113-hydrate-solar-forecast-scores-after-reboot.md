@@ -1,6 +1,6 @@
 # Bug Fix: Hydrate solar forecast scores and active provider from restored state after reboot
 
-Status: ready-for-dev
+Status: review
 issue: 113
 branch: "QS_113"
 
@@ -29,34 +29,34 @@ After HA reboot, two things go wrong:
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add `QSBaseSensorSolarScoreRestore` subclass (AC: #1, #3, #4)
-  - [ ] 1.1 Create class in `sensor.py` extending `QSBaseSensorRestore`
-  - [ ] 1.2 Accept `provider: QSSolarProvider` in constructor, store as `self._provider`
-  - [ ] 1.3 In `async_added_to_hass`: call `await super().async_added_to_hass()` first, then if `self._provider.score is None` and `self._attr_native_value` is set, parse with `float()` in try/except (`TypeError`, `ValueError`), assign `self._provider.score` on success
-- [ ] Task 2: Wire score sensor to new subclass (AC: #1)
-  - [ ] 2.1 In `create_ha_sensor_for_QSSolar` (line ~400), replace `QSBaseSensorRestore` with `QSBaseSensorSolarScoreRestore` for the per-provider forecast score loop, passing the `provider` reference
-- [ ] Task 3: Add `QSBaseSensorSolarActiveProviderRestore` subclass (AC: #2, #3, #4, #5)
-  - [ ] 3.1 Create class in `sensor.py` extending `QSBaseSensorRestore`
-  - [ ] 3.2 Accept `device: QSSolar` reference (already available via `self.device` from parent)
-  - [ ] 3.3 In `async_added_to_hass`: call `await super().async_added_to_hass()` first, then if `self._attr_native_value` is a non-empty string that exists as a key in `device.solar_forecast_providers`, call `device._set_active_provider(name)` (or add a thin public wrapper — see dev notes)
-  - [ ] 3.4 Skip if restored value is `unavailable`, `unknown`, empty, or not a configured provider name
-  - [ ] 3.5 Do NOT set `_provider_mode` — only update `_active_provider_name`
-- [ ] Task 4: Wire active provider sensor to new subclass (AC: #2)
-  - [ ] 4.1 In `create_ha_sensor_for_QSSolar` (line ~412), replace `QSBaseSensorRestore` with `QSBaseSensorSolarActiveProviderRestore` for the active provider sensor
-- [ ] Task 5: Tests for score hydration (AC: #1, #3, #4, #6)
-  - [ ] 5.1 Test: numeric restore value hydrates `provider.score` when `score is None`
-  - [ ] 5.2 Test: skip when `provider.score` is already set (don't clobber)
-  - [ ] 5.3 Test: skip when restored value is `unavailable` or `unknown`
-  - [ ] 5.4 Test: skip when restored value is non-numeric string
-  - [ ] 5.5 Test: skip when no last extra data available
-- [ ] Task 6: Tests for active provider hydration (AC: #2, #3, #4, #5, #6)
-  - [ ] 6.1 Test: valid provider name from restore updates `device.active_provider_name`
-  - [ ] 6.2 Test: unknown provider name (not in dict) is skipped — keeps default
-  - [ ] 6.3 Test: `unavailable` / `unknown` / empty string skipped
-  - [ ] 6.4 Test: does NOT change `_provider_mode`
-  - [ ] 6.5 Test: skip when no last extra data available
-- [ ] Task 7: Quality gate (AC: #6)
-  - [ ] 7.1 Run `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy + translations
+- [x] Task 1: Add `QSBaseSensorSolarScoreRestore` subclass (AC: #1, #3, #4)
+  - [x] 1.1 Create class in `sensor.py` extending `QSBaseSensorRestore`
+  - [x] 1.2 Accept `provider: QSSolarProvider` in constructor, store as `self._provider`
+  - [x] 1.3 In `async_added_to_hass`: call `await super().async_added_to_hass()` first, then if `self._provider.score is None` and `self._attr_native_value` is set, parse with `float()` in try/except (`TypeError`, `ValueError`), assign `self._provider.score` on success
+- [x] Task 2: Wire score sensor to new subclass (AC: #1)
+  - [x] 2.1 In `create_ha_sensor_for_QSSolar` (line ~400), replace `QSBaseSensorRestore` with `QSBaseSensorSolarScoreRestore` for the per-provider forecast score loop, passing the `provider` reference
+- [x] Task 3: Add `QSBaseSensorSolarActiveProviderRestore` subclass (AC: #2, #3, #4, #5)
+  - [x] 3.1 Create class in `sensor.py` extending `QSBaseSensorRestore`
+  - [x] 3.2 Accept `device: QSSolar` reference (already available via `self.device` from parent)
+  - [x] 3.3 In `async_added_to_hass`: call `await super().async_added_to_hass()` first, then if `self._attr_native_value` is a non-empty string that exists as a key in `device.solar_forecast_providers`, call `device._set_active_provider(name)` (or add a thin public wrapper — see dev notes)
+  - [x] 3.4 Skip if restored value is `unavailable`, `unknown`, empty, or not a configured provider name
+  - [x] 3.5 Do NOT set `_provider_mode` — only update `_active_provider_name`
+- [x] Task 4: Wire active provider sensor to new subclass (AC: #2)
+  - [x] 4.1 In `create_ha_sensor_for_QSSolar` (line ~412), replace `QSBaseSensorRestore` with `QSBaseSensorSolarActiveProviderRestore` for the active provider sensor
+- [x] Task 5: Tests for score hydration (AC: #1, #3, #4, #6)
+  - [x] 5.1 Test: numeric restore value hydrates `provider.score` when `score is None`
+  - [x] 5.2 Test: skip when `provider.score` is already set (don't clobber)
+  - [x] 5.3 Test: skip when restored value is `unavailable` or `unknown`
+  - [x] 5.4 Test: skip when restored value is non-numeric string
+  - [x] 5.5 Test: skip when no last extra data available
+- [x] Task 6: Tests for active provider hydration (AC: #2, #3, #4, #5, #6)
+  - [x] 6.1 Test: valid provider name from restore updates `device.active_provider_name`
+  - [x] 6.2 Test: unknown provider name (not in dict) is skipped — keeps default
+  - [x] 6.3 Test: `unavailable` / `unknown` / empty string skipped
+  - [x] 6.4 Test: does NOT change `_provider_mode`
+  - [x] 6.5 Test: skip when no last extra data available
+- [x] Task 7: Quality gate (AC: #6)
+  - [x] 7.1 Run `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy + translations
 
 ## Dev Notes
 
@@ -151,9 +151,18 @@ For the score tests, the `_make_restore_sensor` helper will need to accept the n
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
 
 ### Completion Notes List
+- Added `QSBaseSensorSolarScoreRestore` subclass that hydrates `provider.score` from persisted sensor value on startup (float parse with try/except guard)
+- Added `QSBaseSensorSolarActiveProviderRestore` subclass that hydrates active provider via `_set_active_provider()` from persisted sensor value on startup (validates name exists in providers dict)
+- Wired both subclasses in `create_ha_sensor_for_QSSolar` replacing `QSBaseSensorRestore`
+- Used Option A (direct `_set_active_provider` call) as recommended — no mode change, no new public API
+- 13 new tests covering all acceptance criteria: hydration, skip-safe (unavailable/unknown/non-numeric/invalid name/empty), no-clobber, no-mode-change, no-extra-data
+- All quality gates pass: pytest 100% coverage, ruff format/lint, mypy, translations
 
 ### File List
+- `custom_components/quiet_solar/sensor.py` (modified)
+- `tests/test_platform_sensor.py` (modified)

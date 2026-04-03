@@ -14,6 +14,8 @@ from custom_components.quiet_solar.sensor import (
     QSBaseSensor,
     QSBaseSensorForecastRestore,
     QSBaseSensorRestore,
+    QSBaseSensorSolarActiveProviderRestore,
+    QSBaseSensorSolarScoreRestore,
     QSLoadSensorCurrentConstraints,
     async_setup_entry,
     async_unload_entry,
@@ -472,8 +474,8 @@ def test_solar_sensors_use_restore_class():
     assert len(active_provider) == 1
 
     assert isinstance(forecast_age[0], QSBaseSensorRestore), "Forecast age sensor must use QSBaseSensorRestore"
-    assert isinstance(scores[0], QSBaseSensorRestore), "Score sensor must use QSBaseSensorRestore"
-    assert isinstance(active_provider[0], QSBaseSensorRestore), "Active provider sensor must use QSBaseSensorRestore"
+    assert isinstance(scores[0], QSBaseSensorSolarScoreRestore), "Score sensor must use QSBaseSensorSolarScoreRestore"
+    assert isinstance(active_provider[0], QSBaseSensorSolarActiveProviderRestore), "Active provider sensor must use QSBaseSensorSolarActiveProviderRestore"
 
 
 # --- Tests for QSBaseSensorRestore filtering unavailable/unknown on restore ---
@@ -558,3 +560,233 @@ async def test_forecast_restore_sensor_filters_unavailable():
     """QSBaseSensorForecastRestore inherits the unavailable filtering via super()."""
     sensor = await _restore_with_value(STATE_UNAVAILABLE, cls=QSBaseSensorForecastRestore)
     assert sensor._attr_native_value is None
+
+
+# --- Tests for QSBaseSensorSolarScoreRestore (Task 5) ---
+
+
+def _make_score_restore_sensor(provider=None):
+    """Create a score restore sensor for testing."""
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+
+    mock_device = MagicMock()
+    mock_device.device_id = "test_solar"
+    mock_device.device_type = "solar"
+    mock_device.name = "Test Solar"
+    mock_device.qs_enable_device = True
+
+    description = QSSensorEntityDescription(
+        key="test_score_key",
+        translation_key="test",
+    )
+
+    if provider is None:
+        provider = MagicMock()
+        provider.score = None
+
+    return QSBaseSensorSolarScoreRestore(
+        mock_handler, mock_device, description, provider=provider
+    )
+
+
+async def _restore_score_with_value(native_value, provider=None):
+    """Helper: restore a score sensor with given native_value."""
+    from custom_components.quiet_solar.sensor import QSExtraStoredData
+
+    sensor = _make_score_restore_sensor(provider=provider)
+    stored_data = QSExtraStoredData(
+        native_value=native_value,
+        native_attr={"some_attr": "val"},
+    )
+
+    with patch.object(sensor, "async_get_last_extra_data", new_callable=AsyncMock) as mock_extra:
+        mock_extra.return_value = MagicMock()
+        mock_extra.return_value.as_dict.return_value = stored_data.as_dict()
+        await sensor.async_added_to_hass()
+
+    return sensor
+
+
+@pytest.mark.asyncio
+async def test_score_restore_hydrates_provider_score():
+    """Numeric restore value hydrates provider.score when score is None."""
+    provider = MagicMock()
+    provider.score = None
+
+    sensor = await _restore_score_with_value("123.45", provider=provider)
+
+    assert provider.score == 123.45
+    assert sensor._attr_native_value == "123.45"
+
+
+@pytest.mark.asyncio
+async def test_score_restore_skips_when_score_already_set():
+    """Skip hydration when provider.score is already set."""
+    provider = MagicMock()
+    provider.score = 50.0
+
+    sensor = await _restore_score_with_value("999.0", provider=provider)
+
+    assert provider.score == 50.0
+
+
+@pytest.mark.asyncio
+async def test_score_restore_skips_unavailable():
+    """Skip hydration when restored value is unavailable."""
+    provider = MagicMock()
+    provider.score = None
+
+    await _restore_score_with_value(STATE_UNAVAILABLE, provider=provider)
+
+    assert provider.score is None
+
+
+@pytest.mark.asyncio
+async def test_score_restore_skips_unknown():
+    """Skip hydration when restored value is unknown."""
+    provider = MagicMock()
+    provider.score = None
+
+    await _restore_score_with_value(STATE_UNKNOWN, provider=provider)
+
+    assert provider.score is None
+
+
+@pytest.mark.asyncio
+async def test_score_restore_skips_non_numeric():
+    """Skip hydration when restored value is non-numeric string."""
+    provider = MagicMock()
+    provider.score = None
+
+    await _restore_score_with_value("not_a_number", provider=provider)
+
+    assert provider.score is None
+
+
+@pytest.mark.asyncio
+async def test_score_restore_skips_no_extra_data():
+    """Skip hydration when no last extra data available."""
+    provider = MagicMock()
+    provider.score = None
+
+    sensor = _make_score_restore_sensor(provider=provider)
+
+    with patch.object(sensor, "async_get_last_extra_data", new_callable=AsyncMock) as mock_extra:
+        mock_extra.return_value = None
+        await sensor.async_added_to_hass()
+
+    assert provider.score is None
+
+
+# --- Tests for QSBaseSensorSolarActiveProviderRestore (Task 6) ---
+
+
+def _make_active_provider_restore_sensor(providers=None):
+    """Create an active provider restore sensor for testing."""
+    from custom_components.quiet_solar.sensor import QSSensorEntityDescription
+
+    mock_handler = MagicMock()
+    mock_handler.hass = MagicMock()
+
+    mock_device = MagicMock()
+    mock_device.device_id = "test_solar"
+    mock_device.device_type = "solar"
+    mock_device.name = "Test Solar"
+    mock_device.qs_enable_device = True
+
+    if providers is None:
+        providers = {"Solcast": MagicMock(), "OpenMeteo": MagicMock()}
+    mock_device.solar_forecast_providers = providers
+    mock_device._set_active_provider = MagicMock()
+    mock_device._provider_mode = "auto"
+
+    description = QSSensorEntityDescription(
+        key="test_active_provider_key",
+        translation_key="test",
+    )
+
+    return QSBaseSensorSolarActiveProviderRestore(
+        mock_handler, mock_device, description
+    )
+
+
+async def _restore_active_provider_with_value(native_value, providers=None):
+    """Helper: restore an active provider sensor with given native_value."""
+    from custom_components.quiet_solar.sensor import QSExtraStoredData
+
+    sensor = _make_active_provider_restore_sensor(providers=providers)
+    stored_data = QSExtraStoredData(
+        native_value=native_value,
+        native_attr={},
+    )
+
+    with patch.object(sensor, "async_get_last_extra_data", new_callable=AsyncMock) as mock_extra:
+        mock_extra.return_value = MagicMock()
+        mock_extra.return_value.as_dict.return_value = stored_data.as_dict()
+        await sensor.async_added_to_hass()
+
+    return sensor
+
+
+@pytest.mark.asyncio
+async def test_active_provider_restore_valid_name():
+    """Valid provider name from restore updates device active provider."""
+    sensor = await _restore_active_provider_with_value("Solcast")
+
+    sensor.device._set_active_provider.assert_called_once_with("Solcast")
+
+
+@pytest.mark.asyncio
+async def test_active_provider_restore_unknown_name_skipped():
+    """Unknown provider name (not in dict) is skipped."""
+    sensor = await _restore_active_provider_with_value("NonExistent")
+
+    sensor.device._set_active_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_active_provider_restore_unavailable_skipped():
+    """Unavailable restored value is skipped."""
+    sensor = await _restore_active_provider_with_value(STATE_UNAVAILABLE)
+
+    sensor.device._set_active_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_active_provider_restore_unknown_string_skipped():
+    """Unknown state string restored value is skipped."""
+    sensor = await _restore_active_provider_with_value(STATE_UNKNOWN)
+
+    sensor.device._set_active_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_active_provider_restore_empty_string_skipped():
+    """Empty string restored value is skipped."""
+    sensor = await _restore_active_provider_with_value("")
+
+    sensor.device._set_active_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_active_provider_restore_does_not_change_mode():
+    """Hydration does NOT set _provider_mode."""
+    sensor = await _restore_active_provider_with_value("Solcast")
+
+    # _provider_mode should not be touched — only _set_active_provider is called
+    assert sensor.device._provider_mode == "auto"
+
+
+@pytest.mark.asyncio
+async def test_active_provider_restore_skips_no_extra_data():
+    """Skip hydration when no last extra data available."""
+    sensor = _make_active_provider_restore_sensor()
+
+    with patch.object(sensor, "async_get_last_extra_data", new_callable=AsyncMock) as mock_extra:
+        mock_extra.return_value = None
+        await sensor.async_added_to_hass()
+
+    sensor.device._set_active_provider.assert_not_called()

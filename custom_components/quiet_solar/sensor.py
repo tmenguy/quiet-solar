@@ -67,7 +67,7 @@ from .ha_model.charger import QSChargerGeneric
 from .ha_model.device import HADeviceMixin
 from .ha_model.home import QSHome
 from .ha_model.person import QSPerson
-from .ha_model.solar import QSSolar
+from .ha_model.solar import QSSolar, QSSolarProvider
 from .home_model.load import AbstractDevice, AbstractLoad
 
 
@@ -397,7 +397,11 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
             value_fn=lambda device, key, prov=provider: prov.score,
             qs_is_none_unavailable=True,
         )
-        entities.append(QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=score_sensor))
+        entities.append(
+            QSBaseSensorSolarScoreRestore(
+                data_handler=device.data_handler, device=device, description=score_sensor, provider=provider
+            )
+        )
 
     # Active solar provider sensor
     active_provider_sensor = QSSensorEntityDescription(
@@ -408,7 +412,9 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         qs_is_none_unavailable=True,
     )
     entities.append(
-        QSBaseSensorRestore(data_handler=device.data_handler, device=device, description=active_provider_sensor)
+        QSBaseSensorSolarActiveProviderRestore(
+            data_handler=device.data_handler, device=device, description=active_provider_sensor
+        )
     )
 
     for name in QSForecastSolarSensors:
@@ -647,6 +653,43 @@ class QSBaseSensorForecastRestore(QSBaseSensorRestore):
             prober_data = self._attr_extra_state_attributes.pop(self.PROBER_ATTR_KEY, None)
             if prober_data is not None:
                 prober.restore_stored_values(prober_data)
+
+
+class QSBaseSensorSolarScoreRestore(QSBaseSensorRestore):
+    """Sensor that hydrates provider.score from restored state on startup."""
+
+    def __init__(
+        self,
+        data_handler,
+        device: AbstractDevice,
+        description: QSSensorEntityDescription,
+        *,
+        provider: QSSolarProvider,
+    ) -> None:
+        super().__init__(data_handler=data_handler, device=device, description=description)
+        self._provider = provider
+
+    async def async_added_to_hass(self) -> None:
+        """Restore provider score from persisted sensor value."""
+        await super().async_added_to_hass()
+        if self._provider.score is None and self._attr_native_value is not None:
+            try:
+                self._provider.score = float(self._attr_native_value)
+            except TypeError, ValueError:
+                pass
+
+
+class QSBaseSensorSolarActiveProviderRestore(QSBaseSensorRestore):
+    """Sensor that hydrates active provider from restored state on startup."""
+
+    device: QSSolar
+
+    async def async_added_to_hass(self) -> None:
+        """Restore active provider from persisted sensor value."""
+        await super().async_added_to_hass()
+        restored = self._attr_native_value
+        if isinstance(restored, str) and restored and restored in self.device.solar_forecast_providers:
+            self.device._set_active_provider(restored)
 
 
 class QSDeviceSensorData(QSBaseSensorRestore):
