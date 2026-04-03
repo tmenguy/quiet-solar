@@ -1686,18 +1686,30 @@ class QSHome(QSDynamicGroup):
             if self.home_available_power > 0:
                 # we need to check if what is available will "really" be available to consume by any dynamic load ...
 
+                # grid_consumption is used directly: positive (export) adds
+                # redirectable capacity, negative (import) represents a debt
+                # that reduces what is truly available for new loads.
+
                 max_available_home_power = MAX_POWER_INFINITE
                 if self.battery is None or is_battery_dc_coupled:
                     if (
                         self.solar_plant is not None
                         and self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE
                     ):
-                        if inverter_output_clamped >= self.solar_plant.solar_max_output_power_value:
-                            max_available_home_power = 0
+                        inverter_headroom = max(
+                            0, self.solar_plant.solar_max_output_power_value - inverter_output_clamped
+                        )
+                        # DC-coupled battery charges on the DC bus; stopping
+                        # that charge frees DC power for the inverter, but
+                        # only up to inverter AC headroom. Charge beyond
+                        # headroom is DC overflow (production > inverter AC
+                        # capacity) and cannot reach AC loads.
+                        if is_battery_dc_coupled and battery_charge_clamped > 0:
+                            dc_battery_redirectable = min(battery_charge_clamped, inverter_headroom)
+                            max_available_home_power = grid_consumption + dc_battery_redirectable
                         else:
-                            max_available_home_power = max(
-                                0, self.solar_plant.solar_max_output_power_value - inverter_output_clamped
-                            )
+                            max_available_home_power = grid_consumption + inverter_headroom
+                        max_available_home_power = max(0, max_available_home_power)
                         max_available_home_power = min(
                             max_available_home_power, self.solar_plant.solar_max_output_power_value
                         )
@@ -1708,13 +1720,19 @@ class QSHome(QSDynamicGroup):
                     if self.solar_plant is None:
                         max_available_home_power = max_battery_discharge
                     elif self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE:
-                        # the inverter and the battery are un coupled so the max available power
-                        # will be the sum of the max battery discharge
+                        # AC-coupled: inverter and battery are independent
+                        # paths, max available is their combined capacity
                         max_available_home_power = max(
                             0,
                             max_battery_discharge
                             + self.solar_plant.solar_max_output_power_value
-                            - inverter_output_clamped,
+                            - inverter_output_clamped
+                            + grid_consumption,
+                        )
+                        # Cap at combined physical maximum of both paths
+                        max_available_home_power = min(
+                            max_available_home_power,
+                            self.solar_plant.solar_max_output_power_value + max_battery_discharge,
                         )
 
                 if self.home_available_power > (1.05 * max_available_home_power):  # 5% tolerance
