@@ -938,6 +938,68 @@ class TestGetHistoricalDataDefensiveGuard:
 # ============================================================================
 
 
+# ============================================================================
+# force_scoring_cycle tests
+# ============================================================================
+
+
+class TestForceScoringCycle:
+    """Test QSSolar.force_scoring_cycle() for manual recomputation."""
+
+    async def test_resets_guard_and_runs_scoring(self, fake_hass):
+        """force_scoring_cycle resets _last_scoring_half_day and calls _run_scoring_cycle."""
+        providers = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Solcast"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers)
+
+        # Simulate that scoring already ran this half-day
+        solar._last_scoring_half_day = (datetime.date(2024, 6, 15), 0)
+
+        t = datetime.datetime(2024, 6, 15, 6, 0, tzinfo=pytz.UTC)
+        with patch.object(solar, "_run_scoring_cycle") as mock_run:
+            await solar.force_scoring_cycle(t)
+
+        # Guard must have been cleared before _run_scoring_cycle was called
+        assert mock_run.call_count == 1
+        assert mock_run.call_args[0][0] == t
+
+    async def test_works_when_guard_already_set(self, fake_hass):
+        """force_scoring_cycle bypasses the half-day throttle even if scoring already ran."""
+        providers = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Solcast"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers)
+
+        # Set the guard to current half-day
+        t = datetime.datetime(2024, 6, 15, 10, 0, tzinfo=pytz.UTC)
+        current_half = solar._scoring_half_day(t)
+        solar._last_scoring_half_day = current_half
+
+        # Normal _run_scoring_cycle would skip — but force_scoring_cycle resets the guard
+        await solar.force_scoring_cycle(t)
+
+        # After force, the guard should be set again (by _run_scoring_cycle)
+        assert solar._last_scoring_half_day == current_half
+
+    async def test_uses_utcnow_when_no_time_given(self, fake_hass):
+        """force_scoring_cycle uses dt_util.utcnow() when time is None."""
+        providers = [
+            {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Solcast"},
+        ]
+        solar = _make_solar(fake_hass, providers_config=providers)
+
+        fake_now = datetime.datetime(2024, 6, 15, 14, 0, tzinfo=pytz.UTC)
+        with (
+            patch.object(solar, "_run_scoring_cycle") as mock_run,
+            patch("custom_components.quiet_solar.ha_model.solar.dt_util") as mock_dt,
+        ):
+            mock_dt.utcnow.return_value = fake_now
+            await solar.force_scoring_cycle()
+
+        mock_run.assert_called_once_with(fake_now)
+
+
 class TestAddValueDuplicateTimestamp:
     """Test that add_value replaces existing value when same timestamp is used."""
 

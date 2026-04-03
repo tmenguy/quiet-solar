@@ -276,6 +276,8 @@ BUTTON_HOME_SERIALIZE_FOR_DEBUG = "qs_home_serialize_for_debug"
 BUTTON_HOME_GENERATE_YAML_DASHBOARD = "qs_home_generate_yaml_dashboard"
 BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA = "qs_home_recompute_people_historical_data"
 
+BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES = "qs_solar_recompute_forecast_scores"
+
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY = "qs_bump_solar_charge_priority"
 BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"

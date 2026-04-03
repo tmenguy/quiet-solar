@@ -430,6 +430,9 @@
             },
             "qs_next_car_charge_force_now": {
                 "name": "Force Charge Now"
+            },
+            "qs_solar_recompute_forecast_scores": {
+                "name": "Recompute forecast scores"
             }
         },
         "number": {

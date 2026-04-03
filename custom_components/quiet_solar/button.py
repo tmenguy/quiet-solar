@@ -21,12 +21,14 @@ from .const import (
     BUTTON_HOME_SERIALIZE_FOR_DEBUG,
     BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE,
     BUTTON_LOAD_RESET_OVERRIDE_STATE,
+    BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES,
     DOMAIN,
 )
 from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric
 from .ha_model.home import QSHome
+from .ha_model.solar import QSSolar
 from .home_model.load import AbstractDevice, AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +76,20 @@ def create_ha_button_for_QSHome(device: QSHome):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=home_generate_yaml))
+
+    return entities
+
+
+def create_ha_button_for_QSSolar(device: QSSolar):
+    entities = []
+
+    qs_recompute_scores = QSButtonEntityDescription(
+        key=BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES,
+        translation_key=BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES,
+        async_press=lambda x: x.device.force_scoring_cycle(),
+    )
+
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_recompute_scores))
 
     return entities
 
@@ -180,6 +196,9 @@ def create_ha_button(device: AbstractDevice):
     ret = []
     if isinstance(device, QSHome):
         ret.extend(create_ha_button_for_QSHome(device))
+
+    if isinstance(device, QSSolar):
+        ret.extend(create_ha_button_for_QSSolar(device))
 
     if isinstance(device, QSChargerGeneric):
         ret.extend(create_ha_button_for_QSChargerGeneric(device))

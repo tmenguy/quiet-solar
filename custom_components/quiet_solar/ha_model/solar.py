@@ -11,6 +11,7 @@ from os.path import join
 import aiofiles.os
 import numpy as np
 import pytz
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ACCURATE_POWER_SENSOR,
@@ -289,6 +290,18 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         self._last_scoring_half_day = None
         for provider in self.solar_forecast_providers.values():
             provider.reset_scoring()
+
+    async def force_scoring_cycle(self, time: datetime | None = None) -> None:
+        """Force a scoring recomputation, bypassing the half-day throttle."""
+        if time is None:
+            time = dt_util.utcnow()
+        self._last_scoring_half_day = None
+        self._run_scoring_cycle(time)
+
+        if self._provider_mode == SOLAR_PROVIDER_MODE_AUTO:
+            self.auto_select_best_provider()
+
+        self.solar_forecast_provider_handler = self.active_provider
 
     @staticmethod
     def _scoring_half_day(time: datetime) -> tuple:
