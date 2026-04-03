@@ -1,6 +1,6 @@
 # Bug Fix: Hydrate solar forecast scores and active provider from restored state after reboot
 
-Status: review
+Status: done
 issue: 113
 branch: "QS_113"
 
