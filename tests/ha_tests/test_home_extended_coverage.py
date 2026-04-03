@@ -3178,9 +3178,10 @@ class TestNonControlledConsumptionBranches:
         # home_available_power = grid(-100) + battery(600) = 500
         # DC-coupled: inverter_headroom = max(0, 3000 - 2800) = 200
         # battery charging (600 > 0): dc_redirectable = min(600, 200) = 200
-        # max_available = 0 + 200 = 200, min(200, 3000) = 200
-        # 500 > 1.05 * 200 = 210 → clamp fires → max(0, 210) = 210
-        assert home.home_available_power == pytest.approx(210.0, rel=0.01)
+        # max_available = max(0, -100 + 200) = 100, min(100, 3000) = 100
+        # Grid import is a debt: 200W freed from battery - 100W replaces import = 100W net
+        # 500 > 1.05 * 100 = 105 → clamp fires → max(0, 105) = 105
+        assert home.home_available_power == pytest.approx(105.0, rel=0.01)
 
     @pytest.mark.asyncio
     async def test_available_power_clamp_boundary_inverter_equals_solar_max(

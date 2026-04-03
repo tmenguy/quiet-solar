@@ -1686,9 +1686,9 @@ class QSHome(QSDynamicGroup):
             if self.home_available_power > 0:
                 # we need to check if what is available will "really" be available to consume by any dynamic load ...
 
-                # Power currently exported to grid can be redirected to home loads
-                # without needing additional inverter capacity
-                grid_export_redirectable = max(0.0, grid_consumption)
+                # grid_consumption is used directly: positive (export) adds
+                # redirectable capacity, negative (import) represents a debt
+                # that reduces what is truly available for new loads.
 
                 max_available_home_power = MAX_POWER_INFINITE
                 if self.battery is None or is_battery_dc_coupled:
@@ -1706,9 +1706,10 @@ class QSHome(QSDynamicGroup):
                         # capacity) and cannot reach AC loads.
                         if is_battery_dc_coupled and battery_charge_clamped > 0:
                             dc_battery_redirectable = min(battery_charge_clamped, inverter_headroom)
-                            max_available_home_power = grid_export_redirectable + dc_battery_redirectable
+                            max_available_home_power = grid_consumption + dc_battery_redirectable
                         else:
-                            max_available_home_power = grid_export_redirectable + inverter_headroom
+                            max_available_home_power = grid_consumption + inverter_headroom
+                        max_available_home_power = max(0, max_available_home_power)
                         max_available_home_power = min(
                             max_available_home_power, self.solar_plant.solar_max_output_power_value
                         )
@@ -1726,7 +1727,7 @@ class QSHome(QSDynamicGroup):
                             max_battery_discharge
                             + self.solar_plant.solar_max_output_power_value
                             - inverter_output_clamped
-                            + grid_export_redirectable,
+                            + grid_consumption,
                         )
                         # Cap at combined physical maximum of both paths
                         max_available_home_power = min(
