@@ -1686,6 +1686,10 @@ class QSHome(QSDynamicGroup):
             if self.home_available_power > 0:
                 # we need to check if what is available will "really" be available to consume by any dynamic load ...
 
+                # Power currently exported to grid can be redirected to home loads
+                # without needing additional inverter capacity
+                grid_export_redirectable = max(0.0, grid_consumption)
+
                 max_available_home_power = MAX_POWER_INFINITE
                 if self.battery is None or is_battery_dc_coupled:
                     if (
@@ -1693,10 +1697,11 @@ class QSHome(QSDynamicGroup):
                         and self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE
                     ):
                         if inverter_output_clamped >= self.solar_plant.solar_max_output_power_value:
-                            max_available_home_power = 0
+                            max_available_home_power = grid_export_redirectable
                         else:
-                            max_available_home_power = max(
-                                0, self.solar_plant.solar_max_output_power_value - inverter_output_clamped
+                            max_available_home_power = (
+                                max(0, self.solar_plant.solar_max_output_power_value - inverter_output_clamped)
+                                + grid_export_redirectable
                             )
                         max_available_home_power = min(
                             max_available_home_power, self.solar_plant.solar_max_output_power_value
@@ -1714,7 +1719,8 @@ class QSHome(QSDynamicGroup):
                             0,
                             max_battery_discharge
                             + self.solar_plant.solar_max_output_power_value
-                            - inverter_output_clamped,
+                            - inverter_output_clamped
+                            + grid_export_redirectable,
                         )
 
                 if self.home_available_power > (1.05 * max_available_home_power):  # 5% tolerance

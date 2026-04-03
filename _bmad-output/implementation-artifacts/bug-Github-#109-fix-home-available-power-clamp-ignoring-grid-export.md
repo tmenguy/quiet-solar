@@ -3,7 +3,7 @@
 issue: 109
 branch: "QS_109"
 
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 
@@ -83,18 +83,18 @@ Grid-exported power is ALREADY being produced by the inverter. Redirecting it to
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix clamp logic in `home_available_power_sensor_state_getter` (AC: #1, #2, #3, #4)
-  - [ ] 1.1 Compute `grid_export_redirectable = max(0.0, grid_consumption)` before the clamp block (after line 1683, inside the `if self.home_available_power > 0` guard)
-  - [ ] 1.2 DC-coupled / no battery branch (lines 1690-1705): add `grid_export_redirectable` to `max_available_home_power`
-  - [ ] 1.3 AC-coupled battery branch (lines 1706-1718): add `grid_export_redirectable` to `max_available_home_power`
-  - [ ] 1.4 Keep the existing `min(max_available_home_power, solar_max_output_power_value)` secondary clamp at line 1701 — but verify it still makes sense with the new term
-- [ ] Task 2: Add tests for grid-export clamp scenarios (AC: #5, #6)
-  - [ ] 2.1 Test: DC/no-battery, inverter at max, heavy grid export — clamp should NOT reduce available power to 0
-  - [ ] 2.2 Test: DC/no-battery, inverter below max, moderate grid export — clamp should allow headroom + export
-  - [ ] 2.3 Test: AC-coupled battery, inverter at max, heavy grid export — same as 2.1 but with battery
-  - [ ] 2.4 Test: no grid export (grid_consumption <= 0) — clamp unchanged (regression guard)
-  - [ ] 2.5 Test: exact boundary case where inverter_output == solar_max and grid_consumption == home_available_power
-- [ ] Task 3: Run quality gates and verify (AC: #6)
+- [x] Task 1: Fix clamp logic in `home_available_power_sensor_state_getter` (AC: #1, #2, #3, #4)
+  - [x] 1.1 Compute `grid_export_redirectable = max(0.0, grid_consumption)` before the clamp block (after line 1683, inside the `if self.home_available_power > 0` guard)
+  - [x] 1.2 DC-coupled / no battery branch (lines 1690-1705): add `grid_export_redirectable` to `max_available_home_power`
+  - [x] 1.3 AC-coupled battery branch (lines 1706-1718): add `grid_export_redirectable` to `max_available_home_power`
+  - [x] 1.4 Keep the existing `min(max_available_home_power, solar_max_output_power_value)` secondary clamp at line 1701 — verified it still makes sense (caps at inverter max which is correct)
+- [x] Task 2: Add tests for grid-export clamp scenarios (AC: #5, #6)
+  - [x] 2.1 Test: DC/no-battery, inverter at max, heavy grid export — clamp should NOT reduce available power to 0
+  - [x] 2.2 Test: DC/no-battery, inverter below max, moderate grid export — clamp should allow headroom + export
+  - [x] 2.3 Test: AC-coupled battery, inverter at max, heavy grid export — same as 2.1 but with battery
+  - [x] 2.4 Test: no grid export (grid_consumption <= 0) — clamp unchanged (regression guard)
+  - [x] 2.5 Test: exact boundary case where inverter_output == solar_max and grid_consumption == home_available_power
+- [x] Task 3: Run quality gates and verify (AC: #6)
 
 ## Dev Notes
 
@@ -190,7 +190,9 @@ Claude Opus 4.6
 - Story created from GitHub issue #109 analysis + codebase exploration
 - Root cause: clamp computes max_available_home_power as inverter headroom only, ignoring grid export
 - Fix: add max(0, grid_consumption) to max_available_home_power in both DC and AC branches
-- Secondary clamp at line 1701 needs verification during implementation
+- Secondary clamp at line 1701 verified — `min(max_available_home_power, solar_max)` still correct, caps redirectable power at inverter max
+- Updated existing test_available_power_clamped assertion (210→250) to reflect correct post-fix behavior
+- 5 new tests added, all quality gates pass, 100% coverage maintained
 
 ### File List
 
