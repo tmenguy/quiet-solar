@@ -861,6 +861,9 @@
       },
       "qs_home_recompute_people_historical_data": {
         "name": "Recompute People Historical Data"
+      },
+      "qs_solar_recompute_forecast_scores": {
+        "name": "Recompute forecast scores"
       }
     },
     "switch": {

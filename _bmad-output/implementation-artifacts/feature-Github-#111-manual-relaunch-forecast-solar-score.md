@@ -1,6 +1,6 @@
 # Manual Relaunch Forecast Solar Provider Score Computation
 
-Status: draft
+Status: complete
 issue: 111
 branch: "QS_111"
 
@@ -28,30 +28,30 @@ The project already has button entities on QSHome (reset history, debug dump, da
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add constant and domain method (AC: 1, 2)
-  - [ ] 1.1: Add `BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES = "qs_solar_recompute_forecast_scores"` to `const.py` (after the existing `BUTTON_HOME_*` block, near line 277)
-  - [ ] 1.2: Add `force_scoring_cycle(self, time: datetime | None = None)` method to `QSSolar` in `ha_model/solar.py`. This method resets `self._last_scoring_half_day = None` and then calls `self._run_scoring_cycle(time)`. If `time` is None, use `dt_util.utcnow()`.
+- [x] Task 1: Add constant and domain method (AC: 1, 2)
+  - [x] 1.1: Add `BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES = "qs_solar_recompute_forecast_scores"` to `const.py` (after the existing `BUTTON_HOME_*` block, near line 277)
+  - [x] 1.2: Add `force_scoring_cycle(self, time: datetime | None = None)` method to `QSSolar` in `ha_model/solar.py`. This method resets `self._last_scoring_half_day = None` and then calls `self._run_scoring_cycle(time)`. If `time` is None, use `dt_util.utcnow()`.
 
-- [ ] Task 2: Create button entity for QSSolar (AC: 1, 3)
-  - [ ] 2.1: Import `QSSolar` in `button.py`
-  - [ ] 2.2: Import `BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES` in `button.py`
-  - [ ] 2.3: Create `create_ha_button_for_QSSolar(device: QSSolar)` function that creates a single button with:
+- [x] Task 2: Create button entity for QSSolar (AC: 1, 3)
+  - [x] 2.1: Import `QSSolar` in `button.py`
+  - [x] 2.2: Import `BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES` in `button.py`
+  - [x] 2.3: Create `create_ha_button_for_QSSolar(device: QSSolar)` function that creates a single button with:
     - `key=BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES`
     - `translation_key=BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES`
     - `async_press=lambda x: x.device.force_scoring_cycle()`
-  - [ ] 2.4: Add `isinstance(device, QSSolar)` check in `create_ha_button()` dispatcher (after the `QSHome` check)
+  - [x] 2.4: Add `isinstance(device, QSSolar)` check in `create_ha_button()` dispatcher (after the `QSHome` check)
 
-- [ ] Task 3: Add translation (AC: 6)
-  - [ ] 3.1: Add entry in `strings.json` under `entity.button`:
+- [x] Task 3: Add translation (AC: 6)
+  - [x] 3.1: Add entry in `strings.json` under `entity.button`:
     ```json
     "qs_solar_recompute_forecast_scores": {
       "name": "Recompute forecast scores"
     }
     ```
-  - [ ] 3.2: Run `bash scripts/generate-translations.sh` to sync `translations/en.json`
+  - [x] 3.2: Run `bash scripts/generate-translations.sh` to sync `translations/en.json`
 
-- [ ] Task 4: Dashboard integration (AC: 5)
-  - [ ] 4.1: In `quiet_solar_dashboard_template_standard_ha.yaml.j2`, add the button entity in the solar device section (after the score sensors loop around line 464):
+- [x] Task 4: Dashboard integration (AC: 5)
+  - [x] 4.1: In `quiet_solar_dashboard_template_standard_ha.yaml.j2`, add the button entity in the solar device section (after the score sensors loop around line 464):
     ```jinja2
     {%- set ha_entity = device.ha_entities.get("qs_solar_recompute_forecast_scores") %}
     {%- if ha_entity != None %}
@@ -59,14 +59,14 @@ The project already has button entities on QSHome (reset history, debug dump, da
     {{ "  name: " + "'" + ha_entity.name + "'" }}
     {%- endif %}
     ```
-  - [ ] 4.2: Apply the same pattern in `quiet_solar_dashboard_template.yaml.j2` if it has a solar section
+  - [x] 4.2: Apply the same pattern in `quiet_solar_dashboard_template.yaml.j2` if it has a solar section
 
-- [ ] Task 5: Tests (AC: 7)
-  - [ ] 5.1: Test `force_scoring_cycle()` resets `_last_scoring_half_day` and calls `_run_scoring_cycle` — add to `tests/test_solar_forecast_scoring.py`
-  - [ ] 5.2: Test `force_scoring_cycle()` works even when scoring already ran this half-day (the guard was set)
-  - [ ] 5.3: Test `create_ha_button_for_QSSolar()` returns exactly 1 button entity with correct key — add to `tests/test_platform_button.py`
-  - [ ] 5.4: Test `create_ha_button()` dispatcher includes QSSolar buttons when given a QSSolar device
-  - [ ] 5.5: Test the button's `async_press` lambda calls `force_scoring_cycle()` on the device
+- [x] Task 5: Tests (AC: 7)
+  - [x] 5.1: Test `force_scoring_cycle()` resets `_last_scoring_half_day` and calls `_run_scoring_cycle` — add to `tests/test_solar_forecast_scoring.py`
+  - [x] 5.2: Test `force_scoring_cycle()` works even when scoring already ran this half-day (the guard was set)
+  - [x] 5.3: Test `create_ha_button_for_QSSolar()` returns exactly 1 button entity with correct key — add to `tests/test_platform_button.py`
+  - [x] 5.4: Test `create_ha_button()` dispatcher includes QSSolar buttons when given a QSSolar device
+  - [x] 5.5: Test the button's `async_press` lambda calls `force_scoring_cycle()` on the device
 
 ## Dev Notes
 
@@ -118,9 +118,23 @@ No domain-layer changes are needed. The scoring logic (`_run_scoring_cycle`, `co
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
+None
 
 ### Completion Notes List
+- All 5 tasks completed with TDD approach (red-green-refactor)
+- All quality gates pass: ruff format, ruff lint, mypy, translations, pytest 100% coverage
+- No deviations from the original spec
 
 ### File List
+- `custom_components/quiet_solar/const.py` — added `BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES`
+- `custom_components/quiet_solar/ha_model/solar.py` — added `force_scoring_cycle()` method, `dt_util` import
+- `custom_components/quiet_solar/button.py` — added `create_ha_button_for_QSSolar()`, `QSSolar` dispatch in `create_ha_button()`
+- `custom_components/quiet_solar/strings.json` — added button translation
+- `custom_components/quiet_solar/translations/en.json` — auto-generated
+- `custom_components/quiet_solar/ui/quiet_solar_dashboard_template_standard_ha.yaml.j2` — added button to solar section
+- `custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2` — added button to solar section
+- `tests/test_solar_forecast_scoring.py` — 3 tests for `force_scoring_cycle()`
+- `tests/test_platform_button.py` — 3 tests for QSSolar button creation, dispatch, and press

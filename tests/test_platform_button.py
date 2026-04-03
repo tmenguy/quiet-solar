@@ -13,12 +13,17 @@ from custom_components.quiet_solar.button import (
     QSButtonEntityDescription,
     async_setup_entry,
     async_unload_entry,
+    create_ha_button,
     create_ha_button_for_AbstractLoad,
     create_ha_button_for_QSCar,
     create_ha_button_for_QSChargerGeneric,
     create_ha_button_for_QSHome,
+    create_ha_button_for_QSSolar,
 )
-from custom_components.quiet_solar.const import DOMAIN
+from custom_components.quiet_solar.const import (
+    BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES,
+    DOMAIN,
+)
 from tests.factories import create_minimal_home_model
 from tests.test_helpers import create_mock_device
 
@@ -320,3 +325,64 @@ async def test_qs_button_entity_press_force_update_all_exception():
     mock_home.force_update_all.assert_awaited_once()
     mock_logger.error.assert_called_once()
     assert "force_update_all failed" in mock_logger.error.call_args[0][0]
+
+
+def test_create_ha_button_for_solar():
+    """Test creating buttons for solar device."""
+    from custom_components.quiet_solar.ha_model.solar import QSSolar
+
+    mock_solar = MagicMock(spec=QSSolar)
+    mock_solar.data_handler = MagicMock()
+    mock_solar.device_id = "test_solar"
+    mock_solar.device_type = "solar"
+    mock_solar.name = "Test Solar"
+    mock_solar.qs_enable_device = True
+    mock_solar.force_scoring_cycle = AsyncMock()
+
+    entities = create_ha_button_for_QSSolar(mock_solar)
+
+    assert len(entities) == 1
+    assert all(isinstance(e, QSButtonEntity) for e in entities)
+    assert entities[0].entity_description.key == BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES
+
+
+def test_create_ha_button_dispatcher_includes_solar():
+    """Test that create_ha_button dispatcher includes QSSolar buttons."""
+    from custom_components.quiet_solar.ha_model.solar import QSSolar
+
+    mock_solar = MagicMock(spec=QSSolar)
+    mock_solar.data_handler = MagicMock()
+    mock_solar.device_id = "test_solar"
+    mock_solar.device_type = "solar"
+    mock_solar.name = "Test Solar"
+    mock_solar.qs_enable_device = True
+    mock_solar.force_scoring_cycle = AsyncMock()
+
+    buttons = create_ha_button(mock_solar)
+
+    # Should include the solar button plus the AbstractDevice buttons
+    solar_buttons = [b for b in buttons if b.entity_description.key == BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES]
+    assert len(solar_buttons) == 1
+
+
+@pytest.mark.asyncio
+async def test_solar_button_press_calls_force_scoring_cycle():
+    """Test that pressing the solar button calls force_scoring_cycle on the device."""
+    from custom_components.quiet_solar.ha_model.solar import QSSolar
+
+    mock_solar = MagicMock(spec=QSSolar)
+    mock_solar.data_handler = MagicMock()
+    mock_solar.data_handler.hass = MagicMock()
+    mock_solar.device_id = "test_solar"
+    mock_solar.device_type = "solar"
+    mock_solar.name = "Test Solar"
+    mock_solar.qs_enable_device = True
+    mock_solar.home = None
+    mock_solar.force_scoring_cycle = AsyncMock()
+
+    entities = create_ha_button_for_QSSolar(mock_solar)
+    button = entities[0]
+
+    await button.entity_description.async_press(button)
+
+    mock_solar.force_scoring_cycle.assert_awaited_once()
