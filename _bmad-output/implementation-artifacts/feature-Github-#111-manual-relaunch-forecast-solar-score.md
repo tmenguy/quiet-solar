@@ -1,6 +1,6 @@
 # Manual Relaunch Forecast Solar Provider Score Computation
 
-Status: complete
+Status: done
 issue: 111
 branch: "QS_111"
 
