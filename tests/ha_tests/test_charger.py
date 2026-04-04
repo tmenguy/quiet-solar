@@ -3107,7 +3107,7 @@ async def test_charger_constraint_update_value_callback(
     charger_device._expected_charge_state.last_ping_time_success = now - timedelta(seconds=3600)
 
     car_device.car_charge_percent_sensor = "sensor.car_soc"
-    car_device.get_car_charge_percent = MagicMock(return_value=None)
+    car_device.get_car_charge_percent = MagicMock(return_value=50)
     car_device.is_car_charge_growing = MagicMock(return_value=False)
     car_device.setup_car_charge_target_if_needed = AsyncMock()
 
@@ -3131,6 +3131,83 @@ async def test_charger_constraint_update_value_callback(
     assert result is not None
     assert do_continue is True
     charger_device.on_device_state_change.assert_awaited()
+
+
+async def test_charger_constraint_update_value_callback_sensor_unavailable_skips_error(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Bug 116/4: zero-power error is skipped when SOC sensor returns None."""
+    from .const import MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_sensor_unavail_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="quiet_solar_charger_sensor_unavail_test",
+    )
+    charger_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_sensor_unavail_test",
+        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        unique_id="quiet_solar_car_sensor_unavail_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    charger_device.car = car_device
+
+    now = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+    charger_device._do_update_charger_state = AsyncMock()
+    charger_device.is_not_plugged = MagicMock(return_value=False)
+    charger_device.current_command = copy_command(CMD_ON)
+    charger_device._compute_added_charge_update = MagicMock(return_value=2.0)
+    charger_device.is_car_stopped_asking_current = MagicMock(return_value=False)
+    charger_device.is_charging_power_zero = MagicMock(return_value=True)
+    charger_device.is_charger_group_power_zero = MagicMock(return_value=True)
+    charger_device.on_device_state_change = AsyncMock()
+    charger_device.possible_charge_error_start_time = None
+    charger_device._expected_charge_state.value = True
+    charger_device._expected_charge_state.last_ping_time_success = now - timedelta(seconds=3600)
+
+    car_device.car_charge_percent_sensor = "sensor.car_soc"
+    # Bug 4: sensor returns None (unavailable) — error should NOT be triggered
+    car_device.get_car_charge_percent = MagicMock(return_value=None)
+    car_device.is_car_charge_growing = MagicMock(return_value=False)
+    car_device.setup_car_charge_target_if_needed = AsyncMock()
+
+    charger_device.father_device.charger_group = MagicMock()
+    charger_device.father_device.charger_group.dyn_handle = AsyncMock()
+
+    class DummyConstraint:
+        def __init__(self) -> None:
+            self.current_value = 10.0
+            self.target_value = 80.0
+            self.first_value_update = now - timedelta(hours=1)
+            self.last_value_update = now
+            self.last_value_change_update = now - timedelta(minutes=10)
+
+        def is_constraint_met(self, time: datetime, current_value: float) -> bool:
+            return False
+
+    ct = DummyConstraint()
+    result, do_continue = await charger_device.constraint_update_value_callback_soc(ct, now, is_target_percent=True)
+    assert result is not None
+    assert do_continue is True
+    # on_device_state_change should NOT be called when sensor is unavailable
+    charger_device.on_device_state_change.assert_not_awaited()
 
 
 async def test_charger_constraint_update_value_callback_unplugged(

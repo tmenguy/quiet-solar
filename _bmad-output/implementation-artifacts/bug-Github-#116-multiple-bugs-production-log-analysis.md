@@ -1,6 +1,6 @@
 # Bug Fix: Multiple bugs found in 2026-04-04 production log analysis
 
-Status: todo
+Status: done
 issue: 116
 branch: "QS_116"
 
@@ -161,56 +161,56 @@ Startup race condition — entity hasn't reported a value yet. Code already hand
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix Bug 1 — NoneType in charger budgeting (AC: #1)
-  - [ ] 1.1 In `dyn_handle` cooldown filter (`charger.py:914-927`): when excluding a charger from `budget_chargers`, initialize its `budgeted_amp` to `cs.current_real_max_charging_amp or 0` and `budgeted_num_phases` to `cs.current_active_phase_number or (3 if cs.charger.physical_3p else 1)` — this ensures the excluded charger has a valid budget representing its actual state
-  - [ ] 1.2 In `QSChargerStatus.get_current_charging_amps()` (`charger.py:370`): defensive guard — return `[0.0, 0.0, 0.0]` if `current_real_max_charging_amp is None` or `current_active_phase_number is None`
-  - [ ] 1.3 In `QSChargerStatus.get_budget_amps()` (`charger.py:373`): defensive guard — return `[0.0, 0.0, 0.0]` if `budgeted_amp is None` or `budgeted_num_phases is None`
-  - [ ] 1.4 Add tests: cooldown-excluded charger gets `budgeted_amp` set to current amp
-  - [ ] 1.5 Add tests: `get_current_charging_amps()` returns zero amps when values are `None`
-  - [ ] 1.6 Add tests: `get_budget_amps()` returns zero amps when values are `None`
-  - [ ] 1.7 Add tests: `apply_budget_strategy` completes without error when charger status has cooldown-initialized values
+- [x] Task 1: Fix Bug 1 — NoneType in charger budgeting (AC: #1)
+  - [x] 1.1 In `dyn_handle` cooldown filter (`charger.py:914-927`): when excluding a charger from `budget_chargers`, initialize its `budgeted_amp` to `cs.current_real_max_charging_amp or 0` and `budgeted_num_phases` to `cs.current_active_phase_number or (3 if cs.charger.physical_3p else 1)` — this ensures the excluded charger has a valid budget representing its actual state
+  - [x] 1.2 In `QSChargerStatus.get_current_charging_amps()` (`charger.py:370`): defensive guard — return `[0.0, 0.0, 0.0]` if `current_real_max_charging_amp is None` or `current_active_phase_number is None`
+  - [x] 1.3 In `QSChargerStatus.get_budget_amps()` (`charger.py:373`): defensive guard — return `[0.0, 0.0, 0.0]` if `budgeted_amp is None` or `budgeted_num_phases is None`
+  - [x] 1.4 Add tests: cooldown-excluded charger gets `budgeted_amp` set to current amp
+  - [x] 1.5 Add tests: `get_current_charging_amps()` returns zero amps when values are `None`
+  - [x] 1.6 Add tests: `get_budget_amps()` returns zero amps when values are `None`
+  - [x] 1.7 Add tests: `apply_budget_strategy` completes without error when charger status has cooldown-initialized values
 
-- [ ] Task 2: Fix Bug 2 — IndexError in `adapt_repartition` (AC: #2)
-  - [ ] 2.1 In `adapt_repartition` (`constraints.py`): add `if len(power_sorted_cmds) == 0: continue` immediately after the `adapt_power_steps_budgeting` call at line 1373-1380, before the branching logic that sets `j`
-  - [ ] 2.2 Add test: `adapt_repartition` with empty `power_sorted_cmds` does not crash and returns correctly
-  - [ ] 2.3 Add test: `adapt_repartition` skips slots where budget constraints eliminate all commands
+- [x] Task 2: Fix Bug 2 — IndexError in `adapt_repartition` (AC: #2)
+  - [x] 2.1 In `adapt_repartition` (`constraints.py`): add `if len(power_sorted_cmds) == 0: continue` immediately after the `adapt_power_steps_budgeting` call at line 1373-1380, before the branching logic that sets `j`
+  - [x] 2.2 Add test: `adapt_repartition` with empty `power_sorted_cmds` does not crash and returns correctly
+  - [x] 2.3 Add test: `adapt_repartition` skips slots where budget constraints eliminate all commands
 
-- [ ] Task 3: Fix Bug 7 — Python 2-style except syntax (AC: #7)
-  - [ ] 3.1 Fix `home.py:194`: change `except ValueError, TypeError, IndexError:` to `except (ValueError, TypeError, IndexError):`
-  - [ ] 3.2 Fix `home.py:852`: change `except ValueError, TypeError, KeyError:` to `except (ValueError, TypeError, KeyError):`
-  - [ ] 3.3 Fix `home.py:4387`: change `except ValueError, TypeError:` to `except (ValueError, TypeError):`
-  - [ ] 3.4 Add tests: verify `TypeError` is caught correctly (e.g., `float(None)` → `TypeError` caught, not propagated)
+- [x] Task 3: Fix Bug 7 — Python 2-style except syntax (AC: #7)
+  - [x] 3.1 Fix `home.py:194`: change `except ValueError, TypeError, IndexError:` to `except (ValueError, TypeError, IndexError):`
+  - [x] 3.2 Fix `home.py:852`: change `except ValueError, TypeError, KeyError:` to `except (ValueError, TypeError, KeyError):`
+  - [x] 3.3 Fix `home.py:4387`: change `except ValueError, TypeError:` to `except (ValueError, TypeError):`
+  - [x] 3.4 Add tests: verify `TypeError` is caught correctly (e.g., `float(None)` → `TypeError` caught, not propagated)
 
-- [ ] Task 4: Fix Bug 3 — empty power sorted commands + latent bug (AC: #3)
-  - [ ] 4.1 In `adapt_power_steps_budgeting_low_level` (`constraints.py:1208-1215`): add explicit `if last_cmd_idx_ok < 0: return []` before the fallthrough
-  - [ ] 4.2 In `compute_best_period_repartition` (`constraints.py` lines 1855, 2056, 2286): downgrade `_LOGGER.error` to `_LOGGER.warning` for the "no power sorted commands" messages
-  - [ ] 4.3 Add test: `adapt_power_steps_budgeting_low_level` returns empty list when all commands exceed budget
-  - [ ] 4.4 Verify existing tests still pass
+- [x] Task 4: Fix Bug 3 — empty power sorted commands + latent bug (AC: #3)
+  - [x] 4.1 In `adapt_power_steps_budgeting_low_level` (`constraints.py:1208-1215`): add explicit `if last_cmd_idx_ok < 0: return []` before the fallthrough
+  - [x] 4.2 In `compute_best_period_repartition` (`constraints.py` lines 1855, 2056, 2286): downgrade `_LOGGER.error` to `_LOGGER.warning` for the "no power sorted commands" messages
+  - [x] 4.3 Add test: `adapt_power_steps_budgeting_low_level` returns empty list when all commands exceed budget
+  - [x] 4.4 Verify existing tests still pass
 
-- [ ] Task 5: Fix Bug 4 — false no-power-detected error (AC: #4)
-  - [ ] 5.1 In `update_value_callback` (`charger.py:4667-4700`): before the 600s zero-power check, verify that the car target entity is available. If unavailable, skip the check or log at WARNING instead of ERROR and do NOT trigger `DEVICE_STATUS_CHANGE_ERROR`
-  - [ ] 5.2 Add test: zero-power check is skipped when target entity is unavailable
-  - [ ] 5.3 Add test: zero-power check still fires normally when target entity is available
+- [x] Task 5: Fix Bug 4 — false no-power-detected error (AC: #4)
+  - [x] 5.1 In `update_value_callback` (`charger.py:4667-4700`): before the 600s zero-power check, verify that the car target entity is available. If unavailable, skip the check or log at WARNING instead of ERROR and do NOT trigger `DEVICE_STATUS_CHANGE_ERROR`
+  - [x] 5.2 Add test: zero-power check is skipped when target entity is unavailable
+  - [x] 5.3 Add test: zero-power check still fires normally when target entity is available
 
-- [ ] Task 6: Fix Bug 5 — is_person_covered warning spam (AC: #5)
-  - [ ] 6.1 In charger constraint handling (`charger.py:3561-3564`): rate-limit the `is_person_covered: False` warning — emit once per `(car, person, next_usage_time)` triplet, then suppress until state changes. Use an instance-level dict to track already-warned triplets
-  - [ ] 6.2 Also suppress or downgrade to DEBUG once `next_usage_time` is in the past
-  - [ ] 6.3 Add test: warning emitted once for a given triplet, then suppressed
-  - [ ] 6.4 Add test: warning re-emitted when triplet changes
+- [x] Task 6: Fix Bug 5 — is_person_covered warning spam (AC: #5)
+  - [x] 6.1 In charger constraint handling (`charger.py:3561-3564`): rate-limit the `is_person_covered: False` warning — emit once per `(car, person, next_usage_time)` triplet, then suppress until state changes. Use an instance-level dict to track already-warned triplets
+  - [x] 6.2 Also suppress or downgrade to DEBUG once `next_usage_time` is in the past
+  - [x] 6.3 Add test: warning emitted once for a given triplet, then suppressed
+  - [x] 6.4 Add test: warning re-emitted when triplet changes
 
-- [ ] Task 7: Fix Bug 6 — REJECTING unauthorized assignment spam (AC: #6)
-  - [ ] 7.1 In `compute_and_set_best_persons_cars_allocations` or `get_best_persons_cars_allocations` (`home.py`): pre-filter `p_s` to exclude persons who have zero authorized cars in the current `c_s` set before building the cost matrix
-  - [ ] 7.2 Downgrade the post-filter rejection log from `WARNING` to `DEBUG` — after the pre-filter, this path is only reachable in race conditions
-  - [ ] 7.3 Add test: persons with no authorized car are excluded from optimization
-  - [ ] 7.4 Add test: post-filter rejection log fires at DEBUG
+- [x] Task 7: Fix Bug 6 — REJECTING unauthorized assignment spam (AC: #6)
+  - [x] 7.1 In `compute_and_set_best_persons_cars_allocations` or `get_best_persons_cars_allocations` (`home.py`): pre-filter `p_s` to exclude persons who have zero authorized cars in the current `c_s` set before building the cost matrix
+  - [x] 7.2 Downgrade the post-filter rejection log from `WARNING` to `DEBUG` — after the pre-filter, this path is only reachable in race conditions
+  - [x] 7.3 Add test: persons with no authorized car are excluded from optimization
+  - [x] 7.4 Add test: post-filter rejection log fires at DEBUG
 
-- [ ] Task 8: Fix Bug 8 and Bug 9 — startup log noise (AC: #8, #9)
-  - [ ] 8.1 In `home.py:4389, 4409`: downgrade "Error loading lazy safe value" from `_LOGGER.warning` to `_LOGGER.debug`
-  - [ ] 8.2 In `battery.py:106-118`: downgrade `probe_if_command_set` `_LOGGER.warning` to `_LOGGER.debug` for the `None` return cases
-  - [ ] 8.3 Verify existing tests still pass
+- [x] Task 8: Fix Bug 8 and Bug 9 — startup log noise (AC: #8, #9)
+  - [x] 8.1 In `home.py:4389, 4409`: downgrade "Error loading lazy safe value" from `_LOGGER.warning` to `_LOGGER.debug`
+  - [x] 8.2 In `battery.py:106-118`: downgrade `probe_if_command_set` `_LOGGER.warning` to `_LOGGER.debug` for the `None` return cases
+  - [x] 8.3 Verify existing tests still pass
 
-- [ ] Task 9: Quality gate (AC: #10)
-  - [ ] 9.1 Run `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy + translations
+- [x] Task 9: Quality gate (AC: #10)
+  - [x] 9.1 Run `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy + translations
 
 ## Dev Notes
 
@@ -335,4 +335,17 @@ Claude Opus 4.6
 
 ### Completion Notes List
 
+- All 9 bugs fixed: 2 critical crashers, 2 moderate, 3 log-spam, 2 minor
+- 100% test coverage maintained with 23+ new test functions
+- Quality gate: ruff format/lint, mypy, translations, pytest 100% coverage all pass
+
 ### File List
+
+- `custom_components/quiet_solar/ha_model/charger.py` — Bug 1 (cooldown filter init + defensive guards), Bug 4 (SOC sensor availability check), Bug 5 (rate-limit person coverage warning)
+- `custom_components/quiet_solar/home_model/constraints.py` — Bug 2 (empty-list guard in adapt_repartition), Bug 3 (explicit return [] + log downgrades)
+- `custom_components/quiet_solar/ha_model/home.py` — Bug 6 (pre-filter persons + log downgrade), Bug 7 (except syntax fix x3), Bug 8 (lazy safe value log downgrade)
+- `custom_components/quiet_solar/ha_model/battery.py` — Bug 9 (startup log downgrade)
+- `tests/test_bug_116_production_log_fixes.py` — New test file with 20 tests for all bugs
+- `tests/test_charger_coverage_deep.py` — Added test for past-usage-time debug path
+- `tests/ha_tests/test_charger.py` — Added sensor-unavailable test, fixed existing test
+- `tests/ha_tests/test_home.py` — Added unauthorized cross-assignment test

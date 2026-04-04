@@ -753,6 +753,82 @@ async def test_home_best_persons_cars_allocations_basic(
     assert car_b.current_forecasted_person is not None
 
 
+async def test_home_allocation_rejects_unauthorized_cross_assignment(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Bug 116/6: optimizer cross-assigns unauthorized pairs; rejection logs at DEBUG."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Car A only authorized for Person A, Car B only for Person B
+    car_a = SimpleNamespace(
+        name="Car A",
+        current_forecasted_person=None,
+        _user_originated={},
+        car_is_invited=False,
+        charger=_FakeCharger(),
+        ha_entities={},
+        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
+    )
+    car_a.get_user_originated = lambda key, default=None: car_a._user_originated.get(key, default)
+    car_a.set_user_originated = lambda key, value: car_a._user_originated.__setitem__(key, value)
+    car_a.has_user_originated = lambda key: key in car_a._user_originated
+    car_a.clear_user_originated = lambda key: car_a._user_originated.pop(key, None)
+    car_b = SimpleNamespace(
+        name="Car B",
+        current_forecasted_person=None,
+        _user_originated={},
+        car_is_invited=False,
+        charger=_FakeCharger(),
+        ha_entities={},
+        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 30.0, 70.0, 8.0)),
+    )
+    car_b.get_user_originated = lambda key, default=None: car_b._user_originated.get(key, default)
+    car_b.set_user_originated = lambda key, value: car_b._user_originated.__setitem__(key, value)
+    car_b.has_user_originated = lambda key: key in car_b._user_originated
+    car_b.clear_user_originated = lambda key: car_b._user_originated.pop(key, None)
+
+    # Person A authorized for car_a only, Person B for car_b only
+    person_a = _HashableNS(
+        name="Person A",
+        preferred_car="Car A",
+        update_person_forecast=MagicMock(return_value=(datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC), 30.0)),
+        get_authorized_cars=MagicMock(return_value=[car_a]),
+        notify_of_forecast_if_needed=AsyncMock(),
+    )
+    person_b = _HashableNS(
+        name="Person B",
+        preferred_car="Car B",
+        update_person_forecast=MagicMock(return_value=(datetime(2026, 1, 16, 9, 0, tzinfo=pytz.UTC), 20.0)),
+        get_authorized_cars=MagicMock(return_value=[car_b]),
+        notify_of_forecast_if_needed=AsyncMock(),
+    )
+
+    home._cars = [car_a, car_b]
+    home._persons = [person_a, person_b]
+
+    # Force optimizer to cross-assign: person_a → car_b, person_b → car_a
+    # Both pairs are unauthorized (raw_energy == 0.0), so REJECTING fires
+    with patch(
+        "custom_components.quiet_solar.ha_model.home.hungarian_algorithm",
+        return_value={0: 1, 1: 0},
+    ):
+        result = await home.compute_and_set_best_persons_cars_allocations(
+            time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
+            force_update=True,
+            do_notify=False,
+        )
+
+    # Both cross-assignments should be rejected — no person assigned
+    assert len(result) == 0
+    assert car_a.current_forecasted_person is None
+    assert car_b.current_forecasted_person is None
+
+
 async def test_home_recompute_people_historical_data(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
