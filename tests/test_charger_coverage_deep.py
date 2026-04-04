@@ -747,7 +747,7 @@ class TestCheckLoadActivityAndConstraints:
         assert any(c.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN for c in cts)
 
     @pytest.mark.asyncio
-    async def test_person_coverage_past_usage_time_debug(self):
+    async def test_person_coverage_past_usage_time_debug(self, caplog):
         """Bug 116/5: past next_usage_time logs at DEBUG and skips warning."""
         *_, charger, car, now = self._setup()
         _plug_car(charger, car, now)
@@ -762,10 +762,13 @@ class TestCheckLoadActivityAndConstraints:
             return_value=(False, past_time, 80.0, person_mock)
         )
 
-        await charger.check_load_activity_and_constraints(now)
-        # The person should be set to None after the past-time check triggers
-        # (the code sets person = None in the is_person_covered is True branch,
-        # but for the False + past case, it just logs debug and continues)
+        with caplog.at_level(logging.DEBUG):
+            await charger.check_load_activity_and_constraints(now)
+
+        # Past-usage path should log at DEBUG, not WARNING
+        person_logs = [r for r in caplog.records if "TestPerson" in r.getMessage()]
+        assert any(r.levelno == logging.DEBUG for r in person_logs)
+        assert all(r.levelno < logging.WARNING for r in person_logs)
 
     @pytest.mark.asyncio
     async def test_non_percent_car(self):
