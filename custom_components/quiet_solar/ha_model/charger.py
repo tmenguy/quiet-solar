@@ -3568,7 +3568,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         person = None
                     elif is_person_covered is False:
                         triplet = (self.car.name, person.name, next_usage_time)
-                        if next_usage_time is not None and next_usage_time < time:
+                        if next_usage_time < time:
                             _LOGGER.debug(
                                 "plugged car %s assigned to person %s: next usage %s is in the past, skipping coverage warning",
                                 self.car.name,
@@ -4710,25 +4710,21 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     charger_is_zero = self.is_charging_power_zero(time=time, for_duration=for_duration)
 
                 if charger_is_zero is True:
-                    if sensor_result is None:
-                        _LOGGER.warning(
-                            "update_value_callback (is %%:%s):%s %s expected to be charging but no power detected"
-                            " (skipping error — SOC sensor unavailable)",
-                            is_target_percent,
-                            self.name,
-                            self.car.name,
+                    _LOGGER.error(
+                        "update_value_callback (is %%:%s):%s %s expected to be charging but no power detected"
+                        " going to the car over the last %s seconds",
+                        is_target_percent,
+                        self.name,
+                        self.car.name,
+                        CHARGER_CHECK_REAL_POWER_WINDOW_S,
+                    )
+                    if self.possible_charge_error_start_time is None:
+                        self.possible_charge_error_start_time = time
+                        await self.on_device_state_change(
+                            time=time,
+                            device_change_type=DEVICE_STATUS_CHANGE_ERROR,
+                            message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected",
                         )
-                    else:
-                        _LOGGER.error(
-                            f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name} expected to be charging but no power detected going to the car over the last {CHARGER_CHECK_REAL_POWER_WINDOW_S} seconds"
-                        )
-                        if self.possible_charge_error_start_time is None:
-                            self.possible_charge_error_start_time = time
-                            await self.on_device_state_change(
-                                time=time,
-                                device_change_type=DEVICE_STATUS_CHANGE_ERROR,
-                                message=f"There is no power being delivered to the car ({self.car.name}) while charging was expected",
-                            )
                 else:
                     self.possible_charge_error_start_time = None
 

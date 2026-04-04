@@ -384,55 +384,6 @@ def test_persons_with_authorized_car_kept_in_optimization():
 
 
 # =============================================================================
-# Bug 4: False no-power-detected error — SOC sensor unavailable guard
-# =============================================================================
-
-
-def test_zero_power_error_skipped_when_sensor_unavailable(caplog):
-    """Bug 4: zero-power error is skipped (downgraded to WARNING) when SOC sensor is None."""
-    sensor_result = None
-    charger_is_zero = True
-    is_target_percent = True
-    name = "Test Charger"
-    car_name = "Test Car"
-
-    with caplog.at_level(logging.WARNING):
-        if charger_is_zero:
-            if sensor_result is None:
-                logging.getLogger().warning(
-                    "update_value_callback: %s %s expected to be charging but no power detected"
-                    " (skipping error — SOC sensor unavailable)",
-                    name,
-                    car_name,
-                )
-            else:
-                logging.getLogger().error("should not appear")
-
-    assert len(caplog.records) == 1
-    assert "skipping error" in caplog.records[0].message
-    assert caplog.records[0].levelno == logging.WARNING
-
-
-def test_zero_power_error_fires_when_sensor_available(caplog):
-    """Bug 4: zero-power error still fires normally when SOC sensor has a value."""
-    sensor_result = 50.0  # sensor available
-    charger_is_zero = True
-
-    with caplog.at_level(logging.ERROR):
-        if charger_is_zero:
-            if sensor_result is None:
-                logging.getLogger().warning("should not appear")
-            else:
-                logging.getLogger().error(
-                    "expected to be charging but no power detected",
-                )
-
-    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
-    assert len(error_records) == 1
-    assert "no power detected" in error_records[0].message
-
-
-# =============================================================================
 # Bug 8: Startup lazy safe value — log downgrade to DEBUG
 # =============================================================================
 
