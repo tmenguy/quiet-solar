@@ -139,10 +139,10 @@ Startup race condition — entity hasn't reported a value yet. Code already hand
 1. **Bug 1 (NoneType):** `apply_budget_strategy` never crashes. Cooldown-excluded chargers have their `budgeted_amp` initialized to their current amp before budgeting runs. Defensive guard in `get_budget_amps()`/`get_current_charging_amps()` returns `[0.0, 0.0, 0.0]` for `None` values.
 2. **Bug 2 (IndexError):** `adapt_repartition` never crashes on empty `power_sorted_cmds`. When the list is empty, the slot is skipped.
 3. **Bug 3 (empty commands):** `adapt_power_steps_budgeting_low_level` has an explicit `return []` for the `last_cmd_idx_ok < 0` case. Log downgraded from ERROR to WARNING.
-4. **Bug 4 (false error):** The zero-power-detected check skips or reduces severity when the car target entity is unavailable/stale. With Bug 1 fixed, most occurrences should resolve.
+4. **Bug 4 (false error):** ~~Reverted during review~~ — the zero-power error fires regardless of SOC sensor availability, since the power measurement is independent of the SOC reading. With Bug 1 fixed, most false positives should resolve.
 5. **Bug 5 (person warning):** The `is_person_covered: False` warning is rate-limited to once per `(car, person, next_usage_time)` triplet, then suppressed until state changes.
 6. **Bug 6 (unauthorized):** Persons with no authorized car in the current set are pre-filtered before the optimizer. Post-filter rejection log downgraded to DEBUG.
-7. **Bug 7 (except syntax):** All 3 occurrences use correct `except (ValueError, TypeError):` tuple syntax.
+7. **Bug 7 (except syntax):** ~~Skipped~~ — Python 3.14 treats comma-separated exceptions as implicit tuples; the syntax works correctly. No code change needed.
 8. **Bug 8 (lazy safe):** Startup lazy safe value warnings downgraded to DEBUG.
 9. **Bug 9 (battery startup):** Battery `probe_if_command_set` warnings downgraded to DEBUG.
 10. **No regressions:** All existing tests pass and 100% test coverage is maintained.
@@ -175,11 +175,9 @@ Startup race condition — entity hasn't reported a value yet. Code already hand
   - [x] 2.2 Add test: `adapt_repartition` with empty `power_sorted_cmds` does not crash and returns correctly
   - [x] 2.3 Add test: `adapt_repartition` skips slots where budget constraints eliminate all commands
 
-- [x] Task 3: Fix Bug 7 — Python 2-style except syntax (AC: #7)
-  - [x] 3.1 Fix `home.py:194`: change `except ValueError, TypeError, IndexError:` to `except (ValueError, TypeError, IndexError):`
-  - [x] 3.2 Fix `home.py:852`: change `except ValueError, TypeError, KeyError:` to `except (ValueError, TypeError, KeyError):`
-  - [x] 3.3 Fix `home.py:4387`: change `except ValueError, TypeError:` to `except (ValueError, TypeError):`
-  - [x] 3.4 Add tests: verify `TypeError` is caught correctly (e.g., `float(None)` → `TypeError` caught, not propagated)
+- [ ] ~~Task 3: Fix Bug 7 — Python 2-style except syntax (AC: #7)~~ SKIPPED — Python 3.14 implicit tuple works correctly
+  - [ ] ~~3.1-3.3~~ No code change needed
+  - [x] 3.4 Tests confirm TypeError is caught correctly via implicit tuple
 
 - [x] Task 4: Fix Bug 3 — empty power sorted commands + latent bug (AC: #3)
   - [x] 4.1 In `adapt_power_steps_budgeting_low_level` (`constraints.py:1208-1215`): add explicit `if last_cmd_idx_ok < 0: return []` before the fallthrough
@@ -187,10 +185,8 @@ Startup race condition — entity hasn't reported a value yet. Code already hand
   - [x] 4.3 Add test: `adapt_power_steps_budgeting_low_level` returns empty list when all commands exceed budget
   - [x] 4.4 Verify existing tests still pass
 
-- [x] Task 5: Fix Bug 4 — false no-power-detected error (AC: #4)
-  - [x] 5.1 In `update_value_callback` (`charger.py:4667-4700`): before the 600s zero-power check, verify that the car target entity is available. If unavailable, skip the check or log at WARNING instead of ERROR and do NOT trigger `DEVICE_STATUS_CHANGE_ERROR`
-  - [x] 5.2 Add test: zero-power check is skipped when target entity is unavailable
-  - [x] 5.3 Add test: zero-power check still fires normally when target entity is available
+- [ ] ~~Task 5: Fix Bug 4 — false no-power-detected error (AC: #4)~~ REVERTED — power measurement is independent of SOC sensor; error should fire regardless
+  - [ ] ~~5.1-5.3~~ Reverted during review; Bug 1 fix resolves root cause
 
 - [x] Task 6: Fix Bug 5 — is_person_covered warning spam (AC: #5)
   - [x] 6.1 In charger constraint handling (`charger.py:3561-3564`): rate-limit the `is_person_covered: False` warning — emit once per `(car, person, next_usage_time)` triplet, then suppress until state changes. Use an instance-level dict to track already-warned triplets
