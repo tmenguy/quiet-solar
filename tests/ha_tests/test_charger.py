@@ -3107,7 +3107,7 @@ async def test_charger_constraint_update_value_callback(
     charger_device._expected_charge_state.last_ping_time_success = now - timedelta(seconds=3600)
 
     car_device.car_charge_percent_sensor = "sensor.car_soc"
-    car_device.get_car_charge_percent = MagicMock(return_value=None)
+    car_device.get_car_charge_percent = MagicMock(return_value=50)
     car_device.is_car_charge_growing = MagicMock(return_value=False)
     car_device.setup_car_charge_target_if_needed = AsyncMock()
 
@@ -3131,6 +3131,7 @@ async def test_charger_constraint_update_value_callback(
     assert result is not None
     assert do_continue is True
     charger_device.on_device_state_change.assert_awaited()
+
 
 
 async def test_charger_constraint_update_value_callback_unplugged(

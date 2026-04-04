@@ -1211,6 +1211,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         elif last_cmd_idx_ok >= 0:
             # we have some commands that are ok, so we can use them
             out_sorted_commands = self._power_sorted_cmds[: last_cmd_idx_ok + 1]
+        else:
+            # all commands exceed budget — explicit empty return
+            return []
 
         return out_sorted_commands
 
@@ -1378,6 +1381,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             use_production_limits=use_production_limits,
                         )
                     )
+                    if len(power_sorted_cmds) == 0:
+                        continue
                     if init_energy_delta >= 0.0:
                         if current_command_power == 0 and allow_change_state is False:
                             # we do not want to change the state of the load, so we cannot add energy
@@ -1851,8 +1856,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     break
 
             if has_a_cmd is False:
-                _LOGGER.error(
-                    f"compute_best_period_repartition: no power sorted commands in as fast as possible {self.name}"
+                _LOGGER.warning(
+                    "compute_best_period_repartition: no power sorted commands in as fast as possible %s", self.name
                 )
                 final_ret = False
             else:
@@ -2052,7 +2057,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     quantity_to_be_added = local_quantity_to_be_added
 
             if has_a_cmd is False:
-                _LOGGER.error(
+                _LOGGER.warning(
                     "compute_best_period_repartition: no power sorted commands for green energy %s", self.name
                 )
                 final_ret = False
@@ -2282,8 +2287,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             break
 
                     if has_a_cmd is False:
-                        _LOGGER.error(
-                            f"compute_best_period_repartition: no power sorted commands for mandatory per price repartition {self.name}"
+                        _LOGGER.warning(
+                            "compute_best_period_repartition: no power sorted commands for mandatory per price repartition %s",
+                            self.name,
                         )
 
             quantity_to_be_added = self._adapt_commands(

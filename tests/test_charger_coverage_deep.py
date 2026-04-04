@@ -747,6 +747,30 @@ class TestCheckLoadActivityAndConstraints:
         assert any(c.type >= CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN for c in cts)
 
     @pytest.mark.asyncio
+    async def test_person_coverage_past_usage_time_debug(self, caplog):
+        """Bug 116/5: past next_usage_time logs at DEBUG and skips warning."""
+        *_, charger, car, now = self._setup()
+        _plug_car(charger, car, now)
+        charger.get_best_car = MagicMock(return_value=car)
+
+        # Mock get_best_person_next_need to return is_person_covered=False with past usage time
+        past_time = now - timedelta(hours=2)
+        person_mock = MagicMock()
+        person_mock.name = "TestPerson"
+        person_mock.notify_of_forecast_if_needed = AsyncMock()
+        car.get_best_person_next_need = AsyncMock(
+            return_value=(False, past_time, 80.0, person_mock)
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            await charger.check_load_activity_and_constraints(now)
+
+        # Past-usage path should log at DEBUG, not WARNING
+        person_logs = [r for r in caplog.records if "TestPerson" in r.getMessage()]
+        assert any(r.levelno == logging.DEBUG for r in person_logs)
+        assert all(r.levelno < logging.WARNING for r in person_logs)
+
+    @pytest.mark.asyncio
     async def test_non_percent_car(self):
         """Car without SOC sensor uses energy-based constraints."""
         hass, home, charger, _, now = self._setup()

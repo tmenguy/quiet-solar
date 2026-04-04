@@ -368,9 +368,13 @@ class QSChargerStatus:
         return ret
 
     def get_current_charging_amps(self) -> list[float | int]:
+        if self.current_real_max_charging_amp is None or self.current_active_phase_number is None:
+            return [0.0, 0.0, 0.0]
         return self.get_amps_from_values(self.current_real_max_charging_amp, self.current_active_phase_number)
 
     def get_budget_amps(self) -> list[float | int]:
+        if self.budgeted_amp is None or self.budgeted_num_phases is None:
+            return [0.0, 0.0, 0.0]
         return self.get_amps_from_values(self.budgeted_amp, self.budgeted_num_phases)
 
     def update_amps_with_delta(
@@ -918,6 +922,9 @@ class QSChargerGroup:
                         cs.charger._last_amp_change_time is not None
                         and (time - cs.charger._last_amp_change_time).total_seconds() < CHARGER_ADAPTATION_WINDOW_S
                     ):
+                        # Keep current amp as budget so apply_budget_strategy won't crash
+                        cs.budgeted_amp = cs.current_real_max_charging_amp or 0
+                        cs.budgeted_num_phases = cs.current_active_phase_number or (3 if cs.charger.physical_3p else 1)
                         _LOGGER.info(
                             "dyn_handle: skipping %s for budgeting, amp change cooldown (%ss since last change)",
                             cs.name,
@@ -2061,6 +2068,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._inner_num_active_phases: QSStateCmd | None = None
 
         self.possible_charge_error_start_time: datetime | None = None
+        self._warned_person_coverage_triplet: tuple | None = None
 
         self.reset()
 
@@ -3559,9 +3567,25 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if next_usage_time is None or person_min_target_charge is None or is_person_covered is None:
                         person = None
                     elif is_person_covered is False:
-                        _LOGGER.warning(
-                            f"plugged car {self.car.name} is assigned to person {person.name} next usage at {next_usage_time} need min target charge {person_min_target_charge}%, is_person_covered: {is_person_covered}"
-                        )
+                        triplet = (self.car.name, person.name, next_usage_time)
+                        if next_usage_time < time:
+                            _LOGGER.debug(
+                                "plugged car %s assigned to person %s: next usage %s is in the past, skipping coverage warning",
+                                self.car.name,
+                                person.name,
+                                next_usage_time,
+                            )
+                        elif triplet != self._warned_person_coverage_triplet:
+                            self._warned_person_coverage_triplet = triplet
+                            _LOGGER.warning(
+                                "plugged car %s is assigned to person %s next usage at %s"
+                                " need min target charge %s%%, is_person_covered: %s",
+                                self.car.name,
+                                person.name,
+                                next_usage_time,
+                                person_min_target_charge,
+                                is_person_covered,
+                            )
                     else:
                         person = None
 
@@ -4687,7 +4711,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                 if charger_is_zero is True:
                     _LOGGER.error(
-                        f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name} expected to be charging but no power detected going to the car over the last {CHARGER_CHECK_REAL_POWER_WINDOW_S} seconds"
+                        "update_value_callback (is %%:%s):%s %s expected to be charging but no power detected"
+                        " going to the car over the last %s seconds",
+                        is_target_percent,
+                        self.name,
+                        self.car.name,
+                        CHARGER_CHECK_REAL_POWER_WINDOW_S,
                     )
                     if self.possible_charge_error_start_time is None:
                         self.possible_charge_error_start_time = time

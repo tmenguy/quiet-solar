@@ -2518,6 +2518,14 @@ class QSHome(QSDynamicGroup):
                 c_name_to_index[car.name] = len(c_s)
                 c_s.append(car)
 
+            # Pre-filter persons who have no authorized car in the current set
+            c_names = {c.name for c in c_s}
+            p_s = [
+                (person, leave_time, mileage)
+                for person, leave_time, mileage in p_s
+                if any(c.name in c_names for c in person.get_authorized_cars())
+            ]
+
             if len(p_s) == 0 or len(c_s) == 0:
                 _LOGGER.info("get_best_persons_cars_allocations: No persons or cars to allocate")
             else:
@@ -2566,7 +2574,7 @@ class QSHome(QSDynamicGroup):
                 for person_index, car_index in assignment.items():
                     # raw_energy == 0.0 means unauthorized pair — skip it
                     if raw_energy[person_index, car_index] == 0.0:
-                        _LOGGER.warning(
+                        _LOGGER.debug(
                             "get_best_persons_cars_allocations: REJECTING unauthorized assignment Car:%s -> Person:%s",
                             c_s[car_index].name,
                             p_s[person_index][0].name,
@@ -4386,7 +4394,7 @@ class QSSolarHistoryVals:
                             value = float(reset_for_switch_device.get_power_from_switch_state(s.state))
                     except ValueError, TypeError:
                         value = None
-                        _LOGGER.warning("Error loading lazy safe value for %s state %s", self.entity_id, s.state)
+                        _LOGGER.debug("Error loading lazy safe value for %s state %s", self.entity_id, s.state)
                         # is it the same as a bad state above?
 
                 if value is not None:
@@ -4406,7 +4414,7 @@ class QSSolarHistoryVals:
                             do_save = True
 
                     # possibly a wrong state
-                    _LOGGER.warning("Error loading lazy safe value for %s", self.entity_id)
+                    _LOGGER.debug("Error loading lazy safe value for %s", self.entity_id)
 
             if self._current_idx is not None and self._current_idx != now_idx:
                 if self.store_and_flush_current_vals():
