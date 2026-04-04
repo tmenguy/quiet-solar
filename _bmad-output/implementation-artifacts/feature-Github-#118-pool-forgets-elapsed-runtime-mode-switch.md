@@ -25,7 +25,7 @@ When a pool has been running in force-on mode for 11 hours and the user switches
 
 ### Root cause
 
-Two cooperating failures in `push_live_constraint` (`load.py:1305`):
+Three cooperating failures across `push_live_constraint` and `set_live_constraints`:
 
 **Failure 1 — Active constraint replacement requires matching end times (load.py:1351)**
 
@@ -44,6 +44,14 @@ This condition also fails on cross-mode switching because the end times differ.
 
 All constraints created in `check_load_activity_and_constraints` use `initial_value=0`, so there is no mechanism to seed the new constraint with accumulated runtime from outside `push_live_constraint`.
 
+**Failure 4 — `set_live_constraints` silently drops met constraints (load.py:1284)**
+
+Even if carry-over succeeds and `current_value` is transferred correctly, `set_live_constraints` at line 1284 filters out met constraints:
+```python
+self._constraints = [c for c in self._constraints if c.is_constraint_met(time=time) is False]
+```
+This happens **without calling `ack_completed_constraint`**, so `_last_completed_constraint` is never updated. On the next periodic `check_load_activity_and_constraints` call, a fresh constraint is created with `current_value=0` — and the runtime is lost again.
+
 ### Why existing carry logic does not help
 
 | Carry mechanism | Location | Why it fails |
@@ -51,15 +59,77 @@ All constraints created in `check_load_activity_and_constraints` use `initial_va
 | Carry from completed constraint | `load.py:1331-1345` | End time mismatch (tomorrow midnight vs 20:00) |
 | Active constraint replacement | `load.py:1351-1367` | End time mismatch (same reason) |
 | `reset_initial_value_to_follow_prev_if_needed` | `constraints.py:526` | Only fires when `initial_value is None`; hardcoded to `0` |
+| `set_live_constraints` met filter | `load.py:1284` | Silently drops met constraints without `ack_completed_constraint` |
 
 ## Fix Plan
 
-### Fix 1: Carry `current_value` across mode switches in `push_live_constraint`
+### Fix 1: Save runtime and clean up old-mode constraints in `check_load_activity_and_constraints`
+
+**File:** `custom_components/quiet_solar/ha_model/bistate_duration.py`
+**Location:** In the `else` block at line 565, **before** `_build_mode_constraint_items` is called
+
+Before building new-mode constraints, save the max `current_value` from any existing non-override constraint and remove them. This ensures old force-on constraints are cleaned up even when end dates differ from the new default constraint.
+
+```python
+# Save runtime from old-mode constraints and clean them up
+saved_runtime = 0.0
+old_removed = False
+for i, ct in enumerate(self._constraints):
+    if ct.load_info is not None and ct.load_info.get("originator", "") == "user_override":
+        continue  # keep override constraints
+    if ct.current_value > saved_runtime:
+        saved_runtime = ct.current_value
+    self._constraints[i] = None
+    old_removed = True
+
+if old_removed:
+    self._constraints = [c for c in self._constraints if c is not None]
+```
+
+Then after building the new constraint (line 577-588) but before `push_live_constraint`, pre-seed its `current_value`:
+
+```python
+load_mandatory = TimeBasedSimplePowerLoadConstraint(
+    ...
+    initial_value=0,
+    target_value=ct.target_value,
+)
+# Pre-seed with saved runtime from old-mode constraint
+if saved_runtime > 0:
+    load_mandatory.current_value = min(saved_runtime, ct.target_value)
+```
+
+### Fix 2: Intercept immediately-met constraints in `push_live_constraint`
+
+**File:** `custom_components/quiet_solar/home_model/load.py`
+**Location:** In the `else` branch of the active constraint replacement loop, after the carry at lines 1365-1367
+
+After carry-over (either from Fix 1 pre-seeding or from the existing replacement carry at line 1366), the new constraint may be immediately met. If `set_live_constraints` (line 1370) filters it out at line 1284, `_last_completed_constraint` is never set — and the next periodic check recreates the constraint from scratch.
+
+Fix: after the carry-over, check if the constraint is now met. If so, set `_last_completed_constraint` directly, clean up, and return `True` without appending:
+
+```python
+else:
+    self._constraints[i] = None
+    if type(c) == type(constraint) and c.current_value > constraint.current_value:
+        constraint.current_value = min(c.current_value, constraint.target_value)
+    # If carry-over made constraint immediately met, ack and bail out
+    if constraint.is_constraint_met(time=time):
+        self._last_completed_constraint = constraint
+        self._constraints = [x for x in self._constraints if x is not None]
+        return True
+```
+
+**Why not call `ack_completed_constraint`?** It is `async` while `push_live_constraint` is sync. The essential bookkeeping (`_last_completed_constraint = constraint`) is done synchronously. We skip `on_device_state_change(CONSTRAINT_COMPLETED)` — acceptable since the constraint was never active in the solver.
+
+**Guard interaction:** After Fix 2 sets `_last_completed_constraint`, the identity check at lines 1317-1329 will correctly reject subsequent re-pushes of the same Default constraint (same `requested_target_value` + same `end_of_constraint`). Force-on has `target=25h` vs Default `target=8h`, so the guard will not cross-block different modes.
+
+### Fix 3: Carry from active constraints regardless of end time in `push_live_constraint`
 
 **File:** `custom_components/quiet_solar/home_model/load.py`
 **Location:** After the carry-from-completed block (after line 1345), before the active constraint loop (line 1347)
 
-Add a new block that carries `current_value` from an active constraint of the same type, even when end times differ. When the new constraint replaces the old one (mode switch), mark the old one for removal:
+Defense-in-depth: even without Fix 1's pre-seeding, `push_live_constraint` should carry `current_value` from an active constraint of the same type when end times differ (mode switch). Mark the old one for removal:
 
 ```python
 # Carry current_value from active constraint during mode switch
@@ -78,28 +148,18 @@ for i, c in enumerate(self._constraints):
             constraint.current_value,
         )
         break
-```
 
-This must be placed **before** the existing active constraint loop (line 1347) to ensure the old constraint is removed and its runtime is transferred before the duplicate/replacement checks.
-
-**Why this is safe:**
-- `type(c) == type(constraint)` ensures only same-type constraints transfer runtime (e.g., `TimeBasedSimplePowerLoadConstraint` to `TimeBasedSimplePowerLoadConstraint`)
-- The `min(c.current_value, constraint.target_value)` cap prevents `current_value` from exceeding the new target
-- Only one constraint per load is expected (pool/bistate), so the `break` is correct
-- Setting `self._constraints[i] = None` prevents the stale force-on constraint from persisting alongside the new default constraint
-
-**Important:** After this block, clean up `None` entries before the existing loop iterates, or restructure the existing loop to skip `None` entries. The existing loop at line 1347 already tolerates `None` entries since `set_live_constraints` filters them, but the `eq_no_current` call on `None` would crash. Filter first:
-
-```python
 self._constraints = [c for c in self._constraints if c is not None]
 ```
 
-### Fix 2: Relax carry-from-completed for same-load constraints
+**Combined with Fix 2:** After this carry, also check `constraint.is_constraint_met(time)`. If met, set `_last_completed_constraint = constraint` and return `True` without appending — same pattern as Fix 2.
+
+### Fix 4: Relax carry-from-completed end-time condition
 
 **File:** `custom_components/quiet_solar/home_model/load.py`
 **Location:** Lines 1331-1345
 
-Relax the end-time matching condition in the carry-from-completed block. For same-type, same-load constraints, the end time should not be required to match — the runtime accumulated within the same day cycle is what matters:
+Belt-and-suspenders for the case where the force-on constraint was already completed (stored in `_last_completed_constraint`) before the mode switch. Remove the end-time matching requirement:
 
 Change:
 ```python
@@ -123,61 +183,85 @@ if (
 ):
 ```
 
-**Risk assessment:** The end-time check was added in Bug #68 to prevent carrying across unrelated day cycles. Without it, we could carry stale runtime from yesterday's constraint. However, `_last_completed_constraint` is reset when a new day cycle starts (via `ack_completed_constraint`), so the risk is low. If needed, add a same-day check instead:
-
+**Risk:** Could carry stale runtime from a previous day cycle. `_last_completed_constraint` is reset via `ack_completed_constraint` on new day cycles, so the risk is low. If needed, add a same-day safety check:
 ```python
 and self._last_completed_constraint.end_of_constraint.date() == constraint.end_of_constraint.date()
 ```
 
-**Recommendation:** Start with Fix 1 (active constraint carry) which is the primary fix. Fix 2 is a belt-and-suspenders improvement for the case where the force-on constraint has already been completed before the mode switch.
+### Fix priority
+
+| Fix | Layer | Criticality | What it prevents |
+|---|---|---|---|
+| Fix 1 | `bistate_duration.py` | **Must have** | Cleans up stale old-mode constraints + pre-seeds runtime |
+| Fix 2 | `load.py` | **Must have** | Prevents met constraint from being silently dropped and recreated |
+| Fix 3 | `load.py` | **Should have** | Defense-in-depth carry in `push_live_constraint` for any mode switch |
+| Fix 4 | `load.py` | **Nice to have** | Carry from completed constraint across mode switches |
 
 ## Acceptance Criteria
 
-1. When a pool has been running 11h in force-on mode and user switches to default (8h/day), the constraint shows 8h/8h (capped at target) and is immediately satisfied
+1. When a pool has been running 11h in force-on mode and user switches to default (8h/day), the constraint is immediately satisfied, `_last_completed_constraint` is set, and metrics show 8h/8h
 2. When a pool has been running 5h in force-on mode and user switches to default (8h/day), the constraint shows 5h/8h and solver schedules only 3 more hours
 3. When switching from default to force-on, the existing runtime is also preserved
 4. When switching to off mode, constraints are still correctly cleared (existing behavior)
 5. The identity check (same target + same end time as completed) still blocks re-push correctly
 6. The Bug #68 carry-from-completed still works for same-mode target extension (4h→7h)
-7. All existing tests continue to pass
+7. After an immediately-met constraint is acked, subsequent periodic checks do NOT recreate a fresh 0h constraint
+8. Old-mode constraints with different end times are cleaned up (no zombie force-on constraint alongside new default)
+9. All existing tests continue to pass
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add mode-switch carry block in `push_live_constraint` (AC: 1, 2, 3)
+- [ ] Task 1: Save runtime and clean up old-mode constraints in `bistate_duration.py` (AC: 1, 2, 3, 8)
+  - [ ] In `check_load_activity_and_constraints` else block (line 565), save max `current_value` from non-override constraints
+  - [ ] Remove old non-override constraints before building new ones
+  - [ ] Pre-seed new constraint's `current_value` with `min(saved_runtime, target_value)` after creation
+- [ ] Task 2: Intercept immediately-met constraints in `push_live_constraint` (AC: 1, 7)
+  - [ ] In the replacement `else` branch (after line 1367), check `constraint.is_constraint_met(time)`
+  - [ ] If met: set `_last_completed_constraint = constraint`, clean up nulled entries, return `True`
+  - [ ] Apply same pattern after the new mode-switch carry block (Task 3)
+- [ ] Task 3: Carry from active constraints regardless of end time in `push_live_constraint` (AC: 1, 2, 3)
   - [ ] Add carry-from-active block before existing loop at line 1347
-  - [ ] Add `None` cleanup after the new block
-  - [ ] Add debug logging for the carry
-- [ ] Task 2: Relax carry-from-completed end-time condition (AC: 1, 6)
+  - [ ] Carry `current_value` from same-type active constraint, mark old for removal
+  - [ ] Clean up `None` entries after the block
+  - [ ] If immediately met after carry, set `_last_completed_constraint` and return `True`
+- [ ] Task 4: Relax carry-from-completed end-time condition (AC: 6)
   - [ ] Remove or relax the end_of_constraint matching condition at lines 1338-1340
   - [ ] Consider adding a same-day check as a safer alternative
-- [ ] Task 3: Add tests for cross-mode runtime carry (AC: 1, 2, 3, 4, 5, 6, 7)
-  - [ ] Test force-on→default with runtime exceeding new target (11h→8h)
-  - [ ] Test force-on→default with runtime below new target (5h→8h)
+- [ ] Task 5: Add tests (AC: 1, 2, 3, 4, 5, 6, 7, 8, 9)
+  - [ ] Test force-on→default with runtime exceeding new target (11h→8h) — immediately met, `_last_completed_constraint` set
+  - [ ] Test force-on→default with non-midnight finish time (different end dates)
+  - [ ] Test force-on→default with runtime below new target (5h→8h) — partial carry
   - [ ] Test default→force-on runtime preservation
   - [ ] Test that off mode still clears constraints
   - [ ] Test that Bug #68 same-mode extension still works
-  - [ ] Test that identity check still blocks re-push
+  - [ ] Test that identity check blocks re-push after immediately-met ack
+  - [ ] Test that subsequent periodic check does NOT recreate constraint after ack
 
 ## Dev Notes
 
 ### Architecture constraints
 
-- **Two-layer boundary**: The fix is entirely in `home_model/load.py` (domain layer). No HA imports needed.
+- **Two-layer boundary**: Fix spans both `ha_model/bistate_duration.py` (HA layer — mode-switch cleanup) and `home_model/load.py` (domain layer — constraint carry/ack). The bistate fix handles HA-specific mode logic; the load fix handles generic constraint management. No new cross-boundary imports.
 - **Logging**: Use lazy `%s` formatting, no f-strings in log calls, no trailing periods.
 - **Type checking**: Use `type(c) == type(constraint)` (not `isinstance`) — consistent with existing carry logic at line 1335 and 1366.
+- **Async boundary**: `push_live_constraint` is sync; `ack_completed_constraint` is async. The immediately-met intercept sets `_last_completed_constraint` directly (sync) rather than calling `ack_completed_constraint` to avoid async ripple through ~15 callers + ~80 test sites.
 
 ### Key code locations
 
 | File | Lines | What |
 |---|---|---|
-| `home_model/load.py` | 1305-1373 | `push_live_constraint` — main fix location |
-| `home_model/load.py` | 1331-1345 | Carry-from-completed block (Bug #68) |
-| `home_model/load.py` | 1347-1367 | Active constraint replacement loop |
-| `home_model/load.py` | 1106-1122 | `ack_completed_constraint` — sets `_last_completed_constraint` |
+| `ha_model/bistate_duration.py` | 565-605 | `check_load_activity_and_constraints` else block — Fix 1 location |
+| `ha_model/bistate_duration.py` | 577-588 | Constraint creation with `initial_value=0` — pre-seed location |
 | `ha_model/bistate_duration.py` | 278-356 | `_build_mode_constraint_items` — different end times per mode |
-| `ha_model/bistate_duration.py` | 577-588 | Constraint creation with `initial_value=0` |
+| `home_model/load.py` | 1284 | `set_live_constraints` met filter — silent drop of met constraints |
+| `home_model/load.py` | 1305-1373 | `push_live_constraint` — Fix 2, 3, 4 location |
+| `home_model/load.py` | 1317-1329 | Identity check — blocks re-push of same completed constraint |
+| `home_model/load.py` | 1331-1345 | Carry-from-completed block (Bug #68) — Fix 4 location |
+| `home_model/load.py` | 1347-1367 | Active constraint replacement loop — Fix 2 intercept location |
+| `home_model/load.py` | 1106-1122 | `ack_completed_constraint` — async, NOT called from sync fix |
 | `home_model/constraints.py` | 82-147 | `LoadConstraint.__init__` — `initial_value` handling |
 | `tests/test_load_model.py` | — | Existing constraint carry tests |
+| `tests/test_ha_pool.py` | — | Pool-specific tests |
 
 ### Related prior work
 
@@ -194,8 +278,8 @@ and self._last_completed_constraint.end_of_constraint.date() == constraint.end_o
 
 ### Project Structure Notes
 
-- Fix is entirely within `home_model/` (domain layer) — no HA bridge changes needed
-- No new files needed — modify existing `load.py` and `test_load_model.py`
+- Fix spans `ha_model/bistate_duration.py` (mode-switch cleanup) and `home_model/load.py` (constraint carry/ack)
+- No new files needed — modify existing source and test files
 - No config key changes, no UI changes, no translation changes
 
 ### References
