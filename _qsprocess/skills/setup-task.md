@@ -2,11 +2,13 @@
 
 Create a GitHub issue (if needed), set up a feature branch and worktree for parallel development — without touching main's checkout state.
 
+**IMPORTANT: This skill must be fast and automatic.** Do NOT analyze, diagnose, or interpret the user's input (e.g., do not read log files to understand a bug, do not research the codebase). Just pass the text through to the GitHub issue as-is. Deep analysis belongs in `/create-plan`.
+
 ## Input
 
 The user provides ONE of:
 - A story key (e.g., "3.2") referencing an epic in `_bmad-output/planning-artifacts/epics.md`
-- A feature description (free text)
+- A feature description (free text, may include logs or error traces)
 - A path to an external plan `.md` file (e.g., from Cursor) via `--plan /path/to/plan.md`
 - An existing GitHub issue number via `--issue N` (e.g., `--issue 42`)
 
@@ -27,10 +29,10 @@ Capture `issue_number`, `title`, `body`, `labels`, and `story_type` from the JSO
 
 **Otherwise** (new issue — the default):
 
-Determine the issue title and body from the input:
+Derive title and body directly from the input — no codebase analysis, no log interpretation:
 - **Story key**: Look up `_bmad-output/planning-artifacts/epics.md` for the story title and description. Title: `"Story {{story_key}}: {{title}}"`.
-- **Plan file**: Read the plan, extract its title/summary. Title: `"{{plan_title}}"`. Body: summary of the plan.
-- **Free text**: Use the text as title (truncated if long). Body: the full text.
+- **Plan file**: Read the plan, use its title as issue title. Body: the full plan text.
+- **Free text**: Extract a short title (first sentence or first ~80 chars). Body: the full text verbatim (including any logs, traces, etc.).
 
 ```bash
 python scripts/qs/create_issue.py --title "{{title}}" --body "{{body}}" [--labels "{{labels}}"]
