@@ -563,24 +563,32 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}"
             )
         else:
-            # Save runtime from old-mode constraints and clean them up
-            # so mode switches (e.g. force-on → default) preserve accumulated runtime
-            saved_runtime = 0.0
-            old_removed = False
-            for i, existing_ct in enumerate(self._constraints):
-                if existing_ct.load_info is not None and existing_ct.load_info.get("originator", "") == "user_override":
-                    continue
-                if existing_ct.current_value > saved_runtime:
-                    saved_runtime = existing_ct.current_value
-                self._constraints[i] = None
-                old_removed = True
-
-            if old_removed:
-                self._constraints = [c for c in self._constraints if c is not None]
-
             constraints = await self._build_mode_constraint_items(time, bistate_mode, do_push_constraint_after)
 
             if len(constraints) > 0:
+                # Detect mode change: existing non-override constraint has a
+                # different end time than the new constraints → mode switch
+                new_ends = {ct.end_schedule for ct in constraints}
+                mode_changed = any(
+                    c.end_of_constraint not in new_ends
+                    for c in self._constraints
+                    if not (c.load_info is not None and c.load_info.get("originator", "") == "user_override")
+                )
+
+                saved_runtime = 0.0
+                if mode_changed:
+                    # Save runtime from ALL constraints (override counts toward
+                    # daily target just like force-on)
+                    for c in self._constraints:
+                        if c.current_value > saved_runtime:
+                            saved_runtime = c.current_value
+                    # Remove old non-override constraints
+                    for i, c in enumerate(self._constraints):
+                        is_override = c.load_info is not None and c.load_info.get("originator", "") == "user_override"
+                        if not is_override:
+                            self._constraints[i] = None
+                    self._constraints = [c for c in self._constraints if c is not None]
+
                 agend_cts = []
                 for ct in constraints:
                     type = CONSTRAINT_TYPE_MANDATORY_END_TIME
@@ -601,8 +609,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         initial_value=0,
                         target_value=ct.target_value,
                     )
-                    # Pre-seed with saved runtime from old-mode constraint
-                    if saved_runtime > 0:
+                    # Pre-seed only on mode change
+                    if mode_changed and saved_runtime > 0:
                         load_mandatory.current_value = min(saved_runtime, load_mandatory.target_value)
 
                     if ct.agenda_push:
