@@ -1329,7 +1329,9 @@ class AbstractLoad(AbstractDevice):
                 return False
 
             # Carry current_value from completed constraint for same day cycle
-            # so that extending a completed target preserves accumulated runtime
+            # so that extending a completed target preserves accumulated runtime.
+            # Same-cycle carry (Bug #68): end times match.
+            # Cross-mode carry: different end times but deadline not yet passed.
             if (
                 self._last_completed_constraint is not None
                 and type(self._last_completed_constraint) == type(constraint)
@@ -1337,12 +1339,19 @@ class AbstractLoad(AbstractDevice):
                 and (
                     self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint
                     or self._last_completed_constraint.initial_end_of_constraint == constraint.end_of_constraint
+                    or self._last_completed_constraint.end_of_constraint >= time
                 )
             ):
                 constraint.current_value = min(
                     self._last_completed_constraint.current_value,
                     constraint.target_value,
                 )
+
+            # If carry-over (from completed or pre-seeded) made constraint
+            # immediately met, ack and return without appending
+            if constraint.is_constraint_met(time=time):
+                self._last_completed_constraint = constraint
+                return True
 
             for i, c in enumerate(self._constraints):
                 if c.eq_no_current(constraint):
@@ -1365,6 +1374,11 @@ class AbstractLoad(AbstractDevice):
                         # the problem here is that we can loose .... the current value
                         if type(c) == type(constraint) and c.current_value > constraint.current_value:
                             constraint.current_value = min(c.current_value, constraint.target_value)
+                        # If carry-over made constraint immediately met, ack and return
+                        if constraint.is_constraint_met(time=time):
+                            self._last_completed_constraint = constraint
+                            self._constraints = [x for x in self._constraints if x is not None]
+                            return True
 
             self._constraints.append(constraint)
             self.set_live_constraints(time, self._constraints)

@@ -563,6 +563,21 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 f"check_load_activity_and_constraints: bistate _bistate_mode_off {self._bistate_mode_off} for load {self.name}"
             )
         else:
+            # Save runtime from old-mode constraints and clean them up
+            # so mode switches (e.g. force-on → default) preserve accumulated runtime
+            saved_runtime = 0.0
+            old_removed = False
+            for i, existing_ct in enumerate(self._constraints):
+                if existing_ct.load_info is not None and existing_ct.load_info.get("originator", "") == "user_override":
+                    continue
+                if existing_ct.current_value > saved_runtime:
+                    saved_runtime = existing_ct.current_value
+                self._constraints[i] = None
+                old_removed = True
+
+            if old_removed:
+                self._constraints = [c for c in self._constraints if c is not None]
+
             constraints = await self._build_mode_constraint_items(time, bistate_mode, do_push_constraint_after)
 
             if len(constraints) > 0:
@@ -586,6 +601,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         initial_value=0,
                         target_value=ct.target_value,
                     )
+                    # Pre-seed with saved runtime from old-mode constraint
+                    if saved_runtime > 0:
+                        load_mandatory.current_value = min(saved_runtime, load_mandatory.target_value)
+
                     if ct.agenda_push:
                         agend_cts.append(load_mandatory)
                     else:
