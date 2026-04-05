@@ -2399,6 +2399,82 @@ class TestSetLiveConstraints:
 
         # After first constraint, second should have updated start
 
+    def test_set_live_constraints_filters_already_completed(self):
+        """Constraints matching _last_completed_constraint are filtered out.
+
+        Covers bug #120: re-pushed agenda constraint that was already met
+        should not survive into _constraints, preventing spurious force_solving.
+        """
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 20, 0, tzinfo=pytz.UTC)
+        time_now = datetime(2026, 1, 22, 15, 0, tzinfo=pytz.UTC)
+
+        # Simulate a completed constraint
+        completed = self.create_constraint(
+            load, end_time, target_value=100.0, current_value=100.0,
+        )
+        load._last_completed_constraint = completed
+
+        # A new constraint with same target and same end time (re-pushed by agenda)
+        repushed = self.create_constraint(
+            load, end_time, target_value=100.0, current_value=0.0,
+        )
+
+        load.set_live_constraints(time_now, [repushed])
+
+        # The re-pushed constraint should be filtered out
+        assert repushed not in load._constraints
+        assert load._constraints == []
+
+    def test_set_live_constraints_filters_completed_initial_end(self):
+        """Constraint matching _last_completed via initial_end_of_constraint is filtered.
+
+        When the completed constraint had its end extended, re-push uses the
+        original end time.  The filter should still match.
+        """
+        load = self.create_load()
+        original_end = datetime(2026, 1, 22, 20, 0, tzinfo=pytz.UTC)
+        extended_end = datetime(2026, 1, 22, 22, 0, tzinfo=pytz.UTC)
+        time_now = datetime(2026, 1, 22, 15, 0, tzinfo=pytz.UTC)
+
+        completed = self.create_constraint(
+            load, original_end, target_value=100.0, current_value=100.0,
+        )
+        # Simulate that end was extended after completion
+        completed.end_of_constraint = extended_end
+        load._last_completed_constraint = completed
+
+        # Re-pushed constraint uses original end time
+        repushed = self.create_constraint(
+            load, original_end, target_value=100.0, current_value=0.0,
+        )
+
+        load.set_live_constraints(time_now, [repushed])
+
+        # Should be filtered because original_end matches initial_end_of_constraint
+        assert repushed not in load._constraints
+        assert load._constraints == []
+
+    def test_set_live_constraints_keeps_different_target(self):
+        """Constraint with different target_value is NOT filtered, even if end matches."""
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 20, 0, tzinfo=pytz.UTC)
+        time_now = datetime(2026, 1, 22, 15, 0, tzinfo=pytz.UTC)
+
+        completed = self.create_constraint(
+            load, end_time, target_value=100.0, current_value=100.0,
+        )
+        load._last_completed_constraint = completed
+
+        # Different target value — should NOT be filtered
+        new_ct = self.create_constraint(
+            load, end_time, target_value=200.0, current_value=0.0,
+        )
+
+        load.set_live_constraints(time_now, [new_ct])
+
+        assert new_ct in load._constraints
+
 
 # =============================================================================
 # Test push_live_constraint
@@ -2711,12 +2787,14 @@ class TestPushLiveConstraint:
         )
 
         time_now = datetime.now(tz=pytz.UTC)
-        result, _ = load.push_live_constraint(time_now, new_ct)
+        pushed, needs_ack = load.push_live_constraint(time_now, new_ct)
 
-        assert result is True
+        # Dead-on-arrival: no solver-input change (bug #120)
+        assert pushed is False
+        assert needs_ack is True
         # Carry capped at new target: min(14400, 10800) = 10800
         assert new_ct.current_value == 10800.0
-        # Constraint is immediately met so set_live_constraints prunes it
+        # Constraint is immediately met so it's not in _constraints
         assert load._constraints == []
 
     def test_push_live_constraint_no_carry_from_completed_different_end(self):
@@ -2766,6 +2844,147 @@ class TestPushLiveConstraint:
         pushed = [c for c in load._constraints if c is not None]
         assert len(pushed) == 1
         assert pushed[0].current_value == 0.0
+
+    def test_push_live_constraint_dead_on_arrival_returns_false_true(self):
+        """Carry-over making constraint immediately met returns (False, True).
+
+        Bug #120: when carry-over from _last_completed_constraint makes a new
+        constraint immediately met, the return should be (False, True) — no
+        solver-input change was made, but the caller should ack.
+        """
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 23, 59, tzinfo=pytz.UTC)
+
+        # Completed constraint with 4h of runtime
+        completed = self.create_constraint(
+            load, end_time, target_value=14400.0, current_value=14400.0,
+        )
+        load._last_completed_constraint = completed
+        load._constraints = []
+
+        # New constraint with same end, lower target — carry makes it met
+        new_ct = self.create_constraint(
+            load, end_time, target_value=10800.0, current_value=0.0,
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        pushed, needs_ack = load.push_live_constraint(time_now, new_ct)
+
+        # No change to _constraints → pushed=False; needs ack → needs_ack=True
+        assert pushed is False
+        assert needs_ack is True
+        assert load._constraints == []
+
+    def test_push_live_constraint_replace_met_returns_true_true(self):
+        """Replacing existing constraint that becomes met returns (True, True).
+
+        The return True, True at the replacement path (line ~1390) is correct
+        because _constraints WAS modified.  Verify it stays unchanged.
+        """
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC)
+
+        existing = self.create_constraint(
+            load, end_time, target_value=200.0, current_value=150.0,
+        )
+        load._constraints = [existing]
+        load._last_completed_constraint = None
+
+        # Replace with same end, different score; carry min(150, 100)=100 → met
+        new_ct = self.create_constraint(
+            load, end_time, target_value=100.0, current_value=0.0,
+            from_user=True,  # Different score
+        )
+
+        time_now = datetime.now(tz=pytz.UTC)
+        pushed, needs_ack = load.push_live_constraint(time_now, new_ct)
+
+        # _constraints was modified → pushed=True; met → needs_ack=True
+        assert pushed is True
+        assert needs_ack is True
+
+
+# =============================================================================
+# Test agenda re-push loop break (Github-#120)
+# =============================================================================
+
+
+class TestAgendaRepushLoopBreak:
+    """Integration test: agenda re-push after constraint met does not trigger force solve.
+
+    This test simulates the full feedback loop described in bug #120:
+    1. Constraint B is met via update_live_constraints
+    2. Calendar re-pushes B via push_agenda_constraints
+    3. Neither trigger should set force_solving or return pushed=True
+    """
+
+    def create_load(self):
+        """Create a test load."""
+        mock_home = create_minimal_home_model()
+        mock_home.voltage = 230.0
+        mock_home.is_off_grid = MagicMock(return_value=False)
+        mock_home.dashboard_sections = None
+        return AbstractLoad(
+            name="Pool",
+            device_type="test_pool",
+            home=mock_home,
+            **{CONF_POWER: 1500},
+        )
+
+    def test_agenda_repush_after_met_no_force_solve(self):
+        """Full loop: met constraint re-pushed by agenda does not trigger force solve."""
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 20, 0, tzinfo=pytz.UTC)
+        time_now = datetime(2026, 1, 22, 15, 0, tzinfo=pytz.UTC)
+
+        # Step 1: Create and complete a constraint (simulating update_live_constraints ack)
+        original = create_real_constraint(
+            load, end_time=end_time, target_value=14400.0,
+            current_value=14400.0, time_now=time_now,
+        )
+        original.add_or_update_load_info("originator", "agenda")
+        load._last_completed_constraint = original
+        load._constraints = []
+
+        # Step 2: Calendar re-pushes the same constraint
+        repushed = create_real_constraint(
+            load, end_time=end_time, target_value=14400.0,
+            current_value=0.0, time_now=time_now,
+        )
+        repushed.add_or_update_load_info("originator", "agenda")
+
+        changed, to_ack = load.push_agenda_constraints(time_now, [repushed])
+
+        # Neither path should report a change requiring force solve
+        assert changed is False
+        # No constraints should survive
+        assert load._constraints == []
+
+    def test_agenda_repush_via_set_live_constraints_filter(self):
+        """Constraint that bypasses Guard #1 is caught by set_live_constraints filter."""
+        load = self.create_load()
+        end_time = datetime(2026, 1, 22, 20, 0, tzinfo=pytz.UTC)
+        time_now = datetime(2026, 1, 22, 15, 0, tzinfo=pytz.UTC)
+
+        # Completed constraint
+        completed = create_real_constraint(
+            load, end_time=end_time, target_value=14400.0,
+            current_value=14400.0, time_now=time_now,
+        )
+        load._last_completed_constraint = completed
+
+        # Manually add a constraint matching the completed one to _constraints
+        # (simulating a scenario where it slipped through)
+        sneaky = create_real_constraint(
+            load, end_time=end_time, target_value=14400.0,
+            current_value=0.0, time_now=time_now,
+        )
+        load._constraints = [sneaky]
+
+        # set_live_constraints should filter it out
+        load.set_live_constraints(time_now, load._constraints)
+
+        assert load._constraints == []
 
 
 # =============================================================================
@@ -2845,7 +3064,8 @@ class TestModeSwitchRuntimeCarry:
 
         result, needs_ack = load.push_live_constraint(now, default_ct)
 
-        assert result is True
+        # Dead-on-arrival: no solver-input change (bug #120 fix)
+        assert result is False
         # Constraint is immediately met — not appended to _constraints
         assert len(load._constraints) == 0
         # _last_completed_constraint set for identity guard, async ack deferred
@@ -2974,7 +3194,8 @@ class TestModeSwitchRuntimeCarry:
         load._last_completed_constraint = None
 
         result1, _ = load.push_live_constraint(now, ct1)
-        assert result1 is True
+        # Dead-on-arrival: no solver-input change (bug #120 fix)
+        assert result1 is False
         assert load._last_completed_constraint is ct1
 
         # Second push: same target + same end → blocked by identity check
