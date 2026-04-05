@@ -1,6 +1,6 @@
 # Fix: Pool forgets elapsed runtime when switching from force-on to default mode
 
-Status: dev-complete
+Status: done
 issue: 118
 branch: "QS_118"
 
