@@ -3176,12 +3176,12 @@ class TestNonControlledConsumptionBranches:
         result = home.home_non_controlled_consumption_sensor_state_getter("s", now)
         assert result is not None
         # home_available_power = grid(-100) + battery(600) = 500
-        # DC-coupled: inverter_headroom = max(0, 3000 - 2800) = 200
-        # battery charging (600 > 0): dc_redirectable = min(600, 200) = 200
-        # max_available = max(0, -100 + 200) = 100, min(100, 3000) = 100
-        # Grid import is a debt: 200W freed from battery - 100W replaces import = 100W net
-        # 500 > 1.05 * 100 = 105 → clamp fires → max(0, 105) = 105
-        assert home.home_available_power == pytest.approx(105.0, rel=0.01)
+        # DC overflow fix (#122): solar_inferred = 2800+600 = 3400, max = 3000
+        #   dc_overflow = min(max(0, 3400-3000), 600) = 400
+        #   home_available_power = 500 - 400 = 100
+        # Downstream clamp: headroom=200, redirectable=min(600,200)=200
+        #   max_available = max(0, -100+200) = 100 → 100 ≤ 105 → no clamp
+        assert home.home_available_power == pytest.approx(100.0, rel=0.01)
 
     @pytest.mark.asyncio
     async def test_available_power_clamp_boundary_inverter_equals_solar_max(

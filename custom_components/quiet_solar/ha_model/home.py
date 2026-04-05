@@ -1682,6 +1682,31 @@ class QSHome(QSDynamicGroup):
             self.home_consumption = home_consumption
             self.home_available_power = grid_consumption + battery_charge_clamped
 
+            # For DC-coupled: subtract the DC overflow that is forced into the
+            # battery and can never reach AC loads
+            dc_overflow = 0.0
+            if is_battery_dc_coupled and battery_charge_clamped > 0 and solar_production_not_clamped is not None:
+                if self.solar_plant is not None and self.solar_plant.solar_max_output_power_value < MAX_POWER_INFINITE:
+                    dc_overflow = max(0.0, solar_production_not_clamped - self.solar_plant.solar_max_output_power_value)
+                    dc_overflow = min(dc_overflow, battery_charge_clamped)
+                    self.home_available_power -= dc_overflow
+
+            # If grid is importing while battery charges voluntarily, the
+            # system is not redirecting charge to cover AC demand.  Don't
+            # count voluntary charge as available.
+            if battery_charge_clamped > 0:
+                voluntary_charge = battery_charge_clamped - dc_overflow
+                if voluntary_charge > 0 and grid_consumption < -200.0:
+                    prev = self.home_available_power
+                    self.home_available_power = min(self.home_available_power, 0.0)
+                    _LOGGER.warning(
+                        "Home available_power CLAMPED to 0: grid importing %.2f while battery charges %.2f voluntarily (dc_overflow:%.2f), was %.2f",
+                        grid_consumption,
+                        voluntary_charge,
+                        dc_overflow,
+                        prev,
+                    )
+
             # clamp the available power to what could be really available, to not get from the grid
             if self.home_available_power > 0:
                 # we need to check if what is available will "really" be available to consume by any dynamic load ...
