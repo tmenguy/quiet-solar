@@ -2916,14 +2916,18 @@ class TestModeSwitchRuntimeCarry:
         # Runtime preserved: 5h carried
         assert pushed[0].current_value == 5 * 3600.0
 
-    def test_cross_mode_carry_from_completed_different_end(self):
-        """Carry from completed force-on (end=tomorrow) to default (end=today 20:00)."""
+    def test_cross_mode_no_carry_from_completed_different_end(self):
+        """No carry from completed force-on (end=tomorrow) to default (end=today 20:00).
+
+        Carry-from-completed requires matching end times. Cross-mode runtime
+        preservation relies on Fix 1 pre-seeding in bistate_duration.py.
+        """
         load = self.create_load()
         now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
         tomorrow_midnight = datetime(2026, 4, 6, 0, 0, tzinfo=pytz.UTC)
         today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
 
-        # Completed force-on with 11h (deadline tomorrow — still active)
+        # Completed force-on with 11h (deadline tomorrow — different end)
         completed_force = _create_time_based_constraint(
             load, tomorrow_midnight,
             target_value=25 * 3600.0,
@@ -2945,9 +2949,12 @@ class TestModeSwitchRuntimeCarry:
         result = load.push_live_constraint(now, default_ct)
 
         assert result is True
-        # Carry from completed: min(11h, 8h target) = 8h → immediately met
-        assert default_ct.current_value == 8 * 3600.0
-        assert load._last_completed_constraint is default_ct
+        # No carry — end times differ, so constraint is appended with current_value=0
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        assert pushed[0].current_value == 0.0
+        # _last_completed_constraint unchanged
+        assert load._last_completed_constraint is completed_force
 
     def test_identity_check_blocks_repush_after_immediately_met(self):
         """After immediately-met ack, identity check blocks re-push of same constraint."""
@@ -3046,13 +3053,16 @@ class TestModeSwitchRuntimeCarry:
         assert pushed[0].current_value == 4 * 3600.0
 
     def test_no_stale_carry_from_previous_day(self):
-        """Runtime from yesterday's completed constraint should not carry to today."""
+        """Runtime from yesterday's completed constraint should not carry to today.
+
+        End times differ (yesterday vs today), so carry-from-completed does not fire.
+        """
         load = self.create_load()
         now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
         yesterday_2000 = datetime(2026, 4, 4, 20, 0, tzinfo=pytz.UTC)
         today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
 
-        # Yesterday's completed constraint — deadline has passed
+        # Yesterday's completed constraint — different end time
         completed = _create_time_based_constraint(
             load, yesterday_2000,
             target_value=8 * 3600.0,
@@ -3075,7 +3085,7 @@ class TestModeSwitchRuntimeCarry:
         assert result is True
         pushed = [c for c in load._constraints if c is not None]
         assert len(pushed) == 1
-        # No carry — yesterday's deadline has passed
+        # No carry — end times differ
         assert pushed[0].current_value == 0.0
 
     def test_same_end_replacement_carry_immediately_met(self):

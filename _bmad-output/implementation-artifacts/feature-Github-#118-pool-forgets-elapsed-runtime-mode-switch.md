@@ -221,15 +221,16 @@ and self._last_completed_constraint.end_of_constraint.date() == constraint.end_o
   - [x] Also in the replacement `else` branch (same-end-time replacement with carry)
 - [x] Task 3: **Dropped** — carry from active constraints regardless of end time
   - Removed during implementation: too broad, interfered with charger constraints (different end times are legitimate for chargers). Fix 1 handles active constraint cleanup at the bistate level instead.
-- [x] Task 4: Relax carry-from-completed end-time condition (AC: 6)
-  - [x] Added `or self._last_completed_constraint.end_of_constraint >= time` to allow cross-mode carry
-  - [x] Preserves original Bug #68 same-end-time matching as primary path
-  - [x] Staleness guard: completed constraint deadline must not have passed
+- [x] Task 4: **Reverted** — relaxed carry-from-completed end-time condition
+  - Removed `or self._last_completed_constraint.end_of_constraint >= time` during review
+  - Too broad: fires for any completed constraint whose deadline hasn't passed, not just cross-mode switches
+  - Cross-mode runtime preservation relies solely on Fix 1 (bistate pre-seeding)
+  - Bug #68 same-end-time matching preserved unchanged
 - [x] Task 5: Add tests (AC: 1, 2, 3, 4, 5, 6, 7, 8, 9)
   - [x] Test force-on→default with runtime exceeding new target (11h→8h) — immediately met
   - [x] Test force-on→default with runtime below new target (5h→8h) — partial carry
   - [x] Test default→force-on runtime preservation via completed carry
-  - [x] Test cross-mode carry from completed with different end times
+  - [x] Test cross-mode NO carry from completed with different end times (Fix 4 reverted)
   - [x] Test identity check blocks re-push after immediately-met ack
   - [x] Test Fix 1 cleanup simulation at push level
   - [x] Test Bug #68 same-mode extension still works

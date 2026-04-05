@@ -1331,7 +1331,6 @@ class AbstractLoad(AbstractDevice):
             # Carry current_value from completed constraint for same day cycle
             # so that extending a completed target preserves accumulated runtime.
             # Same-cycle carry (Bug #68): end times match.
-            # Cross-mode carry: different end times but deadline not yet passed.
             if (
                 self._last_completed_constraint is not None
                 and type(self._last_completed_constraint) == type(constraint)
@@ -1339,7 +1338,6 @@ class AbstractLoad(AbstractDevice):
                 and (
                     self._last_completed_constraint.end_of_constraint == constraint.end_of_constraint
                     or self._last_completed_constraint.initial_end_of_constraint == constraint.end_of_constraint
-                    or self._last_completed_constraint.end_of_constraint >= time
                 )
             ):
                 constraint.current_value = min(
