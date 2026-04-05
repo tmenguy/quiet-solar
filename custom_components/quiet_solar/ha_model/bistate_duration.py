@@ -584,7 +584,6 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 # end times happen to coincide.
                 if self._previous_bistate_mode is not None and self._previous_bistate_mode != bistate_mode:
                     mode_changed = True
-                self._previous_bistate_mode = bistate_mode
 
                 saved_runtime = 0.0
                 if mode_changed:
@@ -647,6 +646,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}"
                         )
+
+        self._previous_bistate_mode = bistate_mode
 
         await self.update_current_metrics(time)
 
