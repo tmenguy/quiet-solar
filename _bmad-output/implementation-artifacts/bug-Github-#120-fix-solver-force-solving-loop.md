@@ -1,6 +1,6 @@
 # Bug Fix: Fix solver force-solving loop
 
-Status: dev-complete
+Status: done
 issue: 120
 branch: "QS_120"
 
