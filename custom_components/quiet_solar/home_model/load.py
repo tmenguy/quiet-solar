@@ -1289,6 +1289,30 @@ class AbstractLoad(AbstractDevice):
 
         self._constraints = [c for c in self._constraints if c.is_constraint_met(time=time) is False]
 
+        # Filter out constraints matching the last completed one (bug #120)
+        if self._last_completed_constraint is not None:
+            lc = self._last_completed_constraint
+            before = len(self._constraints)
+            self._constraints = [
+                c
+                for c in self._constraints
+                if not (
+                    c.requested_target_value == lc.requested_target_value
+                    and (
+                        c.end_of_constraint == lc.end_of_constraint
+                        or c.end_of_constraint == lc.initial_end_of_constraint
+                    )
+                )
+            ]
+            if len(self._constraints) != before:
+                _LOGGER.warning(
+                    "set_live_constraints: removed %d already-completed "
+                    "constraint(s) matching last completed %s for %s",
+                    before - len(self._constraints),
+                    lc.name,
+                    self.name,
+                )
+
         # recompute the constraint start:
         kept = []
         current_start = DATETIME_MIN_UTC
@@ -1357,10 +1381,11 @@ class AbstractLoad(AbstractDevice):
                 )
 
             # If carry-over (from completed or pre-seeded) made constraint
-            # immediately met, guardrail _last_completed and signal caller to ack
+            # immediately met, guardrail _last_completed and signal caller to ack.
+            # Return (False, True): no solver-input change was made (bug #120)
             if constraint.is_constraint_met(time=time):
                 self._last_completed_constraint = constraint
-                return True, True
+                return False, True
 
             for i, c in enumerate(self._constraints):
                 if c.eq_no_current(constraint):

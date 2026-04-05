@@ -5004,8 +5004,8 @@ class TestAgendaConstraintNotKilledWhenEventClose:
         car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
 
         result = await charger.check_load_activity_and_constraints(now)
-        # do_force_solve was set → constraint logic ran through line 2932
-        assert result is True
+        # Bug #120 fix: dead-on-arrival constraint no longer sets do_force_solve
+        assert result is False
 
 
 # =============================================================================

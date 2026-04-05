@@ -1,6 +1,6 @@
 # Bug Fix: Fix solver force-solving loop
 
-Status: ready-for-dev
+Status: dev-complete
 issue: 120
 branch: "QS_120"
 
@@ -36,18 +36,18 @@ When a constraint was removed from `_constraints` (by the previous `update_live_
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Fix `set_live_constraints` -- filter out already-completed constraints (AC: #1)
-  - [ ] 1.1: In `home_model/load.py`, method `set_live_constraints`, after the existing met-constraint filter at line 1290, add filtering for constraints matching `_last_completed_constraint`
-  - [ ] 1.2: Match on `requested_target_value` AND (`end_of_constraint` == lc.`end_of_constraint` OR `end_of_constraint` == lc.`initial_end_of_constraint`)
-  - [ ] 1.3: Add warning log when constraints are removed by this filter
-- [ ] Task 2: Fix `push_live_constraint` -- correct return for dead-on-arrival (AC: #2, #3)
-  - [ ] 2.1: At line 1361-1363, change `return True, True` to `return False, True`
-  - [ ] 2.2: Verify the other `return True, True` at line 1390 stays unchanged
-- [ ] Task 3: Update tests (AC: #4, #5, #6)
-  - [ ] 3.1: Add test for `set_live_constraints` filtering already-completed constraints
-  - [ ] 3.2: Add test for `push_live_constraint` returning `(False, True)` for dead-on-arrival
-  - [ ] 3.3: Add integration-level test showing the full loop is broken (agenda re-push after constraint met does not trigger force solve)
-  - [ ] 3.4: Run full quality gate to verify 100% coverage and all existing tests pass
+- [x] Task 1: Fix `set_live_constraints` -- filter out already-completed constraints (AC: #1)
+  - [x] 1.1: In `home_model/load.py`, method `set_live_constraints`, after the existing met-constraint filter at line 1290, add filtering for constraints matching `_last_completed_constraint`
+  - [x] 1.2: Match on `requested_target_value` AND (`end_of_constraint` == lc.`end_of_constraint` OR `end_of_constraint` == lc.`initial_end_of_constraint`)
+  - [x] 1.3: Add warning log when constraints are removed by this filter
+- [x] Task 2: Fix `push_live_constraint` -- correct return for dead-on-arrival (AC: #2, #3)
+  - [x] 2.1: At line 1361-1363, change `return True, True` to `return False, True`
+  - [x] 2.2: Verify the other `return True, True` at line 1390 stays unchanged
+- [x] Task 3: Update tests (AC: #4, #5, #6)
+  - [x] 3.1: Add test for `set_live_constraints` filtering already-completed constraints
+  - [x] 3.2: Add test for `push_live_constraint` returning `(False, True)` for dead-on-arrival
+  - [x] 3.3: Add integration-level test showing the full loop is broken (agenda re-push after constraint met does not trigger force solve)
+  - [x] 3.4: Run full quality gate to verify 100% coverage and all existing tests pass
 
 ## Dev Notes
 
@@ -164,9 +164,17 @@ if pushed:
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6
 
 ### Debug Log References
 
 ### Completion Notes List
+- Fix 1: Added already-completed constraint filter in `set_live_constraints` (load.py:1293-1311)
+- Fix 2: Changed dead-on-arrival return from `(True, True)` to `(False, True)` in `push_live_constraint` (load.py:1385)
+- Updated 3 existing tests that depended on old `(True, True)` return semantics
+- Added 7 new tests covering both fix paths and the integration loop break
 
 ### File List
+- `custom_components/quiet_solar/home_model/load.py` — both fixes
+- `tests/test_load_model.py` — new tests + updated existing tests
+- `tests/test_charger_coverage_deep.py` — updated assertion for dead-on-arrival behavior
