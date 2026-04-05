@@ -1439,7 +1439,8 @@ async def test_home_dc_coupled_voluntary_charge_clamp(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
-    # Grid importing -500 W, battery charging 2400 W, no DC overflow
+    # Grid importing -500 W, battery charging 2400 W.
+    # Regardless of overflow amount, voluntary_charge remains > 0 and must clamp available power to 0.
     _setup_home_for_dc_test(
         home,
         is_dc_coupled=True,
@@ -1490,6 +1491,39 @@ async def test_home_ac_coupled_no_dc_overflow(
 
     # AC-coupled: no DC overflow subtraction, raw = 500 + 3600 = 4100
     assert home.home_available_power == pytest.approx(4100.0, abs=1.0)
+
+
+async def test_home_ac_coupled_voluntary_charge_clamp(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC-coupled: voluntary charge clamp fires when grid imports during charge."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # AC-coupled battery charging 2000 W while grid imports -500 W.
+    # dc_overflow = 0 (AC-coupled), voluntary_charge = 2000, grid < -200 → clamp to 0.
+    _setup_home_for_dc_test(
+        home,
+        is_dc_coupled=False,
+        battery_charge=2000.0,
+        solar_production=10000.0,
+        inverter_output=10000.0,
+        grid_consumption=-500.0,
+        inverter_max=12000.0,
+        max_discharge=5000.0,
+    )
+
+    time_now = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
+    home.home_non_controlled_consumption_sensor_state_getter(
+        home.home_non_controlled_consumption_sensor, time_now
+    )
+
+    # raw = -500 + 2000 = 1500, but voluntary clamp → 0
+    assert home.home_available_power == pytest.approx(0.0)
 
 
 async def test_home_dc_coupled_no_solar_plant(

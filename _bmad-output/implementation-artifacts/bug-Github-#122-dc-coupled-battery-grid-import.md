@@ -15,7 +15,7 @@ so that the dyn_handle does not see phantom surplus and increase car charging, c
 1. **DC overflow subtracted**: For DC-coupled systems, `home_available_power` at line 1683 of `ha_model/home.py` subtracts the forced DC overflow (solar production minus inverter max output, capped by battery charge) before the value is stored in history.
 2. **Voluntary charge clamp**: When grid is importing (beyond -200 W noise threshold) while the battery charges voluntarily above DC overflow, `home_available_power` is clamped to 0 with a warning log.
 3. **Downstream clamp untouched**: The existing `max_available_home_power` clamping block (lines 1686-1746) remains as a safety net — no regressions.
-4. **AC-coupled unaffected**: Systems without DC-coupled batteries see zero change in behavior (`dc_overflow = 0`).
+4. **AC-coupled: dc_overflow always 0, voluntary charge clamp applies universally**: For AC-coupled systems, `dc_overflow = 0` (no DC bus overflow). The voluntary charge clamp (grid importing >200 W while battery charges) applies to all battery types — charging from grid should never count as available surplus.
 5. **Tests**: New parametrized tests cover DC-coupled overflow subtraction, voluntary-charge grid-import clamp, AC-coupled no-op, and edge cases (no solar plant, zero battery charge).
 
 ## Tasks / Subtasks
@@ -28,7 +28,8 @@ so that the dyn_handle does not see phantom surplus and increase car charging, c
 - [x] **Task 2 — Tests** (AC: 5)
   - [x] 2.1 Parametrized test for DC-coupled overflow subtraction (adjusted values to avoid downstream clamp interference).
   - [x] 2.2 Test voluntary-charge clamp: grid importing -500 W, voluntary charge 2400 W → home_available_power clamped to 0.
-  - [x] 2.3 Test AC-coupled no-op: same scenario, `is_dc_coupled=False` → dc_overflow = 0, no clamp.
+  - [x] 2.3 Test AC-coupled no-op: `is_dc_coupled=False`, grid exporting → dc_overflow = 0, no clamp.
+  - [x] 2.6 Test AC-coupled voluntary charge clamp: `is_dc_coupled=False`, grid importing -500 W, battery charging 2000 W → clamp to 0.
   - [x] 2.4 Test edge: no solar plant → dc_overflow = 0.
   - [x] 2.5 Test edge: battery_charge_clamped = 0 → dc_overflow = 0, no voluntary clamp.
 
