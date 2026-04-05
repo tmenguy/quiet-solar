@@ -849,3 +849,184 @@ class TestPreviousBistateModeDetection:
         assert len(device._constraints) >= 1
         new_ct = device._constraints[0]
         assert new_ct.current_value == min(5 * 3600.0, new_ct.target_value)
+
+
+# ===================================================================
+# Finding 4: Integration test for Fix 1 — full check_load flow for
+# force-on → default mode switch where runtime exceeds new target
+# ===================================================================
+
+
+class TestModeSwitchRuntimePreservationFullFlow:
+    @pytest.mark.asyncio
+    async def test_force_on_to_default_runtime_capped_and_immediately_met(self, hass, device):
+        """Force-on with 11h runtime → default 8h/day: runtime capped to 8h, constraint immediately met.
+
+        Exercises the FULL check_load_activity_and_constraints flow (not just
+        push_live_constraint in isolation). This is the key scenario for
+        PR #118 Fix 1: when accumulated runtime exceeds the new mode's target,
+        the pre-seeded current_value is capped to min(saved_runtime, target),
+        making the constraint immediately met.
+        """
+        time = datetime.datetime.now(pytz.UTC)
+        tomorrow = time + timedelta(hours=24)
+
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=tomorrow)
+
+        # Step 1: put device in force-on mode and create the 25h constraint
+        device.bistate_mode = "bistate_mode_on"
+        device._constraints = []
+
+        await device.check_load_activity_and_constraints(time)
+        assert device._previous_bistate_mode == "bistate_mode_on"
+        assert len(device._constraints) >= 1
+        force_on_ct = device._constraints[0]
+        assert force_on_ct.target_value == 25 * 3600.0
+
+        # Step 2: simulate 11 hours of accumulated runtime on the force-on constraint
+        force_on_ct.current_value = 11 * 3600.0
+
+        # Step 3: switch to default mode with 8h/day target
+        device.bistate_mode = "bistate_mode_default"
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        device.get_next_time_from_hours = MagicMock(return_value=tomorrow)
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert device._previous_bistate_mode == "bistate_mode_default"
+
+        # The new constraint target is 8h (8 * 3600 = 28800s).
+        # Pre-seeded current_value = min(11h, 8h) = 8h = 28800s.
+        # Since 28800 >= 0.995 * 28800, the constraint is immediately met.
+        # push_live_constraint sets _last_completed_constraint and returns (True, True).
+        assert device._last_completed_constraint is not None
+        completed_ct = device._last_completed_constraint
+        assert completed_ct.target_value == 8.0 * 3600.0
+        assert completed_ct.current_value == 8.0 * 3600.0  # min(11h, 8h) = 8h
+        assert completed_ct.is_constraint_met(time=time)
+
+        # The constraint should NOT remain in _constraints since it was
+        # immediately met (push_live_constraint returns before appending)
+        active_non_override = [
+            c for c in device._constraints
+            if not (c.load_info is not None and c.load_info.get("originator", "") == "user_override")
+        ]
+        assert len(active_non_override) == 0
+
+    @pytest.mark.asyncio
+    async def test_force_on_to_default_runtime_below_target_preserved(self, hass, device):
+        """Force-on with 5h runtime → default 8h/day: runtime preserved as-is.
+
+        Complementary to the capping test above. When saved runtime is below
+        the new target, the full current_value carries over and the constraint
+        remains active (not immediately met).
+        """
+        time = datetime.datetime.now(pytz.UTC)
+        tomorrow = time + timedelta(hours=24)
+
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=tomorrow)
+
+        # Step 1: force-on mode
+        device.bistate_mode = "bistate_mode_on"
+        device._constraints = []
+
+        await device.check_load_activity_and_constraints(time)
+        device._constraints[0].current_value = 5 * 3600.0
+
+        # Step 2: switch to default 8h/day
+        device.bistate_mode = "bistate_mode_default"
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        device.get_next_time_from_hours = MagicMock(return_value=tomorrow)
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        # runtime 5h < target 8h, so constraint is NOT immediately met
+        assert len(device._constraints) >= 1
+        new_ct = device._constraints[0]
+        assert new_ct.target_value == 8.0 * 3600.0
+        assert new_ct.current_value == 5 * 3600.0  # min(5h, 8h) = 5h, preserved
+        assert not new_ct.is_constraint_met(time=time)
+
+
+# ===================================================================
+# Finding 6: Off-mode (AC 4) — switching to off clears constraints,
+# no runtime pre-seeding occurs
+# ===================================================================
+
+
+class TestModeSwitchToOffClearsConstraints:
+    @pytest.mark.asyncio
+    async def test_force_on_to_off_clears_constraints_no_preseeding(self, hass, device):
+        """Force-on with active constraint → off mode: constraints cleared, no pre-seeding.
+
+        Verifies that the mode-change runtime preservation code in the non-off
+        branch does NOT interfere when switching to off mode. The off-mode
+        branch takes a completely different path that wipes constraints.
+        """
+        time = datetime.datetime.now(pytz.UTC)
+        tomorrow = time + timedelta(hours=24)
+
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=tomorrow)
+
+        # Step 1: force-on mode with accumulated runtime
+        device.bistate_mode = "bistate_mode_on"
+        device._constraints = []
+
+        await device.check_load_activity_and_constraints(time)
+        assert len(device._constraints) >= 1
+        device._constraints[0].current_value = 11 * 3600.0
+
+        # Record that _last_completed_constraint is currently None
+        assert device._last_completed_constraint is None
+
+        # Step 2: switch to off mode
+        device.bistate_mode = "bistate_mode_off"
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        # Off mode should have cleared all constraints
+        assert device._constraints == []
+        # No runtime pre-seeding should have happened: _last_completed_constraint
+        # should still be None (off mode doesn't create new constraints)
+        assert device._last_completed_constraint is None
+        # Should have returned True to force a re-solve (constraints were removed)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_default_to_off_clears_constraints_no_preseeding(self, hass, device):
+        """Default mode with active constraint → off mode: constraints cleared.
+
+        Same as above but starting from default mode instead of force-on.
+        """
+        time = datetime.datetime.now(pytz.UTC)
+        tomorrow = time + timedelta(hours=24)
+
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.get_next_time_from_hours = MagicMock(return_value=tomorrow)
+
+        # Step 1: default mode 8h/day with some accumulated runtime
+        device.bistate_mode = "bistate_mode_default"
+        device.default_on_duration = 8.0
+        device.default_on_finish_time = dt_time(hour=7, minute=0, second=0)
+        device._constraints = []
+
+        await device.check_load_activity_and_constraints(time)
+        assert len(device._constraints) >= 1
+        device._constraints[0].current_value = 3 * 3600.0
+
+        assert device._last_completed_constraint is None
+
+        # Step 2: switch to off mode
+        device.bistate_mode = "bistate_mode_off"
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        # Off mode wipes constraints
+        assert device._constraints == []
+        assert device._last_completed_constraint is None
+        assert result is True
