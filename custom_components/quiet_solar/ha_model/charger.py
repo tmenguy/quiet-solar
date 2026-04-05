@@ -3778,6 +3778,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     person_ct=car_charge_person,
                 )
 
+        await self.flush_pending_ack(time)
         return do_force_solve
 
     @property

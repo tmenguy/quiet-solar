@@ -633,6 +633,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}"
                         )
 
+        await self.flush_pending_ack(time)
         await self.update_current_metrics(time)
 
         return do_force_next_solve

@@ -768,6 +768,7 @@ class AbstractLoad(AbstractDevice):
         super().__init__(**kwargs)
 
         self._last_completed_constraint: LoadConstraint | None = None
+        self._pending_ack_constraint: LoadConstraint | None = None
 
         self.current_constraint_current_value: float | None = None
         self.current_constraint_current_energy: float | None = None
@@ -992,6 +993,8 @@ class AbstractLoad(AbstractDevice):
                 if cs_load.is_constraint_active_for_time_period(time):
                     self.push_live_constraint(time, cs_load)
 
+        await self.flush_pending_ack(time)
+
         if stored_executed is not None:
             self._last_completed_constraint = LoadConstraint.new_from_saved_dict(time, self, stored_executed)
         else:
@@ -1120,6 +1123,18 @@ class AbstractLoad(AbstractDevice):
 
         self._last_completed_constraint = constraint
         await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED)
+
+    async def flush_pending_ack(self, time: datetime):
+        """Ack a constraint that was immediately met during push_live_constraint.
+
+        push_live_constraint is sync and cannot call the async
+        ack_completed_constraint directly. Instead it stores the constraint in
+        _pending_ack_constraint; async callers flush it via this method.
+        """
+        if self._pending_ack_constraint is not None:
+            ct = self._pending_ack_constraint
+            self._pending_ack_constraint = None
+            await self.ack_completed_constraint(time, ct)
 
     def get_active_readable_name(self, time: datetime | None = None, filter_for_human_notification=False) -> str | None:
 
@@ -1346,9 +1361,10 @@ class AbstractLoad(AbstractDevice):
                 )
 
             # If carry-over (from completed or pre-seeded) made constraint
-            # immediately met, ack and return without appending
+            # immediately met, set for identity guard and defer async ack
             if constraint.is_constraint_met(time=time):
                 self._last_completed_constraint = constraint
+                self._pending_ack_constraint = constraint
                 return True
 
             for i, c in enumerate(self._constraints):
@@ -1372,10 +1388,11 @@ class AbstractLoad(AbstractDevice):
                         # the problem here is that we can loose .... the current value
                         if type(c) == type(constraint) and c.current_value > constraint.current_value:
                             constraint.current_value = min(c.current_value, constraint.target_value)
-                        # If carry-over made constraint immediately met, ack and return
+                        # If carry-over made constraint immediately met, defer async ack
                         if constraint.is_constraint_met(time=time):
-                            self._last_completed_constraint = constraint
                             self._constraints = [x for x in self._constraints if x is not None]
+                            self._last_completed_constraint = constraint
+                            self._pending_ack_constraint = constraint
                             return True
 
             self._constraints.append(constraint)

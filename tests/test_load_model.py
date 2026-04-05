@@ -2822,7 +2822,7 @@ class TestModeSwitchRuntimeCarry:
         )
 
     def test_force_on_to_default_exceeded_immediately_met(self):
-        """11h force-on → 8h default: constraint immediately met, _last_completed set.
+        """11h force-on → 8h default: constraint immediately met, ack deferred.
 
         Fix 1 (bistate_duration.py) cleans up old constraints and pre-seeds
         current_value before push_live_constraint is called.
@@ -2848,8 +2848,9 @@ class TestModeSwitchRuntimeCarry:
         assert result is True
         # Constraint is immediately met — not appended to _constraints
         assert len(load._constraints) == 0
-        # _last_completed_constraint is set
+        # _last_completed_constraint set for identity guard, async ack deferred
         assert load._last_completed_constraint is default_ct
+        assert load._pending_ack_constraint is default_ct
         assert default_ct.current_value == 8 * 3600.0
 
     def test_force_on_to_default_partial_carry(self):
@@ -3124,6 +3125,7 @@ class TestModeSwitchRuntimeCarry:
         # Carry made it met: min(100h, 50h) = 50h ≥ 0.995*50h → immediately met
         assert new_ct.current_value == 50 * 3600.0
         assert load._last_completed_constraint is new_ct
+        assert load._pending_ack_constraint is new_ct
         # Old constraint removed, new not appended (returned early)
         remaining = [c for c in load._constraints if c is not None]
         assert len(remaining) == 0
