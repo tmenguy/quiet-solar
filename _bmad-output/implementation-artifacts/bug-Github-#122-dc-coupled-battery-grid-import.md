@@ -1,6 +1,6 @@
 # Bug Fix: DC-Coupled Battery Excessive Grid Import
 
-Status: dev-complete
+Status: done
 issue: 122
 branch: "QS_122"
 
