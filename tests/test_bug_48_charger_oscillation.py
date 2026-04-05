@@ -342,7 +342,7 @@ class TestPersonAsapTargetPreservation(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 self.charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info", return_value=False
             ),
-            patch.object(self.charger, "push_live_constraint", return_value=False),
+            patch.object(self.charger, "push_live_constraint", return_value=(False, False)),
         ):
             await self.charger.check_load_activity_and_constraints(self.time)
 
@@ -386,7 +386,7 @@ class TestPersonAsapTargetPreservation(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 self.charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info", return_value=False
             ),
-            patch.object(self.charger, "push_live_constraint", return_value=False),
+            patch.object(self.charger, "push_live_constraint", return_value=(False, False)),
         ):
             await self.charger.check_load_activity_and_constraints(self.time)
 
@@ -436,7 +436,7 @@ class TestPersonAsapTargetPreservation(unittest.IsolatedAsyncioTestCase):
             patch.object(
                 self.charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info", return_value=False
             ),
-            patch.object(self.charger, "push_live_constraint", return_value=False),
+            patch.object(self.charger, "push_live_constraint", return_value=(False, False)),
         ):
             await self.charger.check_load_activity_and_constraints(self.time)
 
@@ -489,7 +489,7 @@ class TestPushLiveConstraintDuplicateDetection:
             load_param="TestCar",
         )
 
-        result = load.push_live_constraint(time, new_constraint)
+        result, _ = load.push_live_constraint(time, new_constraint)
 
         assert result is False, (
             "push_live_constraint should block duplicate when initial_end_of_constraint "
@@ -527,7 +527,7 @@ class TestPushLiveConstraintDuplicateDetection:
             load_param="TestCar",
         )
 
-        result = load.push_live_constraint(time, new_constraint)
+        result, _ = load.push_live_constraint(time, new_constraint)
 
         assert result is True, "Different target value should allow push even if initial_end matches"
 
@@ -560,7 +560,7 @@ class TestPushLiveConstraintDuplicateDetection:
             load_param="TestCar",
         )
 
-        result = load.push_live_constraint(time, new_constraint)
+        result, _ = load.push_live_constraint(time, new_constraint)
 
         assert result is False, "Exact end_of_constraint match should still block duplicate"
 
@@ -593,7 +593,7 @@ class TestNormalChargingFlowRegression(unittest.IsolatedAsyncioTestCase):
 
         def tracking_push(time, constraint):
             push_calls.append(constraint)
-            return True
+            return True, False
 
         with (
             patch.object(self.charger, "is_not_plugged", return_value=False),
@@ -628,7 +628,7 @@ class TestNormalChargingFlowRegression(unittest.IsolatedAsyncioTestCase):
 
         def tracking_push(time, constraint):
             push_calls.append(constraint)
-            return True
+            return True, False
 
         with (
             patch.object(self.charger, "is_not_plugged", return_value=False),
@@ -664,6 +664,6 @@ class TestNormalChargingFlowRegression(unittest.IsolatedAsyncioTestCase):
             load_param="TestCar",
         )
 
-        result = load.push_live_constraint(time, constraint)
+        result, _ = load.push_live_constraint(time, constraint)
 
         assert result is True, "Push should succeed when no last completed constraint exists"

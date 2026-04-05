@@ -768,7 +768,6 @@ class AbstractLoad(AbstractDevice):
         super().__init__(**kwargs)
 
         self._last_completed_constraint: LoadConstraint | None = None
-        self._pending_ack_constraint: LoadConstraint | None = None
 
         self.current_constraint_current_value: float | None = None
         self.current_constraint_current_energy: float | None = None
@@ -916,8 +915,10 @@ class AbstractLoad(AbstractDevice):
     #
     #     return res
 
-    def push_agenda_constraints(self, time: datetime, new_constraints: list[LoadConstraint | None]) -> bool:
-
+    def push_agenda_constraints(
+        self, time: datetime, new_constraints: list[LoadConstraint | None]
+    ) -> tuple[bool, list[LoadConstraint]]:
+        """Push agenda constraints. Returns (changed, constraints_to_ack)."""
         for new_ct in new_constraints:
             new_ct.add_or_update_load_info("originator", "agenda")
 
@@ -951,6 +952,7 @@ class AbstractLoad(AbstractDevice):
         new_constraints = [c for c in new_constraints if c is not None]
 
         res = False
+        to_ack: list[LoadConstraint] = []
 
         if one_c_removed:
             self._constraints = [c for c in self._constraints if c is not None]
@@ -958,9 +960,12 @@ class AbstractLoad(AbstractDevice):
             res = True
 
         for new_ct in new_constraints:
-            res = self.push_live_constraint(time, new_ct) or res
+            pushed, needs_ack = self.push_live_constraint(time, new_ct)
+            if needs_ack:
+                to_ack.append(new_ct)
+            res = pushed or res
 
-        return res
+        return res, to_ack
 
     def get_power_from_switch_state(self, state: str | None) -> float | None:
         if state is None:
@@ -992,8 +997,6 @@ class AbstractLoad(AbstractDevice):
                 # only restore constraints that can still be active
                 if cs_load.is_constraint_active_for_time_period(time):
                     self.push_live_constraint(time, cs_load)
-
-        await self.flush_pending_ack(time)
 
         if stored_executed is not None:
             self._last_completed_constraint = LoadConstraint.new_from_saved_dict(time, self, stored_executed)
@@ -1098,7 +1101,7 @@ class AbstractLoad(AbstractDevice):
 
         for ct in existing_constraints:
             if ct is not None:
-                self.push_live_constraint(time, ct)
+                self.push_live_constraint(time, ct)  # ack ignored: restoring existing constraints
 
         return True
 
@@ -1123,18 +1126,6 @@ class AbstractLoad(AbstractDevice):
 
         self._last_completed_constraint = constraint
         await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED)
-
-    async def flush_pending_ack(self, time: datetime):
-        """Ack a constraint that was immediately met during push_live_constraint.
-
-        push_live_constraint is sync and cannot call the async
-        ack_completed_constraint directly. Instead it stores the constraint in
-        _pending_ack_constraint; async callers flush it via this method.
-        """
-        if self._pending_ack_constraint is not None:
-            ct = self._pending_ack_constraint
-            self._pending_ack_constraint = None
-            await self.ack_completed_constraint(time, ct)
 
     def get_active_readable_name(self, time: datetime | None = None, filter_for_human_notification=False) -> str | None:
 
@@ -1317,11 +1308,16 @@ class AbstractLoad(AbstractDevice):
         if not self._constraints:
             self._constraints = []
 
-    def push_live_constraint(self, time: datetime, constraint: LoadConstraint | None = None) -> bool:
+    def push_live_constraint(self, time: datetime, constraint: LoadConstraint | None = None) -> tuple[bool, bool]:
+        """Push a constraint to the live constraint list.
 
+        Returns (pushed, needs_ack): pushed is True if a change was made,
+        needs_ack is True if the constraint was immediately met and the caller
+        should await ack_completed_constraint(time, constraint).
+        """
         if self.qs_enable_device is False:
             self._constraints = []
-            return True
+            return True, False
 
         if not self._constraints:
             self._constraints = []
@@ -1341,7 +1337,7 @@ class AbstractLoad(AbstractDevice):
                     "Constraint %s not pushed because same end date (or initial end date) and same target value as last completed one",
                     constraint.name,
                 )
-                return False
+                return False, False
 
             # Carry current_value from completed constraint for same day cycle
             # so that extending a completed target preserves accumulated runtime.
@@ -1361,16 +1357,15 @@ class AbstractLoad(AbstractDevice):
                 )
 
             # If carry-over (from completed or pre-seeded) made constraint
-            # immediately met, set for identity guard and defer async ack
+            # immediately met, guardrail _last_completed and signal caller to ack
             if constraint.is_constraint_met(time=time):
                 self._last_completed_constraint = constraint
-                self._pending_ack_constraint = constraint
-                return True
+                return True, True
 
             for i, c in enumerate(self._constraints):
                 if c.eq_no_current(constraint):
                     c.carry_info_from_other_constraint(constraint)
-                    return False
+                    return False, False
                 if c.end_of_constraint == constraint.end_of_constraint or (
                     c.as_fast_as_possible and constraint.as_fast_as_possible
                 ):
@@ -1379,7 +1374,7 @@ class AbstractLoad(AbstractDevice):
                             f"Constraint not pushed because same end date as another one, and same score or type old: {c.name} new not added {constraint.name}"
                         )
                         c.carry_info_from_other_constraint(constraint)
-                        return False
+                        return False, False
                     else:
                         self._constraints[i] = None
                         _LOGGER.info(
@@ -1388,18 +1383,17 @@ class AbstractLoad(AbstractDevice):
                         # the problem here is that we can loose .... the current value
                         if type(c) == type(constraint) and c.current_value > constraint.current_value:
                             constraint.current_value = min(c.current_value, constraint.target_value)
-                        # If carry-over made constraint immediately met, defer async ack
+                        # If carry-over made constraint immediately met, signal caller to ack
                         if constraint.is_constraint_met(time=time):
                             self._constraints = [x for x in self._constraints if x is not None]
                             self._last_completed_constraint = constraint
-                            self._pending_ack_constraint = constraint
-                            return True
+                            return True, True
 
             self._constraints.append(constraint)
             self.set_live_constraints(time, self._constraints)
-            return True
+            return True, False
 
-        return False
+        return False, False
 
     async def update_live_constraints(
         self, time: datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)

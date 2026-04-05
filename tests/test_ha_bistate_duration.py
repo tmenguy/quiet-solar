@@ -642,7 +642,7 @@ class TestQSBiStateDurationCheckLoadActivityModeDefault:
         bistate_check_load_device.bistate_mode = "bistate_mode_default"
         bistate_check_load_device.default_on_duration = None
         bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
-        bistate_check_load_device.push_agenda_constraints = MagicMock(return_value=False)
+        bistate_check_load_device.push_agenda_constraints = MagicMock(return_value=(False, []))
 
         time = datetime.datetime.now(pytz.UTC)
 
@@ -690,7 +690,7 @@ class TestQSBiStateDurationCheckLoadActivityModeAuto:
         bistate_check_load_device.bistate_mode = "bistate_mode_auto"
         bistate_check_load_device.is_load_command_set = MagicMock(return_value=False)
         bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
-        bistate_check_load_device.push_agenda_constraints = MagicMock(return_value=False)
+        bistate_check_load_device.push_agenda_constraints = MagicMock(return_value=(False, []))
 
         time = datetime.datetime.now(pytz.UTC)
 
@@ -752,7 +752,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         hass.states.async_set("switch.test_device", "on")
 
         bistate_check_load_device.set_live_constraints = MagicMock()
-        bistate_check_load_device.push_live_constraint = MagicMock(return_value=True)
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=(True, False))
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
         bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
@@ -779,7 +779,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         hass.states.async_set("switch.test_device", "off")
 
         bistate_check_load_device.set_live_constraints = MagicMock()
-        bistate_check_load_device.push_live_constraint = MagicMock(return_value=True)
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=(True, False))
         bistate_check_load_device.constraint_reset_and_reset_commands_if_needed = MagicMock()
         bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
 
@@ -837,7 +837,7 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
         bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
 
         hass.states.async_set("switch.test_device", "on")
-        bistate_check_load_device.push_live_constraint = MagicMock(return_value=True)
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=(True, False))
 
         result = await bistate_check_load_device.check_load_activity_and_constraints(time)
 

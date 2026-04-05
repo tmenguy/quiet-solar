@@ -633,7 +633,7 @@ class TestModeOffWithFreshOverride:
 
         # Mock push_live_constraint to return False so override is NOT added to _constraints
         # but override_constraint variable is still set
-        device.push_live_constraint = MagicMock(return_value=False)
+        device.push_live_constraint = MagicMock(return_value=(False, False))
         device.set_live_constraints = MagicMock()
 
         result = await device.check_load_activity_and_constraints(time)

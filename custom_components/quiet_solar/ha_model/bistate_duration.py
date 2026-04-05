@@ -505,7 +505,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 target_value=3600.0 * self.override_duration,
                             )
 
-                            if self.push_live_constraint(time, override_constraint):
+                            pushed, needs_ack = self.push_live_constraint(time, override_constraint)
+                            if needs_ack:
+                                await self.ack_completed_constraint(time, override_constraint)
+                            if pushed:
                                 _LOGGER.info(
                                     f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint"
                                 )
@@ -618,7 +621,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     if ct.agenda_push:
                         agend_cts.append(load_mandatory)
                     else:
-                        push_res = self.push_live_constraint(time, load_mandatory)
+                        push_res, needs_ack = self.push_live_constraint(time, load_mandatory)
+                        if needs_ack:
+                            await self.ack_completed_constraint(time, load_mandatory)
                         do_force_next_solve = push_res or do_force_next_solve
                         if push_res:
                             _LOGGER.info(
@@ -626,14 +631,15 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             )
 
                 if len(agend_cts) > 0:
-                    push_res = self.push_agenda_constraints(time, agend_cts)
+                    push_res, agenda_to_ack = self.push_agenda_constraints(time, agend_cts)
+                    for ct_ack in agenda_to_ack:
+                        await self.ack_completed_constraint(time, ct_ack)
                     do_force_next_solve = push_res or do_force_next_solve
                     if push_res:
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}"
                         )
 
-        await self.flush_pending_ack(time)
         await self.update_current_metrics(time)
 
         return do_force_next_solve
