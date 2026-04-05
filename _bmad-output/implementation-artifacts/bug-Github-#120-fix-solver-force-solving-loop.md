@@ -155,11 +155,11 @@ if pushed:
 
 ### References
 
-- [Source: home_model/load.py#set_live_constraints] line 1290 -- met-constraint filter
-- [Source: home_model/load.py#push_live_constraint] line 1361-1363 -- dead-on-arrival return
-- [Source: home_model/load.py#push_live_constraint] line 1390 -- correct return True, True (constraint replaced)
-- [Source: home_model/load.py#update_live_constraints] line 1525 -- len check that triggers force_solving
-- [Source: home_model/load.py#push_agenda_constraints] line 966 -- `res = pushed or res`
+- `home_model/load.py#set_live_constraints` — met-constraint filter (`is_constraint_met` list comprehension)
+- `home_model/load.py#push_live_constraint` — dead-on-arrival return (`return False, True` after `is_constraint_met` check)
+- `home_model/load.py#push_live_constraint` — correct `return True, True` (constraint replaced via `self._constraints[i] = None`)
+- `home_model/load.py#update_live_constraints` — `len(constraints) != len(self._constraints)` check that triggers `force_solving`
+- `home_model/load.py#push_agenda_constraints` — `res = pushed or res` aggregation loop
 
 ## Dev Agent Record
 
