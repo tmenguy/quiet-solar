@@ -246,7 +246,7 @@ and self._last_completed_constraint.end_of_constraint.date() == constraint.end_o
 - **Two-layer boundary**: Fix spans both `ha_model/bistate_duration.py` (HA layer — mode-switch cleanup) and `home_model/load.py` (domain layer — constraint carry/ack). The bistate fix handles HA-specific mode logic; the load fix handles generic constraint management. No new cross-boundary imports.
 - **Logging**: Use lazy `%s` formatting, no f-strings in log calls, no trailing periods.
 - **Type checking**: Use `type(c) == type(constraint)` (not `isinstance`) — consistent with existing carry logic at line 1335 and 1366.
-- **Async boundary**: `push_live_constraint` is sync; `ack_completed_constraint` is async. The immediately-met intercept sets `_last_completed_constraint` directly (sync) rather than calling `ack_completed_constraint` to avoid async ripple through ~15 callers + ~80 test sites.
+- **Async boundary**: `push_live_constraint` is sync and returns `(pushed: bool, needs_ack: bool)`. When `needs_ack` is True the caller (always async) must `await ack_completed_constraint(time, constraint)`. `_last_completed_constraint` is also set as a sync guardrail for the identity check. `push_agenda_constraints` returns `(bool, list[LoadConstraint])` following the same pattern.
 
 ### Supplementary mode-change detection via `_previous_bistate_mode`
 
