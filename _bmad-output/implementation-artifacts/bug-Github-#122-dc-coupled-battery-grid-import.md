@@ -1,6 +1,6 @@
 # Bug Fix: DC-Coupled Battery Excessive Grid Import
 
-Status: ready-for-dev
+Status: dev-complete
 issue: 122
 branch: "QS_122"
 
@@ -20,17 +20,17 @@ so that the dyn_handle does not see phantom surplus and increase car charging, c
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Fix `home_available_power` computation** (AC: 1, 2, 3, 4)
-  - [ ] 1.1 After line 1683 (`self.home_available_power = grid_consumption + battery_charge_clamped`), compute `dc_overflow` for DC-coupled systems and subtract it.
-  - [ ] 1.2 Add voluntary-charge grid-import clamp: if `voluntary_charge > 0` and `grid_consumption < -200.0`, clamp `home_available_power` to `min(self.home_available_power, 0.0)` with `_LOGGER.warning`.
-  - [ ] 1.3 Verify the existing `max_available_home_power` clamp block is unchanged.
+- [x] **Task 1 — Fix `home_available_power` computation** (AC: 1, 2, 3, 4)
+  - [x] 1.1 After line 1683 (`self.home_available_power = grid_consumption + battery_charge_clamped`), compute `dc_overflow` for DC-coupled systems and subtract it.
+  - [x] 1.2 Add voluntary-charge grid-import clamp: if `voluntary_charge > 0` and `grid_consumption < -200.0`, clamp `home_available_power` to `min(self.home_available_power, 0.0)` with `_LOGGER.warning`.
+  - [x] 1.3 Verify the existing `max_available_home_power` clamp block is unchanged.
 
-- [ ] **Task 2 — Tests** (AC: 5)
-  - [ ] 2.1 Parametrized test for DC-coupled: solar 13200 W, inverter max 12000 W, battery charge 3600 W → dc_overflow = 1200 W, home_available_power reduced by 1200.
-  - [ ] 2.2 Test voluntary-charge clamp: grid importing -500 W, voluntary charge 2400 W → home_available_power clamped to 0.
-  - [ ] 2.3 Test AC-coupled no-op: same scenario, `is_dc_coupled=False` → dc_overflow = 0, no clamp.
-  - [ ] 2.4 Test edge: no solar plant → dc_overflow = 0.
-  - [ ] 2.5 Test edge: battery_charge_clamped = 0 → dc_overflow = 0, no voluntary clamp.
+- [x] **Task 2 — Tests** (AC: 5)
+  - [x] 2.1 Parametrized test for DC-coupled overflow subtraction (adjusted values to avoid downstream clamp interference).
+  - [x] 2.2 Test voluntary-charge clamp: grid importing -500 W, voluntary charge 2400 W → home_available_power clamped to 0.
+  - [x] 2.3 Test AC-coupled no-op: same scenario, `is_dc_coupled=False` → dc_overflow = 0, no clamp.
+  - [x] 2.4 Test edge: no solar plant → dc_overflow = 0.
+  - [x] 2.5 Test edge: battery_charge_clamped = 0 → dc_overflow = 0, no voluntary clamp.
 
 ## Dev Notes
 

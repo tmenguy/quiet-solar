@@ -1321,6 +1321,251 @@ async def test_home_non_controlled_consumption_calculation(
     assert home.grid_consumption_power == 200.0
 
 
+def _setup_home_for_dc_test(
+    home,
+    *,
+    is_dc_coupled: bool,
+    battery_charge: float,
+    solar_production: float | None,
+    inverter_output: float,
+    grid_consumption: float,
+    inverter_max: float = 12000.0,
+    max_discharge: float = 5000.0,
+):
+    """Set up home with battery/solar mocks for DC-coupled testing."""
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+
+    battery = MagicMock()
+    battery.charge_discharge_sensor = "sensor.battery_power"
+    battery.get_sensor_latest_possible_valid_value = MagicMock(return_value=battery_charge)
+    battery.battery_get_current_possible_max_discharge_power = MagicMock(return_value=max_discharge)
+    battery.is_dc_coupled = is_dc_coupled
+    battery.clamp_charge_power = MagicMock(side_effect=lambda x: max(0, x))
+
+    solar = MagicMock()
+    solar.solar_inverter_active_power = "sensor.solar_power"
+    solar.solar_inverter_input_active_power = (
+        "sensor.solar_input_power" if solar_production is not None else None
+    )
+
+    def solar_sensor_val(entity_id, tolerance_seconds=None, time=None):
+        if entity_id == "sensor.solar_power":
+            return inverter_output
+        if entity_id == "sensor.solar_input_power":
+            return solar_production
+        return None
+
+    solar.get_sensor_latest_possible_valid_value = MagicMock(side_effect=solar_sensor_val)
+    solar.solar_max_output_power_value = inverter_max
+    solar.solar_production = 0.0
+    solar.inverter_output_power = 0.0
+
+    home.physical_battery = battery
+    home.physical_solar_plant = solar
+    home.accurate_power_sensor = None
+    home._childrens = []
+    home._all_loads = []
+
+    def home_sensor_val(entity_id, tolerance_seconds=None, time=None):
+        if entity_id == home.grid_active_power_sensor:
+            return grid_consumption
+        return None
+
+    home.get_sensor_latest_possible_valid_value = MagicMock(side_effect=home_sensor_val)
+
+
+@pytest.mark.parametrize(
+    ("solar_prod", "inverter_max", "inverter_out", "battery_charge", "grid", "expected_overflow", "expected_avail"),
+    [
+        # DC overflow: solar 14000, inverter max 12000, inverter out 11000
+        # overflow = max(0, 14000-12000) = 2000, min(2000, 3000) = 2000
+        # home_available = 800 + 3000 - 2000 = 1800
+        # Downstream: headroom=1000, redirectable=min(3000,1000)=1000, max_avail=1800 → no clamp
+        (14000.0, 12000.0, 11000.0, 3000.0, 800.0, 2000.0, 1800.0),
+        # No overflow: solar < inverter max
+        # home_available = 300 + 2000 = 2300
+        # Downstream: headroom=2000, redirectable=2000, max_avail=2300 → no clamp
+        (10000.0, 12000.0, 10000.0, 2000.0, 300.0, 0.0, 2300.0),
+    ],
+    ids=["dc_overflow_subtracted", "no_overflow_when_below_max"],
+)
+async def test_home_dc_coupled_overflow_subtraction(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+    solar_prod: float,
+    inverter_max: float,
+    inverter_out: float,
+    battery_charge: float,
+    grid: float,
+    expected_overflow: float,
+    expected_avail: float,
+) -> None:
+    """DC-coupled: home_available_power is reduced by DC overflow."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    _setup_home_for_dc_test(
+        home,
+        is_dc_coupled=True,
+        battery_charge=battery_charge,
+        solar_production=solar_prod,
+        inverter_output=inverter_out,
+        grid_consumption=grid,
+        inverter_max=inverter_max,
+    )
+
+    time_now = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
+    home.home_non_controlled_consumption_sensor_state_getter(
+        home.home_non_controlled_consumption_sensor, time_now
+    )
+
+    # raw = grid + battery_charge, expected = raw - overflow
+    raw = grid + battery_charge
+    assert expected_avail == pytest.approx(raw - expected_overflow)
+    assert home.home_available_power == pytest.approx(expected_avail, abs=1.0)
+
+
+async def test_home_dc_coupled_voluntary_charge_clamp(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Voluntary charge with grid import clamps home_available_power to 0."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Grid importing -500 W, battery charging 2400 W, no DC overflow
+    _setup_home_for_dc_test(
+        home,
+        is_dc_coupled=True,
+        battery_charge=2400.0,
+        solar_production=10000.0,
+        inverter_output=10000.0,
+        grid_consumption=-500.0,
+        inverter_max=12000.0,
+    )
+
+    time_now = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
+    home.home_non_controlled_consumption_sensor_state_getter(
+        home.home_non_controlled_consumption_sensor, time_now
+    )
+
+    # voluntary_charge = 2400 - 0 = 2400, grid < -200 → clamp to 0
+    assert home.home_available_power == pytest.approx(0.0)
+
+
+async def test_home_ac_coupled_no_dc_overflow(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC-coupled system: dc_overflow is always 0, no change in behavior."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # max_discharge=5000 keeps downstream clamp generous for AC-coupled path:
+    # max_avail = max(0, 5000+12000-12000+500) = 5500 → 4100 < 5775 → no clamp
+    _setup_home_for_dc_test(
+        home,
+        is_dc_coupled=False,
+        battery_charge=3600.0,
+        solar_production=13200.0,
+        inverter_output=12000.0,
+        grid_consumption=500.0,
+        inverter_max=12000.0,
+        max_discharge=5000.0,
+    )
+
+    time_now = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
+    home.home_non_controlled_consumption_sensor_state_getter(
+        home.home_non_controlled_consumption_sensor, time_now
+    )
+
+    # AC-coupled: no DC overflow subtraction, raw = 500 + 3600 = 4100
+    assert home.home_available_power == pytest.approx(4100.0, abs=1.0)
+
+
+async def test_home_dc_coupled_no_solar_plant(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """No solar plant: dc_overflow = 0 regardless of DC coupling flag."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+
+    battery = MagicMock()
+    battery.charge_discharge_sensor = "sensor.battery_power"
+    battery.get_sensor_latest_possible_valid_value = MagicMock(return_value=1000.0)
+    # High max discharge so downstream clamp doesn't interfere
+    battery.battery_get_current_possible_max_discharge_power = MagicMock(return_value=5000.0)
+    battery.is_dc_coupled = True
+
+    home.physical_battery = battery
+    home.physical_solar_plant = None
+    home.accurate_power_sensor = None
+    home._childrens = []
+    home._all_loads = []
+
+    def sensor_val(entity_id, tolerance_seconds=None, time=None):
+        if entity_id == home.grid_active_power_sensor:
+            return 300.0
+        return None
+
+    home.get_sensor_latest_possible_valid_value = MagicMock(side_effect=sensor_val)
+
+    time_now = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
+    home.home_non_controlled_consumption_sensor_state_getter(
+        home.home_non_controlled_consumption_sensor, time_now
+    )
+
+    # No solar plant → is_battery_dc_coupled forced False → no overflow
+    # With no solar but battery not None → inverter=0, solar=0
+    # home_available_power = grid + battery_charge = 300 + 1000 = 1300
+    # Downstream (AC path, no solar): max_avail = max_discharge = 5000 → no clamp
+    assert home.home_available_power == pytest.approx(1300.0, abs=1.0)
+
+
+async def test_home_dc_coupled_zero_battery_charge(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Zero battery charge: dc_overflow = 0, no voluntary clamp."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    _setup_home_for_dc_test(
+        home,
+        is_dc_coupled=True,
+        battery_charge=0.0,
+        solar_production=13200.0,
+        inverter_output=12000.0,
+        grid_consumption=500.0,
+        inverter_max=12000.0,
+    )
+
+    time_now = datetime(2026, 1, 15, 12, 0, tzinfo=pytz.UTC)
+    home.home_non_controlled_consumption_sensor_state_getter(
+        home.home_non_controlled_consumption_sensor, time_now
+    )
+
+    # battery_charge = 0 → dc_overflow guard fails → raw = 500 + 0 = 500
+    assert home.home_available_power == pytest.approx(500.0, abs=1.0)
+
+
 async def test_home_update_all_states_basic_flow(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
