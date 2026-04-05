@@ -52,6 +52,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.qs_bistate_current_duration_h: float = 0.0
         self.qs_bistate_current_on_h: float = 0.0
+        self._previous_bistate_mode: str | None = None
 
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
@@ -505,7 +506,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 target_value=3600.0 * self.override_duration,
                             )
 
-                            if self.push_live_constraint(time, override_constraint):
+                            pushed, needs_ack = self.push_live_constraint(time, override_constraint)
+                            if needs_ack:
+                                await self.ack_completed_constraint(time, override_constraint)
+                            if pushed:
                                 _LOGGER.info(
                                     f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint"
                                 )
@@ -566,6 +570,35 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             constraints = await self._build_mode_constraint_items(time, bistate_mode, do_push_constraint_after)
 
             if len(constraints) > 0:
+                # Detect mode change: existing non-override constraint has a
+                # different end time than the new constraints → mode switch
+                new_ends = {ct.end_schedule for ct in constraints}
+                mode_changed = any(
+                    c.end_of_constraint not in new_ends
+                    for c in self._constraints
+                    if not (c.load_info is not None and c.load_info.get("originator", "") == "user_override")
+                )
+
+                # Supplement end-time detection: if the bistate mode string
+                # itself changed we definitely switched modes, even when
+                # end times happen to coincide.
+                if self._previous_bistate_mode is not None and self._previous_bistate_mode != bistate_mode:
+                    mode_changed = True
+
+                saved_runtime = 0.0
+                if mode_changed:
+                    # Save runtime from ALL constraints (override counts toward
+                    # daily target just like force-on)
+                    for c in self._constraints:
+                        if c.current_value > saved_runtime:
+                            saved_runtime = c.current_value
+                    # Remove old non-override constraints
+                    for i, c in enumerate(self._constraints):
+                        is_override = c.load_info is not None and c.load_info.get("originator", "") == "user_override"
+                        if not is_override:
+                            self._constraints[i] = None
+                    self._constraints = [c for c in self._constraints if c is not None]
+
                 agend_cts = []
                 for ct in constraints:
                     type = CONSTRAINT_TYPE_MANDATORY_END_TIME
@@ -573,6 +606,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         type = CONSTRAINT_TYPE_FILLER_AUTO  # will be after battery filling lowest priority
 
                     degraded_type = ct.degraded_type if ct.degraded_type is not None else CONSTRAINT_TYPE_FILLER_AUTO
+
+                    initial_cv = None
+                    if mode_changed and saved_runtime > 0:
+                        initial_cv = min(saved_runtime, ct.target_value)
 
                     load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,
@@ -584,12 +621,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         end_of_constraint=ct.end_schedule,
                         power=self.power_use,
                         initial_value=0,
+                        current_value=initial_cv,
                         target_value=ct.target_value,
                     )
+
                     if ct.agenda_push:
                         agend_cts.append(load_mandatory)
                     else:
-                        push_res = self.push_live_constraint(time, load_mandatory)
+                        push_res, needs_ack = self.push_live_constraint(time, load_mandatory)
+                        if needs_ack:
+                            await self.ack_completed_constraint(time, load_mandatory)
                         do_force_next_solve = push_res or do_force_next_solve
                         if push_res:
                             _LOGGER.info(
@@ -597,12 +638,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             )
 
                 if len(agend_cts) > 0:
-                    push_res = self.push_agenda_constraints(time, agend_cts)
+                    push_res, agenda_to_ack = self.push_agenda_constraints(time, agend_cts)
+                    for ct_ack in agenda_to_ack:
+                        await self.ack_completed_constraint(time, ct_ack)
                     do_force_next_solve = push_res or do_force_next_solve
                     if push_res:
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: bistate load {self.name} pushed agenda constraints {agend_cts}"
                         )
+
+        self._previous_bistate_mode = bistate_mode
 
         await self.update_current_metrics(time)
 

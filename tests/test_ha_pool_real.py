@@ -258,7 +258,7 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         pool_device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        pool_device.push_live_constraint = MagicMock(return_value=True)
+        pool_device.push_live_constraint = MagicMock(return_value=(True, False))
 
         time = datetime.datetime.now(pytz.UTC)
         result = await pool_device.check_load_activity_and_constraints(time)
@@ -277,7 +277,7 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         pool_device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        pool_device.push_live_constraint = MagicMock(return_value=True)
+        pool_device.push_live_constraint = MagicMock(return_value=(True, False))
 
         time = datetime.datetime.now(pytz.UTC)
         result = await pool_device.check_load_activity_and_constraints(time)
@@ -297,7 +297,7 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         pool_device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        pool_device.push_agenda_constraints = MagicMock(return_value=True)
+        pool_device.push_agenda_constraints = MagicMock(return_value=(True, []))
 
         time = datetime.datetime.now(pytz.UTC)
         await pool_device.check_load_activity_and_constraints(time)
@@ -314,7 +314,7 @@ class TestQSPoolCheckLoadActivityAndConstraints:
         pool_device.get_next_time_from_hours = MagicMock(
             return_value=datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=6)
         )
-        pool_device.push_live_constraint = MagicMock(return_value=True)
+        pool_device.push_live_constraint = MagicMock(return_value=(True, False))
         pool_home.is_off_grid = MagicMock(return_value=False)
 
         time = datetime.datetime.now(pytz.UTC)

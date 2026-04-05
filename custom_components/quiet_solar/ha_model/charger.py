@@ -3213,7 +3213,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self._last_completed_constraint = self._boot_last_completed_constraint
                 for ct in self._boot_constraints:
                     if ct.load_param == best_car.name:
-                        if self.push_live_constraint(time, ct):
+                        pushed, needs_ack = self.push_live_constraint(time, ct)
+                        if needs_ack:
+                            await self.ack_completed_constraint(time, ct)
+                        if pushed:
                             do_force_solve = True
 
                 self._boot_constraints = []
@@ -3388,7 +3391,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     support_auto=True,
                 )
 
-                if self.push_live_constraint(time, force_constraint):
+                pushed, needs_ack = self.push_live_constraint(time, force_constraint)
+                if needs_ack:
+                    await self.ack_completed_constraint(time, force_constraint)
+                if pushed:
                     _LOGGER.info(
                         f"check_load_activity_and_constraints: plugged car {self.car.name}  target_charge {target_charge} /  next target {self.car.get_car_target_SOC()} pushed forces constraint {force_constraint.name}"
                     )
@@ -3476,7 +3482,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         support_auto=True,
                     )
 
-                    if self.push_live_constraint(time, user_timed_constraint):
+                    pushed, needs_ack = self.push_live_constraint(time, user_timed_constraint)
+                    if needs_ack:
+                        await self.ack_completed_constraint(time, user_timed_constraint)
+                    if pushed:
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: plugged car {self.car.name} pushed user mandatory constraint {user_timed_constraint.name}"
                         )
@@ -3554,7 +3563,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             support_auto=True,
                         )
 
-                        if self.push_agenda_constraints(time, [car_charge_agenda]):
+                        pushed, agenda_to_ack = self.push_agenda_constraints(time, [car_charge_agenda])
+                        for ct_ack in agenda_to_ack:
+                            await self.ack_completed_constraint(time, ct_ack)
+                        if pushed:
                             _LOGGER.info(
                                 f"check_load_activity_and_constraints: plugged car {self.car.name} pushed mandatory constraint {car_charge_agenda.name}"
                             )
@@ -3677,7 +3689,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     support_auto=True,
                                 )
 
-                                if self.push_live_constraint(time, car_charge_person):
+                                pushed, needs_ack = self.push_live_constraint(time, car_charge_person)
+                                if needs_ack:
+                                    await self.ack_completed_constraint(time, car_charge_person)
+                                if pushed:
                                     _LOGGER.info(
                                         f"check_load_activity_and_constraints: plugged car {self.car.name} pushed usage minimum charge constraint {car_charge_person.name}"
                                     )
@@ -3763,7 +3778,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         support_auto=True,
                     )
 
-                    if self.push_live_constraint(time, car_charge_best_effort):
+                    pushed, needs_ack = self.push_live_constraint(time, car_charge_best_effort)
+                    if needs_ack:
+                        await self.ack_completed_constraint(time, car_charge_best_effort)
+                    if pushed:
                         _LOGGER.info(
                             f"check_load_activity_and_constraints: plugged car {self.car.name} default charge: {self.car.car_default_charge}% pushed filler constraint {car_charge_best_effort.name}"
                         )

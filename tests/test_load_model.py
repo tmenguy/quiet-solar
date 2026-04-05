@@ -16,6 +16,7 @@ from custom_components.quiet_solar.const import (
     CONF_POWER,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
     DASHBOARD_NO_SECTION,
 )
 from custom_components.quiet_solar.home_model.commands import (
@@ -31,6 +32,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     DATETIME_MAX_UTC,
     DATETIME_MIN_UTC,
     MultiStepsPowerLoadConstraint,
+    TimeBasedSimplePowerLoadConstraint,
 )
 from custom_components.quiet_solar.home_model.load import (
     AbstractDevice,
@@ -2451,7 +2453,7 @@ class TestPushLiveConstraint:
         load._constraints = [ct_dummy]
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, None)
+        result, _ = load.push_live_constraint(time_now, None)
 
         assert result is True
         assert load._constraints == []
@@ -2462,7 +2464,7 @@ class TestPushLiveConstraint:
         load._constraints = []
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, None)
+        result, _ = load.push_live_constraint(time_now, None)
 
         # Should return without doing anything significant
         assert load._constraints == []
@@ -2476,7 +2478,7 @@ class TestPushLiveConstraint:
         ct = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC))
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, ct)
+        result, _ = load.push_live_constraint(time_now, ct)
 
         assert result is True
 
@@ -2491,7 +2493,7 @@ class TestPushLiveConstraint:
         new_ct = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0)
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, new_ct)
+        result, _ = load.push_live_constraint(time_now, new_ct)
 
         assert result is False
 
@@ -2508,7 +2510,7 @@ class TestPushLiveConstraint:
         new_ct = self.create_constraint(load, datetime(2026, 1, 22, 12, 0, tzinfo=pytz.UTC), target_value=100.0)
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, new_ct)
+        result, _ = load.push_live_constraint(time_now, new_ct)
 
         assert result is False  # Should be rejected as duplicate
 
@@ -2531,7 +2533,7 @@ class TestPushLiveConstraint:
         )
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, new_ct)
+        result, _ = load.push_live_constraint(time_now, new_ct)
 
         assert result is True
 
@@ -2550,7 +2552,7 @@ class TestPushLiveConstraint:
         )
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, new_ct)
+        result, _ = load.push_live_constraint(time_now, new_ct)
 
         assert result is False
 
@@ -2576,7 +2578,7 @@ class TestPushLiveConstraint:
         )
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, new_ct)
+        result, _ = load.push_live_constraint(time_now, new_ct)
 
         assert result is True
 
@@ -2679,7 +2681,7 @@ class TestPushLiveConstraint:
         )
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, new_ct)
+        result, _ = load.push_live_constraint(time_now, new_ct)
 
         assert result is True
         pushed = [c for c in load._constraints if c is not None]
@@ -2709,7 +2711,7 @@ class TestPushLiveConstraint:
         )
 
         time_now = datetime.now(tz=pytz.UTC)
-        result = load.push_live_constraint(time_now, new_ct)
+        result, _ = load.push_live_constraint(time_now, new_ct)
 
         assert result is True
         # Carry capped at new target: min(14400, 10800) = 10800
@@ -2764,6 +2766,434 @@ class TestPushLiveConstraint:
         pushed = [c for c in load._constraints if c is not None]
         assert len(pushed) == 1
         assert pushed[0].current_value == 0.0
+
+
+# =============================================================================
+# Test mode-switch runtime carry (Github-#118)
+# =============================================================================
+
+
+def _create_time_based_constraint(
+    load,
+    end_time,
+    target_value,
+    current_value=0.0,
+    constraint_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    from_user=False,
+    time_now=None,
+    load_info=None,
+):
+    """Create a TimeBasedSimplePowerLoadConstraint (used by pool/bistate loads)."""
+    if time_now is None:
+        time_now = end_time - timedelta(hours=1)
+    return TimeBasedSimplePowerLoadConstraint(
+        time=time_now,
+        load=load,
+        type=constraint_type,
+        load_info=load_info,
+        start_of_constraint=DATETIME_MIN_UTC,
+        end_of_constraint=end_time,
+        initial_value=0.0,
+        current_value=current_value,
+        target_value=target_value,
+        power=1000.0,
+        from_user=from_user,
+    )
+
+
+class TestModeSwitchRuntimeCarry:
+    """Test runtime carry across mode switches (Github-#118).
+
+    Simulates pool switching between force-on mode (25h target, end=tomorrow
+    midnight) and default mode (e.g. 8h target, end=today 20:00).
+    """
+
+    def create_load(self):
+        """Create a test load."""
+        mock_home = create_minimal_home_model()
+        mock_home.voltage = 230.0
+        mock_home.is_off_grid = MagicMock(return_value=False)
+        mock_home.dashboard_sections = None
+        return AbstractLoad(
+            name="Pool",
+            device_type="test_pool",
+            home=mock_home,
+            **{CONF_POWER: 1500},
+        )
+
+    def test_force_on_to_default_exceeded_immediately_met(self):
+        """11h force-on → 8h default: constraint immediately met, ack deferred.
+
+        Fix 1 (bistate_duration.py) cleans up old constraints and pre-seeds
+        current_value before push_live_constraint is called.
+        """
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # Fix 1 already cleaned up old force-on constraint
+        load._constraints = []
+        load._last_completed_constraint = None
+
+        # New default constraint pre-seeded by Fix 1: current_value=min(11h, 8h)=8h
+        default_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=8 * 3600.0,
+            current_value=min(11 * 3600.0, 8 * 3600.0),
+            time_now=now,
+        )
+
+        result, needs_ack = load.push_live_constraint(now, default_ct)
+
+        assert result is True
+        # Constraint is immediately met — not appended to _constraints
+        assert len(load._constraints) == 0
+        # _last_completed_constraint set for identity guard, async ack deferred
+        assert load._last_completed_constraint is default_ct
+        assert needs_ack is True
+        assert default_ct.current_value == 8 * 3600.0
+
+    def test_force_on_to_default_partial_carry(self):
+        """5h force-on → 8h default: partial carry, constraint not yet met.
+
+        Fix 1 cleans up old constraint and pre-seeds before push.
+        """
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # Fix 1 already cleaned up old force-on constraint
+        load._constraints = []
+        load._last_completed_constraint = None
+
+        # Pre-seeded with min(5h, 8h)=5h
+        default_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=8 * 3600.0,
+            current_value=min(5 * 3600.0, 8 * 3600.0),
+            time_now=now,
+        )
+
+        result, _ = load.push_live_constraint(now, default_ct)
+
+        assert result is True
+        # 5h < 8h: not met, constraint appended
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        assert pushed[0].current_value == 5 * 3600.0
+        assert load._last_completed_constraint is None
+
+    def test_default_to_force_on_runtime_preserved(self):
+        """5h default → force-on: runtime preserved via completed carry."""
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+        tomorrow_midnight = datetime(2026, 4, 6, 0, 0, tzinfo=pytz.UTC)
+
+        # Default constraint was completed with 5h
+        completed_default = _create_time_based_constraint(
+            load, today_2000,
+            target_value=5 * 3600.0,
+            current_value=5 * 3600.0,
+            time_now=now,
+        )
+        load._last_completed_constraint = completed_default
+        load._constraints = []
+
+        # Force-on constraint pushed (pre-seeded with 5h by Fix 1)
+        force_on = _create_time_based_constraint(
+            load, tomorrow_midnight,
+            target_value=25 * 3600.0,
+            current_value=min(5 * 3600.0, 25 * 3600.0),
+            from_user=True,
+            time_now=now,
+        )
+
+        result, _ = load.push_live_constraint(now, force_on)
+
+        assert result is True
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        # Runtime preserved: 5h carried
+        assert pushed[0].current_value == 5 * 3600.0
+
+    def test_cross_mode_no_carry_from_completed_different_end(self):
+        """No carry from completed force-on (end=tomorrow) to default (end=today 20:00).
+
+        Carry-from-completed requires matching end times. Cross-mode runtime
+        preservation relies on Fix 1 pre-seeding in bistate_duration.py.
+        """
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        tomorrow_midnight = datetime(2026, 4, 6, 0, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # Completed force-on with 11h (deadline tomorrow — different end)
+        completed_force = _create_time_based_constraint(
+            load, tomorrow_midnight,
+            target_value=25 * 3600.0,
+            current_value=11 * 3600.0,
+            from_user=True,
+            time_now=now,
+        )
+        load._last_completed_constraint = completed_force
+        load._constraints = []
+
+        # New default with current_value=0 (no Fix 1 pre-seed)
+        default_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=8 * 3600.0,
+            current_value=0.0,
+            time_now=now,
+        )
+
+        result, _ = load.push_live_constraint(now, default_ct)
+
+        assert result is True
+        # No carry — end times differ, so constraint is appended with current_value=0
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        assert pushed[0].current_value == 0.0
+        # _last_completed_constraint unchanged
+        assert load._last_completed_constraint is completed_force
+
+    def test_identity_check_blocks_repush_after_immediately_met(self):
+        """After immediately-met ack, identity check blocks re-push of same constraint."""
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # First push: pre-seeded with 8h, target=8h → immediately met
+        ct1 = _create_time_based_constraint(
+            load, today_2000,
+            target_value=8 * 3600.0,
+            current_value=8 * 3600.0,
+            time_now=now,
+        )
+        load._constraints = []
+        load._last_completed_constraint = None
+
+        result1, _ = load.push_live_constraint(now, ct1)
+        assert result1 is True
+        assert load._last_completed_constraint is ct1
+
+        # Second push: same target + same end → blocked by identity check
+        ct2 = _create_time_based_constraint(
+            load, today_2000,
+            target_value=8 * 3600.0,
+            current_value=0.0,
+            time_now=now,
+        )
+
+        result2, _ = load.push_live_constraint(now, ct2)
+        assert result2 is False
+
+    def test_fix1_cleanup_before_push(self):
+        """Simulate Fix 1: old constraints cleaned up, runtime saved, new constraint pre-seeded.
+
+        This tests the bistate_duration.py cleanup pattern at the push_live_constraint level.
+        """
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        tomorrow_midnight = datetime(2026, 4, 6, 0, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # Simulate Fix 1 cleanup: save runtime from old force-on
+        force_on_current_value = 5 * 3600.0
+        saved_runtime = force_on_current_value
+
+        # Fix 1 removes old non-override constraints
+        load._constraints = []
+        load._last_completed_constraint = None
+
+        # Fix 1 pre-seeds new constraint
+        default_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=8 * 3600.0,
+            current_value=min(saved_runtime, 8 * 3600.0),
+            time_now=now,
+        )
+
+        result, _ = load.push_live_constraint(now, default_ct)
+
+        assert result is True
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        assert pushed[0] is default_ct
+        assert pushed[0].current_value == 5 * 3600.0
+
+    def test_bug68_same_mode_extension_still_works(self):
+        """Bug #68 regression: extending 4h→7h within same mode still carries."""
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        completed = _create_time_based_constraint(
+            load, today_2000,
+            target_value=4 * 3600.0,
+            current_value=4 * 3600.0,
+            time_now=now,
+        )
+        load._last_completed_constraint = completed
+        load._constraints = []
+
+        # Extend to 7h — same end date, higher target
+        extended = _create_time_based_constraint(
+            load, today_2000,
+            target_value=7 * 3600.0,
+            current_value=0.0,
+            time_now=now,
+        )
+
+        result, _ = load.push_live_constraint(now, extended)
+
+        assert result is True
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        # 4h carried from completed, capped at 7h target
+        assert pushed[0].current_value == 4 * 3600.0
+
+    def test_no_stale_carry_from_previous_day(self):
+        """Runtime from yesterday's completed constraint should not carry to today.
+
+        End times differ (yesterday vs today), so carry-from-completed does not fire.
+        """
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        yesterday_2000 = datetime(2026, 4, 4, 20, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # Yesterday's completed constraint — different end time
+        completed = _create_time_based_constraint(
+            load, yesterday_2000,
+            target_value=8 * 3600.0,
+            current_value=8 * 3600.0,
+            time_now=yesterday_2000 - timedelta(hours=1),
+        )
+        load._last_completed_constraint = completed
+        load._constraints = []
+
+        # Today's new constraint
+        new_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=8 * 3600.0,
+            current_value=0.0,
+            time_now=now,
+        )
+
+        result, _ = load.push_live_constraint(now, new_ct)
+
+        assert result is True
+        pushed = [c for c in load._constraints if c is not None]
+        assert len(pushed) == 1
+        # No carry — end times differ
+        assert pushed[0].current_value == 0.0
+
+    def test_same_end_replacement_carry_immediately_met(self):
+        """Same-end-time replacement with carry makes constraint immediately met.
+
+        Covers load.py lines 1379-1381: after carry in replacement branch,
+        constraint is met → set _last_completed_constraint and return.
+        """
+        load = self.create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # Existing constraint: same end time, lower score, high current_value
+        old_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=200 * 3600.0,
+            current_value=100 * 3600.0,
+            from_user=False,
+            time_now=now,
+        )
+        load._constraints = [old_ct]
+        load._last_completed_constraint = None
+
+        # New constraint: same end time, higher score, low target → will be met after carry
+        new_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=50 * 3600.0,
+            current_value=0.0,
+            from_user=True,
+            time_now=now,
+        )
+
+        result, needs_ack = load.push_live_constraint(now, new_ct)
+
+        assert result is True
+        # Carry made it met: min(100h, 50h) = 50h ≥ 0.995*50h → immediately met
+        assert new_ct.current_value == 50 * 3600.0
+        assert load._last_completed_constraint is new_ct
+        assert needs_ack is True
+        # Old constraint removed, new not appended (returned early)
+        remaining = [c for c in load._constraints if c is not None]
+        assert len(remaining) == 0
+
+
+class TestSetLiveConstraintsCoverage:
+    """Coverage tests for set_live_constraints edge cases."""
+
+    def _create_load(self):
+        """Create a test load."""
+        mock_home = create_minimal_home_model()
+        mock_home.voltage = 230.0
+        mock_home.is_off_grid = MagicMock(return_value=False)
+        mock_home.dashboard_sections = None
+        return AbstractLoad(
+            name="CovLoad",
+            device_type="test_load",
+            home=mock_home,
+            **{CONF_POWER: 1500},
+        )
+
+    def test_set_live_constraints_infinite_met_skipped(self):
+        """Infinite constraint that is met is skipped in the keep-best loop.
+
+        Covers load.py line 1207.
+        """
+        load = self._create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+
+        # Two infinite constraints — one is already met
+        met_inf = _create_time_based_constraint(
+            load, DATETIME_MAX_UTC,
+            target_value=100.0,
+            current_value=100.0,
+            time_now=now,
+        )
+        unmet_inf = _create_time_based_constraint(
+            load, DATETIME_MAX_UTC,
+            target_value=200.0,
+            current_value=0.0,
+            from_user=True,
+            time_now=now,
+        )
+        load.set_live_constraints(now, [met_inf, unmet_inf])
+
+        # Only one infinite should remain (the unmet one with higher score)
+        infinite = [c for c in load._constraints if c.end_of_constraint == DATETIME_MAX_UTC]
+        assert len(infinite) <= 1
+
+    def test_set_live_constraints_all_met_empty_result(self):
+        """All constraints met → kept is empty → _constraints = [].
+
+        Covers load.py line 1303.
+        """
+        load = self._create_load()
+        now = datetime(2026, 4, 5, 15, 0, tzinfo=pytz.UTC)
+        today_2000 = datetime(2026, 4, 5, 20, 0, tzinfo=pytz.UTC)
+
+        # Constraint is already met
+        met_ct = _create_time_based_constraint(
+            load, today_2000,
+            target_value=100.0,
+            current_value=100.0,
+            time_now=now,
+        )
+        load.set_live_constraints(now, [met_ct])
+
+        assert load._constraints == []
 
 
 # =============================================================================
@@ -3385,7 +3815,7 @@ class TestAbstractLoadExtendedCoverage:
             create_real_constraint(basic_load, time_now=time_now, end_time=time_now + timedelta(hours=5))
         ]
 
-        result = basic_load.push_agenda_constraints(time_now, new_constraints)
+        result, _ = basic_load.push_agenda_constraints(time_now, new_constraints)
 
         assert result is True
 
@@ -3401,7 +3831,7 @@ class TestAbstractLoadExtendedCoverage:
 
         # Push same constraint again
         new_constraint = create_real_constraint(basic_load, time_now=time_now, end_time=end_time)
-        result = basic_load.push_agenda_constraints(time_now, [new_constraint])
+        result, _ = basic_load.push_agenda_constraints(time_now, [new_constraint])
 
         # Should not add duplicate
         assert len([c for c in basic_load._constraints if c is not None]) >= 1

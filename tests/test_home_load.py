@@ -386,7 +386,7 @@ class TestAbstractLoadPushConstraint:
             target_value=3600.0,  # 1 hour in seconds
         )
 
-        result = load.push_agenda_constraints(time, [constraint])
+        result, _ = load.push_agenda_constraints(time, [constraint])
 
         assert result is True
         assert len(load._constraints) == 1

@@ -538,7 +538,7 @@ class TestAbstractLoadPushAgendaConstraints:
             end_of_constraint=_t(4),
             target_value=1000,
         )
-        result = load.push_agenda_constraints(t, [new_ct])
+        result, _ = load.push_agenda_constraints(t, [new_ct])
         assert result is True
         # The old one should be gone, new one present
         assert any(c.target_value >= 1000 for c in load._constraints)
@@ -867,7 +867,7 @@ class TestAbstractLoadPushLiveConstraint:
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
-        result = load.push_live_constraint(t, ct2)
+        result, _ = load.push_live_constraint(t, ct2)
         # Should not push since same score
         assert result is False
 
@@ -879,7 +879,7 @@ class TestAbstractLoadPushLiveConstraint:
         load = MinimalTestLoad(name="TestLoad", home=home)
         load._enabled = False
         ct = create_constraint(load=load, time=_t(0), end_of_constraint=_t(2), target_value=100)
-        result = load.push_live_constraint(_t(0), ct)
+        result, _ = load.push_live_constraint(_t(0), ct)
         assert result is True
         assert load._constraints == []
 
@@ -1454,7 +1454,7 @@ class TestSetLiveConstraintsDeepEdgeCases:
             target_value=100,
             constraint_type=CONSTRAINT_TYPE_FILLER_AUTO,
         )
-        result = load.push_live_constraint(t, ct2)
+        result, _ = load.push_live_constraint(t, ct2)
         # It should be rejected (same score, same end)
         assert result is False
 
@@ -1987,7 +1987,7 @@ class TestPushLiveConstraintLines1212_1214:
         )
         assert ct1.score(t) == ct2.score(t)
         assert not ct1.eq_no_current(ct2)
-        result = load.push_live_constraint(t, ct2)
+        result, _ = load.push_live_constraint(t, ct2)
         assert result is False
         assert len(load._constraints) == 1
 

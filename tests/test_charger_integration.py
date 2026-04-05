@@ -208,7 +208,7 @@ class TestCheckLoadActivityAndConstraints(unittest.IsolatedAsyncioTestCase):
             patch.object(self.charger, "get_best_car", return_value=mock_car),
             patch.object(self.charger, "clean_constraints_for_load_param_and_if_same_key_same_value_info"),
             patch.object(self.charger, "set_live_constraints"),
-            patch.object(self.charger, "push_live_constraint", return_value=False),
+            patch.object(self.charger, "push_live_constraint", return_value=(False, False)),
         ):
             await self.charger.check_load_activity_and_constraints(time)
 
