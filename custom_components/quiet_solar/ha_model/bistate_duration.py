@@ -597,6 +597,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
                     degraded_type = ct.degraded_type if ct.degraded_type is not None else CONSTRAINT_TYPE_FILLER_AUTO
 
+                    initial_cv = None
+                    if mode_changed and saved_runtime > 0:
+                        initial_cv = min(saved_runtime, ct.target_value)
+
                     load_mandatory = TimeBasedSimplePowerLoadConstraint(
                         type=type,
                         degraded_type=degraded_type,
@@ -607,11 +611,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         end_of_constraint=ct.end_schedule,
                         power=self.power_use,
                         initial_value=0,
+                        current_value=initial_cv,
                         target_value=ct.target_value,
                     )
-                    # Pre-seed only on mode change
-                    if mode_changed and saved_runtime > 0:
-                        load_mandatory.current_value = min(saved_runtime, load_mandatory.target_value)
 
                     if ct.agenda_push:
                         agend_cts.append(load_mandatory)
