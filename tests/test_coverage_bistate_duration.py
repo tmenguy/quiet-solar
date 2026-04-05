@@ -693,3 +693,159 @@ class TestConstraintPushPaths:
         assert len(device._constraints) >= 1
         ct = device._constraints[0]
         assert ct.target_value == 2.0 * 3600.0
+
+
+# ===================================================================
+# Lines 510, 626, 636: needs_ack branches after push_live_constraint
+# ===================================================================
+
+
+class TestNeedsAckAfterPush:
+    """Cover the `if needs_ack: await self.ack_completed_constraint(…)` branches.
+
+    Each test mocks push_live_constraint to return (True, True) and verifies
+    that ack_completed_constraint is called.
+    """
+
+    @pytest.mark.asyncio
+    async def test_override_push_needs_ack(self, hass, device):
+        """Line 510: ack after override constraint push returns needs_ack.
+
+        Trigger: user override detected (state differs from command) with
+        non-idle override state, and push_live_constraint returns (True, True).
+        """
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        device.current_command = CMD_OFF
+        device.running_command = None
+
+        # HA state differs from expected -> override detected as "on" (non-idle)
+        hass.states.async_set("switch.test_device", "on")
+        device._constraints = []
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+
+        device.push_live_constraint = MagicMock(return_value=(True, True))
+        device.ack_completed_constraint = AsyncMock()
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        device.ack_completed_constraint.assert_awaited_once()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_non_agenda_push_needs_ack(self, hass, device):
+        """Line 626: ack after non-agenda constraint push returns needs_ack.
+
+        Trigger: mode_on builds a non-agenda constraint, push returns (True, True).
+        """
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.bistate_mode = "bistate_mode_on"
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.get_proper_local_adapted_tomorrow = MagicMock(
+            return_value=time + timedelta(hours=24)
+        )
+        device._constraints = []
+
+        device.push_live_constraint = MagicMock(return_value=(True, True))
+        device.ack_completed_constraint = AsyncMock()
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        device.ack_completed_constraint.assert_awaited_once()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_agenda_push_needs_ack(self, hass, device):
+        """Line 636: ack after agenda constraint push via push_agenda_constraints.
+
+        Trigger: auto mode with calendar events that produce agenda_push=True
+        constraints, and push_agenda_constraints returns items to ack.
+        """
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=False)
+        device._constraints = []
+
+        # Calendar event that produces an agenda constraint
+        future_event = (
+            time + timedelta(hours=1),
+            time + timedelta(hours=3),
+        )
+        device.get_next_scheduled_events = AsyncMock(return_value=[future_event])
+
+        # Build a sentinel constraint to be returned in the ack list
+        sentinel_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=time,
+            load=device,
+            from_user=False,
+            start_of_constraint=time + timedelta(hours=1),
+            end_of_constraint=time + timedelta(hours=3),
+            power=1000.0,
+            initial_value=0,
+            target_value=7200.0,
+        )
+
+        device.push_agenda_constraints = MagicMock(return_value=(True, [sentinel_ct]))
+        device.ack_completed_constraint = AsyncMock()
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        device.push_agenda_constraints.assert_called_once()
+        device.ack_completed_constraint.assert_awaited_once_with(time, sentinel_ct)
+        assert result is True
+
+
+# ===================================================================
+# Line 586: _previous_bistate_mode detects mode change even when
+# end times coincide
+# ===================================================================
+
+
+class TestPreviousBistateModeDetection:
+    @pytest.mark.asyncio
+    async def test_mode_change_detected_via_previous_bistate_mode(self, hass, device):
+        """When end times coincide but mode string changed, mode_changed is True.
+
+        Covers line 586: mode_changed = True via _previous_bistate_mode check.
+        """
+        time = datetime.datetime.now(pytz.UTC)
+        tomorrow = time + timedelta(hours=24)
+
+        device.is_load_command_set = MagicMock(return_value=False)
+        device.get_proper_local_adapted_tomorrow = MagicMock(return_value=tomorrow)
+
+        # First call in mode_on to set _previous_bistate_mode
+        device.bistate_mode = "bistate_mode_on"
+        device._constraints = []
+
+        await device.check_load_activity_and_constraints(time)
+        assert device._previous_bistate_mode == "bistate_mode_on"
+        assert len(device._constraints) >= 1
+        # Seed runtime on the constraint created above
+        device._constraints[0].current_value = 5 * 3600.0
+
+        # Second call: switch to default mode but engineer the same end time
+        # so the end-time detection alone would NOT flag mode_changed.
+        device.bistate_mode = "bistate_mode_default"
+        device.default_on_duration = 8.0
+        # Return the same end time as mode_on (tomorrow) so end-time check passes
+        device.get_next_time_from_hours = MagicMock(return_value=tomorrow)
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert device._previous_bistate_mode == "bistate_mode_default"
+        # The new constraint should have carried runtime from mode_on
+        # (mode_changed was True thanks to _previous_bistate_mode)
+        assert len(device._constraints) >= 1
+        new_ct = device._constraints[0]
+        assert new_ct.current_value == min(5 * 3600.0, new_ct.target_value)

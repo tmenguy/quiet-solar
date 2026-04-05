@@ -52,6 +52,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.qs_bistate_current_duration_h: float = 0.0
         self.qs_bistate_current_on_h: float = 0.0
+        self._previous_bistate_mode: str | None = None
 
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
@@ -577,6 +578,13 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     for c in self._constraints
                     if not (c.load_info is not None and c.load_info.get("originator", "") == "user_override")
                 )
+
+                # Supplement end-time detection: if the bistate mode string
+                # itself changed we definitely switched modes, even when
+                # end times happen to coincide.
+                if self._previous_bistate_mode is not None and self._previous_bistate_mode != bistate_mode:
+                    mode_changed = True
+                self._previous_bistate_mode = bistate_mode
 
                 saved_runtime = 0.0
                 if mode_changed:

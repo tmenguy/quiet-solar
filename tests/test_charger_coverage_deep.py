@@ -8374,3 +8374,163 @@ class TestIsCarChargedCombinedEscape:
         )
         assert is_charged is True
         assert result == 80
+
+
+# =============================================================================
+# needs_ack branches: push_live_constraint returns (True, True)
+# Lines 3218, 3396, 3487, 3694
+# =============================================================================
+
+
+class TestNeedsAckAfterPushCharger:
+    """Cover the `if needs_ack: await self.ack_completed_constraint(…)` branches.
+
+    Each test mocks push_live_constraint to return (True, True) and verifies
+    that ack_completed_constraint is called.
+    """
+
+    def _setup(self):
+        hass = _make_hass()
+        home = _make_home()
+        charger = _create_charger(hass, home)
+        car = _make_real_car(hass, home)
+        now = datetime.now(pytz.UTC)
+
+        _init_charger_states(charger)
+        charger.is_charger_unavailable = MagicMock(return_value=False)
+        charger.probe_for_possible_needed_reboot = MagicMock(return_value=False)
+        charger.is_not_plugged = MagicMock(return_value=False)
+        charger.is_plugged = MagicMock(return_value=True)
+        charger.set_charging_num_phases = AsyncMock(return_value=False)
+        charger.set_max_charging_current = AsyncMock(return_value=True)
+        charger.reboot = AsyncMock()
+        return hass, home, charger, car, now
+
+    @pytest.mark.asyncio
+    async def test_boot_constraint_push_needs_ack(self):
+        """Line 3218: ack after boot constraint push returns needs_ack.
+
+        Trigger: boot car matches best car, boot constraints exist,
+        _constraints is empty, push_live_constraint returns (True, True).
+        """
+        *_, charger, car, now = self._setup()
+        boot_time = now - timedelta(seconds=2 * CHARGER_CHECK_STATE_WINDOW_S + 10)
+        charger._boot_time = boot_time
+        charger._boot_time_adjusted = boot_time
+
+        # Attach car to build power_steps, save them, then detach
+        _plug_car(charger, car, now)
+        saved_power_steps = list(charger._power_steps)
+        charger.detach_car()
+
+        boot_ct = MultiStepsPowerLoadConstraintChargePercent(
+            total_capacity_wh=60000,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            time=boot_time,
+            load=charger,
+            load_param=car.name,
+            from_user=True,
+            end_of_constraint=now + timedelta(hours=6),
+            initial_value=40.0,
+            target_value=80.0,
+            power_steps=saved_power_steps,
+            support_auto=True,
+        )
+        charger._boot_car = car
+        charger._boot_constraints = [boot_ct]
+        charger._boot_last_completed_constraint = None
+        charger.get_best_car = MagicMock(return_value=car)
+
+        # Return (True, True) for the boot constraint, (True, False) for others
+        real_push = charger.push_live_constraint
+        call_count = [0]
+
+        def selective_push(time_arg, ct):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return (True, True)
+            return real_push(time_arg, ct)
+
+        charger.push_live_constraint = selective_push
+        charger.ack_completed_constraint = AsyncMock()
+
+        await charger.check_load_activity_and_constraints(now)
+
+        charger.ack_completed_constraint.assert_awaited_once_with(now, boot_ct)
+
+    @pytest.mark.asyncio
+    async def test_force_constraint_push_needs_ack(self):
+        """Line 3396: ack after force constraint push returns needs_ack.
+
+        Trigger: car.do_force_next_charge is True, push returns (True, True).
+        """
+        *_, charger, car, now = self._setup()
+        _plug_car(charger, car, now)
+        charger.get_best_car = MagicMock(return_value=car)
+        car.do_force_next_charge = True
+        car.do_next_charge_time = None
+
+        charger.push_live_constraint = MagicMock(return_value=(True, True))
+        charger.ack_completed_constraint = AsyncMock()
+
+        await charger.check_load_activity_and_constraints(now)
+
+        charger.push_live_constraint.assert_called_once()
+        charger.ack_completed_constraint.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_user_timed_constraint_push_needs_ack(self):
+        """Line 3487: ack after user timed constraint push returns needs_ack.
+
+        Trigger: car has charge_time set (not force_charge), push returns (True, True).
+        """
+        *_, charger, car, now = self._setup()
+        _plug_car(charger, car, now)
+        charger.get_best_car = MagicMock(return_value=car)
+        car.do_force_next_charge = False
+        car.do_next_charge_time = now + timedelta(hours=6)
+
+        charger.push_live_constraint = MagicMock(return_value=(True, True))
+        charger.ack_completed_constraint = AsyncMock()
+
+        await charger.check_load_activity_and_constraints(now)
+
+        charger.push_live_constraint.assert_called_once()
+        charger.ack_completed_constraint.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_car_charge_person_push_needs_ack(self):
+        """Line 3694: ack after car_charge_person push returns needs_ack.
+
+        Trigger: person needs minimum charge, no existing person constraint,
+        car not yet charged enough, push returns (True, True).
+        """
+        *_, charger, car, now = self._setup()
+        _plug_car(charger, car, now)
+        charger.get_best_car = MagicMock(return_value=car)
+        car.get_car_charge_percent = lambda time=None, *a, **kw: 30.0
+        car.do_force_next_charge = False
+        car.do_next_charge_time = None
+
+        person = MagicMock()
+        person.name = "PersonAck"
+        person.notify_of_forecast_if_needed = AsyncMock()
+
+        next_usage_time = now + timedelta(hours=10)
+        person_min_target_charge = 60.0
+
+        car.get_best_person_next_need = AsyncMock(
+            return_value=(False, next_usage_time, person_min_target_charge, person)
+        )
+        car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+        car.set_next_charge_target_percent = AsyncMock()
+        charger._auto_constraints_cleaned_at_user_reset = []
+
+        charger.push_live_constraint = MagicMock(return_value=(True, True))
+        charger.ack_completed_constraint = AsyncMock()
+
+        await charger.check_load_activity_and_constraints(now)
+
+        # push_live_constraint should have been called at least once for the person constraint
+        assert charger.push_live_constraint.call_count >= 1
+        charger.ack_completed_constraint.assert_awaited()

@@ -248,6 +248,18 @@ and self._last_completed_constraint.end_of_constraint.date() == constraint.end_o
 - **Type checking**: Use `type(c) == type(constraint)` (not `isinstance`) — consistent with existing carry logic at line 1335 and 1366.
 - **Async boundary**: `push_live_constraint` is sync; `ack_completed_constraint` is async. The immediately-met intercept sets `_last_completed_constraint` directly (sync) rather than calling `ack_completed_constraint` to avoid async ripple through ~15 callers + ~80 test sites.
 
+### Supplementary mode-change detection via `_previous_bistate_mode`
+
+The original end-time comparison (`mode_changed = any(c.end_of_constraint not in new_ends ...)`) is fragile: if force-on and default modes happen to produce the same `end_of_constraint` value, `mode_changed` evaluates to `False` and runtime pre-seeding is skipped. A new instance variable `_previous_bistate_mode` (initialized to `None` in `__init__`) remembers the bistate mode string from the previous call. After the end-time check, the detection is supplemented:
+
+```python
+if self._previous_bistate_mode is not None and self._previous_bistate_mode != bistate_mode:
+    mode_changed = True
+self._previous_bistate_mode = bistate_mode
+```
+
+Both checks are kept: end-time detection catches calendar changes where end times shift without a mode change; the state variable catches mode switches where end times coincide by accident.
+
 ### Key code locations
 
 | File | Lines | What |
