@@ -45,8 +45,11 @@ from ..const import (
     HOME_AVAILABLE_POWER_SENSOR,
     HOME_CONSUMPTION_SENSOR,
     HOME_NON_CONTROLLED_CONSUMPTION_SENSOR,
+    INTERVALS_MN,
     MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
     MAX_POWER_INFINITE,
+    NUM_INTERVAL_PER_HOUR,
+    NUM_INTERVALS_PER_DAY,
     OFF_GRID_MODE_AUTO,
     OFF_GRID_MODE_FORCE_OFF_GRID,
     OFF_GRID_MODE_FORCE_ON_GRID,
@@ -3020,10 +3023,6 @@ class QSHome(QSDynamicGroup):
 
 # to be able to easily fell on the same week boundaries, it has to be a multiple of 7, take 80 to go more than 1.5 year
 BUFFER_SIZE_DAYS = 80 * 7
-# interval in minutes between 2 measures
-NUM_INTERVAL_PER_HOUR = 4
-INTERVALS_MN = 60 // NUM_INTERVAL_PER_HOUR  # has to be a multiple of 60
-NUM_INTERVALS_PER_DAY = 24 * NUM_INTERVAL_PER_HOUR
 BEGINING_OF_TIME = datetime(2022, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
 BUFFER_SIZE_IN_INTERVALS = BUFFER_SIZE_DAYS * NUM_INTERVALS_PER_DAY
 

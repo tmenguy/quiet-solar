@@ -21,7 +21,10 @@ from .const import (
     BUTTON_HOME_SERIALIZE_FOR_DEBUG,
     BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE,
     BUTTON_LOAD_RESET_OVERRIDE_STATE,
+    BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY,
+    BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY,
     BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES,
+    BUTTON_SOLAR_RESET_DAMPENING,
     DOMAIN,
 )
 from .entity import QSDeviceEntity
@@ -90,6 +93,27 @@ def create_ha_button_for_QSSolar(device: QSSolar):
     )
 
     entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_recompute_scores))
+
+    qs_dampening_1day = QSButtonEntityDescription(
+        key=BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY,
+        translation_key=BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY,
+        async_press=lambda x: x.device.compute_dampening_all_providers(num_days=1),
+    )
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_dampening_1day))
+
+    qs_dampening_7day = QSButtonEntityDescription(
+        key=BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY,
+        translation_key=BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY,
+        async_press=lambda x: x.device.compute_dampening_all_providers(num_days=7),
+    )
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_dampening_7day))
+
+    qs_reset_dampening = QSButtonEntityDescription(
+        key=BUTTON_SOLAR_RESET_DAMPENING,
+        translation_key=BUTTON_SOLAR_RESET_DAMPENING,
+        async_press=lambda x: x.device.reset_dampening_all_providers(),
+    )
+    entities.append(QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_dampening))
 
     return entities
 

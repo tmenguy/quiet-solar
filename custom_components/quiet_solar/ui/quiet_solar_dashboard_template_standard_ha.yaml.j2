@@ -457,12 +457,27 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
               {%- for entity_key, ha_entity in device.ha_entities.items() %}
-              {%-   if entity_key.startswith("qs_solar_forecast_score_") or entity_key == "qs_solar_active_provider" %}
+              {%-   if entity_key.startswith("qs_solar_forecast_score_") or entity_key.startswith("qs_solar_forecast_dampened_score_") or entity_key == "qs_solar_active_provider" %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%-   endif %}
               {%- endfor %}
               {%- set ha_entity = device.ha_entities.get("qs_solar_recompute_forecast_scores") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_solar_compute_dampening_1day") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_solar_compute_dampening_7day") %}
+              {%- if ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_solar_reset_dampening") %}
               {%- if ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}

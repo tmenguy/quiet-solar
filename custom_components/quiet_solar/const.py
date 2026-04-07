@@ -1,5 +1,10 @@
 SOLVER_STEP_S = 900  # 15 minutes
 
+# Ring buffer resolution (15-minute grid)
+NUM_INTERVAL_PER_HOUR = 4
+INTERVALS_MN = 60 // NUM_INTERVAL_PER_HOUR  # 15 minutes
+NUM_INTERVALS_PER_DAY = 24 * NUM_INTERVAL_PER_HOUR  # 96
+
 MAX_POSSIBLE_AMPERAGE = 64
 
 DOMAIN = "quiet_solar"
@@ -231,6 +236,7 @@ BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"
 
 SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
 SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
+SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX = "qs_solar_forecast_dampened_score_"
 SENSOR_SOLAR_ACTIVE_PROVIDER = "qs_solar_active_provider"
 
 SELECT_SOLAR_PROVIDER_MODE = "qs_solar_provider_mode"
@@ -277,6 +283,9 @@ BUTTON_HOME_GENERATE_YAML_DASHBOARD = "qs_home_generate_yaml_dashboard"
 BUTTON_HOME_RECOMPUTE_PEOPLE_HISTORICAL_DATA = "qs_home_recompute_people_historical_data"
 
 BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES = "qs_solar_recompute_forecast_scores"
+BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY = "qs_solar_compute_dampening_1day"
+BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY = "qs_solar_compute_dampening_7day"
+BUTTON_SOLAR_RESET_DAMPENING = "qs_solar_reset_dampening"
 
 SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY = "qs_bump_solar_charge_priority"
