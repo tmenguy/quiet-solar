@@ -15,7 +15,7 @@ Follow the **bmad-code-review** skill. This executes parallel review layers (Bli
 
 When adversarial findings reveal impacts beyond the code fix (e.g., a missing acceptance criterion, an architecture gap, or a rule that should be added), flag the doc impact alongside the code finding so the user can choose "doc-update" when processing the comment.
 
-Post significant findings as PR comments:
+Post ALL findings as PR comments — every category (`decision_needed`, `patch`, `defer`, `dismiss`), not just significant ones. Group them in a single review comment using the category headers so nothing is lost:
 ```bash
 gh pr review {{pr_number}} --comment --body "{{review_body}}"
 ```
@@ -31,17 +31,69 @@ Wait for CodeRabbit (auto-triggers on PR creation/push), then fetch:
 python scripts/qs/review_pr.py {{pr_number}} --fetch-comments --wait-coderabbit 120
 ```
 
-### 3. Process each unresolved comment
+### 3. Consolidated review report
 
-Process comments ONE AT A TIME. For each comment, present it to the user with file path, line, and diff context. Wait for the user's response before moving to the next. Do NOT batch multiple comments. For each one, ask the user to choose:
+Build a single report that merges ALL findings from both sources. Nothing is silently dropped.
+
+**3a. Collect findings**
+
+- **Adversarial review** (from step 1): include every finding from every triage category — `decision_needed`, `patch`, `defer`, AND `dismiss`. Do NOT filter any category out.
+- **CodeRabbit** (from step 2): include every comment (resolved or not).
+
+Deduplicate across sources: if CodeRabbit and the adversarial review flag the same issue (same file + same concern), merge them into one entry and note both sources.
+
+**3b. Present the report**
+
+Display the full report grouped by category, with a count header:
+
+```
+## Review Report — PR #{{pr_number}}
+
+**Adversarial review**: {{N}} findings ({{n_decision}} decision_needed, {{n_patch}} patch, {{n_defer}} defer, {{n_dismiss}} dismiss)
+**CodeRabbit**: {{M}} comments ({{m_unresolved}} unresolved, {{m_resolved}} resolved)
+**After dedup**: {{T}} total items
+
+### decision_needed ({{count}})
+| # | File | Line | Finding | Source |
+|---|------|------|---------|--------|
+| 1 | path | L42  | ...     | Blind Hunter |
+
+### patch ({{count}})
+| # | File | Line | Finding | Source |
+|---|------|------|---------|--------|
+
+### defer ({{count}})
+| # | File | Line | Finding | Source |
+|---|------|------|---------|--------|
+
+### dismiss ({{count}})
+| # | File | Line | Finding | Source |
+|---|------|------|---------|--------|
+
+### CodeRabbit-only ({{count}})
+| # | File | Line | Finding | Status |
+|---|------|------|---------|--------|
+```
+
+**3c. Process items one at a time**
+
+Walk through every item from the report, one at a time, in this order: `decision_needed` first, then `patch`, then `CodeRabbit-only`, then `defer`, then `dismiss`.
+
+For each item, show:
+- The finding with file path, line, and diff context
+- The triage category and source (which review layer or CodeRabbit)
+- For `defer`/`dismiss`: the triage rationale so the user can agree or override
+
+Ask the user to choose one action:
 
 - **fix**: Implement the fix, run quality gates, commit, push
 - **discuss**: Post a reply on the PR explaining the rationale
 - **reject**: Post a rationale and resolve the thread
 - **doc-update**: The comment reveals a spec gap, missing AC, architecture concern, or rule that should be documented. Propose specific edits to the story artifact (or other docs), wait for user approval, apply and commit if accepted.
+- **defer**: Acknowledge the finding, create a tracking comment on the PR noting it is deferred (not dismissed — real issue, wrong time)
 - **skip**: Move on without action
 
-After processing all comments, if any fixes were made, run:
+After processing all items, if any fixes were made, run:
 ```bash
 python scripts/qs/quality_gate.py --cache
 ```
