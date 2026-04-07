@@ -1,4 +1,4 @@
-# Feature: Add Auto-Dampening and Reset Dampening Buttons to Solar Plant Dashboard UI
+# Feature: Add Solar Forecast Dampening Buttons and Split Score Sensors
 
 Status: ready-for-dev
 issue: 124
@@ -7,173 +7,239 @@ branch: "QS_124"
 ## Story
 
 As TheAdmin,
-I want "Compute Dampening" and "Reset Dampening" buttons on the solar plant dashboard for each provider,
-so that I can manually apply MOS linear regression correction to improve forecast accuracy when I choose, without the complexity of automatic dampening.
+I want "Compute Dampening 1-Day", "Compute Dampening 7-Day", and "Reset Dampening" buttons on the solar plant dashboard, with split raw/dampened score sensors per provider that persist dampening coefficients in their attributes,
+so that I can manually apply MOS linear regression correction to improve forecast accuracy, see the impact on scores, and have the solver use dampened forecasts automatically.
 
 ## Context
 
-Story 3.7 originally included automatic solar forecast dampening (MOS linear regression running at midnight). Story 3.14 removed it entirely — it added complexity without sufficient benefit when automatic. The user now wants dampening back as a **manual, button-triggered** operation: press a button to compute coefficients, press another to clear them.
+Story 3.7 originally included automatic solar forecast dampening (MOS linear regression at midnight). Story 3.14 removed it — too complex when automatic. This feature brings dampening back as **manual buttons** with two window sizes (1-day ratio correction, 7-day linear regression), split score sensors (raw + dampened), and coefficients persisted via sensor attributes using the existing RestoreEntity infrastructure.
 
 The scoring infrastructure (MAE computation, provider ranking, auto-selection) remains fully intact from Story 3.14. This feature builds on top of it.
 
 ## Acceptance Criteria
 
-### AC1 — Compute Dampening Button
+### AC1 — Compute Dampening 1-Day Button
 
 **Given** the solar plant dashboard is displayed
-**When** TheAdmin presses the "Compute Dampening" button
-**Then** for each configured provider, the system computes MOS linear regression coefficients `(a_k, b_k)` per time-of-day slot `k` using 7 days of (forecast_k, actual_k) data from the existing ring buffers
-**And** dampened forecast = `max(0, a_k * raw_forecast_k + b_k)` (clamped to non-negative)
-**And** physical guards are enforced: nighttime steps use identity `(1.0, 0.0)`, `a_k` bounded to `[0.1, 3.0]`, minimum 3 data points required per slot (otherwise identity)
+**When** TheAdmin presses the "Compute Dampening (1 Day)" button
+**Then** the system determines the reference day: if local time >= 22:00, use today; otherwise use yesterday
+**And** for each provider, it retrieves 1 day of actual production and stored forecast aligned to the ring buffer's 15-minute grid (`NUM_INTERVAL_PER_HOUR = 4`, 96 slots/day)
+**And** for each 15-min slot `k` (0-95): computes ratio correction `a_k = actual_k / forecast_k`, `b_k = 0` (skip slot if `forecast_k < 10W`, use identity)
+**And** physical guards are enforced: `a_k` clamped to `[0.1, 3.0]`, nighttime slots (both values zero) → identity `(1.0, 0.0)`
 **And** coefficients are stored on the provider and immediately applied to `get_forecast()` and `get_value_from_current_forecast()`
-**And** a log message confirms dampening was computed with the number of slots and average correction factor
+**And** a dampened MAE score is computed and stored as `provider.score_dampened`
 
-### AC2 — Reset Dampening Button
+### AC2 — Compute Dampening 7-Day Button
 
-**Given** dampening coefficients are currently active for one or more providers
+**Given** the solar plant dashboard is displayed
+**When** TheAdmin presses the "Compute Dampening (7 Day)" button
+**Then** the system determines the reference day (same logic as AC1) and uses a 7-day window ending at that day
+**And** for each provider, it retrieves 7 days of actual production and stored forecast aligned to the 15-minute grid
+**And** for each 15-min slot `k` (0-95) with >= 3 data points: computes `numpy.polyfit(forecast_vals, actual_vals, 1)` → `[a_k, b_k]`
+**And** slots with < 3 data points get identity `(1.0, 0.0)`
+**And** same physical guards as AC1
+**And** coefficients stored and dampened MAE score computed
+
+### AC3 — Reset Dampening Button
+
+**Given** any dampening state on any provider
 **When** TheAdmin presses the "Reset Dampening" button
-**Then** all dampening coefficients are cleared for all providers
-**And** `get_forecast()` and `get_value_from_current_forecast()` revert to returning the raw forecast directly
-**And** a log message confirms dampening was reset
+**Then** all providers get identity coefficients: `{k: (1.0, 0.0) for k in range(96)}`
+**And** `score_dampened` is set to `None` for all providers
+**And** `get_forecast()` returns the raw forecast (identity transform applied = no change)
 
-### AC3 — Dampening Persistence
+### AC4 — Score Sensor Split
 
-**Given** dampening coefficients have been computed
+**Given** solar forecast providers are configured
+**When** sensors are registered
+**Then** the existing per-provider score sensor is renamed to "Forecast Raw Score (Provider)" (entity key unchanged to avoid ID breakage)
+**And** a NEW per-provider "Forecast Dampened Score (Provider)" sensor is created with:
+  - `native_value` = `provider.score_dampened` (MAE with dampening applied)
+  - `extra_state_attributes` = `{"dampening_coefficients": {slot_str: [a_k, b_k], ...}}` containing the full coefficient dict
+
+### AC5 — Dampening Persistence via Sensor Attributes
+
+**Given** dampening coefficients are stored in the dampened score sensor attributes
 **When** Home Assistant restarts
-**Then** the dampening coefficients are restored from persistent storage (config entry `options` or similar mechanism)
-**And** the forecast continues to use the dampened values without manual re-trigger
+**Then** `QSBaseSensorSolarDampenedScoreRestore.async_added_to_hass()` reads coefficients from restored `extra_state_attributes`
+**And** calls `provider.set_dampening_coefficients()` to restore the provider's dampening state
+**And** `provider.score_dampened` is restored from the sensor's `native_value`
+**And** subsequent calls to `get_forecast()` apply the restored dampening
 
-**Given** dampening has been reset
-**When** Home Assistant restarts
-**Then** no dampening coefficients are loaded (raw forecast is used)
+### AC6 — Auto-Mode Uses Dampened Scores
 
-### AC4 — Dashboard UI Integration
+**Given** the provider selection mode is "auto"
+**When** `auto_select_best_provider()` runs
+**Then** it uses `provider.get_active_score()` which returns `score_dampened` when available, falling back to `score` (raw)
+**And** the provider with the lowest dampened MAE is selected
+
+### AC7 — Dashboard UI Integration
 
 **Given** the solar plant dashboard is generated
 **When** the template renders the solar device section
-**Then** "Compute Dampening" and "Reset Dampening" buttons appear below the existing "Recompute Forecast Scores" button
-**And** both buttons are always visible (no conditional display)
-
-### AC5 — Dampening Status Sensor
-
-**Given** dampening is active for a provider
-**When** TheAdmin checks the dashboard
-**Then** a `binary_sensor.qs_solar_dampening_active` sensor shows `on` if any provider has active dampening coefficients, `off` otherwise
-**And** the sensor name is "Solar Dampening Active"
+**Then** dampened score sensors appear alongside raw score sensors
+**And** "Compute Dampening (1 Day)", "Compute Dampening (7 Day)", and "Reset Dampening" buttons appear below the existing "Recompute Forecast Scores" button
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add dampening constants and storage fields (AC: 1, 2, 3)
-  - [ ] 1.1 Add constants in `const.py`: `BUTTON_SOLAR_COMPUTE_DAMPENING = "qs_solar_compute_dampening"`, `BUTTON_SOLAR_RESET_DAMPENING = "qs_solar_reset_dampening"`, `BINARY_SENSOR_SOLAR_DAMPENING_ACTIVE = "qs_solar_dampening_active"`
-  - [ ] 1.2 Add dampening fields to `QSSolarProvider.__init__()` in `ha_model/solar.py` (around line 399): `_dampening_coefficients: dict[int, tuple[float, float]] = {}` (key = time-of-day slot index, value = (a_k, b_k))
-  - [ ] 1.3 Add property `has_dampening` on `QSSolarProvider` returning `bool(self._dampening_coefficients)`
+- [ ] Task 1: Add constants (AC: 1, 2, 3, 4)
+  - [ ] 1.1 In `const.py` (~line 279), add:
+    - `BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY = "qs_solar_compute_dampening_1day"`
+    - `BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY = "qs_solar_compute_dampening_7day"`
+    - `BUTTON_SOLAR_RESET_DAMPENING = "qs_solar_reset_dampening"`
+    - `SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX = "qs_solar_forecast_dampened_score_"`
+  - [ ] 1.2 Keep `SENSOR_SOLAR_FORECAST_SCORE_PREFIX` unchanged (preserves raw score entity IDs)
 
-- [ ] Task 2: Implement MOS linear regression computation (AC: 1)
-  - [ ] 2.1 Add method `compute_dampening(time: datetime) -> bool` on `QSSolarProvider`:
-    - Retrieve 7 days of actual production from `solar_production_history.get_historical_data(time, past_hours=168)`
-    - Retrieve 7 days of stored forecast from provider's forecast history ring buffers (same pattern as `compute_score`, lines 538-588)
-    - Group aligned (forecast, actual) pairs by time-of-day slot (use the provider's temporal resolution, typically 15-min or 1-hour)
-    - For each slot with >= 3 data points: compute linear regression `actual = a_k * forecast + b_k` using `numpy.polyfit(forecast, actual, 1)` or `scipy.stats.linregress`
-    - Apply physical guards: `a_k = max(0.1, min(3.0, a_k))`, nighttime slots (both forecast and actual == 0 for all points) get identity `(1.0, 0.0)`
+- [ ] Task 2: Add dampening fields and methods to QSSolarProvider (AC: 1, 2, 3, 5, 6)
+  - [ ] 2.1 Add fields in `QSSolarProvider.__init__()` (`ha_model/solar.py`, after line 399):
+    - `_dampening_coefficients: dict[int, tuple[float, float]] = {}` — key = 15-min slot index 0-95
+    - `score_dampened: float | None = None`
+  - [ ] 2.2 Add property `has_dampening` → `bool(self._dampening_coefficients)`
+  - [ ] 2.3 Add property `dampening_coefficients` → `dict(self._dampening_coefficients)` (copy)
+  - [ ] 2.4 Add `set_dampening_coefficients(coefficients: dict[int, tuple[float, float]])` — used by sensor restore
+  - [ ] 2.5 Add `_time_to_slot_index(time: datetime) -> int`:
+    - Convert UTC time to local time: `local = time.astimezone(dt_util.get_default_time_zone())`
+    - Return `local.hour * NUM_INTERVAL_PER_HOUR + local.minute // INTERVALS_MN` (0-95)
+    - Import `NUM_INTERVAL_PER_HOUR` and `INTERVALS_MN` from `home.py` (or use inline `4` and `15`)
+  - [ ] 2.6 Add `_get_dampened_value(time: datetime, raw_value: float) -> float`:
+    - Look up `(a_k, b_k) = _dampening_coefficients.get(slot, (1.0, 0.0))`
+    - Return `max(0.0, a_k * raw_value + b_k)`
+
+- [ ] Task 3: Implement compute_dampening (AC: 1, 2)
+  - [ ] 3.1 Add `compute_dampening(time: datetime, num_days: int) -> bool` on `QSSolarProvider`:
+    - Determine reference day: local_time = time in local tz. If `local_time.hour >= 22`, ref_day = today; else ref_day = yesterday
+    - Compute ref_end = ref_day at 23:59 local (end of reference day), ref_start = ref_end - `num_days` days
+    - Get actuals: `forecast_handler.solar_production_history.get_historical_data(ref_end_utc, past_hours=num_days * 24)`
+    - Get stored forecast: same approach as `compute_score` (lines 549-573) — pick 8h+ forecast type from `forecast_handler.get_forecast_histories_for_provider(self.provider_name)`, call `.get_historical_data(ref_end_utc, past_hours=num_days * 24)`
+    - Build per-slot data: for each aligned (timestamp, forecast_val, actual_val) triple, compute slot index via `_time_to_slot_index(timestamp)`, group into `slots: dict[int, list[tuple[float, float]]]`
+    - For each slot 0-95:
+      - If `num_days == 1`: ratio correction `a_k = actual / forecast` if `forecast > 10`, else identity. `b_k = 0`
+      - If `num_days >= 7` and `len(points) >= 3`: `a_k, b_k = numpy.polyfit(forecasts, actuals, 1)`. Apply guards: `a_k = max(0.1, min(3.0, a_k))`. Nighttime (all zero) → identity
+      - If < 3 points: identity `(1.0, 0.0)`
     - Store in `self._dampening_coefficients`
-  - [ ] 2.2 Add method `reset_dampening()` on `QSSolarProvider`: clear `_dampening_coefficients`
+    - Call `self.compute_dampened_score(time)` to compute the new dampened MAE
+    - Return True on success
 
-- [ ] Task 3: Modify forecast access to apply dampening (AC: 1, 2)
-  - [ ] 3.1 Modify `QSSolarProvider.get_forecast()` (line 422): if `_dampening_coefficients` is non-empty, apply `(a_k, b_k)` to each forecast value based on its time-of-day slot before returning. Use `_get_dampened_value(time, raw_value)` helper
-  - [ ] 3.2 Modify `QSSolarProvider.get_value_from_current_forecast()` (line 427): same dampening application
-  - [ ] 3.3 Add private helper `_get_dampened_value(time: datetime, raw_value: float) -> float`: compute slot index from time, look up `(a_k, b_k)`, return `max(0, a_k * raw_value + b_k)`
-  - [ ] 3.4 Add private helper `_time_to_slot_index(time: datetime, resolution_minutes: int = 60) -> int`: convert time-of-day to slot index (e.g., for 1h resolution: 0-23; for 15-min resolution: 0-95)
-  - [ ] 3.5 Store `_dampening_resolution_minutes: int` alongside coefficients so the slot index mapping is consistent
+- [ ] Task 4: Implement compute_dampened_score (AC: 1, 2, 4)
+  - [ ] 4.1 Add `compute_dampened_score(time: datetime) -> bool` on `QSSolarProvider`:
+    - Same data retrieval as `compute_score` (24h window of actuals + forecast)
+    - Apply `_get_dampened_value` to each forecast point before comparing
+    - Store result in `self.score_dampened`
+    - Return True on success
 
-- [ ] Task 4: Add orchestration methods on QSSolar (AC: 1, 2)
-  - [ ] 4.1 Add `async compute_dampening_all_providers()` on `QSSolar` (near `force_scoring_cycle`, line 294): iterate all providers, call `compute_dampening(now)`, log results
-  - [ ] 4.2 Add `async reset_dampening_all_providers()` on `QSSolar`: iterate all providers, call `reset_dampening()`, log confirmation
+- [ ] Task 5: Implement reset_dampening (AC: 3)
+  - [ ] 5.1 Add `reset_dampening()` on `QSSolarProvider`:
+    - Set `_dampening_coefficients = {k: (1.0, 0.0) for k in range(24 * NUM_INTERVAL_PER_HOUR)}`
+    - Set `score_dampened = None`
 
-- [ ] Task 5: Add persistence for dampening coefficients (AC: 3)
-  - [ ] 5.1 Add `_salvable_dampening` property on `QSSolarProvider`: serialize `_dampening_coefficients` and `_dampening_resolution_minutes` to a JSON-compatible dict (follow the car dampening persistence pattern in `car.py` lines 180-183)
-  - [ ] 5.2 In `QSSolar.__init__` (line 130): load dampening from config entry options if present, restore to each provider
-  - [ ] 5.3 After `compute_dampening` and `reset_dampening`: save to config entry options via `hass.config_entries.async_update_entry(entry, options={...})` (follow existing persistence patterns)
+- [ ] Task 6: Modify forecast access to apply dampening (AC: 1, 2, 3)
+  - [ ] 6.1 Modify `QSSolarProvider.get_forecast()` (line 422): when `_dampening_coefficients` is non-empty, apply `_get_dampened_value(t, v)` to each `(t, v)` point before returning
+  - [ ] 6.2 Modify `QSSolarProvider.get_value_from_current_forecast()` (line 427): same dampening application
+  - [ ] 6.3 Modify `QSSolarProvider.get_active_score()` (line 418): return `self.score_dampened` if not None, else `self.score`
 
-- [ ] Task 6: Create button entities (AC: 1, 2, 4)
-  - [ ] 6.1 In `button.py` `create_ha_button_for_QSSolar()` (line 83): add two new `QSButtonEntityDescription` entries:
-    - `BUTTON_SOLAR_COMPUTE_DAMPENING` with `async_press=lambda x: x.device.compute_dampening_all_providers()`
-    - `BUTTON_SOLAR_RESET_DAMPENING` with `async_press=lambda x: x.device.reset_dampening_all_providers()`
-  - [ ] 6.2 Add translations in `strings.json` under `entity.button`:
-    - `"qs_solar_compute_dampening": {"name": "Compute dampening"}`
+- [ ] Task 7: Add orchestration methods on QSSolar (AC: 1, 2, 3)
+  - [ ] 7.1 Add `async compute_dampening_all_providers(num_days: int, time: datetime | None = None)` on `QSSolar` (near `force_scoring_cycle`, line 294): iterate providers, call `compute_dampening(time, num_days)`, log results
+  - [ ] 7.2 Add `async reset_dampening_all_providers(time: datetime | None = None)` on `QSSolar`: iterate providers, call `reset_dampening()`, log confirmation
+
+- [ ] Task 8: Rename raw score sensor and add dampened score sensor (AC: 4, 5)
+  - [ ] 8.1 In `sensor.py` `create_ha_sensor_for_QSSolar()` (line 388): change raw score sensor `name` to `f"Forecast Raw Score ({provider_name})"` (keep `key` = `SENSOR_SOLAR_FORECAST_SCORE_PREFIX + safe_name` unchanged)
+  - [ ] 8.2 Add dampened score sensor per provider using `value_fn_and_attr`:
+    ```python
+    def _dampened_score_and_attr(device, key, prov=provider):
+        value = prov.score_dampened
+        attrs = {}
+        if prov.has_dampening:
+            coeffs = {str(slot): [float(a), float(b)] for slot, (a, b) in prov.dampening_coefficients.items()}
+            attrs["dampening_coefficients"] = coeffs
+        return value, attrs
+    ```
+    Key: `SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX + safe_name`, name: `f"Forecast Dampened Score ({provider_name})"`
+  - [ ] 8.3 Create `QSBaseSensorSolarDampenedScoreRestore(QSBaseSensorRestore)`:
+    - `__init__`: accept `provider: QSSolarProvider` parameter (same pattern as `QSBaseSensorSolarScoreRestore`, line 658)
+    - `async_added_to_hass`: call `super()`, restore `provider.score_dampened` from `_attr_native_value`, parse `dampening_coefficients` from `_attr_extra_state_attributes` and call `provider.set_dampening_coefficients()`
+  - [ ] 8.4 Use `QSBaseSensorSolarDampenedScoreRestore` as the entity class for dampened score sensors
+
+- [ ] Task 9: Create button entities (AC: 1, 2, 3, 7)
+  - [ ] 9.1 In `button.py` `create_ha_button_for_QSSolar()` (line 83), add 3 new `QSButtonEntityDescription`:
+    - `BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY` → `async_press=lambda x: x.device.compute_dampening_all_providers(num_days=1)`
+    - `BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY` → `async_press=lambda x: x.device.compute_dampening_all_providers(num_days=7)`
+    - `BUTTON_SOLAR_RESET_DAMPENING` → `async_press=lambda x: x.device.reset_dampening_all_providers()`
+  - [ ] 9.2 Add translations in `strings.json` under `entity.button`:
+    - `"qs_solar_compute_dampening_1day": {"name": "Compute dampening (1 day)"}`
+    - `"qs_solar_compute_dampening_7day": {"name": "Compute dampening (7 day)"}`
     - `"qs_solar_reset_dampening": {"name": "Reset dampening"}`
-  - [ ] 6.3 Run `bash scripts/generate-translations.sh` to sync translations
+  - [ ] 9.3 Run `bash scripts/generate-translations.sh`
 
-- [ ] Task 7: Create dampening active binary sensor (AC: 5)
-  - [ ] 7.1 Add `BINARY_SENSOR_SOLAR_DAMPENING_ACTIVE` in `const.py`
-  - [ ] 7.2 Create binary sensor entity in `binary_sensor.py` (follow `qs_solar_forecast_ok` pattern): state = `any(p.has_dampening for p in device.solar_forecast_providers.values())`
-  - [ ] 7.3 Add `Platform.BINARY_SENSOR` to `QSSolar.get_platforms()` (line 371)
-  - [ ] 7.4 Add translation in `strings.json`: `"qs_solar_dampening_active": {"name": "Solar dampening active"}`
+- [ ] Task 10: Update dashboard template (AC: 7)
+  - [ ] 10.1 In `ui/quiet_solar_dashboard_template.yaml.j2` (after score loop at line 263-268): add loop for `qs_solar_forecast_dampened_score_*` entities
+  - [ ] 10.2 After the recompute scores button (line 269-272): add entries for `qs_solar_compute_dampening_1day`, `qs_solar_compute_dampening_7day`, `qs_solar_reset_dampening`
+  - [ ] 10.3 Same changes in `ui/quiet_solar_dashboard_template_standard_ha.yaml.j2` if it has a matching solar section
 
-- [ ] Task 8: Update dashboard template (AC: 4)
-  - [ ] 8.1 In `ui/quiet_solar_dashboard_template.yaml.j2` (after the recompute scores button at line 269-272): add entries for `qs_solar_compute_dampening`, `qs_solar_reset_dampening`, and `qs_solar_dampening_active`
-  - [ ] 8.2 Do the same in `ui/quiet_solar_dashboard_template_standard_ha.yaml.j2` if it has a matching solar section
-
-- [ ] Task 9: Write tests (AC: 1, 2, 3, 5)
-  - [ ] 9.1 Test `compute_dampening`: mock 7 days of forecast and actual data, verify coefficients are computed correctly, verify physical guards (nighttime identity, a_k bounds, min 3 data points)
-  - [ ] 9.2 Test `reset_dampening`: verify coefficients are cleared, forecast returns raw values
-  - [ ] 9.3 Test `_get_dampened_value`: verify correct slot lookup and value transformation, verify non-negative clamp
-  - [ ] 9.4 Test forecast modification: verify `get_forecast()` and `get_value_from_current_forecast()` apply dampening when active, return raw when inactive
-  - [ ] 9.5 Test persistence: verify dampening coefficients survive simulated restart (save to config entry, reload)
-  - [ ] 9.6 Test binary sensor: verify `qs_solar_dampening_active` reflects actual dampening state
-  - [ ] 9.7 Test button press integration: verify button press triggers compute/reset flow
+- [ ] Task 11: Write tests (AC: all)
+  - [ ] 11.1 Test `compute_dampening` 1-day mode: mock 1 day of forecast+actual data at 15-min resolution, verify ratio correction per slot, verify physical guards (nighttime identity, a_k bounds, skip low forecast)
+  - [ ] 11.2 Test `compute_dampening` 7-day mode: mock 7 days, verify `numpy.polyfit` regression per slot, verify min 3 data points guard, verify nighttime identity
+  - [ ] 11.3 Test day selection logic: verify pressing at 23:00 uses today, pressing at 16:00 uses yesterday
+  - [ ] 11.4 Test `reset_dampening`: verify identity coefficients stored for all 96 slots, `score_dampened` cleared
+  - [ ] 11.5 Test `_get_dampened_value`: verify correct slot lookup, value transformation, non-negative clamp
+  - [ ] 11.6 Test `get_forecast()` and `get_value_from_current_forecast()`: verify dampened output when coefficients active, raw output when empty
+  - [ ] 11.7 Test `get_active_score()`: returns `score_dampened` when available, falls back to `score`
+  - [ ] 11.8 Test sensor restore: create `QSBaseSensorSolarDampenedScoreRestore`, simulate persisted attrs with coefficients, verify `provider.set_dampening_coefficients()` called on restore
+  - [ ] 11.9 Test button integration: verify button press triggers correct `compute_dampening_all_providers(num_days=N)` or `reset_dampening_all_providers()`
 
 ## Dev Notes
 
 ### Architecture Compliance
 
-- **Two-layer boundary**: Dampening computation uses `numpy` (allowed in domain logic) but accesses ring buffers via `QSSolarProvider` which lives in `ha_model/`. The computation can stay in `ha_model/solar.py` since it needs HA config entry access for persistence. If a pure-Python helper is extracted later, it should go to `home_model/home_utils.py`.
-- **Async rules**: `compute_dampening_all_providers()` and `reset_dampening_all_providers()` must be async since they may write to config entries. The regression computation itself (numpy) is CPU-bound — wrap in `hass.async_add_executor_job()` if it takes >100ms.
+- **Two-layer boundary**: Dampening computation lives in `ha_model/solar.py` (needs ring buffer access + HA sensor persistence). Uses `numpy.polyfit` for regression. No scipy (not a HA dependency).
+- **15-minute grid alignment**: Coefficients use the same slot indexing as `QSSolarHistoryVals` ring buffers: `slot = hour * NUM_INTERVAL_PER_HOUR + minute // INTERVALS_MN` (0-95). Import `NUM_INTERVAL_PER_HOUR` from `ha_model/home.py` or use the value `4` inline with a comment.
+- **Async rules**: `compute_dampening_all_providers()` and `reset_dampening_all_providers()` must be async. The numpy regression itself is fast for 96 slots × 7 points — no need for `async_add_executor_job`.
 - **Logging**: Use lazy `%s` formatting, no f-strings in log calls, no trailing periods.
-- **Constants**: All new keys go in `const.py`. Never hardcode strings.
-- **Translations**: Edit `strings.json` only, then run `bash scripts/generate-translations.sh`. Never edit `translations/en.json` directly.
+- **Constants**: All new keys in `const.py`. Never hardcode strings.
+- **Translations**: Edit `strings.json` only, then run `bash scripts/generate-translations.sh`.
 
 ### Existing Patterns to Follow
 
-- **Button creation**: Follow `create_ha_button_for_QSSolar()` in `button.py:83-94` — the "Recompute Forecast Scores" button is the exact pattern.
-- **Binary sensor**: Follow `qs_solar_forecast_ok` binary sensor pattern in `binary_sensor.py` and `sensor.py`.
-- **Config persistence**: Follow `car.py:180-183` for `_salvable_dampening` dict pattern. Use `hass.config_entries.async_update_entry()`.
-- **Dashboard template**: Follow the entity rendering pattern at `quiet_solar_dashboard_template.yaml.j2:269-272`.
-- **Scoring data access**: `compute_dampening` should access the same ring buffers as `compute_score` (lines 538-588 in `solar.py`) — use `forecast_handler.solar_production_history` for actuals and `forecast_handler.get_forecast_histories_for_provider()` for stored forecasts.
+| Pattern | Source | Use For |
+|---------|--------|---------|
+| Button creation | `button.py:83-94` (recompute scores) | 3 new buttons |
+| Score sensor with restore | `sensor.py:388-404` + `QSBaseSensorSolarScoreRestore:658-680` | Dampened score sensor |
+| `value_fn_and_attr` | `QSSensorEntityDescription.value_fn_and_attr` (sensor.py:527) | Return score + coefficients |
+| Restore from attributes | `QSBaseSensorRestore.async_added_to_hass` (sensor.py:601-631) | Restore coefficients at boot |
+| Scoring data access | `compute_score` (solar.py:538-588) | Same ring buffer access for dampening |
+| Dashboard entity loop | `quiet_solar_dashboard_template.yaml.j2:263-268` | Dampened score loop |
 
 ### Key File Locations
 
 | File | Purpose | Key Lines |
 |------|---------|-----------|
-| `const.py` | Constants | 279 (existing solar button), 94-107 (solar config) |
-| `ha_model/solar.py` | Provider + Solar classes | 378-617 (QSSolarProvider), 83-376 (QSSolar), 294-304 (force_scoring_cycle), 538-588 (compute_score) |
-| `button.py` | Button entity creation | 83-94 (create_ha_button_for_QSSolar) |
-| `strings.json` | Translation strings | entity.button section (line ~865) |
-| `sensor.py` | Sensor creation | 368-459 (solar sensors) |
-| `binary_sensor.py` | Binary sensor creation | (follow forecast_ok pattern) |
+| `const.py` | Constants | 233 (score prefix), 279 (solar button) |
+| `ha_model/solar.py` | QSSolarProvider + QSSolar | 378-617 (provider), 83-376 (solar), 294-304 (force_scoring), 418-420 (get_active_score), 422-429 (get_forecast), 538-588 (compute_score) |
+| `ha_model/home.py` | Ring buffer + history | NUM_INTERVAL_PER_HOUR (line 3023), get_historical_data (line 3580), get_forecast_histories_for_provider (line 3063) |
+| `sensor.py` | Sensor creation + restore | 388-404 (score sensors), 520-528 (description), 543-572 (update_callback), 575-631 (restore), 658-680 (score restore) |
+| `button.py` | Button entities | 83-94 (create_ha_button_for_QSSolar) |
+| `strings.json` | Translations | entity.button section (~line 865) |
 | `ui/quiet_solar_dashboard_template.yaml.j2` | Dashboard | 247-273 (solar section) |
-| `home_model/home_utils.py` | Time series utilities | align/slot functions |
-
-### MOS Linear Regression Reference
-
-From the original Story 3.7 acceptance criteria (epics.md lines 744-751):
-- For each time step k: compute `(a_k, b_k)` via linear regression on 7 days of `(forecast_k, actual_k)` data
-- Dampened forecast = `max(0, a_k * raw_forecast_k + b_k)`
-- Physical guards: nighttime steps → identity `(1.0, 0.0)`, `a_k` bounded to `[0.1, 3.0]`, minimum 3 data points per step
-- Use `numpy.polyfit(forecast_values, actual_values, 1)` which returns `[a_k, b_k]`
 
 ### What NOT to Do
 
-- Do NOT add automatic/scheduled dampening computation — this is manual only (button press)
-- Do NOT add per-provider dampening switches (the old `switch.qs_solar_dampening_<provider>` approach was removed)
-- Do NOT add `score_raw` / `score_dampened` split sensors — keep the single score sensor
-- Do NOT modify the scoring cycle — dampening and scoring are independent operations
+- Do NOT add automatic/scheduled dampening — manual button press only
+- Do NOT add per-provider dampening switches (removed in Story 3.14)
+- Do NOT use `scipy` — use `numpy.polyfit` only
+- Do NOT change existing score sensor entity key — only rename the display `name`
+- Do NOT use config entry options for persistence — use sensor attribute RestoreEntity pattern
+- Do NOT add a binary_sensor for dampening status — coefficients visible in sensor attrs is sufficient
 
 ### References
 
-- [Source: epics.md#Story-3.7, lines 709-751] — Original dampening spec
+- [Source: epics.md#Story-3.7, lines 709-751] — Original dampening spec (MOS regression)
 - [Source: epics.md#Story-3.14, lines 776-786] — Dampening removal scope change
 - [Source: ha_model/solar.py#QSSolarProvider, lines 378-617] — Provider class
 - [Source: ha_model/solar.py#QSSolar, lines 83-376] — Solar device class
+- [Source: ha_model/solar.py#compute_score, lines 538-588] — Scoring data access pattern
+- [Source: sensor.py#QSBaseSensorSolarScoreRestore, lines 658-680] — Score restore pattern
+- [Source: sensor.py#QSExtraStoredData, lines 575-599] — Extra stored data for attrs
+- [Source: ha_model/home.py#NUM_INTERVAL_PER_HOUR, line 3023] — Ring buffer resolution
+- [Source: ha_model/home.py#get_historical_data, line 3580] — Historical data retrieval
 - [Source: button.py#create_ha_button_for_QSSolar, lines 83-94] — Button pattern
 - [Source: _bmad-output/project-context.md] — Full 42-rule set
 
