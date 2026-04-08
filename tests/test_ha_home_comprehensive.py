@@ -784,11 +784,6 @@ class TestQSHomeExtendedCoverage:
         result = home.get_devices_for_dashboard_section("Test Section")
         assert isinstance(result, list)
 
-    def test__get_home_max_production_phase_amps_for_budget(self, home):
-        """Test _get_home_max_production_phase_amps_for_budget (lines 903-913)."""
-        result = home._get_home_max_production_phase_amps_for_budget()
-        assert isinstance(result, int)
-
     def test_get_home_max_phase_amps(self, home):
         """Test get_home_max_phase_amps (lines 915-990)."""
         result = home.get_home_max_phase_amps()

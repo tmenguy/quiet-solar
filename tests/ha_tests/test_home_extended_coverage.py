@@ -434,57 +434,6 @@ class TestHomeOffGridMode:
     """Tests for off-grid mode behavior."""
 
     @pytest.mark.asyncio
-    async def test_on_grid_production_phase_amps_capped_by_inverter(
-        self,
-        hass: HomeAssistant,
-        home_config_entry: ConfigEntry,
-    ):
-        """On-grid with solar caps production amps by inverter limit."""
-        home = await _get_home(hass, home_config_entry)
-        home.qs_home_is_off_grid = False
-        home.physical_solar_plant = MagicMock(
-            solar_max_phase_amps=17.4,
-            solar_production=5000.0,
-            solar_max_output_power_value=12000.0,
-        )
-
-        result = home._get_home_max_production_phase_amps_for_budget()
-        # Must be capped by inverter limit, not subscription limit
-        assert result == min(home.dyn_group_max_phase_current_conf, 17.4)
-
-    @pytest.mark.asyncio
-    async def test_off_grid__get_home_max_production_phase_amps_for_budget_no_solar(
-        self,
-        hass: HomeAssistant,
-        home_config_entry: ConfigEntry,
-    ):
-        """Off-grid with no solar returns static amp. Covers line 906-912."""
-        home = await _get_home(hass, home_config_entry)
-        home.qs_home_is_off_grid = True
-        home.physical_solar_plant = None
-
-        result = home._get_home_max_production_phase_amps_for_budget()
-        assert result == home.dyn_group_max_phase_current_conf
-
-    @pytest.mark.asyncio
-    async def test_off_grid__get_home_max_production_phase_amps_for_budget_with_solar(
-        self,
-        hass: HomeAssistant,
-        home_config_entry: ConfigEntry,
-    ):
-        """Off-grid with solar limits to solar max phase amps. Covers line 910."""
-        home = await _get_home(hass, home_config_entry)
-        home.qs_home_is_off_grid = True
-        home.physical_solar_plant = MagicMock(
-            solar_max_phase_amps=15.0,
-            solar_production=3000.0,
-            solar_max_output_power_value=5000.0,
-        )
-
-        result = home._get_home_max_production_phase_amps_for_budget()
-        assert result == min(home.dyn_group_max_phase_current_conf, 15.0)
-
-    @pytest.mark.asyncio
     async def test_off_grid_get_home_max_phase_amps_with_battery(
         self,
         hass: HomeAssistant,

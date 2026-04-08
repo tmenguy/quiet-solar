@@ -1167,39 +1167,61 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         slot_idx: int | None = None,
         existing_amps: list[float | int] | None = None,
         additional_command_piloted_power: float = 0.0,
-        use_production_limits=False,
+        max_slot_power_headroom: float | None = None,
     ) -> list[LoadCommand]:
 
-        out_sorted_commands = []
-
-        if (
-            self.load is None
-            or self.load.father_device is None
-            or self.load.father_device.available_amps_for_group is None
-            or slot_idx is None
-        ):
+        # No slot specified → unfiltered commands (no per-slot guard applies)
+        if slot_idx is None:
             return self._power_sorted_cmds
 
-        # first compute the minium available amps on the slots
-        if use_production_limits:
-            # if we are using production limits, we want to use the production limits as the available amps, not the consumption limits
-            smaller_budget = self.load.father_device.available_amps_production_for_group[slot_idx]
-        else:
+        has_amp_budget = (
+            self.load is not None
+            and self.load.father_device is not None
+            and self.load.father_device.available_amps_for_group is not None
+        )
+
+        # Neither guard applicable → return all commands
+        if not has_amp_budget and max_slot_power_headroom is None:
+            return self._power_sorted_cmds
+
+        smaller_budget = None
+        if has_amp_budget:
+            # per-phase amp guard (subscription/breaker)
             smaller_budget = self.load.father_device.available_amps_for_group[slot_idx]
 
-        if existing_amps is not None and not is_amps_zero(existing_amps):
-            smaller_budget = add_amps(smaller_budget, existing_amps)
+            if existing_amps is not None and not is_amps_zero(existing_amps):
+                smaller_budget = add_amps(smaller_budget, existing_amps)
 
         last_cmd_idx_ok = len(self._power_sorted_cmds) - 1
         for i in range(len(self._power_sorted_cmds) - 1, -1, -1):
             cmd = self._power_sorted_cmds[i]
-            cmd_amps = self.load.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
-            if additional_command_piloted_power > 0.0:
-                piloted_amps = self.load.get_phase_amps_from_power_for_piloted_budgeting(
-                    additional_command_piloted_power
-                )
-                cmd_amps = add_amps(cmd_amps, piloted_amps)
-            if is_amps_greater(cmd_amps, smaller_budget):
+
+            # amp guard: must not exceed per-phase subscription/breaker limit
+            amp_ok = True
+            if has_amp_budget:
+                cmd_amps = self.load.get_phase_amps_from_power_for_budgeting(cmd.power_consign)
+                if additional_command_piloted_power > 0.0:
+                    piloted_amps = self.load.get_phase_amps_from_power_for_piloted_budgeting(
+                        additional_command_piloted_power
+                    )
+                    cmd_amps = add_amps(cmd_amps, piloted_amps)
+                amp_ok = not is_amps_greater(cmd_amps, smaller_budget)
+
+            # power headroom guard: when provided, cmd power must not exceed headroom
+            power_ok = True
+            if max_slot_power_headroom is not None:
+                total_cmd_power = cmd.power_consign + additional_command_piloted_power
+                if total_cmd_power > max_slot_power_headroom:
+                    power_ok = False
+                    _LOGGER.debug(
+                        "Power guard: slot %s cmd %.0fW > headroom %.0fW for %s",
+                        slot_idx,
+                        total_cmd_power,
+                        max_slot_power_headroom,
+                        self.name,
+                    )
+
+            if not amp_ok or not power_ok:
                 # not ok ... continue to remove commands
                 last_cmd_idx_ok = i - 1
             else:
@@ -1210,23 +1232,25 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             return self._power_sorted_cmds
         elif last_cmd_idx_ok >= 0:
             # we have some commands that are ok, so we can use them
-            out_sorted_commands = self._power_sorted_cmds[: last_cmd_idx_ok + 1]
+            return self._power_sorted_cmds[: last_cmd_idx_ok + 1]
         else:
             # all commands exceed budget — explicit empty return
             return []
-
-        return out_sorted_commands
 
     def adapt_power_steps_budgeting(
         self,
         slot_idx: int | None = None,
         commands: list[LoadCommand | None] | None = None,
         for_add=True,
-        use_production_limits=False,
+        max_slot_power_headroom: float | None = None,
     ):
 
         if slot_idx is None:
-            return self.adapt_power_steps_budgeting_low_level(use_production_limits=use_production_limits), 0.0, 0.0
+            return (
+                self.adapt_power_steps_budgeting_low_level(max_slot_power_headroom=max_slot_power_headroom),
+                0.0,
+                0.0,
+            )
 
         existing_cmd_amps = None
         is_current_slot_empty = False
@@ -1265,7 +1289,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 slot_idx=slot_idx,
                 existing_amps=existing_cmd_amps,
                 additional_command_piloted_power=power_piloted_delta,
-                use_production_limits=use_production_limits,
+                max_slot_power_headroom=max_slot_power_headroom,
             )
 
         return power_sorted_cmds, is_current_slot_empty, power_piloted_delta
@@ -1281,6 +1305,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         time: datetime,
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
+        power_headroom: npt.NDArray[np.float64] | None = None,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -1288,7 +1313,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         log_msg = f"{self.name} from {first_slot} to {last_slot} ({int(np.sum(power_slots_duration_s[:first_slot]))}s to {int(np.sum(power_slots_duration_s[:last_slot]))}s)"
 
-        use_production_limits = self.support_auto and energy_delta >= 0.0
+        # apply power headroom guard for all loads consuming energy (not just auto)
+        use_headroom = energy_delta >= 0.0 and power_headroom is not None
 
         if energy_delta >= 0.0:
             _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
@@ -1373,12 +1399,13 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                     j = None
 
+                    slot_headroom = float(power_headroom[i]) if use_headroom else None
                     power_sorted_cmds, is_current_empty_command, possible_power_piloted_delta = (
                         self.adapt_power_steps_budgeting(
                             slot_idx=i,
                             commands=existing_commands,
                             for_add=(init_energy_delta >= 0.0),
-                            use_production_limits=use_production_limits,
+                            max_slot_power_headroom=slot_headroom,
                         )
                     )
                     if len(power_sorted_cmds) == 0:
@@ -1734,6 +1761,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         time_slots: list[datetime],
         additional_available_energy_to_deplete: float = 0.0,
         max_power_to_deplete: float = 0.0,
+        power_headroom: npt.NDArray[np.float64] | None = None,
     ) -> tuple[Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int, float]:
 
         # force to only use solar power for non mandatory constraints
@@ -1972,8 +2000,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     # for global production
 
                     # we will add a command from 0 command so by construction power_piloted_delta will happen
+                    slot_headroom = float(power_headroom[i]) if power_headroom is not None else None
                     power_sorted_cmds, is_current_empty_command, power_piloted_delta = self.adapt_power_steps_budgeting(
-                        slot_idx=i, commands=None, for_add=True, use_production_limits=True
+                        slot_idx=i, commands=None, for_add=True, max_slot_power_headroom=slot_headroom
                     )
 
                     # stronger than the forced slots : may be dangerous to output a command if forbidden by amps or other stuffs
@@ -2286,7 +2315,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         if quantity_to_be_added <= 0.0:
                             break
 
-                    if has_a_cmd is False:
+                    if has_a_cmd is False:  # pragma: no cover — defensive: green energy phase would also have failed
                         _LOGGER.warning(
                             "compute_best_period_repartition: no power sorted commands for mandatory per price repartition %s",
                             self.name,

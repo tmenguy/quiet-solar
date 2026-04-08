@@ -3,7 +3,7 @@
 issue: 126
 branch: "QS_126"
 
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 As a Quiet Solar user with multiple controllable loads,
@@ -85,58 +85,44 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 (AC: 1) Per-slot power tracking and `max_possible_production` in the solver
-  - [ ] 1.1 Add `_total_consumed_power` array to `PeriodSolver.__init__`, initialized from unavoidable consumption forecast (same source as `_available_power` init)
-  - [ ] 1.2 Add `_add_consumption_delta_power(self, delta_power)` utility method on `PeriodSolver` that atomically updates both `self._available_power += delta_power` and `self._total_consumed_power += delta_power`. Every place that currently does `self._available_power = self._available_power + out_power` for load consumption must use this method instead
-  - [ ] 1.3 Evolve `_battery_get_charging_power` to also output per-slot `battery_actual_discharge` and `battery_possible_discharge` (using existing `get_best_discharge_power` utils). Note: user will rework this method further — design for easy replacement
-  - [ ] 1.4 Add `_compute_max_possible_production()` method to `PeriodSolver` implementing the DC/AC coupling formulas above. Takes `battery_actual_discharge[slot]`, `battery_possible_discharge[slot]` from step 1.3
-  - [ ] 1.5 Compute and store `self._max_possible_production` after init (solar-only, no battery) and recompute after each call to `_battery_get_charging_power` (in `solve()`)
-  - [ ] 1.6 In `_allocate_constraints` (solver.py:683), after each constraint allocation (after line 727), recompute battery state via `_battery_get_charging_power` and update `_max_possible_production`
-  - [ ] 1.7 Compute per-slot headroom: `headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]` and pass to constraint allocation
+- [x] Task 1 (AC: 1) Per-slot power tracking and `max_possible_production` in the solver
+  - [x] 1.1 Add `_total_consumed_power` array to `PeriodSolver.__init__`, initialized from unavoidable consumption forecast
+  - [x] 1.2 Add `_add_consumption_delta_power(self, delta_power)` utility method — atomically updates both `_available_power` and `_total_consumed_power`
+  - [x] 1.3 Evolve `_battery_get_charging_power` to output `battery_actual_discharge` and `battery_possible_discharge`
+  - [x] 1.4 Add `_compute_max_possible_production()` method implementing DC/AC coupling formulas
+  - [x] 1.5 Compute `_max_possible_production` after init (solar-only) and recompute with battery data before first `_allocate_constraints` and after each allocation
+  - [x] 1.6 In `_allocate_constraints`, recompute battery state and `_max_possible_production` after each constraint
+  - [x] 1.7 Compute per-slot headroom and pass to constraint allocation
 
-- [ ] Task 2 (AC: 2,3,6) Replace `use_production_limits` with power headroom in constraints
-  - [ ] 2.1 Add `max_slot_power_headroom: float | None` parameter to `adapt_power_steps_budgeting_low_level` (constraints.py:1165), replacing `use_production_limits`
-  - [ ] 2.2 In `adapt_power_steps_budgeting_low_level`: **always** check `available_amps_for_group` (subscription/breaker per-phase protection — unchanged). **Additionally**, when `max_slot_power_headroom is not None`, also filter commands by `cmd.power_consign <= max_slot_power_headroom`. Both guards must pass for a command to be accepted. The only thing removed is the `available_amps_production_for_group` branch
-  - [ ] 2.3 Thread `max_slot_power_headroom` through `adapt_power_steps_budgeting` (line 1220) and `adapt_repartition` (line 1273)
-  - [ ] 2.4 In `compute_best_period_repartition` (line 1727): receive per-slot headroom array as new parameter, pass `headroom[slot]` to `adapt_power_steps_budgeting` for each slot
-  - [ ] 2.5 Update call site at line 1976 (`use_production_limits=True` in available-energy-only path)
-  - [ ] 2.6 Remove `use_production_limits` parameter from all methods
+- [x] Task 2 (AC: 2,3,6) Replace `use_production_limits` with power headroom in constraints
+  - [x] 2.1 Add `max_slot_power_headroom` parameter to `adapt_power_steps_budgeting_low_level`
+  - [x] 2.2 Restructured: amp guard and headroom guard are independent. Either applies when its inputs are available. **Headroom applies even without father_device** (no amp guard needed for headroom to work)
+  - [x] 2.3 Thread `max_slot_power_headroom` through `adapt_power_steps_budgeting` and `adapt_repartition`
+  - [x] 2.4 In `compute_best_period_repartition`: receive headroom array, pass to slot-level budgeting
+  - [x] 2.5 Update call site for available-energy-only path
+  - [x] 2.6 Remove `use_production_limits` parameter from all methods
 
-- [ ] Task 3 (AC: 6) Remove `available_amps_production_for_group` infrastructure
-  - [ ] 3.1 Remove `available_amps_production_for_group` attribute from `QSDynamicGroup.__init__` (dynamic_group.py:36)
-  - [ ] 3.2 Remove production block from `update_available_amps_for_group` (dynamic_group.py:56-64)
-  - [ ] 3.3 Remove `dyn_group_max_production_phase_current_for_budget` property (dynamic_group.py:88)
-  - [ ] 3.4 Remove `from_father_production_budget` parameter and all its uses from `prepare_slots_for_amps_budget` (dynamic_group.py:209, 221-233, 241)
-  - [ ] 3.5 Remove `_get_home_max_production_phase_amps_for_budget` method (home.py:1167-1177)
-  - [ ] 3.6 Remove `dyn_group_max_production_phase_current_for_budget` property override (home.py:1265-1281)
-  - [ ] 3.7 Remove off-grid production branch in `dyn_group_max_phase_current_for_budget` (home.py:1259-1260)
-  - [ ] 3.8 Remove `from_father_production_budget` from `prepare_slots_for_amps_budget` in load.py
+- [x] Task 3 (AC: 6) Remove `available_amps_production_for_group` infrastructure
+  - [x] 3.1–3.8 All removed
 
-- [ ] Task 4 (AC: 4) Power guard respects constraint priority
-  - [ ] 4.1 In `_allocate_constraints` (solver.py:683): for mandatory constraints (`c.is_mandatory`), pass `headroom=None` to `compute_best_period_repartition` (no production cap)
-  - [ ] 4.2 In `adapt_power_steps_budgeting_low_level`: `available_amps_for_group` is ALWAYS checked regardless of mandatory status. When `max_slot_power_headroom is None` (mandatory), only the amp guard applies — the power headroom guard is skipped. Both guards must pass when headroom is provided
-  - [ ] 4.3 Log warning when mandatory load causes total_consumption > max_possible_production
+- [x] Task 4 (AC: 4) Power guard respects constraint priority
+  - [x] 4.1 In `_allocate_constraints`: headroom applied when `always_use_available_only_power or not c.is_mandatory` (matches `do_use_available_power_only` logic). Mandatory-only constraints bypass headroom unless always_use_available_only_power is set
+  - [x] 4.2 Amp guard always active. Headroom guard independent — applies whenever `max_slot_power_headroom` is not None, regardless of father_device
+  - [x] 4.3 Log warning when mandatory load exceeds production
 
-- [ ] Task 5 (AC: 5) Logging
-  - [ ] 5.1 In `adapt_power_steps_budgeting_low_level`: log when power guard filters commands (slot, cmd power, headroom)
-  - [ ] 5.2 In `_compute_max_possible_production`: log per-slot production breakdown (solar, battery, inverter cap)
-  - [ ] 5.3 Use lazy `%s` formatting per project rules
+- [x] Task 5 (AC: 5) Logging
+  - [x] 5.1–5.3 All implemented with lazy `%s` formatting
 
-- [ ] Task 6 (AC: 6,7) Update existing tests
-  - [ ] 6.1 `tests/factories.py`: remove `available_amps_production_for_group` from `MinimalTestHome` (line 331), `create_charger_group` (line 551), `FatherDeviceStub` (lines 837, 870-872). Add power-guard-compatible helpers
-  - [ ] 6.2 `tests/test_constraints.py`: replace 8 `use_production_limits=` call sites (lines 1507-1709) with `max_slot_power_headroom=` parameter
-  - [ ] 6.3 `tests/test_solver.py`: update `test_adapt_power_steps_budgeting_low_level_production_limits` (line 2416) to use power headroom
-  - [ ] 6.4 `tests/test_ha_dynamic_group.py`: remove production budget tests (lines 191-217, 688-714)
-  - [ ] 6.5 `tests/test_charger_coverage_deep.py`: remove production budget setup (lines 107, 184)
-  - [ ] 6.6 `tests/test_coverage_constraints.py`: remove production budget assignments (lines 2039, 2149)
-  - [ ] 6.7 `tests/test_constraint_interaction_boundaries.py`: update `use_production_limits=False` calls (lines 448, 490)
+- [x] Task 6 (AC: 6,7) Update existing tests
+  - [x] 6.1–6.7 All updated
 
-- [ ] Task 7 (AC: 7) New tests
-  - [ ] 7.1 Test `_compute_max_possible_production`: DC-coupled with/without battery, AC-coupled, empty battery, no battery, no inverter limit
-  - [ ] 7.2 Test power guard: 2 chargers + cumulus exceeding inverter → filler commands capped by headroom
-  - [ ] 7.3 Test mandatory bypass: mandatory load allocated despite exceeding production, subsequent filler sees reduced headroom
-  - [ ] 7.4 Test `_add_consumption_delta_power`: verify `_available_power` and `_total_consumed_power` stay in sync after constraint allocations, and that battery-only modifications to `_available_power` don't affect `_total_consumed_power`
-  - [ ] 7.5 Test per-phase amp guard (`available_amps_for_group`) still works independently alongside power guard
+- [x] Task 7 (AC: 7) New tests (15 tests in `tests/test_power_guard.py`)
+  - [x] 7.1 `_compute_max_possible_production`: DC/AC coupling, with/without battery, inverter clamping
+  - [x] 7.2 Power guard filtering and multi-load capping by headroom
+  - [x] 7.3 Mandatory bypass: mandatory allocated despite exceeding production, filler sees reduced headroom
+  - [x] 7.4 `_add_consumption_delta_power` sync verification, battery independence
+  - [x] 7.5 Per-phase amp guard works independently alongside power guard
+  - [x] 7.6 Headroom guard without father_device (new — validates headroom applies even without dynamic group parent)
 
 ## Dev Notes
 
@@ -166,6 +152,10 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - **Battery switchable** — if battery is charging, guard assumes it can stop charging and start discharging
 - **`_battery_get_charging_power` will be reworked by user** — design for easy replacement of its output interface
 - **Emergency 0A dyn_handle override** — deferred to separate story
+- **Headroom condition matches `do_use_available_power_only`** — `if always_use_available_only_power or not c.is_mandatory: headroom = ...` (user correction: not just `c.is_mandatory`)
+- **`adapt_repartition` headroom not gated on `support_auto`** — `use_headroom = energy_delta >= 0.0 and power_headroom is not None` (user correction: non-auto loads should also be limited by headroom)
+- **Headroom guard independent of amp guard** — `adapt_power_steps_budgeting_low_level` checks headroom even when `father_device` is None (user correction: no father doesn't exempt from production limits)
+- **Battery-aware production before first allocation** — `_max_possible_production` recomputed with battery data before `_allocate_constraints` (not just after each allocation)
 
 ## Adversarial Review Notes
 

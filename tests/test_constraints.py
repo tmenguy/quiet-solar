@@ -1504,63 +1504,61 @@ def test_compute_best_period_repartition_mandatory_solar_only_forced():
 
 
 # =============================================================================
-# Test production clamping via use_production_limits
+# Test power headroom guard via max_slot_power_headroom
 # =============================================================================
 
 
-def test_adapt_power_steps_budgeting_low_level_production_limits():
-    """With use_production_limits=True, commands are filtered by production budget.
+def test_adapt_power_steps_budgeting_low_level_power_headroom():
+    """With max_slot_power_headroom, commands whose power exceeds headroom are filtered.
 
-    _FakeLoad puts power/230 on each of 3 phases, so:
-      1000W -> 4.35A, 3000W -> 13.0A, 5000W -> 21.7A
-    Consumption limit 32A allows all three; production limit 10A allows only 1000W and 2000W.
+    Three commands: 1000W, 2000W, 5000W.
+    Amp limit 32A allows all three.
+    Power headroom 2500W allows only 1000W and 2000W.
     """
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
     load.father_device = TestDynamicGroupDouble(
         max_amps=[32.0, 32.0, 32.0],
-        max_production_amps=[10.0, 10.0, 10.0],
     )
 
     constraint = MultiStepsPowerLoadConstraint(
         time=time,
         load=load,
         power_steps=[
-            LoadCommand(command="on", power_consign=1000),  # 4.35A per phase
-            LoadCommand(command="on", power_consign=2000),  # 8.70A per phase
-            LoadCommand(command="on", power_consign=5000),  # 21.7A per phase
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2000),
+            LoadCommand(command="on", power_consign=5000),
         ],
     )
 
-    cmds_consumption = constraint.adapt_power_steps_budgeting_low_level(
+    # Without headroom: all 3 pass the amp guard (32A is generous)
+    cmds_no_headroom = constraint.adapt_power_steps_budgeting_low_level(
         slot_idx=0,
-        use_production_limits=False,
+        max_slot_power_headroom=None,
     )
-    assert len(cmds_consumption) == 3
+    assert len(cmds_no_headroom) == 3
 
-    cmds_production = constraint.adapt_power_steps_budgeting_low_level(
+    # With headroom 2500W: only 1000W and 2000W pass
+    cmds_with_headroom = constraint.adapt_power_steps_budgeting_low_level(
         slot_idx=0,
-        use_production_limits=True,
+        max_slot_power_headroom=2500.0,
     )
-    assert len(cmds_production) < len(cmds_consumption)
-    assert len(cmds_production) == 2
-    assert cmds_production[0].power_consign == 1000
-    assert cmds_production[1].power_consign == 2000
+    assert len(cmds_with_headroom) < len(cmds_no_headroom)
+    assert len(cmds_with_headroom) == 2
+    assert cmds_with_headroom[0].power_consign == 1000
+    assert cmds_with_headroom[1].power_consign == 2000
 
 
-def test_adapt_power_steps_budgeting_production_tighter_than_consumption():
-    """Production limit 15A vs consumption 32A: only low-power commands pass.
+def test_adapt_power_steps_budgeting_headroom_tighter_than_amps():
+    """Power headroom 3500W vs amp limit 32A: only low-power commands pass.
 
-    _FakeLoad puts power/230 on each phase. Under 32A: up to 7360W.
-    Under 15A: up to 3450W. So 1000W, 2000W, 3000W pass both;
-    5000W passes consumption but not production; 7000W passes consumption
-    but not production.
+    Five commands: 1000W, 2000W, 3000W, 5000W, 7000W.
+    Under 32A all fit. Under 3500W headroom only 1000W, 2000W, 3000W pass.
     """
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
     load.father_device = TestDynamicGroupDouble(
         max_amps=[32.0, 32.0, 32.0],
-        max_production_amps=[15.0, 15.0, 15.0],
         num_slots=4,
     )
 
@@ -1568,28 +1566,31 @@ def test_adapt_power_steps_budgeting_production_tighter_than_consumption():
         time=time,
         load=load,
         power_steps=[
-            LoadCommand(command="on", power_consign=1000),  # 4.35A
-            LoadCommand(command="on", power_consign=2000),  # 8.70A
-            LoadCommand(command="on", power_consign=3000),  # 13.0A
-            LoadCommand(command="on", power_consign=5000),  # 21.7A
-            LoadCommand(command="on", power_consign=7000),  # 30.4A
+            LoadCommand(command="on", power_consign=1000),
+            LoadCommand(command="on", power_consign=2000),
+            LoadCommand(command="on", power_consign=3000),
+            LoadCommand(command="on", power_consign=5000),
+            LoadCommand(command="on", power_consign=7000),
         ],
     )
 
     for slot_idx in range(4):
-        cmds_prod = constraint.adapt_power_steps_budgeting_low_level(
+        cmds_headroom = constraint.adapt_power_steps_budgeting_low_level(
             slot_idx=slot_idx,
-            use_production_limits=True,
+            max_slot_power_headroom=3500.0,
         )
-        cmds_cons = constraint.adapt_power_steps_budgeting_low_level(
+        cmds_no_headroom = constraint.adapt_power_steps_budgeting_low_level(
             slot_idx=slot_idx,
-            use_production_limits=False,
+            max_slot_power_headroom=None,
         )
-        assert len(cmds_cons) == 5, "All commands fit under 32A consumption limit"
-        assert len(cmds_prod) == 3, f"Production limit 15A should allow 3 commands in slot {slot_idx}"
-        for cmd in cmds_prod:
-            amps_per_phase = cmd.power_consign / 230.0
-            assert amps_per_phase <= 15.0 + 0.1, f"Command {cmd.power_consign}W exceeds 15A production limit"
+        assert len(cmds_no_headroom) == 5, "All commands fit under 32A amp limit"
+        assert len(cmds_headroom) == 3, (
+            "Headroom 3500W should allow 3 commands in slot %s" % slot_idx
+        )
+        for cmd in cmds_headroom:
+            assert cmd.power_consign <= 3500.0, (
+                "Command %sW exceeds 3500W headroom" % cmd.power_consign
+            )
 
 
 def test_compute_best_period_solar_only_clamped_by_production():
@@ -1653,13 +1654,12 @@ def test_compute_best_period_solar_only_clamped_by_production():
             )
 
 
-def test_adapt_power_steps_budgeting_production_limits_with_existing_amps():
-    """Production limits correctly account for existing command amps."""
+def test_adapt_power_steps_budgeting_headroom_with_existing_amps():
+    """Power headroom guard is independent of existing amps (amp guard still uses them)."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
     load.father_device = TestDynamicGroupDouble(
         max_amps=[32.0, 32.0, 32.0],
-        max_production_amps=[10.0, 10.0, 10.0],
     )
 
     constraint = MultiStepsPowerLoadConstraint(
@@ -1672,24 +1672,27 @@ def test_adapt_power_steps_budgeting_production_limits_with_existing_amps():
         ],
     )
 
+    # With headroom 2500W: 1000W and 2300W pass, 5000W does not
     cmds_no_existing = constraint.adapt_power_steps_budgeting_low_level(
         slot_idx=0,
         existing_amps=None,
-        use_production_limits=True,
+        max_slot_power_headroom=2500.0,
     )
+    # Existing amps widen the amp budget but headroom is power-based
     cmds_with_existing = constraint.adapt_power_steps_budgeting_low_level(
         slot_idx=0,
         existing_amps=[5.0, 5.0, 5.0],
-        use_production_limits=True,
+        max_slot_power_headroom=2500.0,
     )
 
-    assert len(cmds_with_existing) >= len(cmds_no_existing), (
-        "Existing amps should be added back to budget, allowing at least as many commands"
-    )
+    assert len(cmds_no_existing) == 2, "Headroom 2500W allows 1000W and 2300W"
+    assert len(cmds_with_existing) == 2, "Headroom still limits to 2 commands"
+    assert cmds_with_existing[0].power_consign == 1000
+    assert cmds_with_existing[1].power_consign == 2300
 
 
-def test_production_limits_guard_when_consumption_budget_none():
-    """When available_amps_for_group is None, fall back to all commands."""
+def test_headroom_guard_when_consumption_budget_none():
+    """Headroom guard applies even when available_amps_for_group is None."""
     time = datetime.now(tz=pytz.UTC)
     load = _FakeLoad()
     load.father_device = TestDynamicGroupDouble(max_amps=[32.0, 32.0, 32.0])
@@ -1704,8 +1707,22 @@ def test_production_limits_guard_when_consumption_budget_none():
         ],
     )
 
+    # Headroom 500W: both 1000W and 5000W exceed headroom → all filtered out
     cmds = constraint.adapt_power_steps_budgeting_low_level(
         slot_idx=0,
-        use_production_limits=True,
+        max_slot_power_headroom=500.0,
     )
-    assert len(cmds) == 2, "Guard condition: when available_amps_for_group is None, return all commands"
+    assert len(cmds) == 0, "Headroom guard still filters even without amp budget"
+
+    # With generous headroom: no amp budget → all commands pass
+    cmds2 = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0,
+        max_slot_power_headroom=10000.0,
+    )
+    assert len(cmds2) == 2, "No amp budget + generous headroom → all commands pass"
+
+    # With no headroom at all: no amp budget → all commands pass (no guard active)
+    cmds3 = constraint.adapt_power_steps_budgeting_low_level(
+        slot_idx=0,
+    )
+    assert len(cmds3) == 2, "No amp budget + no headroom → all commands pass"

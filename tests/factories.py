@@ -328,7 +328,6 @@ def create_minimal_home_model(
     home._loads = []
     home._last_persons_car_allocation = {}
     home.available_amps_for_group = [[max_phase_amps] * 3]
-    home.available_amps_production_for_group = [[max_phase_amps] * 3]
     home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
     home.get_preferred_person_for_car = MagicMock(return_value=None)
 
@@ -548,7 +547,6 @@ def create_charger_group(
     dyn_group.home = home
     dyn_group._childrens = chargers
     dyn_group.available_amps_for_group = [max_amps]
-    dyn_group.available_amps_production_for_group = [max_amps]
 
     return QSChargerGroup(dyn_group)
 
@@ -810,7 +808,7 @@ class TestChargerDouble:
 class TestDynamicGroupDouble:
     """Test double for QSDynamicGroup that provides minimal required interface.
 
-    Supports multi-slot budgets and separate production limits.
+    Supports multi-slot amp budgets.
     """
 
     def __init__(
@@ -819,7 +817,6 @@ class TestDynamicGroupDouble:
         home: Any = None,
         chargers: list | None = None,
         max_amps: list[float] | None = None,
-        max_production_amps: list[float] | None = None,
         num_slots: int = 1,
         is_3p: bool = True,
         **kwargs,
@@ -832,9 +829,7 @@ class TestDynamicGroupDouble:
         self.charger_group = None
 
         consumption = max_amps or [32.0, 32.0, 32.0]
-        production = max_production_amps or list(consumption)
         self.available_amps_for_group = [list(consumption) for _ in range(num_slots)]
-        self.available_amps_production_for_group = [list(production) for _ in range(num_slots)]
 
         for key, value in kwargs.items():
             setattr(self, key, value)
@@ -860,16 +855,12 @@ class TestDynamicGroupDouble:
         amps: list[float | int],
         add: bool,
     ) -> None:
-        """Update both consumption and production budgets."""
+        """Update consumption amp budget."""
         from custom_components.quiet_solar.home_model.home_utils import add_amps, diff_amps
 
         if self.available_amps_for_group is not None and idx < len(self.available_amps_for_group):
             op = add_amps if add else diff_amps
             self.available_amps_for_group[idx] = op(self.available_amps_for_group[idx], amps)
-
-        if self.available_amps_production_for_group is not None and idx < len(self.available_amps_production_for_group):
-            op = add_amps if add else diff_amps
-            self.available_amps_production_for_group[idx] = op(self.available_amps_production_for_group[idx], amps)
 
         if self.father_device is not None and self.father_device != self:
             return self.father_device.update_available_amps_for_group(idx, amps, add)

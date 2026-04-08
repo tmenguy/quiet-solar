@@ -84,8 +84,11 @@ class PeriodSolver:
 
         # first lay off the time scales and slots, to match the constraints and tariffs timelines
         self._time_slots, self._active_constraints = self.create_time_slots(self._start_time, self._end_time)
-        self._prices, self._durations_s, self._available_power = self.create_power_slots(self._time_slots)
+        self._prices, self._durations_s, self._available_power, ua_consumption = self.create_power_slots(
+            self._time_slots
+        )
         self._solar_production = -self._available_power.copy()
+        self._total_consumed_power = ua_consumption.copy()
         self._battery_charge_power_by_inverter_AC_clamping = None
 
         # fill the battery if we do have some production clamping at inverter level
@@ -119,10 +122,97 @@ class PeriodSolver:
         elif np.min(self._available_power) >= 0:
             _LOGGER.warning("PeriodSolver: NO AVAILABLE POWER ... MINIMUM IS POSITIVE, NO POWER TO CONSUME")
 
+        # initial max_possible_production: solar-only (no battery yet)
+        self._max_possible_production = self._compute_max_possible_production()
+
         self._load_power_usage_for_test = None
         self._battery_power_external_consumption_for_test = None
         self._loads_energy_and_time_consumption_for_test = None
         self._constraints_for_test = None
+
+    def _add_consumption_delta_power(self, delta_power: npt.NDArray[np.float64]) -> None:
+        """Atomically update both _available_power and _total_consumed_power.
+
+        Every place that modifies _available_power for load consumption must use
+        this method to keep the two arrays in sync.  Battery-only operations
+        (charge / discharge) should still modify _available_power directly.
+        """
+        self._available_power = self._available_power + delta_power
+        self._total_consumed_power = self._total_consumed_power + delta_power
+
+    def _compute_max_possible_production(
+        self,
+        battery_actual_discharge: npt.NDArray[np.float64] | None = None,
+        battery_possible_discharge: npt.NDArray[np.float64] | None = None,
+    ) -> npt.NDArray[np.float64]:
+        """Compute per-slot maximum production power in watts.
+
+        The result depends on the coupling type:
+
+        DC-coupled battery (not empty):
+            min(pv + max(0, possible - max(0, actual)), inverter_limit)
+        DC-coupled battery (empty):
+            min(pv, inverter_limit)
+        AC-coupled battery (not empty):
+            min(pv, inverter_limit) + max(0, possible - max(0, actual))
+        AC-coupled / no battery:
+            min(pv, inverter_limit)
+        """
+        num_slots = len(self._available_power)
+        # _solar_production is pv - ua from init; raw pv = _solar_production + ua
+        raw_pv = self._solar_production + self._total_consumed_power - self._total_consumed_power
+        # Actually, _solar_production = -(ua - pv) = pv - ua at init. But _total_consumed_power
+        # has grown since init as loads were allocated. We need the ORIGINAL raw pv.
+        # raw_pv = _solar_production + ua_at_init. The ua_at_init IS the initial _total_consumed_power
+        # which we set from ua_consumption. However _total_consumed_power has been modified since.
+        # We stored _solar_production = pv_power - ua_power, and _solar_production never changes.
+        # So raw_pv[i] = _solar_production[i] + ua_consumption[i]. But we don't keep ua_consumption.
+        # We can use: _solar_production = pv - ua => pv = _solar_production + ua.
+        # The raw solar is the same as what we pass to battery functions.
+        # Looking at the battery code: float(self._solar_production[i]) IS what gets passed as
+        # solar_production to battery utils. And get_best_discharge_power uses that as the solar
+        # context for inverter clamping. So _solar_production is used as-is for battery math.
+        # For our formula, pv[slot] = self._solar_production[slot] per the story spec:
+        #   "pv[slot] = self._solar_production[slot] (fixed, from init)"
+
+        pv = self._solar_production  # net solar (pv - ua), fixed from init
+        inverter_limit = self._max_inverter_dc_to_ac_power
+
+        # solar-only production (no battery contribution)
+        if inverter_limit is not None:
+            solar_capped = np.minimum(np.maximum(pv, 0.0), float(inverter_limit))
+        else:
+            solar_capped = np.maximum(pv, 0.0)
+
+        result = solar_capped.copy()
+
+        if (
+            self._battery is not None
+            and battery_possible_discharge is not None
+            and battery_actual_discharge is not None
+        ):
+            spare_discharge = np.maximum(0.0, battery_possible_discharge - np.maximum(0.0, battery_actual_discharge))
+
+            if self._battery.is_dc_coupled:
+                # DC-coupled: solar + battery share one inverter
+                combined = np.maximum(pv, 0.0) + spare_discharge
+                if inverter_limit is not None:
+                    result = np.minimum(combined, float(inverter_limit))
+                else:
+                    result = combined
+            else:
+                # AC-coupled: battery has its own path, add on top of capped solar
+                result = solar_capped + spare_discharge
+
+        _LOGGER.debug(
+            "max_possible_production: slots=%s, min=%.0f, max=%.0f, has_battery=%s",
+            num_slots,
+            float(np.min(result)),
+            float(np.max(result)),
+            battery_possible_discharge is not None,
+        )
+
+        return result
 
     def create_time_slots(
         self, start_time: datetime, end_time: datetime
@@ -178,19 +268,25 @@ class PeriodSolver:
 
     def create_power_slots(
         self, anchors: list[datetime]
-    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
-        """
-        Create the power slots for the forecast.
+    ) -> tuple[
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+        npt.NDArray[np.float64],
+    ]:
+        """Create the power slots for the forecast.
 
         Args:
-            anchors: list: The list of time slots.
+            anchors: The list of time slots.
 
         Returns:
-            list: A list of power slots.
+            Tuple of (prices, durations_s, available_power, ua_consumption).
         """
-        prices: npt.NDArray[np.float64] = np.zeros(len(anchors) - 1, dtype=np.float64)
-        durations_s: npt.NDArray[np.float64] = np.zeros(len(anchors) - 1, dtype=np.float64)
-        available_power: npt.NDArray[np.float64] = np.zeros(len(anchors) - 1, dtype=np.float64)
+        num = len(anchors) - 1
+        prices: npt.NDArray[np.float64] = np.zeros(num, dtype=np.float64)
+        durations_s: npt.NDArray[np.float64] = np.zeros(num, dtype=np.float64)
+        available_power: npt.NDArray[np.float64] = np.zeros(num, dtype=np.float64)
+        ua_consumption: npt.NDArray[np.float64] = np.zeros(num, dtype=np.float64)
 
         # anchors contain start stop and everything needed to create the slots
         i_tariff = 0
@@ -204,7 +300,7 @@ class PeriodSolver:
             while i_pv < len(anchors) - 1 and self._pv_forecast[i_pv + 1][0] <= anchors[0]:
                 i_pv += 1
 
-        for i in range(len(anchors) - 1):
+        for i in range(num):
             begin_slot = anchors[i]
             end_slot = anchors[i + 1]
 
@@ -225,8 +321,9 @@ class PeriodSolver:
             )  # solar prediction can be smoothed a bit
 
             available_power[i] = ua_power - pv_power
+            ua_consumption[i] = ua_power
 
-        return prices, durations_s, available_power
+        return prices, durations_s, available_power, ua_consumption
 
     def _merge_commands_slots_for_load(
         self, loads, constraint, first_slot, last_slot, new_command_list, prio_on_new=False
@@ -298,10 +395,13 @@ class PeriodSolver:
 
         available_power_list = self._available_power
         max_inverter_dc_to_ac_power = self._max_inverter_dc_to_ac_power
-        battery_ext_consumption_power = np.zeros(len(available_power_list), dtype=np.float64)
-        battery_charge = np.zeros(len(available_power_list), dtype=np.float64)
+        num = len(available_power_list)
+        battery_ext_consumption_power = np.zeros(num, dtype=np.float64)
+        battery_charge = np.zeros(num, dtype=np.float64)
+        battery_actual_discharge = np.zeros(num, dtype=np.float64)
+        battery_possible_discharge = np.zeros(num, dtype=np.float64)
         if existing_battery_commands is None:
-            battery_commands = [None] * len(available_power_list)
+            battery_commands = [None] * num
         else:
             battery_commands = existing_battery_commands
         prices_discharged_energy_buckets = {}
@@ -395,6 +495,18 @@ class PeriodSolver:
                                 consumption_power = 0.0
 
                 battery_ext_consumption_power[i] = consumption_power
+
+                # track actual discharge (positive when discharging) and SOC-limited max
+                if charging_power < 0:
+                    battery_actual_discharge[i] = -charging_power
+                battery_possible_discharge[i] = self._battery.get_best_discharge_power(
+                    self._battery.max_discharging_power,
+                    float(self._solar_production[i]),
+                    max_inverter_dc_to_ac_power,
+                    float(self._durations_s[i]),
+                    current_charge=float(prev_battery_charge),
+                )
+
                 charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
 
                 if limited_discharge_per_price is not None:
@@ -441,6 +553,8 @@ class PeriodSolver:
             prices_remaining_grid_energy_buckets,
             excess_solar_energy,
             remaining_grid_energy,
+            battery_actual_discharge,
+            battery_possible_discharge,
         )
 
     def _prepare_battery_segmentation(self, over_budget=0.2):
@@ -458,6 +572,8 @@ class PeriodSolver:
             prices_remaining_grid_energy_buckets,
             excess_solar_energy,
             remaining_grid_energy,
+            _battery_actual_discharge,
+            _battery_possible_discharge,
         ) = self._battery_get_charging_power()
 
         empty_segments = [[None, num_slots - 1]]
@@ -639,7 +755,7 @@ class PeriodSolver:
                     )
                     has_changed = True
                     constraints_evolution[ci] = out_c_adapted
-                    self._available_power = self._available_power + out_delta_power
+                    self._add_consumption_delta_power(out_delta_power)
                     self._merge_commands_slots_for_load(actions, ci, st, nd, out_commands_adapted, prio_on_new=True)
                 else:
                     _LOGGER.info(
@@ -701,6 +817,13 @@ class PeriodSolver:
             if additional_energy_to_deplete >= 0.0:
                 remaining_additional_energy_to_deplete = 0.0
 
+            # headroom follows the same rule as do_use_available_power_only:
+            # apply power guard when using available power only (non-mandatory or off-grid)
+            if always_use_available_only_power or not c.is_mandatory:
+                headroom = self._max_possible_production - self._total_consumed_power
+            else:
+                headroom = None
+
             (
                 out_c,
                 is_solved,
@@ -720,11 +843,33 @@ class PeriodSolver:
                 time_slots=self._time_slots,
                 additional_available_energy_to_deplete=remaining_additional_energy_to_deplete,
                 max_power_to_deplete=max_power_to_deplete,
+                power_headroom=headroom,
             )
             constraints_evolution[ci] = out_c
             constraints_bounds[ci] = (first_slot, last_slot, min_idx_with_energy_impact, max_idx_with_energy_impact)
-            self._available_power = self._available_power + out_power
+            self._add_consumption_delta_power(out_power)
             self._merge_commands_slots_for_load(actions, ci, first_slot, last_slot, out_commands)
+
+            # recompute battery state and max_possible_production after each allocation
+            if self._battery is not None:
+                result = self._battery_get_charging_power()
+                bat_actual_discharge = result[7]
+                bat_possible_discharge = result[8]
+                self._max_possible_production = self._compute_max_possible_production(
+                    battery_actual_discharge=bat_actual_discharge,
+                    battery_possible_discharge=bat_possible_discharge,
+                )
+
+            # warn when mandatory load bypasses power guard and exceeds production
+            if headroom is None:
+                excess = self._total_consumed_power - self._max_possible_production
+                max_excess = float(np.max(excess))
+                if max_excess > 0:
+                    _LOGGER.warning(
+                        "Mandatory load %s causes total consumption to exceed production by %.0fW",
+                        c.load.name,
+                        max_excess,
+                    )
 
     def _get_power_from_commands(
         self, loads: dict[AbstractLoad, list[LoadCommand]]
@@ -831,17 +976,26 @@ class PeriodSolver:
             # but as we are in off grid : now way we can use grid power
             always_use_available_only_power = True
 
-        if is_off_grid:
-            if self._battery is not None:
-                (
-                    battery_ext_consumption_power,
-                    battery_charge,
-                    battery_commands,
-                    prices_discharged_energy_buckets,
-                    prices_remaining_grid_energy_buckets,
-                    excess_solar_energy,
-                    remaining_grid_energy,
-                ) = self._battery_get_charging_power()
+        if self._battery is not None:
+            (
+                battery_ext_consumption_power,
+                battery_charge,
+                battery_commands,
+                prices_discharged_energy_buckets,
+                prices_remaining_grid_energy_buckets,
+                excess_solar_energy,
+                remaining_grid_energy,
+                _bat_actual_disch,
+                _bat_possible_disch,
+            ) = self._battery_get_charging_power()
+
+            # update max_possible_production with battery info before first allocation
+            self._max_possible_production = self._compute_max_possible_production(
+                battery_actual_discharge=_bat_actual_disch,
+                battery_possible_discharge=_bat_possible_disch,
+            )
+
+            if is_off_grid:
                 battery_min = np.min(battery_charge)
                 if self._battery.is_value_empty(battery_min * 0.8):
                     max_power_to_deplete = 0.0
@@ -933,7 +1087,15 @@ class PeriodSolver:
                 prices_remaining_grid_energy_buckets,
                 excess_solar_energy,
                 remaining_grid_energy,
+                bat_actual_discharge,
+                bat_possible_discharge,
             ) = self._battery_get_charging_power()
+
+            # recompute max_possible_production with battery info
+            self._max_possible_production = self._compute_max_possible_production(
+                battery_actual_discharge=bat_actual_discharge,
+                battery_possible_discharge=bat_possible_discharge,
+            )
 
             # the goal is to lower as much as possible the remaining_grid_energy ... by, if possible, discharging more in the "high" prices and less in the low prices
             if (
@@ -999,7 +1161,14 @@ class PeriodSolver:
                         prices_remaining_grid_energy_buckets,
                         excess_solar_energy,
                         remaining_grid_energy,
+                        bat_actual_discharge,
+                        bat_possible_discharge,
                     ) = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
+
+                    self._max_possible_production = self._compute_max_possible_production(
+                        battery_actual_discharge=bat_actual_discharge,
+                        battery_possible_discharge=bat_possible_discharge,
+                    )
 
             # now we have the best battery commands for the period
             self._available_power = self._available_power + battery_ext_consumption_power
@@ -1162,6 +1331,8 @@ class PeriodSolver:
                 prices_remaining_grid_energy_buckets,
                 excess_solar_energy,
                 remaining_grid_energy,
+                _final_bat_actual,
+                _final_bat_possible,
             ) = self._battery_get_charging_power(existing_battery_commands=battery_commands)
             self._available_power = self._available_power + battery_ext_consumption_power
 

@@ -489,6 +489,7 @@ class TestSolver(TestCase):
             battery=battery,
             pv_forecast=pv_forecast,
             unavoidable_consumption_forecast=unavoidable_consumption_forecast,
+            max_inverter_dc_to_ac_power=20000,
         )
 
         load_commands, battery_commands = s.solve(with_self_test=True)
@@ -2128,7 +2129,9 @@ def test_prepare_battery_segmentation_single_empty_middle():
     battery_charge[7] = 50.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0)
+    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
+    battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_segment, energy_delta = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2168,7 +2171,9 @@ def test_prepare_battery_segmentation_no_empty():
     battery_charge = np.ones(num_slots, dtype=np.float64) * 5000.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0)
+    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
+    battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_segment, energy_delta = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2210,7 +2215,9 @@ def test_prepare_battery_segmentation_over_budget():
     battery_charge[3] = 100.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0)
+    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
+    battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_02, energy_delta_02 = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2289,6 +2296,7 @@ def test_constraints_delta_energy_positive_three_constraints():
         unavoidable_consumption_forecast=ua_forecast,
     )
     solver._available_power = np.ones(num_slots, dtype=np.float64) * 2000.0
+    solver._total_consumed_power = np.zeros(num_slots, dtype=np.float64)
     solver._durations_s = np.ones(num_slots, dtype=np.float64) * 900.0
     solver._time_slots = [start_time + timedelta(seconds=i * 900) for i in range(num_slots + 1)]
 
@@ -2335,6 +2343,7 @@ def test_constraints_delta_segment_outside_bounds_skipped():
         unavoidable_consumption_forecast=ua_forecast,
     )
     solver._available_power = np.ones(num_slots, dtype=np.float64) * 2000.0
+    solver._total_consumed_power = np.zeros(num_slots, dtype=np.float64)
     solver._durations_s = np.ones(num_slots, dtype=np.float64) * 900.0
     solver._time_slots = [start_time + timedelta(seconds=i * 900) for i in range(num_slots + 1)]
 
@@ -2346,8 +2355,8 @@ def test_constraints_delta_segment_outside_bounds_skipped():
     assert constraints_bounds[c1][1] < 4
 
 
-def test_battery_get_charging_power_returns_seven_tuple():
-    """_battery_get_charging_power: returns 7-tuple (battery_ext, battery_charge, battery_commands, ...)."""
+def test_battery_get_charging_power_returns_nine_tuple():
+    """_battery_get_charging_power: returns 9-tuple (battery_ext, battery_charge, battery_commands, ..., battery_actual_discharge, battery_possible_discharge)."""
     dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
     start_time = dt
     end_time = dt + timedelta(hours=4)
@@ -2368,14 +2377,19 @@ def test_battery_get_charging_power_returns_seven_tuple():
         unavoidable_consumption_forecast=ua_forecast,
     )
     result = solver._battery_get_charging_power()
-    assert len(result) == 7
-    battery_ext, battery_charge, battery_commands, prices_discharged, prices_remaining, excess_solar, remaining_grid = (
-        result
-    )
+    assert len(result) == 9
+    (
+        battery_ext, battery_charge, battery_commands,
+        prices_discharged, prices_remaining,
+        excess_solar, remaining_grid,
+        bat_actual_discharge, bat_possible_discharge,
+    ) = result
     assert len(battery_charge) == len(solver._available_power)
     assert len(battery_commands) == len(solver._available_power)
     assert isinstance(remaining_grid, (int, float))
     assert isinstance(excess_solar, (int, float))
+    assert len(bat_actual_discharge) == len(solver._available_power)
+    assert len(bat_possible_discharge) == len(solver._available_power)
 
 
 # =============================================================================
@@ -2412,12 +2426,12 @@ def _make_3p_power_steps(min_a: int = 6, max_a: int = 32) -> list[LoadCommand]:
     return [copy_command(CMD_AUTO_GREEN_ONLY, power_consign=a * 3 * 230) for a in range(min_a, max_a + 1)]
 
 
-def test_adapt_power_steps_budgeting_uses_production_limits():
-    """When use_production_limits=True, power steps must be capped to production budget."""
-    # Production limit: 17A/phase → ~11,730W for 3-phase
+def test_adapt_power_steps_budgeting_uses_power_headroom():
+    """When max_slot_power_headroom is set, power steps must be capped to that headroom."""
+    # Power headroom: 11,730W (equivalent to 17A/phase at 3x230V)
     # Consumption limit: 32A/phase → ~22,080W for 3-phase
     load = _make_3p_load_with_production_budget(
-        production_amps_per_phase=17.0,
+        production_amps_per_phase=32.0,
         consumption_amps_per_phase=32.0,
     )
     steps = _make_3p_power_steps(min_a=6, max_a=32)
@@ -2433,29 +2447,27 @@ def test_adapt_power_steps_budgeting_uses_production_limits():
     )
     load.push_live_constraint(time, constraint)
 
-    # With production limits: should cap to <= 17A/phase = 11,730W
-    capped_cmds = constraint.adapt_power_steps_budgeting_low_level(slot_idx=0, use_production_limits=True)
+    # With power headroom: should cap to <= 11,730W
+    headroom = 17 * 3 * 230.0  # 11,730W
+    capped_cmds = constraint.adapt_power_steps_budgeting_low_level(slot_idx=0, max_slot_power_headroom=headroom)
     if capped_cmds:
         max_power = max(c.power_consign for c in capped_cmds)
-        assert max_power <= 17 * 3 * 230, f"Production-limited power {max_power}W exceeds 17A*3*230={17 * 3 * 230}W"
+        assert max_power <= headroom, f"Headroom-limited power {max_power}W exceeds headroom {headroom}W"
 
-    # Without production limits: should allow up to 32A/phase = 22,080W
-    uncapped_cmds = constraint.adapt_power_steps_budgeting_low_level(slot_idx=0, use_production_limits=False)
-    assert len(uncapped_cmds) == len(steps), "All steps should be available with consumption limits"
+    # Without power headroom: should allow up to 32A/phase = 22,080W
+    uncapped_cmds = constraint.adapt_power_steps_budgeting_low_level(slot_idx=0, max_slot_power_headroom=None)
+    assert len(uncapped_cmds) == len(steps), "All steps should be available without headroom limit"
 
 
-def test_adapt_repartition_green_consign_capped_by_production():
-    """Green consign cannot increase beyond production limit, even when surplus exists.
+def test_adapt_repartition_green_consign_capped_by_power_headroom():
+    """Green consign cannot increase beyond power_headroom, even when surplus exists.
 
-    Budget convention: available_amps_*_for_group represents REMAINING group capacity
-    after existing allocations. When adapt_power_steps_budgeting_low_level runs, it
-    adds existing_amps back to get effective limit.
+    The power_headroom array is now passed to adapt_repartition to cap per-slot
+    power instead of the old available_amps_production_for_group mechanism.
     """
-    # Total production: 17A/phase. Existing: 16A. Remaining: 1A.
-    # Effective limit = 1 + 16 = 17A → max step at 17A.
     load = _make_3p_load_with_production_budget(
-        production_amps_per_phase=1.0,  # remaining after 16A existing
-        consumption_amps_per_phase=16.0,  # remaining after 16A existing
+        production_amps_per_phase=32.0,
+        consumption_amps_per_phase=32.0,
     )
     steps = _make_3p_power_steps(min_a=6, max_a=32)
     time = datetime.now(pytz.UTC)
@@ -2476,7 +2488,10 @@ def test_adapt_repartition_green_consign_capped_by_production():
     existing_at_16a = copy_command(CMD_AUTO_GREEN_CONSIGN, power_consign=16 * 3 * 230)
     existing_commands = [existing_at_16a] * num_slots
 
-    # Large surplus — would go to 32A without production cap
+    max_prod_power = 17 * 3 * 230.0  # 11,730W headroom per slot
+    power_headroom = np.array([max_prod_power] * num_slots, dtype=np.float64)
+
+    # Large surplus — would go to 32A without headroom cap
     _, _, _, _, out_commands, _ = constraint.adapt_repartition(
         first_slot=0,
         last_slot=num_slots - 1,
@@ -2485,13 +2500,13 @@ def test_adapt_repartition_green_consign_capped_by_production():
         existing_commands=existing_commands,
         allow_change_state=True,
         time=time,
+        power_headroom=power_headroom,
     )
 
-    max_prod_power = 17 * 3 * 230  # 11,730W (effective: remaining 1A + existing 16A)
     for i, cmd in enumerate(out_commands):
         if cmd is not None and cmd.power_consign > 0:
             assert cmd.power_consign <= max_prod_power, (
-                f"Slot {i}: green consign {cmd.power_consign}W exceeds production limit {max_prod_power}W"
+                f"Slot {i}: green consign {cmd.power_consign}W exceeds power headroom {max_prod_power}W"
             )
 
 
