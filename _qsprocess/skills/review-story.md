@@ -75,7 +75,7 @@ Display the full report grouped by category, with a count header:
 |---|------|------|---------|--------|
 ```
 
-**3c. Process items one at a time**
+**3c. Collect decisions (no immediate fixes)**
 
 Walk through every item from the report, one at a time, in this order: `decision_needed` first, then `patch`, then `CodeRabbit-only`, then `defer`, then `dismiss`.
 
@@ -86,17 +86,66 @@ For each item, show:
 
 Ask the user to choose one action:
 
-- **fix**: Implement the fix, run quality gates, commit, push
+- **fix**: Mark for fixing (executed later in batch)
 - **discuss**: Post a reply on the PR explaining the rationale
 - **reject**: Post a rationale and resolve the thread
-- **doc-update**: The comment reveals a spec gap, missing AC, architecture concern, or rule that should be documented. Propose specific edits to the story artifact (or other docs), wait for user approval, apply and commit if accepted.
+- **doc-update**: The comment reveals a spec gap, missing AC, architecture concern, or rule that should be documented. Note the proposed edits for later.
 - **defer**: Acknowledge the finding, create a tracking comment on the PR noting it is deferred (not dismissed — real issue, wrong time)
 - **skip**: Move on without action
 
-After processing all items, if any fixes were made, run:
+Do NOT implement any fixes during this phase — only record the user's decision for each item.
+
+**3d. Decision report**
+
+After all items are processed, produce a summary report and present it:
+
+```
+## Review Decisions — PR #{{pr_number}}
+
+| # | File | Finding | Decision | Notes |
+|---|------|---------|----------|-------|
+| 1 | path | ...     | fix      |       |
+| 2 | path | ...     | defer    |       |
+| 3 | path | ...     | doc-update | update AC #3 |
+...
+
+**To fix**: {{count}}
+**To defer**: {{count}}
+**Doc updates**: {{count}}
+**Discuss/reject/skip**: {{count}}
+```
+
+Append this report to the story artifact file (`_bmad-output/implementation-artifacts/{{story_key}}.md`) under a new section:
+
+```markdown
+## Code Review — PR #{{pr_number}} ({{date}})
+
+### Decisions
+| # | File | Finding | Decision | Notes |
+|---|------|---------|----------|-------|
+...
+
+### Deferred items
+- {{finding}} — Reason: {{user rationale}}
+
+### Doc updates planned
+- {{description of doc change}}
+```
+
+Commit and push the updated story file before starting fixes.
+
+**3e. Execute fixes in batch**
+
+Now implement all items marked **fix** or **doc-update**, one by one. For each fix:
+- Apply the code change
+- Commit with a message referencing the finding (e.g. `review: fix #N — {{short description}}`)
+
+After ALL fixes are applied, run quality gates once:
 ```bash
 python scripts/qs/quality_gate.py --cache
 ```
+
+If quality gates fail, fix the failures and re-run until green, then push all commits together.
 
 ### 3.5. Compound doc-sync
 
