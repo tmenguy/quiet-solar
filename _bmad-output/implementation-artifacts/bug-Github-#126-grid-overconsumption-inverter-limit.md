@@ -96,7 +96,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 
 - [ ] Task 2 (AC: 2,3,6) Replace `use_production_limits` with power headroom in constraints
   - [ ] 2.1 Add `max_slot_power_headroom: float | None` parameter to `adapt_power_steps_budgeting_low_level` (constraints.py:1165), replacing `use_production_limits`
-  - [ ] 2.2 In `adapt_power_steps_budgeting_low_level`: when `max_slot_power_headroom is not None`, filter commands by `cmd.power_consign <= max_slot_power_headroom` instead of checking amps against `available_amps_production_for_group`
+  - [ ] 2.2 In `adapt_power_steps_budgeting_low_level`: **always** check `available_amps_for_group` (subscription/breaker per-phase protection — unchanged). **Additionally**, when `max_slot_power_headroom is not None`, also filter commands by `cmd.power_consign <= max_slot_power_headroom`. Both guards must pass for a command to be accepted. The only thing removed is the `available_amps_production_for_group` branch
   - [ ] 2.3 Thread `max_slot_power_headroom` through `adapt_power_steps_budgeting` (line 1220) and `adapt_repartition` (line 1273)
   - [ ] 2.4 In `compute_best_period_repartition` (line 1727): receive per-slot headroom array as new parameter, pass `headroom[slot]` to `adapt_power_steps_budgeting` for each slot
   - [ ] 2.5 Update call site at line 1976 (`use_production_limits=True` in available-energy-only path)
