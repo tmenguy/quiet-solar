@@ -256,6 +256,16 @@ Claude Opus 4.6
 - Moved `NUM_INTERVAL_PER_HOUR`, `INTERVALS_MN`, `NUM_INTERVALS_PER_DAY` from `home.py` to `const.py` per user direction
 - Updated existing button test to account for 3 new buttons
 
+### Review Fixes (PR #125 review)
+- Re-select active provider after `compute_dampening_all_providers` in auto mode
+- Refresh `score_dampened` during `_run_scoring_cycle` when dampening active (prevents stale dampened MAE)
+- Skip dampening on historical fallback forecast data (`_using_historical_fallback` flag)
+- Remove unused `time` parameter from `reset_dampening_all_providers`
+- Fix "7 day" → "7 days" pluralization in button label
+- Extract `_get_scoring_data` shared helper (dedup forecast lookup across `compute_score`, `compute_dampened_score`, `_get_historical_data_for_dampening`)
+- Remove 6 dev-only symlinks from commit
+- Fix button integration tests to verify button→method wiring (not just mock)
+
 ### File List
 - `custom_components/quiet_solar/const.py` — new constants (buttons, sensor prefix, ring buffer resolution)
 - `custom_components/quiet_solar/ha_model/solar.py` — dampening fields, compute/reset/score methods, forecast dampening
