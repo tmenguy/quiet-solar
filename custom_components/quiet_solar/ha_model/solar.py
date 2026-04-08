@@ -163,13 +163,13 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         from .home import QSforecastValueSensor  # deferred to avoid circular import
 
         self.solar_forecast_sensor_values_probers = QSforecastValueSensor.get_probers(
-            self.get_value_from_current_forecast, None, QSForecastSolarSensors
+            self.get_value_from_current_forecast_raw, None, QSForecastSolarSensors
         )
 
         self.solar_forecast_sensor_values_per_provider_probers = {}
         for name, provider in self.solar_forecast_providers.items():
             self.solar_forecast_sensor_values_per_provider_probers[name] = QSforecastValueSensor.get_probers(
-                provider.get_value_from_current_forecast, None, QSForecastSolarSensors
+                provider.get_value_from_current_forecast_raw, None, QSForecastSolarSensors
             )
 
         self.solar_forecast_sensor_values = {}
@@ -366,6 +366,12 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             return provider.get_forecast(start_time, end_time)
         return []
 
+    def get_value_from_current_forecast_raw(self, time: datetime) -> tuple[datetime | None, str | float | None]:
+        provider = self.active_provider
+        if provider is not None:
+            return provider.get_value_from_current_forecast_raw(time)
+        return (None, None)
+
     def get_value_from_current_forecast(self, time: datetime) -> tuple[datetime | None, str | float | None]:
         provider = self.active_provider
         if provider is not None:
@@ -492,10 +498,14 @@ class QSSolarProvider:
             return raw
         return [(t, self._get_dampened_value(t, float(v)) if t is not None and v is not None else v) for t, v in raw]
 
+    def get_value_from_current_forecast_raw(self, time: datetime) -> tuple[datetime | None, str | float | None]:
+        """Return the raw forecast value at a given time, without dampening."""
+        res = get_value_from_time_series(self.solar_forecast, time)
+        return res[0], res[1]
+
     def get_value_from_current_forecast(self, time: datetime) -> tuple[datetime | None, str | float | None]:
         """Return the forecast value at a given time, applying dampening if active."""
-        res = get_value_from_time_series(self.solar_forecast, time)
-        t, v = res[0], res[1]
+        t, v = self.get_value_from_current_forecast_raw(time)
         if self._dampening_coefficients and not self._using_historical_fallback and t is not None and v is not None:
             v = self._get_dampened_value(t, float(v))
         return t, v

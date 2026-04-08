@@ -1509,3 +1509,18 @@ class TestHistoricalFallbackDampeningSkip:
         """Provider starts with _using_historical_fallback = False."""
         provider = _TestProvider(solar=None, domain="test", provider_name="p")
         assert provider._using_historical_fallback is False
+
+
+# ============================================================================
+# QSSolar raw forecast accessor tests
+# ============================================================================
+
+
+class TestQSSolarRawForecastAccessor:
+    """Test QSSolar.get_value_from_current_forecast_raw."""
+
+    def test_returns_none_when_no_provider(self, fake_hass):
+        """Returns (None, None) when no active provider."""
+        solar = _make_solar(fake_hass)
+        t = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        assert solar.get_value_from_current_forecast_raw(t) == (None, None)
