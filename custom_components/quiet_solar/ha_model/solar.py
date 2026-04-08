@@ -317,7 +317,11 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             else:
                 _LOGGER.warning("Failed to compute dampening for provider %s", name)
 
-    async def reset_dampening_all_providers(self, time: datetime | None = None) -> None:
+        if self._provider_mode == SOLAR_PROVIDER_MODE_AUTO:
+            self.auto_select_best_provider()
+        self.solar_forecast_provider_handler = self.active_provider
+
+    async def reset_dampening_all_providers(self) -> None:
         """Reset dampening to identity for all providers."""
         for name, provider in self.solar_forecast_providers.items():
             provider.reset_dampening()
@@ -341,6 +345,11 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         for name, provider in self.solar_forecast_providers.items():
             # Score using previously stored forecast vs last 24h actuals
             is_score_computed = provider.compute_score(time)
+
+            # Keep dampened score in sync when dampening is active
+            if provider.has_dampening:
+                if not provider.compute_dampened_score(time):
+                    provider.score_dampened = None
 
             _LOGGER.info(
                 "Scoring cycle for provider %s: score=%.2f is_score_computed=%s",
@@ -422,6 +431,9 @@ class QSSolarProvider:
         self._dampening_coefficients: dict[int, tuple[float, float]] = {}
         self.score_dampened: float | None = None
 
+        # Historical fallback flag — skip dampening on non-provider data
+        self._using_historical_fallback: bool = False
+
         # Stale notification state (Task 9)
         self._was_stale: bool = False
 
@@ -476,7 +488,7 @@ class QSSolarProvider:
     ) -> list[tuple[datetime | None, str | float | None]]:
         """Return forecast slots, applying dampening if active."""
         raw = get_slots_from_time_series(self.solar_forecast, start_time, end_time)
-        if not self._dampening_coefficients:
+        if not self._dampening_coefficients or self._using_historical_fallback:
             return raw
         return [(t, self._get_dampened_value(t, float(v)) if t is not None and v is not None else v) for t, v in raw]
 
@@ -484,7 +496,7 @@ class QSSolarProvider:
         """Return the forecast value at a given time, applying dampening if active."""
         res = get_value_from_time_series(self.solar_forecast, time)
         t, v = res[0], res[1]
-        if self._dampening_coefficients and t is not None and v is not None:
+        if self._dampening_coefficients and not self._using_historical_fallback and t is not None and v is not None:
             v = self._get_dampened_value(t, float(v))
         return t, v
 
@@ -534,6 +546,7 @@ class QSSolarProvider:
 
                 if len(new_forecast) > 0:
                     self.solar_forecast = new_forecast
+                    self._using_historical_fallback = False
                     prev_successful_time = self._latest_successful_forecast_time
                     self._latest_update_time = time
                     self._latest_successful_forecast_time = time
@@ -568,6 +581,7 @@ class QSSolarProvider:
                 fallback = self.solar.get_historical_solar_fallback(time)
                 if fallback:
                     self.solar_forecast = fallback
+                    self._using_historical_fallback = True
                     _LOGGER.warning(
                         "Using historical solar pattern as fallback for provider %s (%d points)",
                         self.provider_name,
@@ -604,15 +618,6 @@ class QSSolarProvider:
         self, time: datetime, num_days: int
     ) -> tuple[list[tuple[datetime, float]] | None, list[tuple[datetime, float]] | None]:
         """Retrieve actuals and stored forecast for dampening computation."""
-        if self.solar is None or self.solar.home is None:
-            return None, None
-        forecast_handler = self.solar.home.solar_and_consumption_forecast
-        if forecast_handler is None:
-            return None, None
-        prod_history = forecast_handler.solar_production_history
-        if prod_history is None:
-            return None, None
-
         # Determine reference day: if local hour >= 22, use today; else yesterday
         local_time = time.astimezone(dt_util.get_default_time_zone())
         if local_time.hour >= 22:
@@ -625,30 +630,7 @@ class QSSolarProvider:
         ref_end_local = datetime(ref_day.year, ref_day.month, ref_day.day, 23, 59, tzinfo=local_tz)
         ref_end_utc = ref_end_local.astimezone(pytz.UTC)
 
-        past_hours = num_days * 24
-        actuals = prod_history.get_historical_data(ref_end_utc, past_hours=past_hours)
-
-        histories = forecast_handler.get_forecast_histories_for_provider(self.provider_name)
-        past_forecast = None
-        name_list = [(v, n) for n, v in QSForecastSolarSensors.items()]
-        name_list.sort(key=lambda x: x[0])
-
-        for value_s, name in name_list:
-            if value_s >= 8 * 3600:
-                if name in histories:
-                    past_forecast = histories[name].get_historical_data(ref_end_utc, past_hours=past_hours)
-                    if past_forecast:
-                        break
-
-        if past_forecast is None:
-            name_list.sort(key=lambda x: x[0], reverse=True)
-            for value_s, name in name_list:
-                if name in histories:
-                    past_forecast = histories[name].get_historical_data(ref_end_utc, past_hours=past_hours)
-                    if past_forecast:
-                        break
-
-        return actuals, past_forecast
+        return self._get_scoring_data(ref_end_utc, past_hours=num_days * 24)
 
     def compute_dampening(self, time: datetime, num_days: int) -> bool:
         """Compute dampening coefficients from historical data.
@@ -719,18 +701,20 @@ class QSSolarProvider:
         self.compute_dampened_score(time)
         return True
 
-    def compute_dampened_score(self, time: datetime) -> bool:
-        """Compute MAE score with dampening applied to forecast values."""
+    def _get_scoring_data(
+        self, time: datetime, past_hours: int
+    ) -> tuple[list[tuple[datetime, float]] | None, list[tuple[datetime, float]] | None]:
+        """Retrieve actuals and stored forecast for scoring/dampening."""
         if self.solar is None or self.solar.home is None:
-            return False
+            return None, None
         forecast_handler = self.solar.home.solar_and_consumption_forecast
         if forecast_handler is None:
-            return False
+            return None, None
         prod_history = forecast_handler.solar_production_history
         if prod_history is None:
-            return False
+            return None, None
 
-        actual_24_hours = prod_history.get_historical_data(time, past_hours=24)
+        actuals = prod_history.get_historical_data(time, past_hours=past_hours)
 
         histories = forecast_handler.get_forecast_histories_for_provider(self.provider_name)
         past_forecast = None
@@ -740,7 +724,7 @@ class QSSolarProvider:
         for value_s, name in name_list:
             if value_s >= 8 * 3600:
                 if name in histories:
-                    past_forecast = histories[name].get_historical_data(time, past_hours=24)
+                    past_forecast = histories[name].get_historical_data(time, past_hours=past_hours)
                     if past_forecast:
                         break
 
@@ -748,68 +732,35 @@ class QSSolarProvider:
             name_list.sort(key=lambda x: x[0], reverse=True)
             for value_s, name in name_list:
                 if name in histories:
-                    past_forecast = histories[name].get_historical_data(time, past_hours=24)
+                    past_forecast = histories[name].get_historical_data(time, past_hours=past_hours)
                     if past_forecast:
                         break
 
-        if not actual_24_hours or not past_forecast:
+        return actuals, past_forecast
+
+    def compute_dampened_score(self, time: datetime) -> bool:
+        """Compute MAE score with dampening applied to forecast values."""
+        actuals, past_forecast = self._get_scoring_data(time, past_hours=24)
+        if not actuals or not past_forecast:
             return False
 
-        # Apply dampening to forecast before computing MAE
         dampened_forecast = [(t, self._get_dampened_value(t, v)) for t, v in past_forecast]
-        self.score_dampened = self._compute_mae_from_aligned(dampened_forecast, actual_24_hours)
+        self.score_dampened = self._compute_mae_from_aligned(dampened_forecast, actuals)
         return True
 
     def compute_score(self, time: datetime) -> bool:
         """Compute MAE score comparing stored forecast vs provided actuals."""
-        if self.solar is None or self.solar.home is None:
-            return False
-        forecast_handler = self.solar.home.solar_and_consumption_forecast
-        if forecast_handler is None:
-            return False
-        prod_history = forecast_handler.solar_production_history
-        if prod_history is None:
-            return False
-
-        actual_24_hours = prod_history.get_historical_data(time, past_hours=24)
-
-        histories = forecast_handler.get_forecast_histories_for_provider(self.provider_name)
-
-        past_forecast = None
-        # in histories we end up having QSForecastSolarSensors with the timing, 8h can be a good one
-
-        name_list = [(v, n) for n, v in QSForecastSolarSensors.items()]
-        # sort it by time
-        name_list.sort(key=lambda x: x[0])
-
-        for value_s, name in name_list:
-            if value_s >= 8 * 3600:
-                if name in histories:
-                    past_forecast = histories[name].get_historical_data(time, past_hours=24)
-                    if past_forecast:
-                        break
-
-        if past_forecast is None:
-            name_list.sort(key=lambda x: x[0], reverse=True)
-            for value_s, name in name_list:
-                if name in histories:
-                    past_forecast = histories[name].get_historical_data(time, past_hours=24)
-                    if past_forecast:
-                        break
-
-        aligned_actuals = actual_24_hours
-        aligned_forecast = past_forecast
-
-        if not aligned_actuals or not aligned_forecast:
+        actuals, past_forecast = self._get_scoring_data(time, past_hours=24)
+        if not actuals or not past_forecast:
             _LOGGER.warning(
                 "compute_score: missing data for provider %s, actuals=%d points, forecast=%d points",
                 self.provider_name,
-                len(aligned_actuals) if aligned_actuals else 0,
-                len(aligned_forecast) if aligned_forecast else 0,
+                len(actuals) if actuals else 0,
+                len(past_forecast) if past_forecast else 0,
             )
             return False
 
-        self.score = self._compute_mae_from_aligned(aligned_forecast, aligned_actuals)
+        self.score = self._compute_mae_from_aligned(past_forecast, actuals)
         return True
 
     @staticmethod

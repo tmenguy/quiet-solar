@@ -869,7 +869,7 @@
         "name": "Compute dampening (1 day)"
       },
       "qs_solar_compute_dampening_7day": {
-        "name": "Compute dampening (7 day)"
+        "name": "Compute dampening (7 days)"
       },
       "qs_solar_reset_dampening": {
         "name": "Reset dampening"

@@ -758,36 +758,51 @@ class TestButtonIntegration:
     """Test button entities trigger correct orchestration methods."""
 
     async def test_compute_dampening_1day_button(self, fake_hass):
-        """1-day dampening button calls compute_dampening_all_providers(1)."""
+        """1-day dampening button description wires to compute_dampening_all_providers(1)."""
+        from custom_components.quiet_solar.button import create_ha_button_for_QSSolar
+
         solar = _make_solar(
             fake_hass,
             providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
         )
+        solar.data_handler = MagicMock()
+        entities = create_ha_button_for_QSSolar(solar)
+        btn = next(e for e in entities if e.entity_description.key == BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY)
 
         with patch.object(solar, "compute_dampening_all_providers", new_callable=AsyncMock) as mock_compute:
-            await solar.compute_dampening_all_providers(num_days=1)
+            await btn.entity_description.async_press(btn)
             mock_compute.assert_called_once_with(num_days=1)
 
     async def test_compute_dampening_7day_button(self, fake_hass):
-        """7-day dampening button calls compute_dampening_all_providers(7)."""
+        """7-day dampening button description wires to compute_dampening_all_providers(7)."""
+        from custom_components.quiet_solar.button import create_ha_button_for_QSSolar
+
         solar = _make_solar(
             fake_hass,
             providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
         )
+        solar.data_handler = MagicMock()
+        entities = create_ha_button_for_QSSolar(solar)
+        btn = next(e for e in entities if e.entity_description.key == BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY)
 
         with patch.object(solar, "compute_dampening_all_providers", new_callable=AsyncMock) as mock_compute:
-            await solar.compute_dampening_all_providers(num_days=7)
+            await btn.entity_description.async_press(btn)
             mock_compute.assert_called_once_with(num_days=7)
 
     async def test_reset_dampening_button(self, fake_hass):
-        """Reset dampening button calls reset_dampening_all_providers."""
+        """Reset dampening button description wires to reset_dampening_all_providers."""
+        from custom_components.quiet_solar.button import create_ha_button_for_QSSolar
+
         solar = _make_solar(
             fake_hass,
             providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
         )
+        solar.data_handler = MagicMock()
+        entities = create_ha_button_for_QSSolar(solar)
+        btn = next(e for e in entities if e.entity_description.key == BUTTON_SOLAR_RESET_DAMPENING)
 
         with patch.object(solar, "reset_dampening_all_providers", new_callable=AsyncMock) as mock_reset:
-            await solar.reset_dampening_all_providers()
+            await btn.entity_description.async_press(btn)
             mock_reset.assert_called_once()
 
     async def test_orchestration_iterates_all_providers(self, fake_hass):
@@ -1374,3 +1389,123 @@ class TestDampenedScoreRestoreActual:
         # Score should remain None (invalid value), no coefficients restored
         assert provider.score_dampened is None
         assert provider.has_dampening is False
+
+
+# ============================================================================
+# Scoring cycle dampened score refresh tests
+# ============================================================================
+
+
+class TestScoringCycleDampenedRefresh:
+    """Test that _run_scoring_cycle refreshes dampened scores."""
+
+    def test_scoring_cycle_refreshes_dampened_score(self, fake_hass):
+        """When dampening is active, scoring cycle recomputes dampened score."""
+        solar = _make_solar(
+            fake_hass,
+            providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
+        )
+        provider = list(solar.solar_forecast_providers.values())[0]
+
+        # Activate dampening
+        provider._dampening_coefficients = {0: (0.8, 0.0)}
+        provider.score_dampened = 100.0
+
+        # Mock compute methods
+        provider.compute_score = MagicMock(return_value=True)
+        provider.compute_dampened_score = MagicMock(return_value=True)
+
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        solar._run_scoring_cycle(t0)
+
+        provider.compute_score.assert_called_once_with(t0)
+        provider.compute_dampened_score.assert_called_once_with(t0)
+
+    def test_scoring_cycle_skips_dampened_when_inactive(self, fake_hass):
+        """When no dampening, scoring cycle does not compute dampened score."""
+        solar = _make_solar(
+            fake_hass,
+            providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
+        )
+        provider = list(solar.solar_forecast_providers.values())[0]
+        provider.compute_score = MagicMock(return_value=True)
+        provider.compute_dampened_score = MagicMock(return_value=True)
+
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        solar._run_scoring_cycle(t0)
+
+        provider.compute_score.assert_called_once()
+        provider.compute_dampened_score.assert_not_called()
+
+    def test_scoring_cycle_clears_stale_dampened_score(self, fake_hass):
+        """When dampened score computation fails, score_dampened is set to None."""
+        solar = _make_solar(
+            fake_hass,
+            providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
+        )
+        provider = list(solar.solar_forecast_providers.values())[0]
+        provider._dampening_coefficients = {0: (0.8, 0.0)}
+        provider.score_dampened = 100.0
+        provider.compute_score = MagicMock(return_value=True)
+        provider.compute_dampened_score = MagicMock(return_value=False)
+
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        solar._run_scoring_cycle(t0)
+
+        assert provider.score_dampened is None
+
+
+# ============================================================================
+# Historical fallback dampening skip tests
+# ============================================================================
+
+
+class TestHistoricalFallbackDampeningSkip:
+    """Test that dampening is skipped when using historical fallback data."""
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_get_forecast_skips_dampening_on_fallback(self, mock_dt_util):
+        """get_forecast returns raw values when _using_historical_fallback is True."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        provider = _TestProvider(solar=None, domain="test", provider_name="p")
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=tz)
+        provider.solar_forecast = [(t0, 1000.0)]
+
+        # Set dampening that would halve the value
+        slot = QSSolarProvider._time_to_slot_index(t0)
+        provider._dampening_coefficients = {slot: (0.5, 0.0)}
+
+        # Without fallback flag, dampening applies
+        result = provider.get_forecast(t0, t0 + timedelta(hours=1))
+        dampened_values = [v for _, v in result if v is not None]
+        assert any(abs(float(v) - 500.0) < 0.01 for v in dampened_values)
+
+        # With fallback flag, dampening is skipped
+        provider._using_historical_fallback = True
+        result = provider.get_forecast(t0, t0 + timedelta(hours=1))
+        raw_values = [v for _, v in result if v is not None]
+        assert 1000.0 in raw_values
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_get_value_from_current_forecast_skips_dampening_on_fallback(self, mock_dt_util):
+        """get_value_from_current_forecast returns raw when fallback is active."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        provider = _TestProvider(solar=None, domain="test", provider_name="p")
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=tz)
+        provider.solar_forecast = [(t0, 1000.0)]
+
+        slot = QSSolarProvider._time_to_slot_index(t0)
+        provider._dampening_coefficients = {slot: (0.5, 0.0)}
+        provider._using_historical_fallback = True
+
+        _, v = provider.get_value_from_current_forecast(t0)
+        assert v == 1000.0  # Raw, not dampened to 500
+
+    def test_fallback_flag_initially_false(self):
+        """Provider starts with _using_historical_fallback = False."""
+        provider = _TestProvider(solar=None, domain="test", provider_name="p")
+        assert provider._using_historical_fallback is False
