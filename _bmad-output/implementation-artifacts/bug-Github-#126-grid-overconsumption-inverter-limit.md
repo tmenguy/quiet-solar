@@ -114,7 +114,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 
 - [ ] Task 4 (AC: 4) Power guard respects constraint priority
   - [ ] 4.1 In `_allocate_constraints` (solver.py:683): for mandatory constraints (`c.is_mandatory`), pass `headroom=None` to `compute_best_period_repartition` (no production cap)
-  - [ ] 4.2 In `adapt_power_steps_budgeting_low_level`: when `max_slot_power_headroom is None`, skip power guard (return full `_power_sorted_cmds`)
+  - [ ] 4.2 In `adapt_power_steps_budgeting_low_level`: `available_amps_for_group` is ALWAYS checked regardless of mandatory status. When `max_slot_power_headroom is None` (mandatory), only the amp guard applies — the power headroom guard is skipped. Both guards must pass when headroom is provided
   - [ ] 4.3 Log warning when mandatory load causes total_consumption > max_possible_production
 
 - [ ] Task 5 (AC: 5) Logging
