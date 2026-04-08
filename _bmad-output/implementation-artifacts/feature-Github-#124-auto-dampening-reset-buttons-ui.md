@@ -1,6 +1,6 @@
 # Feature: Add Solar Forecast Dampening Buttons and Split Score Sensors
 
-Status: review
+Status: done
 issue: 124
 branch: "QS_124"
 
