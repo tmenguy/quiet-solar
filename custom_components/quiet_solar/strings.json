@@ -864,6 +864,15 @@
       },
       "qs_solar_recompute_forecast_scores": {
         "name": "Recompute forecast scores"
+      },
+      "qs_solar_compute_dampening_1day": {
+        "name": "Compute dampening (1 day)"
+      },
+      "qs_solar_compute_dampening_7day": {
+        "name": "Compute dampening (7 days)"
+      },
+      "qs_solar_reset_dampening": {
+        "name": "Reset dampening"
       }
     },
     "switch": {

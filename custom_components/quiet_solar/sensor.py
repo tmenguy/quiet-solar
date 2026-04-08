@@ -57,6 +57,7 @@ from .const import (
     SENSOR_PERSON_MILEAGE_PREDICTION_KM,
     SENSOR_SOLAR_ACTIVE_PROVIDER,
     SENSOR_SOLAR_FORECAST_AGE,
+    SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX,
     SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
     QSForecastHomeNonControlledSensors,
     QSForecastSolarSensors,
@@ -391,7 +392,7 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         score_key = f"{SENSOR_SOLAR_FORECAST_SCORE_PREFIX}{safe_name}"
         score_sensor = QSSensorEntityDescription(
             key=score_key,
-            name=f"Forecast Score ({provider_name})",
+            name=f"Forecast Raw Score ({provider_name})",
             native_unit_of_measurement=UnitOfPower.WATT,
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn=lambda device, key, prov=provider: prov.score,
@@ -400,6 +401,30 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
         entities.append(
             QSBaseSensorSolarScoreRestore(
                 data_handler=device.data_handler, device=device, description=score_sensor, provider=provider
+            )
+        )
+
+        dampened_score_key = f"{SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX}{safe_name}"
+
+        def _dampened_score_and_attr(device, key, prov=provider):
+            value = prov.score_dampened
+            attrs = {}
+            if prov.has_dampening:
+                coeffs = {str(slot): [float(a), float(b)] for slot, (a, b) in prov.dampening_coefficients.items()}
+                attrs["dampening_coefficients"] = coeffs
+            return value, attrs
+
+        dampened_score_sensor = QSSensorEntityDescription(
+            key=dampened_score_key,
+            name=f"Forecast Dampened Score ({provider_name})",
+            native_unit_of_measurement=UnitOfPower.WATT,
+            entity_category=EntityCategory.DIAGNOSTIC,
+            value_fn_and_attr=_dampened_score_and_attr,
+            qs_is_none_unavailable=True,
+        )
+        entities.append(
+            QSBaseSensorSolarDampenedScoreRestore(
+                data_handler=device.data_handler, device=device, description=dampened_score_sensor, provider=provider
             )
         )
 
@@ -677,6 +702,42 @@ class QSBaseSensorSolarScoreRestore(QSBaseSensorRestore):
                 self._provider.score = float(self._attr_native_value)
             except TypeError, ValueError:
                 pass
+
+
+class QSBaseSensorSolarDampenedScoreRestore(QSBaseSensorRestore):
+    """Sensor that restores dampened score and coefficients on startup."""
+
+    def __init__(
+        self,
+        data_handler,
+        device: AbstractDevice,
+        description: QSSensorEntityDescription,
+        *,
+        provider: QSSolarProvider,
+    ) -> None:
+        super().__init__(data_handler=data_handler, device=device, description=description)
+        self._provider = provider
+
+    async def async_added_to_hass(self) -> None:
+        """Restore dampened score and coefficients from persisted sensor."""
+        await super().async_added_to_hass()
+        if self._provider.score_dampened is None and self._attr_native_value is not None:
+            try:
+                self._provider.score_dampened = float(self._attr_native_value)
+            except TypeError, ValueError:
+                pass
+        if self._attr_extra_state_attributes:
+            raw_coeffs = self._attr_extra_state_attributes.get("dampening_coefficients")
+            if raw_coeffs and isinstance(raw_coeffs, dict):
+                coefficients: dict[int, tuple[float, float]] = {}
+                for slot_str, ab in raw_coeffs.items():
+                    try:
+                        slot = int(slot_str)
+                        coefficients[slot] = (float(ab[0]), float(ab[1]))
+                    except TypeError, ValueError, IndexError:
+                        continue
+                if coefficients:
+                    self._provider.set_dampening_coefficients(coefficients)
 
 
 class QSBaseSensorSolarActiveProviderRestore(QSBaseSensorRestore):

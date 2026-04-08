@@ -21,7 +21,10 @@ from custom_components.quiet_solar.button import (
     create_ha_button_for_QSSolar,
 )
 from custom_components.quiet_solar.const import (
+    BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY,
+    BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY,
     BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES,
+    BUTTON_SOLAR_RESET_DAMPENING,
     DOMAIN,
 )
 from tests.factories import create_minimal_home_model
@@ -341,9 +344,13 @@ def test_create_ha_button_for_solar():
 
     entities = create_ha_button_for_QSSolar(mock_solar)
 
-    assert len(entities) == 1
+    assert len(entities) == 4
     assert all(isinstance(e, QSButtonEntity) for e in entities)
-    assert entities[0].entity_description.key == BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES
+    keys = [e.entity_description.key for e in entities]
+    assert BUTTON_SOLAR_RECOMPUTE_FORECAST_SCORES in keys
+    assert BUTTON_SOLAR_COMPUTE_DAMPENING_1DAY in keys
+    assert BUTTON_SOLAR_COMPUTE_DAMPENING_7DAY in keys
+    assert BUTTON_SOLAR_RESET_DAMPENING in keys
 
 
 def test_create_ha_button_dispatcher_includes_solar():
