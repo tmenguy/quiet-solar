@@ -322,7 +322,11 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         self.solar_forecast_provider_handler = self.active_provider
 
     async def reset_dampening_all_providers(self) -> None:
-        """Reset dampening to identity for all providers."""
+        """Reset dampening to identity for all providers.
+
+        Does not re-select provider: raw scores are unchanged, and the next
+        half-day scoring cycle will refresh dampened scores naturally.
+        """
         for name, provider in self.solar_forecast_providers.items():
             provider.reset_dampening()
         _LOGGER.info("Reset dampening for all providers")
@@ -349,6 +353,10 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             # Keep dampened score in sync when dampening is active
             if provider.has_dampening:
                 if not provider.compute_dampened_score(time):
+                    _LOGGER.warning(
+                        "Dampened score refresh failed for provider %s, clearing stale score",
+                        name,
+                    )
                     provider.score_dampened = None
 
             _LOGGER.info(
@@ -590,8 +598,8 @@ class QSSolarProvider:
             if self.is_stale and len(self.solar_forecast) == 0 and self.solar is not None:
                 fallback = self.solar.get_historical_solar_fallback(time)
                 if fallback:
-                    self.solar_forecast = fallback
                     self._using_historical_fallback = True
+                    self.solar_forecast = fallback
                     _LOGGER.warning(
                         "Using historical solar pattern as fallback for provider %s (%d points)",
                         self.provider_name,
@@ -835,6 +843,7 @@ class QSSolarProviderSolcastDebug(QSSolarProvider):
                 return pickle.load(file)
 
         self.solar_forecast = _pickle_load(file_path)
+        self._using_historical_fallback = False
 
     async def get_power_series_from_orchestrator(
         self, orchestrator, start_time: datetime | None = None, end_time: datetime | None = None
