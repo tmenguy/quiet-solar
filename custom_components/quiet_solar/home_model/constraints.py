@@ -1573,6 +1573,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         )
 
                         out_delta_power[i] = delta_power
+                        if use_headroom:
+                            power_headroom[i] -= delta_power
                         delta_budget_quantity += d_budget_quantity
                         energy_delta -= d_energy
 
@@ -2056,6 +2058,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                         out_power[i] = out_commands[i].power_consign + power_piloted_delta
                         out_power_idxs[i] = j
+                        if power_headroom is not None:
+                            power_headroom[i] -= out_power[i]
 
                         local_quantity_to_be_added -= self.get_delta_budget_quantity(
                             out_commands[i].power_consign, float(power_slots_duration_s[i])
