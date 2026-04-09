@@ -77,7 +77,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 1. **AC1** Given a DC-coupled 12kW inverter with solar=8kW, battery_possible_discharge=5kW, When the solver computes max_possible_production, Then it equals min(8+5, 12) = 12kW
 2. **AC2** Given two chargers + cumulus requesting combined 17.8kW in one slot with max_possible_production=12kW and ua=1kW, When the power guard triggers, Then non-mandatory filler/green commands are reduced until headroom >= 0
 3. **AC3** Given `available_amps_production_for_group` is removed, When `adapt_power_steps_budgeting_low_level` is called for a green/filler constraint, Then it checks `cmd.power_consign <= headroom[slot]` instead of amp budget
-4. **AC4** Given mandatory constraints, When the power guard evaluates them, Then mandatory loads are subject to the same headroom guard as all other constraints. Headroom is always computed and passed
+4. **AC4** Given mandatory constraints, When the power guard evaluates them, Then headroom is always computed and passed. The headroom filters which power steps are available, but the available-power-only capping in `compute_best_period_repartition` only applies when `do_use_available_power_only=True` (non-mandatory or off-grid)
 5. **AC5** Given the power guard triggers, When it logs the decision, Then the log includes slot index, cmd power, headroom, and max_possible_production
 6. **AC6** All removed references to `available_amps_production_for_group` and `use_production_limits` replaced, no dead code remains
 7. **AC7** Existing solver/charger tests adapted and passing. New tests cover: power guard enforcement, multi-load capping, mandatory exemption, DC/AC coupling variants
@@ -105,7 +105,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
   - [x] 3.1–3.8 All removed
 
 - [x] Task 4 (AC: 4) Power guard applies to all constraints
-  - [x] 4.1 In `_allocate_constraints`: headroom always computed and passed to all constraints (mandatory included). No bypass
+  - [x] 4.1 In `_allocate_constraints`: headroom always computed and passed to all constraints (mandatory included). Filters available power steps; available-power capping in `compute_best_period_repartition` still gated by `do_use_available_power_only`
   - [x] 4.2 Amp guard always active. Headroom guard independent — applies whenever `max_slot_power_headroom` is not None, regardless of father_device
   - [x] 4.3 Log warning when non-mandatory load exceeds production (safety net — should not trigger with headroom guard)
 
@@ -153,7 +153,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - **Battery switchable** — if battery is charging, guard assumes it can stop charging and start discharging
 - **Battery refactored** — `_battery_get_charging_power` reworked: uses `_available_power_no_battery` (no circular dependency), unified `Battery.get_charger_power()`, CMD_GREEN_CHARGE_ONLY enforced via `min(0.0, available_power)` clamping, returns 8-tuple (removed `battery_actual_discharge`)
 - **Emergency 0A dyn_handle override** — deferred to separate story
-- **Headroom always computed and passed** — all constraints (including mandatory) subject to headroom guard. No conditional bypass (user review correction: mandatory should not bypass production limits)
+- **Headroom always computed and passed** — headroom array is always provided to `compute_best_period_repartition` and `adapt_repartition`. It gates which power steps are available (via `adapt_power_steps_budgeting_low_level`), but the actual power capping by available power only applies when `do_use_available_power_only=True`. Mandatory constraints (`do_use_available_power_only=False`) still see headroom-filtered command steps, but can pick the highest available step without available-power capping
 - **`adapt_repartition` headroom not gated on `support_auto`** — `use_headroom = energy_delta >= 0.0 and power_headroom is not None` (user correction: non-auto loads should also be limited by headroom)
 - **Headroom guard independent of amp guard** — `adapt_power_steps_budgeting_low_level` checks headroom even when `father_device` is None (user correction: no father doesn't exempt from production limits)
 - **Battery-aware production before first allocation** — `_max_possible_production` recomputed with battery data before `_allocate_constraints` (not just after each allocation)
@@ -200,7 +200,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 ### Critical issues found and fixed during review:
 1. **`_constraints_delta` missing headroom** — `adapt_repartition` was called without `power_headroom` in the surplus allocation path, completely bypassing production limits for surplus-driven loads. This was the primary purpose of the story
 2. **`_max_possible_production` not recomputed after deltas** — `_constraints_delta` modified consumption via `_add_consumption_delta_power` but did not recompute battery state and production, causing stale headroom
-3. **Headroom conditionally bypassed for mandatory** — original implementation had `if mandatory: headroom = None`, allowing mandatory loads to exceed production. User corrected: headroom must always be enforced
+3. **Headroom conditionally bypassed for mandatory** — original implementation had `if mandatory: headroom = None`, not even filtering power steps. User corrected: headroom must always be computed and passed so command steps are filtered; the use-available-power-only capping in `compute_best_period_repartition` still only applies for non-mandatory
 4. **No inverter limit caused negative headroom** — without `max_inverter_dc_to_ac_power`, `max_possible_production = pv` which made headroom negative at night/low-solar, blocking all grid-powered loads. Fixed: return `inf` when no inverter limit
 5. **DC-coupled battery discharge not clamped by PV** — `battery_ac_out` was limited by full inverter capacity, not remaining capacity after PV. Fixed: `discharge_inverter_limit = max(0, inverter - solar_production)`
 6. **Headroom not tracked inline** — `power_headroom` array was passed to `compute_best_period_repartition`/`adapt_repartition` but not updated at each power assignment, causing stale headroom within a single constraint's allocation
