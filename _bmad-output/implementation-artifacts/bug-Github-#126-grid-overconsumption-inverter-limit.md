@@ -3,7 +3,7 @@
 issue: 126
 branch: "QS_126"
 
-Status: review-complete
+Status: done
 
 ## Story
 As a Quiet Solar user with multiple controllable loads,
