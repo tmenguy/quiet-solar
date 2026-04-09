@@ -3,7 +3,7 @@
 issue: 128
 branch: "QS_128"
 
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 As a Quiet Solar user,
@@ -17,19 +17,19 @@ so that I don't accidentally trigger destructive actions like history resets or 
 4. Given the rendered dashboard YAML, when parsed, then `confirmation:` text appears for all 9 action buttons in both templates.
 
 ## Tasks / Subtasks
-- [ ] Task 1: Add confirmation blocks to home buttons in BOTH templates (AC: #1, #3)
-  - [ ] qs_home_serialize_for_debug — standard_ha:395-399, custom:199-203
-  - [ ] qs_home_light_reset_history — standard_ha:400-404, custom:204-208
-  - [ ] qs_home_recompute_people_historical_data — standard_ha:405-409, custom:209-213
-  - [ ] qs_home_reset_history — standard_ha:410-414, custom:214-218
-  - [ ] qs_home_generate_yaml_dashboard — standard_ha:415-419, custom:219-223
-- [ ] Task 2: Add confirmation blocks to solar buttons in BOTH templates (AC: #2, #3)
-  - [ ] qs_solar_recompute_forecast_scores — standard_ha:465-469, custom:269-273
-  - [ ] qs_solar_compute_dampening_1day — standard_ha:470-474, custom:274-278
-  - [ ] qs_solar_compute_dampening_7day — standard_ha:475-479, custom:279-283
-  - [ ] qs_solar_reset_dampening — standard_ha:480-484, custom:284-288
-- [ ] Task 3: Add regression test for confirmation presence in rendered output (AC: #4)
-- [ ] Task 4: Run quality gates and verify all tests pass
+- [x] Task 1: Add confirmation blocks to home buttons in BOTH templates (AC: #1, #3)
+  - [x] qs_home_serialize_for_debug — standard_ha:395-399, custom:199-203
+  - [x] qs_home_light_reset_history — standard_ha:400-404, custom:204-208
+  - [x] qs_home_recompute_people_historical_data — standard_ha:405-409, custom:209-213
+  - [x] qs_home_reset_history — standard_ha:410-414, custom:214-218
+  - [x] qs_home_generate_yaml_dashboard — standard_ha:415-419, custom:219-223
+- [x] Task 2: Add confirmation blocks to solar buttons in BOTH templates (AC: #2, #3)
+  - [x] qs_solar_recompute_forecast_scores — standard_ha:465-469, custom:269-273
+  - [x] qs_solar_compute_dampening_1day — standard_ha:470-474, custom:274-278
+  - [x] qs_solar_compute_dampening_7day — standard_ha:475-479, custom:279-283
+  - [x] qs_solar_reset_dampening — standard_ha:480-484, custom:284-288
+- [x] Task 3: Add regression test for confirmation presence in rendered output (AC: #4)
+- [x] Task 4: Run quality gates and verify all tests pass
 
 ## Dev Notes
 

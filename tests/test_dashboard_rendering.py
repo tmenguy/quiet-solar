@@ -318,6 +318,50 @@ class TestEntityTranslationKeys:
 # ============================================================================
 
 
+class TestConfirmationPopups:
+    """Verify confirmation popups appear for all home and solar action buttons."""
+
+    EXPECTED_CONFIRMATIONS = {
+        "qs_home_serialize_for_debug": "This will export home data to a debug file.",
+        "qs_home_light_reset_history": "This will clear recent home history (keeps older data).",
+        "qs_home_recompute_people_historical_data": "This will recompute all people historical data.",
+        "qs_home_reset_history": "'WARNING: This will permanently delete ALL home history data.'",
+        "qs_home_generate_yaml_dashboard": "This will regenerate the YAML dashboard.",
+        "qs_solar_recompute_forecast_scores": "This will recompute all solar forecast scores.",
+        "qs_solar_compute_dampening_1day": "This will compute solar dampening from 1 day of data.",
+        "qs_solar_compute_dampening_7day": "This will compute solar dampening from 7 days of data.",
+        "qs_solar_reset_dampening": "'WARNING: This will reset ALL solar dampening values.'",
+    }
+
+    @pytest.mark.parametrize(
+        "template_name",
+        [
+            "quiet_solar_dashboard_template.yaml.j2",
+            "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_confirmation_text_present_for_all_action_buttons(
+        self, hass, full_dashboard_home, template_name
+    ):
+        """All 9 home/solar action buttons must have confirmation text in rendered output."""
+        home = full_dashboard_home
+        template_path = COMPONENT_ROOT / "ui" / template_name
+        template_content = template_path.read_text()
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        missing = []
+        for entity_key, expected_text in self.EXPECTED_CONFIRMATIONS.items():
+            if f"text: {expected_text}" not in rendered:
+                missing.append(entity_key)
+
+        assert missing == [], (
+            f"Template {template_name} missing confirmation text for: {', '.join(missing)}"
+        )
+
+
 class TestDashboardSectionMapping:
     """Verify LOAD_TYPE_DASHBOARD_DEFAULT_SECTION maps all device types correctly."""
 
