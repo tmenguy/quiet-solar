@@ -171,7 +171,7 @@ def test_max_production_no_battery():
 
 
 def test_max_production_no_inverter_limit():
-    """No inverter limit → pv + possible."""
+    """No inverter limit → inf (no production ceiling to guard against)."""
     bat = _make_battery(dc_coupled=True, current_charge=5000)
     solver = _make_solver(solar_w=8000, battery=bat, max_inverter=None)
 
@@ -183,9 +183,9 @@ def test_max_production_no_inverter_limit():
         battery_possible_discharge=bat_possible,
     )
 
-    # pv (raw) = 8000, possible = 5000, DC no limit: 8000 + 5000 = 13000
+    # No inverter limit → headroom guard disabled (inf)
     for i in range(num_slots):
-        assert result[i] == 13000.0, f"Slot {i}: expected 13000, got {result[i]}"
+        assert result[i] == np.inf, f"Slot {i}: expected inf, got {result[i]}"
 
 
 def test_max_production_inverter_clamps_dc():
@@ -308,13 +308,28 @@ def test_power_guard_none_no_filtering():
 # ---------------------------------------------------------------------------
 
 
-def test_mandatory_bypasses_power_guard():
-    """Mandatory constraints get headroom=None in _allocate_constraints."""
+def test_mandatory_subject_to_power_guard():
+    """Mandatory constraints are subject to headroom guard — capped when exceeding production."""
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+
     dt = datetime(2024, 6, 15, 10, 0, 0, tzinfo=pytz.UTC)
     pv = [(dt + timedelta(hours=h), 3000) for h in range(5)]
     ua = [(dt + timedelta(hours=h), 500) for h in range(5)]
 
-    load = TestLoad(name="mandatory_load")
+    # Load with multiple steps so headroom can limit to a lower step
+    load = TestLoad(name="mandatory_load", min_p=1000, max_p=4000)
+
+    # Create mandatory constraint requesting 4000W — exceeds production (3000W inverter)
+    constraint = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=load,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=dt + timedelta(hours=2),
+        target_value=4000,
+        power=4000,
+    )
+    load._constraints = [constraint]
+
     solver = PeriodSolver(
         start_time=dt,
         end_time=dt + timedelta(hours=4),
@@ -325,12 +340,22 @@ def test_mandatory_bypasses_power_guard():
         max_inverter_dc_to_ac_power=3000,
     )
 
-    # _total_consumed_power initialized from UA (500W)
-    # max_possible_production ~ min(2500, 3000) = 2500 (net solar = 2500)
-    # headroom ~ 2500 - 500 = 2000
-    # A mandatory load requesting more than 2000W should still get allocated
-    initial_consumed = solver._total_consumed_power.copy()
-    assert initial_consumed[0] >= 0, "UA consumption should be non-negative"
+    # max_possible_production = min(3000, 3000) = 3000, headroom = 3000 - 500 = 2500
+    # Mandatory 4000W > 2500W headroom — should be capped to fit within headroom
+    result = solver.solve()
+
+    # The mandatory load should still be allocated but capped by headroom
+    load_commands = result[0]
+    assert len(load_commands) > 0, "Mandatory load should have been allocated"
+    load_entry = load_commands[0]
+    commands = load_entry[1]
+
+    for _, cmd in commands:
+        if not cmd.is_off_or_idle():
+            # Each active command must respect the headroom (2500W)
+            assert cmd.power_consign <= 2500.0, (
+                f"Mandatory command {cmd.power_consign}W should be capped by headroom 2500W"
+            )
 
 
 def test_total_consumed_power_initialized_from_ua():
@@ -411,7 +436,157 @@ def test_headroom_computation_in_allocate():
     assert solver._max_possible_production is not None
     assert len(solver._max_possible_production) == len(solver._available_power)
 
-    # headroom = max_production - total_consumed
+    # headroom = max_production - total_consumed; verify actual computation
     headroom = solver._max_possible_production - solver._total_consumed_power
+    expected = solver._max_possible_production - solver._total_consumed_power
+    np.testing.assert_array_almost_equal(headroom, expected)
+    # With solar=8000, ua=1000, inverter=12000: production=8000, consumed=1000 → headroom=7000
     for i in range(len(headroom)):
-        assert headroom[i] >= 0 or True, f"Headroom can be negative if UA > production"
+        assert abs(headroom[i] - 7000.0) < 1.0, f"Slot {i}: expected ~7000, got {headroom[i]}"
+
+
+# ---------------------------------------------------------------------------
+# Scenario test — original bug: multi-load exceeds inverter limit
+# ---------------------------------------------------------------------------
+
+
+def test_multi_load_capped_by_inverter_production():
+    """Two filler loads requesting combined 14kW are capped to stay within 12kW inverter.
+
+    Reproduces the core scenario from issue #126: multiple non-mandatory loads
+    should not exceed max_possible_production.
+    """
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+    from custom_components.quiet_solar.home_model.commands import LoadCommand
+
+    dt = datetime(2024, 6, 15, 10, 0, 0, tzinfo=pytz.UTC)
+    pv = [(dt + timedelta(hours=h), 12000) for h in range(5)]
+    ua = [(dt + timedelta(hours=h), 1000) for h in range(5)]
+
+    load1 = TestLoad(name="charger1", min_p=7000, max_p=7000)
+    load2 = TestLoad(name="charger2", min_p=7000, max_p=7000)
+
+    c1 = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=load1,
+        type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=dt + timedelta(hours=4),
+        target_value=28000,
+        power=7000,
+    )
+    c2 = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=load2,
+        type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=dt + timedelta(hours=4),
+        target_value=28000,
+        power=7000,
+    )
+    load1._constraints = [c1]
+    load2._constraints = [c2]
+
+    solver = PeriodSolver(
+        start_time=dt,
+        end_time=dt + timedelta(hours=4),
+        tariffs=0.10 / 1000.0,
+        actionable_loads=[load1, load2],
+        pv_forecast=pv,
+        unavoidable_consumption_forecast=ua,
+        max_inverter_dc_to_ac_power=12000,
+    )
+
+    result = solver.solve()
+
+    # After solving, total_consumed_power should never exceed max_possible_production
+    excess = solver._total_consumed_power - solver._max_possible_production
+    max_excess = float(np.max(excess))
+    assert max_excess <= 1.0, (
+        f"Total consumed power exceeds production by {max_excess:.0f}W — "
+        f"power guard should have prevented this"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Core scenario: surplus distributes to multiple loads but respects production
+# ---------------------------------------------------------------------------
+
+
+def test_surplus_multi_load_respects_production_headroom():
+    """THE original bug scenario: surplus energy drives _constraints_delta to allocate
+    2 car chargers + a boiler, but total must not exceed inverter production.
+
+    Setup: 12kW inverter, 12kW PV, 500W UA.
+    Loads: 2 cars at 7kW each + 1 boiler at 4.5kW = 18.5kW total demand.
+    Without power guard: solver would command all loads simultaneously → 18.5kW > 12kW.
+    With power guard: total consumed must stay <= 12kW (max_possible_production).
+    """
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+
+    dt = datetime(2024, 6, 15, 10, 0, 0, tzinfo=pytz.UTC)
+    pv = [(dt + timedelta(hours=h), 12000) for h in range(7)]
+    ua = [(dt + timedelta(hours=h), 500) for h in range(7)]
+
+    # Two car chargers — filler/green constraints
+    car1 = TestLoad(name="car1", min_p=1380, max_p=7000)
+    car2 = TestLoad(name="car2", min_p=1380, max_p=6000)
+    # Boiler — filler constraint
+    boiler = TestLoad(name="boiler", min_p=1000, max_p=4500)
+
+    c_car1 = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=car1,
+        type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=dt + timedelta(hours=6),
+        target_value=28000,
+        power=7000,
+    )
+    c_car2 = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=car2,
+        type=CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
+        end_of_constraint=dt + timedelta(hours=6),
+        target_value=24000,
+        power=6000,
+    )
+    c_boiler = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=boiler,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+        end_of_constraint=dt + timedelta(hours=6),
+        target_value=18000,
+        power=4500,
+    )
+    car1._constraints = [c_car1]
+    car2._constraints = [c_car2]
+    boiler._constraints = [c_boiler]
+
+    solver = PeriodSolver(
+        start_time=dt,
+        end_time=dt + timedelta(hours=6),
+        tariffs=0.10 / 1000.0,
+        actionable_loads=[car1, car2, boiler],
+        pv_forecast=pv,
+        unavoidable_consumption_forecast=ua,
+        max_inverter_dc_to_ac_power=12000,
+    )
+
+    result = solver.solve()
+
+    # CRITICAL: total consumed power must NEVER exceed max_possible_production in any slot
+    for i in range(len(solver._total_consumed_power)):
+        consumed = solver._total_consumed_power[i]
+        production = solver._max_possible_production[i]
+        assert consumed <= production + 1.0, (
+            f"Slot {i}: consumed {consumed:.0f}W > production {production:.0f}W — "
+            f"power guard failed to cap multi-load surplus allocation"
+        )
+
+    # Verify loads were actually allocated (not just all zeroed out)
+    load_commands = result[0]
+    total_active_slots = 0
+    for load_entry in load_commands:
+        _, commands = load_entry
+        for _, cmd in commands:
+            if not cmd.is_off_or_idle():
+                total_active_slots += 1
+    assert total_active_slots > 0, "At least some loads should have been allocated"

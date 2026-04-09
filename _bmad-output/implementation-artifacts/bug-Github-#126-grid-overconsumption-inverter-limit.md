@@ -173,7 +173,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 
 ### Decisions made:
 - Emergency 0A dyn_handle override deferred to separate story — user requested removal of AC5/Task 5
-- Battery discharge uses SOC-limited values (via `get_best_discharge_power`) — more accurate than hardware max
+- Battery discharge uses SOC-limited values (via `Battery.get_charger_power()` → `possible_discharge`) — more accurate than hardware max
 - Both DC and AC coupling handled in formula — user confirmed
 - Battery assumed switchable (charge → discharge) — user confirmed
 - Recompute battery state after each constraint allocation — user confirmed, for full accuracy

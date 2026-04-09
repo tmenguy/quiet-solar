@@ -2295,6 +2295,7 @@ def test_constraints_delta_energy_positive_three_constraints():
     solver._available_power = np.ones(num_slots, dtype=np.float64) * 2000.0
     solver._available_power_no_battery = np.ones(num_slots, dtype=np.float64) * 2000.0
     solver._total_consumed_power = np.zeros(num_slots, dtype=np.float64)
+    solver._max_possible_production = np.full(num_slots, np.inf, dtype=np.float64)
     solver._durations_s = np.ones(num_slots, dtype=np.float64) * 900.0
     solver._time_slots = [start_time + timedelta(seconds=i * 900) for i in range(num_slots + 1)]
 
@@ -2343,6 +2344,7 @@ def test_constraints_delta_segment_outside_bounds_skipped():
     solver._available_power = np.ones(num_slots, dtype=np.float64) * 2000.0
     solver._available_power_no_battery = np.ones(num_slots, dtype=np.float64) * 2000.0
     solver._total_consumed_power = np.zeros(num_slots, dtype=np.float64)
+    solver._max_possible_production = np.full(num_slots, np.inf, dtype=np.float64)
     solver._durations_s = np.ones(num_slots, dtype=np.float64) * 900.0
     solver._time_slots = [start_time + timedelta(seconds=i * 900) for i in range(num_slots + 1)]
 

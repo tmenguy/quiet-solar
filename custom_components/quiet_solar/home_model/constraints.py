@@ -640,7 +640,8 @@ class LoadConstraint:
         time_slots: list[datetime],
         additional_available_energy_to_deplete: float = 0.0,
         max_power_to_deplete: float = 0.0,
-    ) -> tuple[Self, float, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int, float]:
+        power_headroom: npt.NDArray[np.float64] | None = None,
+    ) -> tuple[Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int, float]:
         """Compute the best repartition of the constraint over the given period."""
 
     @abstractmethod
@@ -655,6 +656,7 @@ class LoadConstraint:
         time: datetime,
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
+        power_headroom: npt.NDArray[np.float64] | None = None,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the power repartition of the constraint over the given period."""
 
@@ -1659,9 +1661,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                             else:
                                                 reclaim_cmd = copy_command(CMD_IDLE)
 
-                                        out_delta_power[k] -= (
+                                        reclaim_delta = (
                                             cmd.power_consign - reclaim_cmd.power_consign + possible_power_piloted_delta
                                         )
+                                        out_delta_power[k] -= reclaim_delta
+                                        if use_headroom:
+                                            power_headroom[k] += reclaim_delta
                                         out_commands[k] = reclaim_cmd
 
                                         if remaining_switches is not None and reclaim_cmd.is_off_or_idle():
@@ -1867,6 +1872,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 out_commands[i] = as_fast_cmd
                 out_power[i] = as_fast_power + power_piloted_delta
+                if power_headroom is not None:
+                    power_headroom[i] -= out_power[i]
 
                 quantity_to_be_added -= self.get_delta_budget_quantity(
                     as_fast_cmd.power_consign, power_slots_duration_s[i]
@@ -2180,6 +2187,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                 #                                                          power_slots_duration_s[
                                 #                                                              i]) / 3600.0
 
+                                if power_headroom is not None:
+                                    power_headroom[i] -= power_to_add - out_power[i]
                                 out_power[i] = power_to_add
                                 out_power_idxs[i] = power_to_add_idx
 
@@ -2299,6 +2308,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     price_cmd = copy_command(power_sorted_cmds[power_cmd_idx])
 
                                 out_commands[i] = price_cmd
+                                if power_headroom is not None:
+                                    power_headroom[i] -= price_cmd.power_consign + power_piloted_delta - out_power[i]
                                 out_power[i] = price_cmd.power_consign + power_piloted_delta
                                 quantity_to_be_added -= self.get_delta_budget_quantity(
                                     price_cmd.power_consign, power_slots_duration_s[i]
@@ -2341,6 +2352,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             for i in range(first_slot, last_slot + 1):
                 if out_commands[i] is None:
                     out_commands[i] = copy_command(default_cmd)
+                    if power_headroom is not None:
+                        power_headroom[i] += out_power[i]
                     out_power[i] = 0.0
 
         added_quantity = initial_quantity_to_be_added - quantity_to_be_added

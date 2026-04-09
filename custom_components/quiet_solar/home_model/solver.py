@@ -5,7 +5,7 @@ import numpy as np
 import numpy.typing as npt
 import pytz
 
-from ..const import SOLVER_STEP_S, MAX_POWER_INFINITE
+from ..const import MAX_POWER_INFINITE, SOLVER_STEP_S
 from .battery import Battery
 from .commands import (
     CMD_AUTO_GREEN_CAP,
@@ -84,8 +84,8 @@ class PeriodSolver:
 
         # first lay off the time scales and slots, to match the constraints and tariffs timelines
         self._time_slots, self._active_constraints = self.create_time_slots(self._start_time, self._end_time)
-        self._prices, self._durations_s, self._available_power, ua_consumption, pv_consumption = self.create_power_slots(
-            self._time_slots
+        self._prices, self._durations_s, self._available_power, ua_consumption, pv_consumption = (
+            self.create_power_slots(self._time_slots)
         )
         self._solar_production = pv_consumption
         self._total_consumed_power = ua_consumption.copy()
@@ -94,9 +94,15 @@ class PeriodSolver:
         self._battery_charge_power_by_inverter_AC_clamping = None
 
         # fill the battery if we do have some production clamping at inverter level
-        if not (self._battery is None or self._battery.is_dc_coupled is False or max_inverter_dc_to_ac_power is None or max_inverter_dc_to_ac_power == MAX_POWER_INFINITE):
-
-            self._battery_charge_power_by_inverter_AC_clamping = np.maximum(pv_consumption - max_inverter_dc_to_ac_power, 0)
+        if not (
+            self._battery is None
+            or self._battery.is_dc_coupled is False
+            or max_inverter_dc_to_ac_power is None
+            or max_inverter_dc_to_ac_power == MAX_POWER_INFINITE
+        ):
+            self._battery_charge_power_by_inverter_AC_clamping = np.maximum(
+                pv_consumption - max_inverter_dc_to_ac_power, 0
+            )
             # reduce the available power to what is really available for the home: it is clamped by the maximum capacity of the inverter
             self._available_power = self._available_power + self._battery_charge_power_by_inverter_AC_clamping
 
@@ -166,19 +172,19 @@ class PeriodSolver:
         pv = self._solar_production  # raw solar
         inverter_limit = self._max_inverter_dc_to_ac_power
 
-        if self._battery is not None and self._battery.is_dc_coupled:
+        # No inverter limit → no production ceiling to guard against; loads draw from grid
+        if inverter_limit is None:
+            return np.full(num_slots, np.inf, dtype=np.float64)
 
+        if self._battery is not None and self._battery.is_dc_coupled:
             if battery_possible_discharge is not None:
                 result = pv + battery_possible_discharge
             else:
                 result = pv
 
-            if inverter_limit is not None:
-                result = np.minimum(result , float(inverter_limit))
+            result = np.minimum(result, float(inverter_limit))
         else:
-            result = pv
-            if inverter_limit is not None:
-                result = np.minimum(result , float(inverter_limit))
+            result = np.minimum(pv, float(inverter_limit))
 
             if battery_possible_discharge is not None:
                 result = result + battery_possible_discharge
@@ -371,9 +377,7 @@ class PeriodSolver:
 
         loads[load] = existing_cmds
 
-    def _battery_get_charging_power(
-        self, limited_discharge_per_price=None, existing_battery_commands=None
-    ):
+    def _battery_get_charging_power(self, limited_discharge_per_price=None, existing_battery_commands=None):
         available_power_list = self._available_power_no_battery
         max_inverter_dc_to_ac_power = self._max_inverter_dc_to_ac_power
         num = len(available_power_list)
@@ -397,7 +401,6 @@ class PeriodSolver:
             prev_battery_charge = init_battery_charge
 
             for i in range(len(available_power_list)):
-
                 if battery_commands[i] is None:
                     battery_commands[i] = copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE)
 
@@ -420,6 +423,7 @@ class PeriodSolver:
                     max_inverter_dc_to_ac_power,
                     float(self._durations_s[i]),
                     prev_battery_charge,
+                    solar_production=float(self._solar_production[i]),
                 )
 
                 battery_ext_consumption_power[i] = consumption_power
@@ -566,24 +570,32 @@ class PeriodSolver:
                 reclaim_energy = min(self._battery.get_value_full(), reclaim_energy)
 
                 _LOGGER.info(
-                    f"_prepare_battery_segmentation: at {self._time_slots[empty_segments[s_idx][0]]} battery is expected to be empty"
+                    "_prepare_battery_segmentation: at %s battery is expected to be empty",
+                    self._time_slots[empty_segments[s_idx][0]],
                 )
                 _LOGGER.info(
-                    f"_prepare_battery_segmentation: need to reclaim {reclaim_energy} Wh from {self._time_slots[to_shave_segment[0]]} to {self._time_slots[to_shave_segment[1]]}"
+                    "_prepare_battery_segmentation: need to reclaim %s Wh from %s to %s",
+                    reclaim_energy,
+                    self._time_slots[to_shave_segment[0]],
+                    self._time_slots[to_shave_segment[1]],
                 )
 
                 max_charge_in_segment = (
                     np.max(battery_charge[to_shave_segment[0] : to_shave_segment[1] + 1]) + energy_to_get_back[s_idx]
                 )
                 _LOGGER.info(
-                    f"_prepare_battery_segmentation: raw computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)"
+                    "_prepare_battery_segmentation: raw computation battery should have peaked at %.0f Wh (%.1f%%)",
+                    max_charge_in_segment,
+                    (100.0 * max_charge_in_segment) / self._battery.capacity,
                 )
 
                 max_charge_in_segment = (
                     np.max(battery_charge[to_shave_segment[0] : to_shave_segment[1] + 1]) + reclaim_energy
                 )
                 _LOGGER.info(
-                    f"_prepare_battery_segmentation: 2nd computation battery should have peaked at {max_charge_in_segment} Wh ({(100.0 * max_charge_in_segment) / self._battery.capacity}%)"
+                    "_prepare_battery_segmentation: 2nd computation battery should have peaked at %.0f Wh (%.1f%%)",
+                    max_charge_in_segment,
+                    (100.0 * max_charge_in_segment) / self._battery.capacity,
                 )
 
                 energy_delta = -reclaim_energy
@@ -619,11 +631,19 @@ class PeriodSolver:
 
             if energy_delta > 0:
                 _LOGGER.info(
-                    f"_constraints_delta: trying to consume more: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[f'{c.load.name} {score_c}' for c, score_c in constraints]}"
+                    "_constraints_delta: trying to consume more: %sWh from %s to %s for loads %s",
+                    energy_delta,
+                    self._time_slots[seg_start],
+                    self._time_slots[seg_end],
+                    [(c.load.name, score_c) for c, score_c in constraints],
                 )
             else:
                 _LOGGER.info(
-                    f"_constraints_delta: trying to reclaim: {energy_delta}Wh from {self._time_slots[seg_start]} to {self._time_slots[seg_end]} for loads {[f'{c.load.name} {score_c}' for c, score_c in constraints]}"
+                    "_constraints_delta: trying to reclaim: %sWh from %s to %s for loads %s",
+                    energy_delta,
+                    self._time_slots[seg_start],
+                    self._time_slots[seg_end],
+                    [(c.load.name, score_c) for c, score_c in constraints],
                 )
             load_to_re_adapt = set()
 
@@ -663,19 +683,39 @@ class PeriodSolver:
                         time=self._start_time,
                         allow_no_reclaim=allow_no_reclaim if energy_delta > 0 else False,
                         time_slots=self._time_slots,
+                        power_headroom=self._max_possible_production - self._total_consumed_power,
                     )
                 )
                 if has_changes:
                     _LOGGER.info(
-                        f"_constraints_delta: {ci.load.name} remaining: {energy_delta} init: {init_energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}"
+                        "_constraints_delta: %s remaining: %s init: %s Wh orig ask: %sWh from %s to %s",
+                        ci.load.name,
+                        energy_delta,
+                        init_energy_delta,
+                        orig_energy_delta,
+                        self._time_slots[st],
+                        self._time_slots[nd],
                     )
                     has_changed = True
                     constraints_evolution[ci] = out_c_adapted
                     self._add_consumption_delta_power(out_delta_power)
                     self._merge_commands_slots_for_load(actions, ci, st, nd, out_commands_adapted, prio_on_new=True)
+
+                    # recompute battery state and max_possible_production after each delta
+                    bat_possible_discharge = None
+                    if self._battery is not None:
+                        bat_possible_discharge = self._battery_get_charging_power()[7]
+                    self._max_possible_production = self._compute_max_possible_production(
+                        battery_possible_discharge=bat_possible_discharge,
+                    )
                 else:
                     _LOGGER.info(
-                        f"_constraints_delta: {ci.load.name} no change, energy delta: {energy_delta} Wh orig ask: {orig_energy_delta}Wh from {self._time_slots[st]} to {self._time_slots[nd]}"
+                        "_constraints_delta: %s no change, energy delta: %s Wh orig ask: %sWh from %s to %s",
+                        ci.load.name,
+                        energy_delta,
+                        orig_energy_delta,
+                        self._time_slots[st],
+                        self._time_slots[nd],
                     )
 
                 if ci.support_auto:
@@ -733,12 +773,8 @@ class PeriodSolver:
             if additional_energy_to_deplete >= 0.0:
                 remaining_additional_energy_to_deplete = 0.0
 
-            # headroom follows the same rule as do_use_available_power_only:
-            # apply power guard when using available power only (non-mandatory or off-grid)
-            if always_use_available_only_power or not c.is_mandatory:
-                headroom = self._max_possible_production - self._total_consumed_power
-            else:
-                headroom = None
+            # always compute headroom so all constraints (including mandatory) are subject to production limits
+            headroom = self._max_possible_production - self._total_consumed_power
 
             (
                 out_c,
@@ -774,13 +810,13 @@ class PeriodSolver:
                 battery_possible_discharge=bat_possible_discharge,
             )
 
-            # warn when mandatory load bypasses power guard and exceeds production
-            if headroom is None:
+            # warn when non-mandatory load exceeds production (safety net — should not happen with headroom)
+            if not c.is_mandatory:
                 excess = self._total_consumed_power - self._max_possible_production
                 max_excess = float(np.max(excess))
                 if max_excess > 0:
                     _LOGGER.warning(
-                        "Mandatory load %s causes total consumption to exceed production by %.0fW",
+                        "Non-mandatory load %s causes total consumption to exceed production by %.0fW",
                         c.load.name,
                         max_excess,
                     )

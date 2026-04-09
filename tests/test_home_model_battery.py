@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from custom_components.quiet_solar.const import (
     CONF_BATTERY_CAPACITY,
+    CONF_BATTERY_IS_DC_COUPLED,
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
     MAX_POWER_INFINITE,
@@ -227,3 +228,84 @@ def test_battery_max_discharge_infinite():
     battery._current_charge_value = battery.get_value_full()
     assert battery.get_max_discharging_power() is None
     assert battery.battery_get_current_possible_max_discharge_power() == MAX_POWER_INFINITE
+
+
+def test_get_charger_power_dc_coupled_discharge_clamped_by_pv():
+    """DC-coupled: battery discharge limited by remaining inverter capacity after PV."""
+    battery = Battery(
+        name="Battery",
+        device_type="battery",
+        **{
+            CONF_BATTERY_CAPACITY: 10000,
+            CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+            CONF_BATTERY_IS_DC_COUPLED: True,
+        },
+    )
+    battery._current_charge_value = 8000
+
+    # PV=5900, inverter=6000 → only 100W inverter headroom for battery discharge
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=1100.0,  # ua=7000, pv=5900 → 1100 deficit
+        clamped_over_dc_power=0.0,
+        max_inverter_dc_to_ac_power=6000.0,
+        duration_s=3600,
+        current_charge=battery.current_charge,
+        solar_production=5900.0,
+    )
+    # discharge_inverter_limit = max(0, 6000 - 5900) = 100
+    # battery_ac_out = min(5000, min(1100, 100)) = 100
+    assert ac_flow == -100.0
+    assert charging_power == -100.0
+
+    # AC-coupled battery: same scenario but no PV-inverter sharing
+    battery_ac = Battery(
+        name="Battery_AC",
+        device_type="battery",
+        **{
+            CONF_BATTERY_CAPACITY: 10000,
+            CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+            CONF_BATTERY_IS_DC_COUPLED: False,
+        },
+    )
+    battery_ac._current_charge_value = 8000
+
+    _, ac_flow_ac, _ = battery_ac.get_charger_power(
+        available_power=1100.0,
+        clamped_over_dc_power=0.0,
+        max_inverter_dc_to_ac_power=6000.0,
+        duration_s=3600,
+        current_charge=battery_ac.current_charge,
+        solar_production=5900.0,
+    )
+    # AC-coupled: discharge_inverter_limit = inverter_ac_limit = 6000 (no PV sharing)
+    assert ac_flow_ac == -1100.0  # full 1100W discharge (limited by demand, not inverter)
+
+
+def test_get_charger_power_dc_coupled_pv_saturates_inverter():
+    """DC-coupled: PV exceeds inverter → zero discharge headroom."""
+    battery = Battery(
+        name="Battery",
+        device_type="battery",
+        **{
+            CONF_BATTERY_CAPACITY: 10000,
+            CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+            CONF_BATTERY_IS_DC_COUPLED: True,
+        },
+    )
+    battery._current_charge_value = 8000
+
+    # PV=15000 > inverter=12000 → discharge_inverter_limit = 0
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=500.0,
+        clamped_over_dc_power=3000.0,  # excess PV beyond inverter
+        max_inverter_dc_to_ac_power=12000.0,
+        duration_s=3600,
+        current_charge=battery.current_charge,
+        solar_production=15000.0,
+    )
+    # discharge_inverter_limit = max(0, 12000 - 15000) = 0
+    # battery_ac_out = min(5000, min(500, 0)) = 0
+    assert ac_flow >= 0.0  # no discharge, only charging from clamped DC

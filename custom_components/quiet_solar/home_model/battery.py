@@ -40,7 +40,6 @@ class Battery(AbstractDevice):
     def charge_from_grid(self) -> bool:
         return False
 
-
     def get_charger_power(
         self,
         available_power: float,
@@ -48,6 +47,7 @@ class Battery(AbstractDevice):
         max_inverter_dc_to_ac_power: float | None,
         duration_s: float,
         current_charge: float | None = None,
+        solar_production: float = 0.0,
     ):
         # available_power = ua + p - pv + cp
         # cp : the clamped dc power
@@ -58,13 +58,20 @@ class Battery(AbstractDevice):
         if current_charge is None:
             current_charge = self.current_charge if self.current_charge is not None else 0.0
 
-        inverter_ac_limit = float(max_inverter_dc_to_ac_power) if max_inverter_dc_to_ac_power is not None else float("inf")
+        inverter_ac_limit = (
+            float(max_inverter_dc_to_ac_power) if max_inverter_dc_to_ac_power is not None else float("inf")
+        )
+
+        # For DC-coupled, PV and battery share the inverter: discharge limited by remaining capacity
+        discharge_inverter_limit = inverter_ac_limit
+        if self.is_dc_coupled and max_inverter_dc_to_ac_power is not None:
+            discharge_inverter_limit = max(0.0, inverter_ac_limit - solar_production)
 
         battery_ac_out = 0.0
         battery_ac_in = 0.0
 
         if available_power > 0.0:
-            battery_ac_out = min(self.max_discharging_power, min(available_power, inverter_ac_limit))
+            battery_ac_out = min(self.max_discharging_power, min(available_power, discharge_inverter_limit))
         else:
             battery_ac_in = min(self.max_charging_power, min(0.0 - available_power, inverter_ac_limit))
 
@@ -73,8 +80,12 @@ class Battery(AbstractDevice):
 
         charging_power = battery_dc_in - battery_dc_out
 
-        possible_charge = min(self.max_charging_power, max(0.0, (self.get_value_full() - current_charge) * 3600 / duration_s))
-        possible_discharge = min(self.max_discharging_power, max(0.0, (current_charge - self.get_value_empty()) * 3600 / duration_s))
+        possible_charge = min(
+            self.max_charging_power, max(0.0, (self.get_value_full() - current_charge) * 3600 / duration_s)
+        )
+        possible_discharge = min(
+            self.max_discharging_power, max(0.0, (current_charge - self.get_value_empty()) * 3600 / duration_s)
+        )
 
         battery_ac_in = min(battery_ac_in, max(0.0, possible_charge - clamped_over_dc_power))
         battery_ac_out = min(battery_ac_out, possible_discharge)
@@ -85,7 +96,6 @@ class Battery(AbstractDevice):
             charging_power = max(charging_power, -possible_discharge)
 
         return charging_power, battery_ac_in - battery_ac_out, possible_discharge
-
 
     def is_value_full(self, energy_value_wh: float | None) -> bool:
         if energy_value_wh is None:
