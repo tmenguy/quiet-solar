@@ -200,26 +200,46 @@ views:
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will export home data to a debug file." }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_home_light_reset_history") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will clear recent home history (keeps older data)." }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_home_recompute_people_historical_data") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will recompute all people historical data." }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_home_reset_history") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: 'WARNING: This will permanently delete ALL home history data.'" }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_home_generate_yaml_dashboard") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will regenerate the YAML dashboard." }}
               {%- endif %}
             {% elif device.device_type == "battery" -%}
               {%- set ha_entity = device.ha_entities.get("load_current_command") %}
@@ -270,21 +290,37 @@ views:
               {%- if ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will recompute all solar forecast scores." }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_solar_compute_dampening_1day") %}
               {%- if ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will compute solar dampening from 1 day of data." }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_solar_compute_dampening_7day") %}
               {%- if ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: This will compute solar dampening from 7 days of data." }}
               {%- endif %}
               {%- set ha_entity = device.ha_entities.get("qs_solar_reset_dampening") %}
               {%- if ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {{ "  tap_action:" }}
+              {{ "    action: toggle" }}
+              {{ "  confirmation:" }}
+              {{ "    text: 'WARNING: This will reset ALL solar dampening values.'" }}
               {%- endif %}
             {% endif %}
             {%- if device.device_type not in ["car", "pool", "climate", "on_off_duration"] %}
