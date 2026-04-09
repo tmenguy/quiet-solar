@@ -34,36 +34,30 @@ Root cause: the existing production guard operates in per-phase amps, which cann
 
 ### max_possible_production Formula
 
-**DC-coupled battery, not empty:**
+**DC-coupled battery:**
 ```
 max_possible_production[slot] = min(
-    pv[slot] + max(0, battery_possible_discharge[slot] - max(0, battery_actual_discharge[slot])),
+    pv[slot] + battery_possible_discharge[slot],
     max_inverter_dc_to_ac_power
 )
 ```
 
-**DC-coupled battery, empty:**
-```
-max_possible_production[slot] = min(pv[slot], max_inverter_dc_to_ac_power)
-```
-
-**AC-coupled battery, not empty:**
+**AC-coupled battery:**
 ```
 max_possible_production[slot] = min(pv[slot], max_inverter_dc_to_ac_power) +
-    max(0, battery_possible_discharge[slot] - max(0, battery_actual_discharge[slot]))
+    battery_possible_discharge[slot]
 ```
 
-**AC-coupled battery, empty (or no battery):**
+**No battery:**
 ```
 max_possible_production[slot] = min(pv[slot], max_inverter_dc_to_ac_power)
 ```
 
 Where:
-- `pv[slot]` = `self._solar_production[slot]` (fixed, from init)
-- `battery_possible_discharge[slot]` = SOC-limited max discharge, from `get_best_discharge_power` utils
-- `battery_actual_discharge[slot]` = what battery is currently discharging, from `_battery_get_charging_power` output
+- `pv[slot]` = `self._solar_production[slot]` — **raw PV** (not `pv - ua`), stored from `create_power_slots` output
+- `battery_possible_discharge[slot]` = SOC-limited max discharge, from unified `Battery.get_charger_power()` third return value
 - `max_inverter_dc_to_ac_power` = `self._max_inverter_dc_to_ac_power`
-- Battery assumed switchable: if charging, it can stop and start discharging (remaining = full possible discharge)
+- Battery assumed switchable: if charging, it can stop charging and start discharging (full possible discharge available)
 
 ### headroom Derivation
 
@@ -71,11 +65,11 @@ Where:
 headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 ```
 
-`_total_consumed_power` is an explicit array initialized with unavoidable consumption and updated via `_add_consumption_delta_power(delta_power)` — a utility method on `PeriodSolver` that atomically updates both `_available_power` and `_total_consumed_power` with the same delta. This ensures the two arrays never drift apart, even when `_available_power` is also modified by battery operations.
+`_total_consumed_power` is an explicit array initialized with unavoidable consumption and updated via `_add_consumption_delta_power(delta_power)` — a utility method on `PeriodSolver` that atomically updates `_available_power`, `_available_power_no_battery`, and `_total_consumed_power` with the same delta. `_available_power_no_battery` provides a clean baseline (without battery ops) for `_battery_get_charging_power`, avoiding circular dependency.
 
 ## Acceptance Criteria
 
-1. **AC1** Given a DC-coupled 12kW inverter with solar=8kW, battery_possible_discharge=5kW, battery_actual_discharge=2kW, When the solver computes max_possible_production, Then it equals min(8+max(0,5-2), 12) = min(11,12) = 11kW
+1. **AC1** Given a DC-coupled 12kW inverter with solar=8kW, battery_possible_discharge=5kW, When the solver computes max_possible_production, Then it equals min(8+5, 12) = 12kW
 2. **AC2** Given two chargers + cumulus requesting combined 17.8kW in one slot with max_possible_production=12kW and ua=1kW, When the power guard triggers, Then non-mandatory filler/green commands are reduced until headroom >= 0
 3. **AC3** Given `available_amps_production_for_group` is removed, When `adapt_power_steps_budgeting_low_level` is called for a green/filler constraint, Then it checks `cmd.power_consign <= headroom[slot]` instead of amp budget
 4. **AC4** Given mandatory constraints, When the power guard evaluates them, Then mandatory loads bypass the production power guard (pass headroom=None). `_available_power` is still updated to reflect their consumption, so subsequent non-mandatory constraints see reduced headroom
@@ -88,7 +82,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - [x] Task 1 (AC: 1) Per-slot power tracking and `max_possible_production` in the solver
   - [x] 1.1 Add `_total_consumed_power` array to `PeriodSolver.__init__`, initialized from unavoidable consumption forecast
   - [x] 1.2 Add `_add_consumption_delta_power(self, delta_power)` utility method — atomically updates both `_available_power` and `_total_consumed_power`
-  - [x] 1.3 Evolve `_battery_get_charging_power` to output `battery_actual_discharge` and `battery_possible_discharge`
+  - [x] 1.3 Refactored: unified `Battery.get_charger_power()` replaces separate charge/discharge methods; `_battery_get_charging_power` uses `_available_power_no_battery` and returns 8-tuple
   - [x] 1.4 Add `_compute_max_possible_production()` method implementing DC/AC coupling formulas
   - [x] 1.5 Compute `_max_possible_production` after init (solar-only) and recompute with battery data before first `_allocate_constraints` and after each allocation
   - [x] 1.6 In `_allocate_constraints`, recompute battery state and `_max_possible_production` after each constraint
@@ -138,7 +132,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 |------|---------|
 | `home_model/solver.py` | Add `_compute_max_possible_production`, recompute in `_allocate_constraints`, pass headroom |
 | `home_model/constraints.py` | Replace `use_production_limits` with `max_slot_power_headroom` in `adapt_power_steps_budgeting*` and `adapt_repartition` |
-| `home_model/battery.py` | Read-only dependency (utils: `get_best_discharge_power`, `is_dc_coupled`) |
+| `home_model/battery.py` | Unified `get_charger_power()` replacing separate charge/discharge methods; `charge_from_grid` property |
 | `ha_model/dynamic_group.py` | Remove `available_amps_production_for_group`, simplify `update_available_amps_for_group` and `prepare_slots_for_amps_budget` |
 | `ha_model/home.py` | Remove `_get_home_max_production_phase_amps_for_budget`, `dyn_group_max_production_phase_current_for_budget` |
 | `home_model/load.py` | Remove `from_father_production_budget` from `prepare_slots_for_amps_budget` |
@@ -147,15 +141,21 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 `factories.py`, `test_constraints.py`, `test_solver.py`, `test_ha_dynamic_group.py`, `test_charger_coverage_deep.py`, `test_coverage_constraints.py`, `test_constraint_interaction_boundaries.py`
 
 ### Important Design Decisions
-- **Explicit `_total_consumed_power` array** — kept in sync with `_available_power` via `_add_consumption_delta_power()` utility. Not derived, because `_available_power` is also modified by battery operations that are NOT consumption
+- **Explicit `_total_consumed_power` array** — kept in sync with `_available_power` and `_available_power_no_battery` via `_add_consumption_delta_power()` utility. Not derived, because `_available_power` is also modified by battery operations that are NOT consumption
 - **No `_max_production_power` as static array** — recomputed dynamically after each constraint via `_battery_get_charging_power`
 - **Battery switchable** — if battery is charging, guard assumes it can stop charging and start discharging
-- **`_battery_get_charging_power` will be reworked by user** — design for easy replacement of its output interface
+- **Battery refactored** — `_battery_get_charging_power` reworked: uses `_available_power_no_battery` (no circular dependency), unified `Battery.get_charger_power()`, CMD_GREEN_CHARGE_ONLY enforced via `min(0.0, available_power)` clamping, returns 8-tuple (removed `battery_actual_discharge`)
 - **Emergency 0A dyn_handle override** — deferred to separate story
 - **Headroom condition matches `do_use_available_power_only`** — `if always_use_available_only_power or not c.is_mandatory: headroom = ...` (user correction: not just `c.is_mandatory`)
 - **`adapt_repartition` headroom not gated on `support_auto`** — `use_headroom = energy_delta >= 0.0 and power_headroom is not None` (user correction: non-auto loads should also be limited by headroom)
 - **Headroom guard independent of amp guard** — `adapt_power_steps_budgeting_low_level` checks headroom even when `father_device` is None (user correction: no father doesn't exempt from production limits)
 - **Battery-aware production before first allocation** — `_max_possible_production` recomputed with battery data before `_allocate_constraints` (not just after each allocation)
+- **`_solar_production` is raw PV** — stored directly from `create_power_slots` pv_consumption output; `_available_power` uses `pv - ua` as before, but production formula uses raw PV to avoid double-counting UA
+- **`_available_power_no_battery`** — clean copy of `_available_power` tracking `ua + loads - pv` without battery ops; avoids circular dependency where battery state depends on `_available_power` which battery also modifies
+- **`_add_consumption_delta_power` updates 3 arrays** — `_available_power`, `_available_power_no_battery`, `_total_consumed_power` atomically
+- **UA amps subtracted from amp budget at solver init** — `solve()` subtracts UA power from per-phase amp budget before constraint allocation
+- **CMD_GREEN_CHARGE_ONLY enforcement** — `_battery_get_charging_power` clamps `available_power = min(0.0, available_power)` for green-charge-only commands, preventing discharge
+- **Simplified `_compute_max_possible_production`** — removed `battery_actual_discharge` parameter; uses full `possible_discharge` (battery assumed switchable)
 
 ## Adversarial Review Notes
 
@@ -180,5 +180,4 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 
 ### Known risks acknowledged:
 - `_battery_get_charging_power` called per-constraint in inner loop may be slow — correctness first, optimize later
-- `_battery_get_charging_power` needs rework for better clamping (user will handle separately)
 - Per-group production isolation lost when removing `available_amps_production_for_group` — home-level power guard replaces it
