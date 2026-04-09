@@ -18,6 +18,7 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER_AUTO,
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
 )
 from custom_components.quiet_solar.home_model.battery import Battery
@@ -590,3 +591,47 @@ def test_surplus_multi_load_respects_production_headroom():
             if not cmd.is_off_or_idle():
                 total_active_slots += 1
     assert total_active_slots > 0, "At least some loads should have been allocated"
+
+
+def test_asap_off_grid_headroom_filters_steps():
+    """Off-grid ASAP constraint: headroom filters power steps in the as-fast-as-possible path."""
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+
+    dt = datetime(2024, 6, 15, 10, 0, 0, tzinfo=pytz.UTC)
+    pv = [(dt + timedelta(hours=h), 5000) for h in range(5)]
+    ua = [(dt + timedelta(hours=h), 200) for h in range(5)]
+
+    load = TestLoad(name="asap_load", min_p=1000, max_p=4000)
+    constraint = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=load,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        end_of_constraint=dt + timedelta(hours=3),
+        target_value=6000,
+        power=4000,
+    )
+    load._constraints = [constraint]
+
+    solver = PeriodSolver(
+        start_time=dt,
+        end_time=dt + timedelta(hours=4),
+        tariffs=0.10 / 1000.0,
+        actionable_loads=[load],
+        pv_forecast=pv,
+        unavoidable_consumption_forecast=ua,
+        max_inverter_dc_to_ac_power=5000,
+    )
+
+    # Off-grid: always_use_available_only_power=True → ASAP gets do_use_available_power_only=True
+    result = solver.solve(is_off_grid=True)
+
+    # Load should be allocated (PV=5000 > load needs)
+    load_commands = result[0]
+    assert len(load_commands) > 0
+    _, commands = load_commands[0]
+    has_active = any(not cmd.is_off_or_idle() for _, cmd in commands)
+    assert has_active, "ASAP load should be allocated in off-grid mode with sufficient PV"
+
+    # Total consumed must not exceed production
+    for i in range(len(solver._total_consumed_power)):
+        assert solver._total_consumed_power[i] <= solver._max_possible_production[i] + 1.0

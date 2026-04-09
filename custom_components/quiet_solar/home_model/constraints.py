@@ -1822,9 +1822,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
             has_a_cmd = False
             for i in range(first_slot, last_slot + 1):
+                slot_headroom = None
+                if do_use_available_power_only and power_headroom is not None:
+                    slot_headroom = float(power_headroom[i])
                 # we will add a command from 0 command so by construction power_piloted_delta will happen
                 power_sorted_cmds, is_current_empty_command, power_piloted_delta = self.adapt_power_steps_budgeting(
-                    slot_idx=i, commands=None, for_add=True
+                    slot_idx=i, commands=None, for_add=True, max_slot_power_headroom=slot_headroom
                 )
 
                 # stronger that the forced slots_commands ... can be dangerous to output such command now
