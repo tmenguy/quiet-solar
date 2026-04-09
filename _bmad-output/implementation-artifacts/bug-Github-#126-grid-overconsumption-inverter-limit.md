@@ -3,7 +3,7 @@
 issue: 126
 branch: "QS_126"
 
-Status: dev-complete
+Status: review-complete
 
 ## Story
 As a Quiet Solar user with multiple controllable loads,
@@ -53,6 +53,11 @@ max_possible_production[slot] = min(pv[slot], max_inverter_dc_to_ac_power) +
 max_possible_production[slot] = min(pv[slot], max_inverter_dc_to_ac_power)
 ```
 
+**No inverter limit (`max_inverter_dc_to_ac_power` is None):**
+```
+max_possible_production[slot] = inf  (headroom guard effectively disabled)
+```
+
 Where:
 - `pv[slot]` = `self._solar_production[slot]` — **raw PV** (not `pv - ua`), stored from `create_power_slots` output
 - `battery_possible_discharge[slot]` = SOC-limited max discharge, from unified `Battery.get_charger_power()` third return value
@@ -72,7 +77,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 1. **AC1** Given a DC-coupled 12kW inverter with solar=8kW, battery_possible_discharge=5kW, When the solver computes max_possible_production, Then it equals min(8+5, 12) = 12kW
 2. **AC2** Given two chargers + cumulus requesting combined 17.8kW in one slot with max_possible_production=12kW and ua=1kW, When the power guard triggers, Then non-mandatory filler/green commands are reduced until headroom >= 0
 3. **AC3** Given `available_amps_production_for_group` is removed, When `adapt_power_steps_budgeting_low_level` is called for a green/filler constraint, Then it checks `cmd.power_consign <= headroom[slot]` instead of amp budget
-4. **AC4** Given mandatory constraints, When the power guard evaluates them, Then mandatory loads bypass the production power guard (pass headroom=None). `_available_power` is still updated to reflect their consumption, so subsequent non-mandatory constraints see reduced headroom
+4. **AC4** Given mandatory constraints, When the power guard evaluates them, Then mandatory loads are subject to the same headroom guard as all other constraints. Headroom is always computed and passed
 5. **AC5** Given the power guard triggers, When it logs the decision, Then the log includes slot index, cmd power, headroom, and max_possible_production
 6. **AC6** All removed references to `available_amps_production_for_group` and `use_production_limits` replaced, no dead code remains
 7. **AC7** Existing solver/charger tests adapted and passing. New tests cover: power guard enforcement, multi-load capping, mandatory exemption, DC/AC coupling variants
@@ -84,8 +89,8 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
   - [x] 1.2 Add `_add_consumption_delta_power(self, delta_power)` utility method — atomically updates both `_available_power` and `_total_consumed_power`
   - [x] 1.3 Refactored: unified `Battery.get_charger_power()` replaces separate charge/discharge methods; `_battery_get_charging_power` uses `_available_power_no_battery` and returns 8-tuple
   - [x] 1.4 Add `_compute_max_possible_production()` method implementing DC/AC coupling formulas
-  - [x] 1.5 Compute `_max_possible_production` after init (solar-only) and recompute with battery data before first `_allocate_constraints` and after each allocation
-  - [x] 1.6 In `_allocate_constraints`, recompute battery state and `_max_possible_production` after each constraint
+  - [x] 1.5 Compute `_max_possible_production` after init (solar-only) and recompute with battery data before first `_allocate_constraints`, after each allocation, and after each `_constraints_delta` change
+  - [x] 1.6 In `_allocate_constraints` and `_constraints_delta`, recompute battery state and `_max_possible_production` after each constraint change
   - [x] 1.7 Compute per-slot headroom and pass to constraint allocation
 
 - [x] Task 2 (AC: 2,3,6) Replace `use_production_limits` with power headroom in constraints
@@ -99,10 +104,10 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - [x] Task 3 (AC: 6) Remove `available_amps_production_for_group` infrastructure
   - [x] 3.1–3.8 All removed
 
-- [x] Task 4 (AC: 4) Power guard respects constraint priority
-  - [x] 4.1 In `_allocate_constraints`: headroom applied when `always_use_available_only_power or not c.is_mandatory` (matches `do_use_available_power_only` logic). Mandatory-only constraints bypass headroom unless always_use_available_only_power is set
+- [x] Task 4 (AC: 4) Power guard applies to all constraints
+  - [x] 4.1 In `_allocate_constraints`: headroom always computed and passed to all constraints (mandatory included). No bypass
   - [x] 4.2 Amp guard always active. Headroom guard independent — applies whenever `max_slot_power_headroom` is not None, regardless of father_device
-  - [x] 4.3 Log warning when mandatory load exceeds production
+  - [x] 4.3 Log warning when non-mandatory load exceeds production (safety net — should not trigger with headroom guard)
 
 - [x] Task 5 (AC: 5) Logging
   - [x] 5.1–5.3 All implemented with lazy `%s` formatting
@@ -110,13 +115,15 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - [x] Task 6 (AC: 6,7) Update existing tests
   - [x] 6.1–6.7 All updated
 
-- [x] Task 7 (AC: 7) New tests (15 tests in `tests/test_power_guard.py`)
-  - [x] 7.1 `_compute_max_possible_production`: DC/AC coupling, with/without battery, inverter clamping
+- [x] Task 7 (AC: 7) New tests (17 tests in `tests/test_power_guard.py` + 2 in `test_home_model_battery.py`)
+  - [x] 7.1 `_compute_max_possible_production`: DC/AC coupling, with/without battery, inverter clamping, no-inverter-limit returns inf
   - [x] 7.2 Power guard filtering and multi-load capping by headroom
-  - [x] 7.3 Mandatory bypass: mandatory allocated despite exceeding production, filler sees reduced headroom
+  - [x] 7.3 Mandatory subject to headroom: mandatory capped when exceeding production
   - [x] 7.4 `_add_consumption_delta_power` sync verification, battery independence
   - [x] 7.5 Per-phase amp guard works independently alongside power guard
-  - [x] 7.6 Headroom guard without father_device (new — validates headroom applies even without dynamic group parent)
+  - [x] 7.6 Headroom guard without father_device (validates headroom applies even without dynamic group parent)
+  - [x] 7.7 `test_surplus_multi_load_respects_production_headroom` — core bug scenario: 2 cars + boiler (18.5kW) vs 12kW inverter, total never exceeds production via `_constraints_delta` surplus path
+  - [x] 7.8 DC-coupled battery discharge clamped by remaining inverter capacity after PV (`test_home_model_battery.py`)
 
 ## Dev Notes
 
@@ -130,9 +137,9 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 ### Key Files (production)
 | File | Changes |
 |------|---------|
-| `home_model/solver.py` | Add `_compute_max_possible_production`, recompute in `_allocate_constraints`, pass headroom |
+| `home_model/solver.py` | Add `_compute_max_possible_production`, recompute in `_allocate_constraints` and `_constraints_delta`, pass headroom everywhere |
 | `home_model/constraints.py` | Replace `use_production_limits` with `max_slot_power_headroom` in `adapt_power_steps_budgeting*` and `adapt_repartition` |
-| `home_model/battery.py` | Unified `get_charger_power()` replacing separate charge/discharge methods; `charge_from_grid` property |
+| `home_model/battery.py` | Unified `get_charger_power()` with `solar_production` param; DC-coupled discharge clamped by remaining inverter capacity; `charge_from_grid` property |
 | `ha_model/dynamic_group.py` | Remove `available_amps_production_for_group`, simplify `update_available_amps_for_group` and `prepare_slots_for_amps_budget` |
 | `ha_model/home.py` | Remove `_get_home_max_production_phase_amps_for_budget`, `dyn_group_max_production_phase_current_for_budget` |
 | `home_model/load.py` | Remove `from_father_production_budget` from `prepare_slots_for_amps_budget` |
@@ -146,7 +153,7 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - **Battery switchable** — if battery is charging, guard assumes it can stop charging and start discharging
 - **Battery refactored** — `_battery_get_charging_power` reworked: uses `_available_power_no_battery` (no circular dependency), unified `Battery.get_charger_power()`, CMD_GREEN_CHARGE_ONLY enforced via `min(0.0, available_power)` clamping, returns 8-tuple (removed `battery_actual_discharge`)
 - **Emergency 0A dyn_handle override** — deferred to separate story
-- **Headroom condition matches `do_use_available_power_only`** — `if always_use_available_only_power or not c.is_mandatory: headroom = ...` (user correction: not just `c.is_mandatory`)
+- **Headroom always computed and passed** — all constraints (including mandatory) subject to headroom guard. No conditional bypass (user review correction: mandatory should not bypass production limits)
 - **`adapt_repartition` headroom not gated on `support_auto`** — `use_headroom = energy_delta >= 0.0 and power_headroom is not None` (user correction: non-auto loads should also be limited by headroom)
 - **Headroom guard independent of amp guard** — `adapt_power_steps_budgeting_low_level` checks headroom even when `father_device` is None (user correction: no father doesn't exempt from production limits)
 - **Battery-aware production before first allocation** — `_max_possible_production` recomputed with battery data before `_allocate_constraints` (not just after each allocation)
@@ -156,6 +163,10 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - **UA amps subtracted from amp budget at solver init** — `solve()` subtracts UA power from per-phase amp budget before constraint allocation
 - **CMD_GREEN_CHARGE_ONLY enforcement** — `_battery_get_charging_power` clamps `available_power = min(0.0, available_power)` for green-charge-only commands, preventing discharge
 - **Simplified `_compute_max_possible_production`** — removed `battery_actual_discharge` parameter; uses full `possible_discharge` (battery assumed switchable)
+- **No inverter limit = inf headroom** — when `max_inverter_dc_to_ac_power` is None, `_compute_max_possible_production` returns `np.inf` (no production ceiling to guard; loads draw from grid freely). The power guard only protects the inverter's DC→AC capacity
+- **`_constraints_delta` passes headroom to `adapt_repartition`** — surplus allocation path also enforces production limits; `_max_possible_production` recomputed after each delta change (user review correction: was missing entirely)
+- **DC-coupled battery discharge clamped by PV** — `Battery.get_charger_power()` accepts `solar_production` param; for DC-coupled, `discharge_inverter_limit = max(0, inverter_limit - solar_production)` ensures discharge doesn't exceed remaining inverter capacity after PV
+- **Headroom updated inline during constraint allocation** — `compute_best_period_repartition` and `adapt_repartition` update `power_headroom[i]` at every `out_power[i]`/`out_delta_power[i]` assignment, including reclaim and auto-fill paths
 
 ## Adversarial Review Notes
 
@@ -179,5 +190,22 @@ headroom[slot] = max_possible_production[slot] - _total_consumed_power[slot]
 - Recompute battery state after each constraint allocation — user confirmed, for full accuracy
 
 ### Known risks acknowledged:
-- `_battery_get_charging_power` called per-constraint in inner loop may be slow — correctness first, optimize later
+- `_battery_get_charging_power` called per-constraint in inner loop (both `_allocate_constraints` and `_constraints_delta`) may be slow — correctness first, optimize later
 - Per-group production isolation lost when removing `available_amps_production_for_group` — home-level power guard replaces it
+
+## PR Review Notes (PR #127)
+
+**Review round:** 1 (adversarial + CodeRabbit + user corrections)
+
+### Critical issues found and fixed during review:
+1. **`_constraints_delta` missing headroom** — `adapt_repartition` was called without `power_headroom` in the surplus allocation path, completely bypassing production limits for surplus-driven loads. This was the primary purpose of the story
+2. **`_max_possible_production` not recomputed after deltas** — `_constraints_delta` modified consumption via `_add_consumption_delta_power` but did not recompute battery state and production, causing stale headroom
+3. **Headroom conditionally bypassed for mandatory** — original implementation had `if mandatory: headroom = None`, allowing mandatory loads to exceed production. User corrected: headroom must always be enforced
+4. **No inverter limit caused negative headroom** — without `max_inverter_dc_to_ac_power`, `max_possible_production = pv` which made headroom negative at night/low-solar, blocking all grid-powered loads. Fixed: return `inf` when no inverter limit
+5. **DC-coupled battery discharge not clamped by PV** — `battery_ac_out` was limited by full inverter capacity, not remaining capacity after PV. Fixed: `discharge_inverter_limit = max(0, inverter - solar_production)`
+6. **Headroom not tracked inline** — `power_headroom` array was passed to `compute_best_period_repartition`/`adapt_repartition` but not updated at each power assignment, causing stale headroom within a single constraint's allocation
+7. **Missing core scenario test** — no test proved that surplus-driven `_constraints_delta` with multiple loads (2 cars + boiler) respects production limits. Added `test_surplus_multi_load_respects_production_headroom`
+
+### Quality gate results:
+- 4749 tests passing, 100% coverage
+- ruff format/lint, mypy, translations all pass
