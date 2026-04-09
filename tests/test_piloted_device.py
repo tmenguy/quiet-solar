@@ -117,6 +117,13 @@ class MockHome:
         """Prepare amp slots - simplified mock."""
         pass
 
+    def get_phase_amps_from_power_for_budgeting(self, power: float) -> list[float | int]:
+        """Convert power to per-phase amps (3-phase balanced)."""
+        if power == 0.0:
+            return [0.0, 0.0, 0.0]
+        p = power / 3.0 / self.voltage
+        return [p, p, p]
+
     def update_available_amps_for_group(self, idx: int, amps: list[float | int], add: bool):
         """Update available amps - simplified mock."""
         pass

@@ -2129,9 +2129,8 @@ def test_prepare_battery_segmentation_single_empty_middle():
     battery_charge[7] = 50.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_segment, energy_delta = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2171,9 +2170,8 @@ def test_prepare_battery_segmentation_no_empty():
     battery_charge = np.ones(num_slots, dtype=np.float64) * 5000.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_segment, energy_delta = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2215,9 +2213,8 @@ def test_prepare_battery_segmentation_over_budget():
     battery_charge[3] = 100.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_02, energy_delta_02 = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2296,6 +2293,7 @@ def test_constraints_delta_energy_positive_three_constraints():
         unavoidable_consumption_forecast=ua_forecast,
     )
     solver._available_power = np.ones(num_slots, dtype=np.float64) * 2000.0
+    solver._available_power_no_battery = np.ones(num_slots, dtype=np.float64) * 2000.0
     solver._total_consumed_power = np.zeros(num_slots, dtype=np.float64)
     solver._durations_s = np.ones(num_slots, dtype=np.float64) * 900.0
     solver._time_slots = [start_time + timedelta(seconds=i * 900) for i in range(num_slots + 1)]
@@ -2343,6 +2341,7 @@ def test_constraints_delta_segment_outside_bounds_skipped():
         unavoidable_consumption_forecast=ua_forecast,
     )
     solver._available_power = np.ones(num_slots, dtype=np.float64) * 2000.0
+    solver._available_power_no_battery = np.ones(num_slots, dtype=np.float64) * 2000.0
     solver._total_consumed_power = np.zeros(num_slots, dtype=np.float64)
     solver._durations_s = np.ones(num_slots, dtype=np.float64) * 900.0
     solver._time_slots = [start_time + timedelta(seconds=i * 900) for i in range(num_slots + 1)]
@@ -2355,8 +2354,8 @@ def test_constraints_delta_segment_outside_bounds_skipped():
     assert constraints_bounds[c1][1] < 4
 
 
-def test_battery_get_charging_power_returns_nine_tuple():
-    """_battery_get_charging_power: returns 9-tuple (battery_ext, battery_charge, battery_commands, ..., battery_actual_discharge, battery_possible_discharge)."""
+def test_battery_get_charging_power_returns_eight_tuple():
+    """_battery_get_charging_power: returns 8-tuple (battery_ext, battery_charge, battery_commands, ..., battery_possible_discharge)."""
     dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
     start_time = dt
     end_time = dt + timedelta(hours=4)
@@ -2377,18 +2376,17 @@ def test_battery_get_charging_power_returns_nine_tuple():
         unavoidable_consumption_forecast=ua_forecast,
     )
     result = solver._battery_get_charging_power()
-    assert len(result) == 9
+    assert len(result) == 8
     (
         battery_ext, battery_charge, battery_commands,
         prices_discharged, prices_remaining,
         excess_solar, remaining_grid,
-        bat_actual_discharge, bat_possible_discharge,
+        bat_possible_discharge,
     ) = result
     assert len(battery_charge) == len(solver._available_power)
     assert len(battery_commands) == len(solver._available_power)
     assert isinstance(remaining_grid, (int, float))
     assert isinstance(excess_solar, (int, float))
-    assert len(bat_actual_discharge) == len(solver._available_power)
     assert len(bat_possible_discharge) == len(solver._available_power)
 
 

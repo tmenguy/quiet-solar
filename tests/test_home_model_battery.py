@@ -11,8 +11,18 @@ from custom_components.quiet_solar.const import (
 from custom_components.quiet_solar.home_model.battery import Battery
 
 
-def test_get_best_charge_power_clamps_to_solar_and_capacity():
-    """Test charge power respects solar and remaining capacity."""
+def test_charge_from_grid_base_property():
+    """Base Battery.charge_from_grid always returns False."""
+    battery = Battery(name="bat", **{
+        CONF_BATTERY_CAPACITY: 10000,
+        CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+        CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+    })
+    assert battery.charge_from_grid is False
+
+
+def test_get_charger_power_charge_from_excess_solar_and_soc_clamp():
+    """Test charging from excess solar; SOC clamp limits near-full battery."""
     battery = Battery(
         name="Battery",
         device_type="battery",
@@ -24,19 +34,34 @@ def test_get_best_charge_power_clamps_to_solar_and_capacity():
     )
     battery._current_charge_value = 9000
 
-    power = battery.get_best_charge_power(
-        power_in=5000,
-        solar_production=1000,
+    # available_power=-1000 means 1000 W excess solar; only 1000 Wh room left
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=-1000.0,
+        clamped_over_dc_power=0.0,
         max_inverter_dc_to_ac_power=None,
         duration_s=3600,
         current_charge=battery.current_charge,
     )
 
-    assert power == 1000
+    assert charging_power == 1000.0
+    assert ac_flow == 1000.0  # all AC in, no AC out
+    assert possible_discharge == 3000.0  # plenty of energy to discharge
+
+    # Full battery: no more charging possible
+    battery._current_charge_value = battery.get_value_full()
+    charging_power, ac_flow, _ = battery.get_charger_power(
+        available_power=-2000.0,
+        clamped_over_dc_power=0.0,
+        max_inverter_dc_to_ac_power=None,
+        duration_s=3600,
+        current_charge=battery.current_charge,
+    )
+    assert charging_power == 0.0
+    assert ac_flow == 0.0
 
 
-def test_get_best_discharge_power_clamps_to_inverter():
-    """Test discharge power respects inverter limit."""
+def test_get_charger_power_discharge_clamps_to_inverter():
+    """Test discharge power clamped by inverter AC limit."""
     battery = Battery(
         name="Battery",
         device_type="battery",
@@ -48,15 +73,18 @@ def test_get_best_discharge_power_clamps_to_inverter():
     )
     battery._current_charge_value = 8000
 
-    power = battery.get_best_discharge_power(
-        power_out=3000,
-        solar_production=2000,
-        max_inverter_dc_to_ac_power=4000,
+    # available_power=3000 means 3000 W deficit; inverter caps AC output at 2000
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=3000.0,
+        clamped_over_dc_power=0.0,
+        max_inverter_dc_to_ac_power=2000.0,
         duration_s=3600,
         current_charge=battery.current_charge,
     )
 
-    assert power == 2000
+    assert charging_power == -2000.0  # negative = discharging
+    assert ac_flow == -2000.0  # AC out
+    assert possible_discharge == 4000.0
 
 
 def test_battery_current_possible_max_discharge_power():
@@ -78,8 +106,8 @@ def test_battery_current_possible_max_discharge_power():
     assert battery.battery_get_current_possible_max_discharge_power() == 0.0
 
 
-def test_get_best_charge_power_handles_min_and_inverter():
-    """Test charge power respects min and inverter limits."""
+def test_get_charger_power_inverter_limit_and_dc_clamp():
+    """Test inverter AC limit caps charging; DC-coupled path adds clamped power."""
     battery = Battery(
         name="Battery",
         device_type="battery",
@@ -89,27 +117,41 @@ def test_get_best_charge_power_handles_min_and_inverter():
             CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
         },
     )
-    battery.min_charging_power = 100.0
 
-    assert (
-        battery.get_best_charge_power(
-            power_in=50,
-            solar_production=1000,
-            max_inverter_dc_to_ac_power=None,
-            duration_s=3600,
-            current_charge=None,
-        )
-        == 0.0
-    )
-
-    power = battery.get_best_charge_power(
-        power_in=5000,
-        solar_production=5000,
-        max_inverter_dc_to_ac_power=1200,
+    # Inverter limit caps AC charging to 1200 W
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=-5000.0,
+        clamped_over_dc_power=0.0,
+        max_inverter_dc_to_ac_power=1200.0,
         duration_s=3600,
-        current_charge=None,
+        current_charge=None,  # defaults to 0.0
     )
-    assert power == 1200
+    assert charging_power == 1200.0
+    assert ac_flow == 1200.0
+    assert possible_discharge == 0.0  # empty battery can't discharge
+
+    # DC-coupled path: clamped_over_dc_power adds direct DC charging
+    battery._current_charge_value = 5000.0
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=0.0,  # balanced load
+        clamped_over_dc_power=2000.0,
+        max_inverter_dc_to_ac_power=None,
+        duration_s=3600,
+        current_charge=battery.current_charge,
+    )
+    assert charging_power == 2000.0  # all from DC path
+    assert ac_flow == 0.0  # no AC flow
+    assert possible_discharge == 3000.0  # mid-charge battery
+
+    # None max_inverter uses float("inf") — no AC capping
+    charging_power_uncapped, _, _ = battery.get_charger_power(
+        available_power=-5000.0,
+        clamped_over_dc_power=0.0,
+        max_inverter_dc_to_ac_power=None,
+        duration_s=3600,
+        current_charge=battery.current_charge,
+    )
+    assert charging_power_uncapped == 3000.0  # limited by max_charging_power, not inverter
 
 
 def test_charge_discharge_helpers_and_availability():
@@ -134,8 +176,8 @@ def test_charge_discharge_helpers_and_availability():
     assert battery.get_available_energy() == 100.0
 
 
-def test_get_best_discharge_power_handles_min_and_unknown_charge():
-    """Test discharge power with min threshold and unknown charge."""
+def test_get_charger_power_discharge_soc_clamp_and_unknown_charge():
+    """Test discharge: empty battery blocked, unknown charge defaults to 0, full battery discharges."""
     battery = Battery(
         name="Battery",
         device_type="battery",
@@ -145,36 +187,30 @@ def test_get_best_discharge_power_handles_min_and_unknown_charge():
             CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 4000,
         },
     )
-    battery.min_discharging_power = 100.0
 
-    assert (
-        battery.get_best_discharge_power(
-            power_out=50,
-            solar_production=0.0,
-            max_inverter_dc_to_ac_power=None,
-            duration_s=3600,
-            current_charge=None,
-        )
-        == 0.0
-    )
-
-    power = battery.get_best_discharge_power(
-        power_out=2000,
-        solar_production=0.0,
+    # Unknown charge (None) defaults to 0.0 => empty => can't discharge
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=2000.0,
+        clamped_over_dc_power=0.0,
         max_inverter_dc_to_ac_power=None,
         duration_s=3600,
         current_charge=None,
     )
-    assert power == 0.0
+    assert charging_power == 0.0
+    assert ac_flow == 0.0
+    assert possible_discharge == 0.0
 
-    power = battery.get_best_discharge_power(
-        power_out=2000,
-        solar_production=0.0,
+    # Full battery can discharge
+    charging_power, ac_flow, possible_discharge = battery.get_charger_power(
+        available_power=2000.0,
+        clamped_over_dc_power=0.0,
         max_inverter_dc_to_ac_power=None,
         duration_s=3600,
         current_charge=battery.get_value_full(),
     )
-    assert power == 2000
+    assert charging_power == -2000.0  # negative = discharging
+    assert ac_flow == -2000.0
+    assert possible_discharge == 4000.0  # full battery, max discharge available
 
 
 def test_battery_max_discharge_infinite():

@@ -90,27 +90,23 @@ def _make_solver(
 
 
 def test_max_production_dc_coupled_with_battery():
-    """AC1: DC-coupled 12kW inverter, solar=8kW, possible=5kW, actual=2kW → 11kW."""
+    """AC1: DC-coupled 12kW inverter, solar=8kW, possible=5kW → 12kW (clamped)."""
     bat = _make_battery(dc_coupled=True, current_charge=5000)
     solver = _make_solver(solar_w=8000, battery=bat, max_inverter=12000)
 
-    # _solar_production = pv - ua = 8000 - 1000 = 7000
-    # But for the formula pv[slot] = _solar_production[slot] per story spec
+    # _solar_production = raw PV = 8000
     num_slots = len(solver._available_power)
-    bat_actual = np.zeros(num_slots, dtype=np.float64)
-    bat_actual[:] = 2000.0
     bat_possible = np.zeros(num_slots, dtype=np.float64)
     bat_possible[:] = 5000.0
 
     result = solver._compute_max_possible_production(
-        battery_actual_discharge=bat_actual,
         battery_possible_discharge=bat_possible,
     )
 
-    # pv (net solar) = 7000, spare = max(0, 5000 - max(0, 2000)) = 3000
-    # DC: min(max(0,7000) + 3000, 12000) = min(10000, 12000) = 10000
+    # pv (raw) = 8000, possible = 5000
+    # DC: min(8000 + 5000, 12000) = min(13000, 12000) = 12000
     for i in range(num_slots):
-        assert result[i] == 10000.0, f"Slot {i}: expected 10000, got {result[i]}"
+        assert result[i] == 12000.0, f"Slot {i}: expected 12000, got {result[i]}"
 
 
 def test_max_production_dc_coupled_empty_battery():
@@ -119,39 +115,47 @@ def test_max_production_dc_coupled_empty_battery():
     solver = _make_solver(solar_w=8000, battery=bat, max_inverter=12000)
 
     num_slots = len(solver._available_power)
-    bat_actual = np.zeros(num_slots, dtype=np.float64)
     bat_possible = np.zeros(num_slots, dtype=np.float64)
 
     result = solver._compute_max_possible_production(
-        battery_actual_discharge=bat_actual,
         battery_possible_discharge=bat_possible,
     )
 
-    # pv = 7000, spare = 0, DC: min(7000 + 0, 12000) = 7000
+    # pv (raw) = 8000, possible = 0, DC: min(8000 + 0, 12000) = 8000
     for i in range(num_slots):
-        assert result[i] == 7000.0, f"Slot {i}: expected 7000, got {result[i]}"
+        assert result[i] == 8000.0, f"Slot {i}: expected 8000, got {result[i]}"
+
+
+def test_max_production_dc_coupled_no_discharge_info():
+    """DC-coupled, no battery_possible_discharge passed → pv only."""
+    bat = _make_battery(dc_coupled=True, current_charge=5000)
+    solver = _make_solver(solar_w=8000, battery=bat, max_inverter=12000)
+
+    # Call without battery_possible_discharge — hits the else branch (line 174)
+    result = solver._compute_max_possible_production()
+
+    # DC, no discharge info: min(pv, inverter) = min(8000, 12000) = 8000
+    for i in range(len(result)):
+        assert result[i] == 8000.0, f"Slot {i}: expected 8000, got {result[i]}"
 
 
 def test_max_production_ac_coupled_with_battery():
-    """AC-coupled: min(pv, inverter) + spare_discharge."""
+    """AC-coupled: min(pv, inverter) + possible_discharge."""
     bat = _make_battery(dc_coupled=False, current_charge=5000)
     solver = _make_solver(solar_w=8000, battery=bat, max_inverter=12000)
 
     num_slots = len(solver._available_power)
-    bat_actual = np.zeros(num_slots, dtype=np.float64)
-    bat_actual[:] = 2000.0
     bat_possible = np.zeros(num_slots, dtype=np.float64)
     bat_possible[:] = 5000.0
 
     result = solver._compute_max_possible_production(
-        battery_actual_discharge=bat_actual,
         battery_possible_discharge=bat_possible,
     )
 
-    # pv = 7000, spare = 3000
-    # AC: min(max(0,7000), 12000) + 3000 = 7000 + 3000 = 10000
+    # pv (raw) = 8000, possible = 5000
+    # AC: min(8000, 12000) + 5000 = 8000 + 5000 = 13000
     for i in range(num_slots):
-        assert result[i] == 10000.0, f"Slot {i}: expected 10000, got {result[i]}"
+        assert result[i] == 13000.0, f"Slot {i}: expected 13000, got {result[i]}"
 
 
 def test_max_production_no_battery():
@@ -160,30 +164,28 @@ def test_max_production_no_battery():
 
     result = solver._compute_max_possible_production()
 
-    # pv = 7000, no battery, min(7000, 12000) = 7000
+    # pv (raw) = 8000, no battery, min(8000, 12000) = 8000
     num_slots = len(solver._available_power)
     for i in range(num_slots):
-        assert result[i] == 7000.0, f"Slot {i}: expected 7000, got {result[i]}"
+        assert result[i] == 8000.0, f"Slot {i}: expected 8000, got {result[i]}"
 
 
 def test_max_production_no_inverter_limit():
-    """No inverter limit → pv + spare."""
+    """No inverter limit → pv + possible."""
     bat = _make_battery(dc_coupled=True, current_charge=5000)
     solver = _make_solver(solar_w=8000, battery=bat, max_inverter=None)
 
     num_slots = len(solver._available_power)
-    bat_actual = np.zeros(num_slots, dtype=np.float64)
     bat_possible = np.zeros(num_slots, dtype=np.float64)
     bat_possible[:] = 5000.0
 
     result = solver._compute_max_possible_production(
-        battery_actual_discharge=bat_actual,
         battery_possible_discharge=bat_possible,
     )
 
-    # pv = 7000, spare = 5000, DC no limit: 7000 + 5000 = 12000
+    # pv (raw) = 8000, possible = 5000, DC no limit: 8000 + 5000 = 13000
     for i in range(num_slots):
-        assert result[i] == 12000.0, f"Slot {i}: expected 12000, got {result[i]}"
+        assert result[i] == 13000.0, f"Slot {i}: expected 13000, got {result[i]}"
 
 
 def test_max_production_inverter_clamps_dc():
@@ -192,16 +194,14 @@ def test_max_production_inverter_clamps_dc():
     solver = _make_solver(solar_w=10000, battery=bat, max_inverter=6000)
 
     num_slots = len(solver._available_power)
-    bat_actual = np.zeros(num_slots, dtype=np.float64)
     bat_possible = np.zeros(num_slots, dtype=np.float64)
     bat_possible[:] = 5000.0
 
     result = solver._compute_max_possible_production(
-        battery_actual_discharge=bat_actual,
         battery_possible_discharge=bat_possible,
     )
 
-    # pv = 9000, spare = 5000, DC: min(9000+5000, 6000) = 6000
+    # pv (raw) = 10000, possible = 5000, DC: min(10000+5000, 6000) = 6000
     for i in range(num_slots):
         assert result[i] == 6000.0, f"Slot {i}: expected 6000, got {result[i]}"
 

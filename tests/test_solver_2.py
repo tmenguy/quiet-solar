@@ -1626,9 +1626,8 @@ def test_prepare_battery_segmentation_first_segment_empty():
         battery_charge[i] = 5000.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave, energy_delta = solver._prepare_battery_segmentation()
@@ -1664,9 +1663,8 @@ def test_prepare_battery_segmentation_null_current_charge():
     battery_charge[5] = 10.0
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
-    battery_actual_discharge = np.zeros(num_slots, dtype=np.float64)
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_actual_discharge, battery_possible_discharge)
+    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave, energy_delta = solver._prepare_battery_segmentation()

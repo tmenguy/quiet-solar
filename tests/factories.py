@@ -83,6 +83,16 @@ class MinimalTestHome:
         self._cars = []
         self._chargers = []
 
+    def get_phase_amps_from_power_for_budgeting(self, power: float) -> list[float | int]:
+        """Convert power to per-phase amps, matching AbstractDevice logic."""
+        if power == 0.0:
+            return [0.0, 0.0, 0.0]
+        if self.is_3p:
+            p = power / 3.0 / self.voltage
+            return [p, p, p]
+        else:
+            return [power / self.voltage, 0.0, 0.0]
+
 
 class MinimalTestLoad(AbstractLoad):
     """Minimal load implementation for testing constraints and solver.
