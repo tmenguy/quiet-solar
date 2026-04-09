@@ -129,3 +129,22 @@ Add a regression test in `tests/test_dashboard_rendering.py` that renders both t
 ### Known risks acknowledged:
 - Template changes don't propagate to existing dashboards — users must regenerate
 - HA Lovelace parser validation is not tested at runtime level (only YAML structure is validated by tests)
+
+## Code Review — PR #129 (2026-04-09)
+
+### Decisions
+| # | File | Finding | Decision | Notes |
+|---|------|---------|----------|-------|
+| 1 | Both templates | Dashboard regeneration warning text could mention manual edits lost | reject | Current text is intentional |
+| 2 | Both templates | Pattern matches car section exactly | reject | Correct implementation |
+| 3 | Both templates | WARNING single-quote YAML quoting | reject | Working as designed |
+| 4 | Both templates | Both templates have identical blocks | reject | Expected |
+| 5 | Both templates | None guard skips missing entities | reject | Correct pattern |
+| 6 | test_dashboard_rendering.py | String search adequate as regression guard | reject | Existing tests cover YAML validity |
+| 7 | test_dashboard_rendering.py | Global text presence vs per-entity binding (CodeRabbit) | reject | Hypothetical edge case not worth test complexity |
+
+### Deferred items
+_None_
+
+### Doc updates planned
+_None_
