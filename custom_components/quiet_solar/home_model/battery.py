@@ -40,42 +40,62 @@ class Battery(AbstractDevice):
     def charge_from_grid(self) -> bool:
         return False
 
-    def get_best_charge_power(
+    def get_charger_power(
         self,
-        power_in: float,
-        solar_production: float,
+        available_power: float,
+        clamped_over_dc_power: float,
         max_inverter_dc_to_ac_power: float | None,
         duration_s: float,
         current_charge: float | None = None,
+        solar_production: float = 0.0,
     ):
-
-        if power_in < self.min_charging_power:
-            return 0.0
+        # available_power = ua + p - pv + cp
+        # cp : the clamped dc power
+        # ua : the non-controllable load consumption
+        # p  : load power
+        # pv : solar panel production
 
         if current_charge is None:
-            current_charge = self.current_charge
+            current_charge = self.current_charge if self.current_charge is not None else 0.0
 
-        if current_charge is None:
-            current_charge = 0.0
+        inverter_ac_limit = (
+            float(max_inverter_dc_to_ac_power) if max_inverter_dc_to_ac_power is not None else float("inf")
+        )
 
-        charging_power = min(power_in, self.max_charging_power)
+        # For DC-coupled, PV and battery share the inverter: discharge limited by remaining capacity
+        discharge_inverter_limit = inverter_ac_limit
+        if self.is_dc_coupled and max_inverter_dc_to_ac_power is not None:
+            discharge_inverter_limit = max(0.0, inverter_ac_limit - solar_production)
 
-        if max_inverter_dc_to_ac_power is not None:
-            charging_power = min(charging_power, max_inverter_dc_to_ac_power)
+        battery_ac_out = 0.0
+        battery_ac_in = 0.0
 
-        if self.charge_from_grid is False:
-            if solar_production < 0.99 * charging_power:  # a bit of legroom ...1% for the trace
-                _LOGGER.warning(
-                    f"get_best_charge_power: clamping charging_power:{charging_power} > solar_production:{solar_production}"
-                )
+        if available_power > 0.0:
+            battery_ac_out = min(self.max_discharging_power, min(available_power, discharge_inverter_limit))
+        else:
+            battery_ac_in = min(self.max_charging_power, min(0.0 - available_power, inverter_ac_limit))
 
-            charging_power = min(solar_production, charging_power)
+        battery_dc_in = min(self.max_charging_power, clamped_over_dc_power + battery_ac_in)
+        battery_dc_out = battery_ac_out
 
-        available_power = max(0.0, ((self.get_value_full()) - current_charge) * 3600 / duration_s)
+        charging_power = battery_dc_in - battery_dc_out
 
-        charging_power = min(charging_power, available_power)
+        possible_charge = min(
+            self.max_charging_power, max(0.0, (self.get_value_full() - current_charge) * 3600 / duration_s)
+        )
+        possible_discharge = min(
+            self.max_discharging_power, max(0.0, (current_charge - self.get_value_empty()) * 3600 / duration_s)
+        )
 
-        return charging_power
+        battery_ac_in = min(battery_ac_in, max(0.0, possible_charge - clamped_over_dc_power))
+        battery_ac_out = min(battery_ac_out, possible_discharge)
+
+        if charging_power > 0:
+            charging_power = min(charging_power, possible_charge)
+        else:
+            charging_power = max(charging_power, -possible_discharge)
+
+        return charging_power, battery_ac_in - battery_ac_out, possible_discharge
 
     def is_value_full(self, energy_value_wh: float | None) -> bool:
         if energy_value_wh is None:
@@ -92,42 +112,6 @@ class Battery(AbstractDevice):
 
     def get_value_empty(self):
         return self.min_soc * self.capacity
-
-    def get_best_discharge_power(
-        self,
-        power_out: float | None,
-        solar_production: float,
-        max_inverter_dc_to_ac_power: float | None,
-        duration_s: float,
-        current_charge: float | None = None,
-    ):
-
-        if power_out < self.min_discharging_power:
-            return 0.0
-
-        if current_charge is None:
-            current_charge = self.current_charge
-
-        if current_charge is None:
-            current_charge = 0.0
-
-        discharging_power = power_out
-
-        # if there is too much solar production whatever we do we can't discharge more than the inverter capacity
-        if solar_production > 0.0:
-            if max_inverter_dc_to_ac_power is not None and power_out + solar_production > max_inverter_dc_to_ac_power:
-                discharging_power = max(0.0, max_inverter_dc_to_ac_power - solar_production)
-                _LOGGER.warning(
-                    f"get_best_discharge_power: clamping power_out:{power_out} + solar_production:{solar_production} to max_inverter_dc_to_ac_power:{max_inverter_dc_to_ac_power}, so discharging_power={discharging_power}"
-                )
-
-        discharging_power = min(discharging_power, self.max_discharging_power)
-
-        available_power = max(0.0, (current_charge - (self.min_soc * self.capacity)) * 3600 / duration_s)
-
-        discharging_power = min(discharging_power, available_power)
-
-        return discharging_power
 
     def get_available_energy(self):
         current_charge = self.current_charge

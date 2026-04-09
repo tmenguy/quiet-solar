@@ -445,7 +445,6 @@ class TestAmpBudgetExhaustion:
         available_cmds = constraint.adapt_power_steps_budgeting_low_level(
             slot_idx=0,
             existing_amps=None,
-            use_production_limits=False,
         )
 
         assert len(available_cmds) == 0, (
@@ -487,7 +486,6 @@ class TestAmpBudgetExhaustion:
         available_cmds = constraint.adapt_power_steps_budgeting_low_level(
             slot_idx=0,
             existing_amps=None,
-            use_production_limits=False,
         )
 
         assert len(available_cmds) == 1, f"Expected 1 fitting command, got {len(available_cmds)}"

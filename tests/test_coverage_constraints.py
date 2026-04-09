@@ -2036,7 +2036,6 @@ def test_mandatory_price_loop_with_some_empty_budgets():
     # Exhaust amp budgets for specific slots: budgeting returns empty commands
     for s in [2, 3, 6, 7]:
         fd.available_amps_for_group[s] = [0.1, 0.1, 0.1]
-        fd.available_amps_production_for_group[s] = [0.1, 0.1, 0.1]
     load.father_device = fd
 
     constraint = MultiStepsPowerLoadConstraint(
@@ -2146,7 +2145,6 @@ def test_price_optimizer_with_existing_commands_and_energy_tracking():
     )
     # Some slots with exhausted budget: price optimizer hits continue (line 1679)
     fd.available_amps_for_group[5] = [0.1, 0.1, 0.1]
-    fd.available_amps_production_for_group[5] = [0.1, 0.1, 0.1]
     load.father_device = fd
 
     constraint = MultiStepsPowerLoadConstraint(

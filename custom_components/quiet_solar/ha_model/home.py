@@ -1167,18 +1167,6 @@ class QSHome(QSDynamicGroup):
         """Return the voltage of the home."""
         return self._voltage
 
-    def _get_home_max_production_phase_amps_for_budget(self) -> int:
-        """Return max per-phase amps for production-budget calculations.
-
-        Always caps by inverter limit (solar_max_phase_amps) when a solar
-        plant is configured, regardless of on-grid/off-grid state.
-        """
-        static_amp = self.dyn_group_max_phase_current_conf
-        if self.solar_plant:
-            static_amp = min(static_amp, self.solar_plant.solar_max_phase_amps)
-
-        return static_amp
-
     def get_home_max_available_production_power(self):
         """Return the maximum power currently available from production sources.
 
@@ -1255,33 +1243,6 @@ class QSHome(QSDynamicGroup):
         dyn_group_max_phase_current = min_amps(dyn_group_max_phase_current, static_amps)
 
         return dyn_group_max_phase_current
-
-    @property
-    def dyn_group_max_phase_current_for_budget(self) -> list[float | int]:
-
-        if self.is_off_grid():
-            return self.dyn_group_max_production_phase_current_for_budget
-
-        return super().dyn_group_max_phase_current_for_budget
-
-    @property
-    def dyn_group_max_production_phase_current_for_budget(self) -> list[float | int]:
-
-        static_amps = super().dyn_group_max_phase_current_for_budget
-
-        prod_max_amps = self._get_home_max_production_phase_amps_for_budget()
-
-        if self.physical_3p:
-            dyn_group_max_phase_current_for_budget = [prod_max_amps, prod_max_amps, prod_max_amps]
-        else:
-            dyn_group_max_phase_current_for_budget = [0, 0, 0]
-            dyn_group_max_phase_current_for_budget[self.mono_phase_index] = prod_max_amps
-
-        # _LOGGER.info(f"dyn_group_max_phase_current_for_budget: Home in off grid mode, setting max phase current to {prod_max_amps}A instead of {self.dyn_group_max_phase_current_conf}A")
-
-        dyn_group_max_phase_current_for_budget = min_amps(dyn_group_max_phase_current_for_budget, static_amps)
-
-        return dyn_group_max_phase_current_for_budget
 
     def get_devices_for_dashboard_section(self, section_name: str) -> list[HADeviceMixin]:
 
