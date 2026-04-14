@@ -314,6 +314,7 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             try:
                 success = provider.compute_dampening(time, num_days)
             except Exception:
+                provider.reset_dampening()
                 _LOGGER.exception("Unexpected error computing dampening for provider %s", name)
                 continue
             if success:
