@@ -3,7 +3,7 @@
 issue: 131
 branch: "QS_131"
 
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 As a Quiet Solar user with dampening enabled,
@@ -17,16 +17,16 @@ so that my dashboard shows accurate values immediately after restart instead of 
 4. Given a provider where `compute_dampened_score()` succeeds, When the scoring cycle runs normally, Then `score_dampened` is updated to the newly computed value (no change in happy path behavior).
 
 ## Tasks / Subtasks
-- [ ] Task 1: Remove aggressive score clearing in `_run_scoring_cycle()` (AC: #1, #2, #3)
-  - [ ] 1.1: In `ha_model/solar.py`, method `QSSolar._run_scoring_cycle()`, remove the `provider.score_dampened = None` assignment inside the `if not provider.compute_dampened_score(time):` block
-  - [ ] 1.2: Change the log from `_LOGGER.warning` to `_LOGGER.info` with message: `"Dampened score refresh failed for provider %s, keeping existing score %s", name, provider.score_dampened` (lazy `%s`, no period)
-  - [ ] 1.3: In the existing `_LOGGER.info` that follows the scoring block, add `provider.score_dampened` to the log output for visibility
-- [ ] Task 2: Update and add tests in `TestScoringCycleDampenedRefresh` (AC: #1, #2, #3, #4)
-  - [ ] 2.0: Modify existing `test_scoring_cycle_clears_stale_dampened_score` -- rename to `test_scoring_cycle_preserves_existing_dampened_score_on_failure`, change assertion from `assert provider.score_dampened is None` to `assert provider.score_dampened == 100.0` (preserved)
-  - [ ] 2.1: Add `test_scoring_cycle_preserves_none_dampened_score_on_failure` -- set `provider._dampening_coefficients = {0: (0.8, 0.0)}` (so `has_dampening` is True) but leave `score_dampened` as None, mock `compute_dampened_score` to return False, assert `score_dampened is None`
-  - [ ] 2.2: Enhance existing `test_scoring_cycle_refreshes_dampened_score` to verify actual value update (not just that the mock was called)
-- [ ] Task 3: Run quality gates (AC: all)
-  - [ ] 3.1: Run `python scripts/qs/quality_gate.py` -- ensure 100% coverage, ruff, mypy, translations pass
+- [x] Task 1: Remove aggressive score clearing in `_run_scoring_cycle()` (AC: #1, #2, #3)
+  - [x] 1.1: In `ha_model/solar.py`, method `QSSolar._run_scoring_cycle()`, remove the `provider.score_dampened = None` assignment inside the `if not provider.compute_dampened_score(time):` block
+  - [x] 1.2: Change the log from `_LOGGER.warning` to `_LOGGER.info` with message: `"Dampened score refresh failed for provider %s, keeping existing score %s", name, provider.score_dampened` (lazy `%s`, no period)
+  - [x] 1.3: In the existing `_LOGGER.info` that follows the scoring block, add `provider.score_dampened` to the log output for visibility
+- [x] Task 2: Update and add tests in `TestScoringCycleDampenedRefresh` (AC: #1, #2, #3, #4)
+  - [x] 2.0: Modify existing `test_scoring_cycle_clears_stale_dampened_score` -- rename to `test_scoring_cycle_preserves_existing_dampened_score_on_failure`, change assertion from `assert provider.score_dampened is None` to `assert provider.score_dampened == 100.0` (preserved)
+  - [x] 2.1: Add `test_scoring_cycle_preserves_none_dampened_score_on_failure` -- set `provider._dampening_coefficients = {0: (0.8, 0.0)}` (so `has_dampening` is True) but leave `score_dampened` as None, mock `compute_dampened_score` to return False, assert `score_dampened is None`
+  - [x] 2.2: Enhance existing `test_scoring_cycle_refreshes_dampened_score` to verify actual value update (not just that the mock was called)
+- [x] Task 3: Run quality gates (AC: all)
+  - [x] 3.1: Run `python scripts/qs/quality_gate.py` -- ensure 100% coverage, ruff, mypy, translations pass
 
 ## Dev Notes
 - **Root cause**: `QSSolar._run_scoring_cycle()` in `ha_model/solar.py` clears `provider.score_dampened = None` when `compute_dampened_score()` fails. After reboot, historical data isn't available yet, so the computation always fails on the first cycle, destroying the value that `QSBaseSensorSolarDampenedScoreRestore.async_added_to_hass()` (sensor.py) just restored.

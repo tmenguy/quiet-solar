@@ -1400,7 +1400,7 @@ class TestScoringCycleDampenedRefresh:
     """Test that _run_scoring_cycle refreshes dampened scores."""
 
     def test_scoring_cycle_refreshes_dampened_score(self, fake_hass):
-        """When dampening is active, scoring cycle recomputes dampened score."""
+        """When dampening is active and computation succeeds, dampened score is updated."""
         solar = _make_solar(
             fake_hass,
             providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
@@ -1411,15 +1411,19 @@ class TestScoringCycleDampenedRefresh:
         provider._dampening_coefficients = {0: (0.8, 0.0)}
         provider.score_dampened = 100.0
 
-        # Mock compute methods
+        def _fake_compute_dampened(time):
+            provider.score_dampened = 95.0
+            return True
+
         provider.compute_score = MagicMock(return_value=True)
-        provider.compute_dampened_score = MagicMock(return_value=True)
+        provider.compute_dampened_score = MagicMock(side_effect=_fake_compute_dampened)
 
         t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
         solar._run_scoring_cycle(t0)
 
         provider.compute_score.assert_called_once_with(t0)
         provider.compute_dampened_score.assert_called_once_with(t0)
+        assert provider.score_dampened == 95.0
 
     def test_scoring_cycle_skips_dampened_when_inactive(self, fake_hass):
         """When no dampening, scoring cycle does not compute dampened score."""
@@ -1437,8 +1441,8 @@ class TestScoringCycleDampenedRefresh:
         provider.compute_score.assert_called_once()
         provider.compute_dampened_score.assert_not_called()
 
-    def test_scoring_cycle_clears_stale_dampened_score(self, fake_hass):
-        """When dampened score computation fails, score_dampened is set to None."""
+    def test_scoring_cycle_preserves_existing_dampened_score_on_failure(self, fake_hass):
+        """When dampened score computation fails, existing score_dampened is preserved."""
         solar = _make_solar(
             fake_hass,
             providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
@@ -1446,6 +1450,22 @@ class TestScoringCycleDampenedRefresh:
         provider = list(solar.solar_forecast_providers.values())[0]
         provider._dampening_coefficients = {0: (0.8, 0.0)}
         provider.score_dampened = 100.0
+        provider.compute_score = MagicMock(return_value=True)
+        provider.compute_dampened_score = MagicMock(return_value=False)
+
+        t0 = datetime.datetime(2024, 6, 15, 12, 0, tzinfo=pytz.UTC)
+        solar._run_scoring_cycle(t0)
+
+        assert provider.score_dampened == 100.0
+
+    def test_scoring_cycle_preserves_none_dampened_score_on_failure(self, fake_hass):
+        """When dampened score was never computed and computation fails, score_dampened stays None."""
+        solar = _make_solar(
+            fake_hass,
+            providers_config=[{CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Test"}],
+        )
+        provider = list(solar.solar_forecast_providers.values())[0]
+        provider._dampening_coefficients = {0: (0.8, 0.0)}
         provider.compute_score = MagicMock(return_value=True)
         provider.compute_dampened_score = MagicMock(return_value=False)
 
