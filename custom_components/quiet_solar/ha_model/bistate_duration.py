@@ -493,12 +493,20 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 self.external_user_initiated_state,
                             )
                             self.reset_override_state_and_set_reset_ask_time(time)
+                            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = (
+                                None  # no extra cleanup cycle needed, constraints cleared below
+                            )
                             self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
                             override_constraint = None
                             do_force_next_solve = True
                         else:
                             _LOGGER.info(
-                                f"check_load_activity_and_constraints: bistate OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} {expected_state_running}"
+                                "check_load_activity_and_constraints: bistate "
+                                "OVERRIDE BY USER %s for load %s instead of %s %s",
+                                state.state,
+                                self.name,
+                                expected_state,
+                                expected_state_running,
                             )
 
                             # the user did something different ... just OVERRIDE the automation for a given time
@@ -538,7 +546,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                     await self.ack_completed_constraint(time, override_constraint)
                                 if pushed:
                                     _LOGGER.info(
-                                        f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint"
+                                        "check_load_activity_and_constraints: bistate "
+                                        "load %s pushed user override constraint",
+                                        self.name,
                                     )
                                     do_force_next_solve = True
 
