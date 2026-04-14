@@ -311,7 +311,12 @@ class QSSolar(HADeviceMixin, AbstractDevice):
         if time is None:
             time = dt_util.utcnow()
         for name, provider in self.solar_forecast_providers.items():
-            success = provider.compute_dampening(time, num_days)
+            try:
+                success = provider.compute_dampening(time, num_days)
+            except Exception:
+                provider.reset_dampening()
+                _LOGGER.exception("Unexpected error computing dampening for provider %s", name)
+                continue
             if success:
                 _LOGGER.info("Computed %d-day dampening for provider %s", num_days, name)
             else:
@@ -674,6 +679,10 @@ class QSSolarProvider:
         for t, actual_val in actuals:
             if t in forecast_dict:
                 forecast_val = forecast_dict[t]
+                # Defense-in-depth: filter NaN/Inf (ring buffer is int32 so
+                # cannot contain NaN today, but protects against future changes)
+                if not (np.isfinite(forecast_val) and np.isfinite(actual_val)):
+                    continue
                 slot = self._time_to_slot_index(t)
                 if slot not in slots:
                     slots[slot] = []
@@ -709,11 +718,43 @@ class QSSolarProvider:
                 if len(points) < 3:
                     coefficients[slot] = (1.0, 0.0)
                     continue
+
+                # Near-identical forecasts: singular Vandermonde matrix
+                if np.ptp(forecasts) < 1.0:
+                    mean_fc = float(np.mean(forecasts))
+                    if mean_fc < 10:
+                        coefficients[slot] = (1.0, 0.0)
+                    else:
+                        a_k = float(np.mean(actuals_vals)) / mean_fc
+                        a_k = max(0.1, min(3.0, a_k))
+                        coefficients[slot] = (a_k, 0.0)
+                    continue
+
                 # numpy.polyfit(forecasts, actuals, 1) → [a_k, b_k]
-                fit = np.polyfit(forecasts, actuals_vals, 1)
-                a_k = float(fit[0])
-                b_k = float(fit[1])
+                try:
+                    fit = np.polyfit(forecasts, actuals_vals, 1)
+                    a_k = float(fit[0])
+                    b_k = float(fit[1])
+                except np.linalg.LinAlgError, ValueError:
+                    _LOGGER.warning(
+                        "Polyfit failed for slot %d (%d points), using identity",
+                        slot,
+                        len(points),
+                    )
+                    coefficients[slot] = (1.0, 0.0)
+                    continue
+
+                if not (np.isfinite(a_k) and np.isfinite(b_k)):
+                    _LOGGER.warning(
+                        "Non-finite polyfit output for slot %d (%d points), using identity",
+                        slot,
+                        len(points),
+                    )
+                    coefficients[slot] = (1.0, 0.0)
+                    continue
+
                 a_k = max(0.1, min(3.0, a_k))
+                b_k = max(-5000.0, min(5000.0, b_k))
                 coefficients[slot] = (a_k, b_k)
 
         self._dampening_coefficients = coefficients

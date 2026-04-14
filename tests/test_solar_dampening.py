@@ -957,6 +957,352 @@ class TestDampenedScoreSensorCreation:
 
 
 # ============================================================================
+# SVD convergence fix tests (Issue #130)
+# ============================================================================
+
+
+class TestIdenticalForecastHandling:
+    """Test near-identical forecast handling in 7-day mode (AC #1, #5)."""
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_identical_forecasts_use_ratio(self, mock_dt_util):
+        """Identical forecasts across 7 days compute a_k = mean(actuals)/mean(forecasts)."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+        # All forecasts 1000W, actuals 800W → a_k = 0.8, b_k = 0
+        provider = _make_provider_with_histories(
+            actuals_fn=lambda h: 800.0 if 8 <= h <= 16 else 0.0,
+            forecast_fn=lambda h: 1000.0 if 8 <= h <= 16 else 0.0,
+            t0=t0,
+            num_days=7,
+        )
+
+        result = provider.compute_dampening(t0, num_days=7)
+        assert result is True
+
+        # Daytime slots should have a_k ~0.8, b_k = 0
+        for slot in range(32, 64):  # 8:00 to 16:00
+            a_k, b_k = provider._dampening_coefficients.get(slot, (1.0, 0.0))
+            if a_k != 1.0:  # Skip identity slots
+                assert abs(a_k - 0.8) < 0.01
+                assert b_k == 0.0
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_near_identical_forecasts_use_ratio(self, mock_dt_util):
+        """Near-identical forecasts (0 < ptp < 1.0) use ratio path, not polyfit."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        # Inject per-day varying forecasts at slot 48 (12:00 CEST) with ptp=0.6
+        actuals_data = []
+        forecast_data = []
+        for day in range(7):
+            t = datetime.datetime(2024, 6, 8 + day, 10, 0, tzinfo=pytz.UTC)
+            fc = 1000.0 + day * 0.1  # ptp = 0.6 < 1.0 but not identical
+            forecast_data.append((t, fc))
+            actuals_data.append((t, 900.0))
+
+        provider = _TestProvider(solar=None, domain="test", provider_name="prov")
+        provider._get_historical_data_for_dampening = MagicMock(
+            return_value=(actuals_data, forecast_data)
+        )
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+
+        result = provider.compute_dampening(t0, num_days=7)
+        assert result is True
+
+        # Slot 48 should use ratio path: a_k ~0.9, b_k = 0
+        a_k, b_k = provider._dampening_coefficients[48]
+        assert abs(a_k - 0.9) < 0.01
+        assert b_k == 0.0
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_near_identical_low_forecast_identity(self, mock_dt_util):
+        """Near-identical forecasts with mean < 10 use identity coefficients."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+        # Low forecasts (5W) that are identical → mean_fc < 10 → identity
+        provider = _make_provider_with_histories(
+            actuals_fn=lambda h: 5.0 if 8 <= h <= 16 else 0.0,
+            forecast_fn=lambda h: 5.0 if 8 <= h <= 16 else 0.0,
+            t0=t0,
+            num_days=7,
+        )
+
+        provider.compute_dampening(t0, num_days=7)
+
+        # All slots should be identity
+        for slot in range(NUM_INTERVALS_PER_DAY):
+            assert provider._dampening_coefficients[slot] == (1.0, 0.0)
+
+
+class TestPolyfitSuccessWithVaryingForecasts:
+    """Test normal polyfit success path with varying forecasts across days."""
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_varying_forecasts_use_polyfit(self, mock_dt_util):
+        """Varying forecasts (ptp >= 1.0) use polyfit regression path."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        # 7 data points at 12:00 CEST (slot 48) with varying forecasts
+        actuals_data = []
+        forecast_data = []
+        for day in range(7):
+            t = datetime.datetime(2024, 6, 8 + day, 10, 0, tzinfo=pytz.UTC)
+            fc = 800.0 + day * 50.0  # 800, 850, ..., 1100 → ptp=300
+            actuals_data.append((t, fc * 0.9 + 50.0))
+            forecast_data.append((t, fc))
+
+        provider = _TestProvider(solar=None, domain="test", provider_name="prov")
+        provider._get_historical_data_for_dampening = MagicMock(
+            return_value=(actuals_data, forecast_data)
+        )
+
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+        result = provider.compute_dampening(t0, num_days=7)
+        assert result is True
+
+        # Slot 48 should have non-identity coefficients from regression
+        a_k, b_k = provider._dampening_coefficients[48]
+        assert abs(a_k - 0.9) < 0.05  # slope ~0.9
+        assert abs(b_k - 50.0) < 5.0  # intercept ~50
+
+
+class TestPolyfitExceptionHandling:
+    """Test polyfit exception handling in 7-day mode (AC #2, #3, #6).
+
+    Uses direct data injection with varying forecasts per slot across days
+    to ensure ptp >= 1.0 and the polyfit path is actually reached.
+    """
+
+    @staticmethod
+    def _make_provider_with_varying_data(mock_dt_util):
+        """Create provider with 7 days of varying forecasts at slot 48 (12:00 CEST)."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        # 7 data points at 12:00 CEST across 7 days — forecasts vary by 50W/day
+        # ptp = 300, well above the 1.0 threshold
+        actuals_data = []
+        forecast_data = []
+        for day in range(7):
+            t = datetime.datetime(2024, 6, 8 + day, 10, 0, tzinfo=pytz.UTC)  # 12:00 CEST
+            fc = 800.0 + day * 50.0
+            actuals_data.append((t, fc * 0.8 + 20.0))
+            forecast_data.append((t, fc))
+
+        provider = _TestProvider(solar=None, domain="test", provider_name="prov")
+        provider._get_historical_data_for_dampening = MagicMock(
+            return_value=(actuals_data, forecast_data)
+        )
+        return provider, datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_linalg_error_falls_back_to_identity(self, mock_dt_util):
+        """LinAlgError from polyfit results in identity coefficients."""
+        provider, t0 = self._make_provider_with_varying_data(mock_dt_util)
+
+        with patch("custom_components.quiet_solar.ha_model.solar.np.polyfit") as mock_polyfit:
+            mock_polyfit.side_effect = np.linalg.LinAlgError("SVD did not converge")
+            result = provider.compute_dampening(t0, num_days=7)
+
+        assert result is True
+        assert provider._dampening_coefficients[48] == (1.0, 0.0)
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_value_error_falls_back_to_identity(self, mock_dt_util):
+        """ValueError from polyfit results in identity coefficients."""
+        provider, t0 = self._make_provider_with_varying_data(mock_dt_util)
+
+        with patch("custom_components.quiet_solar.ha_model.solar.np.polyfit") as mock_polyfit:
+            mock_polyfit.side_effect = ValueError("bad input")
+            result = provider.compute_dampening(t0, num_days=7)
+
+        assert result is True
+        assert provider._dampening_coefficients[48] == (1.0, 0.0)
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_non_finite_output_falls_back_to_identity(self, mock_dt_util):
+        """Non-finite polyfit output (NaN/Inf) results in identity coefficients."""
+        provider, t0 = self._make_provider_with_varying_data(mock_dt_util)
+
+        with patch("custom_components.quiet_solar.ha_model.solar.np.polyfit") as mock_polyfit:
+            mock_polyfit.return_value = np.array([np.inf, np.nan])
+            result = provider.compute_dampening(t0, num_days=7)
+
+        assert result is True
+        assert provider._dampening_coefficients[48] == (1.0, 0.0)
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_polyfit_warning_logged_on_exception(self, mock_dt_util, caplog):
+        """Warning is logged when polyfit raises an exception."""
+        import logging
+
+        provider, t0 = self._make_provider_with_varying_data(mock_dt_util)
+
+        with (
+            patch("custom_components.quiet_solar.ha_model.solar.np.polyfit") as mock_polyfit,
+            caplog.at_level(logging.WARNING),
+        ):
+            mock_polyfit.side_effect = np.linalg.LinAlgError("SVD did not converge")
+            provider.compute_dampening(t0, num_days=7)
+
+        assert "Polyfit failed for slot" in caplog.text
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_non_finite_warning_logged(self, mock_dt_util, caplog):
+        """Warning is logged when polyfit returns non-finite values."""
+        import logging
+
+        provider, t0 = self._make_provider_with_varying_data(mock_dt_util)
+
+        with (
+            patch("custom_components.quiet_solar.ha_model.solar.np.polyfit") as mock_polyfit,
+            caplog.at_level(logging.WARNING),
+        ):
+            mock_polyfit.return_value = np.array([np.nan, 0.0])
+            provider.compute_dampening(t0, num_days=7)
+
+        assert "Non-finite polyfit output for slot" in caplog.text
+
+
+class TestNanInfFiltering:
+    """Test NaN/Inf defense-in-depth at slot assembly (AC #4).
+
+    Note: production ring buffer stores int32 which cannot contain NaN/Inf.
+    Test helpers inject Python floats, so these tests exercise code that
+    protects against future storage changes.
+    """
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_nan_forecast_filtered_7day(self, mock_dt_util):
+        """NaN forecast values are excluded from slot data in 7-day mode."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+        # Inject NaN at local hour 10.0 (slot 40)
+        provider = _make_provider_with_histories(
+            actuals_fn=lambda h: 800.0 if 8 <= h <= 16 else 0.0,
+            forecast_fn=lambda h: float("nan") if abs(h - 10.0) < 0.01 else (1000.0 if 8 <= h <= 16 else 0.0),
+            t0=t0,
+            num_days=7,
+        )
+
+        result = provider.compute_dampening(t0, num_days=7)
+        assert result is True
+        # Slot 40 should have no valid points → identity
+        assert provider._dampening_coefficients[40] == (1.0, 0.0)
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_inf_actual_filtered_7day(self, mock_dt_util):
+        """Inf actual values are excluded from slot data in 7-day mode."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+        # Inject Inf at local hour 12.0 (slot 48)
+        provider = _make_provider_with_histories(
+            actuals_fn=lambda h: float("inf") if abs(h - 12.0) < 0.01 else (800.0 if 8 <= h <= 16 else 0.0),
+            forecast_fn=lambda h: 1000.0 if 8 <= h <= 16 else 0.0,
+            t0=t0,
+            num_days=7,
+        )
+
+        result = provider.compute_dampening(t0, num_days=7)
+        assert result is True
+        # Slot 48 should have no valid points → identity
+        assert provider._dampening_coefficients[48] == (1.0, 0.0)
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_nan_forecast_filtered_1day(self, mock_dt_util):
+        """NaN forecast values are excluded in 1-day mode (Task 5: AC #4)."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+        # Inject NaN forecast at local hour 10.0
+        provider = _make_provider_with_histories(
+            actuals_fn=lambda h: 800.0 if 8 <= h <= 16 else 0.0,
+            forecast_fn=lambda h: float("nan") if abs(h - 10.0) < 0.01 else (1000.0 if 8 <= h <= 16 else 0.0),
+            t0=t0,
+            num_days=1,
+        )
+
+        result = provider.compute_dampening(t0, num_days=1)
+        assert result is True
+        # Slot 40 should have no points → identity
+        assert provider._dampening_coefficients[40] == (1.0, 0.0)
+
+    @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
+    def test_neg_inf_both_filtered(self, mock_dt_util):
+        """Negative infinity in both forecast and actual are filtered."""
+        tz = pytz.timezone("Europe/Paris")
+        mock_dt_util.get_default_time_zone.return_value = tz
+
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
+        provider = _make_provider_with_histories(
+            actuals_fn=lambda h: float("-inf") if abs(h - 11.0) < 0.01 else (800.0 if 8 <= h <= 16 else 0.0),
+            forecast_fn=lambda h: float("-inf") if abs(h - 11.0) < 0.01 else (1000.0 if 8 <= h <= 16 else 0.0),
+            t0=t0,
+            num_days=7,
+        )
+
+        result = provider.compute_dampening(t0, num_days=7)
+        assert result is True
+        # Slot 44 (11:00) should have no valid points → identity
+        assert provider._dampening_coefficients[44] == (1.0, 0.0)
+
+
+class TestProviderExceptionSafety:
+    """Test exception safety in compute_dampening_all_providers (AC #7)."""
+
+    async def test_provider_exception_continues_others(self, fake_hass):
+        """Exception in one provider does not block remaining providers."""
+        solar = _make_solar(
+            fake_hass,
+            providers_config=[
+                {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Failing"},
+                {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "Working"},
+            ],
+        )
+
+        providers = list(solar.solar_forecast_providers.values())
+        providers[0].compute_dampening = MagicMock(side_effect=RuntimeError("boom"))
+        providers[1].compute_dampening = MagicMock(return_value=True)
+
+        await solar.compute_dampening_all_providers(num_days=7)
+
+        # Both providers were called despite the first raising
+        providers[0].compute_dampening.assert_called_once()
+        providers[1].compute_dampening.assert_called_once()
+
+    async def test_provider_exception_logged(self, fake_hass, caplog):
+        """Exception in provider is logged with provider name."""
+        import logging
+
+        solar = _make_solar(
+            fake_hass,
+            providers_config=[
+                {CONF_SOLAR_PROVIDER_DOMAIN: SOLCAST_SOLAR_DOMAIN, CONF_SOLAR_PROVIDER_NAME: "BadProvider"},
+            ],
+        )
+
+        provider = list(solar.solar_forecast_providers.values())[0]
+        provider.compute_dampening = MagicMock(side_effect=RuntimeError("unexpected"))
+
+        with caplog.at_level(logging.ERROR):
+            await solar.compute_dampening_all_providers(num_days=7)
+
+        assert "Unexpected error computing dampening for provider" in caplog.text
+
+
+# ============================================================================
 # Coverage: edge cases for _get_historical_data_for_dampening
 # ============================================================================
 
