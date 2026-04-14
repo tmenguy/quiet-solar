@@ -3,7 +3,7 @@
 issue: 134
 branch: "QS_134"
 
-Status: dev-complete
+Status: done
 
 ## Story
 As a user with a climate load in force mode,
