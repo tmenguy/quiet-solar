@@ -224,8 +224,21 @@ The bug is a stale local variable `override_constraint` in `check_load_activity_
 ### Decisions made:
 - Keep Task 1 (bug fix) and Task 2 (enhancement) in same story, clearly labeled — Rationale: both address the same user-facing issue, independently testable, lower overhead than separate stories
 - Approved if/else control flow structure for "back to normal" detection — Rationale: clean separation, back-to-normal check runs first, else falls through to existing logic
-- Auto-mode regression test confirms mode guard — Rationale: ensures Task 2 doesn't accidentally break auto mode overrides
+- Auto-mode regression test confirms mode guard — Rationale: ensures Task 2 doesn't accidentally break auto-mode overrides
 
 ### Known risks acknowledged:
 - [Critic] For force-on mode, the code path after override detection differs from force-off (goes through `_build_mode_constraint_items` at ~line 569 instead of `_bistate_mode_off` handler at ~line 529). Task 2 handles this by resetting BEFORE both paths diverge, but the asymmetry is worth monitoring during implementation
 - [External Challenger] The Cursor plan's assumption that "off" override should persist for override_duration was explicitly overridden by user preference. If users later request the ability to have "off" overrides persist with a timer, this decision would need revisiting
+
+## Code Review — PR #135 (2026-04-15)
+
+### Decisions
+| # | File | Finding | Decision | Notes |
+|---|------|---------|----------|-------|
+| P1 | `bistate_duration.py:500` | F-string in moved log line (OVERRIDE BY USER) | fix | Convert to lazy %s |
+| P2 | `bistate_duration.py:540` | F-string in moved log line (pushed constraint) | fix | Convert to lazy %s |
+| C1 | story artifact:227 | "auto mode" → "auto-mode" hyphenation | fix | |
+| D1 | `bistate_duration.py:536` | `do_force_next_solve` not set on failed push | reject | Pre-existing, out of scope |
+| X1 | `bistate_duration.py:496+588` | Redundant constraint reset after back-to-normal | reject | |
+| X2 | `bistate_duration.py:495` | `_first_cmd_reset_done` not cleared in back-to-normal | fix | Match natural expiration pattern |
+| X3 | `tests/test_ha_bistate_duration.py` | AC #1 test shares path with AC #2 | fix | Add stale-ref test on standard override path |
