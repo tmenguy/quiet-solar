@@ -753,6 +753,7 @@ class QSSolarProvider:
                     continue
 
                 a_k = max(0.1, min(3.0, a_k))
+                b_k = max(-5000.0, min(5000.0, b_k))
                 coefficients[slot] = (a_k, b_k)
 
         self._dampening_coefficients = coefficients
