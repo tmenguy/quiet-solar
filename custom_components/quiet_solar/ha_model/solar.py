@@ -353,17 +353,18 @@ class QSSolar(HADeviceMixin, AbstractDevice):
             # Keep dampened score in sync when dampening is active
             if provider.has_dampening:
                 if not provider.compute_dampened_score(time):
-                    _LOGGER.warning(
-                        "Dampened score refresh failed for provider %s, clearing stale score",
+                    _LOGGER.info(
+                        "Dampened score refresh failed for provider %s, keeping existing score %s",
                         name,
+                        provider.score_dampened,
                     )
-                    provider.score_dampened = None
 
             _LOGGER.info(
-                "Scoring cycle for provider %s: score=%.2f is_score_computed=%s",
+                "Scoring cycle for provider %s: score=%.2f is_score_computed=%s dampened_score=%s",
                 name,
                 provider.score if provider.score is not None else float("nan"),
                 is_score_computed,
+                provider.score_dampened,
             )
 
     def get_forecast(
