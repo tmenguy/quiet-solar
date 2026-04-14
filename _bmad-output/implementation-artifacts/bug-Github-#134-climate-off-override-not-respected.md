@@ -3,7 +3,7 @@
 issue: 134
 branch: "QS_134"
 
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 As a user with a climate load in force mode,
@@ -45,7 +45,7 @@ so that the system respects my intent instead of reverting to a stale override c
 
 ### Task 1: Fix stale `override_constraint` reference [Bug Fix] (AC: #1)
 
-- [ ] 1.1: In `ha_model/bistate_duration.py`, inside `check_load_activity_and_constraints()`, in the `if is_command_overridden_state_changed:` block, add `override_constraint = None` immediately after the `self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)` call and before the idle/non-idle branch comment.
+- [x] 1.1: In `ha_model/bistate_duration.py`, inside `check_load_activity_and_constraints()`, in the `if is_command_overridden_state_changed:` block, add `override_constraint = None` immediately after the `self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)` call and before the idle/non-idle branch comment.
 
 ```python
 # BEFORE:
@@ -64,13 +64,13 @@ so that the system respects my intent instead of reverting to a stale override c
                     # we will create a constraint if the asked state is not idle ...
 ```
 
-- [ ] 1.2: This single line prevents both stale-reference effects:
+- [x] 1.2: This single line prevents both stale-reference effects:
   - (a) The `do_push_constraint_after` assignment that reads `override_constraint.end_of_constraint` no longer fires
   - (b) The `if override_constraint is not None:` check in the `_bistate_mode_off` handler no longer re-adds the old heat constraint via `set_live_constraints()`
 
 ### Task 2: Add "back to normal" override cancellation for force modes [Enhancement] (AC: #2, #3)
 
-- [ ] 2.1: In the same `if is_command_overridden_state_changed:` block, BEFORE the existing line that sets `self.external_user_initiated_state = current_state`, add a new if/else structure:
+- [x] 2.1: In the same `if is_command_overridden_state_changed:` block, BEFORE the existing line that sets `self.external_user_initiated_state = current_state`, add a new if/else structure:
 
 ```python
                     if is_command_overridden_state_changed:
@@ -111,7 +111,7 @@ so that the system respects my intent instead of reverting to a stale override c
                             # ... rest of existing idle/non-idle branch ...
 ```
 
-- [ ] 2.2: Key design constraints for the detection logic:
+- [x] 2.2: Key design constraints for the detection logic:
   - **Precondition**: `self.external_user_initiated_state is not None` — only fires when there is an existing override to cancel
   - **Mode guard**: `bistate_mode in (self._bistate_mode_off, self._bistate_mode_on)` — never fires in auto/calendar modes
   - **Force-off detection**: `current_state == self.expected_state_from_command(CMD_IDLE)` — user went back to off (= `_state_off`)
@@ -123,34 +123,34 @@ so that the system respects my intent instead of reverting to a stale override c
 
 Test file: `tests/test_ha_bistate_duration.py` using existing `ConcreteBiStateDevice` class and `bistate_setup` fixture.
 
-- [ ] 3.1: `test_heat_to_off_override_no_stale_constraint` (AC: #1)
+- [x] 3.1: `test_heat_to_off_override_no_stale_constraint` (AC: #1)
   - Set up `ConcreteBiStateDevice` in `_bistate_mode_off`
   - Simulate user override to "on" (heat) — verify override constraint created
   - Simulate user override to "off" — verify old heat constraint is NOT in `_constraints`
   - Verify no stale constraint re-added via `set_live_constraints`
 
-- [ ] 3.2: `test_force_off_heat_then_off_cancels_override` (AC: #2)
+- [x] 3.2: `test_force_off_heat_then_off_cancels_override` (AC: #2)
   - Set up device in `_bistate_mode_off`
   - Simulate user override to "on" (heat) — override active
   - Simulate user override to "off" (matching force-off base)
   - Assert `external_user_initiated_state is None`
   - Assert `_constraints` is empty
 
-- [ ] 3.3: `test_force_on_off_then_on_cancels_override` (AC: #3)
+- [x] 3.3: `test_force_on_off_then_on_cancels_override` (AC: #3)
   - Set up device in `_bistate_mode_on` (where `_state_on = "on"`)
   - Simulate user override to "off" — override active
   - Simulate user override to "on" (exact match to `_state_on`) — back to normal
   - Assert `external_user_initiated_state is None`
   - Also test: override to "off" then to a DIFFERENT non-off state (not `_state_on`) — should be treated as a new override, NOT cancelled
 
-- [ ] 3.4: `test_force_off_heat_override_persists_for_duration` (AC: #4)
+- [x] 3.4: `test_force_off_heat_override_persists_for_duration` (AC: #4)
   - Set up device in `_bistate_mode_off`
   - Simulate user override to "on" (heat)
   - Assert override constraint exists with `end_of_constraint = time + override_duration`
   - Assert `external_user_initiated_state == "on"`
   - Advance time within override_duration — assert override still active
 
-- [ ] 3.5: `test_auto_mode_override_not_cancelled_by_back_to_normal` (AC: #5)
+- [x] 3.5: `test_auto_mode_override_not_cancelled_by_back_to_normal` (AC: #5)
   - Set up device in `bistate_mode_auto`
   - Simulate user override to "on" — override active
   - Simulate user changes back to "off"
@@ -159,7 +159,7 @@ Test file: `tests/test_ha_bistate_duration.py` using existing `ConcreteBiStateDe
 
 ### Task 4: Quality gate (AC: all)
 
-- [ ] 4.1: Run `python scripts/qs/quality_gate.py` from repo root
+- [x] 4.1: Run `python scripts/qs/quality_gate.py` from repo root
   - Expect: pytest passes with 100% coverage on changed files
   - Expect: ruff reports no lint errors
   - Expect: mypy passes
