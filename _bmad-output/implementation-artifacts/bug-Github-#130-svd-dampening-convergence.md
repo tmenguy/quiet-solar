@@ -3,7 +3,7 @@
 issue: 130
 branch: "QS_130"
 
-Status: ready-for-dev
+Status: dev-complete
 
 ## Story
 As a Quiet Solar user,
@@ -28,28 +28,28 @@ so that pressing the "Compute Dampening (7 Day)" button never crashes with an SV
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Add near-identical forecast handling in `compute_dampening` (AC: #1, #5)
-  - [ ] 1.1: In `ha_model/solar.py`, in `compute_dampening()` inside the 7-day branch (after the `len(points) < 3` check), add a near-identical forecast check using `np.ptp(forecasts) < threshold`. When triggered, compute `a_k = np.mean(actuals_vals) / np.mean(forecasts)` with `b_k = 0.0`, clamp `a_k` to [0.1, 3.0]. Guard against `mean(forecasts) < 10` (use identity).
-  - [ ] 1.2: Add tests: identical forecasts (all 1000.0), near-identical forecasts (1000.0 ± 0.001), and verify `a_k` is the mean ratio with `b_k = 0`.
+- [x] Task 1: Add near-identical forecast handling in `compute_dampening` (AC: #1, #5)
+  - [x] 1.1: In `ha_model/solar.py`, in `compute_dampening()` inside the 7-day branch (after the `len(points) < 3` check), add a near-identical forecast check using `np.ptp(forecasts) < threshold`. When triggered, compute `a_k = np.mean(actuals_vals) / np.mean(forecasts)` with `b_k = 0.0`, clamp `a_k` to [0.1, 3.0]. Guard against `mean(forecasts) < 10` (use identity).
+  - [x] 1.2: Add tests: identical forecasts (all 1000.0), near-identical forecasts (1000.0 ± 0.001), and verify `a_k` is the mean ratio with `b_k = 0`.
 
-- [ ] Task 2: Wrap `np.polyfit` in try/except (AC: #2, #3, #6)
-  - [ ] 2.1: In `ha_model/solar.py`, in `compute_dampening()`, wrap the `np.polyfit()` call in `try/except (np.linalg.LinAlgError, ValueError)`. On exception, log warning with `%s` formatting including slot number and point count, fall back to (1.0, 0.0).
-  - [ ] 2.2: After polyfit returns, validate output with `np.isfinite(a_k) and np.isfinite(b_k)`. If not finite, log warning and fall back to identity.
-  - [ ] 2.3: Add tests: mock `np.polyfit` to raise `LinAlgError`, verify identity fallback and warning logged. Test near-degenerate data producing non-finite output.
+- [x] Task 2: Wrap `np.polyfit` in try/except (AC: #2, #3, #6)
+  - [x] 2.1: In `ha_model/solar.py`, in `compute_dampening()`, wrap the `np.polyfit()` call in `try/except (np.linalg.LinAlgError, ValueError)`. On exception, log warning with `%s` formatting including slot number and point count, fall back to (1.0, 0.0).
+  - [x] 2.2: After polyfit returns, validate output with `np.isfinite(a_k) and np.isfinite(b_k)`. If not finite, log warning and fall back to identity.
+  - [x] 2.3: Add tests: mock `np.polyfit` to raise `LinAlgError`, verify identity fallback and warning logged. Test near-degenerate data producing non-finite output.
 
-- [ ] Task 3: Add NaN/Inf defense-in-depth at slot assembly (AC: #4, #5)
-  - [ ] 3.1: In `ha_model/solar.py`, in `compute_dampening()`, in the loop where `(forecast_val, actual_val)` pairs are appended to `slots[slot]`, add `if np.isfinite(forecast_val) and np.isfinite(actual_val)` guard. Document in comment: defense-in-depth for future storage changes (current ring buffer is int32, cannot contain NaN).
-  - [ ] 3.2: Add tests: inject NaN/Inf into forecast and actual data via test helpers, verify they are excluded from slot points.
+- [x] Task 3: Add NaN/Inf defense-in-depth at slot assembly (AC: #4, #5)
+  - [x] 3.1: In `ha_model/solar.py`, in `compute_dampening()`, in the loop where `(forecast_val, actual_val)` pairs are appended to `slots[slot]`, add `if np.isfinite(forecast_val) and np.isfinite(actual_val)` guard. Document in comment: defense-in-depth for future storage changes (current ring buffer is int32, cannot contain NaN).
+  - [x] 3.2: Add tests: inject NaN/Inf into forecast and actual data via test helpers, verify they are excluded from slot points.
 
-- [ ] Task 4: Add exception safety net in `compute_dampening_all_providers` (AC: #7)
-  - [ ] 4.1: In `ha_model/solar.py`, in `compute_dampening_all_providers()`, wrap the `provider.compute_dampening(time, num_days)` call in try/except to catch any unexpected exception. Log error with provider name, continue to next provider.
-  - [ ] 4.2: Add test: mock `compute_dampening` to raise an unexpected exception, verify other providers still get processed.
+- [x] Task 4: Add exception safety net in `compute_dampening_all_providers` (AC: #7)
+  - [x] 4.1: In `ha_model/solar.py`, in `compute_dampening_all_providers()`, wrap the `provider.compute_dampening(time, num_days)` call in try/except to catch any unexpected exception. Log error with provider name, continue to next provider.
+  - [x] 4.2: Add test: mock `compute_dampening` to raise an unexpected exception, verify other providers still get processed.
 
-- [ ] Task 5: Verify 1-day mode resilience (AC: #4)
-  - [ ] 5.1: Verify that the 1-day ratio correction path (the `num_days == 1` branch) is protected by Task 3's NaN/Inf filter at slot assembly. The `f_val < 10` guard at line 700 already prevents division by near-zero. Add test for 1-day mode with NaN data injected via test helper.
+- [x] Task 5: Verify 1-day mode resilience (AC: #4)
+  - [x] 5.1: Verify that the 1-day ratio correction path (the `num_days == 1` branch) is protected by Task 3's NaN/Inf filter at slot assembly. The `f_val < 10` guard at line 700 already prevents division by near-zero. Add test for 1-day mode with NaN data injected via test helper.
 
-- [ ] Task 6: Run quality gates
-  - [ ] 6.1: Run `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy + translations all pass.
+- [x] Task 6: Run quality gates
+  - [x] 6.1: Run `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy + translations all pass.
 
 ## Dev Notes
 
