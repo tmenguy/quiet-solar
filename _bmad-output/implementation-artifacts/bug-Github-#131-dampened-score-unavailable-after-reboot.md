@@ -3,7 +3,7 @@
 issue: 131
 branch: "QS_131"
 
-Status: dev-complete
+Status: done
 
 ## Story
 As a Quiet Solar user with dampening enabled,
