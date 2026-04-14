@@ -471,49 +471,86 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             self.asked_for_reset_user_initiated_state_time = None
 
                     if is_command_overridden_state_changed:
-                        _LOGGER.info(
-                            f"check_load_activity_and_constraints: bistate OVERRIDE BY USER {state.state} for load {self.name} instead of {expected_state} {expected_state_running}"
-                        )
-
-                        # the user did something different ... just OVERRIDE the automation for a given time
-                        self.external_user_initiated_state = current_state
-                        self.external_user_initiated_state_time = time
-
-                        # remove any overridden constraint if any
-                        self.constraint_reset_and_reset_commands_if_needed(
-                            keep_commands=True
-                        )  # remove any constraint if any we will add it back if needed below
-
-                        # we will create a constraint if the asked state is not idle ...
-                        if self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
-                            # idle command
+                        # "back to normal" — user overrides back to base mode state
+                        if (
+                            self.external_user_initiated_state is not None
+                            and bistate_mode in (self._bistate_mode_off, self._bistate_mode_on)
+                            and (
+                                (
+                                    bistate_mode == self._bistate_mode_off
+                                    and current_state == self.expected_state_from_command(CMD_IDLE)
+                                )
+                                or (bistate_mode == self._bistate_mode_on and current_state == self._state_on)
+                            )
+                        ):
+                            _LOGGER.info(
+                                "check_load_activity_and_constraints: bistate "
+                                "BACK TO NORMAL %s for load %s (mode %s), "
+                                "cancelling override from %s",
+                                current_state,
+                                self.name,
+                                bistate_mode,
+                                self.external_user_initiated_state,
+                            )
+                            self.reset_override_state_and_set_reset_ask_time(time)
+                            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = (
+                                None  # no extra cleanup cycle needed, constraints cleared below
+                            )
+                            self.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
+                            override_constraint = None
                             do_force_next_solve = True
-                            # all constraint removed above : command_and_constraint_reset
                         else:
-                            end_schedule = time + timedelta(seconds=(3600.0 * self.override_duration))
-                            override_constraint = TimeBasedSimplePowerLoadConstraint(
-                                type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                                degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
-                                time=time,
-                                load=self,
-                                load_param=self.external_user_initiated_state,
-                                load_info={"originator": "user_override"},
-                                from_user=True,
-                                start_of_constraint=time,
-                                end_of_constraint=end_schedule,
-                                power=self.power_use,
-                                initial_value=0,
-                                target_value=3600.0 * self.override_duration,
+                            _LOGGER.info(
+                                "check_load_activity_and_constraints: bistate "
+                                "OVERRIDE BY USER %s for load %s instead of %s %s",
+                                state.state,
+                                self.name,
+                                expected_state,
+                                expected_state_running,
                             )
 
-                            pushed, needs_ack = self.push_live_constraint(time, override_constraint)
-                            if needs_ack:
-                                await self.ack_completed_constraint(time, override_constraint)
-                            if pushed:
-                                _LOGGER.info(
-                                    f"check_load_activity_and_constraints: bistate load {self.name} pushed user override constraint"
-                                )
+                            # the user did something different ... just OVERRIDE the automation for a given time
+                            self.external_user_initiated_state = current_state
+                            self.external_user_initiated_state_time = time
+
+                            # remove any overridden constraint if any
+                            self.constraint_reset_and_reset_commands_if_needed(
+                                keep_commands=True
+                            )  # remove any constraint if any we will add it back if needed below
+                            override_constraint = None  # clear stale ref after constraints wiped
+
+                            # we will create a constraint if the asked state is not idle ...
+                            if self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
+                                # idle command
                                 do_force_next_solve = True
+                                # all constraint removed above : command_and_constraint_reset
+                            else:
+                                end_schedule = time + timedelta(seconds=(3600.0 * self.override_duration))
+                                override_constraint = TimeBasedSimplePowerLoadConstraint(
+                                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                                    degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                                    time=time,
+                                    load=self,
+                                    load_param=self.external_user_initiated_state,
+                                    load_info={"originator": "user_override"},
+                                    from_user=True,
+                                    start_of_constraint=time,
+                                    end_of_constraint=end_schedule,
+                                    power=self.power_use,
+                                    initial_value=0,
+                                    target_value=3600.0 * self.override_duration,
+                                )
+
+                                pushed, needs_ack = self.push_live_constraint(time, override_constraint)
+                                if needs_ack:
+                                    await self.ack_completed_constraint(time, override_constraint)
+                                if pushed:
+                                    _LOGGER.info(
+                                        "check_load_activity_and_constraints: bistate "
+                                        "load %s pushed user override constraint",
+                                        self.name,
+                                    )
+                                    do_force_next_solve = True
 
                     if (
                         self.external_user_initiated_state is not None

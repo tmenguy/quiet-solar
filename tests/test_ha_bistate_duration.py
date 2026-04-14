@@ -1108,3 +1108,341 @@ class TestUpdateCurrentMetricsOverride:
 
         assert bistate_device.qs_bistate_current_duration_h == pytest.approx(1.0)
         assert bistate_device.qs_bistate_current_on_h == pytest.approx(0.5)
+
+
+class TestQSBiStateDurationOverrideBugFix134:
+    """Test override bug fix: stale constraint ref and back-to-normal detection (#134)."""
+
+    @pytest.mark.asyncio
+    async def test_heat_to_off_override_no_stale_constraint(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """AC #1: Heat override then off does not re-add stale heat constraint."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_off"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = "on"
+        device.external_user_initiated_state_time = time - datetime.timedelta(minutes=10)
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        heat_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=device.external_user_initiated_state_time,
+            load=device,
+            load_param="on",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=device.external_user_initiated_state_time,
+            end_of_constraint=device.external_user_initiated_state_time
+            + datetime.timedelta(hours=int(device.override_duration)),
+            power=device.power_use,
+            initial_value=0,
+            target_value=3600.0 * device.override_duration,
+        )
+        device._constraints = [heat_constraint]
+
+        hass.states.async_set("switch.test_device", "off")
+        device.set_live_constraints = MagicMock()
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert result is True
+        # Stale heat constraint must NOT be in _constraints
+        assert heat_constraint not in device._constraints
+        # set_live_constraints must NOT have been called with the stale constraint
+        for call in device.set_live_constraints.call_args_list:
+            _, constraints = call[0]
+            assert heat_constraint not in constraints
+
+    @pytest.mark.asyncio
+    async def test_force_off_heat_then_off_cancels_override(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """AC #2: Force-off heat override then off cancels override entirely."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_off"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = "on"
+        device.external_user_initiated_state_time = time - datetime.timedelta(minutes=10)
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        heat_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=device.external_user_initiated_state_time,
+            load=device,
+            load_param="on",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=device.external_user_initiated_state_time,
+            end_of_constraint=device.external_user_initiated_state_time
+            + datetime.timedelta(hours=int(device.override_duration)),
+            power=device.power_use,
+            initial_value=0,
+            target_value=3600.0 * device.override_duration,
+        )
+        device._constraints = [heat_constraint]
+
+        hass.states.async_set("switch.test_device", "off")
+        device.set_live_constraints = MagicMock()
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert device.external_user_initiated_state is None
+        assert device._constraints == []
+        assert device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_force_on_off_then_on_cancels_override(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """AC #3: Force-on off override then on (exact _state_on) cancels override."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_on"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = "off"
+        device.external_user_initiated_state_time = time - datetime.timedelta(minutes=10)
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        off_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=device.external_user_initiated_state_time,
+            load=device,
+            load_param="off",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=device.external_user_initiated_state_time,
+            end_of_constraint=device.external_user_initiated_state_time
+            + datetime.timedelta(hours=int(device.override_duration)),
+            power=device.power_use,
+            initial_value=0,
+            target_value=3600.0 * device.override_duration,
+        )
+        device._constraints = [off_constraint]
+
+        # User switches back to "on" (exact match to _state_on)
+        hass.states.async_set("switch.test_device", "on")
+        device.set_live_constraints = MagicMock()
+        device.push_live_constraint = MagicMock(return_value=(True, False))
+        device.get_proper_local_adapted_tomorrow = MagicMock(
+            return_value=time + datetime.timedelta(hours=24)
+        )
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert device.external_user_initiated_state is None
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_force_on_different_on_mode_is_new_override(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """AC #3 extra: switching to different on-mode (not _state_on) is a new override."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_on"
+        device._state_on = "auto"  # configure _state_on to "auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = "off"
+        device.external_user_initiated_state_time = time - datetime.timedelta(minutes=10)
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        off_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=device.external_user_initiated_state_time,
+            load=device,
+            load_param="off",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=device.external_user_initiated_state_time,
+            end_of_constraint=device.external_user_initiated_state_time
+            + datetime.timedelta(hours=int(device.override_duration)),
+            power=device.power_use,
+            initial_value=0,
+            target_value=3600.0 * device.override_duration,
+        )
+        device._constraints = [off_constraint]
+
+        # User switches to "cool" (different from _state_on "auto")
+        hass.states.async_set("switch.test_device", "cool")
+        device.set_live_constraints = MagicMock()
+        device.push_live_constraint = MagicMock(return_value=(True, False))
+        device.get_proper_local_adapted_tomorrow = MagicMock(
+            return_value=time + datetime.timedelta(hours=24)
+        )
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        # Should be treated as new override, NOT cancelled
+        assert device.external_user_initiated_state == "cool"
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_force_off_heat_override_persists_for_duration(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """AC #4: Heat override with no prior override creates persistent constraint."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_off"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        hass.states.async_set("switch.test_device", "on")
+        device.set_live_constraints = MagicMock()
+        device.push_live_constraint = MagicMock(return_value=(True, False))
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert device.external_user_initiated_state == "on"
+        assert device.external_user_initiated_state_time == time
+
+        # Override constraint was pushed with correct duration
+        device.push_live_constraint.assert_called_once()
+        constraint = device.push_live_constraint.call_args[0][1]
+        assert constraint.target_value == 3600.0 * device.override_duration
+        expected_end = time + datetime.timedelta(seconds=3600.0 * device.override_duration)
+        assert constraint.end_of_constraint == expected_end
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_auto_mode_override_not_cancelled_by_back_to_normal(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """AC #5: Auto mode override not cancelled when user changes back to idle."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = "on"
+        device.external_user_initiated_state_time = time - datetime.timedelta(minutes=10)
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        override_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=device.external_user_initiated_state_time,
+            load=device,
+            load_param="on",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=device.external_user_initiated_state_time,
+            end_of_constraint=device.external_user_initiated_state_time
+            + datetime.timedelta(hours=int(device.override_duration)),
+            power=device.power_use,
+            initial_value=0,
+            target_value=3600.0 * device.override_duration,
+        )
+        device._constraints = [override_ct]
+
+        hass.states.async_set("switch.test_device", "off")
+        device.set_live_constraints = MagicMock()
+        device.push_live_constraint = MagicMock(return_value=(True, False))
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        # "back to normal" should NOT fire in auto mode — mode guard prevents it
+        # Override changes to new state "off" (standard override behavior)
+        assert device.external_user_initiated_state is not None
+        assert device.external_user_initiated_state == "off"
+
+    @pytest.mark.asyncio
+    async def test_stale_constraint_not_reused_on_override_change(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """Stale override_constraint ref not reused when switching between overrides.
+
+        Exercises the override_constraint = None fix in the standard override path
+        (not the back-to-normal path). Force-off device with an existing non-idle
+        override changes to a different non-idle state.
+        """
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_off"
+        device._state_on = "auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = "auto"
+        device.external_user_initiated_state_time = time - datetime.timedelta(minutes=10)
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        old_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=device.external_user_initiated_state_time,
+            load=device,
+            load_param="auto",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=device.external_user_initiated_state_time,
+            end_of_constraint=device.external_user_initiated_state_time
+            + datetime.timedelta(hours=int(device.override_duration)),
+            power=device.power_use,
+            initial_value=0,
+            target_value=3600.0 * device.override_duration,
+        )
+        device._constraints = [old_constraint]
+
+        # User switches to "cool" — different non-idle state, not back-to-normal
+        hass.states.async_set("switch.test_device", "cool")
+        original_set_live = device.set_live_constraints
+        set_live_calls: list[tuple] = []
+
+        def tracking_set_live(t, constraints):
+            set_live_calls.append((t, list(constraints)))
+            return original_set_live(t, constraints)
+
+        device.set_live_constraints = tracking_set_live
+        device.push_live_constraint = MagicMock(return_value=(True, False))
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert result is True
+        assert device.external_user_initiated_state == "cool"
+        # Old constraint must NOT appear in any set_live_constraints call
+        for _, constraints in set_live_calls:
+            assert old_constraint not in constraints
