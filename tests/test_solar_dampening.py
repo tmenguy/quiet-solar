@@ -991,27 +991,32 @@ class TestIdenticalForecastHandling:
 
     @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
     def test_near_identical_forecasts_use_ratio(self, mock_dt_util):
-        """Near-identical forecasts (ptp < 1.0) also use ratio path."""
+        """Near-identical forecasts (0 < ptp < 1.0) use ratio path, not polyfit."""
         tz = pytz.timezone("Europe/Paris")
         mock_dt_util.get_default_time_zone.return_value = tz
 
-        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
-        # Forecasts with tiny variation (all map to same h → same value)
-        provider = _make_provider_with_histories(
-            actuals_fn=lambda h: 900.0 if 8 <= h <= 16 else 0.0,
-            forecast_fn=lambda h: 1000.0 if 8 <= h <= 16 else 0.0,
-            t0=t0,
-            num_days=7,
+        # Inject per-day varying forecasts at slot 48 (12:00 CEST) with ptp=0.6
+        actuals_data = []
+        forecast_data = []
+        for day in range(7):
+            t = datetime.datetime(2024, 6, 8 + day, 10, 0, tzinfo=pytz.UTC)
+            fc = 1000.0 + day * 0.1  # ptp = 0.6 < 1.0 but not identical
+            forecast_data.append((t, fc))
+            actuals_data.append((t, 900.0))
+
+        provider = _TestProvider(solar=None, domain="test", provider_name="prov")
+        provider._get_historical_data_for_dampening = MagicMock(
+            return_value=(actuals_data, forecast_data)
         )
+        t0 = datetime.datetime(2024, 6, 15, 23, 0, tzinfo=pytz.UTC)
 
         result = provider.compute_dampening(t0, num_days=7)
         assert result is True
 
-        # Verify b_k = 0 for all non-identity slots (ratio path, not regression)
-        for slot in range(NUM_INTERVALS_PER_DAY):
-            a_k, b_k = provider._dampening_coefficients.get(slot, (1.0, 0.0))
-            if a_k != 1.0:
-                assert b_k == 0.0
+        # Slot 48 should use ratio path: a_k ~0.9, b_k = 0
+        a_k, b_k = provider._dampening_coefficients[48]
+        assert abs(a_k - 0.9) < 0.01
+        assert b_k == 0.0
 
     @patch("custom_components.quiet_solar.ha_model.solar.dt_util")
     def test_near_identical_low_forecast_identity(self, mock_dt_util):
