@@ -1203,6 +1203,7 @@ class TestQSBiStateDurationOverrideBugFix134:
 
         assert device.external_user_initiated_state is None
         assert device._constraints == []
+        assert device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
         assert result is True
 
     @pytest.mark.asyncio
@@ -1384,3 +1385,64 @@ class TestQSBiStateDurationOverrideBugFix134:
         # Override changes to new state "off" (standard override behavior)
         assert device.external_user_initiated_state is not None
         assert device.external_user_initiated_state == "off"
+
+    @pytest.mark.asyncio
+    async def test_stale_constraint_not_reused_on_override_change(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """Stale override_constraint ref not reused when switching between overrides.
+
+        Exercises the override_constraint = None fix in the standard override path
+        (not the back-to-normal path). Force-off device with an existing non-idle
+        override changes to a different non-idle state.
+        """
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_off"
+        device._state_on = "auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.current_command = None
+        device.running_command = None
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        device.external_user_initiated_state = "auto"
+        device.external_user_initiated_state_time = time - datetime.timedelta(minutes=10)
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        old_constraint = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=device.external_user_initiated_state_time,
+            load=device,
+            load_param="auto",
+            load_info={"originator": "user_override"},
+            from_user=True,
+            start_of_constraint=device.external_user_initiated_state_time,
+            end_of_constraint=device.external_user_initiated_state_time
+            + datetime.timedelta(hours=int(device.override_duration)),
+            power=device.power_use,
+            initial_value=0,
+            target_value=3600.0 * device.override_duration,
+        )
+        device._constraints = [old_constraint]
+
+        # User switches to "cool" — different non-idle state, not back-to-normal
+        hass.states.async_set("switch.test_device", "cool")
+        original_set_live = device.set_live_constraints
+        set_live_calls: list[tuple] = []
+
+        def tracking_set_live(t, constraints):
+            set_live_calls.append((t, list(constraints)))
+            return original_set_live(t, constraints)
+
+        device.set_live_constraints = tracking_set_live
+        device.push_live_constraint = MagicMock(return_value=(True, False))
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert result is True
+        assert device.external_user_initiated_state == "cool"
+        # Old constraint must NOT appear in any set_live_constraints call
+        for _, constraints in set_live_calls:
+            assert old_constraint not in constraints
