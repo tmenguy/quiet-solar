@@ -124,3 +124,22 @@ When `np.ptp(forecasts) < threshold` (e.g., 1.0 W):
 ### Known risks acknowledged:
 - Test data path (floats) differs from production data path (int32) — NaN/Inf tests exercise code that can't fire in production
 - Near-identical threshold choice (e.g., 1.0 W) is somewhat arbitrary — may need tuning based on real-world data
+
+## Code Review — PR #133 (2026-04-14)
+
+### Decisions
+| # | File | Finding | Decision | Notes |
+|---|------|---------|----------|-------|
+| 1 | solar.py:736 | PEP 758 except syntax | reject | Project targets py314 |
+| 2 | solar.py:316-318 | Stale dampening on exception | fix | Call reset_dampening() |
+| 3 | test_solar_dampening.py:993 | Near-identical test uses identical data | fix | Add test with varying forecasts |
+| 4 | story artifact | PEP 758 not documented | skip | |
+| 5 | solar.py:755 | b_k intercept unbounded | fix | Add b_k clamping |
+| 6 | solar.py:726 | mean_fc division safety | skip | Already guarded |
+| 7 | solar.py:721 | np.ptp on list | skip | Works correctly |
+
+### Deferred items
+(none)
+
+### Doc updates planned
+(none)
