@@ -3,7 +3,7 @@
 issue: 130
 branch: "QS_130"
 
-Status: dev-complete
+Status: done
 
 ## Story
 As a Quiet Solar user,
