@@ -24,9 +24,10 @@ so that the system respects my intent instead of reverting to a stale override c
    And the load returns to the force-off base behavior immediately
 
 3. Given a climate load in force-on mode with an active off override
-   When the user manually overrides to any non-off state (matching the force-on base direction)
+   When the user manually overrides to the exact configured `_state_on` (e.g., "auto")
    Then the system resets the override entirely (`external_user_initiated_state = None`)
    And the load returns to the force-on base behavior immediately
+   (Note: switching to a DIFFERENT on-mode like "cool" when `_state_on` is "auto" is a new override, not "back to normal")
 
 4. Given a climate load in force-off mode with NO prior override
    When the user manually sets the load to "heat"
@@ -82,7 +83,7 @@ so that the system respects my intent instead of reverting to a stale override c
                                  and current_state == self.expected_state_from_command(CMD_IDLE))
                                 or
                                 (bistate_mode == self._bistate_mode_on
-                                 and current_state != self.expected_state_from_command(CMD_IDLE))
+                                 and current_state == self._state_on)
                             )
                         ):
                             _LOGGER.info(
@@ -114,7 +115,7 @@ so that the system respects my intent instead of reverting to a stale override c
   - **Precondition**: `self.external_user_initiated_state is not None` — only fires when there is an existing override to cancel
   - **Mode guard**: `bistate_mode in (self._bistate_mode_off, self._bistate_mode_on)` — never fires in auto/calendar modes
   - **Force-off detection**: `current_state == self.expected_state_from_command(CMD_IDLE)` — user went back to off (= `_state_off`)
-  - **Force-on detection**: `current_state != self.expected_state_from_command(CMD_IDLE)` — user went back to any non-off state
+  - **Force-on detection**: `current_state == self._state_on` — user went back to the exact configured on-state (e.g., "auto"). Switching to a different on-mode (e.g., "cool" when `_state_on` is "auto") is treated as a new override, not "back to normal"
   - After reset, `do_force_next_solve = True` to trigger solver re-evaluation
   - The `reset_override_state_and_set_reset_ask_time()` method sets `asked_for_reset_user_initiated_state_time` which triggers a 60s cooldown window. This is acceptable for "back to normal" since the user just explicitly cancelled.
 
@@ -136,10 +137,11 @@ Test file: `tests/test_ha_bistate_duration.py` using existing `ConcreteBiStateDe
   - Assert `_constraints` is empty
 
 - [ ] 3.3: `test_force_on_off_then_on_cancels_override` (AC: #3)
-  - Set up device in `_bistate_mode_on`
+  - Set up device in `_bistate_mode_on` (where `_state_on = "on"`)
   - Simulate user override to "off" — override active
-  - Simulate user override to "on" (matching force-on base)
+  - Simulate user override to "on" (exact match to `_state_on`) — back to normal
   - Assert `external_user_initiated_state is None`
+  - Also test: override to "off" then to a DIFFERENT non-off state (not `_state_on`) — should be treated as a new override, NOT cancelled
 
 - [ ] 3.4: `test_force_off_heat_override_persists_for_duration` (AC: #4)
   - Set up device in `_bistate_mode_off`
@@ -192,6 +194,7 @@ The bug is a stale local variable `override_constraint` in `check_load_activity_
 - **`reset_override_state_and_set_reset_ask_time()` cooldown**: this method sets `asked_for_reset_user_initiated_state_time` which triggers a 60s cooldown window (lines ~462-471) that suppresses new override detection. This is acceptable for "back to normal" — the user just explicitly cancelled, and a 60s window before re-override is reasonable
 - **`_state_on` / `_state_off`**: these are concrete-class-specific. For `ConcreteBiStateDevice` in tests: `_state_on = "on"`, `_state_off = "off"`. For climate: `_state_off = HVACMode.OFF`, `_state_on = HVACMode.AUTO` (configurable). The detection uses `expected_state_from_command(CMD_IDLE)` which returns `_state_off`, making it work for all subclasses
 - **Force-on code path differs from force-off**: Force-off's stale-constraint bug is at the `_bistate_mode_off` handler (~line 529). Force-on goes through the `else` branch (~line 569) which calls `_build_mode_constraint_items()`. Task 2 handles both paths uniformly by resetting the override BEFORE the constraint creation code runs
+- **Force-on detection is strict**: Only `current_state == self._state_on` (exact match to the configured on-state) triggers "back to normal". If the user switches from an "off" override to a *different* on-mode (e.g., "cool" when `_state_on` is "auto"), that is a new override, not "back to normal". This avoids incorrectly cancelling overrides when the user deliberately picks a specific HVAC mode
 
 ### Project Structure Notes
 - Main fix file: `custom_components/quiet_solar/ha_model/bistate_duration.py`
