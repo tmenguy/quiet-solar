@@ -4299,6 +4299,9 @@ class QSSolarHistoryVals:
                 os.makedirs(self.storage_path, exist_ok=True)
             self.values = await self.read_values_async()
 
+            if np.max(self.values) == 0 and np.min(self.values) == 0:
+                self.values = None
+
         last_bad_idx = None
         num_slots_before_now_idx = 0
         do_save = False
