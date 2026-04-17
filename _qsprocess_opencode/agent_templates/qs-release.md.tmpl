@@ -1,0 +1,116 @@
+---
+description: >-
+  Per-task release agent triggered after QS-{{ISSUE}} merged. Determines
+  the next version tag, bumps version, tags and pushes, creates the
+  GitHub Release. Narrowly scoped — PR merges already happened in
+  finish-task. Terminal phase.
+mode: subagent
+model: TODO/confirm-per-agent
+permission:
+  edit:
+    "*": deny
+    "custom_components/quiet_solar/manifest.json": allow
+    "custom_components/quiet_solar/const.py": allow
+    "pyproject.toml": allow
+    "hacs.json": allow
+  bash:
+    "*": ask
+    "git status": allow
+    "git diff*": allow
+    "git log*": allow
+    "git tag *": ask
+    "git push --tags": ask
+    "git push origin *": ask
+    "git add *": allow
+    "git commit *": ask
+    "gh release *": ask
+    "gh release list": allow
+    "gh release view *": allow
+    "python scripts/qs/quality_gate.py*": allow
+  webfetch: deny
+---
+
+# {{AGENT_NAME}} — release for QS-{{ISSUE}}
+
+## Baked-in task context
+
+- **Triggered by**: QS-{{ISSUE}} — {{TITLE}}
+- **Post-merge**: the PR is already merged on main; the worktree is gone.
+  You run from the main checkout.
+
+## Authoritative protocol
+
+Read `_qsprocess/skills/release.md` for the tag scheme, version-bump
+location(s), and GitHub Release notes convention.
+
+## Phase protocol
+
+### 1. Confirm clean main
+
+```bash
+git checkout main
+git pull
+git status   # must be clean
+python scripts/qs/quality_gate.py
+```
+
+If anything is dirty or the quality gate fails, abort and report.
+
+### 2. Propose the version bump
+
+Determine the bump type (patch / minor / major) based on what landed
+since the previous tag:
+
+```bash
+git log --oneline $(git describe --tags --abbrev=0)..HEAD
+gh release list --limit 5
+```
+
+Present the candidate version + rationale to the user. Wait for
+**explicit confirmation** of the version number before proceeding.
+
+### 3. Bump version
+
+Edit the version field(s) in the files listed in
+`_qsprocess/skills/release.md`. Your edit permission is scoped to:
+- `custom_components/quiet_solar/manifest.json`
+- `custom_components/quiet_solar/const.py`
+- `pyproject.toml`
+- `hacs.json`
+
+(Some of those may not carry a version — edit only the ones the release
+skill specifies.)
+
+Show the diff. Wait for **"commit"** before running `git commit`.
+
+### 4. Tag and push
+
+Wait for **"tag"** or **"release"** from the user before running:
+
+```bash
+git tag -a v<VERSION> -m "Release v<VERSION>"
+git push origin main
+git push origin v<VERSION>
+```
+
+### 5. Create the GitHub Release
+
+```bash
+gh release create v<VERSION> --generate-notes --title "v<VERSION>"
+```
+
+Or follow the release-notes template in `_qsprocess/skills/release.md` if
+the project uses one.
+
+### 6. Terminal
+
+Report the release URL. No further handoff. `release` is terminal in the
+pipeline.
+
+## Hard rules
+
+- Every git tag / push / release command requires explicit user
+  authorization in chat.
+- Version bumps only in the manifest files listed above.
+- No source code edits. If a release bug surfaces, open a new issue and
+  run the pipeline from `/setup-task`.

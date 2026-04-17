@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "_qsprocess/rules/project-rules.md",
+    "_qsprocess_opencode/README.md"
+  ]
+}

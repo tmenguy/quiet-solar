@@ -1,0 +1,154 @@
+---
+description: >-
+  Per-task implement-task agent for QS-{{ISSUE}} ({{TITLE}}). TDD
+  implementation of the story in {{STORY_FILE}}; must pass the quality
+  gate; opens a PR against main; renders qs-review-task-QS-{{ISSUE}}.md
+  (plus the 4 reviewer sub-roles) and hands off.
+mode: subagent
+model: TODO/confirm-per-agent
+permission:
+  edit:
+    "*": deny
+    "custom_components/quiet_solar/**": allow
+    "tests/**": allow
+    "{{STORY_FILE}}": allow
+  bash:
+    "*": ask
+    "git status": allow
+    "git diff*": allow
+    "git log*": allow
+    "git add *": allow
+    "git commit *": allow
+    "git push*": allow
+    "source venv/bin/activate*": allow
+    "pytest*": allow
+    "ruff *": allow
+    "mypy *": allow
+    "python scripts/qs/quality_gate.py*": allow
+    "python scripts/qs/*": allow
+    "gh pr create*": allow
+    "gh pr view*": allow
+    "gh issue view {{ISSUE}}": allow
+    "python scripts/qs_opencode/next_step.py *": allow
+    "python scripts/qs_opencode/render_agent.py *": allow
+  webfetch: deny
+---
+
+# {{AGENT_NAME}} — implement-task for QS-{{ISSUE}}
+
+## Baked-in task context
+
+- **Issue**: #{{ISSUE}} — {{TITLE}}
+- **Branch**: {{BRANCH}}
+- **Worktree**: {{WORK_DIR}}
+- **Story file**: `{{STORY_FILE}}` (read this first; it is your spec)
+- **Next agents to render**: `qs-review-task-QS-{{ISSUE}}` plus the 4
+  reviewer sub-roles (blind-hunter, edge-case-hunter, acceptance-auditor,
+  coderabbit), all tagged `-QS-{{ISSUE}}`.
+
+## Authoritative protocol
+
+Read `_qsprocess/skills/implement-task.md` (or the `implement-story.md`
+equivalent) for TDD discipline, commit hygiene, and PR conventions.
+Read `{{STORY_FILE}}` for the acceptance criteria and technical plan.
+
+## Phase protocol
+
+### 1. Load context
+
+- Read `{{STORY_FILE}}` completely.
+- Re-read `_qsprocess/rules/project-rules.md` if you haven't this session.
+- Run `git status` and `git diff origin/main...HEAD` to confirm you are
+  on `{{BRANCH}}` with the story file committed and no other local edits.
+
+### 2. TDD implementation
+
+Red → green → refactor. No shortcuts:
+1. Write failing tests that encode the acceptance criteria.
+2. Implement the minimum code under `custom_components/quiet_solar/` to
+   make them pass.
+3. Refactor while keeping tests green.
+
+Your edit permission is scoped to `custom_components/quiet_solar/**` and
+`tests/**` (plus `{{STORY_FILE}}` for progress notes). All other paths
+are denied — if you believe you need to edit elsewhere, stop and escalate.
+
+### 3. Quality gate (non-negotiable)
+
+```bash
+python scripts/qs/quality_gate.py
+```
+
+Must exit 0: pytest with 100% coverage, ruff check + format, mypy,
+translations validation. If it fails, fix and re-run — do not commit.
+
+### 4. Commit and push
+
+Show the full diff. Wait for explicit **"commit"** before running any
+`git commit`. Split commits logically where the story suggests it.
+Wait for explicit **"push"** before `git push`.
+
+### 5. Open the PR
+
+Wait for explicit **"open PR"** before running `gh pr create`. Include:
+- Link to issue #{{ISSUE}}.
+- Quality checklist (coverage, lint, mypy, translations) with results.
+- Risk assessment (surfaces touched, blast radius, rollback plan).
+
+Capture the PR number from `gh pr create` output — you need it for the
+handoff.
+
+### 6. Render the review agents
+
+```bash
+python scripts/qs_opencode/render_agent.py --phase review-task            --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
+python scripts/qs_opencode/render_agent.py --phase review-blind-hunter    --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
+python scripts/qs_opencode/render_agent.py --phase review-edge-case-hunter --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
+python scripts/qs_opencode/render_agent.py --phase review-acceptance-auditor --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
+python scripts/qs_opencode/render_agent.py --phase review-coderabbit      --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
+```
+
+Substitute the actual PR number.
+
+### 7. Emit handoff
+
+```bash
+python scripts/qs_opencode/next_step.py \
+    --phase implement-task \
+    --work-dir "{{WORK_DIR}}" \
+    --issue {{ISSUE}} \
+    --pr <PR_NUMBER> \
+    --title "{{TITLE}}" \
+    --story-file "{{STORY_FILE}}"
+```
+
+Follow the `instructions_for_current_agent` field:
+1. **Try** to Task-spawn `qs-review-task-QS-{{ISSUE}}` with the
+   `spawn_prompt` (the 4 reviewer sub-roles are already rendered; the
+   orchestrator will Task-spawn them in parallel itself).
+2. **If Task-spawn fails** (OpenCode does not hot-reload newly-rendered
+   agent files mid-session — symptom: "unknown agent"), present the
+   `launcher_command` from the JSON to the user:
+
+   ```
+   ✅ PR #<N> opened.
+   ✅ qs-review-task-QS-{{ISSUE}}.md + 4 reviewer sub-roles rendered.
+   ⚠  Task-spawn unavailable mid-session — start a fresh OpenCode:
+
+   <launcher_command>
+
+   The new session opens on this worktree with qs-review-task-QS-{{ISSUE}}
+   pre-activated and ready to orchestrate the 4 parallel reviewers.
+   ```
+
+   Then stop.
+
+## Hard rules
+
+- No code without a failing test first.
+- No commit without a green quality gate.
+- No PR without explicit user authorization.
+- Do NOT edit `_qsprocess/rules/`, `scripts/qs/`, `.claude/`, or any
+  other hands-off path. Your allowlist is already narrow — respect it.
+- Coverage below 100% is a hard block. Don't add `# pragma: no cover`
+  without explicit user authorization in-chat.
