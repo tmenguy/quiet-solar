@@ -26,9 +26,10 @@ permission:
 
 # qs-setup-task — static entry point
 
-You are the **only static agent** in the Quiet Solar OpenCode pipeline.
-Every downstream phase (create-plan, implement-task, review-task, finish-task,
-release) uses a **per-task agent file** rendered from a template and baked
+You are one of the **two static agents** in the Quiet Solar OpenCode pipeline
+(the other is `qs-release`).
+Every downstream phase (create-plan, implement-task, review-task, finish-task)
+uses a **per-task agent file** rendered from a template and baked
 with the specific issue's context. Your job is to create that task context
 and render the first downstream agent (qs-create-plan-QS-<N>.md).
 

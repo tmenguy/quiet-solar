@@ -27,7 +27,6 @@ _qsprocess_opencode/
 │   ├── qs-review-acceptance-auditor.md.tmpl
 │   ├── qs-review-coderabbit.md.tmpl
 │   ├── qs-finish-task.md.tmpl
-│   └── qs-release.md.tmpl
 ```
 
 Templates are rendered by `scripts/qs_opencode/render_agent.py` into each
@@ -56,14 +55,16 @@ its own worktree and are cleaned up at finish-task time.
 `/release` is narrowly scoped to tag + GitHub Release and is **decoupled** from
 `finish-task` (the PR merge happens in `finish-task`).
 
-## Architecture — one static agent, nine rendered per task
+## Architecture — two static agents, eight rendered per task
 
 ### Static (in main checkout)
 
 | File | Purpose |
 | --- | --- |
-| `.opencode/agents/qs-setup-task.md` | Only always-present subagent. Runs in home OpenCode on `main`. |
-| `.opencode/commands/setup-task.md` | Only slash command. Delegates to `qs-setup-task`. |
+| `.opencode/agents/qs-setup-task.md` | Task setup — creates issue, branch, worktree. Runs on `main`. |
+| `.opencode/agents/qs-release.md` | Release — tags, bumps version, creates GitHub Release. Runs on `main`, independent of any task. |
+| `.opencode/commands/setup-task.md` | Slash command delegating to `qs-setup-task`. |
+| `.opencode/commands/release.md` | Slash command delegating to `qs-release`. |
 
 ### Per-task (rendered into each worktree's `.opencode/agents/`)
 
@@ -77,7 +78,6 @@ its own worktree and are cleaned up at finish-task time.
 | `qs-review-acceptance-auditor-QS-<N>` (hidden) | `qs-implement-task-QS-<N>` |
 | `qs-review-coderabbit-QS-<N>` (hidden) | `qs-implement-task-QS-<N>` |
 | `qs-finish-task-QS-<N>` | `qs-review-task-QS-<N>` |
-| `qs-release-QS-<N>` (optional) | `qs-finish-task-QS-<N>` |
 
 `implement-task` renders five review agents in one transition so the
 orchestrator can Task-spawn its sub-roles in parallel with no further I/O.

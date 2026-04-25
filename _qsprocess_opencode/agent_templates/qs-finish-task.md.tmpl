@@ -2,8 +2,8 @@
 description: >-
   Per-task finish-task agent for QS-{{ISSUE}} / PR #{{PR_NUMBER}}. Runs
   the final quality gate, merges the PR with explicit user authorization,
-  cleans up the branch + worktree, updates the epics index. Optionally
-  renders qs-release-QS-{{ISSUE}} if a release is warranted.
+  cleans up the branch + worktree, updates the epics index. Tells the
+  user to run `/release` separately if a release is warranted.
 mode: primary
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
@@ -34,8 +34,8 @@ permission:
 - **Branch**: {{BRANCH}}
 - **Worktree**: {{WORK_DIR}}
 - **Story file**: `{{STORY_FILE}}`
-- **Next agent (optional)**: `qs-release-QS-{{ISSUE}}` (only if user
-  explicitly opts for a release).
+- **Release**: not handled here — the user runs `/release` separately
+  from the main checkout after this phase completes.
 
 ## Authoritative protocol
 
@@ -107,50 +107,18 @@ If the command refuses due to lingering uncommitted state, report that
 to the user and do NOT force-remove unless they explicitly authorize
 `--force`.
 
-### 6. Ask about release
+### 6. Mention release option
 
-Explicitly ask: "Task {{ISSUE}} is merged. Do you want to cut a release
-now?"
+Tell the user:
 
-- **No**: you're done. Say so and stop.
-- **Yes**: render `qs-release-QS-{{ISSUE}}` and hand off:
+```
+Task #{{ISSUE}} is merged; epics index updated; worktree removed.
 
-  ```bash
-  python scripts/qs_opencode/render_agent.py \
-      --phase release \
-      --work-dir "$(pwd)" \
-      --issue {{ISSUE}} \
-      --title "{{TITLE}}"
+If you want to cut a release, run `/release` from the main checkout.
+```
 
-  python scripts/qs_opencode/next_step.py \
-      --phase finish-task \
-      --work-dir "$(pwd)" \
-      --issue {{ISSUE}} \
-      --title "{{TITLE}}"
-  ```
-
-  **Try** to Task-spawn `qs-release-QS-{{ISSUE}}` with the `spawn_prompt`
-  from the next_step JSON. **If Task-spawn fails** (OpenCode does not
-  hot-reload newly-rendered agent files mid-session — symptom: "unknown
-  agent"), present the `launcher_command` from the JSON to the user:
-
-  ```
-  ✅ PR #<N> merged; epics index updated; worktree removed.
-  ✅ qs-release-QS-{{ISSUE}}.md rendered into the current checkout.
-  ⚠  Task-spawn unavailable mid-session — start a fresh OpenCode:
-
-  <launcher_command>
-
-  The new session opens on the current checkout with qs-release-QS-{{ISSUE}}
-  pre-activated and ready to tag + publish.
-  ```
-
-  Then stop.
-
-  (Note: after step 5 the worktree is gone. The release runs from the
-  main checkout. `--work-dir` in step 6 is whichever checkout is now
-  current — that's what both render_agent.py and the launcher's
-  `--work-dir` resolve to.)
+Then stop. Release is a separate static agent (`qs-release`) invoked via
+`/release` — it is not part of the per-task pipeline.
 
 ## Hard rules
 

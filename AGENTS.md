@@ -13,13 +13,14 @@ load these before doing any substantive work:
 - `_bmad-output/project-context.md` — 42-rule code style set
 - `_qsprocess_opencode/README.md` — this workflow's directory layout and conventions
 
-## Workflow — one static agent, nine rendered per task
+## Workflow — two static agents, eight rendered per task
 
-The OpenCode pipeline has **exactly one static agent and one slash command**:
+The OpenCode pipeline has **two static agents and two slash commands**:
 
 | Command        | Subagent         | Phase                                                 |
 | -------------- | ---------------- | ----------------------------------------------------- |
 | `/setup-task`  | `qs-setup-task`  | Create issue + branch + worktree; render first per-task agent; print launcher |
+| `/release`     | `qs-release`     | Tag + bump version + GitHub Release (independent of any task) |
 
 Every downstream phase is a **per-task agent** rendered on demand from a
 template into the new worktree's `.opencode/agents/` folder, named
@@ -33,7 +34,6 @@ template into the new worktree's `.opencode/agents/` folder, named
 - `qs-review-acceptance-auditor-QS-<N>` (hidden sub-role)
 - `qs-review-coderabbit-QS-<N>` (hidden sub-role)
 - `qs-finish-task-QS-<N>` — final gate + merge PR + worktree cleanup
-- `qs-release-QS-<N>` — tag + GitHub Release (optional)
 
 Each rendered agent has the issue-specific context (issue number, title,
 branch, worktree, story file) baked into its system prompt and a narrow
@@ -45,7 +45,7 @@ tool/permission allowlist tuned to that phase.
   launcher printed by `qs-setup-task` (not a Task spawn). Before emitting
   the launcher, `qs-setup-task` renders `qs-create-plan-QS-<N>.md` into
   the worktree.
-- **Phases 2 → 3 → 4 → 5 (→ 6)**: sibling-spawn via the Task tool inside
+- **Phases 2 → 3 → 4 → 5**: sibling-spawn via the Task tool inside
   a single OpenCode instance running in the worktree. Each phase ends by
   calling `scripts/qs_opencode/next_step.py` which emits a handoff JSON
   payload. The payload contains:
@@ -58,7 +58,7 @@ tool/permission allowlist tuned to that phase.
 one transition (review orchestrator + four reviewer sub-roles), so the
 orchestrator can Task-spawn its reviewers in parallel without further I/O.
 
-There are **no slash commands for phases 2–6** because OpenCode command
+There are **no slash commands for phases 2–5** because OpenCode command
 frontmatter pins a static `agent:` name and cannot dispatch to
 dynamically-named agents. If the Task tool cannot spawn dynamically-named
 agents in the running OpenCode version, the finishing agent asks the user

@@ -72,15 +72,8 @@ PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
         "render_phases": ["finish-task"],
         "handoff": "task",
     },
-    "finish-task": {
-        # Release is optional; finish-task decides with the user and only
-        # renders + spawns qs-release-QS-<N> when a release is warranted.
-        "next_agent_phase": "release",
-        "render_phases": ["release"],
-        "handoff": "task",
-        "optional": True,
-    },
-    "release": None,  # terminal
+    "finish-task": None,  # terminal — release is a separate static agent
+    "release": None,  # terminal (kept for completeness)
 }
 
 
