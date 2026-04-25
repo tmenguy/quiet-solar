@@ -57,8 +57,9 @@ no duplicated rules).
    `permission` block — edit allowlist per phase, known-script bash
    allowlist, `webfetch: deny` unless needed. Destructive ops fall back
    to `"*": ask`.
-7. **Models**: all templates ship with `model: TODO/confirm-per-agent`.
-   User tunes per-agent after the first commit.
+7. **Models**: agents inherit the project-wide default from `opencode.json`
+   (`"model": "github-copilot/claude-opus-4.6"`). Per-agent overrides can
+   be added to individual templates when needed.
 8. **Renames vs. Claude/Cursor** (intentional, OpenCode-only):
    - `implement-story` → `implement-task`
    - `review-story` → `review-task`
@@ -225,8 +226,9 @@ The existing CodeRabbit flow (auto-review on PR push) is untouched.
 
 ## Open TODOs for Iteration
 
-- **Model IDs** — all agents ship with `TODO/confirm-per-agent`. Tune
-  per-agent after first commit.
+- **Model IDs** — agents inherit the project default
+  (`github-copilot/claude-opus-4.6` in `opencode.json`). Add per-agent
+  `model:` overrides to templates if a phase benefits from a different model.
 - **OpenCode CLI preload flags** — confirmed via `opencode --help`:
   `opencode [project] --agent <name> --prompt <text>`. The launcher uses
   both flags and also prints a banner with the intended agent + prompt

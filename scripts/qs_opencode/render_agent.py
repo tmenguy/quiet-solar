@@ -3,7 +3,7 @@
 
 Reads a template from ``_qsprocess_opencode/agent_templates/<phase>.md.tmpl``,
 substitutes ``{{VAR}}`` placeholders from CLI arguments, and writes the result
-to ``<work_dir>/.opencode/agent/qs-<phase>-QS-<issue>.md``.
+to ``<work_dir>/.opencode/agents/qs-<phase>-QS-<issue>.md``.
 
 Templates use a deliberately simple ``{{VAR}}`` syntax (no Jinja dependency).
 Unknown variables raise; undefined placeholders left in the output also raise
@@ -120,7 +120,7 @@ def _parse_extras(items: list[str]) -> dict[str, str]:
 
 def _output_path(work_dir: Path, phase: str, issue: int) -> Path:
     agent_name = f"qs-{phase}-QS-{issue}.md"
-    return work_dir / ".opencode" / "agent" / agent_name
+    return work_dir / ".opencode" / "agents" / agent_name
 
 
 def main() -> None:
@@ -132,7 +132,7 @@ def main() -> None:
         help="Phase whose agent template to render",
     )
     parser.add_argument("--work-dir", required=True,
-                        help="Worktree where .opencode/agent/ lives")
+                        help="Worktree where .opencode/agents/ lives")
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--title", required=True)
     parser.add_argument("--branch", default=None,

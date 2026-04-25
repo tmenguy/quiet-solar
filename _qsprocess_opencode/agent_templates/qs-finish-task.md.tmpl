@@ -5,7 +5,7 @@ description: >-
   cleans up the branch + worktree, updates the epics index. Optionally
   renders qs-release-QS-{{ISSUE}} if a release is warranted.
 mode: subagent
-model: TODO/confirm-per-agent
+# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit:
     "*": deny
@@ -94,7 +94,7 @@ python scripts/qs_opencode/cleanup_agents.py \
 ```
 
 This removes all `qs-*-QS-{{ISSUE}}.md` files from the worktree's
-`.opencode/agent/` folder. The cleanup runs BEFORE worktree removal so
+`.opencode/agents/` folder. The cleanup runs BEFORE worktree removal so
 git worktree deletion doesn't complain about stale references.
 
 ### 5. Remove the worktree

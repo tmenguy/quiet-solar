@@ -4,7 +4,7 @@ description: >-
   artifact at {{STORY_FILE}}, commits and pushes it on branch {{BRANCH}},
   then renders qs-implement-task-QS-{{ISSUE}}.md and hands off.
 mode: subagent
-model: TODO/confirm-per-agent
+# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit:
     "*": deny
@@ -108,7 +108,7 @@ Read the JSON. Follow its `instructions_for_current_agent` field:
 
    ```
    ✅ Story written, committed, pushed.
-   ✅ qs-implement-task-QS-{{ISSUE}}.md rendered in .opencode/agent/.
+   ✅ qs-implement-task-QS-{{ISSUE}}.md rendered in .opencode/agents/.
    ⚠  Task-spawn unavailable mid-session — start a fresh OpenCode:
 
    <launcher_command>

@@ -155,9 +155,11 @@ fix / defer / reject decisions.
 
 ## Models
 
-Every rendered agent ships with `model: TODO/confirm-per-agent`. Tune
-per-agent (either in the template or in the rendered file) after the
-first commit:
+All agents inherit the project-wide default model set in `opencode.json`
+(`"model": "github-copilot/claude-opus-4.6"`). To override for a specific
+phase, add a `model:` key to the template's YAML frontmatter.
+
+Guidance for per-agent overrides (if needed later):
 
 - **Opus-class** recommended for `qs-create-plan` and `qs-implement-task`
   (high-stakes writing / TDD).

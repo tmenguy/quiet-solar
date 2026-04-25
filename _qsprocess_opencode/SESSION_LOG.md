@@ -136,8 +136,7 @@ gate is called by `implement-task` and `finish-task`.
 Nine `*.md.tmpl` files, all with:
 
 - `mode: subagent`
-- `model: TODO/confirm-per-agent` (user will tune per-agent post-commit)
-- `permission` blocks scoped narrowly (e.g., create-plan can only edit
+- No `model:` key — agents inherit the project default from `opencode.json`- `permission` blocks scoped narrowly (e.g., create-plan can only edit
   the story file; implement-task edits only `custom_components/quiet_solar/**`
   and `tests/**`; review agents are edit-deny)
 - YAML frontmatter validated via `yaml.safe_load`
@@ -205,11 +204,12 @@ one path, every transition emits BOTH:
 Finishing agent tries Task first; on failure presents the launcher.
 Works for any OpenCode version, gracefully.
 
-### 5. Models left as placeholders
+### 5. Model inheritance via project default
 
-Every rendered agent ships with `model: TODO/confirm-per-agent`. User
-will tune per-agent after first commit based on cost/quality profile of
-each phase (e.g., reviewer sub-roles might run on cheaper models).
+All agents omit the `model:` frontmatter key and inherit the project-wide
+default set in `opencode.json` (`"model": "github-copilot/claude-opus-4.6"`).
+Per-agent overrides can be added to individual templates if a phase
+benefits from a different model.
 
 ---
 
@@ -221,8 +221,8 @@ All completed and passing:
 - [x] All 9 templates render without leftover `{{...}}`.
 - [x] All 9 rendered YAML frontmatters valid (`yaml.safe_load`).
 - [x] All frontmatters include: `description`, `mode: subagent`,
-  `model: TODO/confirm-per-agent`, `permission`. Reviewer sub-roles
-  additionally have `hidden: true`.
+  `permission`. Reviewer sub-roles additionally have `hidden: true`.
+  Model is inherited from `opencode.json` project default.
 - [x] Templates reference the right scripts in the right counts
   (next_step.py, render_agent.py, cleanup_agents.py, quality_gate.py).
 - [x] `next_step.py` handoff JSON verified for every transition,
@@ -257,10 +257,11 @@ version would let you prefer one path.
 4. If it fails, the launcher fallback kicks in automatically. Either way
    the pipeline completes.
 
-### 2. Per-agent model selection
+### 2. Per-agent model overrides (optional)
 
-All 10 agents currently say `model: TODO/confirm-per-agent`. Pick once
-you know your cost ceiling. Suggestions to consider:
+All agents now inherit `github-copilot/claude-opus-4.6` from
+`opencode.json`. If cost/latency becomes a concern, add per-agent
+`model:` overrides to individual templates. Suggestions:
 - create-plan: medium-high (story quality matters)
 - implement-task: highest (TDD + quality gate)
 - review-task orchestrator: medium

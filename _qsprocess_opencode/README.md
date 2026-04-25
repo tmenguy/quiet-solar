@@ -121,11 +121,10 @@ natural-language instruction like "Activate agent
 
 ## Open TODOs carried forward
 
-- Model IDs per agent (`model: TODO/confirm-per-agent` in every template).
-  Tune after the first pipeline run.
 - Exact `opencode` CLI flags to preload a slash command / agent-activation
-  instruction on a new session (used by Phase 1 launcher). Resolve via
-  `opencode --help`.
+  instruction on a new session (used by Phase 1 launcher). Resolved:
+  `opencode [project] --agent <name> --prompt <text>` (confirmed via
+  `opencode --help`).
 - Permission allowlists per agent — starting sketches only; expect tuning
   after the first pipeline run.
 

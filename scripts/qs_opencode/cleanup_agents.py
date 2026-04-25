@@ -2,7 +2,7 @@
 """Remove per-task OpenCode agent files for a given issue.
 
 Called by ``qs-finish-task-QS-<N>`` just before the worktree is deleted.
-Removes every ``qs-*-QS-<issue>.md`` under ``<work_dir>/.opencode/agent/``.
+Removes every ``qs-*-QS-<issue>.md`` under ``<work_dir>/.opencode/agents/``.
 
 Usage::
 
@@ -10,7 +10,7 @@ Usage::
         --work-dir /path/to/worktree \\
         --issue 42
 
-Never deletes files outside the given worktree's ``.opencode/agent/`` dir.
+Never deletes files outside the given worktree's ``.opencode/agents/`` dir.
 """
 
 from __future__ import annotations
@@ -34,13 +34,13 @@ def main() -> None:
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir).resolve()
-    agent_dir = work_dir / ".opencode" / "agent"
+    agent_dir = work_dir / ".opencode" / "agents"
     if not agent_dir.is_dir():
         output_json({
             "work_dir": str(work_dir),
             "issue": args.issue,
             "removed": [],
-            "summary": f"No .opencode/agent/ directory under {work_dir}",
+            "summary": f"No .opencode/agents/ directory under {work_dir}",
         })
         return
 

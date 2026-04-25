@@ -28,7 +28,7 @@ to inspect if it fails.
 | 0.12 | `launch_opencode.py` JSON shape | `python scripts/qs_opencode/launch_opencode.py --work-dir /tmp/x --title "QS_42 test" --issue 42 --preload-command "Activate qs-create-plan-QS-42 and begin."` | Valid JSON with `tool`, `same_context`, `new_context`, optional `pycharm_context` |
 | 0.13 | Static agent/command files have frontmatter | Visual: `.opencode/agent/qs-setup-task.md` and `.opencode/command/setup-task.md` start/end with `---` | Pass |
 | 0.14 | Only one static agent, one command | `ls .opencode/agent/qs-*.md` ; `ls .opencode/command/*.md` | Exactly `qs-setup-task.md` and `setup-task.md` |
-| 0.15 | Models are TODO placeholders | `grep -l "TODO/confirm-per-agent" .opencode/agent/qs-setup-task.md _qsprocess_opencode/agent_templates/*.md.tmpl \| wc -l` | `10` (1 static + 9 templates) |
+| 0.15 | No model placeholder left | `grep -rl "TODO/confirm-per-agent" .opencode/agent/qs-setup-task.md _qsprocess_opencode/agent_templates/*.md.tmpl \| wc -l` | `0` |
 | 0.16 | No accidental edits to hands-off areas | `git status _qsprocess/ scripts/qs/ docs/development-workflow-guide.md .claude/ CLAUDE.md .cursor/ .cursorrules` | Nothing modified |
 
 ## 1. OpenCode discovery
