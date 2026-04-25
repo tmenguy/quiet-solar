@@ -475,7 +475,144 @@ def test_solar_sensors_use_restore_class():
 
     assert isinstance(forecast_age[0], QSBaseSensorRestore), "Forecast age sensor must use QSBaseSensorRestore"
     assert isinstance(scores[0], QSBaseSensorSolarScoreRestore), "Score sensor must use QSBaseSensorSolarScoreRestore"
-    assert isinstance(active_provider[0], QSBaseSensorSolarActiveProviderRestore), "Active provider sensor must use QSBaseSensorSolarActiveProviderRestore"
+    assert isinstance(active_provider[0], QSBaseSensorSolarActiveProviderRestore), (
+        "Active provider sensor must use QSBaseSensorSolarActiveProviderRestore"
+    )
+
+
+def test_solar_score_sensors_have_display_precision():
+    """Test that score and dampened score sensors set suggested_display_precision=2."""
+    from custom_components.quiet_solar.const import (
+        SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX,
+        SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.score = 123.456789
+    mock_provider.score_dampened = 98.7654321
+    mock_provider.has_dampening = True
+    mock_provider.dampening_coefficients = {0: (1.0, 0.5), 1: (0.9, 0.3)}
+
+    mock_device = create_mock_device("solar", name="Test Solar")
+    mock_device.data_handler = MagicMock()
+    mock_device.solar_forecast_providers = {"TestProvider": mock_provider}
+    mock_device.get_forecast_age_hours = MagicMock(return_value=1.5)
+    mock_device.active_provider_name = "TestProvider"
+    mock_device.solar_forecast_sensor_values = {}
+    mock_device.solar_forecast_sensor_values_probers = {}
+    mock_device.solar_forecast_sensor_values_per_provider = {}
+    mock_device.solar_forecast_sensor_values_per_provider_probers = {}
+
+    entities = create_ha_sensor_for_QSSolar(mock_device)
+
+    scores = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_SCORE_PREFIX)]
+    dampened = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX)]
+
+    assert len(scores) == 1, "Expected exactly one score sensor"
+    assert len(dampened) == 1, "Expected exactly one dampened score sensor"
+
+    assert scores[0].entity_description.suggested_display_precision == 2, (
+        "Score sensor must have suggested_display_precision=2"
+    )
+    assert dampened[0].entity_description.suggested_display_precision == 2, (
+        "Dampened score sensor must have suggested_display_precision=2"
+    )
+
+
+def test_solar_score_sensor_none_reports_unavailable():
+    """Test that score sensor reports unavailable when provider.score is None (AC #3)."""
+    from custom_components.quiet_solar.const import (
+        SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.score = None
+    mock_provider.score_dampened = None
+    mock_provider.has_dampening = False
+
+    mock_device = create_mock_device("solar", name="Test Solar")
+    mock_device.data_handler = MagicMock()
+    mock_device.solar_forecast_providers = {"TestProvider": mock_provider}
+    mock_device.get_forecast_age_hours = MagicMock(return_value=1.5)
+    mock_device.active_provider_name = "TestProvider"
+    mock_device.solar_forecast_sensor_values = {}
+    mock_device.solar_forecast_sensor_values_probers = {}
+    mock_device.solar_forecast_sensor_values_per_provider = {}
+    mock_device.solar_forecast_sensor_values_per_provider_probers = {}
+
+    entities = create_ha_sensor_for_QSSolar(mock_device)
+    scores = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_SCORE_PREFIX)]
+    assert len(scores) == 1
+
+    sensor = scores[0]
+    sensor.async_write_ha_state = MagicMock()
+
+    test_time = datetime.now(pytz.UTC)
+    sensor.async_update_callback(test_time)
+
+    assert sensor._attr_available is False
+    assert sensor._attr_native_value == STATE_UNAVAILABLE
+
+
+def test_solar_score_sensor_native_value_full_precision():
+    """Test that native_value returns full-precision float, not rounded (AC #4)."""
+    from custom_components.quiet_solar.const import (
+        SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.score = 123.456789
+    mock_provider.score_dampened = 98.7654321
+    mock_provider.has_dampening = False
+
+    mock_device = create_mock_device("solar", name="Test Solar")
+    mock_device.data_handler = MagicMock()
+    mock_device.solar_forecast_providers = {"TestProvider": mock_provider}
+    mock_device.get_forecast_age_hours = MagicMock(return_value=1.5)
+    mock_device.active_provider_name = "TestProvider"
+    mock_device.solar_forecast_sensor_values = {}
+    mock_device.solar_forecast_sensor_values_probers = {}
+    mock_device.solar_forecast_sensor_values_per_provider = {}
+    mock_device.solar_forecast_sensor_values_per_provider_probers = {}
+
+    entities = create_ha_sensor_for_QSSolar(mock_device)
+    scores = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_SCORE_PREFIX)]
+    assert len(scores) == 1
+
+    sensor = scores[0]
+    sensor.async_write_ha_state = MagicMock()
+
+    test_time = datetime.now(pytz.UTC)
+    sensor.async_update_callback(test_time)
+
+    # native_value must be the full-precision float, not rounded
+    assert sensor._attr_native_value == 123.456789
+
+
+def test_solar_no_providers_no_score_sensors():
+    """Test that empty solar_forecast_providers creates no score/dampened sensors."""
+    from custom_components.quiet_solar.const import (
+        SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX,
+        SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
+    )
+
+    mock_device = create_mock_device("solar", name="Test Solar")
+    mock_device.data_handler = MagicMock()
+    mock_device.solar_forecast_providers = {}
+    mock_device.get_forecast_age_hours = MagicMock(return_value=1.5)
+    mock_device.active_provider_name = None
+    mock_device.solar_forecast_sensor_values = {}
+    mock_device.solar_forecast_sensor_values_probers = {}
+    mock_device.solar_forecast_sensor_values_per_provider = {}
+    mock_device.solar_forecast_sensor_values_per_provider_probers = {}
+
+    entities = create_ha_sensor_for_QSSolar(mock_device)
+
+    scores = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_SCORE_PREFIX)]
+    dampened = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX)]
+
+    assert len(scores) == 0, "No score sensors should be created with empty providers"
+    assert len(dampened) == 0, "No dampened score sensors should be created with empty providers"
 
 
 # --- Tests for QSBaseSensorRestore filtering unavailable/unknown on restore ---
@@ -587,9 +724,7 @@ def _make_score_restore_sensor(provider=None):
         provider = MagicMock()
         provider.score = None
 
-    return QSBaseSensorSolarScoreRestore(
-        mock_handler, mock_device, description, provider=provider
-    )
+    return QSBaseSensorSolarScoreRestore(mock_handler, mock_device, description, provider=provider)
 
 
 async def _restore_score_with_value(native_value, provider=None):
@@ -708,9 +843,7 @@ def _make_active_provider_restore_sensor(providers=None):
         translation_key="test",
     )
 
-    return QSBaseSensorSolarActiveProviderRestore(
-        mock_handler, mock_device, description
-    )
+    return QSBaseSensorSolarActiveProviderRestore(mock_handler, mock_device, description)
 
 
 async def _restore_active_provider_with_value(native_value, providers=None):
