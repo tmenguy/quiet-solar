@@ -1,31 +1,20 @@
 ---
 description: >-
   Static release agent. Determines the next version tag, bumps version,
-  tags and pushes, creates the GitHub Release. Runs on main, independent
-  of any task or worktree. Use when the user says "create release",
-  "cut a release", or "/release".
+  tags and pushes. GitHub Actions creates the Release. Runs on main,
+  independent of any task or worktree. Use when the user says "create
+  release", "cut a release", or "/release".
 mode: subagent
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
-  edit:
-    "*": deny
-    "custom_components/quiet_solar/manifest.json": allow
-    "custom_components/quiet_solar/const.py": allow
-    "pyproject.toml": allow
-    "hacs.json": allow
+  edit: deny
   bash:
     "*": ask
     "git status": allow
-    "git diff*": allow
     "git log*": allow
-    "git tag *": ask
-    "git push --tags": ask
-    "git push origin *": ask
-    "git add *": allow
-    "git commit *": ask
-    "gh release *": ask
-    "gh release list": allow
-    "gh release view *": allow
+    "git checkout main": allow
+    "git pull": allow
+    "python scripts/qs/release.py*": allow
     "python scripts/qs/quality_gate.py*": allow
   webfetch: deny
 ---
@@ -36,11 +25,6 @@ You are the **release agent** for the Quiet Solar pipeline. You run on
 `main` in the home checkout — no worktree, no task context needed. You are
 a static agent like `qs-setup-task`, always present in the repository.
 
-## Authoritative protocol
-
-Read `_qsprocess/skills/release.md` for the tag scheme, version-bump
-location(s), and GitHub Release notes convention.
-
 ## Phase protocol
 
 ### 1. Confirm clean main
@@ -49,66 +33,45 @@ location(s), and GitHub Release notes convention.
 git checkout main
 git pull
 git status   # must be clean
-python scripts/qs/quality_gate.py
 ```
 
-If anything is dirty or the quality gate fails, abort and report.
+If anything is dirty, abort and report.
 
-### 2. Propose the version bump
-
-Determine the bump type (patch / minor / major) based on what landed
-since the previous tag:
+### 2. Dry-run to show what will happen
 
 ```bash
-git log --oneline $(git describe --tags --abbrev=0)..HEAD
-gh release list --limit 5
+python scripts/qs/release.py --dry-run
 ```
 
-Present the candidate version + rationale to the user. Wait for
-**explicit confirmation** of the version number before proceeding.
+Show the proposed tag and version to the user. Wait for **explicit
+confirmation** before proceeding.
 
-### 3. Bump version
-
-Edit the version field(s) in the files listed in
-`_qsprocess/skills/release.md`. Your edit permission is scoped to:
-- `custom_components/quiet_solar/manifest.json`
-- `custom_components/quiet_solar/const.py`
-- `pyproject.toml`
-- `hacs.json`
-
-(Some of those may not carry a version — edit only the ones the release
-skill specifies.)
-
-Show the diff. Wait for **"commit"** before running `git commit`.
-
-### 4. Tag and push
-
-Wait for **"tag"** or **"release"** from the user before running:
+### 3. Run the release
 
 ```bash
-git tag -a v<VERSION> -m "Release v<VERSION>"
-git push origin main
-git push origin v<VERSION>
+python scripts/qs/release.py
 ```
 
-### 5. Create the GitHub Release
+The script handles everything:
+- Determines the next date-based tag (e.g. `v2026.04.26.0`)
+- Bumps `manifest.json` version
+- Commits and pushes to main
+- Tags and pushes the tag
 
-```bash
-gh release create v<VERSION> --generate-notes --title "v<VERSION>"
-```
+### 4. Report
 
-Or follow the release-notes template in `_qsprocess/skills/release.md` if
-the project uses one.
+Show the tag and version from the script output. Remind the user that
+GitHub Actions will:
+- Run the full test suite
+- Validate HACS compatibility
+- Create the GitHub Release with changelog
 
-### 6. Terminal
+Direct them to the Actions tab to monitor.
 
-Report the release URL. No further handoff. `release` is terminal in the
-pipeline.
+No further handoff. `release` is terminal in the pipeline.
 
 ## Hard rules
 
-- Every git tag / push / release command requires explicit user
-  authorization in chat.
-- Version bumps only in the manifest files listed above.
+- Always dry-run first and get user confirmation before the real run.
 - No source code edits. If a release bug surfaces, open a new issue and
   run the pipeline from `/setup-task`.
