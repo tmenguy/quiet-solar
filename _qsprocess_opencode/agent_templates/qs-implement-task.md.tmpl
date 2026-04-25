@@ -73,30 +73,43 @@ Your edit permission is scoped to `custom_components/quiet_solar/**` and
 `tests/**` (plus `{{STORY_FILE}}` for progress notes). All other paths
 are denied — if you believe you need to edit elsewhere, stop and escalate.
 
-### 3. Quality gate (non-negotiable)
+### 3. Implementation summary and quality gate confirmation
+
+Before running the quality gate, present a **summary** to the user:
+- List of modified / created files with a one-line description of each change.
+- Key design decisions made during implementation.
+- Any open questions or risks.
+
+Then ask the user: **"Ready to run the quality gate?"**. Wait for
+confirmation before proceeding.
+
+### 4. Quality gate (non-negotiable)
 
 ```bash
 python scripts/qs/quality_gate.py
 ```
 
 Must exit 0: pytest with 100% coverage, ruff check + format, mypy,
-translations validation. If it fails, fix and re-run — do not commit.
+translations validation. If it fails, **fix autonomously and re-run** —
+only ask the user for direction if you are genuinely stuck after 2–3
+attempts.
 
-### 4. Commit and push
+### 5. Commit, push, and open PR (automatic)
 
-Show the full diff. Wait for explicit **"commit"** before running any
-`git commit`. Split commits logically where the story suggests it.
-Wait for explicit **"push"** before `git push`.
-
-### 5. Open the PR
-
-Wait for explicit **"open PR"** before running `gh pr create`. Include:
-- Link to issue #{{ISSUE}}.
-- Quality checklist (coverage, lint, mypy, translations) with results.
-- Risk assessment (surfaces touched, blast radius, rollback plan).
+Once the quality gate passes, proceed **automatically** without asking:
+1. `git add` all relevant files.
+2. `git commit` with a clear message referencing #{{ISSUE}}.
+3. `git push -u origin {{BRANCH}}`.
+4. `gh pr create` with:
+   - Link to issue #{{ISSUE}}.
+   - Quality checklist (coverage, lint, mypy, translations) with results.
+   - Risk assessment (surfaces touched, blast radius, rollback plan).
 
 Capture the PR number from `gh pr create` output — you need it for the
 handoff.
+
+Do NOT ask for "commit", "push", or "open PR" confirmation — this is
+authorized by the workflow.
 
 ### 6. Render the review agents
 
@@ -128,17 +141,19 @@ Follow the `instructions_for_current_agent` field:
    orchestrator will Task-spawn them in parallel itself).
 2. **If Task-spawn fails** (OpenCode does not hot-reload newly-rendered
    agent files mid-session — symptom: "unknown agent"), present the
-   `launcher_command` from the JSON to the user:
+   `launcher_command` from the JSON to the user with clear next-step
+   instructions:
 
    ```
+   ✅ Implementation complete — quality gate passed.
+   ✅ Committed and pushed to {{BRANCH}}.
    ✅ PR #<N> opened.
    ✅ qs-review-task-QS-{{ISSUE}}.md + 4 reviewer sub-roles rendered.
-   ⚠  Task-spawn unavailable mid-session — start a fresh OpenCode:
+
+   📋 NEXT STEP — Review:
+   Run this command in your terminal to start the review phase:
 
    <launcher_command>
-
-   The new session opens on this worktree with qs-review-task-QS-{{ISSUE}}
-   pre-activated and ready to orchestrate the 4 parallel reviewers.
    ```
 
    Then stop.
@@ -147,7 +162,7 @@ Follow the `instructions_for_current_agent` field:
 
 - No code without a failing test first.
 - No commit without a green quality gate.
-- No PR without explicit user authorization.
+- After a green quality gate, commit + push + PR are automatic (no user prompt).
 - Do NOT edit `_qsprocess/rules/`, `scripts/qs/`, `.claude/`, or any
   other hands-off path. Your allowlist is already narrow — respect it.
 - Coverage below 100% is a hard block. Don't add `# pragma: no cover`
