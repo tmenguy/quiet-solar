@@ -16,7 +16,7 @@ Usage::
         --work-dir /path/to/worktree \\
         --issue 42 \\
         --title "Story 3.2: add foo bar" \\
-        --story-file _qsprocess/stories/QS-42.story.md \\
+        --story-file _qsprocess_opencode/stories/QS-42.story.md \\
         [--pr 5] \\
         [--extra KEY=VALUE ...]
 

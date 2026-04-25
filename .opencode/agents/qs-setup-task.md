@@ -106,11 +106,11 @@ python scripts/qs_opencode/render_agent.py \
     --work-dir "{{worktree_path}}" \
     --issue {{issue_number}} \
     --title "{{title}}" \
-    --story-file "_qsprocess/stories/QS-{{issue_number}}.story.md"
+    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
 ```
 
 If the user specified a story key (e.g., "3.2"), use
-`--story-file "_qsprocess/stories/story-{{story_key}}.md"` instead.
+`--story-file "_qsprocess_opencode/stories/story-{{story_key}}.md"` instead.
 
 Verify render_agent.py exited 0 and the file exists at
 `{{worktree_path}}/.opencode/agents/qs-create-plan-QS-{{issue_number}}.md`.

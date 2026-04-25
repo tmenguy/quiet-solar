@@ -9,7 +9,7 @@ permission:
   edit:
     "*": deny
     "{{STORY_FILE}}": allow
-    "_qsprocess/stories/**": allow
+    "_qsprocess_opencode/stories/**": allow
   bash:
     "*": ask
     "gh issue view {{ISSUE}}": allow
@@ -18,7 +18,7 @@ permission:
     "git diff*": allow
     "git log*": allow
     "git add {{STORY_FILE}}": allow
-    "git add _qsprocess/stories/*": allow
+    "git add _qsprocess_opencode/stories/*": allow
     "git commit *": allow
     "git push*": allow
     "python scripts/qs_opencode/next_step.py *": allow
@@ -60,7 +60,7 @@ Also read these if referenced by the issue body:
 Write exactly ONE file: `{{STORY_FILE}}`. Follow the story template and
 completeness bar defined in `_qsprocess/skills/create-plan.md`. You may
 NOT edit any other file in this phase — your edit permission is scoped
-to `{{STORY_FILE}}` and the `_qsprocess/stories/` tree only.
+to `{{STORY_FILE}}` and the `_qsprocess_opencode/stories/` tree only.
 
 ### 3. Present the diff and wait for authorization
 

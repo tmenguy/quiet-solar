@@ -15,13 +15,13 @@ to inspect if it fails.
 | # | Check | Command | Expected |
 |---|-------|---------|----------|
 | 0.1 | Python scripts parse | `python -c "import ast, pathlib; [ast.parse(p.read_text()) for p in pathlib.Path('scripts/qs_opencode').glob('*.py')]"` | No output, exit 0 |
-| 0.2 | `render_agent.py` dry-render into a tempdir | `TMP=$(mktemp -d); mkdir -p $TMP/.opencode/agent; python scripts/qs_opencode/render_agent.py --phase create-plan --work-dir $TMP --issue 999 --title "smoke test" --story-file _qsprocess/stories/QS-999.story.md` | Valid JSON with `agent_file`, `agent_name`; file exists and has no `{{...}}` leftovers |
+| 0.2 | `render_agent.py` dry-render into a tempdir | `TMP=$(mktemp -d); mkdir -p $TMP/.opencode/agent; python scripts/qs_opencode/render_agent.py --phase create-plan --work-dir $TMP --issue 999 --title "smoke test" --story-file _qsprocess_opencode/stories/QS-999.story.md` | Valid JSON with `agent_file`, `agent_name`; file exists and has no `{{...}}` leftovers |
 | 0.3 | `render_agent.py` refuses overwrite without flag | Re-run 0.2 | Exits non-zero with "already exists" message |
 | 0.4 | `render_agent.py` works with `--overwrite` | Re-run 0.2 with `--overwrite` | Valid JSON, file rewritten |
 | 0.5 | `render_agent.py` covers all 9 phases | Loop phases: create-plan, implement-task, review-task, review-blind-hunter, review-edge-case-hunter, review-acceptance-auditor, review-coderabbit, finish-task, release | 9 agent files rendered, all free of `{{...}}` leftovers |
 | 0.6 | `cleanup_agents.py --dry-run` lists files | `python scripts/qs_opencode/cleanup_agents.py --work-dir $TMP --issue 999 --dry-run` | JSON with `removed` listing all 9 rendered files, nothing actually deleted |
 | 0.7 | `cleanup_agents.py` deletes files | Run without `--dry-run` | 9 files removed; re-run returns empty `removed` list |
-| 0.8 | `next_step.py` JSON shape (create-plan → implement-task) | `python scripts/qs_opencode/next_step.py --phase create-plan --work-dir /tmp/x --title "QS_42 test" --issue 42 --story-file _qsprocess/stories/QS-42.story.md` | JSON with `next_agent` = `qs-implement-task-QS-42`, `render_commands` (list of 1), `spawn_prompt`, `instructions_for_current_agent` |
+| 0.8 | `next_step.py` JSON shape (create-plan → implement-task) | `python scripts/qs_opencode/next_step.py --phase create-plan --work-dir /tmp/x --title "QS_42 test" --issue 42 --story-file _qsprocess_opencode/stories/QS-42.story.md` | JSON with `next_agent` = `qs-implement-task-QS-42`, `render_commands` (list of 1), `spawn_prompt`, `instructions_for_current_agent` |
 | 0.9 | `next_step.py` fan-out (implement-task → review-task) | Same for `--phase implement-task --pr 5 ...` | JSON with 5 `render_commands` (review-task + 4 sub-roles) |
 | 0.10 | `next_step.py` marks release optional | `--phase finish-task ...` | JSON with `"optional": true` |
 | 0.11 | `next_step.py` terminal on release | `--phase release ...` | JSON with `next_agent: null` |

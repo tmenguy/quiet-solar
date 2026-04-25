@@ -7,7 +7,7 @@ remains the Claude Code / Cursor reference, unchanged).
 Both workflows drive the same lifecycle (setup → plan → implement → review
 → finish → release) against the same git worktree layout, the same quality
 gate (`python scripts/qs/quality_gate.py`), and the same story artifacts
-under `_qsprocess/stories/`. The difference is purely in how phases are
+under `_qsprocess_opencode/stories/`. The difference is purely in how phases are
 materialized and hand off to each other.
 
 ## Architecture — per-task agents
@@ -172,7 +172,7 @@ Every agent declares an explicit `permission` block in its YAML
 frontmatter:
 
 - `edit`: narrow allowlist of paths the phase is expected to touch
-  (e.g. create-plan: only `_qsprocess/stories/QS-<N>.story.md`;
+  (e.g. create-plan: only `_qsprocess_opencode/stories/QS-<N>.story.md`;
   review-*: `deny`; setup-task: `deny`).
 - `bash`: known-script allowlist (`python scripts/qs/*`,
   `python scripts/qs_opencode/*`, `git *`, `gh *` as each phase needs).
