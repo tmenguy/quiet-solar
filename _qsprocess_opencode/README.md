@@ -31,7 +31,7 @@ _qsprocess_opencode/
 ```
 
 Templates are rendered by `scripts/qs_opencode/render_agent.py` into each
-worktree's `.opencode/agent/` folder as `qs-<phase>-QS-<N>.md`. There is
+worktree's `.opencode/agents/` folder as `qs-<phase>-QS-<N>.md`. There is
 **no shared per-task agent location** — every task's agents live only in
 its own worktree and are cleaned up at finish-task time.
 
@@ -62,10 +62,10 @@ its own worktree and are cleaned up at finish-task time.
 
 | File | Purpose |
 | --- | --- |
-| `.opencode/agent/qs-setup-task.md` | Only always-present subagent. Runs in home OpenCode on `main`. |
-| `.opencode/command/setup-task.md` | Only slash command. Delegates to `qs-setup-task`. |
+| `.opencode/agents/qs-setup-task.md` | Only always-present subagent. Runs in home OpenCode on `main`. |
+| `.opencode/commands/setup-task.md` | Only slash command. Delegates to `qs-setup-task`. |
 
-### Per-task (rendered into each worktree's `.opencode/agent/`)
+### Per-task (rendered into each worktree's `.opencode/agents/`)
 
 | Rendered agent | Rendered by |
 | --- | --- |

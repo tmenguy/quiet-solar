@@ -26,9 +26,9 @@ to inspect if it fails.
 | 0.10 | `next_step.py` marks release optional | `--phase finish-task ...` | JSON with `"optional": true` |
 | 0.11 | `next_step.py` terminal on release | `--phase release ...` | JSON with `next_agent: null` |
 | 0.12 | `launch_opencode.py` JSON shape | `python scripts/qs_opencode/launch_opencode.py --work-dir /tmp/x --title "QS_42 test" --issue 42 --preload-command "Activate qs-create-plan-QS-42 and begin."` | Valid JSON with `tool`, `same_context`, `new_context`, optional `pycharm_context` |
-| 0.13 | Static agent/command files have frontmatter | Visual: `.opencode/agent/qs-setup-task.md` and `.opencode/command/setup-task.md` start/end with `---` | Pass |
-| 0.14 | Only one static agent, one command | `ls .opencode/agent/qs-*.md` ; `ls .opencode/command/*.md` | Exactly `qs-setup-task.md` and `setup-task.md` |
-| 0.15 | No model placeholder left | `grep -rl "TODO/confirm-per-agent" .opencode/agent/qs-setup-task.md _qsprocess_opencode/agent_templates/*.md.tmpl \| wc -l` | `0` |
+| 0.13 | Static agent/command files have frontmatter | Visual: `.opencode/agents/qs-setup-task.md` and `.opencode/commands/setup-task.md` start/end with `---` | Pass |
+| 0.14 | Only one static agent, one command | `ls .opencode/agents/qs-*.md` ; `ls .opencode/commands/*.md` | Exactly `qs-setup-task.md` and `setup-task.md` |
+| 0.15 | No model placeholder left | `grep -rl "TODO/confirm-per-agent" .opencode/agents/qs-setup-task.md _qsprocess_opencode/agent_templates/*.md.tmpl \| wc -l` | `0` |
 | 0.16 | No accidental edits to hands-off areas | `git status _qsprocess/ scripts/qs/ docs/development-workflow-guide.md .claude/ CLAUDE.md .cursor/ .cursorrules` | Nothing modified |
 
 ## 1. OpenCode discovery
@@ -46,8 +46,8 @@ Open the repo in OpenCode on main.
 | # | Check | How | Expected |
 |---|-------|-----|----------|
 | 2.1 | Issue + branch + worktree | `/setup-task 42` (throwaway issue in test repo) | Issue fetched/created, branch `QS_42`, worktree under `../quiet-solar-worktrees/QS_42/` |
-| 2.2 | Create-plan agent rendered | `ls <worktree>/.opencode/agent/` | Contains `qs-create-plan-QS-42.md`, no `{{...}}` leftovers |
-| 2.3 | Rendered agent has issue context | `grep -E "QS-42\|#42" <worktree>/.opencode/agent/qs-create-plan-QS-42.md` | Multiple matches |
+| 2.2 | Create-plan agent rendered | `ls <worktree>/.opencode/agents/` | Contains `qs-create-plan-QS-42.md`, no `{{...}}` leftovers |
+| 2.3 | Rendered agent has issue context | `grep -E "QS-42\|#42" <worktree>/.opencode/agents/qs-create-plan-QS-42.md` | Multiple matches |
 | 2.4 | Launcher emitted | Agent's final message | Terminal command (and PyCharm command if detected) printed |
 | 2.5 | Launcher preloads agent activation | Inspect the `--preload-command` | Instructs new session to activate `qs-create-plan-QS-42` by name |
 | 2.6 | No Task spawn to create-plan | Session log | Agent did NOT call the Task tool — handoff is an explicit new-session launch |
@@ -81,7 +81,7 @@ Open the repo in OpenCode on main.
 | 5.2 | Quality gate green | `python scripts/qs/quality_gate.py` run by agent | Exit 0; pytest 100% cov, ruff clean, mypy clean, translations ok |
 | 5.3 | PR opened | `gh pr list --head QS_42` | PR exists with quality checklist filled in |
 | 5.4 | 5-way render for review | Transcript | `render_agent.py` invoked 5 times: review-task, review-blind-hunter, review-edge-case-hunter, review-acceptance-auditor, review-coderabbit |
-| 5.5 | Review agent files exist | `ls <worktree>/.opencode/agent/` | 5 new `qs-review-*-QS-42.md` files |
+| 5.5 | Review agent files exist | `ls <worktree>/.opencode/agents/` | 5 new `qs-review-*-QS-42.md` files |
 | 5.6 | Task spawn to qs-review-task-QS-42 | Session log | Orchestrator invoked with spawn_prompt |
 
 ## 6. Phase 4 — qs-review-task-QS-42
@@ -101,7 +101,7 @@ Open the repo in OpenCode on main.
 | 7.1 | Final gate re-run | Transcript | `quality_gate.py` run once more on PR head, green |
 | 7.2 | Merge authorized | Transcript | Agent waited for explicit "merge" before `gh pr merge` |
 | 7.3 | cleanup_agents.py called | Transcript | `python scripts/qs_opencode/cleanup_agents.py --work-dir <w> --issue 42` invoked |
-| 7.4 | Per-task agent files removed | `ls <worktree>/.opencode/agent/` before worktree deletion | No `qs-*-QS-42.md` files remain |
+| 7.4 | Per-task agent files removed | `ls <worktree>/.opencode/agents/` before worktree deletion | No `qs-*-QS-42.md` files remain |
 | 7.5 | Branch + worktree cleanup | `git branch -a \| grep QS_42` ; `git worktree list` | Gone |
 | 7.6 | Epics index updated | Diff on `_bmad-output/planning-artifacts/epics.md` (or equivalent) | Story marked done |
 | 7.7 | Release prompted (not auto) | Session log | If release warranted, user asked; `qs-release-QS-42` only rendered/spawned on explicit "release" |
@@ -146,7 +146,7 @@ Open the repo in OpenCode on main.
   the user can activate manually as a fallback.
 - **Task spawn fails on dynamic agent** (steps 4.6, 5.6, 6.5, 7.7):
   this is the expected outcome if OpenCode does not hot-reload
-  `.opencode/agent/` files mid-session. `next_step.py` emits a
+  `.opencode/agents/` files mid-session. `next_step.py` emits a
   `launcher_command` in its JSON payload for every transition; the
   finishing agent presents that command to the user, who runs it to
   start a fresh OpenCode session with the newly-rendered agent

@@ -35,7 +35,7 @@ All OpenCode-flavored siblings live under:
 
 Only `qs-setup-task` is a permanent agent file. Every downstream phase is
 a **per-task agent** rendered on demand from a template into the new
-worktree's `.opencode/agent/` directory, named `qs-<phase>-QS-<N>.md`
+worktree's `.opencode/agents/` directory, named `qs-<phase>-QS-<N>.md`
 with issue-specific context (issue #, title, branch, worktree, story
 file, PR #) baked directly into the system prompt, and with a narrow
 `permission` allowlist tuned to that phase.
@@ -80,7 +80,7 @@ agent:
 2. Calls `next_step.py` which emits JSON containing both a Task
    `spawn_prompt` and a full `launcher_command` / `launcher_payload`.
 3. **Tries** `Task(subagent_type='qs-<next>-QS-<N>', prompt=...)`.
-4. **If Task fails** (OpenCode may not hot-reload new `.opencode/agent/`
+4. **If Task fails** (OpenCode may not hot-reload new `.opencode/agents/`
    files mid-session — this is version-dependent and unverified
    empirically), the agent presents the `launcher_command` to the user
    and stops. The user runs it; a fresh OpenCode starts on the same
@@ -103,10 +103,10 @@ gate is called by `implement-task` and `finish-task`.
 
 ### Static OpenCode entry point
 
-- `.opencode/agent/qs-setup-task.md` — the only permanent subagent file.
+- `.opencode/agents/qs-setup-task.md` — the only permanent subagent file.
   Renders `qs-create-plan-QS-<N>.md` into the worktree, then emits the
   Phase 1 → 2 launcher.
-- `.opencode/command/setup-task.md` — the only slash command (invokes
+- `.opencode/commands/setup-task.md` — the only slash command (invokes
   `qs-setup-task`).
 - `opencode.json` — project-level OpenCode config.
 
@@ -119,7 +119,7 @@ gate is called by `implement-task` and `finish-task`.
 - `launch_opencode.py` — CLI wrapper around `build_launcher_payload`
   used by setup-task. Accepts `--agent` and `--preload-command`.
 - `render_agent.py` — renders one template into
-  `<work_dir>/.opencode/agent/qs-<phase>-QS-<N>.md`. `{{VAR}}`
+  `<work_dir>/.opencode/agents/qs-<phase>-QS-<N>.md`. `{{VAR}}`
   substitution. Refuses overwrite without `--overwrite`.
 - `next_step.py` — emits the handoff JSON at end-of-phase. Contains the
   `PHASE_TRANSITIONS` map (create-plan → implement-task, etc.) including
@@ -128,20 +128,21 @@ gate is called by `implement-task` and `finish-task`.
   `spawn_prompt` (for Task) and `launcher_command` / `launcher_payload`
   (for the hot-reload-fails fallback).**
 - `cleanup_agents.py` — removes all `qs-*-QS-<N>.md` from a worktree's
-  `.opencode/agent/`. Called by `finish-task` before worktree removal.
+  `.opencode/agents/`. Called by `finish-task` before worktree removal.
 - `__init__.py` — empty.
 
 ### Templates (`_qsprocess_opencode/agent_templates/`)
 
 Nine `*.md.tmpl` files, all with:
 
-- `mode: subagent`
-- No `model:` key — agents inherit the project default from `opencode.json`- `permission` blocks scoped narrowly (e.g., create-plan can only edit
+- Phase agents (create-plan, implement-task, review-task, finish-task, release): `mode: primary` — activated via `--agent` CLI flag
+- Reviewer sub-roles (blind-hunter, edge-case-hunter, acceptance-auditor, coderabbit): `mode: subagent` + `hidden: true` — Task-spawned by review-task orchestrator
+- No `model:` key — agents inherit the project default from `opencode.json`
+- `permission` blocks scoped narrowly (e.g., create-plan can only edit
   the story file; implement-task edits only `custom_components/quiet_solar/**`
   and `tests/**`; review agents are edit-deny)
 - YAML frontmatter validated via `yaml.safe_load`
 - Reference `_qsprocess/skills/<phase>.md` as authoritative protocol
-- Reviewer sub-roles have `hidden: true`
 
 ### Documentation
 
@@ -193,7 +194,7 @@ if flag syntax ever changes.
 ### 4. Dual-path phase transitions (Task + launcher fallback)
 
 Added this round. Critical insight: if OpenCode does not hot-reload
-`.opencode/agent/` mid-session, mid-session Task-spawn of a
+`.opencode/agents/` mid-session, mid-session Task-spawn of a
 newly-rendered agent will fail with "unknown agent". Rather than pick
 one path, every transition emits BOTH:
 
@@ -220,9 +221,9 @@ All completed and passing:
 - [x] All 5 Python scripts parse (AST check).
 - [x] All 9 templates render without leftover `{{...}}`.
 - [x] All 9 rendered YAML frontmatters valid (`yaml.safe_load`).
-- [x] All frontmatters include: `description`, `mode: subagent`,
-  `permission`. Reviewer sub-roles additionally have `hidden: true`.
-  Model is inherited from `opencode.json` project default.
+- [x] All frontmatters include: `description`, `mode` (`primary` for phase agents,
+  `subagent` for reviewer sub-roles), `permission`. Reviewer sub-roles additionally
+  have `hidden: true`. Model is inherited from `opencode.json` project default.
 - [x] Templates reference the right scripts in the right counts
   (next_step.py, render_agent.py, cleanup_agents.py, quality_gate.py).
 - [x] `next_step.py` handoff JSON verified for every transition,
@@ -241,7 +242,7 @@ All completed and passing:
 
 ### 1. Task-tool dynamic-agent behavior (empirically unverified)
 
-Whether OpenCode hot-reloads `.opencode/agent/` files mid-session
+Whether OpenCode hot-reloads `.opencode/agents/` files mid-session
 (required for in-session Task-spawn of rendered agents to succeed) is
 **version-dependent and not yet empirically tested**. The dual-path
 design makes this non-blocking — worst case is 4 OpenCode restarts per
@@ -328,8 +329,8 @@ If you come back to this workflow later and need to continue:
 
 This session produced the first commit, which adds:
 
-- `.opencode/agent/qs-setup-task.md`
-- `.opencode/command/setup-task.md`
+- `.opencode/agents/qs-setup-task.md`
+- `.opencode/commands/setup-task.md`
 - `opencode.json`
 - `AGENTS.md`
 - `scripts/qs_opencode/` (6 files: __init__, utils, render_agent,

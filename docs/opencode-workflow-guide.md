@@ -15,11 +15,11 @@ materialized and hand off to each other.
 The OpenCode flow has **one static agent** and **nine per-task agents**
 generated on demand.
 
-- **Static**: `.opencode/agent/qs-setup-task.md` — the only always-present
-  subagent, plus its slash command `.opencode/command/setup-task.md`. Runs
+- **Static**: `.opencode/agents/qs-setup-task.md` — the only always-present
+  subagent, plus its slash command `.opencode/commands/setup-task.md`. Runs
   in the home OpenCode on `main`.
 - **Per-task**: every downstream phase is rendered from a template into the
-  new worktree's `.opencode/agent/` folder with all issue-specific context
+  new worktree's `.opencode/agents/` folder with all issue-specific context
   baked into the system prompt and narrow tool/permission allowlists tuned
   to that phase.
 
@@ -64,11 +64,11 @@ key/value pairs can be passed with `--extra KEY=VALUE`.
 ### Rendering
 
 `scripts/qs_opencode/render_agent.py` renders one phase template into
-`<work_dir>/.opencode/agent/qs-<phase>-QS-<issue>.md`. It refuses to
+`<work_dir>/.opencode/agents/qs-<phase>-QS-<issue>.md`. It refuses to
 overwrite an existing file unless `--overwrite` is passed.
 
 `scripts/qs_opencode/cleanup_agents.py` removes every
-`qs-*-QS-<issue>.md` under `<work_dir>/.opencode/agent/` at finish-task
+`qs-*-QS-<issue>.md` under `<work_dir>/.opencode/agents/` at finish-task
 time. It never touches files outside the given worktree.
 
 ## Handoff model
@@ -227,7 +227,7 @@ scripts/qs_opencode/                      # sibling of scripts/qs
   launch_opencode.py                      # Phase 1 launcher payload
 
 # Inside each worktree (created per task):
-<worktree>/.opencode/agent/
+<worktree>/.opencode/agents/
   qs-create-plan-QS-<N>.md                # rendered by setup-task
   qs-implement-task-QS-<N>.md             # rendered by create-plan
   qs-review-task-QS-<N>.md                # rendered by implement-task

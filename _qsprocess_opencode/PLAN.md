@@ -17,7 +17,7 @@ in OpenCode with:
 - **One static agent and one slash command** (`/setup-task` →
   `qs-setup-task`). Everything else is generated per task.
 - **Nine per-task agents** rendered on demand from templates into the new
-  worktree's `.opencode/agent/` folder, with issue-specific context baked
+  worktree's `.opencode/agents/` folder, with issue-specific context baked
   into the system prompt and narrow tool/permission allowlists.
 
 Keep `_qsprocess/` as the Claude/Cursor source of truth and add
@@ -32,7 +32,7 @@ no duplicated rules).
    phases 2–6 deliberately have no slash command.
 2. **Per-task agent files** named `qs-<phase>-QS-<N>.md` are rendered
    from templates in `_qsprocess_opencode/agent_templates/*.md.tmpl` into
-   the worktree's `.opencode/agent/`. Each ships with issue number, title,
+   the worktree's `.opencode/agents/`. Each ships with issue number, title,
    branch, worktree path, and story-file path hard-coded into its prompt.
 3. **Template engine**: simple `{{VAR}}` substitution in
    `scripts/qs_opencode/render_agent.py`. No Jinja dependency. Missing or
@@ -51,7 +51,7 @@ no duplicated rules).
      with explicit user consent.
 5. **Cleanup**: `scripts/qs_opencode/cleanup_agents.py --work-dir <w>
    --issue <N>` removes every `qs-*-QS-<N>.md` from
-   `<w>/.opencode/agent/` at finish-task time, before the worktree is
+   `<w>/.opencode/agents/` at finish-task time, before the worktree is
    deleted.
 6. **Permissions (moderate lockdown)**: each template declares a narrow
    `permission` block — edit allowlist per phase, known-script bash
@@ -109,7 +109,7 @@ docs/
 ### Per-task (rendered into each worktree)
 
 ```
-<worktree>/.opencode/agent/
+<worktree>/.opencode/agents/
   qs-create-plan-QS-<N>.md                # rendered by qs-setup-task
   qs-implement-task-QS-<N>.md             # rendered by qs-create-plan
   qs-review-task-QS-<N>.md                # rendered by qs-implement-task
@@ -129,7 +129,7 @@ docs/
    └─ qs-setup-task (static):
        1. Follow _qsprocess/skills/setup-task.md (issue, branch, worktree)
        2. render_agent.py --phase create-plan ...
-          → writes <worktree>/.opencode/agent/qs-create-plan-QS-<N>.md
+          → writes <worktree>/.opencode/agents/qs-create-plan-QS-<N>.md
        3. launch_opencode.py --preload-command "Activate qs-create-plan-QS-<N>..."
           → prints launcher (terminal + optional PyCharm)
 
@@ -212,9 +212,9 @@ The existing CodeRabbit flow (auto-review on PR push) is untouched.
 - [x] `scripts/qs_opencode/render_agent.py` — template renderer.
 - [x] `scripts/qs_opencode/cleanup_agents.py` — per-task agent cleanup.
 - [x] `scripts/qs_opencode/next_step.py` — rewritten for new handoff model.
-- [x] `.opencode/agent/qs-setup-task.md` — rewritten to render
+- [x] `.opencode/agents/qs-setup-task.md` — rewritten to render
       create-plan agent before launcher.
-- [x] `.opencode/command/setup-task.md` — updated.
+- [x] `.opencode/commands/setup-task.md` — updated.
 - [x] Nine templates under `_qsprocess_opencode/agent_templates/`.
 - [x] `docs/opencode-workflow-guide.md` — rewritten for new architecture.
 - [x] `AGENTS.md` — rewritten.
@@ -234,7 +234,7 @@ The existing CodeRabbit flow (auto-review on PR push) is untouched.
   both flags and also prints a banner with the intended agent + prompt
   as a visible fallback.
 - **Task tool + dynamic agents** — whether OpenCode hot-reloads
-  newly-rendered `.opencode/agent/` files mid-session is version-
+  newly-rendered `.opencode/agents/` files mid-session is version-
   dependent and unverified empirically. The pipeline handles both
   cases: `next_step.py` emits a `spawn_prompt` for Task() AND a
   `launcher_command` fallback. Finishing agents try Task-spawn first;

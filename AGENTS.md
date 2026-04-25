@@ -22,7 +22,7 @@ The OpenCode pipeline has **exactly one static agent and one slash command**:
 | `/setup-task`  | `qs-setup-task`  | Create issue + branch + worktree; render first per-task agent; print launcher |
 
 Every downstream phase is a **per-task agent** rendered on demand from a
-template into the new worktree's `.opencode/agent/` folder, named
+template into the new worktree's `.opencode/agents/` folder, named
 `qs-<phase>-QS-<N>.md`:
 
 - `qs-create-plan-QS-<N>` — write story artifact, commit, push
@@ -81,8 +81,8 @@ to the user.
 
 ## Rendering and cleanup
 
-- `scripts/qs_opencode/render_agent.py --phase <p> --work-dir <w> --issue <N> --title <t> [--story-file ...] [--pr ...] [--extra KEY=VALUE ...]` renders one template into `<w>/.opencode/agent/qs-<p>-QS-<N>.md`. Refuses to overwrite without `--overwrite`. Templates live under `_qsprocess_opencode/agent_templates/*.md.tmpl` and use `{{VAR}}` substitution.
-- `scripts/qs_opencode/cleanup_agents.py --work-dir <w> --issue <N>` removes every `qs-*-QS-<N>.md` under `<w>/.opencode/agent/`. Called by `qs-finish-task-QS-<N>` just before the worktree is deleted.
+- `scripts/qs_opencode/render_agent.py --phase <p> --work-dir <w> --issue <N> --title <t> [--story-file ...] [--pr ...] [--extra KEY=VALUE ...]` renders one template into `<w>/.opencode/agents/qs-<p>-QS-<N>.md`. Refuses to overwrite without `--overwrite`. Templates live under `_qsprocess_opencode/agent_templates/*.md.tmpl` and use `{{VAR}}` substitution.
+- `scripts/qs_opencode/cleanup_agents.py --work-dir <w> --issue <N>` removes every `qs-*-QS-<N>.md` under `<w>/.opencode/agents/`. Called by `qs-finish-task-QS-<N>` just before the worktree is deleted.
 
 ## Quality gate (non-negotiable)
 
