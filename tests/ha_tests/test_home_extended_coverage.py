@@ -1733,6 +1733,32 @@ class TestQSSolarHistoryValsInit:
         result = await hv.init(datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC))
         assert result == (None, None)
 
+    @pytest.mark.asyncio
+    async def test_init_resets_values_with_wrong_shape(self, tmp_path):
+        """Init resets values when read_values_async returns array with wrong shape. Covers lines 4310-4313."""
+        forecast = MagicMock()
+        forecast.home = None
+        forecast.storage_path = str(tmp_path)
+
+        hv = QSSolarHistoryVals(forecast=forecast, entity_id="sensor.test_shape")
+        hv._init_done = False
+        hv.values = None
+
+        # Return an array with wrong shape (3, 10) instead of (2, BUFFER_SIZE_IN_INTERVALS)
+        wrong_shape_array = np.ones((3, 10), dtype=np.int32)
+
+        with (
+            patch.object(hv, "read_values_async", new_callable=AsyncMock, return_value=wrong_shape_array),
+            patch("custom_components.quiet_solar.ha_model.home.load_from_history", new_callable=AsyncMock, return_value=[]),
+        ):
+            result = await hv.init(datetime(2026, 2, 10, 14, 0, tzinfo=pytz.UTC))
+
+        # values should have been reset to a fresh zeros array (wrong shape discarded)
+        assert hv.values is not None
+        assert hv.values.shape == (2, BUFFER_SIZE_IN_INTERVALS)
+        # result should be (None, None) since no history states were loaded
+        assert result == (None, None)
+
 
 # ========================================================================
 # QSHome map_location_path

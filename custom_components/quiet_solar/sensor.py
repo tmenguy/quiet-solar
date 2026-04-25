@@ -397,6 +397,7 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn=lambda device, key, prov=provider: prov.score,
             qs_is_none_unavailable=True,
+            suggested_display_precision=2,
         )
         entities.append(
             QSBaseSensorSolarScoreRestore(
@@ -421,6 +422,7 @@ def create_ha_sensor_for_QSSolar(device: QSSolar):
             entity_category=EntityCategory.DIAGNOSTIC,
             value_fn_and_attr=_dampened_score_and_attr,
             qs_is_none_unavailable=True,
+            suggested_display_precision=2,
         )
         entities.append(
             QSBaseSensorSolarDampenedScoreRestore(

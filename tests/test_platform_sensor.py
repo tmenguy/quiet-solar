@@ -478,6 +478,44 @@ def test_solar_sensors_use_restore_class():
     assert isinstance(active_provider[0], QSBaseSensorSolarActiveProviderRestore), "Active provider sensor must use QSBaseSensorSolarActiveProviderRestore"
 
 
+def test_solar_score_sensors_have_display_precision():
+    """Test that score and dampened score sensors set suggested_display_precision=2."""
+    from custom_components.quiet_solar.const import (
+        SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX,
+        SENSOR_SOLAR_FORECAST_SCORE_PREFIX,
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.score = 123.456789
+    mock_provider.score_dampened = 98.7654321
+    mock_provider.has_dampening = False
+
+    mock_device = create_mock_device("solar", name="Test Solar")
+    mock_device.data_handler = MagicMock()
+    mock_device.solar_forecast_providers = {"TestProvider": mock_provider}
+    mock_device.get_forecast_age_hours = MagicMock(return_value=1.5)
+    mock_device.active_provider_name = "TestProvider"
+    mock_device.solar_forecast_sensor_values = {}
+    mock_device.solar_forecast_sensor_values_probers = {}
+    mock_device.solar_forecast_sensor_values_per_provider = {}
+    mock_device.solar_forecast_sensor_values_per_provider_probers = {}
+
+    entities = create_ha_sensor_for_QSSolar(mock_device)
+
+    scores = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_SCORE_PREFIX)]
+    dampened = [e for e in entities if e.entity_description.key.startswith(SENSOR_SOLAR_FORECAST_DAMPENED_SCORE_PREFIX)]
+
+    assert len(scores) == 1, "Expected exactly one score sensor"
+    assert len(dampened) == 1, "Expected exactly one dampened score sensor"
+
+    assert scores[0].entity_description.suggested_display_precision == 2, (
+        "Score sensor must have suggested_display_precision=2"
+    )
+    assert dampened[0].entity_description.suggested_display_precision == 2, (
+        "Dampened score sensor must have suggested_display_precision=2"
+    )
+
+
 # --- Tests for QSBaseSensorRestore filtering unavailable/unknown on restore ---
 
 
