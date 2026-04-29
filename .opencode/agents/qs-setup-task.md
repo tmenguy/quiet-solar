@@ -117,25 +117,23 @@ If the user specified a story key (e.g., "3.2"), use
 Verify render_agent.py exited 0 and the file exists at
 `{{worktree_path}}/.opencode/agents/qs-create-plan-QS-{{issue_number}}.md`.
 
-### 4. Reload agents and hand off
+### 4. Tell the user what to do next
 
-Run `/reload` to make OpenCode discover the newly-rendered agent file in
-the worktree's `.opencode/agents/` directory.
-
-Then Task-spawn `qs-create-plan-QS-{{issue_number}}`:
-
-```
-Task(subagent_type="qs-create-plan-QS-{{issue_number}}", prompt="Begin your phase protocol.")
-```
-
-### 5. Tell the user what happens next
+Print the following directions for the user to continue manually:
 
 ```
 Task #{{issue_number}} ready.
    Worktree:   {{worktree_path}}
-   Agent:      qs-create-plan-QS-{{issue_number}} (rendered and reloaded)
-→ Handing off to create-plan phase...
+   Agent:      qs-create-plan-QS-{{issue_number}} (rendered)
+
+Next steps:
+1. Open a new workspace on the worktree QS_{{issue_number}}
+2. Start a new OpenCode session there and activate the create-plan agent:
+   opencode --agent qs-create-plan-QS-{{issue_number}} --prompt "Begin your phase protocol."
 ```
+
+Do NOT attempt to Task-spawn, /reload, or otherwise automatically hand off
+to the next phase. Just print the directions and stop.
 
 ## Hard rules
 
