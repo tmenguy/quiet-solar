@@ -54,7 +54,6 @@ gh issue view {{ISSUE}} --json title,body,labels,milestone
 Also read these if referenced by the issue body:
 - `_qsprocess/rules/project-rules.md`
 - `_bmad-output/project-context.md`
-- Any linked epic/story files under `_bmad-output/planning-artifacts/`
 
 ### 2. Write the story artifact
 
@@ -63,45 +62,40 @@ completeness bar defined in `_qsprocess/skills/create-plan.md`. You may
 NOT edit any other file in this phase — your edit permission is scoped
 to `{{STORY_FILE}}` and the `_qsprocess_opencode/stories/` tree only.
 
-### 3. Present the diff and wait for authorization
+### 3. Finalize
 
-Show the user the story file diff. Wait for explicit **"commit"** before
-running `git add {{STORY_FILE}} && git commit`. Wait for explicit
-**"push"** before `git push -u origin {{BRANCH}}`.
+Present the story file to the user with a diff, then ask a single question:
 
-Commit message format: see `_qsprocess/skills/create-plan.md` (typically
-`plan: story QS-{{ISSUE}} — {{TITLE}}`).
+> **"Ready to implement, or keep working on the plan?"**
 
-### 4. Render the next agent
+- **If the user wants to keep working** → stay in the edit loop, make
+  requested changes, then re-present and re-ask.
+- **If the user says ready** → proceed automatically with ALL of the
+  following (no separate "commit" / "push" gates):
 
-Once the story is pushed:
-
-```bash
-python scripts/qs_opencode/render_agent.py \
-    --phase implement-task \
-    --work-dir "{{WORK_DIR}}" \
-    --issue {{ISSUE}} \
-    --title "{{TITLE}}" \
-    --story-file "{{STORY_FILE}}"
-```
-
-### 5. Emit handoff
-
-```bash
-python scripts/qs_opencode/next_step.py \
-    --phase create-plan \
-    --work-dir "{{WORK_DIR}}" \
-    --issue {{ISSUE}} \
-    --title "{{TITLE}}" \
-    --story-file "{{STORY_FILE}}"
-```
-
-Read the JSON. Follow these steps:
-1. Run any remaining `render_commands` (create-plan only renders one, so
-   typically this is already done in step 4).
-2. Run `/reload` to make OpenCode discover the newly-rendered agent file.
-3. Task-spawn `qs-implement-task-QS-{{ISSUE}}` using the `spawn_prompt`
-   from the JSON.
+1. `git add {{STORY_FILE}} && git commit -m "plan: story QS-{{ISSUE}} — {{TITLE}}"`
+2. `git push -u origin {{BRANCH}}`
+3. Render the next agent:
+   ```bash
+   python scripts/qs_opencode/render_agent.py \
+       --phase implement-task \
+       --work-dir "{{WORK_DIR}}" \
+       --issue {{ISSUE}} \
+       --title "{{TITLE}}" \
+       --story-file "{{STORY_FILE}}"
+   ```
+4. Emit handoff:
+   ```bash
+   python scripts/qs_opencode/next_step.py \
+       --phase create-plan \
+       --work-dir "{{WORK_DIR}}" \
+       --issue {{ISSUE}} \
+       --title "{{TITLE}}" \
+       --story-file "{{STORY_FILE}}"
+   ```
+5. Run `/reload` to make OpenCode discover the newly-rendered agent file.
+6. Task-spawn `qs-implement-task-QS-{{ISSUE}}` with the `spawn_prompt`
+   from the handoff JSON.
 
 Present the result:
 ```
@@ -113,7 +107,6 @@ Present the result:
 ## Hard rules
 
 - ONLY edit `{{STORY_FILE}}`. Do not touch source code or tests.
-- Do NOT run the quality gate — that's Phase 3's job.
-- Do NOT commit or push without explicit user authorization.
+- Do NOT run the quality gate — that's the implement phase's job.
 - Do NOT modify `_qsprocess/rules/`, `scripts/qs/`, `.claude/`, or any
   other hands-off path.
