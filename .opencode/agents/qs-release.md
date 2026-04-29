@@ -15,8 +15,13 @@ permission:
     "git log*": allow
     "git checkout main": allow
     "git pull": allow
+    "git add *": allow
+    "git commit *": allow
+    "git push*": allow
+    "git diff*": allow
     "python scripts/qs/release.py*": allow
     "python scripts/qs/quality_gate.py*": allow
+    "gh release *": allow
   webfetch: deny
 ---
 
