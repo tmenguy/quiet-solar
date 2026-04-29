@@ -5,6 +5,7 @@ description: >-
   drives interactive triage with the user, authorizes fix commits, and
   hands off to qs-finish-task-QS-{{ISSUE}}.
 mode: primary
+color: "#F59E0B"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit: deny
@@ -117,23 +118,16 @@ python scripts/qs_opencode/next_step.py \
     --story-file "{{STORY_FILE}}"
 ```
 
-**Try** to Task-spawn `qs-finish-task-QS-{{ISSUE}}` with the
-`spawn_prompt`. **If Task-spawn fails** (OpenCode does not hot-reload
-newly-rendered agent files mid-session — symptom: "unknown agent"),
-present the `launcher_command` from the JSON to the user:
+Follow these steps:
+1. Run `/reload` to make OpenCode discover the newly-rendered agent file.
+2. Task-spawn `qs-finish-task-QS-{{ISSUE}}` with the `spawn_prompt`.
 
+Present the result:
 ```
 ✅ Review complete — all findings triaged and (if any) fixes merged.
-✅ qs-finish-task-QS-{{ISSUE}}.md rendered.
-⚠  Task-spawn unavailable mid-session — start a fresh OpenCode:
-
-<launcher_command>
-
-The new session opens on this worktree with qs-finish-task-QS-{{ISSUE}}
-pre-activated and ready to run the final quality gate + merge.
+✅ qs-finish-task-QS-{{ISSUE}}.md rendered and reloaded.
+→ Handing off to finish phase...
 ```
-
-Then stop.
 
 ## Hard rules
 

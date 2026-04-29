@@ -4,6 +4,7 @@ description: >-
   artifact at {{STORY_FILE}}, commits and pushes it on branch {{BRANCH}},
   then renders qs-implement-task-QS-{{ISSUE}}.md and hands off.
 mode: primary
+color: "#3B82F6"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit:
@@ -95,30 +96,19 @@ python scripts/qs_opencode/next_step.py \
     --story-file "{{STORY_FILE}}"
 ```
 
-Read the JSON. Follow its `instructions_for_current_agent` field:
+Read the JSON. Follow these steps:
 1. Run any remaining `render_commands` (create-plan only renders one, so
-   typically this is already done in step 4 — the handoff command will
-   re-emit it; re-running with the same inputs is a no-op because
-   `render_agent.py` refuses to overwrite without `--overwrite`).
-2. **Try** to Task-spawn `qs-implement-task-QS-{{ISSUE}}` using the
-   `spawn_prompt` from the JSON.
-3. **If Task-spawn fails** (OpenCode does not hot-reload newly-rendered
-   agent files mid-session — symptom: "unknown agent" / "agent not
-   found"), present the `launcher_command` from the JSON to the user:
+   typically this is already done in step 4).
+2. Run `/reload` to make OpenCode discover the newly-rendered agent file.
+3. Task-spawn `qs-implement-task-QS-{{ISSUE}}` using the `spawn_prompt`
+   from the JSON.
 
-   ```
-   ✅ Story written, committed, pushed.
-   ✅ qs-implement-task-QS-{{ISSUE}}.md rendered in .opencode/agents/.
-   ⚠  Task-spawn unavailable mid-session — start a fresh OpenCode:
-
-   <launcher_command>
-
-   The new session will open on this worktree with qs-implement-task-QS-{{ISSUE}}
-   pre-activated and ready to begin.
-   ```
-
-   Then stop. The user runs the command; a new OpenCode session picks up
-   the rendered agent with a clean process.
+Present the result:
+```
+✅ Story written, committed, pushed.
+✅ qs-implement-task-QS-{{ISSUE}}.md rendered and reloaded.
+→ Handing off to implement phase...
+```
 
 ## Hard rules
 

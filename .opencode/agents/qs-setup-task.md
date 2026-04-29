@@ -6,7 +6,8 @@ description: >-
   folder, then emits a launcher for a new OpenCode session on the worktree.
   Use when the user says "setup task", "new task", "work on issue #N", or
   describes a new feature to start.
-mode: subagent
+mode: primary
+color: "#8B5CF6"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit: deny
@@ -116,38 +117,15 @@ If the user specified a story key (e.g., "3.2"), use
 Verify render_agent.py exited 0 and the file exists at
 `{{worktree_path}}/.opencode/agents/qs-create-plan-QS-{{issue_number}}.md`.
 
-### 4. Emit the launcher payload
+### 4. Reload agents and hand off
 
-```bash
-python scripts/qs_opencode/launch_opencode.py \
-    --work-dir "{{worktree_path}}" \
-    --issue {{issue_number}} \
-    --title "{{title}}" \
-    --agent "qs-create-plan-QS-{{issue_number}}" \
-    --preload-command "Begin your phase protocol."
-```
+Run `/reload` to make OpenCode discover the newly-rendered agent file in
+the worktree's `.opencode/agents/` directory.
 
-Parse the JSON output. Display the launcher options to the user:
+Then Task-spawn `qs-create-plan-QS-{{issue_number}}`:
 
 ```
-**Option A — New terminal:**
-  {{new_context}}
-
-**Option B — Same context:**
-  {{same_context}}
-```
-
-If `pycharm_context` is present:
-```
-**Option C — PyCharm + clipboard:**
-  {{pycharm_context}}
-  (Opens PyCharm on the worktree. In PyCharm: Option+F12 -> Cmd+V -> Enter)
-```
-
-If `pycharm_applescript_context` is present:
-```
-**Option D — PyCharm + auto-type (experimental):**
-  {{pycharm_applescript_context}}
+Task(subagent_type="qs-create-plan-QS-{{issue_number}}", prompt="Begin your phase protocol.")
 ```
 
 ### 5. Tell the user what happens next
@@ -155,11 +133,8 @@ If `pycharm_applescript_context` is present:
 ```
 Task #{{issue_number}} ready.
    Worktree:   {{worktree_path}}
-   Pre-rendered agent:  .opencode/agents/qs-create-plan-QS-{{issue_number}}.md
-                        (baked with issue context, narrow permissions)
-
--> Start a new OpenCode on the worktree using one of the options above.
-   Then say: "Activate qs-create-plan-QS-{{issue_number}} and begin."
+   Agent:      qs-create-plan-QS-{{issue_number}} (rendered and reloaded)
+→ Handing off to create-plan phase...
 ```
 
 ## Hard rules
@@ -169,8 +144,6 @@ Task #{{issue_number}} ready.
 - Do NOT run `python scripts/qs/setup_task.py` — it generates Claude Code
   launchers, not OpenCode launchers. Use `bash scripts/worktree-setup.sh`
   directly as shown in step 2.
-- Do NOT attempt to Task-spawn `qs-create-plan-QS-<N>` from this session
-  — the handoff is a new OpenCode session, not a Task call.
 - Do NOT commit or push anything. setup-task only creates a branch and
   worktree; there are no file changes in this phase.
 - If any step fails, abort and report the failure; do not try to auto-heal.

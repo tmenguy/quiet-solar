@@ -5,6 +5,7 @@ description: >-
   gate; opens a PR against main; renders qs-review-task-QS-{{ISSUE}}.md
   (plus the 4 reviewer sub-roles) and hands off.
 mode: primary
+color: "#22C55E"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit:
@@ -135,28 +136,21 @@ python scripts/qs_opencode/next_step.py \
     --story-file "{{STORY_FILE}}"
 ```
 
-Follow the `instructions_for_current_agent` field:
-1. **Try** to Task-spawn `qs-review-task-QS-{{ISSUE}}` with the
-   `spawn_prompt` (the 4 reviewer sub-roles are already rendered; the
-   orchestrator will Task-spawn them in parallel itself).
-2. **If Task-spawn fails** (OpenCode does not hot-reload newly-rendered
-   agent files mid-session — symptom: "unknown agent"), present the
-   `launcher_command` from the JSON to the user with clear next-step
-   instructions:
+Follow these steps:
+1. Run `/reload` to make OpenCode discover all 5 newly-rendered agent
+   files (review orchestrator + 4 sub-roles).
+2. Task-spawn `qs-review-task-QS-{{ISSUE}}` with the `spawn_prompt`
+   (the orchestrator will Task-spawn the 4 reviewer sub-roles in
+   parallel itself).
 
-   ```
-   ✅ Implementation complete — quality gate passed.
-   ✅ Committed and pushed to {{BRANCH}}.
-   ✅ PR #<N> opened.
-   ✅ qs-review-task-QS-{{ISSUE}}.md + 4 reviewer sub-roles rendered.
-
-   📋 NEXT STEP — Review:
-   Run this command in your terminal to start the review phase:
-
-   <launcher_command>
-   ```
-
-   Then stop.
+Present the result:
+```
+✅ Implementation complete — quality gate passed.
+✅ Committed and pushed to {{BRANCH}}.
+✅ PR #<N> opened.
+✅ qs-review-task-QS-{{ISSUE}}.md + 4 reviewer sub-roles rendered and reloaded.
+→ Handing off to review phase...
+```
 
 ## Hard rules
 

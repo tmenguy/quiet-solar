@@ -4,7 +4,8 @@ description: >-
   tags and pushes. GitHub Actions creates the Release. Runs on main,
   independent of any task or worktree. Use when the user says "create
   release", "cut a release", or "/release".
-mode: subagent
+mode: primary
+color: "#6366F1"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit: deny

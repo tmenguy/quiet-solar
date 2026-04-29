@@ -206,14 +206,10 @@ def main() -> None:
         "1. Render the next agent file(s):",
         *[f"   $ {cmd}" for cmd in render_cmds],
         "",
-        "2. Try to spawn the next agent in the current session via the Task tool:",
-        f"   Task(subagent_type={next_agent!r}, prompt=<spawn_prompt below>)",
+        "2. Run `/reload` to make OpenCode discover the newly-rendered agent(s).",
         "",
-        "3. If Task-spawn fails because OpenCode does not hot-reload agent",
-        "   files mid-session (symptom: 'unknown agent' / 'agent not found'),",
-        "   fall back to the launcher: present `launcher_command` to the user",
-        "   and stop. The user will run it to start a fresh OpenCode session",
-        "   where the newly-rendered agent file is visible.",
+        "3. Spawn the next agent via the Task tool:",
+        f"   Task(subagent_type={next_agent!r}, prompt=<spawn_prompt below>)",
     ]
 
     output_json({
