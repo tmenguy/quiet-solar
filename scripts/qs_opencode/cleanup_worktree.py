@@ -192,6 +192,25 @@ def main() -> None:  # noqa: C901
             })
             return
 
+        # --push-first only handles unpushed commits; uncommitted files
+        # would be silently lost when the worktree is deleted.
+        if args.push_first and status["uncommitted_files"]:
+            output_json({
+                "status": "action_required",
+                "safe_to_remove": False,
+                "uncommitted_files": status["uncommitted_files"],
+                "unpushed_commits": status["unpushed_commits"],
+                "branch": status["branch"],
+                "message": (
+                    "Worktree has uncommitted files that --push-first cannot save. "
+                    "Commit them first, or use --force to discard."
+                ),
+                "options": {
+                    "--force": "Delete worktree and lose all uncommitted changes",
+                },
+            })
+            return
+
     # Step 2: Push if requested
     if args.push_first:
         if args.dry_run:

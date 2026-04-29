@@ -283,3 +283,19 @@ class TestMain:
 
         assert result["status"] == "dry_run"
         assert result["would_push"] is True
+
+    def test_push_first_with_uncommitted_blocks(self, tmp_path: Path) -> None:
+        """--push-first should refuse if there are uncommitted files."""
+        with patch("cleanup_worktree.check_worktree_status") as mock_status:
+            mock_status.return_value = {
+                "safe_to_remove": False,
+                "uncommitted_files": ["dirty.py"],
+                "unpushed_commits": 2,
+                "branch": "QS_42",
+            }
+            result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42", "--push-first"])
+
+        assert result["status"] == "action_required"
+        assert "--force" in result["options"]
+        assert "--push-first" not in result.get("options", {})
+        assert "uncommitted" in result["message"].lower()
