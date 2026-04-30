@@ -120,12 +120,12 @@ Task-spawn agents that live in a different worktree. Instead, print
 clear instructions for the user to open a new session:
 
 ```
-✅ Task #{{issue_number}} set up.
+Task #{{issue_number}} set up.
    Worktree:  {{worktree_path}}
    Branch:    QS_{{issue_number}}
    Agent:     qs-create-plan-QS-{{issue_number}} (rendered into worktree)
 
-→ Next: open a new OpenCode session on the worktree and activate the agent:
+Next: open a new OpenCode session on the worktree and activate the agent:
 
    opencode {{worktree_path}} --agent qs-create-plan-QS-{{issue_number}}
 
@@ -141,6 +141,9 @@ python scripts/qs_opencode/launch_opencode.py \
     --title "{{title}}" \
     --agent "qs-create-plan-QS-{{issue_number}}"
 ```
+
+Do NOT attempt to Task-spawn, /reload, or otherwise automatically hand off
+to the next phase. Just print the directions and stop.
 
 ## Hard rules
 
