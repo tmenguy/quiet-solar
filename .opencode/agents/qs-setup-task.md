@@ -3,7 +3,8 @@ description: >-
   Phase 1 of the Quiet Solar pipeline (STATIC entry point). Creates a GitHub
   issue, feature branch, and worktree. Renders the per-task
   qs-create-plan-QS-<N>.md agent into the new worktree's .opencode/agents/
-  folder, then emits a launcher for a new OpenCode session on the worktree.
+  folder, then prints instructions for the user to open a new session on
+  the worktree (cannot Task-spawn across workspaces).
   Use when the user says "setup task", "new task", "work on issue #N", or
   describes a new feature to start.
 mode: primary
@@ -42,7 +43,6 @@ to the GitHub issue as-is. Deep analysis belongs in create-plan.
 ## Input
 
 The user provides ONE of:
-- A story key (e.g., "3.2") referencing an epic in `_bmad-output/planning-artifacts/epics.md`
 - A feature description (free text, may include logs or error traces)
 - A path to an external plan `.md` file via `--plan /path/to/plan.md`
 - An existing GitHub issue number via `--issue N` (e.g., `--issue 42`)
@@ -66,8 +66,6 @@ Do NOT create a new issue.
 **Otherwise** (new issue — the default):
 
 Derive title and body directly from the input — no codebase analysis:
-- **Story key**: Look up `_bmad-output/planning-artifacts/epics.md` for the
-  story title and description. Title: `"Story {{story_key}}: {{title}}"`.
 - **Plan file**: Read the plan, use its title as issue title. Body: the full
   plan text.
 - **Free text**: Extract a short title (first sentence or ~80 chars). Body:
@@ -111,25 +109,37 @@ python scripts/qs_opencode/render_agent.py \
     --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
 ```
 
-If the user specified a story key (e.g., "3.2"), use
-`--story-file "_qsprocess_opencode/stories/story-{{story_key}}.md"` instead.
-
 Verify render_agent.py exited 0 and the file exists at
 `{{worktree_path}}/.opencode/agents/qs-create-plan-QS-{{issue_number}}.md`.
 
 ### 4. Tell the user what to do next
 
-Print the following directions for the user to continue manually:
+**IMPORTANT**: This agent runs on the **main checkout**, which is a
+different workspace from the new worktree. You cannot `/reload` or
+Task-spawn agents that live in a different worktree. Instead, print
+clear instructions for the user to open a new session:
 
 ```
-Task #{{issue_number}} ready.
-   Worktree:   {{worktree_path}}
-   Agent:      qs-create-plan-QS-{{issue_number}} (rendered)
+Task #{{issue_number}} set up.
+   Worktree:  {{worktree_path}}
+   Branch:    QS_{{issue_number}}
+   Agent:     qs-create-plan-QS-{{issue_number}} (rendered into worktree)
 
-Next steps:
-1. Open a new workspace on the worktree QS_{{issue_number}}
-2. Start a new OpenCode session there and activate the create-plan agent:
-   opencode --agent qs-create-plan-QS-{{issue_number}} --prompt "Begin your phase protocol."
+Next: open a new OpenCode session on the worktree and activate the agent:
+
+   opencode {{worktree_path}} --agent qs-create-plan-QS-{{issue_number}}
+
+   Then tell it: "Begin your phase protocol."
+```
+
+Also generate the launcher script for convenience:
+
+```bash
+python scripts/qs_opencode/launch_opencode.py \
+    --work-dir "{{worktree_path}}" \
+    --issue {{issue_number}} \
+    --title "{{title}}" \
+    --agent "qs-create-plan-QS-{{issue_number}}"
 ```
 
 Do NOT attempt to Task-spawn, /reload, or otherwise automatically hand off
@@ -144,4 +154,6 @@ to the next phase. Just print the directions and stop.
   directly as shown in step 2.
 - Do NOT commit or push anything. setup-task only creates a branch and
   worktree; there are no file changes in this phase.
+- Do NOT Task-spawn or `/reload` — the rendered agent is in a different
+  workspace. Always print instructions for the user instead.
 - If any step fails, abort and report the failure; do not try to auto-heal.
