@@ -1,4 +1,4 @@
-homeassistant==2026.2.1
+homeassistant>=2026.4.2
 haversine==2.9.0
 aiofiles
 # Core dependencies (if needed)
