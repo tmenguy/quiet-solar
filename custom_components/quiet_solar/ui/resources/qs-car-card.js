@@ -156,13 +156,24 @@ class QsCarCard extends HTMLElement {
       let targetPct, displayTargetValue, maxCircleValue, displaySocValue;
       if (isStalePercentMode) {
           // Stale-percent mode: show +XX% based on energy delivered
-          const energyWh = Number(sCurrentInputedEnergy?.state || 0);
+          const energyRaw = sCurrentInputedEnergy?.state;
+          const energyAvailable = energyRaw != null
+              && !['unavailable', 'unknown', 'none'].includes(String(energyRaw).toLowerCase())
+              && String(energyRaw).trim() !== '';
+          const energyWh = energyAvailable ? Number(energyRaw) : 0;
           const batteryWh = (e.car_battery_capacity_kwh || 100) * 1000;
           const pctAdded = (energyWh / batteryWh) * 100;
-          soc = Math.max(0, Math.min(100, pctAdded));
+          // When charging with zero energy delivered, ensure a minimum arc so animation is visible
+          const minStaleChargingSoc = charging ? 3 : 0;
+          soc = Math.max(minStaleChargingSoc, Math.min(100, pctAdded));
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
-          displaySocValue = `+${this._fmt(pctAdded)}%`;
+          // If energy data is unavailable, show ⚡ instead of +0%
+          if (!energyAvailable && charging) {
+              displaySocValue = '⚡';
+          } else {
+              displaySocValue = `+${this._fmt(pctAdded)}%`;
+          }
           displayTargetValue = `${this._fmt(targetPct ?? 0)}%`;
       } else if (useEnergyMode) {
           const targetEnergy = parseTargetEnergy(target);
@@ -454,7 +465,8 @@ class QsCarCard extends HTMLElement {
       const forecastDisplay = validPersonForecast ? personForecastStr : 'None';
 
       const activeGradId = isFaulted ? gradFaultId : (isStale ? gradStaleId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId)));
-      const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
+      // In stale-percent mode, show animation whenever charging regardless of arc size
+      const showAnimation = (charging && !shouldShowPlaceholder && (segLen > 6 || isStalePercentMode));
 
       //const forecastedPersonStr = sForecastedPerson?.state;
       //const showForecastedPerson = forecastedPersonStr && forecastedPersonStr.toLowerCase() !== 'none' && forecastedPersonStr.toLowerCase() !== 'unknown' && forecastedPersonStr.toLowerCase() !== 'unavailable' && forecastedPersonStr.trim() !== '';
