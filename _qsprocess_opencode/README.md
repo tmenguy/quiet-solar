@@ -40,7 +40,7 @@ its own worktree and are cleaned up at finish-task time.
 | --- | --- | --- |
 | Tools served | Claude Code, Cursor | OpenCode |
 | Phase materialization | static skill files | **per-task agent files rendered from templates** |
-| Handoff between phases | terminal launcher or instruction text | Phase 1: launcher for new OpenCode session on worktree. Phases 2–6: Task tool spawn of rendered sibling agent. |
+| Handoff between phases | terminal launcher or instruction text | Phase 1: launcher for new OpenCode session on worktree. Phases 2–5: new interactive session via HTTP API (`spawn_session.py`). Review sub-roles: Task-spawn (non-interactive). |
 | Source of project rules | `_qsprocess/rules/project-rules.md` (authoritative) | references `_qsprocess/rules/` — no duplication |
 | Code-style rule set | `_bmad-output/project-context.md` (authoritative) | references same file |
 | Quality gate | `python scripts/qs/quality_gate.py` | same command — no fork |
@@ -107,17 +107,20 @@ All phase transitions go through `scripts/qs_opencode/`:
 
 1. **Render the next agent(s)** via `render_agent.py`.
 2. **Emit handoff JSON** via `next_step.py` (contains exact
-   `render_commands`, `spawn_prompt`, and `next_agent` name).
-3. **Spawn the next agent** via the Task tool.
+   `render_commands`, `spawn_session_command`, and `next_agent` name).
+3. **Spawn a new interactive session** via `spawn_session.py`, which
+   calls the OpenCode HTTP API (`POST /session` + `POST /session/:id/prompt_async`).
+   The new session appears in the sidebar and is fully interactive.
 4. At finish-task, **remove all rendered agents** via `cleanup_agents.py`
    before the worktree is deleted.
 
-Phase 1's handoff is the exception: instead of Task-spawn, it prints a
-launcher command (via `launch_opencode.py`) for the user to start a fresh
-OpenCode session on the new worktree. The `--preload-command` is a
-natural-language instruction like "Activate agent
-`qs-create-plan-QS-<N>` and run its phase protocol" — there is no
-`/create-plan` slash command anymore.
+Phase 1's handoff is the exception: instead of `spawn_session.py`, it
+prints a launcher command (via `launch_opencode.py`) for the user to
+start a fresh OpenCode session on the new worktree (different workspace).
+
+Review sub-roles are the other exception: the review-task orchestrator
+still uses the Task tool to spawn its 4 reviewer sub-roles as
+non-interactive subagents (they just return findings).
 
 ## Open TODOs carried forward
 

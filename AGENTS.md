@@ -45,24 +45,25 @@ tool/permission allowlist tuned to that phase.
   launcher printed by `qs-setup-task` (not a Task spawn). Before emitting
   the launcher, `qs-setup-task` renders `qs-create-plan-QS-<N>.md` into
   the worktree.
-- **Phases 2 → 3 → 4 → 5**: sibling-spawn via the Task tool inside
-  a single OpenCode instance running in the worktree. Each phase ends by
-  calling `scripts/qs_opencode/next_step.py` which emits a handoff JSON
-  payload. The payload contains:
+- **Phases 2 → 3 → 4 → 5**: each phase ends by spawning a **new
+  interactive session** via the OpenCode HTTP API (`spawn_session.py`).
+  The new session appears in the OpenCode sidebar and is fully
+  interactive. Each phase ends by calling `scripts/qs_opencode/next_step.py`
+  which emits a handoff JSON payload. The payload contains:
   - `render_commands` — one or more `render_agent.py` invocations the
     finishing agent must execute to materialize the next agent file(s).
-  - `spawn_prompt` — exact prompt to pass to the next `Task(...)` call.
-  - `next_agent` — the `qs-<phase>-QS-<N>` name to spawn.
+  - `spawn_session_command` — the `spawn_session.py` invocation to
+    create a new interactive session for the next phase.
+  - `next_agent` — the `qs-<phase>-QS-<N>` name for the new session.
 
 `implement-task → review-task` is special: it renders **five** agents in
-one transition (review orchestrator + four reviewer sub-roles), so the
-orchestrator can Task-spawn its reviewers in parallel without further I/O.
+one transition (review orchestrator + four reviewer sub-roles). The
+orchestrator's **reviewer sub-roles** are still Task-spawned as
+non-interactive subagents (they just return findings).
 
 There are **no slash commands for phases 2–5** because OpenCode command
 frontmatter pins a static `agent:` name and cannot dispatch to
-dynamically-named agents. If the Task tool cannot spawn dynamically-named
-agents in the running OpenCode version, the finishing agent asks the user
-to activate the rendered agent by name.
+dynamically-named agents.
 
 See `docs/opencode-workflow-guide.md` for the full description.
 

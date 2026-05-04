@@ -139,9 +139,18 @@ python scripts/qs_opencode/next_step.py \
 Follow these steps:
 1. Run `/reload` to make OpenCode discover all 5 newly-rendered agent
    files (review orchestrator + 4 sub-roles).
-2. Task-spawn `qs-review-task-QS-{{ISSUE}}` with the `spawn_prompt`
-   (the orchestrator will Task-spawn the 4 reviewer sub-roles in
-   parallel itself).
+2. Spawn a new interactive session for the review phase by running the
+   `spawn_session_command` from the handoff JSON:
+   ```bash
+   python scripts/qs_opencode/spawn_session.py \
+       --agent qs-review-task-QS-{{ISSUE}} \
+       --prompt "<spawn_prompt from handoff JSON>" \
+       --title "QS-{{ISSUE}}: review-task"
+   ```
+   This creates a new session visible in the OpenCode sidebar.
+   The review orchestrator will Task-spawn the 4 reviewer sub-roles
+   in parallel itself.
+   Your work is DONE after this — do NOT continue in this session.
 
 Present the result:
 ```

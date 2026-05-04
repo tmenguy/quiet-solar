@@ -120,7 +120,16 @@ python scripts/qs_opencode/next_step.py \
 
 Follow these steps:
 1. Run `/reload` to make OpenCode discover the newly-rendered agent file.
-2. Task-spawn `qs-finish-task-QS-{{ISSUE}}` with the `spawn_prompt`.
+2. Spawn a new interactive session for the finish phase by running the
+   `spawn_session_command` from the handoff JSON:
+   ```bash
+   python scripts/qs_opencode/spawn_session.py \
+       --agent qs-finish-task-QS-{{ISSUE}} \
+       --prompt "<spawn_prompt from handoff JSON>" \
+       --title "QS-{{ISSUE}}: finish-task"
+   ```
+   This creates a new session visible in the OpenCode sidebar.
+   Your work is DONE after this — do NOT continue in this session.
 
 Present the result:
 ```

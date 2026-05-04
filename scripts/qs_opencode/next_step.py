@@ -33,6 +33,7 @@ from utils import (  # type: ignore[import-not-found]
     build_launcher_payload,
     output_json,
 )
+from spawn_session import spawn_session  # type: ignore[import-not-found]
 
 
 # Each finished phase maps to the set of agents that must be rendered before
@@ -52,7 +53,7 @@ PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
     "create-plan": {
         "next_agent_phase": "implement-task",
         "render_phases": ["implement-task"],
-        "handoff": "task",
+        "handoff": "session",
     },
     "implement-task": {
         "next_agent_phase": "review-task",
@@ -65,12 +66,12 @@ PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
             "review-acceptance-auditor",
             "review-coderabbit",
         ],
-        "handoff": "task",
+        "handoff": "session",
     },
     "review-task": {
         "next_agent_phase": "finish-task",
         "render_phases": ["finish-task"],
-        "handoff": "task",
+        "handoff": "session",
     },
     "finish-task": None,  # terminal — release is a separate static agent
     "release": None,  # terminal (kept for completeness)
@@ -200,6 +201,15 @@ def main() -> None:
         same_context_text=f"Activate {next_agent} and begin.",
     )
 
+    # Build the spawn_session.py command for the agent templates to use.
+    session_title = f"QS-{args.issue}: {next_phase}"
+    spawn_cmd = (
+        f"python scripts/qs_opencode/spawn_session.py"
+        f" --agent {shlex.quote(next_agent)}"
+        f" --prompt {shlex.quote(prompt)}"
+        f" --title {shlex.quote(session_title)}"
+    )
+
     instructions = [
         "To complete the handoff, execute these steps in order:",
         "",
@@ -208,8 +218,11 @@ def main() -> None:
         "",
         "2. Run `/reload` to make OpenCode discover the newly-rendered agent(s).",
         "",
-        "3. Spawn the next agent via the Task tool:",
-        f"   Task(subagent_type={next_agent!r}, prompt=<spawn_prompt below>)",
+        "3. Spawn a new interactive session for the next phase:",
+        f"   $ {spawn_cmd}",
+        "",
+        "   This creates a new session visible in the OpenCode sidebar.",
+        "   The current session's work is DONE after this — do NOT continue.",
     ]
 
     output_json({
@@ -218,6 +231,7 @@ def main() -> None:
         "next_agent": next_agent,
         "render_commands": render_cmds,
         "spawn_prompt": prompt,
+        "spawn_session_command": spawn_cmd,
         "launcher_command": launcher_payload["new_context"],
         "launcher_payload": launcher_payload,
         "instructions_for_current_agent": "\n".join(instructions),
@@ -230,8 +244,8 @@ def main() -> None:
             "title": args.title,
         },
         "summary": (
-            f"Handoff: render {len(render_cmds)} agent(s), try Task-spawn "
-            f"{next_agent}, fallback to launcher if hot-reload unavailable"
+            f"Handoff: render {len(render_cmds)} agent(s), spawn new "
+            f"interactive session for {next_agent}"
         ),
     })
 
