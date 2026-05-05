@@ -14,8 +14,7 @@ permission:
     "_qsprocess_opencode/stories/**": allow
   bash:
     "*": ask
-    "gh issue view {{ISSUE}}": allow
-    "gh issue view {{ISSUE}} *": allow
+    "gh issue view {{ISSUE}} --json*": allow
     "gh pr view *": allow
     "git status": allow
     "git diff*": allow
@@ -106,7 +105,8 @@ the parallel-review design):
 
 1. Prepare reviewer-specific context for each persona:
    - **Critic**: plan draft text only (no codebase context)
-   - **Concrete Planner**: plan draft + file tree of affected directories +
+   - **Concrete Planner**: plan draft + file tree of affected directories
+     (use the Glob tool on affected directories to produce the tree) +
      key source snippets
    - **Dev Proxy**: plan draft + project rules summary
    - **Scope Guardian**: plan draft + original issue body
@@ -120,6 +120,10 @@ the parallel-review design):
    ```
 
 3. Collect all findings from the 4 reviewers.
+
+4. If a sub-agent fails, times out, or returns unparseable output, log
+   the error and proceed with findings from the remaining reviewers.
+   Do NOT retry or block on a single failure.
 
 ### Phase 5 — Synthesize & Triage
 
@@ -157,7 +161,8 @@ the parallel-review design):
 4. If the user says **revise**:
    - Update the draft incorporating accepted findings
    - Loop back to Phase 4 (max **3 total rounds** of adversarial review)
-   - On round 3, warn: "This is the final review round."
+   - On round 3, this is the FINAL round — do NOT loop back to Phase 4
+     regardless of user request. Proceed directly to Phase 7.
 
 5. If the user says **approve**: proceed to Phase 7.
 

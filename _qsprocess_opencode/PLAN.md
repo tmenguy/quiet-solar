@@ -223,7 +223,7 @@ The existing CodeRabbit flow (auto-review on PR push) is untouched.
 - [x] `.opencode/agents/qs-setup-task.md` — rewritten to render
       create-plan agent before launcher.
 - [x] `.opencode/commands/setup-task.md` — updated.
-- [x] Thirteen templates under `_qsprocess_opencode/agent_templates/` (including 4 plan reviewer sub-agents).
+- [x] Twelve templates under `_qsprocess_opencode/agent_templates/` (including 4 plan reviewer sub-agents).
 - [x] `docs/opencode-workflow-guide.md` — rewritten for new architecture.
 - [x] `AGENTS.md` — rewritten.
 - [x] `_qsprocess_opencode/README.md` — rewritten.
