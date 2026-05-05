@@ -44,6 +44,7 @@ PHASE_TEMPLATES: dict[str, str] = {
     "plan-dev-proxy": "qs-plan-dev-proxy.md.tmpl",
     "plan-scope-guardian": "qs-plan-scope-guardian.md.tmpl",
     "implement-task": "qs-implement-task.md.tmpl",
+    "implement-setup-task": "qs-implement-setup-task.md.tmpl",
     "review-task": "qs-review-task.md.tmpl",
     "review-blind-hunter": "qs-review-blind-hunter.md.tmpl",
     "review-edge-case-hunter": "qs-review-edge-case-hunter.md.tmpl",

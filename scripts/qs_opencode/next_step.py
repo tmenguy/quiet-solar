@@ -68,6 +68,17 @@ PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
         ],
         "handoff": "session",
     },
+    "implement-setup-task": {
+        "next_agent_phase": "review-task",
+        "render_phases": [
+            "review-task",
+            "review-blind-hunter",
+            "review-edge-case-hunter",
+            "review-acceptance-auditor",
+            "review-coderabbit",
+        ],
+        "handoff": "session",
+    },
     "review-task": {
         "next_agent_phase": "finish-task",
         "render_phases": ["finish-task"],
