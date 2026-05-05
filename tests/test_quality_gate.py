@@ -404,6 +404,7 @@ class TestCacheCliIntegration:
             quality_gate.main()
 
         assert exc_info.value.code == 0
+        # mocks order: [ruff_format, ruff_lint, mypy, translations, pytest]
         # Lint gates should NOT have been called
         for m in mocks[:4]:  # ruff_format, ruff_lint, mypy, translations
             m.assert_not_called()

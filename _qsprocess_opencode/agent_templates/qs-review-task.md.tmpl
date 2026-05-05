@@ -88,7 +88,28 @@ entirely. Present a short summary ("No actionable findings — all items
 are invalid or nice-to-have.") and jump directly to **step 8** (render
 finish-task + handoff).
 
-### 5. One-by-one interactive triage
+### 5. Interactive triage
+
+#### 5a. Findings summary and triage mode selection
+
+Before drilling into individual findings, present a **consolidated
+findings summary table** of all actionable findings (ordered by severity:
+must-fix first, then should-fix, then nice-to-have):
+
+| # | Finding (short) | Severity | Source | File / Line |
+|---|-----------------|----------|--------|-------------|
+| 1 | … | must-fix | … | … |
+| 2 | … | should-fix | … | … |
+| … | … | … | … | … |
+
+Then ask: **"Fix all, skip all, or review one by one?"**
+
+- **fix all** — mark every finding as "fix", present the decisions
+  summary (step 5c), and ask for confirmation.
+- **skip all** — jump directly to **step 6** (all-skipped fast path).
+- **review one by one** — proceed to step 5b.
+
+#### 5b. One-by-one triage
 
 Present findings **one at a time**, ordered by severity: all `must-fix`
 first, then `should-fix`, then `nice-to-have`. For each finding, display:
@@ -110,7 +131,10 @@ Then ask: **"fix or skip?"**
 Record the decision and move to the next finding. Do NOT act on any
 decision until all findings have been triaged.
 
-After all findings are processed, present a **decisions summary table**:
+#### 5c. Decisions summary
+
+After all findings are processed (or after "fix all"), present a
+**decisions summary table**:
 
 | # | Finding (short) | Severity | Decision |
 |---|-----------------|----------|----------|
@@ -133,11 +157,14 @@ handoff).
 #### 7a. Write the fix plan file
 
 Determine the fix plan filename:
+- **Guard**: If `{{STORY_FILE}}` is empty, abort fix plan generation and
+  instruct the user to provide a valid story file path before proceeding.
 - Base: derive from `{{STORY_FILE}}` by removing the `.md` extension
-  (e.g., `_qsprocess_opencode/stories/QS-145.story` →
+  (e.g., `_qsprocess_opencode/stories/QS-145.story.md` →
   `_qsprocess_opencode/stories/QS-145.story`).
 - Look for existing files matching `<base>_review_fix_#*.md` in the
   same directory. Auto-increment the counter (`#01`, `#02`, …).
+  If no existing fix plan files are found, start at `#01`.
 - Final path: `<base>_review_fix_#<XX>.md`
 
 Write the fix plan file with this structure:
@@ -199,7 +226,7 @@ Tell the user: **"Copy the prompt above and paste it to the build agent
 (`qs-implement-task-QS-{{ISSUE}}`). Once fixes are pushed, come back
 here and I will re-run the review to verify."**
 
-When the user returns confirming fixes are pushed, **re-run steps 1–5**
+When the user returns confirming fixes are pushed, **re-run steps 1–7**
 to verify. Loop until clean or until the user explicitly says to proceed.
 
 ### 8. Render qs-finish-task-QS-{{ISSUE}}
