@@ -35,6 +35,15 @@ def _patch_git_state(branch: str = "QS_76", commit: str = "abc123", is_clean: bo
     return patch.object(quality_gate, "_get_git_state", return_value=(branch, commit, is_clean))
 
 
+def _patch_full_scope():
+    """Force full scope so dev-only detection doesn't skip gates."""
+    return patch.object(
+        quality_gate,
+        "_detect_scope",
+        return_value={"scope": "full", "changed_test_files": [], "reason": "patched for test"},
+    )
+
+
 def _patch_all_gates(results: list[dict] | None = None):
     """Context manager that patches all five gate check functions."""
     r = results or _make_all_pass_results()
@@ -183,6 +192,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--cache", "--json"]),
             _patch_git_state("QS_76", "abc123", True),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates(),
             pytest.raises(SystemExit),
@@ -207,6 +217,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--cache", "--json"]),
             _patch_git_state("QS_76", "new_commit", True),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates() as mocks,
             pytest.raises(SystemExit),
@@ -230,6 +241,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--cache", "--json"]),
             _patch_git_state("QS_76", "abc123", False),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates() as mocks,
             pytest.raises(SystemExit),
@@ -251,6 +263,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--cache", "--fix", "--json"]),
             _patch_git_state("QS_76", "abc123", True),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates() as mocks,
             pytest.raises(SystemExit),
@@ -270,6 +283,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--cache", "--no-cache", "--json"]),
             _patch_git_state("QS_76", "abc123", True),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates() as mocks,
             pytest.raises(SystemExit),
@@ -289,6 +303,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--json"]),
             _patch_git_state("QS_76", "abc123", True),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates() as mocks,
             pytest.raises(SystemExit),
@@ -307,6 +322,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--cache", "--json"]),
             _patch_git_state("QS_76", "abc123", True),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates(failing),
             pytest.raises(SystemExit),
@@ -330,6 +346,7 @@ class TestCacheCliIntegration:
         with (
             patch("sys.argv", ["quality_gate.py", "--cache", "--json"]),
             patch.object(quality_gate, "_get_git_state", side_effect=git_state_side_effect),
+            _patch_full_scope(),
             patch.object(quality_gate, "CACHE_FILE", cache_path),
             _patch_all_gates(),
             pytest.raises(SystemExit),
@@ -362,3 +379,39 @@ class TestCacheCliIntegration:
             m.assert_not_called()
         output = capsys.readouterr().out
         assert "cached" in output.lower()
+
+    def test_dev_only_scope_skips_lint_gates_and_runs_pytest_only(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Dev-only scope skips ruff/mypy/translations, runs only pytest on changed files."""
+        cache_path = tmp_path / ".quality_gate_cache"
+        dev_only_scope = {
+            "scope": "dev-only",
+            "changed_test_files": ["tests/test_example.py"],
+            "reason": "only dev/test files changed (1 files)",
+        }
+        pytest_result = {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json"]),
+            _patch_git_state("QS_76", "abc123", True),
+            patch.object(quality_gate, "_detect_scope", return_value=dev_only_scope),
+            patch.object(quality_gate, "CACHE_FILE", cache_path),
+            patch.object(quality_gate, "check_pytest_files", return_value=pytest_result) as mock_pytest_files,
+            _patch_all_gates() as mocks,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+
+        assert exc_info.value.code == 0
+        # mocks order: [ruff_format, ruff_lint, mypy, translations, pytest]
+        # Lint gates should NOT have been called
+        for m in mocks[:4]:  # ruff_format, ruff_lint, mypy, translations
+            m.assert_not_called()
+        # Full pytest should NOT have been called either
+        mocks[4].assert_not_called()
+        # Only check_pytest_files should have been called
+        mock_pytest_files.assert_called_once_with(["tests/test_example.py"])
+        output = json.loads(capsys.readouterr().out)
+        assert output["scope"] == "dev-only"
+        assert output["all_passed"] is True
