@@ -39,6 +39,10 @@ from utils import output_json  # type: ignore[import-not-found]
 # produce all five review-related agents in one pass.
 PHASE_TEMPLATES: dict[str, str] = {
     "create-plan": "qs-create-plan.md.tmpl",
+    "plan-critic": "qs-plan-critic.md.tmpl",
+    "plan-concrete-planner": "qs-plan-concrete-planner.md.tmpl",
+    "plan-dev-proxy": "qs-plan-dev-proxy.md.tmpl",
+    "plan-scope-guardian": "qs-plan-scope-guardian.md.tmpl",
     "implement-task": "qs-implement-task.md.tmpl",
     "review-task": "qs-review-task.md.tmpl",
     "review-blind-hunter": "qs-review-blind-hunter.md.tmpl",

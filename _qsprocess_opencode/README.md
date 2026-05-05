@@ -20,6 +20,10 @@ _qsprocess_opencode/
 ├── SMOKE_TEST.md                         # end-to-end verification runbook
 ├── agent_templates/                      # per-task agent templates ({{VAR}} syntax)
 │   ├── qs-create-plan.md.tmpl
+│   ├── qs-plan-critic.md.tmpl
+│   ├── qs-plan-concrete-planner.md.tmpl
+│   ├── qs-plan-dev-proxy.md.tmpl
+│   ├── qs-plan-scope-guardian.md.tmpl
 │   ├── qs-implement-task.md.tmpl
 │   ├── qs-review-task.md.tmpl
 │   ├── qs-review-blind-hunter.md.tmpl
@@ -55,7 +59,7 @@ its own worktree and are cleaned up at finish-task time.
 `/release` is narrowly scoped to tag + GitHub Release and is **decoupled** from
 `finish-task` (the PR merge happens in `finish-task`).
 
-## Architecture — two static agents, eight rendered per task
+## Architecture — two static agents, twelve rendered per task
 
 ### Static (in main checkout)
 
@@ -71,6 +75,10 @@ its own worktree and are cleaned up at finish-task time.
 | Rendered agent | Rendered by |
 | --- | --- |
 | `qs-create-plan-QS-<N>` | `qs-setup-task` (before emitting launcher) |
+| `qs-plan-critic-QS-<N>` (hidden) | `qs-create-plan-QS-<N>` (at Phase 1) |
+| `qs-plan-concrete-planner-QS-<N>` (hidden) | `qs-create-plan-QS-<N>` (at Phase 1) |
+| `qs-plan-dev-proxy-QS-<N>` (hidden) | `qs-create-plan-QS-<N>` (at Phase 1) |
+| `qs-plan-scope-guardian-QS-<N>` (hidden) | `qs-create-plan-QS-<N>` (at Phase 1) |
 | `qs-implement-task-QS-<N>` | `qs-create-plan-QS-<N>` (at end of phase) |
 | `qs-review-task-QS-<N>` | `qs-implement-task-QS-<N>` |
 | `qs-review-blind-hunter-QS-<N>` (hidden) | `qs-implement-task-QS-<N>` |
@@ -79,8 +87,11 @@ its own worktree and are cleaned up at finish-task time.
 | `qs-review-coderabbit-QS-<N>` (hidden) | `qs-implement-task-QS-<N>` |
 | `qs-finish-task-QS-<N>` | `qs-review-task-QS-<N>` |
 
+`create-plan` renders four plan-reviewer sub-agents at startup (Phase 1)
+so it can Task-spawn them in parallel during adversarial review (Phase 4).
 `implement-task` renders five review agents in one transition so the
-orchestrator can Task-spawn its sub-roles in parallel with no further I/O.
+review orchestrator can Task-spawn its sub-roles in parallel with no
+further I/O.
 
 ## Template placeholders
 
@@ -121,6 +132,11 @@ start a fresh OpenCode session on the new worktree (different workspace).
 Review sub-roles are the other exception: the review-task orchestrator
 still uses the Task tool to spawn its 4 reviewer sub-roles as
 non-interactive subagents (they just return findings).
+
+Plan sub-roles follow the same pattern: the create-plan orchestrator
+Task-spawns its 4 plan-reviewer sub-agents in parallel during the
+adversarial review phase. The sub-agents return structured findings
+which the orchestrator consolidates and triages with the user.
 
 ## Open TODOs carried forward
 
