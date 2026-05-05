@@ -3,6 +3,8 @@
   Zero-build single-file Lit-style web component compatible with Home Assistant
 */
 
+const INVALID_STATES = ['unavailable', 'unknown', 'none'];
+
 class QsCarCard extends HTMLElement {
   connectedCallback() {
     if (this._animRaf != null) return;
@@ -126,11 +128,10 @@ class QsCarCard extends HTMLElement {
       const chargeTimeLabel = 'Finish';
 
       const isNumberLike = (v) => v != null && v !== '' && !Number.isNaN(Number(v));
-      const INVALID_STATES = ['unavailable', 'unknown', 'none'];
       const normState = (s) => String(s || '').toLowerCase();
       const validState = (s) => s != null && !INVALID_STATES.includes(normState(s));
-      const rangeNowStr = (sRangeNow && validState(sRangeNow.state) && isNumberLike(sRangeNow.state)) ? `${this._fmt(sRangeNow.state)} km` : '';
-      const rangeTargetStr = (sRangeTarget && validState(sRangeTarget.state) && isNumberLike(sRangeTarget.state)) ? `${this._fmt(sRangeTarget.state)} km` : '';
+      const rangeNowStr = (sRangeNow && isNumberLike(sRangeNow.state)) ? `${this._fmt(sRangeNow.state)} km` : '';
+      const rangeTargetStr = (sRangeTarget && isNumberLike(sRangeTarget.state)) ? `${this._fmt(sRangeTarget.state)} km` : '';
 
       const parseTargetPercent = (txt) => {
           if (!txt) return undefined;
@@ -164,7 +165,7 @@ class QsCarCard extends HTMLElement {
           const batteryWh = (rawCap > 0 ? rawCap : 100) * 1000;
           const pctAdded = Math.max(0, (energyWh / batteryWh) * 100);
           // When charging with unavailable energy, ensure a minimum arc so animation is visible
-          const minStaleChargingSoc = (charging && !energyAvailable) ? 3 : 0;
+          const minStaleChargingSoc = (charging && isStalePercentMode) ? 3 : 0;
           soc = Math.max(minStaleChargingSoc, Math.min(100, pctAdded));
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
