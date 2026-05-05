@@ -103,6 +103,9 @@ Spawn 4 parallel Task tool calls to the hidden sub-agents. Use a **single
 message with 4 parallel Task calls** (critical — serial spawning defeats
 the parallel-review design):
 
+0. Track the current round number explicitly. On each entry to Phase 4,
+   announce to the user: "**Adversarial review — round N of 3.**"
+
 1. Prepare reviewer-specific context for each persona:
    - **Critic**: plan draft text only (no codebase context)
    - **Concrete Planner**: plan draft + file tree of affected directories
@@ -110,6 +113,11 @@ the parallel-review design):
      key source snippets
    - **Dev Proxy**: plan draft + project rules summary
    - **Scope Guardian**: plan draft + original issue body
+
+   If the file tree or source snippets for the Concrete Planner exceed
+   ~2000 lines, truncate to the most relevant directories and summarize
+   the rest. Prefer depth over breadth — include full detail for the
+   primary affected module, summaries for peripheral modules.
 
 2. Spawn all 4 simultaneously:
    ```
@@ -126,6 +134,11 @@ the parallel-review design):
    Do NOT retry or block on a single failure.
 
 ### Phase 5 — Synthesize & Triage
+
+0. If zero findings were collected from all reviewers (all 4 failed or
+   returned empty), warn the user: "All reviewers failed — no adversarial
+   feedback available." Ask whether to proceed without review or retry
+   (counts as a round). Do NOT silently auto-approve.
 
 1. Normalize all findings into unified format:
    - Source reviewer
