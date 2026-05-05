@@ -16,7 +16,7 @@ in OpenCode with:
 
 - **One static agent and one slash command** (`/setup-task` →
   `qs-setup-task`). Everything else is generated per task.
-- **Nine per-task agents** rendered on demand from templates into the new
+- **Twelve per-task agents** rendered on demand from templates into the new
   worktree's `.opencode/agents/` folder, with issue-specific context baked
   into the system prompt and narrow tool/permission allowlists.
 
@@ -85,6 +85,10 @@ _qsprocess_opencode/
   SMOKE_TEST.md                           # end-to-end verification runbook
   agent_templates/                        # per-task agent templates
     qs-create-plan.md.tmpl
+    qs-plan-critic.md.tmpl
+    qs-plan-concrete-planner.md.tmpl
+    qs-plan-dev-proxy.md.tmpl
+    qs-plan-scope-guardian.md.tmpl
     qs-implement-task.md.tmpl
     qs-review-task.md.tmpl
     qs-review-blind-hunter.md.tmpl
@@ -111,6 +115,10 @@ docs/
 ```
 <worktree>/.opencode/agents/
   qs-create-plan-QS-<N>.md                # rendered by qs-setup-task
+  qs-plan-critic-QS-<N>.md               # rendered by qs-create-plan (Phase 1)
+  qs-plan-concrete-planner-QS-<N>.md     # rendered by qs-create-plan (Phase 1)
+  qs-plan-dev-proxy-QS-<N>.md            # rendered by qs-create-plan (Phase 1)
+  qs-plan-scope-guardian-QS-<N>.md       # rendered by qs-create-plan (Phase 1)
   qs-implement-task-QS-<N>.md             # rendered by qs-create-plan
   qs-review-task-QS-<N>.md                # rendered by qs-implement-task
   qs-review-blind-hunter-QS-<N>.md        # rendered by qs-implement-task
@@ -215,7 +223,7 @@ The existing CodeRabbit flow (auto-review on PR push) is untouched.
 - [x] `.opencode/agents/qs-setup-task.md` — rewritten to render
       create-plan agent before launcher.
 - [x] `.opencode/commands/setup-task.md` — updated.
-- [x] Nine templates under `_qsprocess_opencode/agent_templates/`.
+- [x] Thirteen templates under `_qsprocess_opencode/agent_templates/` (including 4 plan reviewer sub-agents).
 - [x] `docs/opencode-workflow-guide.md` — rewritten for new architecture.
 - [x] `AGENTS.md` — rewritten.
 - [x] `_qsprocess_opencode/README.md` — rewritten.
