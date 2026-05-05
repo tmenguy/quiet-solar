@@ -126,8 +126,9 @@ class QsCarCard extends HTMLElement {
       const chargeTimeLabel = 'Finish';
 
       const isNumberLike = (v) => v != null && v !== '' && !Number.isNaN(Number(v));
+      const INVALID_STATES = ['unavailable', 'unknown', 'none'];
       const normState = (s) => String(s || '').toLowerCase();
-      const validState = (s) => s != null && !['unavailable', 'unknown', 'none'].includes(normState(s));
+      const validState = (s) => s != null && !INVALID_STATES.includes(normState(s));
       const rangeNowStr = (sRangeNow && validState(sRangeNow.state) && isNumberLike(sRangeNow.state)) ? `${this._fmt(sRangeNow.state)} km` : '';
       const rangeTargetStr = (sRangeTarget && validState(sRangeTarget.state) && isNumberLike(sRangeTarget.state)) ? `${this._fmt(sRangeTarget.state)} km` : '';
 
@@ -157,20 +158,22 @@ class QsCarCard extends HTMLElement {
       if (isStalePercentMode) {
           // Stale-percent mode: show +XX% based on energy delivered
           const energyRaw = sCurrentInputedEnergy?.state;
-          const energyAvailable = energyRaw != null
-              && !['unavailable', 'unknown', 'none'].includes(String(energyRaw).toLowerCase())
-              && String(energyRaw).trim() !== '';
+          const energyAvailable = isNumberLike(energyRaw);
           const energyWh = energyAvailable ? Number(energyRaw) : 0;
-          const batteryWh = (e.car_battery_capacity_kwh || 100) * 1000;
-          const pctAdded = (energyWh / batteryWh) * 100;
-          // When charging with zero energy delivered, ensure a minimum arc so animation is visible
-          const minStaleChargingSoc = charging ? 3 : 0;
+          const rawCap = Number(e.car_battery_capacity_kwh);
+          const batteryWh = (rawCap > 0 ? rawCap : 100) * 1000;
+          const pctAdded = Math.max(0, (energyWh / batteryWh) * 100);
+          // When charging with unavailable energy, ensure a minimum arc so animation is visible
+          const minStaleChargingSoc = (charging && !energyAvailable) ? 3 : 0;
           soc = Math.max(minStaleChargingSoc, Math.min(100, pctAdded));
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
-          // If energy data is unavailable, show ⚡ instead of +0%
+          // If energy data is unavailable, show contextual indicator instead of +0%
           if (!energyAvailable && charging) {
-              displaySocValue = '⚡';
+              // ⚡ (U+26A1) is widely supported; replace with 'charging' text if emoji issues arise
+              displaySocValue = '\u26A1';
+          } else if (!energyAvailable && !charging) {
+              displaySocValue = '--';
           } else {
               displaySocValue = `+${this._fmt(pctAdded)}%`;
           }
@@ -453,7 +456,7 @@ class QsCarCard extends HTMLElement {
       const personOptions = selPerson?.attributes?.options || [];
       const personState = (selPerson?.state || '').trim();
       const personStateLc = personState.toLowerCase();
-      const personInvalidStates = ['unavailable', 'unknown', 'none'];
+      const personInvalidStates = INVALID_STATES;
       const shouldShowPersonPlaceholder = !personState || personInvalidStates.includes(personStateLc) || !personOptions.includes(personState);
       const personOptionsHtml = shouldShowPersonPlaceholder
           ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${o}</option>`)].join('')
