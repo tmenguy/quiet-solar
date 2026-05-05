@@ -3,6 +3,8 @@
   Zero-build single-file Lit-style web component compatible with Home Assistant
 */
 
+const INVALID_STATES = ['unavailable', 'unknown', 'none'];
+
 class QsCarCard extends HTMLElement {
   connectedCallback() {
     if (this._animRaf != null) return;
@@ -127,9 +129,9 @@ class QsCarCard extends HTMLElement {
 
       const isNumberLike = (v) => v != null && v !== '' && !Number.isNaN(Number(v));
       const normState = (s) => String(s || '').toLowerCase();
-      const validState = (s) => s != null && !['unavailable', 'unknown', 'none'].includes(normState(s));
-      const rangeNowStr = (sRangeNow && validState(sRangeNow.state) && isNumberLike(sRangeNow.state)) ? `${this._fmt(sRangeNow.state)} km` : '';
-      const rangeTargetStr = (sRangeTarget && validState(sRangeTarget.state) && isNumberLike(sRangeTarget.state)) ? `${this._fmt(sRangeTarget.state)} km` : '';
+      const validState = (s) => s != null && !INVALID_STATES.includes(normState(s));
+      const rangeNowStr = (sRangeNow && isNumberLike(sRangeNow.state)) ? `${this._fmt(sRangeNow.state)} km` : '';
+      const rangeTargetStr = (sRangeTarget && isNumberLike(sRangeTarget.state)) ? `${this._fmt(sRangeTarget.state)} km` : '';
 
       const parseTargetPercent = (txt) => {
           if (!txt) return undefined;
@@ -156,13 +158,26 @@ class QsCarCard extends HTMLElement {
       let targetPct, displayTargetValue, maxCircleValue, displaySocValue;
       if (isStalePercentMode) {
           // Stale-percent mode: show +XX% based on energy delivered
-          const energyWh = Number(sCurrentInputedEnergy?.state || 0);
-          const batteryWh = (e.car_battery_capacity_kwh || 100) * 1000;
-          const pctAdded = (energyWh / batteryWh) * 100;
-          soc = Math.max(0, Math.min(100, pctAdded));
+          const energyRaw = sCurrentInputedEnergy?.state;
+          const energyAvailable = isNumberLike(energyRaw);
+          const energyWh = energyAvailable ? Number(energyRaw) : 0;
+          const rawCap = Number(e.car_battery_capacity_kwh);
+          const batteryWh = (rawCap > 0 ? rawCap : 100) * 1000;
+          const pctAdded = Math.max(0, (energyWh / batteryWh) * 100);
+          // When charging with unavailable energy, ensure a minimum arc so animation is visible
+          const minStaleChargingSoc = (charging && isStalePercentMode) ? 3 : 0;
+          soc = Math.max(minStaleChargingSoc, Math.min(100, pctAdded));
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
-          displaySocValue = `+${this._fmt(pctAdded)}%`;
+          // If energy data is unavailable, show contextual indicator instead of +0%
+          if (!energyAvailable && charging) {
+              // ⚡ (U+26A1) is widely supported; replace with 'charging' text if emoji issues arise
+              displaySocValue = '\u26A1';
+          } else if (!energyAvailable && !charging) {
+              displaySocValue = '--';
+          } else {
+              displaySocValue = `+${this._fmt(pctAdded)}%`;
+          }
           displayTargetValue = `${this._fmt(targetPct ?? 0)}%`;
       } else if (useEnergyMode) {
           const targetEnergy = parseTargetEnergy(target);
@@ -442,7 +457,7 @@ class QsCarCard extends HTMLElement {
       const personOptions = selPerson?.attributes?.options || [];
       const personState = (selPerson?.state || '').trim();
       const personStateLc = personState.toLowerCase();
-      const personInvalidStates = ['unavailable', 'unknown', 'none'];
+      const personInvalidStates = INVALID_STATES;
       const shouldShowPersonPlaceholder = !personState || personInvalidStates.includes(personStateLc) || !personOptions.includes(personState);
       const personOptionsHtml = shouldShowPersonPlaceholder
           ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${o}</option>`)].join('')
@@ -454,7 +469,8 @@ class QsCarCard extends HTMLElement {
       const forecastDisplay = validPersonForecast ? personForecastStr : 'None';
 
       const activeGradId = isFaulted ? gradFaultId : (isStale ? gradStaleId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId)));
-      const showAnimation = (charging && !shouldShowPlaceholder && segLen > 6);
+      // In stale-percent mode, show animation whenever charging regardless of arc size
+      const showAnimation = (charging && !shouldShowPlaceholder && (segLen > 6 || isStalePercentMode));
 
       //const forecastedPersonStr = sForecastedPerson?.state;
       //const showForecastedPerson = forecastedPersonStr && forecastedPersonStr.toLowerCase() !== 'none' && forecastedPersonStr.toLowerCase() !== 'unknown' && forecastedPersonStr.toLowerCase() !== 'unavailable' && forecastedPersonStr.trim() !== '';
