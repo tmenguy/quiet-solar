@@ -28,7 +28,8 @@ def main() -> None:
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="List files that would be removed without deleting",
     )
     args = parser.parse_args()
@@ -36,12 +37,14 @@ def main() -> None:
     work_dir = Path(args.work_dir).resolve()
     agent_dir = work_dir / ".opencode" / "agents"
     if not agent_dir.is_dir():
-        output_json({
-            "work_dir": str(work_dir),
-            "issue": args.issue,
-            "removed": [],
-            "summary": f"No .opencode/agents/ directory under {work_dir}",
-        })
+        output_json(
+            {
+                "work_dir": str(work_dir),
+                "issue": args.issue,
+                "removed": [],
+                "summary": f"No .opencode/agents/ directory under {work_dir}",
+            }
+        )
         return
 
     pattern = f"qs-*-QS-{args.issue}.md"
@@ -60,17 +63,18 @@ def main() -> None:
             # Don't let a single failure abort the whole cleanup; report it.
             removed.append(f"FAILED {rel}: {exc}")
 
-    output_json({
-        "work_dir": str(work_dir),
-        "issue": args.issue,
-        "pattern": pattern,
-        "removed": removed,
-        "dry_run": args.dry_run,
-        "summary": (
-            f"{'Would remove' if args.dry_run else 'Removed'} "
-            f"{len(removed)} agent file(s) for QS-{args.issue}"
-        ),
-    })
+    output_json(
+        {
+            "work_dir": str(work_dir),
+            "issue": args.issue,
+            "pattern": pattern,
+            "removed": removed,
+            "dry_run": args.dry_run,
+            "summary": (
+                f"{'Would remove' if args.dry_run else 'Removed'} {len(removed)} agent file(s) for QS-{args.issue}"
+            ),
+        }
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

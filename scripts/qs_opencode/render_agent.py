@@ -33,7 +33,6 @@ from pathlib import Path
 
 from utils import output_json  # type: ignore[import-not-found]
 
-
 # Map phase → template filename. Every phase that can be rendered must appear
 # here. Reviewer sub-roles are rendered individually so implement-task can
 # produce all five review-related agents in one pass.
@@ -44,6 +43,7 @@ PHASE_TEMPLATES: dict[str, str] = {
     "plan-dev-proxy": "qs-plan-dev-proxy.md.tmpl",
     "plan-scope-guardian": "qs-plan-scope-guardian.md.tmpl",
     "implement-task": "qs-implement-task.md.tmpl",
+    "implement-setup-task": "qs-implement-setup-task.md.tmpl",
     "review-task": "qs-review-task.md.tmpl",
     "review-blind-hunter": "qs-review-blind-hunter.md.tmpl",
     "review-edge-case-hunter": "qs-review-edge-case-hunter.md.tmpl",
@@ -67,16 +67,12 @@ def _repo_root() -> Path:
     for parent in here.parents:
         if (parent / "_qsprocess_opencode" / "agent_templates").is_dir():
             return parent
-    raise RuntimeError(
-        "Could not locate repository root (no _qsprocess_opencode/agent_templates/)"
-    )
+    raise RuntimeError("Could not locate repository root (no _qsprocess_opencode/agent_templates/)")
 
 
 def _load_template(phase: str) -> tuple[Path, str]:
     if phase not in PHASE_TEMPLATES:
-        raise SystemExit(
-            f"Unknown phase {phase!r}. Known: {sorted(PHASE_TEMPLATES)}"
-        )
+        raise SystemExit(f"Unknown phase {phase!r}. Known: {sorted(PHASE_TEMPLATES)}")
     tmpl_path = _repo_root() / "_qsprocess_opencode" / "agent_templates" / PHASE_TEMPLATES[phase]
     if not tmpl_path.is_file():
         raise SystemExit(f"Template not found: {tmpl_path}")
@@ -115,9 +111,7 @@ def _parse_extras(items: list[str]) -> dict[str, str]:
         key, value = item.split("=", 1)
         key = key.strip()
         if not key or not key.isidentifier() or not key.isupper():
-            raise SystemExit(
-                f"--extra key must be UPPER_SNAKE_CASE identifier; got {key!r}"
-            )
+            raise SystemExit(f"--extra key must be UPPER_SNAKE_CASE identifier; got {key!r}")
         out[key] = value
     return out
 
@@ -132,24 +126,26 @@ def main() -> None:
         description="Render a per-task OpenCode agent file from a template",
     )
     parser.add_argument(
-        "--phase", required=True, choices=sorted(PHASE_TEMPLATES.keys()),
+        "--phase",
+        required=True,
+        choices=sorted(PHASE_TEMPLATES.keys()),
         help="Phase whose agent template to render",
     )
-    parser.add_argument("--work-dir", required=True,
-                        help="Worktree where .opencode/agents/ lives")
+    parser.add_argument("--work-dir", required=True, help="Worktree where .opencode/agents/ lives")
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--title", required=True)
-    parser.add_argument("--branch", default=None,
-                        help="Feature branch name; defaults to QS_<issue>")
-    parser.add_argument("--story-file", default="",
-                        help="Path to the story artifact (required for most phases)")
+    parser.add_argument("--branch", default=None, help="Feature branch name; defaults to QS_<issue>")
+    parser.add_argument("--story-file", default="", help="Path to the story artifact (required for most phases)")
     parser.add_argument("--pr", type=int, default=None)
     parser.add_argument(
-        "--extra", action="append", default=[],
+        "--extra",
+        action="append",
+        default=[],
         help="Extra KEY=VALUE placeholders for the template (repeatable)",
     )
     parser.add_argument(
-        "--overwrite", action="store_true",
+        "--overwrite",
+        action="store_true",
         help="Replace the agent file if it already exists",
     )
     args = parser.parse_args()
@@ -178,22 +174,20 @@ def main() -> None:
     out_path = _output_path(work_dir, args.phase, args.issue)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if out_path.exists() and not args.overwrite:
-        raise SystemExit(
-            f"Agent file already exists: {out_path}. Pass --overwrite to replace."
-        )
+        raise SystemExit(f"Agent file already exists: {out_path}. Pass --overwrite to replace.")
     out_path.write_text(rendered, encoding="utf-8")
 
-    output_json({
-        "phase": args.phase,
-        "agent_name": context["AGENT_NAME"],
-        "agent_file": str(out_path),
-        "template": str(tmpl_path),
-        "issue": args.issue,
-        "work_dir": str(work_dir),
-        "summary": (
-            f"Rendered {context['AGENT_NAME']} → {out_path.relative_to(work_dir)}"
-        ),
-    })
+    output_json(
+        {
+            "phase": args.phase,
+            "agent_name": context["AGENT_NAME"],
+            "agent_file": str(out_path),
+            "template": str(tmpl_path),
+            "issue": args.issue,
+            "work_dir": str(work_dir),
+            "summary": (f"Rendered {context['AGENT_NAME']} → {out_path.relative_to(work_dir)}"),
+        }
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

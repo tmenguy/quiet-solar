@@ -1,17 +1,18 @@
 ---
 description: >-
-  Per-task implement-task agent for QS-{{ISSUE}} ({{TITLE}}). TDD
-  implementation of the story in {{STORY_FILE}}; must pass the quality
-  gate; opens a PR against main; renders qs-review-task-QS-{{ISSUE}}.md
-  (plus the 4 reviewer sub-roles) and hands off.
+  Per-task implement-setup-task agent for QS-{{ISSUE}} ({{TITLE}}). TDD
+  implementation of dev-environment changes in {{STORY_FILE}}; runs pytest
+  on _qsprocess_opencode/tests/; opens a PR against main; renders
+  qs-review-task-QS-{{ISSUE}}.md (plus the 4 reviewer sub-roles) and
+  hands off.
 mode: primary
-color: "#22C55E"
+color: "#16A34A"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
   edit:
     "*": deny
-    "custom_components/quiet_solar/**": allow
-    "tests/**": allow
+    "_qsprocess_opencode/**": allow
+    "scripts/qs_opencode/**": allow
     "{{STORY_FILE}}": allow
   bash:
     "*": ask
@@ -21,12 +22,10 @@ permission:
     "git add *": allow
     "git commit *": allow
     "git push*": allow
+    "git rm --cached*": allow
     "source venv/bin/activate*": allow
     "pytest*": allow
     "ruff *": allow
-    "mypy *": allow
-    "python scripts/qs/quality_gate.py*": allow
-    "python scripts/qs/*": allow
     "gh pr create*": allow
     "gh pr view*": allow
     "gh issue view {{ISSUE}}": allow
@@ -35,7 +34,7 @@ permission:
   webfetch: deny
 ---
 
-# {{AGENT_NAME}} — implement-task for QS-{{ISSUE}}
+# {{AGENT_NAME}} — implement-setup-task for QS-{{ISSUE}}
 
 ## Baked-in task context
 
@@ -66,13 +65,14 @@ Read `{{STORY_FILE}}` for the acceptance criteria and technical plan.
 
 Red → green → refactor. No shortcuts:
 1. Write failing tests that encode the acceptance criteria.
-2. Implement the minimum code under `custom_components/quiet_solar/` to
-   make them pass.
+2. Implement the minimum code under `_qsprocess_opencode/` and
+   `scripts/qs_opencode/` to make them pass.
 3. Refactor while keeping tests green.
 
-Your edit permission is scoped to `custom_components/quiet_solar/**` and
-`tests/**` (plus `{{STORY_FILE}}` for progress notes). All other paths
-are denied — if you believe you need to edit elsewhere, stop and escalate.
+Your edit permission is scoped to `_qsprocess_opencode/**` and
+`scripts/qs_opencode/**` (plus `{{STORY_FILE}}` for progress notes). All
+other paths are denied — if you believe you need to edit elsewhere, stop
+and escalate.
 
 ### 3. Implementation summary and quality gate confirmation
 
@@ -84,16 +84,16 @@ Before running the quality gate, present a **summary** to the user:
 Then ask the user: **"Ready to run the quality gate?"**. Wait for
 confirmation before proceeding.
 
-### 4. Quality gate (non-negotiable)
+### 4. Quality gate (dev-environment scope)
 
 ```bash
-python scripts/qs/quality_gate.py
+source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v
+ruff check _qsprocess_opencode/ scripts/qs_opencode/
+ruff format --check _qsprocess_opencode/ scripts/qs_opencode/
 ```
 
-Must exit 0: pytest with 100% coverage, ruff check + format, mypy,
-translations validation. If it fails, **fix autonomously and re-run** —
-only ask the user for direction if you are genuinely stuck after 2–3
-attempts.
+All commands must pass. If it fails, **fix autonomously and re-run** — only ask the
+user for direction if you are genuinely stuck after 2–3 attempts.
 
 ### 5. Commit, push, and open PR (automatic)
 
@@ -103,7 +103,7 @@ Once the quality gate passes, proceed **automatically** without asking:
 3. `git push -u origin {{BRANCH}}`.
 4. `gh pr create` with:
    - Link to issue #{{ISSUE}}.
-   - Quality checklist (coverage, lint, mypy, translations) with results.
+   - Quality checklist (tests pass) with results.
    - Risk assessment (surfaces touched, blast radius, rollback plan).
 
 Capture the PR number from `gh pr create` output — you need it for the
@@ -115,11 +115,11 @@ authorized by the workflow.
 ### 6. Render the review agents
 
 ```bash
-python scripts/qs_opencode/render_agent.py --phase review-task            --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
-python scripts/qs_opencode/render_agent.py --phase review-blind-hunter    --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
-python scripts/qs_opencode/render_agent.py --phase review-edge-case-hunter --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
-python scripts/qs_opencode/render_agent.py --phase review-acceptance-auditor --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
-python scripts/qs_opencode/render_agent.py --phase review-coderabbit      --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
+python scripts/qs_opencode/render_agent.py --phase review-task            --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task --extra QUALITY_GATE_CMD="source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v && ruff check _qsprocess_opencode/ scripts/qs_opencode/ && ruff format --check _qsprocess_opencode/ scripts/qs_opencode/"
+python scripts/qs_opencode/render_agent.py --phase review-blind-hunter    --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task --extra QUALITY_GATE_CMD="source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v && ruff check _qsprocess_opencode/ scripts/qs_opencode/ && ruff format --check _qsprocess_opencode/ scripts/qs_opencode/"
+python scripts/qs_opencode/render_agent.py --phase review-edge-case-hunter --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task --extra QUALITY_GATE_CMD="source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v && ruff check _qsprocess_opencode/ scripts/qs_opencode/ && ruff format --check _qsprocess_opencode/ scripts/qs_opencode/"
+python scripts/qs_opencode/render_agent.py --phase review-acceptance-auditor --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task --extra QUALITY_GATE_CMD="source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v && ruff check _qsprocess_opencode/ scripts/qs_opencode/ && ruff format --check _qsprocess_opencode/ scripts/qs_opencode/"
+python scripts/qs_opencode/render_agent.py --phase review-coderabbit      --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task --extra QUALITY_GATE_CMD="source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v && ruff check _qsprocess_opencode/ scripts/qs_opencode/ && ruff format --check _qsprocess_opencode/ scripts/qs_opencode/"
 ```
 
 Substitute the actual PR number.
@@ -128,7 +128,7 @@ Substitute the actual PR number.
 
 ```bash
 python scripts/qs_opencode/next_step.py \
-    --phase implement-task \
+    --phase implement-setup-task \
     --work-dir "{{WORK_DIR}}" \
     --issue {{ISSUE}} \
     --pr <PR_NUMBER> \
@@ -164,9 +164,9 @@ Present the result:
 ## Hard rules
 
 - No code without a failing test first.
-- No commit without a green quality gate.
+- No commit without a green quality gate (`pytest _qsprocess_opencode/tests/` + `ruff check` + `ruff format --check` — not the full `quality_gate.py`).
 - After a green quality gate, commit + push + PR are automatic (no user prompt).
 - Do NOT edit `_qsprocess/rules/`, `scripts/qs/`, `.claude/`, or any
   other hands-off path. Your allowlist is already narrow — respect it.
-- Coverage below 100% is a hard block. Don't add `# pragma: no cover`
-  without explicit user authorization in-chat.
+- Do NOT edit `custom_components/quiet_solar/**` or `tests/**` — those
+  belong to the regular implement-task agent.

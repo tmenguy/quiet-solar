@@ -33,8 +33,6 @@ from utils import (  # type: ignore[import-not-found]
     build_launcher_payload,
     output_json,
 )
-from spawn_session import spawn_session  # type: ignore[import-not-found]
-
 
 # Each finished phase maps to the set of agents that must be rendered before
 # the next Task spawn. Most phases render exactly one agent; implement-task
@@ -68,6 +66,17 @@ PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
         ],
         "handoff": "session",
     },
+    "implement-setup-task": {
+        "next_agent_phase": "review-task",
+        "render_phases": [
+            "review-task",
+            "review-blind-hunter",
+            "review-edge-case-hunter",
+            "review-acceptance-auditor",
+            "review-coderabbit",
+        ],
+        "handoff": "session",
+    },
     "review-task": {
         "next_agent_phase": "finish-task",
         "render_phases": ["finish-task"],
@@ -76,6 +85,13 @@ PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
     "finish-task": None,  # terminal — release is a separate static agent
     "release": None,  # terminal (kept for completeness)
 }
+
+# Valid next-phase values: any phase that appears as a transition target or
+# as a finishing-phase key with a non-None transition.
+_VALID_NEXT_PHASES = sorted(
+    {str(t["next_agent_phase"]) for t in PHASE_TRANSITIONS.values() if t is not None}
+    | {k for k, v in PHASE_TRANSITIONS.items() if v is not None}
+)
 
 
 def _render_cmd(
@@ -132,8 +148,7 @@ def _spawn_prompt(
         lines.append(f"- story_file: {story_file}")
     lines.append("")
     lines.append(
-        "All task-specific context and tool permissions are baked into "
-        "your agent file. Begin your phase protocol now."
+        "All task-specific context and tool permissions are baked into your agent file. Begin your phase protocol now."
     )
     return "\n".join(lines)
 
@@ -143,7 +158,9 @@ def main() -> None:
         description="Emit a Task-handoff payload for the next OpenCode phase",
     )
     parser.add_argument(
-        "--phase", required=True, choices=sorted(PHASE_TRANSITIONS.keys()),
+        "--phase",
+        required=True,
+        choices=sorted(PHASE_TRANSITIONS.keys()),
         help="Current phase (the one finishing)",
     )
     parser.add_argument("--issue", type=int, required=True)
@@ -151,20 +168,48 @@ def main() -> None:
     parser.add_argument("--story-file", default=None)
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--title", required=True)
+    parser.add_argument(
+        "--next-phase",
+        default=None,
+        choices=_VALID_NEXT_PHASES,
+        help="Override the next agent phase (e.g. implement-setup-task instead of implement-task)",
+    )
     args = parser.parse_args()
 
     transition = PHASE_TRANSITIONS[args.phase]
     if transition is None:
-        output_json({
-            "phase_done": args.phase,
-            "next_agent": None,
-            "summary": f"Phase {args.phase} is terminal; no handoff emitted.",
-        })
+        output_json(
+            {
+                "phase_done": args.phase,
+                "next_agent": None,
+                "summary": f"Phase {args.phase} is terminal; no handoff emitted.",
+            }
+        )
         return
 
     assert isinstance(transition, dict)  # for type-checker
-    next_phase = str(transition["next_agent_phase"])
+    next_phase = args.next_phase or str(transition["next_agent_phase"])
     next_agent = f"qs-{next_phase}-QS-{args.issue}"
+
+    # If --next-phase overrides the default, also override render_phases.
+    # Only supported for single-render transitions (like create-plan →
+    # implement-*). Multi-render transitions (like implement-task → 5
+    # review agents) cannot be overridden because the sub-roles would
+    # become inconsistent.
+    render_phases = list(transition["render_phases"])  # type: ignore[arg-type]
+    if args.next_phase and args.next_phase == args.phase:
+        raise SystemExit(
+            f"Cannot override --next-phase to the same phase as --phase "
+            f"({args.phase!r}); this would create a self-loop."
+        )
+    if args.next_phase and args.next_phase != str(transition["next_agent_phase"]):
+        if len(render_phases) > 1:
+            raise SystemExit(
+                f"--next-phase is only supported for single-render "
+                f"transitions (e.g., create-plan). Phase {args.phase!r} "
+                f"renders {len(render_phases)} agents: {render_phases}."
+            )
+        render_phases = [args.next_phase]
 
     render_cmds = [
         _render_cmd(
@@ -175,7 +220,7 @@ def main() -> None:
             story_file=args.story_file,
             pr=args.pr,
         )
-        for phase in transition["render_phases"]  # type: ignore[arg-type]
+        for phase in render_phases
     ]
 
     prompt = _spawn_prompt(
@@ -225,29 +270,29 @@ def main() -> None:
         "   The current session's work is DONE after this — do NOT continue.",
     ]
 
-    output_json({
-        "phase_done": args.phase,
-        "next_phase": next_phase,
-        "next_agent": next_agent,
-        "render_commands": render_cmds,
-        "spawn_prompt": prompt,
-        "spawn_session_command": spawn_cmd,
-        "launcher_command": launcher_payload["new_context"],
-        "launcher_payload": launcher_payload,
-        "instructions_for_current_agent": "\n".join(instructions),
-        "optional": bool(transition.get("optional", False)),
-        "context": {
-            "issue_number": args.issue,
-            "pr_number": args.pr,
-            "story_file": args.story_file,
-            "worktree": args.work_dir,
-            "title": args.title,
-        },
-        "summary": (
-            f"Handoff: render {len(render_cmds)} agent(s), spawn new "
-            f"interactive session for {next_agent}"
-        ),
-    })
+    output_json(
+        {
+            "phase_done": args.phase,
+            "next_phase": next_phase,
+            "next_phase_overridden": bool(args.next_phase and args.next_phase != str(transition["next_agent_phase"])),
+            "next_agent": next_agent,
+            "render_commands": render_cmds,
+            "spawn_prompt": prompt,
+            "spawn_session_command": spawn_cmd,
+            "launcher_command": launcher_payload["new_context"],
+            "launcher_payload": launcher_payload,
+            "instructions_for_current_agent": "\n".join(instructions),
+            "optional": bool(transition.get("optional", False)),
+            "context": {
+                "issue_number": args.issue,
+                "pr_number": args.pr,
+                "story_file": args.story_file,
+                "worktree": args.work_dir,
+                "title": args.title,
+            },
+            "summary": (f"Handoff: render {len(render_cmds)} agent(s), spawn new interactive session for {next_agent}"),
+        }
+    )
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 description: >-
   Per-task create-plan agent for QS-{{ISSUE}} ({{TITLE}}). Writes the story
   artifact at {{STORY_FILE}}, commits and pushes it on branch {{BRANCH}},
-  then renders qs-implement-task-QS-{{ISSUE}}.md and hands off.
+  then renders qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}.md and hands off.
   Uses adversarial multi-persona review before finalizing the plan.
 mode: primary
 color: "#3B82F6"
@@ -36,7 +36,7 @@ permission:
 - **Branch**: {{BRANCH}}
 - **Worktree**: {{WORK_DIR}}
 - **Story file to write**: `{{STORY_FILE}}`
-- **Next agent to render**: `qs-implement-task-QS-{{ISSUE}}`
+- **Next agent to render**: `qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}`
 - **Plan reviewer sub-agents (rendered in Phase 1)**:
   - `qs-plan-critic-QS-{{ISSUE}}`
   - `qs-plan-concrete-planner-QS-{{ISSUE}}`
@@ -212,7 +212,7 @@ the parallel-review design):
    b. Render the next agent:
       ```bash
       python scripts/qs_opencode/render_agent.py \
-          --phase implement-task \
+          --phase {{IMPLEMENT_PHASE}} \
           --work-dir "{{WORK_DIR}}" \
           --issue {{ISSUE}} \
           --title "{{TITLE}}" \
@@ -235,9 +235,9 @@ the parallel-review design):
       `spawn_session_command` from the handoff JSON:
       ```bash
       python scripts/qs_opencode/spawn_session.py \
-          --agent qs-implement-task-QS-{{ISSUE}} \
+          --agent qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}} \
           --prompt "<spawn_prompt from handoff JSON>" \
-          --title "QS-{{ISSUE}}: implement-task"
+          --title "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}"
       ```
       This creates a new session visible in the OpenCode sidebar.
       Your work is DONE after this — do NOT continue in this session.
@@ -246,8 +246,8 @@ Present the result:
 ```
 ✅ Story written, committed, pushed.
 ✅ Adversarial review completed (N rounds, M findings incorporated).
-✅ qs-implement-task-QS-{{ISSUE}}.md rendered and reloaded.
-→ Handing off to implement phase...
+✅ qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}.md rendered and reloaded.
+→ Handing off to {{IMPLEMENT_PHASE}} phase...
 ```
 
 ## Hard rules

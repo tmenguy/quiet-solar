@@ -37,24 +37,24 @@ def main() -> None:
     parser.add_argument("--title", required=True)
     parser.add_argument("--work-dir", required=True)
     parser.add_argument(
-        "--agent", default=None,
-        help='Rendered agent to activate, e.g. "qs-create-plan-QS-42". '
-             "Passed to opencode as --agent.",
+        "--agent",
+        default=None,
+        help='Rendered agent to activate, e.g. "qs-create-plan-QS-42". Passed to opencode as --agent.',
     )
     parser.add_argument(
-        "--preload-command", default=None,
-        help='Initial prompt for the new session, e.g. '
-             '"Begin your phase protocol." Passed to opencode as --prompt.',
+        "--preload-command",
+        default=None,
+        help='Initial prompt for the new session, e.g. "Begin your phase protocol." Passed to opencode as --prompt.',
     )
     parser.add_argument(
-        "--same-context", default=None,
+        "--same-context",
+        default=None,
         help="Override the same-context text. Defaults to the preload command.",
     )
     args = parser.parse_args()
 
     same_context = args.same_context or (
-        args.preload_command
-        or (f"Activate agent {args.agent} and run its phase protocol." if args.agent else "")
+        args.preload_command or (f"Activate agent {args.agent} and run its phase protocol." if args.agent else "")
     )
     payload = build_launcher_payload(
         args.work_dir,

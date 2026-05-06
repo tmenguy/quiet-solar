@@ -8,7 +8,9 @@ mode: primary
 color: "#F59E0B"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
-  edit: deny
+  edit:
+    "*": deny
+    "_qsprocess_opencode/stories/*_review_fix_*.md": allow
   bash:
     "*": ask
     "gh pr view *": allow
@@ -216,14 +218,14 @@ in it. For each finding:
 3. Verify the fix is correct.
 
 After all fixes are implemented:
-1. Run `python scripts/qs/quality_gate.py` and ensure it passes.
+1. Run the quality gate and ensure it passes.
 2. Commit with message: "fix: address review findings (round <XX>) for #{{ISSUE}}"
 3. Push to origin/{{BRANCH}}.
 ```
 ````
 
 Tell the user: **"Copy the prompt above and paste it to the build agent
-(`qs-implement-task-QS-{{ISSUE}}`). Once fixes are pushed, come back
+(`qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}`). Once fixes are pushed, come back
 here and I will re-run the review to verify."**
 
 When the user returns confirming fixes are pushed, **re-run steps 1–7**
@@ -238,7 +240,9 @@ python scripts/qs_opencode/render_agent.py \
     --issue {{ISSUE}} \
     --title "{{TITLE}}" \
     --story-file "{{STORY_FILE}}" \
-    --pr {{PR_NUMBER}}
+    --pr {{PR_NUMBER}} \
+    --extra IMPLEMENT_PHASE={{IMPLEMENT_PHASE}} \
+    --extra QUALITY_GATE_CMD="{{QUALITY_GATE_CMD}}"
 ```
 
 ### 9. Emit handoff

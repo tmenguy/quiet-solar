@@ -89,7 +89,11 @@ def is_worktree(work_dir: str) -> bool:
     """Return ``True`` when ``work_dir`` is a worktree (not the main repo)."""
     try:
         return Path(work_dir).resolve() != get_main_worktree().resolve()
-    except (subprocess.CalledProcessError, OSError, RuntimeError):
+    except (  # noqa: UP031
+        subprocess.CalledProcessError,
+        OSError,
+        RuntimeError,
+    ):
         return False
 
 
@@ -230,7 +234,9 @@ def build_launcher_payload(
 ) -> dict:
     """Build the JSON payload consumed by ``qs-setup-task`` for its final message."""
     new_context = opencode_launch_command(
-        work_dir, issue, title,
+        work_dir,
+        issue,
+        title,
         agent=agent,
         preload_command=preload_command,
     )
@@ -244,10 +250,16 @@ def build_launcher_payload(
     pycharm_bin = detect_pycharm()
     if pycharm_bin and is_worktree(work_dir):
         payload["pycharm_context"] = pycharm_launch_command(
-            work_dir, issue, opencode_cmd=new_context, pycharm_bin=pycharm_bin,
+            work_dir,
+            issue,
+            opencode_cmd=new_context,
+            pycharm_bin=pycharm_bin,
         )
         payload["pycharm_applescript_context"] = pycharm_applescript_launch_command(
-            work_dir, issue, opencode_cmd=new_context, pycharm_bin=pycharm_bin,
+            work_dir,
+            issue,
+            opencode_cmd=new_context,
+            pycharm_bin=pycharm_bin,
         )
 
     return payload

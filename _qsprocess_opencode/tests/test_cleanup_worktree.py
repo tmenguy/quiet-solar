@@ -5,19 +5,11 @@ Run with: source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v
 
 from __future__ import annotations
 
-import json
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-# Add scripts dir to path so we can import the module
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "qs_opencode"))
-
-import cleanup_worktree  # noqa: E402
-
+import cleanup_worktree
 
 # ---------------------------------------------------------------------------
 # check_worktree_status
