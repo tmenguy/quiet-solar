@@ -25,6 +25,7 @@ permission:
     "git push*": allow
     "python scripts/qs_opencode/next_step.py *": allow
     "python scripts/qs_opencode/render_agent.py *": allow
+    "python scripts/qs_opencode/spawn_session.py *": allow
   webfetch: deny
 ---
 
@@ -37,7 +38,7 @@ permission:
 - **Worktree**: {{WORK_DIR}}
 - **Story file to write**: `{{STORY_FILE}}`
 - **Next agent to render**: `qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}`
-- **Plan reviewer sub-agents (rendered in Phase 1)**:
+- **Plan reviewer sub-agents (pre-rendered by setup-task)**:
   - `qs-plan-critic-QS-{{ISSUE}}`
   - `qs-plan-concrete-planner-QS-{{ISSUE}}`
   - `qs-plan-dev-proxy-QS-{{ISSUE}}`
@@ -64,15 +65,7 @@ additions below extend it.
 
 3. Explore affected codebase areas referenced by the issue.
 
-4. Render the 4 plan reviewer sub-agents:
-   ```bash
-   python scripts/qs_opencode/render_agent.py --phase plan-critic --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   python scripts/qs_opencode/render_agent.py --phase plan-concrete-planner --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   python scripts/qs_opencode/render_agent.py --phase plan-dev-proxy --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   python scripts/qs_opencode/render_agent.py --phase plan-scope-guardian --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   ```
-
-5. Compile an in-memory Analysis Brief (scope, risk, key findings, open
+4. Compile an in-memory Analysis Brief (scope, risk, key findings, open
    questions, affected files).
 
 ### Phase 2 — Present & Clarify
@@ -229,26 +222,28 @@ the parallel-review design):
           --story-file "{{STORY_FILE}}"
       ```
 
-   d. Run `/reload` to make OpenCode discover the newly-rendered agent file.
-
-   e. Spawn a new interactive session for the next phase by running the
-      `spawn_session_command` from the handoff JSON:
+   d. Spawn a new session and trigger reload:
       ```bash
       python scripts/qs_opencode/spawn_session.py \
           --agent qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}} \
-          --prompt "<spawn_prompt from handoff JSON>" \
           --title "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}" \
           --directory "{{WORK_DIR}}"
       ```
-      This creates a new session visible in the OpenCode sidebar.
+      This creates a blank session and fires a delayed `/instance/reload`.
       Your work is DONE after this — do NOT continue in this session.
 
 Present the result:
 ```
 ✅ Story written, committed, pushed.
 ✅ Adversarial review completed (N rounds, M findings incorporated).
-✅ qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}.md rendered and reloaded.
-→ Handing off to {{IMPLEMENT_PHASE}} phase...
+✅ qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}.md rendered.
+✅ Session "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}" created, reload scheduled.
+
+👉 Next steps for user:
+   1. Refresh browser (reload fires in ~2s).
+   2. Switch to session "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}".
+   3. Select agent "qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}" from the agent picker.
+   4. Type the kickoff prompt from the handoff JSON.
 ```
 
 ## Hard rules

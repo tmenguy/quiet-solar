@@ -77,23 +77,27 @@ def check_worktree_status(work_dir: Path) -> dict:
     }
 
 
-def remove_agent_files(work_dir: Path, issue: int) -> list[str]:
-    """Remove per-task agent files (inline logic from cleanup_agents.py)."""
+def remove_agent_files(work_dir: Path, issue: int) -> tuple[list[str], list[str]]:
+    """Remove per-task agent files (inline logic from cleanup_agents.py).
+
+    Returns ``(removed, failed)`` — two lists of relative paths.
+    """
     agent_dir = work_dir / ".opencode" / "agents"
     if not agent_dir.is_dir():
-        return []
+        return [], []
 
     pattern = f"qs-*-QS-{issue}.md"
     matches = sorted(agent_dir.glob(pattern))
     removed: list[str] = []
+    failed: list[str] = []
     for path in matches:
         rel = str(path.relative_to(work_dir))
         try:
             path.unlink()
             removed.append(rel)
         except OSError as exc:
-            removed.append(f"FAILED {rel}: {exc}")
-    return removed
+            failed.append(f"{rel}: {exc}")
+    return removed, failed
 
 
 def list_agent_files(work_dir: Path, issue: int) -> list[str]:
@@ -168,6 +172,36 @@ def main() -> None:  # noqa: C901
         )
         return
 
+    # Step 0: Remove agent files FIRST (before status check).
+    # Untracked agent .md files would cause check_worktree_status to report
+    # the tree as dirty, aborting cleanup before removal ever runs.
+    #
+    # NOTE: On --push-first --force, agents are irrecoverably deleted before
+    # the push attempt.  If the push fails, agent files cannot be recovered
+    # (the worktree still exists but agents are gone).  This is a known
+    # limitation with low blast radius (dev tooling only).  A full fix
+    # would require backing up agent files before removal, which is out of
+    # scope.  The ``agents_removed`` key in the error JSON gives the caller
+    # visibility into what was already cleaned.
+    agents_removed: list[str] = []
+    agents_failed: list[str] = []
+    if args.dry_run:
+        would_remove = list_agent_files(work_dir, args.issue)
+    else:
+        agents_removed, agents_failed = remove_agent_files(work_dir, args.issue)
+
+    # Dry-run: report what would happen and exit
+    if args.dry_run:
+        output_json(
+            {
+                "status": "dry_run",
+                "would_remove_agents": would_remove,
+                "would_remove_worktree": str(work_dir),
+                "would_push": bool(args.push_first),
+            }
+        )
+        return
+
     # Step 1: Check status (unless --force)
     if not args.force:
         status = check_worktree_status(work_dir)
@@ -180,6 +214,8 @@ def main() -> None:  # noqa: C901
                     "uncommitted_files": status["uncommitted_files"],
                     "unpushed_commits": status["unpushed_commits"],
                     "branch": status["branch"],
+                    "agents_removed": agents_removed,
+                    "agents_failed": agents_failed,
                     "message": "Worktree has uncommitted changes and/or unpushed commits.",
                     "options": {
                         "--force": "Delete worktree and lose all uncommitted/unpushed changes",
@@ -199,6 +235,8 @@ def main() -> None:  # noqa: C901
                     "uncommitted_files": status["uncommitted_files"],
                     "unpushed_commits": status["unpushed_commits"],
                     "branch": status["branch"],
+                    "agents_removed": agents_removed,
+                    "agents_failed": agents_failed,
                     "message": (
                         "Worktree has uncommitted files that --push-first cannot save. "
                         "Commit them first, or use --force to discard."
@@ -212,46 +250,26 @@ def main() -> None:  # noqa: C901
 
     # Step 2: Push if requested
     if args.push_first:
-        if args.dry_run:
-            output_json(
-                {
-                    "status": "dry_run",
-                    "would_push": True,
-                    "would_remove_agents": list_agent_files(work_dir, args.issue),
-                    "would_remove_worktree": str(work_dir),
-                }
-            )
-            return
         success, push_output = push_branch(work_dir)
         if not success:
             output_json(
                 {
                     "status": "error",
                     "message": f"Push failed: {push_output}",
+                    "agents_removed": agents_removed,
+                    "agents_failed": agents_failed,
                 }
             )
             return
 
-    if args.dry_run:
-        output_json(
-            {
-                "status": "dry_run",
-                "would_remove_agents": list_agent_files(work_dir, args.issue),
-                "would_remove_worktree": str(work_dir),
-            }
-        )
-        return
-
-    # Step 3: Remove agent files
-    agents_removed = remove_agent_files(work_dir, args.issue)
-
-    # Step 4: Remove worktree
+    # Step 3: Remove worktree
     wt_error = remove_worktree(work_dir)
 
     output_json(
         {
             "status": "removed",
             "agents_removed": agents_removed,
+            "agents_failed": agents_failed,
             "worktree_path": str(work_dir),
             "worktree_remove_error": wt_error,
             "message": f"Worktree QS_{args.issue} fully cleaned up.",
