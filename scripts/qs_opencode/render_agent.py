@@ -165,6 +165,7 @@ def main() -> None:
         "STORY_FILE": args.story_file or "",
         "PR_NUMBER": "" if args.pr is None else str(args.pr),
         "AGENT_NAME": f"qs-{args.phase}-QS-{args.issue}",
+        "IMPLEMENT_PHASE": "implement-task",
     }
     context.update(_parse_extras(args.extra))
 
