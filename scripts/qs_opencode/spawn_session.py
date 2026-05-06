@@ -2,34 +2,37 @@
 """Spawn a new interactive OpenCode session via the HTTP API.
 
 Instead of Task-spawning a non-interactive subagent, this script creates a
-new session that appears in the OpenCode sidebar — fully interactive.
+new **blank** session (no agent, no prompt) and then fires a delayed
+``/instance/reload`` so the server discovers newly-rendered agent files.
 
-It uses the local OpenCode server API (default port 4096) to:
-1. Reload the instance so newly-rendered agents are discovered.
-2. Create a new session.
-3. Send an async prompt with the agent and kickoff message.
+The calling agent should tell the user to:
+1. Refresh the browser (to see the reload take effect).
+2. Switch to the newly created session (by title).
+3. Select the target agent from the agent picker.
+4. Type the kickoff prompt.
 
-All HTTP calls use ``urllib`` from the standard library.  The reload
-endpoint (``POST /instance/reload``) is fire-and-forget on the server —
-it schedules the reload and responds immediately with 200, avoiding the
-deadlock that previously occurred when the reload waited for session
-disposal while the session was blocked on the HTTP response.
+**Why no prompt/agent activation?**  ``POST /instance/reload`` disposes
+all ``SessionRunState`` caches, which cancels every busy session runner.
+If reload fires while our bash tool is still running, the calling session
+gets killed.  The only safe pattern is: fire reload as the *very last*
+side-effect, then yield the final assistant message.  But that means we
+can't wait for the reload to complete, can't poll for agents, and can't
+activate an agent on the new session — all of those require the reload
+to have already finished.
 
 Usage::
 
     python scripts/qs_opencode/spawn_session.py \\
-        --agent qs-implement-task-QS-42 \\
-        --prompt "Begin your phase protocol." \\
-        --title "QS-42: implement-task" \\
+        --agent qs-review-task-QS-42 \\
+        --title "QS-42: review-task" \\
         --directory /path/to/worktree
 
 The ``--directory`` flag is **required** — it tells the OpenCode server
-which project/sandbox the session belongs to.  Without it the middleware
-falls back to ``process.cwd()`` which typically resolves to the global
-project, making the session invisible in the sandbox sidebar.
+which project/sandbox the session belongs to.  Without it the server
+returns 400 on reload and the session may be invisible in the sidebar.
 
-The script outputs JSON with the created session ID so the calling agent
-can report success.
+The script outputs JSON with the created session details and instructions
+for the user.
 """
 
 from __future__ import annotations
@@ -37,8 +40,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
 
@@ -89,114 +93,77 @@ def _api(
         raise SystemExit(1) from exc
 
 
-def _api_safe(
-    method: str,
-    path: str,
-    body: dict | None = None,
+def request_reload_async(
     *,
     directory: str | None = None,
-    timeout: int = 10,
-) -> tuple[bool, dict | list | None]:
-    """Like ``_api`` but returns ``(ok, result)`` instead of raising."""
-    url = f"{_base_url()}{path}"
-    headers: dict[str, str] = {}
-    if directory:
-        headers["x-opencode-directory"] = directory
+    delay_seconds: float = 2.0,
+) -> None:
+    """Fire ``POST /instance/reload`` AFTER our own session has gone idle.
 
-    data: bytes | None = None
-    if body is not None:
-        data = json.dumps(body).encode()
-        headers["Content-Type"] = "application/json"
+    Spawns a detached ``sleep N; curl …`` process and returns immediately.
+    The HTTP request reaches the server only after *delay_seconds*, giving
+    the calling session time to finish and go idle — avoiding the deadlock
+    caused by ``Instance.reload → cancel runner → await done``.
 
-    req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read()
-            if not raw:
-                return True, None
-            return True, json.loads(raw)
-    except urllib.error.HTTPError, urllib.error.URLError, OSError:
-        return False, None
-    except json.JSONDecodeError, TypeError:
-        return True, None
-
-
-def _reload_instance(*, directory: str | None = None) -> bool:
-    """Call ``POST /instance/reload`` so the server re-scans agent files.
-
-    The server now handles reload as fire-and-forget — it schedules the
-    reload in the background and responds with 200 immediately.  This
-    breaks the deadlock that previously occurred when the reload tried to
-    dispose instances (including cancelling active session runners) while
-    the session was blocked waiting for this very HTTP response.
-
-    Best-effort: logs on failure but never aborts.
+    Why a delay: opencode's ``Instance.reload`` disposes ``SessionRunState``,
+    whose finalizer cancels every BUSY session runner on this instance.  If
+    the HTTP request reaches the server while our calling session is still
+    busy (e.g. still rendering its final assistant message), our own runner
+    gets cancelled mid-task.  By spawning a detached ``sleep N; curl …`` and
+    returning immediately, we let our session finish, transition to idle,
+    and be removed from the runners map.  Then the reload arrives, finds no
+    busy runners to cancel, and proceeds cleanly.
     """
     if not directory:
+        directory = os.getcwd()
+
+    base = _base_url()
+    cmd = (
+        f"sleep {delay_seconds}; "
+        f"curl -s -X POST {shlex.quote(base)}/instance/reload "
+        f"-H {shlex.quote(f'x-opencode-directory: {directory}')} "
+        f"> /dev/null 2>&1"
+    )
+    try:
+        subprocess.Popen(  # noqa: S603
+            ["sh", "-c", cmd],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except OSError as exc:
         print(
-            "WARNING: reload called without directory — server may reload wrong context",
+            f"WARNING: failed to spawn /instance/reload trigger ({exc}); "
+            f"agents will not refresh until next manual /reload.",
             file=sys.stderr,
         )
-    url = f"{_base_url()}/instance/reload"
-    headers: dict[str, str] = {}
-    if directory:
-        headers["x-opencode-directory"] = directory
-    req = urllib.request.Request(url, data=b"", method="POST", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            resp.read()
-        return True
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
-        print(f"WARNING: /instance/reload failed ({exc})", file=sys.stderr)
-        return False
-
-
-def _wait_for_agent(
-    agent: str,
-    *,
-    directory: str | None = None,
-    timeout: float = 15,
-    poll_interval: float = 0.5,
-) -> bool:
-    """Poll ``GET /agent`` until *agent* appears in the loaded agents list.
-
-    Returns ``True`` if the agent was found within *timeout* seconds,
-    ``False`` otherwise.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        ok, agents = _api_safe("GET", "/agent", directory=directory, timeout=3)
-        if ok and isinstance(agents, list):
-            names = {a.get("name", "") for a in agents if isinstance(a, dict)}
-            if agent in names:
-                return True
-        time.sleep(poll_interval)
-    return False
 
 
 def spawn_session(
     *,
     agent: str,
-    prompt: str,
     title: str | None = None,
     directory: str | None = None,
+    delay_seconds: float = 2.0,
 ) -> dict:
-    """Create a new interactive session and send the kickoff prompt.
+    """Create a blank session and schedule a delayed reload.
+
+    The session is created immediately (no agent activation, no prompt).
+    Then ``request_reload_async`` fires a detached ``sleep + curl`` so the
+    server re-scans agent files after the calling session goes idle.
+
+    The caller should instruct the user to:
+    1. Refresh the browser after ~delay_seconds.
+    2. Switch to the new session (by *title*).
+    3. Select *agent* from the agent picker.
+    4. Type the kickoff prompt.
 
     *directory* must point to the worktree / sandbox so that the session
     is created under the correct project and appears in the sidebar.
     """
-    # 0. Reload so the server discovers newly-rendered agent files
-    _reload_instance(directory=directory)
-
-    # 1. Wait for the agent to become available (poll GET /agent)
-    if not _wait_for_agent(agent, directory=directory):
-        print(
-            f"WARNING: agent {agent!r} not found after reload; session may fail to activate it.",
-            file=sys.stderr,
-        )
-
-    # 2. Create a new session
+    # 1. Create a blank session (no agent, no prompt)
     session = _api(
         "POST",
         "/session",
@@ -212,29 +179,22 @@ def spawn_session(
         print(f"ERROR: No session ID in response: {session}", file=sys.stderr)
         sys.exit(1)
 
-    # 3. Send the prompt asynchronously (returns empty, session starts working)
-    try:
-        _api(
-            "POST",
-            f"/session/{session_id}/prompt_async",
-            {
-                "agent": agent,
-                "parts": [{"type": "text", "text": prompt}],
-            },
-            directory=directory,
-        )
-    except SystemExit:
-        print(
-            f"WARNING: prompt_async failed for session {session_id}",
-            file=sys.stderr,
-        )
+    # 2. Fire reload LAST — detached, delayed, never blocks.
+    request_reload_async(directory=directory, delay_seconds=delay_seconds)
 
     return {
         "session_id": session_id,
         "agent": agent,
         "title": title or agent,
         "directory": directory,
-        "status": "spawned",
+        "delay_seconds": delay_seconds,
+        "status": "session_created",
+        "instructions": (
+            f"Session '{title or agent}' created. "
+            f"Instance reload scheduled (fires in {delay_seconds}s). "
+            f"Refresh browser, switch to the session, "
+            f"select agent '{agent}' from the picker, then type the kickoff prompt."
+        ),
     }
 
 
@@ -245,12 +205,7 @@ def main() -> None:
     parser.add_argument(
         "--agent",
         required=True,
-        help="Agent name to activate (e.g. qs-implement-task-QS-42)",
-    )
-    parser.add_argument(
-        "--prompt",
-        required=True,
-        help="Kickoff prompt to send to the new session",
+        help="Agent name to activate (e.g. qs-review-task-QS-42)",
     )
     parser.add_argument(
         "--title",
@@ -267,13 +222,22 @@ def main() -> None:
             "the sandbox sidebar."
         ),
     )
+    parser.add_argument(
+        "--delay",
+        type=float,
+        default=2.0,
+        help=(
+            "Seconds to wait before the reload fires.  Must be long enough "
+            "for the calling session to finish and go idle.  Default: 2.0"
+        ),
+    )
     args = parser.parse_args()
 
     result = spawn_session(
         agent=args.agent,
-        prompt=args.prompt,
         title=args.title,
         directory=args.directory,
+        delay_seconds=args.delay,
     )
     output_json(result)
 

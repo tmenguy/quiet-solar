@@ -1,4 +1,4 @@
-"""Tests for spawn_session.py — reload integration + urllib-based API.
+"""Tests for spawn_session.py — session creation + async reload.
 
 Run with: source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v
 """
@@ -8,7 +8,6 @@ from __future__ import annotations
 import http.client
 import json
 import urllib.error
-from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import spawn_session
@@ -24,234 +23,8 @@ def _mock_response(data: bytes = b"", status: int = 200) -> MagicMock:
     return resp
 
 
-class TestReloadInstance:
-    """Tests for the _reload_instance() urllib call."""
-
-    def test_reload_success(self) -> None:
-        """_reload_instance returns True on 200."""
-        with patch("spawn_session.urllib.request.urlopen", return_value=_mock_response()):
-            result = spawn_session._reload_instance(directory="/tmp/test")
-
-        assert result is True
-
-    def test_reload_passes_directory_header(self) -> None:
-        """_reload_instance sets x-opencode-directory header."""
-        with patch("spawn_session.urllib.request.urlopen", return_value=_mock_response()) as mock_urlopen:
-            spawn_session._reload_instance(directory="/my/worktree")
-
-        req = mock_urlopen.call_args[0][0]
-        assert req.get_header("X-opencode-directory") == "/my/worktree"
-
-    def test_reload_sends_empty_body(self) -> None:
-        """_reload_instance sends data=b'' for clean Content-Length: 0."""
-        with patch("spawn_session.urllib.request.urlopen", return_value=_mock_response()) as mock_urlopen:
-            spawn_session._reload_instance(directory="/tmp/test")
-
-        req = mock_urlopen.call_args[0][0]
-        assert req.data == b""
-
-    def test_reload_uses_post_method(self) -> None:
-        """_reload_instance uses POST."""
-        with patch("spawn_session.urllib.request.urlopen", return_value=_mock_response()) as mock_urlopen:
-            spawn_session._reload_instance(directory="/tmp/test")
-
-        req = mock_urlopen.call_args[0][0]
-        assert req.get_method() == "POST"
-
-    def test_reload_uses_10s_timeout(self) -> None:
-        """_reload_instance uses timeout=10."""
-        with patch("spawn_session.urllib.request.urlopen", return_value=_mock_response()) as mock_urlopen:
-            spawn_session._reload_instance(directory="/tmp/test")
-
-        _, kwargs = mock_urlopen.call_args
-        assert kwargs.get("timeout") == 10
-
-    def test_reload_failure_returns_false(self) -> None:
-        """_reload_instance returns False on network error."""
-        with patch(
-            "spawn_session.urllib.request.urlopen",
-            side_effect=urllib.error.URLError("connection refused"),
-        ):
-            result = spawn_session._reload_instance(directory="/tmp/test")
-
-        assert result is False
-
-    def test_reload_http_error_returns_false(self) -> None:
-        """_reload_instance returns False on HTTP 400/500."""
-        err = urllib.error.HTTPError(
-            url="http://127.0.0.1:4096/instance/reload",
-            code=400,
-            msg="Bad Request",
-            hdrs={},  # type: ignore[arg-type]
-            fp=BytesIO(b""),
-        )
-        with patch("spawn_session.urllib.request.urlopen", side_effect=err):
-            result = spawn_session._reload_instance(directory="/tmp/test")
-
-        assert result is False
-
-    def test_reload_warns_when_directory_none(self) -> None:
-        """_reload_instance warns when directory is None."""
-        import io
-
-        captured_stderr = io.StringIO()
-        with (
-            patch("spawn_session.urllib.request.urlopen", return_value=_mock_response()),
-            patch("sys.stderr", captured_stderr),
-        ):
-            result = spawn_session._reload_instance(directory=None)
-
-        assert result is True
-        assert "reload called without directory" in captured_stderr.getvalue()
-
-    def test_reload_called_before_session_creation(self) -> None:
-        """_reload_instance must be called BEFORE session creation."""
-        call_order: list[str] = []
-
-        def tracking_reload(*, directory: str | None = None) -> bool:
-            call_order.append("reload")
-            return True
-
-        def tracking_wait(
-            agent: str,
-            *,
-            directory: str | None = None,
-            timeout: float = 15,
-            poll_interval: float = 0.5,
-        ) -> bool:
-            call_order.append("wait_for_agent")
-            return True
-
-        def tracking_api(
-            method: str,
-            path: str,
-            body: dict | None = None,
-            *,
-            directory: str | None = None,
-            timeout: int = 10,
-        ) -> dict | list | None:
-            call_order.append(f"{method} {path}")
-            if path == "/session":
-                return {"id": "sess-123"}
-            return None
-
-        with (
-            patch.object(spawn_session, "_reload_instance", side_effect=tracking_reload),
-            patch.object(spawn_session, "_wait_for_agent", side_effect=tracking_wait),
-            patch.object(spawn_session, "_api", side_effect=tracking_api),
-        ):
-            spawn_session.spawn_session(
-                agent="qs-test-QS-1",
-                prompt="test",
-                directory="/tmp/test",
-            )
-
-        assert call_order[0] == "reload"
-        assert call_order[1] == "wait_for_agent"
-        assert call_order[2] == "POST /session"
-
-    def test_reload_failure_does_not_abort(self) -> None:
-        """If reload fails, spawn_session should still create the session."""
-        call_order: list[str] = []
-
-        def failing_reload(*, directory: str | None = None) -> bool:
-            call_order.append("reload_failed")
-            return False
-
-        def tracking_api(
-            method: str,
-            path: str,
-            body: dict | None = None,
-            *,
-            directory: str | None = None,
-            timeout: int = 10,
-        ) -> dict | list | None:
-            call_order.append(f"{method} {path}")
-            if path == "/session":
-                return {"id": "sess-123"}
-            return None
-
-        with (
-            patch.object(spawn_session, "_reload_instance", side_effect=failing_reload),
-            patch.object(spawn_session, "_wait_for_agent", return_value=False),
-            patch.object(spawn_session, "_api", side_effect=tracking_api),
-        ):
-            result = spawn_session.spawn_session(
-                agent="qs-test-QS-1",
-                prompt="test",
-                directory="/tmp/test",
-            )
-
-        assert result["status"] == "spawned"
-        assert "POST /session" in call_order
-
-
-class TestWaitForAgent:
-    """Tests for _wait_for_agent polling."""
-
-    def test_agent_found_immediately(self) -> None:
-        """Returns True when agent is already loaded."""
-        agents = [{"name": "qs-review-task-QS-42"}, {"name": "build"}]
-        with patch.object(spawn_session, "_api_safe", return_value=(True, agents)):
-            result = spawn_session._wait_for_agent("qs-review-task-QS-42", timeout=1, poll_interval=0.1)
-        assert result is True
-
-    def test_agent_found_after_polling(self) -> None:
-        """Returns True when agent appears after a few polls."""
-        call_count = 0
-
-        def evolving_api_safe(
-            method: str,
-            path: str,
-            body: dict | None = None,
-            *,
-            directory: str | None = None,
-            timeout: int = 10,
-        ) -> tuple[bool, list | None]:
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                return True, [{"name": "build"}]
-            return True, [{"name": "build"}, {"name": "qs-test-QS-1"}]
-
-        with patch.object(spawn_session, "_api_safe", side_effect=evolving_api_safe):
-            result = spawn_session._wait_for_agent("qs-test-QS-1", timeout=5, poll_interval=0.1)
-
-        assert result is True
-        assert call_count >= 3
-
-    def test_agent_not_found_timeout(self) -> None:
-        """Returns False when agent never appears."""
-        with patch.object(spawn_session, "_api_safe", return_value=(True, [{"name": "build"}])):
-            result = spawn_session._wait_for_agent("qs-missing-QS-99", timeout=0.3, poll_interval=0.1)
-        assert result is False
-
-    def test_api_failure_keeps_polling(self) -> None:
-        """API failures don't abort — keeps polling until timeout."""
-        call_count = 0
-
-        def flaky_api_safe(
-            method: str,
-            path: str,
-            body: dict | None = None,
-            *,
-            directory: str | None = None,
-            timeout: int = 10,
-        ) -> tuple[bool, list | None]:
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                return False, None
-            return True, [{"name": "qs-test-QS-1"}]
-
-        with patch.object(spawn_session, "_api_safe", side_effect=flaky_api_safe):
-            result = spawn_session._wait_for_agent("qs-test-QS-1", timeout=5, poll_interval=0.1)
-
-        assert result is True
-
-
 class TestApi:
-    """Tests for the _api and _api_safe helpers."""
+    """Tests for the _api helper."""
 
     def test_api_returns_parsed_json(self) -> None:
         """_api should return parsed JSON dict on success."""
@@ -288,29 +61,6 @@ class TestApi:
         ):
             spawn_session._api("POST", "/session", {"title": "test"})
 
-    def test_api_safe_returns_tuple_on_success(self) -> None:
-        """_api_safe should return (True, parsed_json)."""
-        resp_data = json.dumps([{"name": "build"}]).encode()
-        with patch(
-            "spawn_session.urllib.request.urlopen",
-            return_value=_mock_response(resp_data),
-        ):
-            ok, result = spawn_session._api_safe("GET", "/agent")
-
-        assert ok is True
-        assert result == [{"name": "build"}]
-
-    def test_api_safe_returns_false_on_error(self) -> None:
-        """_api_safe should return (False, None) on network error."""
-        with patch(
-            "spawn_session.urllib.request.urlopen",
-            side_effect=urllib.error.URLError("refused"),
-        ):
-            ok, result = spawn_session._api_safe("GET", "/agent")
-
-        assert ok is False
-        assert result is None
-
     def test_api_empty_response_returns_none(self) -> None:
         """_api should return None for empty response body."""
         with patch(
@@ -320,3 +70,242 @@ class TestApi:
             result = spawn_session._api("POST", "/session/x/prompt_async", {"agent": "a"})
 
         assert result is None
+
+
+class TestRequestReloadAsync:
+    """Tests for request_reload_async (detached fire-and-forget)."""
+
+    def test_spawns_detached_shell_with_sleep_and_curl(self) -> None:
+        """Should spawn 'sh -c sleep N; curl ...' with start_new_session."""
+        with patch("spawn_session.subprocess.Popen") as mock_popen:
+            spawn_session.request_reload_async(directory="/my/worktree", delay_seconds=3.0)
+
+        mock_popen.assert_called_once()
+        args, kwargs = mock_popen.call_args
+        cmd = args[0]
+        assert cmd[0] == "sh"
+        assert cmd[1] == "-c"
+        shell_script = cmd[2]
+        assert "sleep 3.0" in shell_script
+        assert "/instance/reload" in shell_script
+        assert "x-opencode-directory: /my/worktree" in shell_script
+        assert kwargs["start_new_session"] is True
+        assert kwargs["close_fds"] is True
+
+    def test_defaults_directory_to_cwd(self) -> None:
+        """When directory=None, should use os.getcwd()."""
+        with (
+            patch("spawn_session.subprocess.Popen") as mock_popen,
+            patch("spawn_session.os.getcwd", return_value="/fallback/dir"),
+        ):
+            spawn_session.request_reload_async(directory=None)
+
+        shell_script = mock_popen.call_args[0][0][2]
+        assert "/fallback/dir" in shell_script
+
+    def test_os_error_does_not_raise(self) -> None:
+        """Should handle OSError gracefully (just warn)."""
+        with patch("spawn_session.subprocess.Popen", side_effect=OSError("no sh")):
+            # Should not raise
+            spawn_session.request_reload_async(directory="/tmp/test")
+
+
+class TestSpawnSession:
+    """Tests for spawn_session() — blank session + async reload."""
+
+    def test_creates_session_then_fires_reload(self) -> None:
+        """Session creation must happen BEFORE reload."""
+        call_order: list[str] = []
+
+        def tracking_api(
+            method: str,
+            path: str,
+            body: dict | None = None,
+            *,
+            directory: str | None = None,
+            timeout: int = 10,
+        ) -> dict | list | None:
+            call_order.append(f"{method} {path}")
+            if path == "/session":
+                return {"id": "sess-123"}
+            return None
+
+        def tracking_reload(**kwargs: object) -> None:
+            call_order.append("reload_async")
+
+        with (
+            patch.object(spawn_session, "_api", side_effect=tracking_api),
+            patch.object(
+                spawn_session,
+                "request_reload_async",
+                side_effect=tracking_reload,
+            ),
+        ):
+            result = spawn_session.spawn_session(
+                agent="qs-test-QS-1",
+                directory="/tmp/test",
+            )
+
+        assert call_order == ["POST /session", "reload_async"]
+        assert result["status"] == "session_created"
+        assert result["session_id"] == "sess-123"
+        assert result["agent"] == "qs-test-QS-1"
+
+    def test_no_prompt_sent(self) -> None:
+        """spawn_session should NOT send any prompt."""
+        api_calls: list[str] = []
+
+        def tracking_api(
+            method: str,
+            path: str,
+            body: dict | None = None,
+            *,
+            directory: str | None = None,
+            timeout: int = 10,
+        ) -> dict | list | None:
+            api_calls.append(path)
+            if path == "/session":
+                return {"id": "sess-123"}
+            return None
+
+        with (
+            patch.object(spawn_session, "_api", side_effect=tracking_api),
+            patch.object(spawn_session, "request_reload_async"),
+        ):
+            spawn_session.spawn_session(
+                agent="qs-test-QS-1",
+                directory="/tmp/test",
+            )
+
+        assert not any("prompt" in call for call in api_calls)
+
+    def test_passes_delay_to_reload(self) -> None:
+        """delay_seconds should be forwarded to request_reload_async."""
+        with (
+            patch.object(spawn_session, "_api", return_value={"id": "sess-123"}),
+            patch.object(spawn_session, "request_reload_async") as mock_reload,
+        ):
+            spawn_session.spawn_session(
+                agent="qs-test-QS-1",
+                directory="/tmp/test",
+                delay_seconds=5.0,
+            )
+
+        mock_reload.assert_called_once_with(directory="/tmp/test", delay_seconds=5.0)
+
+    def test_instructions_include_agent_and_title(self) -> None:
+        """Output should include human-readable instructions."""
+        with (
+            patch.object(spawn_session, "_api", return_value={"id": "sess-123"}),
+            patch.object(spawn_session, "request_reload_async"),
+        ):
+            result = spawn_session.spawn_session(
+                agent="qs-review-task-QS-42",
+                title="QS-42: review-task",
+                directory="/tmp/test",
+            )
+
+        assert "qs-review-task-QS-42" in result["instructions"]
+        assert "QS-42: review-task" in result["instructions"]
+        assert "Refresh browser" in result["instructions"]
+        assert "picker" in result["instructions"]
+
+    def test_title_defaults_to_agent(self) -> None:
+        """When title is None, agent name should be used."""
+        with (
+            patch.object(spawn_session, "_api", return_value={"id": "sess-123"}),
+            patch.object(spawn_session, "request_reload_async"),
+        ):
+            result = spawn_session.spawn_session(
+                agent="qs-test-QS-1",
+                directory="/tmp/test",
+            )
+
+        assert result["title"] == "qs-test-QS-1"
+
+    def test_session_creation_failure_exits(self) -> None:
+        """If POST /session fails, should sys.exit."""
+        import pytest
+
+        with (
+            patch.object(
+                spawn_session,
+                "_api",
+                side_effect=SystemExit(1),
+            ),
+            pytest.raises(SystemExit),
+        ):
+            spawn_session.spawn_session(
+                agent="qs-test-QS-1",
+                directory="/tmp/test",
+            )
+
+
+class TestMainCli:
+    """Tests for the CLI entry point."""
+
+    def test_default_delay_is_2(self) -> None:
+        """Default --delay should be 2.0."""
+        with (
+            patch.object(
+                spawn_session,
+                "spawn_session",
+                return_value={
+                    "session_id": "x",
+                    "agent": "a",
+                    "title": "t",
+                    "directory": "/d",
+                    "status": "session_created",
+                    "instructions": "ok",
+                    "delay_seconds": 2.0,
+                },
+            ) as mock_spawn,
+            patch("spawn_session.output_json"),
+            patch(
+                "sys.argv",
+                [
+                    "spawn_session.py",
+                    "--agent",
+                    "qs-test-QS-1",
+                    "--directory",
+                    "/d",
+                ],
+            ),
+        ):
+            spawn_session.main()
+
+        assert mock_spawn.call_args[1]["delay_seconds"] == 2.0
+
+    def test_custom_delay(self) -> None:
+        """--delay should be passed through."""
+        with (
+            patch.object(
+                spawn_session,
+                "spawn_session",
+                return_value={
+                    "session_id": "x",
+                    "agent": "a",
+                    "title": "t",
+                    "directory": "/d",
+                    "status": "session_created",
+                    "instructions": "ok",
+                    "delay_seconds": 5.0,
+                },
+            ) as mock_spawn,
+            patch("spawn_session.output_json"),
+            patch(
+                "sys.argv",
+                [
+                    "spawn_session.py",
+                    "--agent",
+                    "qs-test-QS-1",
+                    "--directory",
+                    "/d",
+                    "--delay",
+                    "5",
+                ],
+            ),
+        ):
+            spawn_session.main()
+
+        assert mock_spawn.call_args[1]["delay_seconds"] == 5.0

@@ -221,16 +221,14 @@ the parallel-review design):
           --story-file "{{STORY_FILE}}"
       ```
 
-   d. Spawn a new interactive session for the next phase by running the
-      `spawn_session_command` from the handoff JSON:
+   d. Spawn a new session and trigger reload:
       ```bash
       python scripts/qs_opencode/spawn_session.py \
           --agent qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}} \
-          --prompt "<spawn_prompt from handoff JSON>" \
           --title "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}" \
           --directory "{{WORK_DIR}}"
       ```
-      This creates a new session visible in the OpenCode sidebar.
+      This creates a blank session and fires a delayed `/instance/reload`.
       Your work is DONE after this — do NOT continue in this session.
 
 Present the result:
@@ -238,7 +236,13 @@ Present the result:
 ✅ Story written, committed, pushed.
 ✅ Adversarial review completed (N rounds, M findings incorporated).
 ✅ qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}.md rendered.
-→ Handing off to {{IMPLEMENT_PHASE}} phase...
+✅ Session "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}" created, reload scheduled.
+
+👉 Next steps for user:
+   1. Refresh browser (reload fires in ~2s).
+   2. Switch to session "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}".
+   3. Select agent "qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}" from the agent picker.
+   4. Type the kickoff prompt from the handoff JSON.
 ```
 
 ## Hard rules

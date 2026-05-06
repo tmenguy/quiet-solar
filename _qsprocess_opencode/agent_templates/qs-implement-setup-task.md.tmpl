@@ -137,18 +137,14 @@ python scripts/qs_opencode/next_step.py \
 ```
 
 Follow these steps:
-1. Spawn a new interactive session for the review phase by running the
-   `spawn_session_command` from the handoff JSON:
+1. Spawn a new session and trigger reload by running:
    ```bash
    python scripts/qs_opencode/spawn_session.py \
        --agent qs-review-task-QS-{{ISSUE}} \
-       --prompt "<spawn_prompt from handoff JSON>" \
        --title "QS-{{ISSUE}}: review-task" \
        --directory "{{WORK_DIR}}"
    ```
-   This creates a new session visible in the OpenCode sidebar.
-   The review orchestrator will Task-spawn the 4 reviewer sub-roles
-   in parallel itself.
+   This creates a blank session and fires a delayed `/instance/reload`.
    Your work is DONE after this — do NOT continue in this session.
 
 Present the result:
@@ -157,7 +153,13 @@ Present the result:
 ✅ Committed and pushed to {{BRANCH}}.
 ✅ PR #<N> opened.
 ✅ qs-review-task-QS-{{ISSUE}}.md + 4 reviewer sub-roles rendered.
-→ Handing off to review phase...
+✅ Session "QS-{{ISSUE}}: review-task" created, reload scheduled.
+
+👉 Next steps for user:
+   1. Refresh browser (reload fires in ~2s).
+   2. Switch to session "QS-{{ISSUE}}: review-task".
+   3. Select agent "qs-review-task-QS-{{ISSUE}}" from the agent picker.
+   4. Type the kickoff prompt from the handoff JSON.
 ```
 
 ## Hard rules

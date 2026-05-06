@@ -254,11 +254,13 @@ def main() -> None:
     )
 
     # Build the spawn_session.py command for the agent templates to use.
+    # Note: spawn_session.py no longer takes --prompt; it creates a blank
+    # session and fires a delayed /instance/reload.  The user manually
+    # selects the agent and types the kickoff prompt.
     session_title = f"QS-{args.issue}: {next_phase}"
     spawn_cmd = (
         f"python scripts/qs_opencode/spawn_session.py"
         f" --agent {shlex.quote(next_agent)}"
-        f" --prompt {shlex.quote(prompt)}"
         f" --title {shlex.quote(session_title)}"
         f" --directory {shlex.quote(args.work_dir)}"
     )
@@ -269,12 +271,17 @@ def main() -> None:
         "1. Render the next agent file(s):",
         *[f"   $ {cmd}" for cmd in render_cmds],
         "",
-        "2. Spawn a new interactive session for the next phase:",
+        "2. Spawn a new blank session and trigger reload:",
         f"   $ {spawn_cmd}",
         "",
-        "   This creates a new session visible in the OpenCode sidebar.",
-        "   The reload is automatic (handled by spawn_session.py).",
-        "   The current session's work is DONE after this — do NOT continue.",
+        "   This creates a new session and fires a delayed /instance/reload.",
+        "   Your work is DONE after this — do NOT continue in this session.",
+        "",
+        "3. Tell the user to:",
+        "   a. Refresh the browser (reload fires in ~2s).",
+        f"   b. Switch to session '{session_title}'.",
+        f"   c. Select agent '{next_agent}' from the agent picker.",
+        "   d. Type the kickoff prompt (see spawn_prompt in this JSON).",
     ]
 
     output_json(
