@@ -41,11 +41,18 @@ from utils import (  # type: ignore[import-not-found]
 PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
     "setup-task": {
         # Phase 1's handoff is a new OpenCode session, NOT a Task spawn.
-        # setup-task renders qs-create-plan-QS-<N>.md into the worktree and
-        # delegates the session launch to launch_opencode.py. This entry is
-        # therefore unused by next_step.py; kept for completeness.
+        # setup-task renders qs-create-plan-QS-<N>.md + 4 plan reviewer
+        # sub-agents into the worktree and delegates the session launch to
+        # launch_opencode.py. This entry is therefore unused by
+        # next_step.py; kept for completeness.
         "next_agent_phase": "create-plan",
-        "render_phases": ["create-plan"],
+        "render_phases": [
+            "create-plan",
+            "plan-critic",
+            "plan-concrete-planner",
+            "plan-dev-proxy",
+            "plan-scope-guardian",
+        ],
         "handoff": "launcher",
     },
     "create-plan": {
@@ -262,12 +269,11 @@ def main() -> None:
         "1. Render the next agent file(s):",
         *[f"   $ {cmd}" for cmd in render_cmds],
         "",
-        "2. Run `/reload` to make OpenCode discover the newly-rendered agent(s).",
-        "",
-        "3. Spawn a new interactive session for the next phase:",
+        "2. Spawn a new interactive session for the next phase:",
         f"   $ {spawn_cmd}",
         "",
         "   This creates a new session visible in the OpenCode sidebar.",
+        "   The reload is automatic (handled by spawn_session.py).",
         "   The current session's work is DONE after this — do NOT continue.",
     ]
 

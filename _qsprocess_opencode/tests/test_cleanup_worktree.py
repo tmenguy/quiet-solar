@@ -291,3 +291,129 @@ class TestMain:
         assert "--force" in result["options"]
         assert "--push-first" not in result.get("options", {})
         assert "uncommitted" in result["message"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Reorder: agent files removed BEFORE status check (QS-155)
+# ---------------------------------------------------------------------------
+
+
+class TestAgentRemovalBeforeStatusCheck:
+    """Verify remove_agent_files runs before check_worktree_status in main()."""
+
+    def _run_main(self, args: list[str]) -> dict:
+        """Run main() with args and capture JSON output."""
+        with patch("sys.argv", ["cleanup_worktree.py", *args]):
+            captured: dict = {}
+
+            def capture_json(data: dict) -> None:
+                captured.update(data)
+
+            with patch("cleanup_worktree.output_json", side_effect=capture_json):
+                cleanup_worktree.main()
+            return captured
+
+    def test_agent_only_worktree_cleans_successfully(self, tmp_path: Path) -> None:
+        """Worktree with ONLY agent files should clean up (status=removed).
+
+        Before the fix, check_worktree_status saw untracked agent .md files
+        and returned action_required, aborting before removal.
+        """
+        # Create agent files
+        agent_dir = tmp_path / ".opencode" / "agents"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "qs-create-plan-QS-42.md").write_text("x")
+        (agent_dir / "qs-review-task-QS-42.md").write_text("x")
+
+        call_order: list[str] = []
+
+        original_remove = cleanup_worktree.remove_agent_files
+        original_check = cleanup_worktree.check_worktree_status
+
+        def tracking_remove(work_dir: Path, issue: int) -> list[str]:
+            call_order.append("remove_agent_files")
+            return original_remove(work_dir, issue)
+
+        def tracking_check(work_dir: Path) -> dict:
+            call_order.append("check_worktree_status")
+            # After agent removal, tree should be clean
+            return {
+                "safe_to_remove": True,
+                "uncommitted_files": [],
+                "unpushed_commits": 0,
+                "branch": "QS_42",
+            }
+
+        with (
+            patch("cleanup_worktree.remove_agent_files", side_effect=tracking_remove),
+            patch("cleanup_worktree.check_worktree_status", side_effect=tracking_check),
+            patch("cleanup_worktree.remove_worktree", return_value=None),
+        ):
+            result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42"])
+
+        assert result["status"] == "removed"
+        assert call_order.index("remove_agent_files") < call_order.index("check_worktree_status")
+
+    def test_agent_files_plus_dirty_still_blocks(self, tmp_path: Path) -> None:
+        """Agent files removed first, but real dirty files still trigger action_required."""
+        agent_dir = tmp_path / ".opencode" / "agents"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "qs-create-plan-QS-42.md").write_text("x")
+
+        call_order: list[str] = []
+
+        def tracking_remove(work_dir: Path, issue: int) -> list[str]:
+            call_order.append("remove_agent_files")
+            return [".opencode/agents/qs-create-plan-QS-42.md"]
+
+        def tracking_check(work_dir: Path) -> dict:
+            call_order.append("check_worktree_status")
+            return {
+                "safe_to_remove": False,
+                "uncommitted_files": ["dirty.py"],
+                "unpushed_commits": 0,
+                "branch": "QS_42",
+            }
+
+        with (
+            patch("cleanup_worktree.remove_agent_files", side_effect=tracking_remove),
+            patch("cleanup_worktree.check_worktree_status", side_effect=tracking_check),
+        ):
+            result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42"])
+
+        assert result["status"] == "action_required"
+        assert call_order.index("remove_agent_files") < call_order.index("check_worktree_status")
+
+    def test_force_path_also_removes_agents_first(self, tmp_path: Path) -> None:
+        """--force should also remove agent files before worktree deletion."""
+        call_order: list[str] = []
+
+        def tracking_remove(work_dir: Path, issue: int) -> list[str]:
+            call_order.append("remove_agent_files")
+            return []
+
+        def tracking_wt_remove(work_dir: Path) -> str | None:
+            call_order.append("remove_worktree")
+            return None
+
+        with (
+            patch("cleanup_worktree.remove_agent_files", side_effect=tracking_remove),
+            patch("cleanup_worktree.remove_worktree", side_effect=tracking_wt_remove),
+        ):
+            result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42", "--force"])
+
+        assert result["status"] == "removed"
+        assert call_order.index("remove_agent_files") < call_order.index("remove_worktree")
+
+    def test_dry_run_lists_agents_without_removing(self, tmp_path: Path) -> None:
+        """--dry-run should list agent files but not remove them."""
+        agent_dir = tmp_path / ".opencode" / "agents"
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "qs-create-plan-QS-42.md").write_text("x")
+
+        result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42", "--dry-run"])
+
+        assert result["status"] == "dry_run"
+        assert len(result["would_remove_agents"]) == 1
+        # File should still exist
+        assert (agent_dir / "qs-create-plan-QS-42.md").exists()

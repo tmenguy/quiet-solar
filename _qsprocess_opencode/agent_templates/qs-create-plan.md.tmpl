@@ -37,7 +37,7 @@ permission:
 - **Worktree**: {{WORK_DIR}}
 - **Story file to write**: `{{STORY_FILE}}`
 - **Next agent to render**: `qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}}`
-- **Plan reviewer sub-agents (rendered in Phase 1)**:
+- **Plan reviewer sub-agents (pre-rendered by setup-task)**:
   - `qs-plan-critic-QS-{{ISSUE}}`
   - `qs-plan-concrete-planner-QS-{{ISSUE}}`
   - `qs-plan-dev-proxy-QS-{{ISSUE}}`
@@ -64,15 +64,7 @@ additions below extend it.
 
 3. Explore affected codebase areas referenced by the issue.
 
-4. Render the 4 plan reviewer sub-agents:
-   ```bash
-   python scripts/qs_opencode/render_agent.py --phase plan-critic --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   python scripts/qs_opencode/render_agent.py --phase plan-concrete-planner --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   python scripts/qs_opencode/render_agent.py --phase plan-dev-proxy --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   python scripts/qs_opencode/render_agent.py --phase plan-scope-guardian --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}"
-   ```
-
-5. Compile an in-memory Analysis Brief (scope, risk, key findings, open
+4. Compile an in-memory Analysis Brief (scope, risk, key findings, open
    questions, affected files).
 
 ### Phase 2 — Present & Clarify
@@ -229,9 +221,7 @@ the parallel-review design):
           --story-file "{{STORY_FILE}}"
       ```
 
-   d. Run `/reload` to make OpenCode discover the newly-rendered agent file.
-
-   e. Spawn a new interactive session for the next phase by running the
+   d. Spawn a new interactive session for the next phase by running the
       `spawn_session_command` from the handoff JSON:
       ```bash
       python scripts/qs_opencode/spawn_session.py \
