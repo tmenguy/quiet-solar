@@ -59,8 +59,7 @@ def _api(method: str, path: str, body: dict | None = None) -> dict:
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode(errors="replace")
         print(
-            f"ERROR: OpenCode API {method} {path} returned {exc.code}: "
-            f"{error_body}",
+            f"ERROR: OpenCode API {method} {path} returned {exc.code}: {error_body}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -88,10 +87,14 @@ def spawn_session(
         sys.exit(1)
 
     # 2. Send the prompt asynchronously (returns 204, session starts working)
-    _api("POST", f"/session/{session_id}/prompt_async", {
-        "agent": agent,
-        "parts": [{"type": "text", "text": prompt}],
-    })
+    _api(
+        "POST",
+        f"/session/{session_id}/prompt_async",
+        {
+            "agent": agent,
+            "parts": [{"type": "text", "text": prompt}],
+        },
+    )
 
     return {
         "session_id": session_id,
@@ -106,15 +109,18 @@ def main() -> None:
         description="Spawn a new interactive OpenCode session via HTTP API",
     )
     parser.add_argument(
-        "--agent", required=True,
+        "--agent",
+        required=True,
         help="Agent name to activate (e.g. qs-implement-task-QS-42)",
     )
     parser.add_argument(
-        "--prompt", required=True,
+        "--prompt",
+        required=True,
         help="Kickoff prompt to send to the new session",
     )
     parser.add_argument(
-        "--title", default=None,
+        "--title",
+        default=None,
         help="Session title (defaults to agent name)",
     )
     args = parser.parse_args()

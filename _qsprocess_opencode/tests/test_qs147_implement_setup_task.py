@@ -16,11 +16,9 @@ import fnmatch
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
-import render_agent
 import next_step
-
+import pytest
+import render_agent
 
 # ---------------------------------------------------------------------------
 # render_agent.py — PHASE_TEMPLATES registration (AC 5)
@@ -46,11 +44,16 @@ class TestRenderAgentPhaseRegistration:
 
         args = [
             "render_agent.py",
-            "--phase", "implement-setup-task",
-            "--work-dir", str(tmp_path),
-            "--issue", "99",
-            "--title", "Test story",
-            "--story-file", "_qsprocess_opencode/stories/QS-99.story.md",
+            "--phase",
+            "implement-setup-task",
+            "--work-dir",
+            str(tmp_path),
+            "--issue",
+            "99",
+            "--title",
+            "Test story",
+            "--story-file",
+            "_qsprocess_opencode/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
             render_agent.main()
@@ -94,13 +97,9 @@ class TestImplementSetupTaskTemplate:
         tmpl = repo_root / "_qsprocess_opencode" / "agent_templates" / "qs-implement-setup-task.md.tmpl"
         return tmpl.read_text(encoding="utf-8")
 
-    def test_allows_qsprocess_opencode_tests(self, template_content: str) -> None:
-        """Edit permissions must allow _qsprocess_opencode/tests/**."""
-        assert '"_qsprocess_opencode/tests/**": allow' in template_content
-
-    def test_allows_qsprocess_opencode_templates(self, template_content: str) -> None:
-        """Edit permissions must allow _qsprocess_opencode/agent_templates/**."""
-        assert '"_qsprocess_opencode/agent_templates/**": allow' in template_content
+    def test_allows_qsprocess_opencode(self, template_content: str) -> None:
+        """Edit permissions must allow _qsprocess_opencode/**."""
+        assert '"_qsprocess_opencode/**": allow' in template_content
 
     def test_allows_scripts_qs_opencode(self, template_content: str) -> None:
         """Edit permissions must allow scripts/qs_opencode/**."""
@@ -157,11 +156,16 @@ class TestCreatePlanTemplate:
 
         args = [
             "render_agent.py",
-            "--phase", "create-plan",
-            "--work-dir", str(tmp_path),
-            "--issue", "99",
-            "--title", "Test story",
-            "--story-file", "_qsprocess_opencode/stories/QS-99.story.md",
+            "--phase",
+            "create-plan",
+            "--work-dir",
+            str(tmp_path),
+            "--issue",
+            "99",
+            "--title",
+            "Test story",
+            "--story-file",
+            "_qsprocess_opencode/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
             with pytest.raises(SystemExit) as exc_info:
@@ -175,12 +179,18 @@ class TestCreatePlanTemplate:
 
         args = [
             "render_agent.py",
-            "--phase", "create-plan",
-            "--work-dir", str(tmp_path),
-            "--issue", "99",
-            "--title", "Test story",
-            "--story-file", "_qsprocess_opencode/stories/QS-99.story.md",
-            "--extra", "IMPLEMENT_PHASE=implement-task",
+            "--phase",
+            "create-plan",
+            "--work-dir",
+            str(tmp_path),
+            "--issue",
+            "99",
+            "--title",
+            "Test story",
+            "--story-file",
+            "_qsprocess_opencode/stories/QS-99.story.md",
+            "--extra",
+            "IMPLEMENT_PHASE=implement-task",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
             render_agent.main()
@@ -220,10 +230,8 @@ class TestGitignorePattern:
 
 
 class TestNextStepNextPhaseOverride:
-    def test_next_phase_overrides_default(self) -> None:
-        """--next-phase should override the default transition target."""
-        from unittest.mock import patch as _patch
-
+    def _run_next_step(self, extra_args: list[str] | None = None) -> dict:
+        """Helper to run next_step.main() and capture output."""
         captured: dict = {}
 
         def capture(data: dict) -> None:
@@ -231,27 +239,49 @@ class TestNextStepNextPhaseOverride:
 
         args = [
             "next_step.py",
-            "--phase", "create-plan",
-            "--issue", "99",
-            "--work-dir", "/tmp/test",
-            "--title", "Test",
-            "--story-file", "story.md",
-            "--next-phase", "implement-setup-task",
+            "--phase",
+            "create-plan",
+            "--issue",
+            "99",
+            "--work-dir",
+            "/tmp/test",
+            "--title",
+            "Test",
+            "--story-file",
+            "story.md",
+            *(extra_args or []),
         ]
-        with _patch("sys.argv", args), \
-             _patch("next_step.output_json", side_effect=capture), \
-             _patch("next_step.build_launcher_payload", return_value={"new_context": "x"}):
+        with (
+            patch("sys.argv", args),
+            patch("next_step.output_json", side_effect=capture),
+            patch("next_step.build_launcher_payload", return_value={"new_context": "x"}),
+        ):
             next_step.main()
+        return captured
+
+    def test_next_phase_overrides_default(self) -> None:
+        """--next-phase should override the default transition target."""
+        captured = self._run_next_step(["--next-phase", "implement-setup-task"])
 
         assert captured["next_phase"] == "implement-setup-task"
         assert captured["next_agent"] == "qs-implement-setup-task-QS-99"
-        # render_commands should reference implement-setup-task, not implement-task
         assert any("implement-setup-task" in cmd for cmd in captured["render_commands"])
 
     def test_no_next_phase_uses_default(self) -> None:
         """Without --next-phase, default transition is used."""
-        from unittest.mock import patch as _patch
+        captured = self._run_next_step()
 
+        assert captured["next_phase"] == "implement-task"
+        assert captured["next_agent"] == "qs-implement-task-QS-99"
+
+    def test_next_phase_rejects_invalid_value(self) -> None:
+        """--next-phase with an invalid value should be rejected by argparse."""
+        with pytest.raises(SystemExit) as exc_info:
+            self._run_next_step(["--next-phase", "nonexistent-phase"])
+        assert exc_info.value.code != 0
+
+    def test_next_phase_on_multi_render_raises(self) -> None:
+        """--next-phase on a multi-render transition should raise an error."""
         captured: dict = {}
 
         def capture(data: dict) -> None:
@@ -259,16 +289,25 @@ class TestNextStepNextPhaseOverride:
 
         args = [
             "next_step.py",
-            "--phase", "create-plan",
-            "--issue", "99",
-            "--work-dir", "/tmp/test",
-            "--title", "Test",
-            "--story-file", "story.md",
+            "--phase",
+            "implement-task",
+            "--issue",
+            "99",
+            "--work-dir",
+            "/tmp/test",
+            "--title",
+            "Test",
+            "--story-file",
+            "story.md",
+            "--pr",
+            "5",
+            "--next-phase",
+            "finish-task",
         ]
-        with _patch("sys.argv", args), \
-             _patch("next_step.output_json", side_effect=capture), \
-             _patch("next_step.build_launcher_payload", return_value={"new_context": "x"}):
+        with (
+            patch("sys.argv", args),
+            patch("next_step.output_json", side_effect=capture),
+            patch("next_step.build_launcher_payload", return_value={"new_context": "x"}),
+            pytest.raises(SystemExit),
+        ):
             next_step.main()
-
-        assert captured["next_phase"] == "implement-task"
-        assert captured["next_agent"] == "qs-implement-task-QS-99"

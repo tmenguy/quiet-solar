@@ -17,6 +17,9 @@ permission:
     "gh pr checks *": allow
     "gh pr merge *": ask
     "python scripts/qs/quality_gate.py*": allow
+    "source venv/bin/activate*": allow
+    "pytest*": allow
+    "ruff *": allow
     "python scripts/qs_opencode/cleanup_worktree.py *": allow
   webfetch: deny
 ---
@@ -46,7 +49,7 @@ merge checklist and cleanup sequence.
 git fetch origin
 git checkout {{BRANCH}}
 git pull
-python scripts/qs/quality_gate.py
+{{QUALITY_GATE_CMD}}
 ```
 
 Must be green. Also check:

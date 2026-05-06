@@ -54,9 +54,7 @@ def check_worktree_status(work_dir: Path) -> dict:
         capture_output=True,
         text=True,
     )
-    uncommitted_files = [
-        line.strip() for line in result.stdout.splitlines() if line.strip()
-    ]
+    uncommitted_files = [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
     result = subprocess.run(
         ["git", "-C", str(work_dir), "log", "@{u}..HEAD", "--oneline"],
@@ -66,9 +64,7 @@ def check_worktree_status(work_dir: Path) -> dict:
     if result.returncode != 0:
         unpushed_commits = -1  # no upstream tracking
     else:
-        unpushed_lines = [
-            line for line in result.stdout.splitlines() if line.strip()
-        ]
+        unpushed_lines = [line for line in result.stdout.splitlines() if line.strip()]
         unpushed_commits = len(unpushed_lines)
 
     safe = len(uncommitted_files) == 0 and unpushed_commits == 0
@@ -105,10 +101,7 @@ def list_agent_files(work_dir: Path, issue: int) -> list[str]:
     agent_dir = work_dir / ".opencode" / "agents"
     if not agent_dir.is_dir():
         return []
-    return [
-        str(p.relative_to(work_dir))
-        for p in sorted(agent_dir.glob(f"qs-*-QS-{issue}.md"))
-    ]
+    return [str(p.relative_to(work_dir)) for p in sorted(agent_dir.glob(f"qs-*-QS-{issue}.md"))]
 
 
 def remove_worktree(work_dir: Path) -> str | None:
@@ -167,10 +160,12 @@ def main() -> None:  # noqa: C901
     work_dir = Path(args.work_dir).resolve()
 
     if not work_dir.exists():
-        output_json({
-            "status": "error",
-            "message": f"Worktree directory does not exist: {work_dir}",
-        })
+        output_json(
+            {
+                "status": "error",
+                "message": f"Worktree directory does not exist: {work_dir}",
+            }
+        )
         return
 
     # Step 1: Check status (unless --force)
@@ -178,63 +173,73 @@ def main() -> None:  # noqa: C901
         status = check_worktree_status(work_dir)
 
         if not status["safe_to_remove"] and not args.push_first:
-            output_json({
-                "status": "action_required",
-                "safe_to_remove": False,
-                "uncommitted_files": status["uncommitted_files"],
-                "unpushed_commits": status["unpushed_commits"],
-                "branch": status["branch"],
-                "message": "Worktree has uncommitted changes and/or unpushed commits.",
-                "options": {
-                    "--force": "Delete worktree and lose all uncommitted/unpushed changes",
-                    "--push-first": "Push current branch to origin, then delete worktree",
-                },
-            })
+            output_json(
+                {
+                    "status": "action_required",
+                    "safe_to_remove": False,
+                    "uncommitted_files": status["uncommitted_files"],
+                    "unpushed_commits": status["unpushed_commits"],
+                    "branch": status["branch"],
+                    "message": "Worktree has uncommitted changes and/or unpushed commits.",
+                    "options": {
+                        "--force": "Delete worktree and lose all uncommitted/unpushed changes",
+                        "--push-first": "Push current branch to origin, then delete worktree",
+                    },
+                }
+            )
             return
 
         # --push-first only handles unpushed commits; uncommitted files
         # would be silently lost when the worktree is deleted.
         if args.push_first and status["uncommitted_files"]:
-            output_json({
-                "status": "action_required",
-                "safe_to_remove": False,
-                "uncommitted_files": status["uncommitted_files"],
-                "unpushed_commits": status["unpushed_commits"],
-                "branch": status["branch"],
-                "message": (
-                    "Worktree has uncommitted files that --push-first cannot save. "
-                    "Commit them first, or use --force to discard."
-                ),
-                "options": {
-                    "--force": "Delete worktree and lose all uncommitted changes",
-                },
-            })
+            output_json(
+                {
+                    "status": "action_required",
+                    "safe_to_remove": False,
+                    "uncommitted_files": status["uncommitted_files"],
+                    "unpushed_commits": status["unpushed_commits"],
+                    "branch": status["branch"],
+                    "message": (
+                        "Worktree has uncommitted files that --push-first cannot save. "
+                        "Commit them first, or use --force to discard."
+                    ),
+                    "options": {
+                        "--force": "Delete worktree and lose all uncommitted changes",
+                    },
+                }
+            )
             return
 
     # Step 2: Push if requested
     if args.push_first:
         if args.dry_run:
-            output_json({
-                "status": "dry_run",
-                "would_push": True,
-                "would_remove_agents": list_agent_files(work_dir, args.issue),
-                "would_remove_worktree": str(work_dir),
-            })
+            output_json(
+                {
+                    "status": "dry_run",
+                    "would_push": True,
+                    "would_remove_agents": list_agent_files(work_dir, args.issue),
+                    "would_remove_worktree": str(work_dir),
+                }
+            )
             return
         success, push_output = push_branch(work_dir)
         if not success:
-            output_json({
-                "status": "error",
-                "message": f"Push failed: {push_output}",
-            })
+            output_json(
+                {
+                    "status": "error",
+                    "message": f"Push failed: {push_output}",
+                }
+            )
             return
 
     if args.dry_run:
-        output_json({
-            "status": "dry_run",
-            "would_remove_agents": list_agent_files(work_dir, args.issue),
-            "would_remove_worktree": str(work_dir),
-        })
+        output_json(
+            {
+                "status": "dry_run",
+                "would_remove_agents": list_agent_files(work_dir, args.issue),
+                "would_remove_worktree": str(work_dir),
+            }
+        )
         return
 
     # Step 3: Remove agent files
@@ -243,13 +248,15 @@ def main() -> None:  # noqa: C901
     # Step 4: Remove worktree
     wt_error = remove_worktree(work_dir)
 
-    output_json({
-        "status": "removed",
-        "agents_removed": agents_removed,
-        "worktree_path": str(work_dir),
-        "worktree_remove_error": wt_error,
-        "message": f"Worktree QS_{args.issue} fully cleaned up.",
-    })
+    output_json(
+        {
+            "status": "removed",
+            "agents_removed": agents_removed,
+            "worktree_path": str(work_dir),
+            "worktree_remove_error": wt_error,
+            "message": f"Worktree QS_{args.issue} fully cleaned up.",
+        }
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -115,11 +115,11 @@ authorized by the workflow.
 ### 6. Render the review agents
 
 ```bash
-python scripts/qs_opencode/render_agent.py --phase review-task            --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-blind-hunter    --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-edge-case-hunter --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-acceptance-auditor --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-coderabbit      --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
+python scripts/qs_opencode/render_agent.py --phase review-task            --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
+python scripts/qs_opencode/render_agent.py --phase review-blind-hunter    --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
+python scripts/qs_opencode/render_agent.py --phase review-edge-case-hunter --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
+python scripts/qs_opencode/render_agent.py --phase review-acceptance-auditor --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
+python scripts/qs_opencode/render_agent.py --phase review-coderabbit      --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-task --extra QUALITY_GATE_CMD="python scripts/qs/quality_gate.py"
 ```
 
 Substitute the actual PR number.
