@@ -49,16 +49,23 @@ Show the PR summary:
 gh pr view {{PR_NUMBER}}
 ```
 
+If `gh pr view` shows the PR is already merged, skip the merge
+authorization and `gh pr merge` step — proceed directly to step 3 with
+force cleanup.
+
 Verify CI status:
 
 ```bash
 gh pr checks {{PR_NUMBER}}
 ```
 
-If checks are failing, report to the user and STOP. Do not attempt merge.
-
-If `gh pr checks` exits non-zero but reports no checks found (empty
-output or "no required checks"), treat this as passing.
+Parse the output of `gh pr checks`:
+- If **all checks pass** → proceed.
+- If any check is **pending** (still in progress) → advise the user to
+  wait and re-run rather than reporting failure.
+- If any check **failed** → report to the user and STOP. Do not attempt
+  merge.
+- If **no checks are listed** (empty output) → treat as passing.
 
 If checks pass (or no required checks are configured), ask the user
 for explicit **"merge"** authorization before proceeding.
@@ -72,11 +79,17 @@ gh pr merge {{PR_NUMBER}} --merge
 If merge fails, report the error to the user and proceed to step 3
 with non-force cleanup. However, if `gh pr merge` reports the PR is
 already merged, treat this as a successful merge for cleanup purposes
-(use `--force`).
+(i.e., use `--force` with the cleanup script in step 3b).
 
 ### 3. Clean up
 
 #### 3a. Delete remote branch
+
+**Safety check**: if `{{BRANCH}}` is `main` or `master`, do NOT delete
+it — report an error and STOP.
+
+Only delete the remote branch if merge **succeeded** (including
+already-merged). If merge **failed**, skip this step.
 
 ```bash
 git push origin --delete {{BRANCH}}
@@ -110,9 +123,9 @@ Parse the JSON output:
   with chosen flag.
 - `"status": "error"` — report error to user.
 
-If `worktree_remove_error` is present in the JSON output, report it as
-a warning (cleanup succeeded via fallback but git worktree state may be
-stale).
+For **both** force and non-force paths: if `worktree_remove_error` is
+present in the JSON output, report it as a warning (cleanup succeeded
+via fallback but git worktree state may be stale).
 
 #### 3c. Final message
 
