@@ -89,7 +89,11 @@ def is_worktree(work_dir: str) -> bool:
     """Return ``True`` when ``work_dir`` is a worktree (not the main repo)."""
     try:
         return Path(work_dir).resolve() != get_main_worktree().resolve()
-    except subprocess.CalledProcessError, OSError, RuntimeError:
+    except (  # noqa: UP031
+        subprocess.CalledProcessError,
+        OSError,
+        RuntimeError,
+    ):
         return False
 
 
