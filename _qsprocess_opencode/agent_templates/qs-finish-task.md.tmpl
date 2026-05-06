@@ -37,7 +37,7 @@ permission:
 Read `_qsprocess/skills/finish-task.md` (or `finish-story.md`) for the
 merge checklist and cleanup sequence.
 
-Note: the phase protocol below supersedes the instructions in finish-story.md. Follow the steps below, not the older skill file.
+> **Note**: the phase protocol below supersedes the instructions in finish-story.md. Follow the steps below, not the older skill file.
 
 ## Phase protocol
 
@@ -57,6 +57,9 @@ gh pr checks {{PR_NUMBER}}
 
 If checks are failing, report to the user and STOP. Do not attempt merge.
 
+If `gh pr checks` exits non-zero but reports no checks found (empty
+output or "no required checks"), treat this as passing.
+
 If checks pass (or no required checks are configured), ask the user
 for explicit **"merge"** authorization before proceeding.
 
@@ -67,7 +70,9 @@ gh pr merge {{PR_NUMBER}} --merge
 ```
 
 If merge fails, report the error to the user and proceed to step 3
-with non-force cleanup.
+with non-force cleanup. However, if `gh pr merge` reports the PR is
+already merged, treat this as a successful merge for cleanup purposes
+(use `--force`).
 
 ### 3. Clean up
 
@@ -105,7 +110,13 @@ Parse the JSON output:
   with chosen flag.
 - `"status": "error"` — report error to user.
 
+If `worktree_remove_error` is present in the JSON output, report it as
+a warning (cleanup succeeded via fallback but git worktree state may be
+stale).
+
 #### 3c. Final message
+
+If merge **succeeded** (including already-merged):
 
 ```
 Task #{{ISSUE}} is merged; worktree removed.
@@ -113,10 +124,17 @@ Task #{{ISSUE}} is merged; worktree removed.
 If you want to cut a release, run `/release` from the main checkout.
 ```
 
+If merge **failed or was not attempted**:
+
+```
+PR #{{PR_NUMBER}} was NOT merged. Worktree removed — branch may still exist on remote.
+```
+
 ## Hard rules
 
 - No merge without explicit user authorization.
-- Auto-force worktree cleanup after successful merge (code is safely on main). Only consult the user about cleanup if merge failed.
+- Auto-force worktree cleanup after successful merge.
+- Only consult the user about cleanup if merge failed.
 - Do NOT auto-chain to release — always ask.
 - Do NOT edit source code or tests in this phase. Your edit scope is
   denied for all paths.
