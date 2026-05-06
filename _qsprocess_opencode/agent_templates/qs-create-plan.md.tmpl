@@ -191,6 +191,12 @@ When NEXT_PHASE=implement-setup-task, add `--next-phase implement-setup-task`
 to the `next_step.py` call and use `implement-setup-task` as the phase for
 `render_agent.py` and `spawn_session.py`.
 
+**Connecting NEXT_PHASE to the commands below:** The `--phase` argument in
+the commands below defaults to `implement-task` (the rendered value of
+`{{IMPLEMENT_PHASE}}`). If you determined NEXT_PHASE=implement-setup-task
+above, replace `implement-task` with `implement-setup-task` in all three
+commands (render, handoff, spawn).
+
 1. Write the story file to `{{STORY_FILE}}`.
 
 2. Append an **Adversarial Review Notes** section at the end of the story:

@@ -26,7 +26,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -111,42 +110,34 @@ def list_agent_files(work_dir: Path, issue: int) -> list[str]:
 
 def remove_worktree(work_dir: Path) -> str | None:
     """Un-register and delete the worktree. Returns error message or None."""
-    main_wt = get_main_worktree()
-
-    # Change CWD to main worktree so we're not inside the directory
-    # being deleted. On macOS/Linux, deleting the CWD can cause
-    # `git worktree remove` to fail and `shutil.rmtree` to silently
-    # leave the directory behind.
-    prev_cwd = os.getcwd()
-    try:
-        os.chdir(str(main_wt))
-    except OSError:
-        pass  # best-effort; proceed anyway
+    error: str | None = None
 
     try:
+        main_wt = get_main_worktree()
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+        error = f"Could not determine main worktree: {exc}"
+        main_wt = None
+
+    if main_wt is not None:
+        # Use cwd= instead of os.chdir to avoid mutating global process state.
         result = subprocess.run(
             ["git", "-C", str(main_wt), "worktree", "remove", str(work_dir), "--force"],
             capture_output=True,
             text=True,
+            cwd=str(main_wt),
         )
-        error = None
         if result.returncode != 0:
-            error = result.stderr.strip()
+            error = result.stderr.strip() or f"git worktree remove exited {result.returncode}"
 
-        # Fallback: physically remove directory if still present
-        if work_dir.exists():
-            try:
-                shutil.rmtree(work_dir)
-            except OSError as exc:
-                rmtree_err = f"shutil.rmtree failed: {exc}"
-                error = f"{error}; {rmtree_err}" if error else rmtree_err
-
-        return error
-    finally:
+    # Fallback: physically remove directory if still present
+    if work_dir.exists():
         try:
-            os.chdir(prev_cwd)
-        except OSError:
-            pass  # original CWD may have been deleted
+            shutil.rmtree(work_dir)
+        except OSError as exc:
+            rmtree_err = f"shutil.rmtree failed: {exc}"
+            error = f"{error}; {rmtree_err}" if error else rmtree_err
+
+    return error
 
 
 def push_branch(work_dir: Path) -> tuple[bool, str]:

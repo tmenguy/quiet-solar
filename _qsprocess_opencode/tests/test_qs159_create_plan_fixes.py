@@ -193,45 +193,32 @@ class TestSetupTaskVerification:
 
 
 # ---------------------------------------------------------------------------
-# Bonus: cleanup_worktree.remove_worktree CWD fix
+# cleanup_worktree.remove_worktree fixes
 # ---------------------------------------------------------------------------
 
 
-class TestRemoveWorktreeCwdFix:
-    def test_changes_cwd_before_removal(self, tmp_path: Path) -> None:
-        """remove_worktree should chdir out of the worktree before deleting it."""
-        import os
-
+class TestRemoveWorktreeFixes:
+    def test_uses_cwd_kwarg_not_os_chdir(self, tmp_path: Path) -> None:
+        """remove_worktree should pass cwd= to subprocess.run, not call os.chdir."""
         work_dir = tmp_path / "worktree"
         work_dir.mkdir()
         main_wt = tmp_path / "main"
         main_wt.mkdir()
 
-        cwd_during_rmtree = []
-
-        def tracking_rmtree(path: str | Path, **kwargs: object) -> None:
-            cwd_during_rmtree.append(os.getcwd())
-            # Don't actually remove in test
-
         with (
             patch("cleanup_worktree.get_main_worktree", return_value=main_wt),
             patch("cleanup_worktree.subprocess.run") as mock_run,
-            patch("cleanup_worktree.shutil.rmtree", side_effect=tracking_rmtree),
+            patch("cleanup_worktree.shutil.rmtree"),
         ):
             mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
-            # Start inside the worktree
-            old_cwd = os.getcwd()
-            os.chdir(str(work_dir))
-            try:
-                cleanup_worktree.remove_worktree(work_dir)
-            finally:
-                os.chdir(old_cwd)
+            cleanup_worktree.remove_worktree(work_dir)
 
-        assert len(cwd_during_rmtree) == 1
-        assert cwd_during_rmtree[0] == str(main_wt)
+        # Verify cwd kwarg was passed
+        call_kwargs = mock_run.call_args[1]
+        assert call_kwargs.get("cwd") == str(main_wt)
 
-    def test_restores_cwd_after_removal(self, tmp_path: Path) -> None:
-        """remove_worktree should restore original CWD after completion."""
+    def test_does_not_mutate_cwd(self, tmp_path: Path) -> None:
+        """remove_worktree must not change the process CWD."""
         import os
 
         work_dir = tmp_path / "worktree"
@@ -248,6 +235,39 @@ class TestRemoveWorktreeCwdFix:
             original_cwd = os.getcwd()
             cleanup_worktree.remove_worktree(work_dir)
             assert os.getcwd() == original_cwd
+
+    def test_handles_get_main_worktree_failure(self, tmp_path: Path) -> None:
+        """When get_main_worktree raises, should still attempt rmtree."""
+        work_dir = tmp_path / "worktree"
+        work_dir.mkdir()
+
+        with (
+            patch("cleanup_worktree.get_main_worktree", side_effect=RuntimeError("no worktrees")),
+            patch("cleanup_worktree.shutil.rmtree") as mock_rmtree,
+        ):
+            error = cleanup_worktree.remove_worktree(work_dir)
+
+        assert error is not None
+        assert "Could not determine main worktree" in error
+        mock_rmtree.assert_called_once()
+
+    def test_git_failure_with_empty_stderr(self, tmp_path: Path) -> None:
+        """Git failure with empty stderr should still report an error."""
+        work_dir = tmp_path / "worktree"
+        work_dir.mkdir()
+        main_wt = tmp_path / "main"
+        main_wt.mkdir()
+
+        with (
+            patch("cleanup_worktree.get_main_worktree", return_value=main_wt),
+            patch("cleanup_worktree.subprocess.run") as mock_run,
+            patch("cleanup_worktree.shutil.rmtree"),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess([], 128, stdout="", stderr="")
+            error = cleanup_worktree.remove_worktree(work_dir)
+
+        assert error is not None
+        assert "exited 128" in error
 
     def test_rmtree_error_surfaced(self, tmp_path: Path) -> None:
         """shutil.rmtree errors should be returned, not silently swallowed."""
