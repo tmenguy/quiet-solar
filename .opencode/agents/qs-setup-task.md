@@ -98,7 +98,7 @@ git branch QS_{{issue_number}} origin/main
 ```
 The work directory is the main repo directory.
 
-### 3. Render qs-create-plan-QS-<N>.md into the worktree
+### 3. Render qs-create-plan-QS-<N>.md and plan reviewer sub-agents into the worktree
 
 ```bash
 python scripts/qs_opencode/render_agent.py \
@@ -109,8 +109,46 @@ python scripts/qs_opencode/render_agent.py \
     --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
 ```
 
-Verify render_agent.py exited 0 and the file exists at
-`{{worktree_path}}/.opencode/agents/qs-create-plan-QS-{{issue_number}}.md`.
+Also render the 4 plan reviewer sub-agents so `create-plan` can
+Task-spawn them in parallel during adversarial review:
+
+```bash
+python scripts/qs_opencode/render_agent.py \
+    --phase plan-critic \
+    --work-dir "{{worktree_path}}" \
+    --issue {{issue_number}} \
+    --title "{{title}}" \
+    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+
+python scripts/qs_opencode/render_agent.py \
+    --phase plan-concrete-planner \
+    --work-dir "{{worktree_path}}" \
+    --issue {{issue_number}} \
+    --title "{{title}}" \
+    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+
+python scripts/qs_opencode/render_agent.py \
+    --phase plan-dev-proxy \
+    --work-dir "{{worktree_path}}" \
+    --issue {{issue_number}} \
+    --title "{{title}}" \
+    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+
+python scripts/qs_opencode/render_agent.py \
+    --phase plan-scope-guardian \
+    --work-dir "{{worktree_path}}" \
+    --issue {{issue_number}} \
+    --title "{{title}}" \
+    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+```
+
+Verify all 5 render_agent.py calls exited 0 and the files exist at
+`{{worktree_path}}/.opencode/agents/`:
+- `qs-create-plan-QS-{{issue_number}}.md`
+- `qs-plan-critic-QS-{{issue_number}}.md`
+- `qs-plan-concrete-planner-QS-{{issue_number}}.md`
+- `qs-plan-dev-proxy-QS-{{issue_number}}.md`
+- `qs-plan-scope-guardian-QS-{{issue_number}}.md`
 
 ### 4. Tell the user what to do next
 
