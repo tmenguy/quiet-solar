@@ -265,7 +265,8 @@ Follow these steps:
    python scripts/qs_opencode/spawn_session.py \
        --agent qs-finish-task-QS-{{ISSUE}} \
        --prompt "<spawn_prompt from handoff JSON>" \
-       --title "QS-{{ISSUE}}: finish-task"
+       --title "QS-{{ISSUE}}: finish-task" \
+       --directory "{{WORK_DIR}}"
    ```
    This creates a new session visible in the OpenCode sidebar.
    Your work is DONE after this — do NOT continue in this session.

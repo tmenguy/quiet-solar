@@ -237,7 +237,8 @@ the parallel-review design):
       python scripts/qs_opencode/spawn_session.py \
           --agent qs-{{IMPLEMENT_PHASE}}-QS-{{ISSUE}} \
           --prompt "<spawn_prompt from handoff JSON>" \
-          --title "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}"
+          --title "QS-{{ISSUE}}: {{IMPLEMENT_PHASE}}" \
+          --directory "{{WORK_DIR}}"
       ```
       This creates a new session visible in the OpenCode sidebar.
       Your work is DONE after this — do NOT continue in this session.
