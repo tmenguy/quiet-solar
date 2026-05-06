@@ -253,6 +253,7 @@ def main() -> None:
         f" --agent {shlex.quote(next_agent)}"
         f" --prompt {shlex.quote(prompt)}"
         f" --title {shlex.quote(session_title)}"
+        f" --directory {shlex.quote(args.work_dir)}"
     )
 
     instructions = [

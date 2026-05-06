@@ -13,7 +13,13 @@ Usage::
     python scripts/qs_opencode/spawn_session.py \
         --agent qs-implement-task-QS-42 \
         --prompt "Begin your phase protocol." \
-        --title "QS-42: implement-task"
+        --title "QS-42: implement-task" \
+        --directory /path/to/worktree
+
+The ``--directory`` flag is **required** — it tells the OpenCode server
+which project/sandbox the session belongs to.  Without it the middleware
+falls back to ``process.cwd()`` which typically resolves to the global
+project, making the session invisible in the sandbox sidebar.
 
 The script outputs JSON with the created session ID so the calling agent
 can report success.
@@ -40,15 +46,31 @@ def _base_url() -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def _api(method: str, path: str, body: dict | None = None) -> dict:
-    """Make a JSON request to the OpenCode server API."""
+def _api(
+    method: str,
+    path: str,
+    body: dict | None = None,
+    *,
+    directory: str | None = None,
+) -> dict:
+    """Make a JSON request to the OpenCode server API.
+
+    When *directory* is given it is sent via the ``x-opencode-directory``
+    header so the instance middleware resolves the correct project /
+    sandbox context for the request.
+    """
     url = f"{_base_url()}{path}"
     data = json.dumps(body).encode() if body else None
+    headers: dict[str, str] = {}
+    if data:
+        headers["Content-Type"] = "application/json"
+    if directory:
+        headers["x-opencode-directory"] = directory
     req = urllib.request.Request(
         url,
         data=data,
         method=method,
-        headers={"Content-Type": "application/json"} if data else {},
+        headers=headers,
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
@@ -77,10 +99,20 @@ def spawn_session(
     agent: str,
     prompt: str,
     title: str | None = None,
+    directory: str | None = None,
 ) -> dict:
-    """Create a new interactive session and send the kickoff prompt."""
+    """Create a new interactive session and send the kickoff prompt.
+
+    *directory* must point to the worktree / sandbox so that the session
+    is created under the correct project and appears in the sidebar.
+    """
     # 1. Create a new session
-    session = _api("POST", "/session", {"title": title or agent})
+    session = _api(
+        "POST",
+        "/session",
+        {"title": title or agent},
+        directory=directory,
+    )
     session_id = session.get("id") or session.get("ID")
     if not session_id:
         print(f"ERROR: Unexpected session response: {session}", file=sys.stderr)
@@ -94,12 +126,14 @@ def spawn_session(
             "agent": agent,
             "parts": [{"type": "text", "text": prompt}],
         },
+        directory=directory,
     )
 
     return {
         "session_id": session_id,
         "agent": agent,
         "title": title or agent,
+        "directory": directory,
         "status": "spawned",
     }
 
@@ -123,12 +157,23 @@ def main() -> None:
         default=None,
         help="Session title (defaults to agent name)",
     )
+    parser.add_argument(
+        "--directory",
+        default=None,
+        help=(
+            "Worktree / sandbox directory for the session.  Sent via "
+            "x-opencode-directory header so the session is created under "
+            "the correct project.  Required for sessions to appear in "
+            "the sandbox sidebar."
+        ),
+    )
     args = parser.parse_args()
 
     result = spawn_session(
         agent=args.agent,
         prompt=args.prompt,
         title=args.title,
+        directory=args.directory,
     )
     output_json(result)
 
