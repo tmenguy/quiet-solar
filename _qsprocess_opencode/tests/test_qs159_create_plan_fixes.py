@@ -18,6 +18,9 @@ from unittest.mock import patch
 import cleanup_worktree
 import render_agent
 
+# Compute repo root independently of render_agent internals
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
 # ---------------------------------------------------------------------------
 # AC #1: IMPLEMENT_PHASE default in render_agent.py
 # ---------------------------------------------------------------------------
@@ -79,6 +82,32 @@ class TestImplementPhaseDefault:
         content = out.read_text()
         assert "implement-setup-task" in content
 
+    def test_implement_phase_not_injected_for_other_phases(self, tmp_path: Path) -> None:
+        """IMPLEMENT_PHASE should not be in context for non-create-plan phases."""
+        agents_dir = tmp_path / ".opencode" / "agents"
+        agents_dir.mkdir(parents=True)
+
+        # implement-setup-task template does not use {{IMPLEMENT_PHASE}},
+        # so it should render fine without the default
+        args = [
+            "render_agent.py",
+            "--phase",
+            "implement-setup-task",
+            "--work-dir",
+            str(tmp_path),
+            "--issue",
+            "99",
+            "--title",
+            "Test story",
+            "--story-file",
+            "_qsprocess_opencode/stories/QS-99.story.md",
+        ]
+        with patch("sys.argv", args), patch("render_agent.output_json"):
+            render_agent.main()
+
+        out = agents_dir / "qs-implement-setup-task-QS-99.md"
+        assert out.is_file()
+
 
 # ---------------------------------------------------------------------------
 # AC #2/#3: create-plan template has routing decision block
@@ -88,8 +117,7 @@ class TestImplementPhaseDefault:
 class TestCreatePlanRoutingGuidance:
     @staticmethod
     def _template_content() -> str:
-        repo_root = render_agent._repo_root()
-        tmpl = repo_root / "_qsprocess_opencode" / "agent_templates" / "qs-create-plan.md.tmpl"
+        tmpl = _REPO_ROOT / "_qsprocess_opencode" / "agent_templates" / "qs-create-plan.md.tmpl"
         return tmpl.read_text(encoding="utf-8")
 
     def test_has_routing_decision_block(self) -> None:
@@ -131,8 +159,7 @@ class TestCreatePlanRoutingGuidance:
 class TestSetupTaskVerification:
     @staticmethod
     def _agent_content() -> str:
-        repo_root = render_agent._repo_root()
-        agent = repo_root / ".opencode" / "agents" / "qs-setup-task.md"
+        agent = _REPO_ROOT / ".opencode" / "agents" / "qs-setup-task.md"
         return agent.read_text(encoding="utf-8")
 
     def test_has_mandatory_verification(self) -> None:
@@ -141,13 +168,21 @@ class TestSetupTaskVerification:
         assert "MANDATORY VERIFICATION" in content
 
     def test_verification_lists_all_five_files(self) -> None:
-        """Verification must list all 5 expected agent files."""
+        """Verification must list all 5 expected agent files individually."""
         content = self._agent_content()
         assert "qs-create-plan-QS-" in content
         assert "qs-plan-critic-QS-" in content
         assert "qs-plan-concrete-planner-QS-" in content
         assert "qs-plan-dev-proxy-QS-" in content
         assert "qs-plan-scope-guardian-QS-" in content
+
+    def test_verification_uses_exact_filenames_not_glob(self) -> None:
+        """Verification should check exact filenames, not rely on a glob pattern."""
+        content = self._agent_content()
+        verif_start = content.index("MANDATORY VERIFICATION")
+        verif_text = content[verif_start:]
+        # Should list individual ls commands, not a glob
+        assert "ls {{worktree_path}}/.opencode/agents/qs-create-plan-QS-" in verif_text
 
     def test_verification_before_launcher(self) -> None:
         """Verification must appear BEFORE the launcher step."""
@@ -174,8 +209,6 @@ class TestRemoveWorktreeCwdFix:
 
         cwd_during_rmtree = []
 
-        original_rmtree = cleanup_worktree.shutil.rmtree
-
         def tracking_rmtree(path: str | Path, **kwargs: object) -> None:
             cwd_during_rmtree.append(os.getcwd())
             # Don't actually remove in test
@@ -197,6 +230,25 @@ class TestRemoveWorktreeCwdFix:
         assert len(cwd_during_rmtree) == 1
         assert cwd_during_rmtree[0] == str(main_wt)
 
+    def test_restores_cwd_after_removal(self, tmp_path: Path) -> None:
+        """remove_worktree should restore original CWD after completion."""
+        import os
+
+        work_dir = tmp_path / "worktree"
+        work_dir.mkdir()
+        main_wt = tmp_path / "main"
+        main_wt.mkdir()
+
+        with (
+            patch("cleanup_worktree.get_main_worktree", return_value=main_wt),
+            patch("cleanup_worktree.subprocess.run") as mock_run,
+            patch("cleanup_worktree.shutil.rmtree"),
+        ):
+            mock_run.return_value = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            original_cwd = os.getcwd()
+            cleanup_worktree.remove_worktree(work_dir)
+            assert os.getcwd() == original_cwd
+
     def test_rmtree_error_surfaced(self, tmp_path: Path) -> None:
         """shutil.rmtree errors should be returned, not silently swallowed."""
         work_dir = tmp_path / "worktree"
@@ -214,3 +266,41 @@ class TestRemoveWorktreeCwdFix:
 
         assert error is not None
         assert "shutil.rmtree failed" in error
+
+
+class TestRemoveWorktreePartialFailureStatus:
+    """Finding 3: main() should report error status when remove_worktree fails."""
+
+    def _run_main(self, args: list[str]) -> dict:
+        captured: dict = {}
+
+        def capture_json(data: dict) -> None:
+            captured.update(data)
+
+        with (
+            patch("sys.argv", ["cleanup_worktree.py", *args]),
+            patch("cleanup_worktree.output_json", side_effect=capture_json),
+        ):
+            cleanup_worktree.main()
+        return captured
+
+    def test_error_status_on_worktree_removal_failure(self, tmp_path: Path) -> None:
+        """When remove_worktree returns an error, status should be 'error'."""
+        with (
+            patch("cleanup_worktree.remove_agent_files", return_value=([], [])),
+            patch("cleanup_worktree.remove_worktree", return_value="git worktree remove failed"),
+        ):
+            result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42", "--force"])
+
+        assert result["status"] == "error"
+        assert "failed" in result["message"]
+
+    def test_removed_status_on_success(self, tmp_path: Path) -> None:
+        """When remove_worktree returns None, status should be 'removed'."""
+        with (
+            patch("cleanup_worktree.remove_agent_files", return_value=([], [])),
+            patch("cleanup_worktree.remove_worktree", return_value=None),
+        ):
+            result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42", "--force"])
+
+        assert result["status"] == "removed"

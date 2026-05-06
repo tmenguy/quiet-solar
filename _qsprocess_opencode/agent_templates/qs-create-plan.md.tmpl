@@ -219,7 +219,7 @@ to the `next_step.py` call and use `implement-setup-task` as the phase for
       git push -u origin {{BRANCH}}
       ```
 
-    b. Render the next agent (use NEXT_PHASE determined above; defaults to {{IMPLEMENT_PHASE}}):
+    b. Render the next agent (use NEXT_PHASE determined above; defaults to `implement-task`):
        ```bash
        python scripts/qs_opencode/render_agent.py \
            --phase {{IMPLEMENT_PHASE}} \
@@ -228,7 +228,7 @@ to the `next_step.py` call and use `implement-setup-task` as the phase for
            --title "{{TITLE}}" \
            --story-file "{{STORY_FILE}}"
        ```
-       If NEXT_PHASE=implement-setup-task, replace `{{IMPLEMENT_PHASE}}` with `implement-setup-task`.
+       If NEXT_PHASE=implement-setup-task, replace `implement-task` with `implement-setup-task` in the `--phase` argument.
 
     c. Emit handoff (add `--next-phase implement-setup-task` if NEXT_PHASE was set above):
        ```bash

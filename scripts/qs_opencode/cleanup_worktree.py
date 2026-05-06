@@ -117,29 +117,36 @@ def remove_worktree(work_dir: Path) -> str | None:
     # being deleted. On macOS/Linux, deleting the CWD can cause
     # `git worktree remove` to fail and `shutil.rmtree` to silently
     # leave the directory behind.
+    prev_cwd = os.getcwd()
     try:
         os.chdir(str(main_wt))
     except OSError:
         pass  # best-effort; proceed anyway
 
-    result = subprocess.run(
-        ["git", "-C", str(main_wt), "worktree", "remove", str(work_dir), "--force"],
-        capture_output=True,
-        text=True,
-    )
-    error = None
-    if result.returncode != 0:
-        error = result.stderr.strip()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(main_wt), "worktree", "remove", str(work_dir), "--force"],
+            capture_output=True,
+            text=True,
+        )
+        error = None
+        if result.returncode != 0:
+            error = result.stderr.strip()
 
-    # Fallback: physically remove directory if still present
-    if work_dir.exists():
+        # Fallback: physically remove directory if still present
+        if work_dir.exists():
+            try:
+                shutil.rmtree(work_dir)
+            except OSError as exc:
+                rmtree_err = f"shutil.rmtree failed: {exc}"
+                error = f"{error}; {rmtree_err}" if error else rmtree_err
+
+        return error
+    finally:
         try:
-            shutil.rmtree(work_dir)
-        except OSError as exc:
-            rmtree_err = f"shutil.rmtree failed: {exc}"
-            error = f"{error}; {rmtree_err}" if error else rmtree_err
-
-    return error
+            os.chdir(prev_cwd)
+        except OSError:
+            pass  # original CWD may have been deleted
 
 
 def push_branch(work_dir: Path) -> tuple[bool, str]:
@@ -280,14 +287,17 @@ def main() -> None:  # noqa: C901
     # Step 3: Remove worktree
     wt_error = remove_worktree(work_dir)
 
+    status = "error" if wt_error else "removed"
+    message = f"Worktree removal failed: {wt_error}" if wt_error else f"Worktree QS_{args.issue} fully cleaned up."
+
     output_json(
         {
-            "status": "removed",
+            "status": status,
             "agents_removed": agents_removed,
             "agents_failed": agents_failed,
             "worktree_path": str(work_dir),
             "worktree_remove_error": wt_error,
-            "message": f"Worktree QS_{args.issue} fully cleaned up.",
+            "message": message,
         }
     )
 

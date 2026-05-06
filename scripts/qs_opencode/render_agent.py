@@ -165,8 +165,12 @@ def main() -> None:
         "STORY_FILE": args.story_file or "",
         "PR_NUMBER": "" if args.pr is None else str(args.pr),
         "AGENT_NAME": f"qs-{args.phase}-QS-{args.issue}",
-        "IMPLEMENT_PHASE": "implement-task",
     }
+    # Only inject IMPLEMENT_PHASE default for create-plan (the only template
+    # that uses it). Other templates should fail loudly if they accidentally
+    # reference {{IMPLEMENT_PHASE}}.
+    if args.phase == "create-plan":
+        context.setdefault("IMPLEMENT_PHASE", "implement-task")
     context.update(_parse_extras(args.extra))
 
     tmpl_path, template = _load_template(args.phase)
