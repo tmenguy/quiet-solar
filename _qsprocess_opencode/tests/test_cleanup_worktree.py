@@ -95,16 +95,31 @@ class TestRemoveAgentFiles:
         (agent_dir / "qs-implement-task-QS-42.md").write_text("x")
         (agent_dir / "qs-create-plan-QS-99.md").write_text("x")  # different issue
 
-        removed = cleanup_worktree.remove_agent_files(tmp_path, 42)
+        removed, failed = cleanup_worktree.remove_agent_files(tmp_path, 42)
 
         assert len(removed) == 2
+        assert failed == []
         assert not (agent_dir / "qs-create-plan-QS-42.md").exists()
         assert not (agent_dir / "qs-implement-task-QS-42.md").exists()
         assert (agent_dir / "qs-create-plan-QS-99.md").exists()
 
     def test_no_agent_dir(self, tmp_path: Path) -> None:
-        removed = cleanup_worktree.remove_agent_files(tmp_path, 42)
+        removed, failed = cleanup_worktree.remove_agent_files(tmp_path, 42)
         assert removed == []
+        assert failed == []
+
+    def test_unlink_failure_goes_to_failed_list(self, tmp_path: Path) -> None:
+        agent_dir = tmp_path / ".opencode" / "agents"
+        agent_dir.mkdir(parents=True)
+        f = agent_dir / "qs-create-plan-QS-42.md"
+        f.write_text("x")
+
+        with patch.object(Path, "unlink", side_effect=OSError("permission denied")):
+            removed, failed = cleanup_worktree.remove_agent_files(tmp_path, 42)
+
+        assert removed == []
+        assert len(failed) == 1
+        assert "permission denied" in failed[0]
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +200,7 @@ class TestMain:
     def test_clean_removes(self, tmp_path: Path) -> None:
         with (
             patch("cleanup_worktree.check_worktree_status") as mock_status,
-            patch("cleanup_worktree.remove_agent_files", return_value=[]) as mock_agents,
+            patch("cleanup_worktree.remove_agent_files", return_value=([], [])) as mock_agents,
             patch("cleanup_worktree.remove_worktree", return_value=None) as mock_wt,
         ):
             mock_status.return_value = {
@@ -203,7 +218,7 @@ class TestMain:
     def test_force_skips_status_check(self, tmp_path: Path) -> None:
         with (
             patch("cleanup_worktree.check_worktree_status") as mock_status,
-            patch("cleanup_worktree.remove_agent_files", return_value=[]),
+            patch("cleanup_worktree.remove_agent_files", return_value=([], [])),
             patch("cleanup_worktree.remove_worktree", return_value=None),
         ):
             result = self._run_main(["--work-dir", str(tmp_path), "--issue", "42", "--force"])
@@ -215,7 +230,7 @@ class TestMain:
         with (
             patch("cleanup_worktree.check_worktree_status") as mock_status,
             patch("cleanup_worktree.push_branch", return_value=(True, "ok")),
-            patch("cleanup_worktree.remove_agent_files", return_value=[]),
+            patch("cleanup_worktree.remove_agent_files", return_value=([], [])),
             patch("cleanup_worktree.remove_worktree", return_value=None),
         ):
             mock_status.return_value = {
@@ -330,7 +345,7 @@ class TestAgentRemovalBeforeStatusCheck:
         original_remove = cleanup_worktree.remove_agent_files
         original_check = cleanup_worktree.check_worktree_status
 
-        def tracking_remove(work_dir: Path, issue: int) -> list[str]:
+        def tracking_remove(work_dir: Path, issue: int) -> tuple[list[str], list[str]]:
             call_order.append("remove_agent_files")
             return original_remove(work_dir, issue)
 
@@ -362,9 +377,9 @@ class TestAgentRemovalBeforeStatusCheck:
 
         call_order: list[str] = []
 
-        def tracking_remove(work_dir: Path, issue: int) -> list[str]:
+        def tracking_remove(work_dir: Path, issue: int) -> tuple[list[str], list[str]]:
             call_order.append("remove_agent_files")
-            return [".opencode/agents/qs-create-plan-QS-42.md"]
+            return [".opencode/agents/qs-create-plan-QS-42.md"], []
 
         def tracking_check(work_dir: Path) -> dict:
             call_order.append("check_worktree_status")
@@ -388,9 +403,9 @@ class TestAgentRemovalBeforeStatusCheck:
         """--force should also remove agent files before worktree deletion."""
         call_order: list[str] = []
 
-        def tracking_remove(work_dir: Path, issue: int) -> list[str]:
+        def tracking_remove(work_dir: Path, issue: int) -> tuple[list[str], list[str]]:
             call_order.append("remove_agent_files")
-            return []
+            return [], []
 
         def tracking_wt_remove(work_dir: Path) -> str | None:
             call_order.append("remove_worktree")
