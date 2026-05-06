@@ -311,3 +311,36 @@ class TestNextStepNextPhaseOverride:
             pytest.raises(SystemExit),
         ):
             next_step.main()
+
+    def test_next_phase_self_loop_raises(self) -> None:
+        """--next-phase equal to --phase should raise a self-loop error."""
+        args = [
+            "next_step.py",
+            "--phase",
+            "create-plan",
+            "--issue",
+            "99",
+            "--work-dir",
+            "/tmp/test",
+            "--title",
+            "Test",
+            "--story-file",
+            "story.md",
+            "--next-phase",
+            "create-plan",
+        ]
+        with (
+            patch("sys.argv", args),
+            patch("next_step.output_json"),
+            patch("next_step.build_launcher_payload", return_value={"new_context": "x"}),
+            pytest.raises(SystemExit, match="self-loop"),
+        ):
+            next_step.main()
+
+    def test_next_phase_overridden_flag(self) -> None:
+        """Output JSON should contain next_phase_overridden boolean."""
+        captured_default = self._run_next_step()
+        assert captured_default["next_phase_overridden"] is False
+
+        captured_override = self._run_next_step(["--next-phase", "implement-setup-task"])
+        assert captured_override["next_phase_overridden"] is True

@@ -86,6 +86,13 @@ PHASE_TRANSITIONS: dict[str, dict[str, object] | None] = {
     "release": None,  # terminal (kept for completeness)
 }
 
+# Valid next-phase values: any phase that appears as a transition target or
+# as a finishing-phase key with a non-None transition.
+_VALID_NEXT_PHASES = sorted(
+    {str(t["next_agent_phase"]) for t in PHASE_TRANSITIONS.values() if t is not None}
+    | {k for k, v in PHASE_TRANSITIONS.items() if v is not None}
+)
+
 
 def _render_cmd(
     *,
@@ -161,13 +168,6 @@ def main() -> None:
     parser.add_argument("--story-file", default=None)
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--title", required=True)
-    # Valid next-phase values: any phase that could be a target (either as a
-    # default next_agent_phase or as a finishing phase key with a non-None
-    # transition — both sets represent renderable agents).
-    _VALID_NEXT_PHASES = sorted(
-        {str(t["next_agent_phase"]) for t in PHASE_TRANSITIONS.values() if t is not None}
-        | {k for k, v in PHASE_TRANSITIONS.items() if v is not None}
-    )
     parser.add_argument(
         "--next-phase",
         default=None,
@@ -197,6 +197,11 @@ def main() -> None:
     # review agents) cannot be overridden because the sub-roles would
     # become inconsistent.
     render_phases = list(transition["render_phases"])  # type: ignore[arg-type]
+    if args.next_phase and args.next_phase == args.phase:
+        raise SystemExit(
+            f"Cannot override --next-phase to the same phase as --phase "
+            f"({args.phase!r}); this would create a self-loop."
+        )
     if args.next_phase and args.next_phase != str(transition["next_agent_phase"]):
         if len(render_phases) > 1:
             raise SystemExit(
@@ -269,6 +274,7 @@ def main() -> None:
         {
             "phase_done": args.phase,
             "next_phase": next_phase,
+            "next_phase_overridden": bool(args.next_phase and args.next_phase != str(transition["next_agent_phase"])),
             "next_agent": next_agent,
             "render_commands": render_cmds,
             "spawn_prompt": prompt,
