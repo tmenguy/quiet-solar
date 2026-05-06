@@ -14,7 +14,8 @@ class QsCarCard extends HTMLElement {
       const dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
       this._lastAnimTs = ts;
       const patternLen = Math.max(8, this._animPatternLen || 64);
-      const speed = 80; // dash units per second
+      const cp = this._chargePower || 0;
+      const speed = Math.min(200, Math.max(20, 20 + (cp - 500) * 180 / 21500));
       this._animOffset = ((this._animOffset || 0) + speed * dt) % patternLen;
       const p = this._root?.getElementById('charge_anim');
       if (p) {
@@ -106,6 +107,7 @@ class QsCarCard extends HTMLElement {
       const isStale = sCarIsStale?.state === 'on';
       let soc = this._percent(sSoc?.state);
       const power = sPower?.state || "0";
+      this._chargePower = Number(power) || 0;
       const target = selLimit?.state || "";
       const charging = (Number(power) > 50);
       const carChargeTypeIcons = {
