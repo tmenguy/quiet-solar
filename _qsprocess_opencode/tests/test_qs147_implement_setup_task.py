@@ -149,8 +149,8 @@ class TestCreatePlanTemplate:
         assert "--phase implement-task" not in phase7_text
         assert "{{IMPLEMENT_PHASE}}" in phase7_text
 
-    def test_renders_fails_without_implement_phase(self, tmp_path: Path) -> None:
-        """When IMPLEMENT_PHASE is not provided, rendering should fail."""
+    def test_renders_succeeds_without_implement_phase_extra(self, tmp_path: Path) -> None:
+        """When IMPLEMENT_PHASE is not provided via --extra, rendering succeeds with default."""
         agents_dir = tmp_path / ".opencode" / "agents"
         agents_dir.mkdir(parents=True)
 
@@ -168,9 +168,13 @@ class TestCreatePlanTemplate:
             "_qsprocess_opencode/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
-            with pytest.raises(SystemExit) as exc_info:
-                render_agent.main()
-            assert exc_info.value.code is not None and exc_info.value.code != 0
+            render_agent.main()
+
+        out = agents_dir / "qs-create-plan-QS-99.md"
+        assert out.is_file()
+        content = out.read_text()
+        # Default IMPLEMENT_PHASE should be implement-task
+        assert "implement-task" in content
 
     def test_renders_with_implement_phase_extra(self, tmp_path: Path) -> None:
         """When IMPLEMENT_PHASE=implement-task is passed, rendering succeeds."""

@@ -150,6 +150,20 @@ Verify all 5 render_agent.py calls exited 0 and the files exist at
 - `qs-plan-dev-proxy-QS-{{issue_number}}.md`
 - `qs-plan-scope-guardian-QS-{{issue_number}}.md`
 
+**MANDATORY VERIFICATION -- DO NOT PROCEED WITHOUT THIS:**
+
+Check each file individually:
+```bash
+ls {{worktree_path}}/.opencode/agents/qs-create-plan-QS-{{issue_number}}.md
+ls {{worktree_path}}/.opencode/agents/qs-plan-critic-QS-{{issue_number}}.md
+ls {{worktree_path}}/.opencode/agents/qs-plan-concrete-planner-QS-{{issue_number}}.md
+ls {{worktree_path}}/.opencode/agents/qs-plan-dev-proxy-QS-{{issue_number}}.md
+ls {{worktree_path}}/.opencode/agents/qs-plan-scope-guardian-QS-{{issue_number}}.md
+```
+
+All 5 commands must succeed. If ANY file is missing, re-run the failed
+`render_agent.py` command. DO NOT print the launcher until all 5 are confirmed.
+
 ### 4. Tell the user what to do next
 
 **IMPORTANT**: This agent runs on the **main checkout**, which is a

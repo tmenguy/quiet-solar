@@ -174,6 +174,29 @@ the parallel-review design):
 
 ### Phase 7 — Finalize
 
+#### Determine implement phase
+
+Review the tasks and affected files in your plan:
+- If ALL affected files match the dev-environment set (see list below),
+  set NEXT_PHASE=implement-setup-task
+- If ANY affected file is outside the dev-environment set,
+  set NEXT_PHASE=implement-task (this is the default)
+
+Dev-environment file patterns:
+`_qsprocess_opencode/**`, `_qsprocess/**`, `scripts/**`, `.opencode/**`,
+`.claude/**`, `.cursor/**`, `docs/**`, `_bmad-output/**`, `.github/**`,
+`AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `pyproject.toml`
+
+When NEXT_PHASE=implement-setup-task, add `--next-phase implement-setup-task`
+to the `next_step.py` call and use `implement-setup-task` as the phase for
+`render_agent.py` and `spawn_session.py`.
+
+**Connecting NEXT_PHASE to the commands below:** The `--phase` argument in
+the commands below defaults to `implement-task` (the rendered value of
+`{{IMPLEMENT_PHASE}}`). If you determined NEXT_PHASE=implement-setup-task
+above, replace `implement-task` with `implement-setup-task` in all three
+commands (render, handoff, spawn).
+
 1. Write the story file to `{{STORY_FILE}}`.
 
 2. Append an **Adversarial Review Notes** section at the end of the story:
@@ -202,25 +225,27 @@ the parallel-review design):
       git push -u origin {{BRANCH}}
       ```
 
-   b. Render the next agent:
-      ```bash
-      python scripts/qs_opencode/render_agent.py \
-          --phase {{IMPLEMENT_PHASE}} \
-          --work-dir "{{WORK_DIR}}" \
-          --issue {{ISSUE}} \
-          --title "{{TITLE}}" \
-          --story-file "{{STORY_FILE}}"
-      ```
+    b. Render the next agent (use NEXT_PHASE determined above; defaults to `implement-task`):
+       ```bash
+       python scripts/qs_opencode/render_agent.py \
+           --phase {{IMPLEMENT_PHASE}} \
+           --work-dir "{{WORK_DIR}}" \
+           --issue {{ISSUE}} \
+           --title "{{TITLE}}" \
+           --story-file "{{STORY_FILE}}"
+       ```
+       If NEXT_PHASE=implement-setup-task, replace `implement-task` with `implement-setup-task` in the `--phase` argument.
 
-   c. Emit handoff:
-      ```bash
-      python scripts/qs_opencode/next_step.py \
-          --phase create-plan \
-          --work-dir "{{WORK_DIR}}" \
-          --issue {{ISSUE}} \
-          --title "{{TITLE}}" \
-          --story-file "{{STORY_FILE}}"
-      ```
+    c. Emit handoff (add `--next-phase implement-setup-task` if NEXT_PHASE was set above):
+       ```bash
+       python scripts/qs_opencode/next_step.py \
+           --phase create-plan \
+           --work-dir "{{WORK_DIR}}" \
+           --issue {{ISSUE}} \
+           --title "{{TITLE}}" \
+           --story-file "{{STORY_FILE}}"
+       ```
+       If NEXT_PHASE=implement-setup-task, append: `--next-phase implement-setup-task`
 
    d. Spawn a new session and trigger reload:
       ```bash

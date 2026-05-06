@@ -110,19 +110,32 @@ def list_agent_files(work_dir: Path, issue: int) -> list[str]:
 
 def remove_worktree(work_dir: Path) -> str | None:
     """Un-register and delete the worktree. Returns error message or None."""
-    main_wt = get_main_worktree()
-    result = subprocess.run(
-        ["git", "-C", str(main_wt), "worktree", "remove", str(work_dir), "--force"],
-        capture_output=True,
-        text=True,
-    )
-    error = None
-    if result.returncode != 0:
-        error = result.stderr.strip()
+    error: str | None = None
+
+    try:
+        main_wt = get_main_worktree()
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+        error = f"Could not determine main worktree: {exc}"
+        main_wt = None
+
+    if main_wt is not None:
+        # Use cwd= instead of os.chdir to avoid mutating global process state.
+        result = subprocess.run(
+            ["git", "-C", str(main_wt), "worktree", "remove", str(work_dir), "--force"],
+            capture_output=True,
+            text=True,
+            cwd=str(main_wt),
+        )
+        if result.returncode != 0:
+            error = result.stderr.strip() or f"git worktree remove exited {result.returncode}"
 
     # Fallback: physically remove directory if still present
     if work_dir.exists():
-        shutil.rmtree(work_dir, ignore_errors=True)
+        try:
+            shutil.rmtree(work_dir)
+        except OSError as exc:
+            rmtree_err = f"shutil.rmtree failed: {exc}"
+            error = f"{error}; {rmtree_err}" if error else rmtree_err
 
     return error
 
@@ -265,14 +278,17 @@ def main() -> None:  # noqa: C901
     # Step 3: Remove worktree
     wt_error = remove_worktree(work_dir)
 
+    status = "error" if wt_error else "removed"
+    message = f"Worktree removal failed: {wt_error}" if wt_error else f"Worktree QS_{args.issue} fully cleaned up."
+
     output_json(
         {
-            "status": "removed",
+            "status": status,
             "agents_removed": agents_removed,
             "agents_failed": agents_failed,
             "worktree_path": str(work_dir),
             "worktree_remove_error": wt_error,
-            "message": f"Worktree QS_{args.issue} fully cleaned up.",
+            "message": message,
         }
     )
 
