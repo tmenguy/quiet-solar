@@ -162,6 +162,10 @@ def main() -> None:
     parser.add_argument("--story-file", default=None)
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--title", required=True)
+    parser.add_argument(
+        "--next-phase", default=None,
+        help="Override the next agent phase (e.g. implement-setup-task instead of implement-task)",
+    )
     args = parser.parse_args()
 
     transition = PHASE_TRANSITIONS[args.phase]
@@ -174,8 +178,18 @@ def main() -> None:
         return
 
     assert isinstance(transition, dict)  # for type-checker
-    next_phase = str(transition["next_agent_phase"])
+    next_phase = args.next_phase or str(transition["next_agent_phase"])
     next_agent = f"qs-{next_phase}-QS-{args.issue}"
+
+    # If --next-phase overrides the default, also override render_phases
+    # (only for single-render transitions like create-plan → implement-*)
+    render_phases = list(transition["render_phases"])  # type: ignore[arg-type]
+    if args.next_phase and args.next_phase != str(transition["next_agent_phase"]):
+        default_phase = str(transition["next_agent_phase"])
+        render_phases = [
+            args.next_phase if str(p) == default_phase else str(p)
+            for p in render_phases
+        ]
 
     render_cmds = [
         _render_cmd(
@@ -186,7 +200,7 @@ def main() -> None:
             story_file=args.story_file,
             pr=args.pr,
         )
-        for phase in transition["render_phases"]  # type: ignore[arg-type]
+        for phase in render_phases
     ]
 
     prompt = _spawn_prompt(

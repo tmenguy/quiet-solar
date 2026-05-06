@@ -13,20 +13,13 @@ Run with: source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v
 from __future__ import annotations
 
 import fnmatch
-import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-# Add scripts dir to path so we can import the modules
-sys.path.insert(
-    0,
-    str(Path(__file__).resolve().parent.parent.parent / "scripts" / "qs_opencode"),
-)
-
-import render_agent  # noqa: E402
-import next_step  # noqa: E402
+import render_agent
+import next_step
 
 
 # ---------------------------------------------------------------------------
@@ -101,9 +94,13 @@ class TestImplementSetupTaskTemplate:
         tmpl = repo_root / "_qsprocess_opencode" / "agent_templates" / "qs-implement-setup-task.md.tmpl"
         return tmpl.read_text(encoding="utf-8")
 
-    def test_allows_qsprocess_opencode(self, template_content: str) -> None:
-        """Edit permissions must allow _qsprocess_opencode/**."""
-        assert '"_qsprocess_opencode/**": allow' in template_content
+    def test_allows_qsprocess_opencode_tests(self, template_content: str) -> None:
+        """Edit permissions must allow _qsprocess_opencode/tests/**."""
+        assert '"_qsprocess_opencode/tests/**": allow' in template_content
+
+    def test_allows_qsprocess_opencode_templates(self, template_content: str) -> None:
+        """Edit permissions must allow _qsprocess_opencode/agent_templates/**."""
+        assert '"_qsprocess_opencode/agent_templates/**": allow' in template_content
 
     def test_allows_scripts_qs_opencode(self, template_content: str) -> None:
         """Edit permissions must allow scripts/qs_opencode/**."""
@@ -120,6 +117,10 @@ class TestImplementSetupTaskTemplate:
     def test_quality_gate_uses_pytest(self, template_content: str) -> None:
         """Quality gate must run pytest on _qsprocess_opencode/tests/."""
         assert "pytest _qsprocess_opencode/tests/" in template_content
+
+    def test_quality_gate_includes_ruff(self, template_content: str) -> None:
+        """Quality gate must include ruff check."""
+        assert "ruff check _qsprocess_opencode/" in template_content
 
     def test_quality_gate_not_full(self, template_content: str) -> None:
         """Must NOT reference the full quality gate script."""
@@ -163,8 +164,9 @@ class TestCreatePlanTemplate:
             "--story-file", "_qsprocess_opencode/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
-            with pytest.raises(SystemExit):
+            with pytest.raises(SystemExit) as exc_info:
                 render_agent.main()
+            assert exc_info.value.code is not None and exc_info.value.code != 0
 
     def test_renders_with_implement_phase_extra(self, tmp_path: Path) -> None:
         """When IMPLEMENT_PHASE=implement-task is passed, rendering succeeds."""
@@ -210,3 +212,63 @@ class TestGitignorePattern:
         assert not fnmatch.fnmatch("qs-release.md", pattern)
         assert fnmatch.fnmatch("qs-create-plan-QS-42.md", pattern)
         assert fnmatch.fnmatch("qs-implement-task-QS-147.md", pattern)
+
+
+# ---------------------------------------------------------------------------
+# next_step.py — --next-phase override (Finding 1)
+# ---------------------------------------------------------------------------
+
+
+class TestNextStepNextPhaseOverride:
+    def test_next_phase_overrides_default(self) -> None:
+        """--next-phase should override the default transition target."""
+        from unittest.mock import patch as _patch
+
+        captured: dict = {}
+
+        def capture(data: dict) -> None:
+            captured.update(data)
+
+        args = [
+            "next_step.py",
+            "--phase", "create-plan",
+            "--issue", "99",
+            "--work-dir", "/tmp/test",
+            "--title", "Test",
+            "--story-file", "story.md",
+            "--next-phase", "implement-setup-task",
+        ]
+        with _patch("sys.argv", args), \
+             _patch("next_step.output_json", side_effect=capture), \
+             _patch("next_step.build_launcher_payload", return_value={"new_context": "x"}):
+            next_step.main()
+
+        assert captured["next_phase"] == "implement-setup-task"
+        assert captured["next_agent"] == "qs-implement-setup-task-QS-99"
+        # render_commands should reference implement-setup-task, not implement-task
+        assert any("implement-setup-task" in cmd for cmd in captured["render_commands"])
+
+    def test_no_next_phase_uses_default(self) -> None:
+        """Without --next-phase, default transition is used."""
+        from unittest.mock import patch as _patch
+
+        captured: dict = {}
+
+        def capture(data: dict) -> None:
+            captured.update(data)
+
+        args = [
+            "next_step.py",
+            "--phase", "create-plan",
+            "--issue", "99",
+            "--work-dir", "/tmp/test",
+            "--title", "Test",
+            "--story-file", "story.md",
+        ]
+        with _patch("sys.argv", args), \
+             _patch("next_step.output_json", side_effect=capture), \
+             _patch("next_step.build_launcher_payload", return_value={"new_context": "x"}):
+            next_step.main()
+
+        assert captured["next_phase"] == "implement-task"
+        assert captured["next_agent"] == "qs-implement-task-QS-99"

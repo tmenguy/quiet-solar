@@ -8,7 +8,9 @@ mode: primary
 color: "#F59E0B"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
-  edit: deny
+  edit:
+    "*": deny
+    "_qsprocess_opencode/stories/*_review_fix_*.md": allow
   bash:
     "*": ask
     "gh pr view *": allow

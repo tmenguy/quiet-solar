@@ -11,10 +11,11 @@ color: "#16A34A"
 permission:
   edit:
     "*": deny
-    "_qsprocess_opencode/**": allow
+    "_qsprocess_opencode/tests/**": allow
+    "_qsprocess_opencode/agent_templates/**": allow
+    "_qsprocess_opencode/stories/*_review_fix_*.md": allow
     "scripts/qs_opencode/**": allow
     "{{STORY_FILE}}": allow
-    ".opencode/agents/.gitignore": allow
   bash:
     "*": ask
     "git status": allow
@@ -89,9 +90,11 @@ confirmation before proceeding.
 
 ```bash
 source venv/bin/activate && pytest _qsprocess_opencode/tests/ -v
+ruff check _qsprocess_opencode/ scripts/qs_opencode/
+ruff format --check _qsprocess_opencode/ scripts/qs_opencode/
 ```
 
-Must pass. If it fails, **fix autonomously and re-run** — only ask the
+All commands must pass. If it fails, **fix autonomously and re-run** — only ask the
 user for direction if you are genuinely stuck after 2–3 attempts.
 
 ### 5. Commit, push, and open PR (automatic)
@@ -114,11 +117,11 @@ authorized by the workflow.
 ### 6. Render the review agents
 
 ```bash
-python scripts/qs_opencode/render_agent.py --phase review-task            --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-blind-hunter    --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-edge-case-hunter --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-acceptance-auditor --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
-python scripts/qs_opencode/render_agent.py --phase review-coderabbit      --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER>
+python scripts/qs_opencode/render_agent.py --phase review-task            --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task
+python scripts/qs_opencode/render_agent.py --phase review-blind-hunter    --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task
+python scripts/qs_opencode/render_agent.py --phase review-edge-case-hunter --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task
+python scripts/qs_opencode/render_agent.py --phase review-acceptance-auditor --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task
+python scripts/qs_opencode/render_agent.py --phase review-coderabbit      --work-dir "{{WORK_DIR}}" --issue {{ISSUE}} --title "{{TITLE}}" --story-file "{{STORY_FILE}}" --pr <PR_NUMBER> --extra IMPLEMENT_PHASE=implement-setup-task
 ```
 
 Substitute the actual PR number.
@@ -163,7 +166,7 @@ Present the result:
 ## Hard rules
 
 - No code without a failing test first.
-- No commit without a green quality gate.
+- No commit without a green quality gate (`pytest _qsprocess_opencode/tests/` + `ruff check` — not the full `quality_gate.py`).
 - After a green quality gate, commit + push + PR are automatic (no user prompt).
 - Do NOT edit `_qsprocess/rules/`, `scripts/qs/`, `.claude/`, or any
   other hands-off path. Your allowlist is already narrow — respect it.
