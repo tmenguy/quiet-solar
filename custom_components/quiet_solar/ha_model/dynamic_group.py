@@ -184,7 +184,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self, tolerance_seconds: float | None, time: datetime, ignore_auto_and_user_overridden_load: bool = False
     ) -> float:
 
-        override_state = self.is_user_overridden() if ignore_auto_and_user_overridden_load else None
+        override_state = self.is_user_overridden()
 
         if ignore_auto_and_user_overridden_load and override_state is True:
             return 0.0  # all children overridden — exclude group entirely
