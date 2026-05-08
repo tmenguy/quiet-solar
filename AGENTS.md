@@ -1,17 +1,45 @@
 # Quiet Solar — OpenCode Rules
 
-This file is the OpenCode entry point. Claude Code reads `CLAUDE.md` directly
-and ignores this file, so the Claude/Cursor workflow is untouched.
+This file is the OpenCode entry point. It is self-contained — OpenCode does NOT
+read `CLAUDE.md` or any file under `_qsprocess/`.
+
+## Project overview
+
+Quiet Solar is a Home Assistant custom component that optimizes solar energy
+self-consumption through a constraint-based solver.
 
 ## Required reading (load with the Read tool on startup)
 
 OpenCode does not auto-parse `@file` references in `AGENTS.md`, so explicitly
 load these before doing any substantive work:
 
-- `CLAUDE.md` — base project rules (shared with Claude Code)
-- `_qsprocess/rules/project-rules.md` — full project rules
-- `_bmad-output/project-context.md` — 42-rule code style set
+- `_qsprocess_opencode/project-rules.md` — project rules (commands, architecture constraints, workflow routing)
+- `_qsprocess_opencode/project-context.md` — 42-rule code style set (naming, async, logging, testing patterns)
 - `_qsprocess_opencode/README.md` — this workflow's directory layout and conventions
+
+## Commands
+
+Activate with `source venv/bin/activate` for all Python commands.
+
+```bash
+# Run all quality gates (pytest 100% coverage + ruff + mypy + translations)
+python scripts/qs/quality_gate.py
+
+# Auto-fix formatting and lint
+python scripts/qs/quality_gate.py --fix
+
+# Run tests only
+source venv/bin/activate && pytest tests/ -v
+```
+
+## Architecture constraints
+
+- **Two-layer boundary**: `home_model/` NEVER imports `homeassistant.*`. `ha_model/` bridges both.
+- **Solver step size**: `SOLVER_STEP_S = 900` in `const.py` — don't touch.
+- **All config keys in `const.py`** — never hardcode strings.
+- **Async rules**: no blocking calls in async code, use `hass.async_add_executor_job()`.
+- **Logging**: lazy `%s`, no f-strings in log calls, no periods at end.
+- **Translations**: NEVER edit `translations/en.json` — edit `strings.json`, run `bash scripts/generate-translations.sh`.
 
 ## Workflow — two static agents, eight rendered per task
 

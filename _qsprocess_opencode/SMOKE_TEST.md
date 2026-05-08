@@ -37,7 +37,7 @@ Open the repo in OpenCode on main.
 
 | # | Check | How | Expected |
 |---|-------|-----|----------|
-| 1.1 | AGENTS.md loaded | Start session, ask: "What rules are you following?" | Agent mentions `CLAUDE.md`, `_qsprocess/rules/project-rules.md`, `_qsprocess_opencode/README.md` |
+| 1.1 | AGENTS.md loaded | Start session, ask: "What rules are you following?" | Agent mentions `_qsprocess_opencode/project-rules.md`, `_qsprocess_opencode/project-context.md`, `_qsprocess_opencode/README.md` |
 | 1.2 | Slash commands listed | Type `/` in the CLI | **Only `/setup-task`** appears (no `/create-plan`, `/implement-task`, `/review-task`, `/finish-task`, `/release`) |
 | 1.3 | Subagents registered | Ask: "List your qs-* subagents" | Exactly `qs-setup-task` — no per-task agents yet (they're rendered per-task into worktrees) |
 
@@ -103,7 +103,7 @@ Open the repo in OpenCode on main.
 | 7.3 | cleanup_agents.py called | Transcript | `python scripts/qs_opencode/cleanup_agents.py --work-dir <w> --issue 42` invoked |
 | 7.4 | Per-task agent files removed | `ls <worktree>/.opencode/agents/` before worktree deletion | No `qs-*-QS-42.md` files remain |
 | 7.5 | Branch + worktree cleanup | `git branch -a \| grep QS_42` ; `git worktree list` | Gone |
-| 7.6 | Epics index updated | Diff on `_bmad-output/planning-artifacts/epics.md` (or equivalent) | Story marked done |
+| 7.6 | Epics index updated | Diff on `_qsprocess_opencode/product/epics.md` (or equivalent) | Story marked done |
 | 7.7 | Release prompted (not auto) | Session log | If release warranted, user asked; `qs-release-QS-42` only rendered/spawned on explicit "release" |
 
 ## 8. Phase 6 — qs-release-QS-42 (optional)

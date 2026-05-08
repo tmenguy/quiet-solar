@@ -48,18 +48,12 @@ permission:
   reviewer sub-roles (blind-hunter, edge-case-hunter, acceptance-auditor,
   coderabbit), all tagged `-QS-{{ISSUE}}`.
 
-## Authoritative protocol
-
-Read `_qsprocess/skills/implement-task.md` (or the `implement-story.md`
-equivalent) for TDD discipline, commit hygiene, and PR conventions.
-Read `{{STORY_FILE}}` for the acceptance criteria and technical plan.
-
 ## Phase protocol
 
 ### 1. Load context
 
 - Read `{{STORY_FILE}}` completely.
-- Re-read `_qsprocess/rules/project-rules.md` if you haven't this session.
+- Re-read `_qsprocess_opencode/project-rules.md` if you haven't this session.
 - Run `git status` and `git diff origin/main...HEAD` to confirm you are
   on `{{BRANCH}}` with the story file committed and no other local edits.
 

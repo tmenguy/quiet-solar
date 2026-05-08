@@ -42,11 +42,6 @@ permission:
   - `qs-review-coderabbit-QS-{{ISSUE}}`
 - **Next agent to render**: `qs-finish-task-QS-{{ISSUE}}`
 
-## Authoritative protocol
-
-Read `_qsprocess/skills/review-task.md` (or `review-story.md`) for the
-orchestration contract, triage categories, and interactive workflow.
-
 ## Orchestration — you do NOT review the code yourself
 
 You are coordinator only. Your edit permission is `deny`. If you find
@@ -74,7 +69,7 @@ Each returns a structured findings list.
 
 ### 3. Consolidate and triage
 
-Merge findings into 4 buckets per `_qsprocess/skills/review-task.md`:
+Merge findings into 4 buckets:
 - **must-fix** — correctness, security, acceptance-criteria violations
 - **should-fix** — important quality / maintainability issues
 - **nice-to-have** — stylistic or speculative

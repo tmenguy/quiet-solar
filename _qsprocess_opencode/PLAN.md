@@ -135,7 +135,7 @@ docs/
 [Home OpenCode, main worktree]
  user: /setup-task 3.2
    └─ qs-setup-task (static):
-       1. Follow _qsprocess/skills/setup-task.md (issue, branch, worktree)
+        1. Follow inline phase protocol (issue, branch, worktree)
        2. render_agent.py --phase create-plan ...
           → writes <worktree>/.opencode/agents/qs-create-plan-QS-<N>.md
        3. launch_opencode.py --preload-command "Activate qs-create-plan-QS-<N>..."
@@ -198,7 +198,7 @@ placeholder, so templates are self-validating.
 | qs-review-edge-case-hunter-QS-<N> | deny | `git diff *`, `git log *`, `grep *` | deny |
 | qs-review-acceptance-auditor-QS-<N> | deny | `git diff *`; reads story file | deny |
 | qs-review-coderabbit-QS-<N> | deny | `gh api *`, `gh pr view *` | deny |
-| qs-finish-task-QS-<N> | narrow (`_bmad-output/planning-artifacts/epics.md`) | `gh pr merge *`, `git *`, `scripts/worktree-cleanup.sh`, `python scripts/qs/quality_gate.py`, `python scripts/qs_opencode/cleanup_agents.py *` | deny |
+| qs-finish-task-QS-<N> | narrow (`_qsprocess_opencode/product/`) | `gh pr merge *`, `git *`, `scripts/worktree-cleanup.sh`, `python scripts/qs/quality_gate.py`, `python scripts/qs_opencode/cleanup_agents.py *` | deny |
 | qs-release-QS-<N> | deny | `git tag *`, `git push --tags`, `python scripts/qs/release.py`, `gh release *` | deny |
 
 Starting sketches; expect tuning after first pipeline run.
