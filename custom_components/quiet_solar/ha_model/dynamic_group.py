@@ -166,9 +166,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         has_overridden = False
         has_not_overridden = False
         for device in self._childrens:
-            if device.is_user_overridden() is True:
+            result = device.is_user_overridden()
+            if result is True:
                 has_overridden = True
-            elif device.is_user_overridden() is False:
+            elif result is False:
                 has_not_overridden = True
             else:
                 # case a child is at unknown so the father too
@@ -214,6 +215,10 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 remove_from_global_sensor = 0.0
             return p - remove_from_global_sensor
 
+        # Mixed override (is_user_overridden() == None) or no group sensor:
+        # fall back to per-child aggregation, skipping overridden children.
+        # This is intentional — per-child sum is the correct approach when
+        # the group sensor cannot be cleanly split between overridden/non-overridden.
         power = 0.0
         for device in self._childrens:
             if isinstance(device, HADeviceMixin):

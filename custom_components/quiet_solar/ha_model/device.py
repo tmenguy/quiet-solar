@@ -864,12 +864,20 @@ class HADeviceMixin:
             # Auto-boosted loads are only excluded when the solver is NOT
             # actively commanding them ON.  When the solver has sent an ON
             # command, the load IS controlled consumption.
+            # Note: is_load_command_set() returns True only when running_command
+            # is None (no in-flight command) AND current_command is set, so
+            # running_command is implicitly checked.
             if not (
                 self.is_load_command_set(time)
                 and self.current_command is not None
                 and not self.current_command.is_off_or_idle()
             ):
                 return 0.0
+        # Note: a load can be both auto-boosted and user-overridden.
+        # If auto-boosted returned 0.0 above, we never reach here.
+        # If auto-boosted fell through (solver commanding ON), this
+        # override check correctly excludes it — the user override
+        # takes priority over the solver command.
         if ignore_auto_and_user_overridden_load and self.is_user_overridden() is True:
             return 0.0
 

@@ -1636,6 +1636,9 @@ class QSHome(QSDynamicGroup):
                     continue
                 if load.is_user_overridden() is True:
                     continue  # don't add piloted devices of overridden loads
+                    # Note: _all_loads is typed list[AbstractLoad] and never contains
+                    # QSDynamicGroup (which inherits AbstractDevice, not AbstractLoad),
+                    # so is_user_overridden() always returns bool, never None.
                 if len(load.devices_to_pilot) != 0:
                     piloted_sets.update(load.devices_to_pilot)
 
@@ -3204,15 +3207,22 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
         return ret
 
     @staticmethod
-    def _apply_override_mask(load_sensor: QSSolarHistoryVals, override_states: list) -> None:
+    def _apply_override_mask(load_sensor: QSSolarHistoryVals, override_states: list, current_time: datetime) -> None:
         """Zero out power values in load_sensor for intervals where override was active.
 
         Walks override_states chronologically. For each state change:
         - State starting with "Override:" → overridden (power excluded from controlled)
         - Otherwise → not overridden
+
+        Overrides shorter than SOLVER_STEP_S (900s) may be invisible because
+        start_idx == end_idx produces an empty slice. This is expected at
+        solver-step resolution.
         """
         if load_sensor.values is None:
             return
+
+        # Ensure chronological order for correct interval masking
+        override_states.sort(key=lambda s: s.last_changed)
 
         is_overridden = False
         prev_time = None
@@ -3221,12 +3231,12 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
             if state.state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
                 continue
 
-            current_time = state.last_changed
+            state_time = state.last_changed
             new_is_overridden = state.state.startswith(OVERRIDE_STATE_PREFIX)
 
             if is_overridden and prev_time is not None:
                 start_idx = load_sensor.get_index_from_time(prev_time)[0]
-                end_idx = load_sensor.get_index_from_time(current_time)[0]
+                end_idx = load_sensor.get_index_from_time(state_time)[0]
                 if start_idx <= end_idx:
                     load_sensor.values[0][start_idx:end_idx] = 0
                 else:
@@ -3234,12 +3244,12 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                     load_sensor.values[0][:end_idx] = 0
 
             is_overridden = new_is_overridden
-            prev_time = current_time
+            prev_time = state_time
 
-        # Handle trailing override (overridden until end of history)
+        # Handle trailing override (overridden until current_time)
         if is_overridden and prev_time is not None:
             start_idx = load_sensor.get_index_from_time(prev_time)[0]
-            end_idx = load_sensor.get_index_from_time(datetime.now(tz=prev_time.tzinfo))[0]
+            end_idx = load_sensor.get_index_from_time(current_time)[0]
             if start_idx <= end_idx:
                 load_sensor.values[0][start_idx:end_idx] = 0
             else:
@@ -3370,7 +3380,14 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                     if load.qs_enable_device is False:
                         continue
                     for pd in load.devices_to_pilot:
-                        piloted_to_owner[pd] = load
+                        existing = piloted_to_owner.setdefault(pd, load)
+                        if existing is not load:
+                            _LOGGER.debug(
+                                "Piloted device %s shared by %s and %s, using first owner",
+                                pd.name if hasattr(pd, "name") else pd,
+                                existing.name,
+                                load.name,
+                            )
                     if len(load.devices_to_pilot) != 0:
                         piloted_sets.update(load.devices_to_pilot)
 
@@ -3444,7 +3461,7 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                         if override_entity_id is not None and load_sensor.values is not None:
                             override_states = await load_from_history(self.hass, override_entity_id, s, e)
                             if override_states:
-                                self._apply_override_mask(load_sensor, override_states)
+                                self._apply_override_mask(load_sensor, override_states, time)
                             else:
                                 _LOGGER.debug(
                                     "No override history for %s, assuming not overridden",

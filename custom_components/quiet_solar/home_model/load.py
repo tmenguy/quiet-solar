@@ -21,6 +21,8 @@ from ..const import (
     CONF_NUM_MAX_ON_OFF,
     CONF_POWER,
     CONF_SWITCH,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     DASHBOARD_NO_SECTION,
     DEVICE_STATUS_CHANGE_CONSTRAINT,
@@ -854,7 +856,10 @@ class AbstractLoad(AbstractDevice):
         if overridden_state is None:
             ct = self.get_current_active_constraint()
             if ct is not None:
-                if ct.load_info is not None and ct.load_info.get("originator", None) == "user_override":
+                if (
+                    ct.load_info is not None
+                    and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+                ):
                     overridden_state = ct.load_param
 
         if self.asked_for_reset_user_initiated_state_time is not None:
@@ -870,7 +875,7 @@ class AbstractLoad(AbstractDevice):
         False if no override is active. Individual loads never return None.
         """
         state = self.get_override_state()
-        if state == OVERRIDE_STATE_NO_OVERRIDE or state == OVERRIDE_STATE_ASKED_FOR_RESET:
+        if state in (OVERRIDE_STATE_NO_OVERRIDE, OVERRIDE_STATE_ASKED_FOR_RESET):
             return False
         return True
 
@@ -941,11 +946,11 @@ class AbstractLoad(AbstractDevice):
     ) -> tuple[bool, list[LoadConstraint]]:
         """Push agenda constraints. Returns (changed, constraints_to_ack)."""
         for new_ct in new_constraints:
-            new_ct.add_or_update_load_info("originator", "agenda")
+            new_ct.add_or_update_load_info(CONSTRAINT_ORIGINATOR_KEY, "agenda")
 
         one_c_removed = False
         for i, ct in enumerate(self._constraints):
-            if ct and ct.load_info is not None and ct.load_info.get("originator", None) == "agenda":
+            if ct and ct.load_info is not None and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == "agenda":
                 # find if we have a agenda one that is matching, if no : we kill it
                 found = False
                 for new_ct in new_constraints:
@@ -1137,7 +1142,7 @@ class AbstractLoad(AbstractDevice):
         if (
             constraint is not None
             and constraint.load_info is not None
-            and constraint.load_info.get("originator", None) == "user_override"
+            and constraint.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
         ):
             # it is a user override based constraint ... we should reset the override state.
             _LOGGER.info(

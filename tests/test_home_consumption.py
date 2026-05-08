@@ -705,7 +705,7 @@ class TestApplyOverrideMask:
             _FakeState("NO OVERRIDE", t0),
             _FakeState("NO OVERRIDE", t1),
         ]
-        cls._apply_override_mask(sensor, states)
+        cls._apply_override_mask(sensor, states, t1)
         np.testing.assert_array_equal(sensor.values, original)
 
     def test_override_interval_zeroed(self):
@@ -720,7 +720,7 @@ class TestApplyOverrideMask:
             _FakeState("NO OVERRIDE", t1),
             _FakeState("NO OVERRIDE", t2),
         ]
-        cls._apply_override_mask(sensor, states)
+        cls._apply_override_mask(sensor, states, t2)
         # t0→t1 should be zeroed (override active)
         idx0 = sensor.get_index_from_time(t0)[0]
         idx1 = sensor.get_index_from_time(t1)[0]
@@ -729,16 +729,50 @@ class TestApplyOverrideMask:
         idx2 = sensor.get_index_from_time(t2)[0]
         assert all(sensor.values[0][idx1:idx2] == 500.0)
 
+    def test_trailing_override_wraps_around_circular_buffer(self):
+        """Lines 3256-3257: trailing override spans wrap-around in circular buffer."""
+        cls = self._get_cls()
+        sensor = _FakeLoadSensor(size=10)
+
+        # We need start_idx > end_idx for the trailing override.
+        # Override get_index_from_time to return controlled values:
+        # first call (prev_time) → idx=8, second call (current_time) → idx=2
+        call_count = [0]
+        indices = [8, 2]  # start=8, end=2 (wraps)
+
+        def controlled_get_index(time):
+            idx = indices[call_count[0]] if call_count[0] < len(indices) else 0
+            call_count[0] += 1
+            return idx, 0
+
+        sensor.get_index_from_time = controlled_get_index
+
+        t0 = datetime(2027, 1, 1, 10, 0, tzinfo=pytz.UTC)
+        t_now = datetime(2027, 1, 1, 12, 0, tzinfo=pytz.UTC)
+        states = [
+            _FakeState("Override: car", t0),
+        ]
+        cls._apply_override_mask(sensor, states, t_now)
+        # Indices 8,9 should be zeroed (from start_idx to end of buffer)
+        assert sensor.values[0][8] == 0.0
+        assert sensor.values[0][9] == 0.0
+        # Indices 0,1 should be zeroed (from start of buffer to end_idx)
+        assert sensor.values[0][0] == 0.0
+        assert sensor.values[0][1] == 0.0
+        # Index 2 onward should remain
+        assert sensor.values[0][2] == 500.0
+        assert sensor.values[0][5] == 500.0
+
     def test_trailing_override_zeroed(self):
-        """Override at end (no subsequent state change) zeroes to current time."""
+        """Override at end (no subsequent state change) zeroes to current_time."""
         cls = self._get_cls()
         sensor = _FakeLoadSensor()
         t0 = datetime(2027, 1, 1, 10, 0, tzinfo=pytz.UTC)
+        t_now = datetime(2027, 1, 1, 12, 0, tzinfo=pytz.UTC)
         states = [
             _FakeState("Override: my_car", t0),
         ]
-        # This will zero from t0 to now — just verify it doesn't crash
-        cls._apply_override_mask(sensor, states)
+        cls._apply_override_mask(sensor, states, t_now)
         idx0 = sensor.get_index_from_time(t0)[0]
         assert sensor.values[0][idx0] == 0.0
 
@@ -749,7 +783,7 @@ class TestApplyOverrideMask:
         sensor.values = None
         t0 = datetime(2027, 1, 1, 10, 0, tzinfo=pytz.UTC)
         states = [_FakeState("Override: x", t0)]
-        cls._apply_override_mask(sensor, states)  # should not crash
+        cls._apply_override_mask(sensor, states, NOW)  # should not crash
 
     def test_unknown_state_skipped(self):
         """Unknown/unavailable states are skipped."""
@@ -764,29 +798,25 @@ class TestApplyOverrideMask:
             _FakeState("unknown", t0),
             _FakeState("unavailable", t1),
         ]
-        cls._apply_override_mask(sensor, states)
+        cls._apply_override_mask(sensor, states, NOW)
         np.testing.assert_array_equal(sensor.values, original)
 
     def test_override_wraps_around_circular_buffer(self):
         """Lines 3233-3234: override spans wrap-around in circular buffer."""
         cls = self._get_cls()
-        # Use a small buffer to force wrap-around
         sensor = _FakeLoadSensor(size=10)
-        import numpy as np
 
         # epoch = 2027-01-01 00:00 UTC, step=900s
         # idx = ((time - epoch).total_seconds() // 900) % 10
         # We want start_idx=8, end_idx=2 (wraps)
         epoch = datetime(2027, 1, 1, tzinfo=pytz.UTC)
-        # idx 8 → offset 8*900=7200s = 2h from epoch
         t0 = epoch + timedelta(seconds=8 * 900)  # idx=8
-        # idx 2 → offset 12*900=10800s (wraps: 12%10=2)
-        t1 = epoch + timedelta(seconds=12 * 900)  # idx=2
+        t1 = epoch + timedelta(seconds=12 * 900)  # idx=2 (wraps: 12%10=2)
         states = [
             _FakeState("Override: car", t0),
             _FakeState("NO OVERRIDE", t1),
         ]
-        cls._apply_override_mask(sensor, states)
+        cls._apply_override_mask(sensor, states, t1)
         # Indices 8,9 and 0,1 should be zeroed (wrap-around)
         assert sensor.values[0][8] == 0.0
         assert sensor.values[0][9] == 0.0
@@ -799,14 +829,12 @@ class TestApplyOverrideMask:
     def test_trailing_override_no_wrap(self):
         """Line 3244: trailing override with start_idx <= end_idx (no wrap)."""
         cls = self._get_cls()
-        import numpy as np
 
-        # Create a sensor with controlled index mapping to ensure start <= end
         sensor = _FakeLoadSensor(size=10)
 
         # Override get_index_from_time to return controlled values
         call_count = [0]
-        indices = [3, 7]  # start=3, end=7 (now) → 3<=7
+        indices = [3, 7]  # start=3, end=7 (current_time) → 3<=7
 
         def controlled_get_index(time):
             idx = indices[call_count[0]] if call_count[0] < len(indices) else 0
@@ -816,10 +844,11 @@ class TestApplyOverrideMask:
         sensor.get_index_from_time = controlled_get_index
 
         t0 = datetime(2027, 1, 1, 10, 0, tzinfo=pytz.UTC)
+        t_now = datetime(2027, 1, 1, 12, 0, tzinfo=pytz.UTC)
         states = [
             _FakeState("Override: car", t0),
         ]
-        cls._apply_override_mask(sensor, states)
+        cls._apply_override_mask(sensor, states, t_now)
         # Indices 3..6 should be zeroed (trailing override, no wrap)
         assert sensor.values[0][3] == 0.0
         assert sensor.values[0][4] == 0.0
@@ -841,5 +870,27 @@ class TestApplyOverrideMask:
             _FakeState("ASKED FOR RESET OVERRIDE", t0),
             _FakeState("NO OVERRIDE", t1),
         ]
-        cls._apply_override_mask(sensor, states)
+        cls._apply_override_mask(sensor, states, t1)
         np.testing.assert_array_equal(sensor.values, original)
+
+    def test_out_of_order_states_sorted(self):
+        """Finding 15: out-of-order states are sorted chronologically."""
+        cls = self._get_cls()
+        sensor = _FakeLoadSensor()
+        t0 = datetime(2027, 1, 1, 10, 0, tzinfo=pytz.UTC)
+        t1 = datetime(2027, 1, 1, 11, 0, tzinfo=pytz.UTC)
+        t2 = datetime(2027, 1, 1, 12, 0, tzinfo=pytz.UTC)
+        # States given out of order — should still work correctly
+        states = [
+            _FakeState("NO OVERRIDE", t1),
+            _FakeState("Override: my_car", t0),
+            _FakeState("NO OVERRIDE", t2),
+        ]
+        cls._apply_override_mask(sensor, states, t2)
+        # t0→t1 should be zeroed
+        idx0 = sensor.get_index_from_time(t0)[0]
+        idx1 = sensor.get_index_from_time(t1)[0]
+        assert all(sensor.values[0][idx0:idx1] == 0.0)
+        # t1→t2 should NOT be zeroed
+        idx2 = sensor.get_index_from_time(t2)[0]
+        assert all(sensor.values[0][idx1:idx2] == 500.0)

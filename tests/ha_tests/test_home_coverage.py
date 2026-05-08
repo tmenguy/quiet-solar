@@ -1,5 +1,6 @@
 """Additional tests for quiet_solar home.py to improve coverage to 91%+."""
 
+import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -4467,7 +4468,9 @@ async def test_reset_forecasts_bfs_override_mask_applied(
     fake_override_state.state = "Override: forced_charge"
     fake_override_state.last_changed = time - timedelta(hours=1)
 
-    async def mock_load_from_history(hass_arg, entity_id, s, e):
+    async def mock_load_from_history(hass_arg, entity_id, s, e, **kwargs):
+        # s, e are the start/end time window passed by _apply_override_mask;
+        # not used in this mock — we return canned data regardless.
         if entity_id == "sensor.charger_override_state":
             return [fake_override_state]
         return []
@@ -4477,6 +4480,87 @@ async def test_reset_forecasts_bfs_override_mask_applied(
         patch(
             "custom_components.quiet_solar.ha_model.home.load_from_history",
             side_effect=mock_load_from_history,
-        ),
+        ) as mock_history,
     ):
         await home.solar_and_consumption_forecast.reset_forecasts(time)
+        # Verify load_from_history was called with the override entity
+        override_calls = [
+            c for c in mock_history.call_args_list
+            if c[0][1] == "sensor.charger_override_state"
+        ]
+        assert len(override_calls) > 0, "_apply_override_mask should query override history"
+
+
+async def test_reset_forecasts_bfs_duplicate_piloted_device_warning(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cover line 3385: debug warning when two loads share a piloted device."""
+    from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_CHARGER_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Create two charger entries so we get two loads
+    charger_entry_1 = MockConfigEntry(
+        domain=DOMAIN,
+        data={**MOCK_CHARGER_CONFIG, "name": "charger_dup_1"},
+        entry_id="charger_dup_test_1",
+        title="charger: charger_dup_1",
+        unique_id="qs_charger_dup_test_1",
+    )
+    charger_entry_1.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry_1.entry_id)
+    await hass.async_block_till_done()
+
+    charger_entry_2 = MockConfigEntry(
+        domain=DOMAIN,
+        data={**MOCK_CHARGER_CONFIG, "name": "charger_dup_2"},
+        entry_id="charger_dup_test_2",
+        title="charger: charger_dup_2",
+        unique_id="qs_charger_dup_test_2",
+    )
+    charger_entry_2.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry_2.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Make a shared piloted device
+    shared_piloted = MagicMock()
+    shared_piloted.name = "shared_device"
+    shared_piloted.get_best_power_HA_entity.return_value = "sensor.shared_power"
+
+    # Inject same piloted device into two different loads
+    loads_with_piloted = []
+    for load in home._all_loads:
+        load.devices_to_pilot = [shared_piloted]
+        loads_with_piloted.append(load)
+        if len(loads_with_piloted) >= 2:
+            break
+
+    assert len(loads_with_piloted) >= 2, "Need at least 2 loads for this test"
+
+    time = datetime.now(tz=pytz.UTC)
+
+    async def mock_load_from_history(hass_arg, entity_id, s, e, **kwargs):
+        return []
+
+    with (
+        patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)),
+        patch(
+            "custom_components.quiet_solar.ha_model.home.load_from_history",
+            side_effect=mock_load_from_history,
+        ),
+        caplog.at_level(logging.DEBUG),
+    ):
+        await home.solar_and_consumption_forecast.reset_forecasts(time)
+
+    assert any(
+        "shared by" in record.message and "using first owner" in record.message
+        for record in caplog.records
+    ), "Expected debug warning about shared piloted device"

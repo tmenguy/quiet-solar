@@ -7,7 +7,12 @@ from datetime import time as dt_time
 import pytz
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
 
-from ..const import CONSTRAINT_TYPE_FILLER_AUTO, CONSTRAINT_TYPE_MANDATORY_END_TIME
+from ..const import (
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
+    CONSTRAINT_TYPE_FILLER_AUTO,
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+)
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import CMD_IDLE, LoadCommand
 from ..home_model.constraints import DATETIME_MAX_UTC, TimeBasedSimplePowerLoadConstraint
@@ -79,7 +84,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             if (
                 ct.is_constraint_active_for_time_period(time)
                 and ct.load_info is not None
-                and ct.load_info.get("originator", "") == "user_override"
+                and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
             ):
                 self.qs_bistate_current_on_h = ct.current_value / 3600.0
                 self.qs_bistate_current_duration_h = ct.target_value / 3600.0
@@ -405,7 +410,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         if (
                             ct.load_param is not None
                             and ct.load_info is not None
-                            and ct.load_info.get("originator", "") == "user_override"
+                            and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
                         ):
                             # we do have already a constraint for this override state
                             override_constraint = ct
@@ -532,7 +537,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                     time=time,
                                     load=self,
                                     load_param=self.external_user_initiated_state,
-                                    load_info={"originator": "user_override"},
+                                    load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
                                     from_user=True,
                                     start_of_constraint=time,
                                     end_of_constraint=end_schedule,
@@ -573,7 +578,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     if (
                         ct.load_param is not None
                         and ct.load_info is not None
-                        and ct.load_info.get("originator", "") == "user_override"
+                        and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
                     ):
                         # we do have already a constraint for this override state
                         found_override = True
@@ -613,7 +618,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 mode_changed = any(
                     c.end_of_constraint not in new_ends
                     for c in self._constraints
-                    if not (c.load_info is not None and c.load_info.get("originator", "") == "user_override")
+                    if not (
+                        c.load_info is not None
+                        and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+                    )
                 )
 
                 # Supplement end-time detection: if the bistate mode string
@@ -631,7 +639,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             saved_runtime = c.current_value
                     # Remove old non-override constraints
                     for i, c in enumerate(self._constraints):
-                        is_override = c.load_info is not None and c.load_info.get("originator", "") == "user_override"
+                        is_override = (
+                            c.load_info is not None
+                            and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+                        )
                         if not is_override:
                             self._constraints[i] = None
                     self._constraints = [c for c in self._constraints if c is not None]
