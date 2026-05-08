@@ -174,6 +174,52 @@ async def test_async_add_entry_rehydrates_cached_entries(hass: HomeAssistant):
 
 
 @pytest.mark.asyncio
+async def test_async_add_entry_auto_generate_failure_logged(hass: HomeAssistant, caplog):
+    """Test that a failure in auto-generate dashboards is logged and swallowed."""
+    hass.data.setdefault(DOMAIN, {})
+    data_handler = QSDataHandler(hass)
+
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="home_entry",
+        data={DEVICE_TYPE: QSHome.conf_type_name},
+        title="home",
+    )
+    home_entry.add_to_hass(hass)
+
+    home_device = MagicMock()
+    home_device.add_device = MagicMock()
+    home_device.get_platforms = MagicMock(return_value=[Platform.SENSOR])
+    home_device.config_entry = home_entry
+    home_device.config_entry_initialized = False
+
+    with (
+        patch(
+            "custom_components.quiet_solar.data_handler.create_device_from_type",
+            return_value=home_device,
+        ),
+        patch.object(
+            hass.config_entries,
+            "async_forward_entry_setups",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "custom_components.quiet_solar.data_handler.async_auto_generate_if_first_install",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        await data_handler.async_add_entry(home_entry)
+
+    assert data_handler.home is home_device
+    assert "Auto-generation of dashboards failed" in caplog.text
+
+    # Teardown: fire unload callbacks to cancel lingering timers
+    for unsub in home_entry._on_unload:
+        unsub()
+
+
+@pytest.mark.asyncio
 async def test_async_update_loads_skips_when_locked(data_handler):
     """Test async_update_loads skips when lock is held."""
     data_handler.home = create_minimal_home_model()
