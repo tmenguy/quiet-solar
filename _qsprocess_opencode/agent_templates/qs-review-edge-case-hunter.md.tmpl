@@ -20,6 +20,10 @@ permission:
     "git log*": allow
     "git blame *": allow
     "git show *": allow
+    "gh api repos/*/pulls/{{PR_NUMBER}}/comments": allow
+    "gh api repos/*/pulls/{{PR_NUMBER}}/reviews": allow
+    "gh api repos/*/pulls/{{PR_NUMBER}} *": allow
+    "gh api repos/*/issues/*/comments *": allow
   read: allow
   webfetch: ask
 ---

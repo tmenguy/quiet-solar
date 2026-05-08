@@ -20,6 +20,8 @@ permission:
     "gh pr comment {{PR_NUMBER}} *": allow
     "gh api repos/*/pulls/{{PR_NUMBER}}/comments": allow
     "gh api repos/*/pulls/{{PR_NUMBER}}/reviews": allow
+    "gh api repos/*/pulls/{{PR_NUMBER}} *": allow
+    "gh api repos/*/issues/*/comments *": allow
     "gh pr checks {{PR_NUMBER}}": allow
   read: allow
   webfetch: deny
