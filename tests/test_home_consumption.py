@@ -28,6 +28,8 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_PAUSE_RESUME_SWITCH,
     CONF_CHARGER_PLUGGED,
     CONF_CHARGER_STATUS_SENSOR,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
 )
 from custom_components.quiet_solar.home_model.constraints import (
@@ -69,12 +71,12 @@ class TestIsUserOverriddenAbstractLoad:
         load.asked_for_reset_user_initiated_state_time = None
         assert load.is_user_overridden() is True
 
-    def test_asked_for_reset_returns_false(self):
-        """AC #1: Load in ASKED FOR RESET state returns False (counted as controlled)."""
+    def test_asked_for_reset_returns_true(self):
+        """Load in ASKED FOR RESET state returns True (still physically overridden)."""
         load = MinimalTestLoad(name="test_load")
         load.external_user_initiated_state = "some_state"
         load.asked_for_reset_user_initiated_state_time = NOW
-        assert load.is_user_overridden() is False
+        assert load.is_user_overridden() is True
 
     def test_constraint_originator_user_override_returns_true(self):
         """AC #2: Load with active constraint originator=user_override returns True."""
@@ -84,7 +86,7 @@ class TestIsUserOverriddenAbstractLoad:
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
             time=NOW,
             end_of_constraint=NOW + timedelta(hours=2),
-            load_info={"originator": "user_override"},
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
             load_param="test_car",
         )
         load.push_live_constraint(NOW, ct)
@@ -107,19 +109,19 @@ class TestChargerForceConstraintOriginator:
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
             time=NOW,
             end_of_constraint=NOW + timedelta(hours=2),
-            load_info={"originator": "user_override"},
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
             load_param="my_car",
         )
         load.push_live_constraint(NOW, ct)
         assert load.get_override_state() == "Override: my_car"
 
-    def test_override_reset_state_not_excluded(self):
-        """AC #1: Load in ASKED FOR RESET OVERRIDE not excluded from controlled."""
+    def test_override_reset_state_excluded(self):
+        """Load in ASKED FOR RESET OVERRIDE is still physically overridden — excluded."""
         load = MinimalTestLoad(name="test_load")
         load.external_user_initiated_state = "some_state"
         load.asked_for_reset_user_initiated_state_time = NOW
         assert load.get_override_state() == "ASKED FOR RESET OVERRIDE"
-        assert load.is_user_overridden() is False
+        assert load.is_user_overridden() is True
 
 
 # =============================================================================
@@ -326,7 +328,7 @@ class TestCleanConstraintsPreservesForceOverride:
             constraint_type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
             time=NOW,
             end_of_constraint=NOW + timedelta(hours=2),
-            load_info={"originator": "user_override"},
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
             load_param="my_car",
         )
         load.push_live_constraint(NOW, force_ct)
@@ -339,7 +341,7 @@ class TestCleanConstraintsPreservesForceOverride:
         # Force constraint should still be there
         active = load.get_current_active_constraint()
         assert active is not None
-        assert active.load_info.get("originator") == "user_override"
+        assert active.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
 
 
 # =============================================================================

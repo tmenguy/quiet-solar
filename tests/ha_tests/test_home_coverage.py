@@ -4461,7 +4461,7 @@ async def test_reset_forecasts_bfs_override_mask_applied(
     override_entity.entity_id = "sensor.charger_override_state"
     target_load.ha_entities["load_override_state"] = override_entity
 
-    time = datetime.now(tz=pytz.UTC)
+    time = datetime(2027, 6, 15, 12, 0, tzinfo=pytz.UTC)
 
     # Create fake override state for load_from_history
     fake_override_state = MagicMock()
@@ -4545,7 +4545,7 @@ async def test_reset_forecasts_bfs_duplicate_piloted_device_warning(
 
     assert len(loads_with_piloted) >= 2, "Need at least 2 loads for this test"
 
-    time = datetime.now(tz=pytz.UTC)
+    time = datetime(2027, 6, 15, 12, 0, tzinfo=pytz.UTC)
 
     async def mock_load_from_history(hass_arg, entity_id, s, e, **kwargs):
         return []

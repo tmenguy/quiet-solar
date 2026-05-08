@@ -875,7 +875,7 @@ class AbstractLoad(AbstractDevice):
         False if no override is active. Individual loads never return None.
         """
         state = self.get_override_state()
-        if state in (OVERRIDE_STATE_NO_OVERRIDE, OVERRIDE_STATE_ASKED_FOR_RESET):
+        if state == OVERRIDE_STATE_NO_OVERRIDE:
             return False
         return True
 

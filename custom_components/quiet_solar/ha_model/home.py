@@ -3456,17 +3456,17 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                             if e < end:
                                 end = e
 
-                        # Apply override mask: zero out intervals where load was user-overridden
-                        override_entity_id = override_sensor_for_entity.get(ha_best_entity_id)
-                        if override_entity_id is not None and load_sensor.values is not None:
-                            override_states = await load_from_history(self.hass, override_entity_id, s, e)
-                            if override_states:
-                                self._apply_override_mask(load_sensor, override_states, time)
-                            else:
-                                _LOGGER.debug(
-                                    "No override history for %s, assuming not overridden",
-                                    override_entity_id,
-                                )
+                            # Apply override mask: zero out intervals where load was user-overridden
+                            override_entity_id = override_sensor_for_entity.get(ha_best_entity_id)
+                            if override_entity_id is not None and load_sensor.values is not None:
+                                override_states = await load_from_history(self.hass, override_entity_id, s, e)
+                                if override_states:
+                                    self._apply_override_mask(load_sensor, override_states, min(time, e))
+                                else:
+                                    _LOGGER.debug(
+                                        "No override history for %s, assuming not overridden",
+                                        override_entity_id,
+                                    )
 
                         values_for_debug[ha_best_entity_id] = np.copy(load_sensor.values)
 

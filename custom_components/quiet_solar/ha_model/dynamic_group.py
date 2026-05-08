@@ -184,11 +184,13 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self, tolerance_seconds: float | None, time: datetime, ignore_auto_and_user_overridden_load: bool = False
     ) -> float:
 
-        if ignore_auto_and_user_overridden_load and self.is_user_overridden() is True:
+        override_state = self.is_user_overridden() if ignore_auto_and_user_overridden_load else None
+
+        if ignore_auto_and_user_overridden_load and override_state is True:
             return 0.0  # all children overridden — exclude group entirely
 
         if (
-            ignore_auto_and_user_overridden_load is False or self.is_user_overridden() is False
+            ignore_auto_and_user_overridden_load is False or override_state is False
         ) and self.accurate_power_sensor is not None:
             remove_from_global_sensor = 0.0
             if ignore_auto_and_user_overridden_load is True:
