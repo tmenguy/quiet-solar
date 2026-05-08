@@ -184,7 +184,7 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self, tolerance_seconds: float | None, time: datetime, ignore_auto_and_user_overridden_load: bool = False
     ) -> float:
 
-        override_state = self.is_user_overridden()
+        override_state = self.is_user_overridden() if ignore_auto_and_user_overridden_load else None
 
         if ignore_auto_and_user_overridden_load and override_state is True:
             return 0.0  # all children overridden — exclude group entirely
@@ -193,8 +193,9 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
             ignore_auto_and_user_overridden_load is False or override_state is False
         ) and self.accurate_power_sensor is not None:
             remove_from_global_sensor = 0.0
-            if ignore_auto_and_user_overridden_load is True:
-                # check if there is an auto-load ... and that it is in fact controlled
+            if ignore_auto_and_user_overridden_load:
+                # override_state is False here (all children not overridden).
+                # Check if there is an auto-load that should be subtracted.
                 for device in self._childrens:
                     if isinstance(device, AbstractLoad) and device.load_is_auto_to_be_boosted:
                         # Auto-boosted loads are only excluded when the solver is NOT
@@ -209,6 +210,8 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                             remove_from_global_sensor += device.get_device_power_latest_possible_valid_value(
                                 tolerance_seconds, time, False
                             )
+                        # Note: auto-boosted loads never support_user_override(), so
+                        # no override check is needed here.
 
             p = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
             if p is None:

@@ -731,6 +731,18 @@ class TestApplyOverrideMask:
         idx2 = sensor.get_index_from_time(t2)[0]
         assert all(sensor.values[0][idx1:idx2] == 500.0)
 
+    def test_no_override_history_assumes_not_overridden(self):
+        """Cold-start: empty override history leaves power values untouched."""
+        cls = self._get_cls()
+        sensor = _FakeLoadSensor()
+        import numpy as np
+
+        original = np.copy(sensor.values)
+        # Empty list — caller guard `if override_states:` prevents the call,
+        # but verify that calling with [] is also safe.
+        cls._apply_override_mask(sensor, [], NOW)
+        np.testing.assert_array_equal(sensor.values, original)
+
     def test_trailing_override_wraps_around_circular_buffer(self):
         """Lines 3256-3257: trailing override spans wrap-around in circular buffer."""
         cls = self._get_cls()

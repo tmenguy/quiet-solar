@@ -3457,6 +3457,9 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                                 end = e
 
                             # Apply override mask: zero out intervals where load was user-overridden
+                            # Known limitation: if the override sensor was created after the
+                            # power sensor's history start, intervals before the sensor existed
+                            # are treated as non-overridden (cold-start default).
                             override_entity_id = override_sensor_for_entity.get(ha_best_entity_id)
                             if override_entity_id is not None and load_sensor.values is not None:
                                 override_states = await load_from_history(self.hass, override_entity_id, s, e)
