@@ -3,18 +3,22 @@
 {## ============================================================ ##}
 {## Add one entry per Legrand switch you want to expose as a     ##}
 {## resilient (HK-with-cloud-fallback) façade.                   ##}
-{## Each entry is a dict with three required keys:               ##}
-{##   slug          : short snake_case id. Generates              ##}
+{## Each entry is a dict with two required keys + one optional:  ##}
+{##   slug          : (required) short snake_case id. Generates   ##}
 {##                   input_boolean.<slug>_state,                 ##}
 {##                   input_boolean.<slug>_command,               ##}
 {##                   switch.<slug>_facade.                       ##}
 {##                   Pick a slug that does NOT collide with any  ##}
 {##                   Netatmo cloud entity name.                  ##}
-{##   name          : friendly name shown in HA UI and (with the  ##}
-{##                   "HA <name> Mirror"/"HA <name> Cmd" prefix)  ##}
-{##                   in Apple Home.                              ##}
-{##   cloud_entity  : the existing Netatmo cloud switch           ##}
-{##                   entity_id used as the fallback leg.         ##}
+{##   name          : (required) friendly name shown in HA UI and ##}
+{##                   (with the "HA <name> Mirror"/"HA <name> Cmd"##}
+{##                   prefix) in Apple Home.                      ##}
+{##   cloud_entity  : (optional) the existing Netatmo cloud       ##}
+{##                   switch entity_id used as the fallback leg.  ##}
+{##                   If omitted, the façade is HK-only: it will  ##}
+{##                   be unavailable whenever either health sensor##}
+{##                   is off, and turn_on/turn_off only drive the ##}
+{##                   HK command boolean.                         ##}
 {## ============================================================ ##}
 {%- set legrand_switches_to_map = namespace(switches = []) %}
 
@@ -31,18 +35,15 @@
 ] %}
 {%- set legrand_switches_to_map.switches = legrand_switches_to_map.switches + [
   {'slug': 'lhk_seche_serviette_arthur',
-   'name': 'towel arthur',
-   'cloud_entity': 'switch.radiateur_seche_serviette_arthur'}
+   'name': 'towel arthur'}
 ] %}
 {%- set legrand_switches_to_map.switches = legrand_switches_to_map.switches + [
   {'slug': 'lhk_seche_serviette_enfants',
-   'name': 'towel enfants',
-   'cloud_entity': 'switch.radiateur_salle_de_bain_enfants'}
+   'name': 'towel enfants'}
 ] %}
 {%- set legrand_switches_to_map.switches = legrand_switches_to_map.switches + [
   {'slug': 'lhk_seche_serviette_parents',
-   'name': 'towel parents',
-   'cloud_entity': 'switch.radiateur_seche_serviette_parents'}
+   'name': 'towel parents'}
 ] %}
 {## --- END EDIT --- ##}
 
@@ -239,6 +240,8 @@ template:
         state: {{ "'{{ is_state(''climate.salle_de_bains_darthur'', ''heat'') }}'" }}
 {##  --- BEGIN: generated Legrand façade switches --- ##}
 {%- for s in legrand_switches_to_map.switches %}
+{%- if s.cloud_entity is defined %}
+{##  --- Cloud-backed variant: HK preferred, cloud fallback --- ##}
   - switch:
       - unique_id: {{ s.slug }}_facade
         default_entity_id: switch.{{ s.slug }}_facade
@@ -318,6 +321,30 @@ template:
               - action: input_boolean.turn_off
                 target:
                   entity_id: input_boolean.{{ s.slug }}_command
+{%- else %}
+{##  --- HK-only variant: no cloud fallback --- ##}
+  - switch:
+      - unique_id: {{ s.slug }}_facade
+        default_entity_id: switch.{{ s.slug }}_facade
+        name: {{ s.name }}
+        state: >
+          {{ "{% set hk_ok = is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') %}" }}
+          {{ "{% if hk_ok and states('input_boolean." ~ s.slug ~ "_state') in ['on','off'] %}" }}
+            {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
+          {{ "{% else %}" }}
+            unknown
+          {{ "{% endif %}" }}
+        availability: >
+          {{ "{{ is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') }}" }}
+        turn_on:
+          - action: input_boolean.turn_on
+            target:
+              entity_id: input_boolean.{{ s.slug }}_command
+        turn_off:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.{{ s.slug }}_command
+{%- endif %}
 {%- endfor %}
 {## --- END: generated Legrand façade switches --- ##}
   - binary_sensor:
