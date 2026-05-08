@@ -466,8 +466,8 @@ class TestDynamicGroupPowerOverrideFiltering:
         )
         assert result == 200.0  # only non-overridden child counted
 
-    def test_group_with_sensor_none_override_mixed_falls_to_children(self):
-        """dynamic_group.py: mixed override (None) with sensor falls to per-child sum."""
+    def test_group_with_sensor_none_override_mixed_subtracts_overridden(self):
+        """dynamic_group.py: mixed override (None) with sensor subtracts overridden children."""
         from custom_components.quiet_solar.ha_model.device import HADeviceMixin
         from tests.conftest import FakeConfigEntry, FakeHass
 
@@ -497,11 +497,57 @@ class TestDynamicGroupPowerOverrideFiltering:
         child1 = FakeHAChild("c1", 100.0, overridden=True)
         child2 = FakeHAChild("c2", 200.0, overridden=False)
         group = self._make_group(hass, [child1, child2], accurate_power_sensor="sensor.group_power")
+
+        # Mock the group sensor to return 300W (total group power)
+        group._entity_probed_last_valid_state = {
+            "sensor.group_power": (NOW, 300.0, None),
+        }
+
         result = group.get_device_power_latest_possible_valid_value(
             tolerance_seconds=None, time=NOW, ignore_auto_and_user_overridden_load=True
         )
-        # Mixed → falls to per-child loop, skips overridden child
+        # Mixed → uses sensor (300) minus overridden child1 power (100) = 200
         assert result == 200.0
+
+    def test_group_with_sensor_nested_mixed_skips_sensor(self):
+        """dynamic_group.py: nested mixed override (child returns None) skips sensor, falls to per-child."""
+        from custom_components.quiet_solar.ha_model.device import HADeviceMixin
+        from tests.conftest import FakeConfigEntry, FakeHass
+
+        hass = FakeHass()
+
+        class FakeHAChild(HADeviceMixin, AbstractDevice):
+            def __init__(self, name, power, overridden=False):
+                self._overridden = overridden
+                self._power_val = power
+                super().__init__(
+                    hass=hass,
+                    config_entry=FakeConfigEntry(entry_id=f"test_{name}"),
+                    home=MinimalTestHome(voltage=230.0),
+                    name=name,
+                    device_type="test",
+                )
+
+            def is_user_overridden(self):
+                return self._overridden
+
+            def get_device_power_latest_possible_valid_value(self, tolerance_seconds, time, ignore_auto_and_user_overridden_load=False):
+                if ignore_auto_and_user_overridden_load and self._overridden is True:
+                    return 0.0
+                return self._power_val
+
+        # child1 returns None (nested mixed) — triggers skip_sensor
+        child1 = FakeHAChild("c1", 100.0, overridden=None)
+        child2 = FakeHAChild("c2", 200.0, overridden=False)
+        group = self._make_group(hass, [child1, child2], accurate_power_sensor="sensor.group_power")
+
+        # Even though sensor exists, skip_sensor should be True → per-child fallback
+        result = group.get_device_power_latest_possible_valid_value(
+            tolerance_seconds=None, time=NOW, ignore_auto_and_user_overridden_load=True
+        )
+        # Group is_user_overridden() returns None (mixed: None + False)
+        # skip_sensor=True → per-child: child1 (None override, not True) = 100, child2 = 200
+        assert result == 300.0
 
     def test_group_with_sensor_auto_boosted_subtracted(self):
         """dynamic_group.py:193-204 — auto-boosted child subtracted from group sensor."""
