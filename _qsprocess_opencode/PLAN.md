@@ -135,7 +135,7 @@ docs/
 [Home OpenCode, main worktree]
  user: /setup-task 3.2
    └─ qs-setup-task (static):
-       1. Follow _qsprocess/skills/setup-task.md (issue, branch, worktree)
+        1. Follow inline phase protocol (issue, branch, worktree)
        2. render_agent.py --phase create-plan ...
           → writes <worktree>/.opencode/agents/qs-create-plan-QS-<N>.md
        3. launch_opencode.py --preload-command "Activate qs-create-plan-QS-<N>..."

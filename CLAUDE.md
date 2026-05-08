@@ -11,4 +11,4 @@ Use these skills for development workflows:
 - `/release` — tag and ship
 
 Quality gates: `python scripts/qs/quality_gate.py` (runs pytest 100% cov + ruff + mypy + translations).
-Code rules: `_qsprocess_opencode/project-context.md`
+Code rules: `_bmad-output/project-context.md`

@@ -37,7 +37,7 @@ Open the repo in OpenCode on main.
 
 | # | Check | How | Expected |
 |---|-------|-----|----------|
-| 1.1 | AGENTS.md loaded | Start session, ask: "What rules are you following?" | Agent mentions `CLAUDE.md`, `_qsprocess/rules/project-rules.md`, `_qsprocess_opencode/README.md` |
+| 1.1 | AGENTS.md loaded | Start session, ask: "What rules are you following?" | Agent mentions `_qsprocess_opencode/project-rules.md`, `_qsprocess_opencode/project-context.md`, `_qsprocess_opencode/README.md` |
 | 1.2 | Slash commands listed | Type `/` in the CLI | **Only `/setup-task`** appears (no `/create-plan`, `/implement-task`, `/review-task`, `/finish-task`, `/release`) |
 | 1.3 | Subagents registered | Ask: "List your qs-* subagents" | Exactly `qs-setup-task` — no per-task agents yet (they're rendered per-task into worktrees) |
 
