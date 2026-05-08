@@ -53,7 +53,7 @@ from ..const import (
     OFF_GRID_MODE_AUTO,
     OFF_GRID_MODE_FORCE_OFF_GRID,
     OFF_GRID_MODE_FORCE_ON_GRID,
-    OVERRIDE_STATE_PREFIX,
+    OVERRIDE_STATE_NO_OVERRIDE,
     PASS1_PREFERRED_CAR_PENALTY_KWH,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
@@ -3232,7 +3232,7 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                 continue
 
             state_time = state.last_changed
-            new_is_overridden = state.state.startswith(OVERRIDE_STATE_PREFIX)
+            new_is_overridden = state.state != OVERRIDE_STATE_NO_OVERRIDE
 
             if is_overridden and prev_time is not None:
                 start_idx = load_sensor.get_index_from_time(prev_time)[0]

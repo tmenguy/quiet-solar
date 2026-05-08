@@ -4,7 +4,7 @@ Tests cover:
 - Bistate load with user override excluded from controlled consumption
 - Charger with force charge constraint (originator: user_override) excluded
 - Charger get_override_state with force constraint
-- Override reset state not excluded (still controlled)
+- Override reset state excluded from controlled consumption (still overridden)
 - Dynamic group all/none/mixed override states
 - Dynamic group without sensor skips overridden children
 - Charger support_user_override returns True
@@ -917,13 +917,10 @@ class TestApplyOverrideMask:
         # Index 7 onward should remain
         assert sensor.values[0][7] == 500.0
 
-    def test_asked_for_reset_not_overridden(self):
-        """ASKED FOR RESET OVERRIDE state does not trigger masking."""
+    def test_asked_for_reset_is_overridden(self):
+        """ASKED FOR RESET OVERRIDE state triggers masking (still overridden)."""
         cls = self._get_cls()
         sensor = _FakeLoadSensor()
-        import numpy as np
-
-        original = np.copy(sensor.values)
         t0 = datetime(2027, 1, 1, 10, 0, tzinfo=pytz.UTC)
         t1 = datetime(2027, 1, 1, 11, 0, tzinfo=pytz.UTC)
         states = [
@@ -931,7 +928,9 @@ class TestApplyOverrideMask:
             _FakeState("NO OVERRIDE", t1),
         ]
         cls._apply_override_mask(sensor, states, t1)
-        np.testing.assert_array_equal(sensor.values, original)
+        idx0 = sensor.get_index_from_time(t0)[0]
+        idx1 = sensor.get_index_from_time(t1)[0]
+        assert all(sensor.values[0][idx0:idx1] == 0.0)
 
     def test_out_of_order_states_sorted(self):
         """Finding 15: out-of-order states are sorted chronologically."""
