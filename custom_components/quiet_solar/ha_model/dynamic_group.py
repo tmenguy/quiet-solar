@@ -184,18 +184,17 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
         self, tolerance_seconds: float | None, time: datetime, ignore_auto_and_user_overridden_load: bool = False
     ) -> float:
 
-        override_state = self.is_user_overridden() if ignore_auto_and_user_overridden_load else None
+        override_state = self.is_user_overridden()
 
         if ignore_auto_and_user_overridden_load and override_state is True:
             return 0.0  # all children overridden — exclude group entirely
 
-        if (
-            ignore_auto_and_user_overridden_load is False or override_state is False
-        ) and self.accurate_power_sensor is not None:
+        if self.accurate_power_sensor is not None:
             remove_from_global_sensor = 0.0
+            skip_sensor = False
             if ignore_auto_and_user_overridden_load:
-                # override_state is False here (all children not overridden).
-                # Check if there is an auto-load that should be subtracted.
+                # Check if there are auto-boosted or overridden children
+                # whose power should be subtracted from the group sensor.
                 for device in self._childrens:
                     if isinstance(device, AbstractLoad) and device.load_is_auto_to_be_boosted:
                         # Auto-boosted loads are only excluded when the solver is NOT
@@ -211,14 +210,30 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                                 tolerance_seconds, time, False
                             )
                         # Note: auto-boosted loads never support_user_override(), so
-                        # no override check is needed here.
+                        # the elif below is always reachable for overridden
+                        # non-auto-boosted children.
+                    elif override_state is None:
+                        # Mixed override: try to subtract overridden children
+                        # from the group sensor value.
+                        device_override_state = device.is_user_overridden()
+                        if device_override_state is True:
+                            remove_from_global_sensor += device.get_device_power_latest_possible_valid_value(
+                                tolerance_seconds, time, False
+                            )
+                        elif device_override_state is None:
+                            # Nested mixed override — can't split the sensor
+                            skip_sensor = True
 
-            p = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
-            if p is None:
-                p = 0.0
-            if p - remove_from_global_sensor < 0:
-                remove_from_global_sensor = 0.0
-            return p - remove_from_global_sensor
+                    if skip_sensor:
+                        break
+
+            if skip_sensor is False:
+                p = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
+                if p is None:
+                    p = 0.0
+                if p - remove_from_global_sensor < 0:
+                    remove_from_global_sensor = 0.0
+                return p - remove_from_global_sensor
 
         # Mixed override (is_user_overridden() == None) or no group sensor:
         # fall back to per-child aggregation, skipping overridden children.
