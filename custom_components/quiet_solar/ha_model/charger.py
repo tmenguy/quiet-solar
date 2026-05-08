@@ -2103,6 +2103,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
 
+    def support_user_override(self) -> bool:
+        return True
+
     async def update_charger_for_user_change(self):
         time = datetime.now(pytz.UTC)
         if await self.do_run_check_load_activity_and_constraints(time):
@@ -3384,6 +3387,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     time=time,
                     load=self,
                     load_param=self.car.name,
+                    load_info={"originator": "user_override"},
                     from_user=True,
                     initial_value=car_initial_value,
                     target_value=target_charge,

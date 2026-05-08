@@ -3563,6 +3563,61 @@ class TestNonControlledConsumptionBranches:
 
 
 # ========================================================================
+# Overridden load's piloted devices excluded (home.py:1636-1637)
+# ========================================================================
+
+
+class TestOverriddenPilotedDevicesExcluded:
+    """Overridden load's piloted devices are excluded from controlled consumption."""
+
+    @pytest.mark.asyncio
+    async def test_overridden_load_piloted_devices_excluded(
+        self,
+        hass: HomeAssistant,
+        home_config_entry: ConfigEntry,
+    ):
+        """Covers home.py line 1636-1637 (is_user_overridden → continue)."""
+        from .const import MOCK_CHARGER_CONFIG
+
+        home = await _get_home(hass, home_config_entry)
+        home.physical_solar_plant = None
+        home.physical_battery = None
+        now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
+
+        ch_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=MOCK_CHARGER_CONFIG,
+            entry_id="ch_ncc_overr",
+            title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+            unique_id="quiet_solar_ch_ncc_overr",
+        )
+        ch_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(ch_entry.entry_id)
+        await hass.async_block_till_done()
+
+        # Create a mock piloted device with power reading
+        piloted = MagicMock(spec=HADeviceMixin)
+        piloted.qs_enable_device = True
+        piloted.get_device_power_latest_possible_valid_value = MagicMock(return_value=500.0)
+
+        # Set the charger load's devices_to_pilot and make it overridden
+        charger = home._chargers[0]
+        charger.devices_to_pilot = [piloted]
+        charger.external_user_initiated_state = "user_forced"
+        charger.asked_for_reset_user_initiated_state_time = None
+
+        assert charger.is_user_overridden() is True
+
+        # Grid
+        _inject_sensor_value(home, home.grid_active_power_sensor, now, -1000.0)
+
+        result = home.home_non_controlled_consumption_sensor_state_getter("s", now)
+        assert result is not None
+        # Overridden load → its piloted devices should NOT be in piloted_sets
+        piloted.get_device_power_latest_possible_valid_value.assert_not_called()
+
+
+# ========================================================================
 # QSHome map_location_path - more branches
 # ========================================================================
 

@@ -4413,3 +4413,70 @@ async def test_allocation_user_selected_person_fallback(
     await hass.async_block_till_done()
     await hass.config_entries.async_unload(car_a_entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def test_reset_forecasts_bfs_override_mask_applied(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Cover line 3447: _apply_override_mask called during BFS history loading."""
+    from custom_components.quiet_solar.ha_model.home import QSSolarHistoryVals
+
+    from .const import MOCK_CHARGER_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_bfs_override_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        unique_id="qs_charger_bfs_override_test",
+    )
+    charger_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Find the charger (which supports user override) and inject piloted device
+    target_load = None
+    for load in home._all_loads:
+        if load.support_user_override():
+            target_load = load
+            break
+
+    assert target_load is not None
+
+    # Inject a piloted device so it goes into ha_entity_to_read
+    mock_piloted = MagicMock()
+    mock_piloted.get_best_power_HA_entity.return_value = "sensor.piloted_power"
+    target_load.devices_to_pilot = [mock_piloted]
+
+    # Ensure the override sensor entity exists on the charger
+    override_entity = MagicMock()
+    override_entity.entity_id = "sensor.charger_override_state"
+    target_load.ha_entities["load_override_state"] = override_entity
+
+    time = datetime.now(tz=pytz.UTC)
+
+    # Create fake override state for load_from_history
+    fake_override_state = MagicMock()
+    fake_override_state.state = "Override: forced_charge"
+    fake_override_state.last_changed = time - timedelta(hours=1)
+
+    async def mock_load_from_history(hass_arg, entity_id, s, e):
+        if entity_id == "sensor.charger_override_state":
+            return [fake_override_state]
+        return []
+
+    with (
+        patch.object(QSSolarHistoryVals, "init", _make_mock_init_success(time)),
+        patch(
+            "custom_components.quiet_solar.ha_model.home.load_from_history",
+            side_effect=mock_load_from_history,
+        ),
+    ):
+        await home.solar_and_consumption_forecast.reset_forecasts(time)

@@ -26,6 +26,9 @@ from ..const import (
     DEVICE_STATUS_CHANGE_CONSTRAINT,
     DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED,
     LOAD_TYPE_DASHBOARD_DEFAULT_SECTION,
+    OVERRIDE_STATE_ASKED_FOR_RESET,
+    OVERRIDE_STATE_NO_OVERRIDE,
+    OVERRIDE_STATE_PREFIX,
 )
 from .commands import CMD_IDLE, LoadCommand, copy_command
 from .constraints import DATETIME_MAX_UTC, DATETIME_MIN_UTC, LoadConstraint
@@ -88,6 +91,14 @@ def map_section_selected_name_in_section_list(
 
 class AbstractDevice:
     conf_type_name = "unknown"
+
+    def is_user_overridden(self) -> bool | None:
+        """Return whether device is currently user-overridden.
+
+        Returns False by default. Subclasses override for actual logic.
+        Return type: True = all overridden, False = none, None = mixed.
+        """
+        return False
 
     def __init__(self, name: str, device_type: str | None = None, **kwargs):
         super().__init__()
@@ -847,10 +858,21 @@ class AbstractLoad(AbstractDevice):
                     overridden_state = ct.load_param
 
         if self.asked_for_reset_user_initiated_state_time is not None:
-            return "ASKED FOR RESET OVERRIDE"
+            return OVERRIDE_STATE_ASKED_FOR_RESET
         if overridden_state is None:
-            return "NO OVERRIDE"
-        return f"Override: {overridden_state}"
+            return OVERRIDE_STATE_NO_OVERRIDE
+        return f"{OVERRIDE_STATE_PREFIX}{overridden_state}"
+
+    def is_user_overridden(self) -> bool | None:
+        """Return whether load is currently user-overridden.
+
+        Returns True if all controlled activity is user-overridden,
+        False if no override is active. Individual loads never return None.
+        """
+        state = self.get_override_state()
+        if state == OVERRIDE_STATE_NO_OVERRIDE or state == OVERRIDE_STATE_ASKED_FOR_RESET:
+            return False
+        return True
 
     def is_time_sensitive(self):
 

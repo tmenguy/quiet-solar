@@ -11,7 +11,7 @@ from ..home_model.home_utils import (
     max_amps,
     min_amps,
 )
-from ..home_model.load import AbstractDevice
+from ..home_model.load import AbstractDevice, AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -155,22 +155,76 @@ class QSDynamicGroup(HADeviceMixin, AbstractDevice):
                 delta_amps=delta_amps, new_amps_consumption=new_amps, time=time
             )
 
+    def is_user_overridden(self) -> bool | None:
+        """Return override state for the group.
+
+        Returns True if ALL children are user-overridden,
+        False if NONE are overridden, None if mixed.
+        """
+        if not self._childrens:
+            return False
+        has_overridden = False
+        has_not_overridden = False
+        for device in self._childrens:
+            if device.is_user_overridden() is True:
+                has_overridden = True
+            elif device.is_user_overridden() is False:
+                has_not_overridden = True
+            else:
+                # case a child is at unknown so the father too
+                return None
+            if has_overridden and has_not_overridden:
+                return None  # mixed — early exit
+        if has_overridden:
+            return True  # all overridden
+        return False  # none overridden
+
     def get_device_power_latest_possible_valid_value(
-        self, tolerance_seconds: float | None, time: datetime, ignore_auto_load: bool = False
+        self, tolerance_seconds: float | None, time: datetime, ignore_auto_and_user_overridden_load: bool = False
     ) -> float:
-        if self.accurate_power_sensor is not None:
+
+        if ignore_auto_and_user_overridden_load and self.is_user_overridden() is True:
+            return 0.0  # all children overridden — exclude group entirely
+
+        if (
+            ignore_auto_and_user_overridden_load is False or self.is_user_overridden() is False
+        ) and self.accurate_power_sensor is not None:
+            remove_from_global_sensor = 0.0
+            if ignore_auto_and_user_overridden_load is True:
+                # check if there is an auto-load ... and that it is in fact controlled
+                for device in self._childrens:
+                    if isinstance(device, AbstractLoad) and device.load_is_auto_to_be_boosted:
+                        # Auto-boosted loads are only excluded when the solver is NOT
+                        # actively commanding them ON.  When the solver has sent an ON
+                        # command, the load IS controlled consumption.
+                        if not (
+                            device.is_load_command_set(time)
+                            and device.current_command is not None
+                            and not device.current_command.is_off_or_idle()
+                        ):
+                            # force to get the data that should be removed in that case
+                            remove_from_global_sensor += device.get_device_power_latest_possible_valid_value(
+                                tolerance_seconds, time, False
+                            )
+
             p = self.get_sensor_latest_possible_valid_value(self.accurate_power_sensor, tolerance_seconds, time)
             if p is None:
-                return 0.0
-            return p
-        else:
-            power = 0.0
-            for device in self._childrens:
-                if isinstance(device, HADeviceMixin):
-                    p = device.get_device_power_latest_possible_valid_value(tolerance_seconds, time, ignore_auto_load)
-                    if p is not None:
-                        power += p
-            return power
+                p = 0.0
+            if p - remove_from_global_sensor < 0:
+                remove_from_global_sensor = 0.0
+            return p - remove_from_global_sensor
+
+        power = 0.0
+        for device in self._childrens:
+            if isinstance(device, HADeviceMixin):
+                if ignore_auto_and_user_overridden_load and device.is_user_overridden() is True:
+                    continue  # skip overridden child entirely
+                p = device.get_device_power_latest_possible_valid_value(
+                    tolerance_seconds, time, ignore_auto_and_user_overridden_load
+                )
+                if p is not None:
+                    power += p
+        return power
 
     def get_min_max_power(self) -> (float, float):
         if len(self._childrens) == 0:

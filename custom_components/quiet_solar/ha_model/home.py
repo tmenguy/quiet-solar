@@ -53,6 +53,7 @@ from ..const import (
     OFF_GRID_MODE_AUTO,
     OFF_GRID_MODE_FORCE_OFF_GRID,
     OFF_GRID_MODE_FORCE_ON_GRID,
+    OVERRIDE_STATE_PREFIX,
     PASS1_PREFERRED_CAR_PENALTY_KWH,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
@@ -1623,7 +1624,9 @@ class QSHome(QSDynamicGroup):
                     if device.qs_enable_device is False:
                         continue
                     p = device.get_device_power_latest_possible_valid_value(
-                        tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time, ignore_auto_load=True
+                        tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S,
+                        time=time,
+                        ignore_auto_and_user_overridden_load=True,
                     )
                     if p is not None:
                         controlled_consumption += p
@@ -1631,12 +1634,14 @@ class QSHome(QSDynamicGroup):
             for load in self._all_loads:
                 if load.qs_enable_device is False:
                     continue
+                if load.is_user_overridden() is True:
+                    continue  # don't add piloted devices of overridden loads
                 if len(load.devices_to_pilot) != 0:
                     piloted_sets.update(load.devices_to_pilot)
 
             for piloted_device in piloted_sets:
                 p = piloted_device.get_device_power_latest_possible_valid_value(
-                    tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time, ignore_auto_load=True
+                    tolerance_seconds=POWER_ALIGNMENT_TOLERANCE_S, time=time, ignore_auto_and_user_overridden_load=True
                 )
                 if p is not None:
                     controlled_consumption += p
@@ -3198,6 +3203,49 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
 
         return ret
 
+    @staticmethod
+    def _apply_override_mask(load_sensor: QSSolarHistoryVals, override_states: list) -> None:
+        """Zero out power values in load_sensor for intervals where override was active.
+
+        Walks override_states chronologically. For each state change:
+        - State starting with "Override:" → overridden (power excluded from controlled)
+        - Otherwise → not overridden
+        """
+        if load_sensor.values is None:
+            return
+
+        is_overridden = False
+        prev_time = None
+
+        for state in override_states:
+            if state.state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE]:
+                continue
+
+            current_time = state.last_changed
+            new_is_overridden = state.state.startswith(OVERRIDE_STATE_PREFIX)
+
+            if is_overridden and prev_time is not None:
+                start_idx = load_sensor.get_index_from_time(prev_time)[0]
+                end_idx = load_sensor.get_index_from_time(current_time)[0]
+                if start_idx <= end_idx:
+                    load_sensor.values[0][start_idx:end_idx] = 0
+                else:
+                    load_sensor.values[0][start_idx:] = 0
+                    load_sensor.values[0][:end_idx] = 0
+
+            is_overridden = new_is_overridden
+            prev_time = current_time
+
+        # Handle trailing override (overridden until end of history)
+        if is_overridden and prev_time is not None:
+            start_idx = load_sensor.get_index_from_time(prev_time)[0]
+            end_idx = load_sensor.get_index_from_time(datetime.now(tz=prev_time.tzinfo))[0]
+            if start_idx <= end_idx:
+                load_sensor.values[0][start_idx:end_idx] = 0
+            else:
+                load_sensor.values[0][start_idx:] = 0
+                load_sensor.values[0][:end_idx] = 0
+
     async def reset_forecasts(self, time: datetime, light_reset=False):
 
         self._in_reset = True
@@ -3315,16 +3363,26 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
 
                 piloted_sets = set()
                 ha_entity_to_read = {}
+                override_sensor_for_entity: dict[str, str] = {}  # power_entity_id → override_sensor_entity_id
 
+                piloted_to_owner: dict[AbstractDevice, AbstractLoad] = {}
                 for load in self.home._all_loads:
                     if load.qs_enable_device is False:
                         continue
+                    for pd in load.devices_to_pilot:
+                        piloted_to_owner[pd] = load
                     if len(load.devices_to_pilot) != 0:
                         piloted_sets.update(load.devices_to_pilot)
 
                 for piloted_device in piloted_sets:
                     ha_best_entity_id = piloted_device.get_best_power_HA_entity()
                     ha_entity_to_read[ha_best_entity_id] = None
+                    # Check owning load for override sensor
+                    owner = piloted_to_owner.get(piloted_device)
+                    if ha_best_entity_id is not None and owner is not None and owner.support_user_override():
+                        override_ha = owner.ha_entities.get("load_override_state")
+                        if override_ha is not None:
+                            override_sensor_for_entity[ha_best_entity_id] = override_ha.entity_id
 
                 while len(bfs_queue) > 0:
                     device = bfs_queue.pop(0)
@@ -3358,6 +3416,16 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                     if ha_best_entity_id is None:
                         ha_entity_to_read[ha_best_entity_id] = switch_device
 
+                    # Track override sensor for devices that support it
+                    if (
+                        ha_best_entity_id is not None
+                        and isinstance(device, AbstractLoad)
+                        and device.support_user_override()
+                    ):
+                        override_ha = device.ha_entities.get("load_override_state")
+                        if override_ha is not None:
+                            override_sensor_for_entity[ha_best_entity_id] = override_ha.entity_id
+
                 for ha_best_entity_id, switch_device in ha_entity_to_read.items():
                     if ha_best_entity_id is not None:
                         load_sensor = QSSolarHistoryVals(entity_id=ha_best_entity_id, forecast=self)
@@ -3370,6 +3438,18 @@ class QSHomeSolarAndConsumptionHistoryAndForecast:
                                 strt = s
                             if e < end:
                                 end = e
+
+                        # Apply override mask: zero out intervals where load was user-overridden
+                        override_entity_id = override_sensor_for_entity.get(ha_best_entity_id)
+                        if override_entity_id is not None and load_sensor.values is not None:
+                            override_states = await load_from_history(self.hass, override_entity_id, s, e)
+                            if override_states:
+                                self._apply_override_mask(load_sensor, override_states)
+                            else:
+                                _LOGGER.debug(
+                                    "No override history for %s, assuming not overridden",
+                                    override_entity_id,
+                                )
 
                         values_for_debug[ha_best_entity_id] = np.copy(load_sensor.values)
 
