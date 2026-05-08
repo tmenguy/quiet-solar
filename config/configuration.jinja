@@ -129,6 +129,24 @@
 {%- set all_power_to_be_corrected = namespace(sensors = []) %}
 {% set postfix_power = "" %}
 
+default_config:
+
+a_file_logger:
+
+tts:
+  - platform: google_translate
+
+group: !include groups.yaml
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+python_script:
+
+logger:
+  default: info
+
+
 input_boolean:
   legrand_ticker:
     name: "Legrand Ticker"
@@ -547,3 +565,5 @@ homekit:
       input_boolean.{{ s.slug }}_command:
         name: LHK {{ s.name }} Cmd
 {%- endfor %}
+
+
