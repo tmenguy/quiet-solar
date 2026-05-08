@@ -13,8 +13,13 @@ permission:
     "_qsprocess_opencode/stories/*_review_fix_*.md": allow
   bash:
     "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
     "gh pr view *": allow
     "gh pr diff *": allow
+    "gh pr diff {{PR_NUMBER}} *": allow
     "gh pr comment *": allow
     "gh pr checks *": allow
     "git status": allow
@@ -23,7 +28,8 @@ permission:
     "python scripts/qs_opencode/next_step.py *": allow
     "python scripts/qs_opencode/render_agent.py *": allow
     "python scripts/qs_opencode/spawn_session.py *": allow
-  webfetch: deny
+  read: allow
+  webfetch: ask
 ---
 
 # {{AGENT_NAME}} — review orchestrator for QS-{{ISSUE}}

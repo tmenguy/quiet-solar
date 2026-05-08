@@ -9,7 +9,12 @@ color: "#3B82F6"
 hidden: true
 permission:
   edit: deny
-  bash: deny
+  bash:
+    "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
   read: allow
   webfetch: deny
 ---

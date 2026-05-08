@@ -9,6 +9,7 @@ mode: primary
 color: "#16A34A"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
+  read: allow
   edit:
     "*": deny
     "_qsprocess_opencode/**": allow
@@ -17,6 +18,10 @@ permission:
     "{{STORY_FILE}}": allow
   bash:
     "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
     "git status": allow
     "git diff*": allow
     "git log*": allow
@@ -33,7 +38,7 @@ permission:
     "python scripts/qs_opencode/next_step.py *": allow
     "python scripts/qs_opencode/render_agent.py *": allow
     "python scripts/qs_opencode/spawn_session.py *": allow
-  webfetch: deny
+  webfetch: ask
 ---
 
 # {{AGENT_NAME}} — implement-setup-task for QS-{{ISSUE}}

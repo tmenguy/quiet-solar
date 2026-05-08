@@ -9,8 +9,14 @@ color: "#3B82F6"
 hidden: true
 permission:
   edit: deny
-  bash: deny
-  webfetch: deny
+  bash:
+    "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+  read: allow
+  webfetch: ask
 ---
 
 # {{AGENT_NAME}} — scope guardian for QS-{{ISSUE}}

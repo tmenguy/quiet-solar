@@ -9,8 +9,14 @@ color: "#3B82F6"
 hidden: true
 permission:
   edit: deny
-  bash: deny
-  webfetch: deny
+  read: allow
+  bash:
+    "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+  webfetch: ask
 ---
 
 # {{AGENT_NAME}} — plan critic for QS-{{ISSUE}}
