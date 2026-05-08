@@ -65,6 +65,10 @@ class TestSlugifyDirect:
         """Strip .md extension."""
         assert _slugify("hello-world.md") == "hello-world"
 
+    def test_empty_slug(self) -> None:
+        """All non-alphanumeric chars produce empty string."""
+        assert _slugify("#$%.md") == ""
+
 
 class TestComputeTargetNameDirect:
     """Direct tests for _compute_target_name."""
@@ -76,6 +80,15 @@ class TestComputeTargetNameDirect:
     def test_without_github_number(self) -> None:
         """No Github-#N produces legacy slug."""
         assert _compute_target_name("deferred-work.md") == "QS-legacy-deferred-work.story.md"
+
+    def test_empty_slug_fallback(self) -> None:
+        """Empty slug falls back to 'unnamed'."""
+        assert _compute_target_name("#$%.md") == "QS-legacy-unnamed.story.md"
+
+    def test_multiple_github_numbers_uses_first(self) -> None:
+        """Multiple Github-#N uses first, warns."""
+        result = _compute_target_name("Github-#42-and-Github-#99.md")
+        assert result == "QS-42.story.md"
 
 
 class TestMigrateDirect:
@@ -128,29 +141,29 @@ class TestNamingConvention:
 
     def test_github_issue_number_extracted(self, src_dir: Path, dst_dir: Path) -> None:
         """Files with Github-#N become QS-N.story.md."""
-        (src_dir / "bug-Github-#101-pool-target.md").write_text("content101")
+        (src_dir / "bug-Github-#101-pool-target.md").write_text("content101", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
         assert (dst_dir / "QS-101.story.md").exists()
-        assert (dst_dir / "QS-101.story.md").read_text() == "content101"
+        assert (dst_dir / "QS-101.story.md").read_text(encoding="utf-8") == "content101"
 
     def test_no_github_number_gets_legacy_slug(self, src_dir: Path, dst_dir: Path) -> None:
         """Files without Github-#N become QS-legacy-{slug}.story.md."""
-        (src_dir / "1-1-agentic-development-workflow.md").write_text("content")
+        (src_dir / "1-1-agentic-development-workflow.md").write_text("content", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
         assert (dst_dir / "QS-legacy-1-1-agentic-development-workflow.story.md").exists()
 
     def test_github_number_in_middle_of_name(self, src_dir: Path, dst_dir: Path) -> None:
         """Github-#N anywhere in filename is extracted."""
-        (src_dir / "1-14-Github-#60-robust-story.md").write_text("c")
+        (src_dir / "1-14-Github-#60-robust-story.md").write_text("c", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
         assert (dst_dir / "QS-60.story.md").exists()
 
     def test_slug_lowercased_and_hyphenated(self, src_dir: Path, dst_dir: Path) -> None:
         """Non-alphanumeric chars become hyphens, collapsed."""
-        (src_dir / "Some--Weird___Name.md").write_text("x")
+        (src_dir / "Some--Weird___Name.md").write_text("x", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
         assert (dst_dir / "QS-legacy-some-weird-name.story.md").exists()
@@ -161,11 +174,11 @@ class TestSkipping:
 
     def test_existing_target_skipped(self, src_dir: Path, dst_dir: Path) -> None:
         """If target already exists, source is skipped."""
-        (src_dir / "bug-Github-#101-something.md").write_text("new")
-        (dst_dir / "QS-101.story.md").write_text("existing")
+        (src_dir / "bug-Github-#101-something.md").write_text("new", encoding="utf-8")
+        (dst_dir / "QS-101.story.md").write_text("existing", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
-        assert (dst_dir / "QS-101.story.md").read_text() == "existing"
+        assert (dst_dir / "QS-101.story.md").read_text(encoding="utf-8") == "existing"
         assert "skipped" in result.stdout.lower()
 
 
@@ -174,8 +187,8 @@ class TestCollisions:
 
     def test_two_sources_same_target_gets_duplicate_suffix(self, src_dir: Path, dst_dir: Path) -> None:
         """When two sources map to same target, second gets -duplicate suffix."""
-        (src_dir / "bug-Github-#101-first.md").write_text("first")
-        (src_dir / "bug-Github-#101-second.md").write_text("second")
+        (src_dir / "bug-Github-#101-first.md").write_text("first", encoding="utf-8")
+        (src_dir / "bug-Github-#101-second.md").write_text("second", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
         assert (dst_dir / "QS-101.story.md").exists()
@@ -188,9 +201,9 @@ class TestSummary:
 
     def test_summary_counts_correct(self, src_dir: Path, dst_dir: Path) -> None:
         """Summary shows N = migrated + skipped."""
-        (src_dir / "bug-Github-#101-a.md").write_text("a")
-        (src_dir / "1-1-workflow.md").write_text("b")
-        (dst_dir / "QS-101.story.md").write_text("existing")
+        (src_dir / "bug-Github-#101-a.md").write_text("a", encoding="utf-8")
+        (src_dir / "1-1-workflow.md").write_text("b", encoding="utf-8")
+        (dst_dir / "QS-101.story.md").write_text("existing", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
         # Should report 2 source, 1 migrated, 1 skipped
@@ -203,7 +216,7 @@ class TestDryRun:
 
     def test_dry_run_no_files_written(self, src_dir: Path, dst_dir: Path) -> None:
         """Dry run prints plan but writes nothing."""
-        (src_dir / "bug-Github-#101-thing.md").write_text("content")
+        (src_dir / "bug-Github-#101-thing.md").write_text("content", encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir), "--dry-run")
         assert result.returncode == 0
         assert not (dst_dir / "QS-101.story.md").exists()
@@ -216,8 +229,8 @@ class TestContentVerbatim:
     def test_content_not_modified(self, src_dir: Path, dst_dir: Path) -> None:
         """Content is copied verbatim, no ref scrubbing."""
         content = "References _bmad-output/ and _qsprocess/ paths"
-        (src_dir / "deferred-work.md").write_text(content)
+        (src_dir / "deferred-work.md").write_text(content, encoding="utf-8")
         result = run_migrate(str(src_dir), str(dst_dir))
         assert result.returncode == 0
         target = dst_dir / "QS-legacy-deferred-work.story.md"
-        assert target.read_text() == content
+        assert target.read_text(encoding="utf-8") == content

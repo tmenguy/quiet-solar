@@ -142,7 +142,7 @@ Nine `*.md.tmpl` files, all with:
   the story file; implement-task edits only `custom_components/quiet_solar/**`
   and `tests/**`; review agents are edit-deny)
 - YAML frontmatter validated via `yaml.safe_load`
-- Reference `_qsprocess/skills/<phase>.md` as authoritative protocol
+- Reference the phase protocol inline (templates are self-contained)
 
 ### Documentation
 

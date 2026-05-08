@@ -33,9 +33,14 @@ def _compute_target_name(source_name: str) -> str:
     """Map a source filename to the target QS naming convention."""
     match = re.search(r"Github-#(\d+)", source_name)
     if match:
+        all_matches = re.findall(r"Github-#(\d+)", source_name)
+        if len(all_matches) > 1:
+            print(f"WARNING: multiple Github-# refs in {source_name}, using #{all_matches[0]}")
         issue_num = match.group(1)
         return f"QS-{issue_num}.story.md"
     slug = _slugify(source_name)
+    if not slug:
+        slug = "unnamed"
     return f"QS-legacy-{slug}.story.md"
 
 

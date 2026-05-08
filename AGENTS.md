@@ -9,8 +9,8 @@ OpenCode does not auto-parse `@file` references in `AGENTS.md`, so explicitly
 load these before doing any substantive work:
 
 - `CLAUDE.md` — base project rules (shared with Claude Code)
-- `_qsprocess/rules/project-rules.md` — full project rules
-- `_bmad-output/project-context.md` — 42-rule code style set
+- `_qsprocess_opencode/project-rules.md` — full project rules
+- `_qsprocess_opencode/project-context.md` — 42-rule code style set
 - `_qsprocess_opencode/README.md` — this workflow's directory layout and conventions
 
 ## Workflow — two static agents, eight rendered per task

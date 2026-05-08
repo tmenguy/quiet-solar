@@ -51,7 +51,7 @@ For workflow routing and architecture constraints, see `_qsprocess_opencode/proj
 
 ### Runtime Data Flow
 
-```
+```text
 HA State Changes → HADeviceMixin tracks states → QSDataHandler.async_update_all_states()
 → Home.update_states() → Home.solve() via PeriodSolver → Load.execute_command() → HA service calls
 ```
@@ -60,7 +60,7 @@ QSDataHandler runs three async cycles: state polling (~4s), load management (~7s
 
 ### Configuration Flow (Adding a New Device)
 
-```
+```text
 User clicks "Add" in HA UI → config_flow.py handles step-by-step UI
 → ConfigEntry created → __init__.py async_setup_entry()
 → Device registered via HADeviceMixin → Platforms (sensor/switch/number/select/button) set up entities
