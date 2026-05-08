@@ -21,9 +21,9 @@ The development pipeline uses skill commands that orchestrate phase-specific age
 
 Skills are defined in `_qsprocess_opencode/` and `.opencode/agents/`. They delegate creative work to per-task agents and mechanical work to Python scripts in `scripts/qs_opencode/`.
 
-Quality gates: `python scripts/qs/quality_gate.py` (pytest 100% coverage + ruff + mypy + translations).
+Quality gates: `python scripts/qs/quality_gate.py` (pytest 100% coverage + ruff + mypy + translations). This is the shared quality gate script — not forked for OpenCode.
 
-Doc-sync is built into `/implement-story`, `/review-story`, and `/finish-story` — the agent detects documentation impacts inline and runs a compound sync at lifecycle boundaries. The finish-story gate uses `python scripts/qs/doc_sync.py` to compare the story artifact against the actual implementation.
+Doc-sync is built into `/implement-story`, `/review-story`, and `/finish-story` — the agent detects documentation impacts inline and runs a compound sync at lifecycle boundaries.
 
 For workflow routing and architecture constraints, see `_qsprocess_opencode/project-rules.md`.
 

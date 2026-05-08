@@ -25,7 +25,8 @@ def _slugify(name: str, *, max_len: int = 80) -> str:
     slug = re.sub(r"-+", "-", slug)
     # Strip leading/trailing hyphens
     slug = slug.strip("-")
-    return slug[:max_len]
+    # Truncate then strip again (truncation may expose a trailing hyphen)
+    return slug[:max_len].rstrip("-")
 
 
 def _compute_target_name(source_name: str) -> str:
@@ -68,7 +69,6 @@ def migrate(
                 # Collision: add -duplicate-N suffix
                 base = target_name.replace(".story.md", "")
                 actual_target = f"{base}-duplicate-{idx}.story.md"
-                collisions += 1
                 print(f"WARNING: collision for {target_name} — {src_file.name} → {actual_target}")
 
             dst_path = dst_dir / actual_target
@@ -77,16 +77,25 @@ def migrate(
                 skipped += 1
                 continue
 
+            # Count collision only for non-skipped duplicates
+            if idx > 0:
+                collisions += 1
+
             if dry_run:
                 print(f"DRY RUN: {src_file.name} → {actual_target}")
                 migrated += 1
             else:
-                dst_path.write_text(src_file.read_text())
+                dst_path.write_text(src_file.read_text(encoding="utf-8"), encoding="utf-8")
                 print(f"Migrated: {src_file.name} → {actual_target}")
                 migrated += 1
 
     total = len(sources)
-    assert total == migrated + skipped, f"Count mismatch: {total} sources != {migrated} migrated + {skipped} skipped"
+    if total != migrated + skipped:
+        print(
+            f"Count mismatch: {total} sources != {migrated} migrated + {skipped} skipped",
+            file=sys.stderr,
+        )
+        return 1
     print(f"\nSummary: {total} source files, {migrated} migrated, {skipped} skipped, {collisions} collisions")
     return 0
 

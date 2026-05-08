@@ -10,7 +10,7 @@ Quiet Solar is a Home Assistant custom component that optimizes solar energy sel
 
 ## Commands
 
-Use `./venv` for all Python commands. Quality gates are automated:
+Activate with `source venv/bin/activate` for all Python commands. Quality gates are automated:
 
 ```bash
 # Run all quality gates (pytest 100% coverage + ruff + mypy + translations)
