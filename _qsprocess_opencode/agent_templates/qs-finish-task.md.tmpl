@@ -8,10 +8,14 @@ mode: primary
 color: "#EC4899"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
-  edit:
-    "*": deny
+  read: allow
+  edit: deny
   bash:
     "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
     "git *": allow
     "gh pr view *": allow
     "gh pr checks *": allow
@@ -31,13 +35,6 @@ permission:
 - **Story file**: `{{STORY_FILE}}`
 - **Release**: not handled here — the user runs `/release` separately
   from the main checkout after this phase completes.
-
-## Authoritative protocol
-
-Read `_qsprocess/skills/finish-task.md` (or `finish-story.md`) for the
-merge checklist and cleanup sequence.
-
-> **Note**: the phase protocol below supersedes the instructions in finish-story.md. Follow the steps below, not the older skill file.
 
 ## Phase protocol
 

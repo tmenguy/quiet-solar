@@ -9,7 +9,12 @@ color: "#3B82F6"
 hidden: true
 permission:
   edit: deny
-  bash: deny
+  bash:
+    "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
   read: allow
   webfetch: deny
 ---
@@ -38,8 +43,8 @@ everything I need?"
 1. Receive the plan draft and project rules from the orchestrator's prompt.
 2. If the plan is empty, return "HALT: No plan provided."
 3. You may read these files for rule context:
-   - `_qsprocess/rules/project-rules.md`
-   - `_bmad-output/project-context.md`
+   - `_qsprocess_opencode/project-rules.md`
+   - `_qsprocess_opencode/project-context.md`
 4. For each task in the plan, evaluate:
    - **Rule compliance:** Does the approach violate project rules? Check:
      - Layer boundaries (`home_model/` NEVER imports `homeassistant.*`)

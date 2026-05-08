@@ -5,16 +5,36 @@
 
 const INVALID_STATES = ['unavailable', 'unknown', 'none'];
 
+const ANIM_MIN_SPEED = 20;   // dash-units per second at minimum power
+const ANIM_MAX_SPEED = 200;  // dash-units per second at maximum power
+const ANIM_MIN_POWER_W = 500;
+const ANIM_MAX_POWER_W = 22000;
+const ANIM_SPEED_RANGE = ANIM_MAX_SPEED - ANIM_MIN_SPEED;
+const ANIM_POWER_RANGE = ANIM_MAX_POWER_W - ANIM_MIN_POWER_W;
+
 class QsCarCard extends HTMLElement {
+  constructor() {
+    super();
+    this._chargePower = 0;
+    this._charging = false;
+  }
+
   connectedCallback() {
     if (this._animRaf != null) return;
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
+      if (!this._charging) {
+        this._animOffset = 0;
+        this._lastAnimTs = null;
+        this._animRaf = requestAnimationFrame(step);
+        return;
+      }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
       const dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
       this._lastAnimTs = ts;
       const patternLen = Math.max(8, this._animPatternLen || 64);
-      const speed = 80; // dash units per second
+      const cp = this._chargePower || 0;
+      const speed = Math.min(ANIM_MAX_SPEED, Math.max(ANIM_MIN_SPEED, ANIM_MIN_SPEED + (cp - ANIM_MIN_POWER_W) * ANIM_SPEED_RANGE / ANIM_POWER_RANGE));
       this._animOffset = ((this._animOffset || 0) + speed * dt) % patternLen;
       const p = this._root?.getElementById('charge_anim');
       if (p) {
@@ -106,8 +126,10 @@ class QsCarCard extends HTMLElement {
       const isStale = sCarIsStale?.state === 'on';
       let soc = this._percent(sSoc?.state);
       const power = sPower?.state || "0";
+      this._chargePower = Number(power) || 0;
       const target = selLimit?.state || "";
       const charging = (Number(power) > 50);
+      this._charging = charging;
       const carChargeTypeIcons = {
           "Unknown": "mdi:help-circle-outline",
           "Not Plugged": "mdi:power-plug-off",

@@ -8,12 +8,17 @@ mode: primary
 color: "#3B82F6"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
+  read: allow
   edit:
     "*": deny
     "{{STORY_FILE}}": allow
     "_qsprocess_opencode/stories/**": allow
   bash:
     "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
     "gh issue view {{ISSUE}} --json*": allow
     "gh pr view *": allow
     "git status": allow
@@ -26,7 +31,7 @@ permission:
     "python scripts/qs_opencode/next_step.py *": allow
     "python scripts/qs_opencode/render_agent.py *": allow
     "python scripts/qs_opencode/spawn_session.py *": allow
-  webfetch: deny
+  webfetch: ask
 ---
 
 # {{AGENT_NAME}} — create-plan for QS-{{ISSUE}}
@@ -44,12 +49,6 @@ permission:
   - `qs-plan-dev-proxy-QS-{{ISSUE}}`
   - `qs-plan-scope-guardian-QS-{{ISSUE}}`
 
-## Authoritative protocol
-
-Read `_qsprocess/skills/create-plan.md` before acting — it defines the
-story format, quality bar, and commit convention. The OpenCode-specific
-additions below extend it.
-
 ## Phase protocol
 
 ### Phase 1 — Gather & Analyze
@@ -60,8 +59,8 @@ additions below extend it.
    ```
 
 2. Read project rules and context:
-   - `_qsprocess/rules/project-rules.md`
-   - `_bmad-output/project-context.md`
+   - `_qsprocess_opencode/project-rules.md`
+   - `_qsprocess_opencode/project-context.md`
 
 3. Explore affected codebase areas referenced by the issue.
 
@@ -81,8 +80,7 @@ additions below extend it.
 
 ### Phase 3 — Draft Plan
 
-1. Generate the full story draft following the template format from
-   `_qsprocess/skills/create-plan.md`:
+1. Generate the full story draft following the template format below:
    - Story statement (As a / I want / So that)
    - BDD acceptance criteria (Given/When/Then)
    - Tasks with AC references
@@ -183,8 +181,8 @@ Review the tasks and affected files in your plan:
   set NEXT_PHASE=implement-task (this is the default)
 
 Dev-environment file patterns:
-`_qsprocess_opencode/**`, `_qsprocess/**`, `scripts/**`, `.opencode/**`,
-`.claude/**`, `.cursor/**`, `docs/**`, `_bmad-output/**`, `.github/**`,
+`_qsprocess_opencode/**`, `scripts/**`, `.opencode/**`,
+`.claude/**`, `.cursor/**`, `docs/**`, `.github/**`,
 `AGENTS.md`, `CLAUDE.md`, `.cursorrules`, `pyproject.toml`
 
 When NEXT_PHASE=implement-setup-task, add `--next-phase implement-setup-task`

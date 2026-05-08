@@ -11,12 +11,17 @@ permission:
   edit: deny
   bash:
     "*": ask
+    "grep *": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
     "gh pr view {{PR_NUMBER}} *": allow
-    "gh pr diff {{PR_NUMBER}}": allow
+    "gh pr diff {{PR_NUMBER}} *": allow
     "git log*": allow
     "git blame *": allow
     "git show *": allow
-  webfetch: deny
+  read: allow
+  webfetch: ask
 ---
 
 # {{AGENT_NAME}} — edge-case-hunter review for QS-{{ISSUE}}

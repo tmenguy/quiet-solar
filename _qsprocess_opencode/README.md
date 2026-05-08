@@ -1,15 +1,13 @@
 # `_qsprocess_opencode/` — OpenCode-flavored workflow sibling
 
-This directory is the OpenCode-native sibling of `_qsprocess/`. It exists so the
-existing Claude Code / Cursor workflow in `_qsprocess/` and `.claude/` stays
-bit-identical while OpenCode gets first-class subagent support for the same
-six-phase pipeline — using a **per-task agent** architecture instead of a
-fixed set of static subagents.
+This directory is the OpenCode-native workflow tree, self-contained with its own
+copies of project rules and context documents. The Claude Code / Cursor workflow
+in `_qsprocess/` and `.claude/` remains separate and untouched.
 
 > **Hard constraint**: nothing under `_qsprocess/`, `scripts/qs/`,
 > `docs/development-workflow-guide.md`, `.claude/`, `CLAUDE.md`, `.cursor/`,
-> or `.cursorrules` is ever modified. The authoritative rules still live in
-> `_qsprocess/rules/` and `CLAUDE.md`; this tree pulls them in by reference.
+> or `.cursorrules` is ever modified. OpenCode has its own copies of project
+> rules and context documents under `_qsprocess_opencode/`.
 
 ## What lives here
 
@@ -38,15 +36,15 @@ worktree's `.opencode/agents/` folder as `qs-<phase>-QS-<N>.md`. There is
 **no shared per-task agent location** — every task's agents live only in
 its own worktree and are cleaned up at finish-task time.
 
-## How this relates to `_qsprocess/`
+## Relationship to `_qsprocess/`
 
 | Concern | `_qsprocess/` | `_qsprocess_opencode/` |
 | --- | --- | --- |
 | Tools served | Claude Code, Cursor | OpenCode |
 | Phase materialization | static skill files | **per-task agent files rendered from templates** |
 | Handoff between phases | terminal launcher or instruction text | Phase 1: launcher for new OpenCode session on worktree. Phases 2–5: new interactive session via HTTP API (`spawn_session.py`). Review sub-roles: Task-spawn (non-interactive). |
-| Source of project rules | `_qsprocess/rules/project-rules.md` (authoritative) | references `_qsprocess/rules/` — no duplication |
-| Code-style rule set | `_bmad-output/project-context.md` (authoritative) | references same file |
+| Source of project rules | `_qsprocess/rules/project-rules.md` | `_qsprocess_opencode/project-rules.md` (own copy) |
+| Code-style rule set | `_bmad-output/project-context.md` | `_qsprocess_opencode/project-context.md` (own copy) |
 | Quality gate | `python scripts/qs/quality_gate.py` | same command — no fork |
 | Phase scripts | `scripts/qs/` | `scripts/qs_opencode/` (sibling, no import) |
 
@@ -151,5 +149,5 @@ which the orchestrator consolidates and triages with the user.
 
 When the user is ready to drop the Claude/Cursor integration, they can
 promote this tree to `_qsprocess/` and retire the scripts. Until then,
-keep both trees in parallel. Any rule changes belong in
-`_qsprocess/rules/project-rules.md` — this sibling **only references**.
+keep both trees in parallel. Rule changes for OpenCode belong in
+`_qsprocess_opencode/project-rules.md`.
