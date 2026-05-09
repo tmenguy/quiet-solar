@@ -638,13 +638,16 @@ class TestQSDynamicGroupCoverageExtensions:
         # Create mock children that are HADeviceMixin instances
         child1 = MagicMock(spec=HADeviceMixin)
         child1.get_device_power_latest_possible_valid_value = MagicMock(return_value=1000.0)
+        child1.is_user_overridden = MagicMock(return_value=False)
 
         child2 = MagicMock(spec=HADeviceMixin)
         child2.get_device_power_latest_possible_valid_value = MagicMock(return_value=500.0)
+        child2.is_user_overridden = MagicMock(return_value=False)
 
         # Child that returns None
         child3 = MagicMock(spec=HADeviceMixin)
         child3.get_device_power_latest_possible_valid_value = MagicMock(return_value=None)
+        child3.is_user_overridden = MagicMock(return_value=False)
 
         device._childrens = [child1, child2, child3]
         time = datetime.datetime.now(pytz.UTC)

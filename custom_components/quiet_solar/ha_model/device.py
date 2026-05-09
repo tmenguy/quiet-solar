@@ -857,16 +857,38 @@ class HADeviceMixin:
             return vals[-1][0], vals[-1][1], vals[-1][2]
 
     def get_device_power_latest_possible_valid_value(
-        self, tolerance_seconds: float | None, time: datetime, ignore_auto_load: bool = False
+        self, tolerance_seconds: float | None, time: datetime, ignore_auto_and_user_overridden_load: bool = False
     ) -> float:
 
-        if ignore_auto_load and isinstance(self, AbstractLoad) and self.load_is_auto_to_be_boosted:
+        if ignore_auto_and_user_overridden_load and isinstance(self, AbstractLoad) and self.load_is_auto_to_be_boosted:
+            # Auto-boosted loads are only excluded when the solver is NOT
+            # actively commanding them ON.  When the solver has sent an ON
+            # command, the load IS controlled consumption.
+            # Note: is_load_command_set() returns True only when running_command
+            # is None (no in-flight command) AND current_command is set, so
+            # running_command is implicitly checked.
+            if not (
+                self.is_load_command_set(time)
+                and self.current_command is not None
+                and not self.current_command.is_off_or_idle()
+            ):
+                return 0.0
+        # Note: a load can be both auto-boosted and user-overridden.
+        # If auto-boosted returned 0.0 above, we never reach here.
+        # If auto-boosted fell through (solver commanding ON), this
+        # override check correctly excludes it — the user override
+        # takes priority over the solver command.
+        if ignore_auto_and_user_overridden_load and self.is_user_overridden() is True:
             return 0.0
 
         p = self.get_sensor_latest_possible_valid_value(self._get_power_measure(), tolerance_seconds, time)
 
         if p is None:
-            return 0.0
+            p = self.get_sensor_latest_possible_valid_value(self.command_based_power_sensor, tolerance_seconds, time)
+
+        if p is None:
+            p = 0.0
+
         return p
 
     def get_device_amps_consumption(self, tolerance_seconds: float | None, time: datetime) -> list[float | int] | None:

@@ -386,16 +386,18 @@ def test_sensor_valid_time_value_attr_tolerance_passes_line766():
 
 # ==========================================================================
 # 13. Line 779: get_device_power_latest_possible_valid_value
-#     ignore_auto_load=True and load_is_auto_to_be_boosted=True
+#     ignore_auto_and_user_overridden_load=True and load_is_auto_to_be_boosted=True
 # ==========================================================================
 
 
 def test_get_device_power_ignore_auto_load_line779():
-    """Cover line 779: returns 0.0 when ignore_auto_load and load is auto."""
+    """Cover line 779: returns 0.0 when ignore_auto_and_user_overridden_load and load is auto (no active command)."""
     dev = _make_load_device()
     dev.load_is_auto_to_be_boosted = True
     now = datetime.now(tz=pytz.UTC)
-    result = dev.get_device_power_latest_possible_valid_value(tolerance_seconds=None, time=now, ignore_auto_load=True)
+    result = dev.get_device_power_latest_possible_valid_value(
+        tolerance_seconds=None, time=now, ignore_auto_and_user_overridden_load=True
+    )
     assert result == 0.0
 
 

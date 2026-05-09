@@ -128,6 +128,8 @@ from ..const import (
     CONF_CHARGER_STATUS_SENSOR,
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH,
     CONF_DEVICE_EFFICIENCY,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
@@ -2103,6 +2105,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
 
+    def support_user_override(self) -> bool:
+        return True
+
     async def update_charger_for_user_change(self):
         time = datetime.now(pytz.UTC)
         if await self.do_run_check_load_activity_and_constraints(time):
@@ -3384,6 +3389,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     time=time,
                     load=self,
                     load_param=self.car.name,
+                    load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
                     from_user=True,
                     initial_value=car_initial_value,
                     target_value=target_charge,
