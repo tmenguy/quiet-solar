@@ -18,6 +18,7 @@ permission:
     "gh issue view *": allow
     "gh repo view *": allow
     "git *": allow
+    "source venv/bin/activate": allow
     "python scripts/qs/fetch_issue.py *": allow
     "python scripts/qs/create_issue.py *": allow
     "bash scripts/worktree-setup.sh *": allow
