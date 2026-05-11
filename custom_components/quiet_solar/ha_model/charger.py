@@ -4510,11 +4510,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     if probe_only is False:
                         if (time - self._expected_amperage.last_ping_time_success).total_seconds() > duration_check_s:
                             _LOGGER.debug(
-                                f"Ensure State:{self.name} set amperage already set to {charging_current_amp}A ... but reset it"
+                                "Ensure State:%s amperage ping (no-op if %sA == %sA)",
+                                self.name,
+                                charging_current_amp,
+                                self._expected_amperage.value,
                             )
-                            await self.set_charging_current(
-                                current=self._expected_amperage.value, time=time, force=True
-                            )
+                            await self.set_charging_current(current=self._expected_amperage.value, time=time)
                             self._expected_amperage.last_ping_time_success = time
                 else:
                     one_bad = True

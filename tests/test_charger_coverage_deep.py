@@ -3345,8 +3345,10 @@ class TestEnsureCorrectStateCharger:
         ch.update_data_request.assert_called()
 
     @pytest.mark.asyncio
-    async def test_amps_match_but_reset_needed(self):
-        """Lines 3709-3712: amps match but ping timeout -> re-sets charging current."""
+    async def test_amps_match_ping_called_but_no_low_level_resend(self):
+        """Amps match but ping timeout -> set_charging_current called WITHOUT force,
+        so low_level_set_charging_current is NOT invoked (equality guard skips it).
+        """
         _, _, ch, _, now = self._setup()
         ch.is_charge_enabled = MagicMock(return_value=True)
         ch.is_charge_disabled = MagicMock(return_value=False)
@@ -3355,8 +3357,13 @@ class TestEnsureCorrectStateCharger:
         very_long_ago = now - timedelta(seconds=2 * STATE_CMD_TIME_BETWEEN_RETRY_S + 10)
         ch._expected_amperage.first_time_success = very_long_ago
         ch._expected_amperage.last_ping_time_success = very_long_ago
+        # Use real set_charging_current so the equality guard runs
+        ch.set_charging_current = ch.__class__.set_charging_current.__get__(ch)
+        ch.low_level_set_charging_current = AsyncMock(return_value=False)
         await ch._ensure_correct_state(now)
-        ch.set_charging_current.assert_called()
+        # The wrapper is called (ping fires), but low-level is NOT called
+        # because amps match and force is not set
+        ch.low_level_set_charging_current.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_amps_mismatch_not_ok_to_launch(self):
