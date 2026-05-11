@@ -19,6 +19,7 @@ permission:
     "git commit *": allow
     "git push*": allow
     "git diff*": allow
+    "source venv/bin/activate*": allow
     "python scripts/qs/release.py*": allow
     "python scripts/qs/quality_gate.py*": allow
     "gh release *": allow
