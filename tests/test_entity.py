@@ -219,3 +219,37 @@ def test_qs_device_entity_availability_enabled_device():
     entity._set_availabiltiy()
 
     assert entity._attr_available is True
+
+
+def test_qs_device_entity_does_not_set_entity_id():
+    """Test QSDeviceEntity does not explicitly assign entity_id.
+
+    Regression test for #166: HA expects entities to use their platform domain
+    (e.g. button.*, sensor.*) as entity_id prefix. Explicitly setting entity_id
+    forced all entities to use quiet_solar.* prefix. Letting HA assign entity IDs
+    automatically ensures correct platform-based prefixes.
+
+    Uses AST analysis to detect assignment statements (not just string mentions).
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from custom_components.quiet_solar.entity import QSDeviceEntity
+
+    source = textwrap.dedent(inspect.getsource(QSDeviceEntity.__init__))
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                    and target.attr == "entity_id"
+                ):
+                    pytest.fail(
+                        "QSDeviceEntity.__init__ must not assign self.entity_id — "
+                        "let HA assign platform-based entity IDs automatically"
+                    )

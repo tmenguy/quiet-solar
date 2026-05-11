@@ -1,22 +1,5 @@
 # serializer version: 1
-# name: test_car_sensors[sensor.qs_test_car_car_best_power_value-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'device_class': 'power',
-      'friendly_name': 'car Test Car Power Consumption',
-      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
-      'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_best_power_value',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_car_sensors[sensor.qs_test_car_car_car_autonomy_to_target_soc_km-state]
+# name: test_car_sensors[sensor.car_test_car_autonomy_to_target_soc_km-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -26,59 +9,58 @@
       'unit_of_measurement': <UnitOfLength.KILOMETERS: 'km'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_car_autonomy_to_target_soc_km',
+    'entity_id': 'sensor.car_test_car_autonomy_to_target_soc_km',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_car_sensors[sensor.qs_test_car_car_car_charge_time-state]
+# name: test_car_sensors[sensor.car_test_car_charge_eta-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'car Test Car Charge ETA',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_car_charge_time',
+    'entity_id': 'sensor.car_test_car_charge_eta',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_car_sensors[sensor.qs_test_car_car_car_charge_type-state]
+# name: test_car_sensors[sensor.car_test_car_charge_type-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'car Test Car Charge Type',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_car_charge_type',
+    'entity_id': 'sensor.car_test_car_charge_type',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_car_sensors[sensor.qs_test_car_car_car_estimated_range_km-state]
+# name: test_car_sensors[sensor.car_test_car_constraint_current_energy-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'device_class': 'distance',
-      'friendly_name': 'car Test Car Estimated Range (km)',
-      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
-      'unit_of_measurement': <UnitOfLength.KILOMETERS: 'km'>,
+      'device_class': 'energy',
+      'friendly_name': 'car Test Car Constraint Current Energy',
+      'unit_of_measurement': <UnitOfEnergy.WATT_HOUR: 'Wh'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_car_estimated_range_km',
+    'entity_id': 'sensor.car_test_car_constraint_current_energy',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_car_sensors[sensor.qs_test_car_car_car_soc_percentage-state]
+# name: test_car_sensors[sensor.car_test_car_current_charge-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -88,234 +70,204 @@
       'unit_of_measurement': '%',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_car_soc_percentage',
+    'entity_id': 'sensor.car_test_car_current_charge',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_car_sensors[sensor.qs_test_car_car_current_constraint_car-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Car Next Charge',
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_current_constraint_car',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_car_sensors[sensor.qs_test_car_car_current_constraint_current_energy-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'device_class': 'energy',
-      'friendly_name': 'car Test Car Constraint Current Energy',
-      'unit_of_measurement': <UnitOfEnergy.WATT_HOUR: 'Wh'>,
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_current_constraint_current_energy',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_car_sensors[sensor.qs_test_car_car_device_information_storage-state]
+# name: test_car_sensors[sensor.car_test_car_device_information_storage-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'car Test Car Device Information Storage',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_device_information_storage',
+    'entity_id': 'sensor.car_test_car_device_information_storage',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_car_sensors[sensor.qs_test_car_car_load_current_command-state]
+# name: test_car_sensors[sensor.car_test_car_estimated_range_km-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'device_class': 'distance',
+      'friendly_name': 'car Test Car Estimated Range (km)',
+      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
+      'unit_of_measurement': <UnitOfLength.KILOMETERS: 'km'>,
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.car_test_car_estimated_range_km',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_car_sensors[sensor.car_test_car_load_current_command-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'car Test Car Load Current Command',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_load_current_command',
+    'entity_id': 'sensor.car_test_car_load_current_command',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_car_sensors[sensor.qs_test_car_car_qs_car_person_forecast-state]
+# name: test_car_sensors[sensor.car_test_car_next_charge-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'car Test Car Next Charge',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.car_test_car_next_charge',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_car_sensors[sensor.car_test_car_person_forecasted_mileage-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'car Test Car Person Forecasted Mileage',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_car_car_qs_car_person_forecast',
+    'entity_id': 'sensor.car_test_car_person_forecasted_mileage',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_best_power_value-state]
+# name: test_car_sensors[sensor.car_test_car_power_consumption-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'device_class': 'power',
-      'friendly_name': 'charger Test Charger Power Consumption',
+      'friendly_name': 'car Test Car Power Consumption',
       'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_best_power_value',
+    'entity_id': 'sensor.car_test_car_power_consumption',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint-state]
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_charge_eta-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Next Charge',
+      'friendly_name': 'car Test Charger generic car Charge ETA',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_current_constraint',
+    'entity_id': 'sensor.car_test_charger_generic_car_charge_eta',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint_current_energy-state]
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_charge_type-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'car Test Charger generic car Charge Type',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.car_test_charger_generic_car_charge_type',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_constraint_current_energy-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'device_class': 'energy',
-      'friendly_name': 'charger Test Charger Constraint Current Energy',
+      'friendly_name': 'car Test Charger generic car Constraint Current Energy',
       'unit_of_measurement': <UnitOfEnergy.WATT_HOUR: 'Wh'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_current_constraint_current_energy',
+    'entity_id': 'sensor.car_test_charger_generic_car_constraint_current_energy',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint_current_percent_completion-state]
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_device_information_storage-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Constraint % completion',
-      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
-      'unit_of_measurement': '%',
+      'friendly_name': 'car Test Charger generic car Device Information Storage',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_current_constraint_current_percent_completion',
+    'entity_id': 'sensor.car_test_charger_generic_car_device_information_storage',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_current_constraint_current_value-state]
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_load_current_command-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Constraint Current Value',
-      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
+      'friendly_name': 'car Test Charger generic car Load Current Command',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_current_constraint_current_value',
+    'entity_id': 'sensor.car_test_charger_generic_car_load_current_command',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_device_information_storage-state]
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_next_charge-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Device Information Storage',
+      'friendly_name': 'car Test Charger generic car Next Charge',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_device_information_storage',
+    'entity_id': 'sensor.car_test_charger_generic_car_next_charge',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_load_current_command-state]
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_person_forecasted_mileage-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Load Current Command',
+      'friendly_name': 'car Test Charger generic car Person Forecasted Mileage',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_load_current_command',
+    'entity_id': 'sensor.car_test_charger_generic_car_person_forecasted_mileage',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_load_override_state-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Load External Override',
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_load_override_state',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_end_time-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Next/Current End Time',
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_end_time',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_charger_sensors[sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_start_time-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'charger Test Charger Next/Current Start Time',
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_charger_generic_qs_next_or_current_constraint_start_time',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_best_power_value-state]
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_power_consumption-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -325,145 +277,190 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_best_power_value',
+    'entity_id': 'sensor.car_test_charger_generic_car_power_consumption',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_car_charge_time-state]
+# name: test_charger_sensors[sensor.charger_test_charger_constraint_completion-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car Charge ETA',
+      'friendly_name': 'charger Test Charger Constraint % completion',
+      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
+      'unit_of_measurement': '%',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_car_charge_time',
+    'entity_id': 'sensor.charger_test_charger_constraint_completion',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_car_charge_type-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car Charge Type',
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_car_charge_type',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_current_constraint_car-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car Next Charge',
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_current_constraint_car',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_current_constraint_current_energy-state]
+# name: test_charger_sensors[sensor.charger_test_charger_constraint_current_energy-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'device_class': 'energy',
-      'friendly_name': 'car Test Charger generic car Constraint Current Energy',
+      'friendly_name': 'charger Test Charger Constraint Current Energy',
       'unit_of_measurement': <UnitOfEnergy.WATT_HOUR: 'Wh'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_current_constraint_current_energy',
+    'entity_id': 'sensor.charger_test_charger_constraint_current_energy',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_device_information_storage-state]
+# name: test_charger_sensors[sensor.charger_test_charger_constraint_current_value-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car Device Information Storage',
+      'friendly_name': 'charger Test Charger Constraint Current Value',
+      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_device_information_storage',
+    'entity_id': 'sensor.charger_test_charger_constraint_current_value',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_load_current_command-state]
+# name: test_charger_sensors[sensor.charger_test_charger_device_information_storage-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car Load Current Command',
+      'friendly_name': 'charger Test Charger Device Information Storage',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_load_current_command',
+    'entity_id': 'sensor.charger_test_charger_device_information_storage',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_charger_sensors[sensor.qs_test_charger_generic_car_car_qs_car_person_forecast-state]
+# name: test_charger_sensors[sensor.charger_test_charger_load_current_command-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'car Test Charger generic car Person Forecasted Mileage',
+      'friendly_name': 'charger Test Charger Load Current Command',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_charger_generic_car_car_qs_car_person_forecast',
+    'entity_id': 'sensor.charger_test_charger_load_current_command',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_device_information_storage-state]
+# name: test_charger_sensors[sensor.charger_test_charger_load_external_override-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'charger Test Charger Load External Override',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.charger_test_charger_load_external_override',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_charger_sensors[sensor.charger_test_charger_next_charge-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'charger Test Charger Next Charge',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.charger_test_charger_next_charge',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_charger_sensors[sensor.charger_test_charger_next_current_end_time-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'charger Test Charger Next/Current End Time',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.charger_test_charger_next_current_end_time',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_charger_sensors[sensor.charger_test_charger_next_current_start_time-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'charger Test Charger Next/Current Start Time',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.charger_test_charger_next_current_start_time',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_charger_sensors[sensor.charger_test_charger_power_consumption-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'device_class': 'power',
+      'friendly_name': 'charger Test Charger Power Consumption',
+      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
+      'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.charger_test_charger_power_consumption',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_home_sensors[sensor.home_test_home_device_information_storage-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'home Test Home Device Information Storage',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_device_information_storage',
+    'entity_id': 'sensor.home_test_home_device_information_storage',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_home_available_power-state]
+# name: test_home_sensors[sensor.home_test_home_load_current_command-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
-      'device_class': 'power',
-      'friendly_name': 'home Test Home qs_home_extra_available_power',
-      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
-      'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
+      'friendly_name': 'home Test Home Load Current Command',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_home_available_power',
+    'entity_id': 'sensor.home_test_home_load_current_command',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_home_consumption-state]
+# name: test_home_sensors[sensor.home_test_home_qs_home_consumption_power-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -473,14 +470,31 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_home_consumption',
+    'entity_id': 'sensor.home_test_home_qs_home_consumption_power',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_home_non_controlled_consumption-state]
+# name: test_home_sensors[sensor.home_test_home_qs_home_extra_available_power-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'device_class': 'power',
+      'friendly_name': 'home Test Home qs_home_extra_available_power',
+      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
+      'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.home_test_home_qs_home_extra_available_power',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_home_sensors[sensor.home_test_home_qs_home_non_controlled_consumption_power-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -490,28 +504,14 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_home_non_controlled_consumption',
+    'entity_id': 'sensor.home_test_home_qs_home_non_controlled_consumption_power',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_load_current_command-state]
-  StateSnapshot({
-    'attributes': ReadOnlyDict({
-      'attribution': 'Data provided by QuietSolarAbstraction',
-      'friendly_name': 'home Test Home Load Current Command',
-    }),
-    'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_load_current_command',
-    'last_changed': <ANY>,
-    'last_reported': <ANY>,
-    'last_updated': <ANY>,
-    'state': 'unknown',
-  })
-# ---
-# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_15mn-state]
+# name: test_home_sensors[sensor.home_test_home_qs_no_control_forecast_15mn-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -521,14 +521,14 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_qs_no_control_forecast_15mn',
+    'entity_id': 'sensor.home_test_home_qs_no_control_forecast_15mn',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_1h-state]
+# name: test_home_sensors[sensor.home_test_home_qs_no_control_forecast_1h-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -538,14 +538,14 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_qs_no_control_forecast_1h',
+    'entity_id': 'sensor.home_test_home_qs_no_control_forecast_1h',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_30mn-state]
+# name: test_home_sensors[sensor.home_test_home_qs_no_control_forecast_30mn-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -555,14 +555,14 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_qs_no_control_forecast_30mn',
+    'entity_id': 'sensor.home_test_home_qs_no_control_forecast_30mn',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_3h-state]
+# name: test_home_sensors[sensor.home_test_home_qs_no_control_forecast_3h-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -572,14 +572,14 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_qs_no_control_forecast_3h',
+    'entity_id': 'sensor.home_test_home_qs_no_control_forecast_3h',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_6h-state]
+# name: test_home_sensors[sensor.home_test_home_qs_no_control_forecast_6h-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -589,14 +589,14 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_qs_no_control_forecast_6h',
+    'entity_id': 'sensor.home_test_home_qs_no_control_forecast_6h',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_home_sensors[sensor.qs_test_home_home_qs_no_control_forecast_now-state]
+# name: test_home_sensors[sensor.home_test_home_qs_no_control_forecast_now-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
@@ -606,49 +606,49 @@
       'unit_of_measurement': <UnitOfPower.WATT: 'W'>,
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_home_home_qs_no_control_forecast_now',
+    'entity_id': 'sensor.home_test_home_qs_no_control_forecast_now',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_person_sensors[sensor.qs_test_person_person_device_information_storage-state]
+# name: test_person_sensors[sensor.person_test_person_device_information_storage-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'person Test Person Device Information Storage',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_person_person_device_information_storage',
+    'entity_id': 'sensor.person_test_person_device_information_storage',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_person_sensors[sensor.qs_test_person_person_load_current_command-state]
+# name: test_person_sensors[sensor.person_test_person_load_current_command-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'person Test Person Load Current Command',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_person_person_load_current_command',
+    'entity_id': 'sensor.person_test_person_load_current_command',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,
     'state': 'unknown',
   })
 # ---
-# name: test_person_sensors[sensor.qs_test_person_person_person_mileage_prediction-state]
+# name: test_person_sensors[sensor.person_test_person_predicted_next_day_mileage_km-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
       'attribution': 'Data provided by QuietSolarAbstraction',
       'friendly_name': 'person Test Person Predicted Next Day Mileage (km)',
     }),
     'context': <ANY>,
-    'entity_id': 'sensor.qs_test_person_person_person_mileage_prediction',
+    'entity_id': 'sensor.person_test_person_predicted_next_day_mileage_km',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,

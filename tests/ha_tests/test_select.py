@@ -28,12 +28,16 @@ async def test_home_select_entities_created(
 async def test_home_mode_select_options(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    entity_registry: er.EntityRegistry,
 ) -> None:
     """Test home mode select has correct options."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    state = hass.states.get("select.qs_test_home_home_home_mode")
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
+    home_mode_entries = [e for e in entity_entries if e.domain == "select" and "home_mode" in (e.unique_id or "")]
+    assert len(home_mode_entries) == 1
+    state = hass.states.get(home_mode_entries[0].entity_id)
     assert state is not None
 
     options = state.attributes.get("options", [])
@@ -43,12 +47,17 @@ async def test_home_mode_select_options(
 async def test_home_mode_select_change(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    entity_registry: er.EntityRegistry,
 ) -> None:
     """Test home mode select can be changed."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    state = hass.states.get("select.qs_test_home_home_home_mode")
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
+    home_mode_entries = [e for e in entity_entries if e.domain == "select" and "home_mode" in (e.unique_id or "")]
+    assert len(home_mode_entries) == 1
+    entity_id = home_mode_entries[0].entity_id
+    state = hass.states.get(entity_id)
     assert state is not None
 
     options = state.attributes.get("options", [])
@@ -58,12 +67,12 @@ async def test_home_mode_select_change(
         await hass.services.async_call(
             "select",
             "select_option",
-            {"entity_id": "select.qs_test_home_home_home_mode", "option": new_option},
+            {"entity_id": entity_id, "option": new_option},
             blocking=True,
         )
         await hass.async_block_till_done()
 
-        new_state = hass.states.get("select.qs_test_home_home_home_mode")
+        new_state = hass.states.get(entity_id)
         assert new_state.state == new_option
 
 

@@ -29,13 +29,19 @@ async def test_home_switch_entities_created(
 async def test_home_off_grid_mode_select(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    entity_registry: er.EntityRegistry,
 ) -> None:
     """Test home off-grid mode select can be changed."""
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
-    # Find off-grid mode select
-    state = hass.states.get("select.qs_test_home_home_off_grid_mode")
+    # Find off-grid mode select dynamically via entity registry
+    entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
+    off_grid_entries = [e for e in entity_entries if e.domain == "select" and "off_grid_mode" in (e.unique_id or "")]
+    assert len(off_grid_entries) == 1, f"Expected 1 off-grid select, found {len(off_grid_entries)}"
+    entity_id = off_grid_entries[0].entity_id
+
+    state = hass.states.get(entity_id)
     assert state is not None
     assert state.state == "off_grid_mode_auto"
 
@@ -43,24 +49,24 @@ async def test_home_off_grid_mode_select(
     await hass.services.async_call(
         "select",
         "select_option",
-        {"entity_id": "select.qs_test_home_home_off_grid_mode", "option": "off_grid_mode_force_off_grid"},
+        {"entity_id": entity_id, "option": "off_grid_mode_force_off_grid"},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("select.qs_test_home_home_off_grid_mode")
+    state = hass.states.get(entity_id)
     assert state.state == "off_grid_mode_force_off_grid"
 
     # Switch to force on-grid
     await hass.services.async_call(
         "select",
         "select_option",
-        {"entity_id": "select.qs_test_home_home_off_grid_mode", "option": "off_grid_mode_force_on_grid"},
+        {"entity_id": entity_id, "option": "off_grid_mode_force_on_grid"},
         blocking=True,
     )
     await hass.async_block_till_done()
 
-    state = hass.states.get("select.qs_test_home_home_off_grid_mode")
+    state = hass.states.get(entity_id)
     assert state.state == "off_grid_mode_force_on_grid"
 
 
