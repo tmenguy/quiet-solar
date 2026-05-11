@@ -219,3 +219,22 @@ def test_qs_device_entity_availability_enabled_device():
     entity._set_availabiltiy()
 
     assert entity._attr_available is True
+
+
+def test_qs_device_entity_does_not_set_entity_id():
+    """Test QSDeviceEntity does not explicitly set entity_id.
+
+    Regression test for #166: HA expects entities to use their platform domain
+    (e.g. button.*, sensor.*) as entity_id prefix. Explicitly setting entity_id
+    forced all entities to use quiet_solar.* prefix. Letting HA assign entity IDs
+    automatically ensures correct platform-based prefixes.
+    """
+    import inspect
+
+    from custom_components.quiet_solar.entity import QSDeviceEntity
+
+    source = inspect.getsource(QSDeviceEntity.__init__)
+    assert "self.entity_id" not in source, (
+        "QSDeviceEntity.__init__ must not set self.entity_id — "
+        "let HA assign platform-based entity IDs automatically"
+    )

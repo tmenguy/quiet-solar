@@ -3,13 +3,12 @@ from datetime import datetime
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity import Entity, async_generate_entity_id
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.typing import UNDEFINED
 
 from .const import (
     DEFAULT_ATTRIBUTION,
     DOMAIN,
-    ENTITY_ID_FORMAT,
     MANUFACTURER,
 )
 from .ha_model.battery import QSBattery
@@ -119,7 +118,6 @@ class QSDeviceEntity(QSBaseEntity):
             model=device.device_type,
         )
         self._attr_unique_id = f"{self.device.device_id}-{description.key}"
-        self.entity_id = async_generate_entity_id(ENTITY_ID_FORMAT, name=self._attr_unique_id, hass=data_handler.hass)
 
     @property
     def device_type(self) -> str:
