@@ -35,7 +35,7 @@ async def test_home_mode_select_options(
     await hass.async_block_till_done()
 
     entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
-    home_mode_entries = [e for e in entity_entries if e.domain == "select" and "running_mode" in e.entity_id]
+    home_mode_entries = [e for e in entity_entries if e.domain == "select" and "home_mode" in (e.unique_id or "")]
     assert len(home_mode_entries) == 1
     state = hass.states.get(home_mode_entries[0].entity_id)
     assert state is not None
@@ -54,7 +54,7 @@ async def test_home_mode_select_change(
     await hass.async_block_till_done()
 
     entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
-    home_mode_entries = [e for e in entity_entries if e.domain == "select" and "running_mode" in e.entity_id]
+    home_mode_entries = [e for e in entity_entries if e.domain == "select" and "home_mode" in (e.unique_id or "")]
     assert len(home_mode_entries) == 1
     entity_id = home_mode_entries[0].entity_id
     state = hass.states.get(entity_id)

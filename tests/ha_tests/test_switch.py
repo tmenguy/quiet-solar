@@ -37,7 +37,7 @@ async def test_home_off_grid_mode_select(
 
     # Find off-grid mode select dynamically via entity registry
     entity_entries = er.async_entries_for_config_entry(entity_registry, home_config_entry.entry_id)
-    off_grid_entries = [e for e in entity_entries if e.domain == "select" and "off_grid" in e.entity_id]
+    off_grid_entries = [e for e in entity_entries if e.domain == "select" and "off_grid_mode" in (e.unique_id or "")]
     assert len(off_grid_entries) == 1, f"Expected 1 off-grid select, found {len(off_grid_entries)}"
     entity_id = off_grid_entries[0].entity_id
 
