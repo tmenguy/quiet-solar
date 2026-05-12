@@ -72,35 +72,38 @@ Capture `worktree_path`, `branch`, and the launcher payload
 ### 3. Tell the user what to do next
 
 The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
-`scripts/worktree-setup.sh`). Surface BOTH a CLI flow and a Claude
-Desktop flow, because the friction is different in each.
+`scripts/worktree-setup.sh`). Surface the launcher (preferred path — an
+interactive `claude --agent qs-create-plan` session) and the slash-command
+fallback (degraded one-shot UX, kept for Claude Desktop).
 
 ```text
 Task #{{issue_number}} set up.
   Worktree:  {{worktree_path}}
   Branch:    QS_{{issue_number}}  (HEAD already checked out)
 
-Pick whichever opens a new session for you:
+Next phase: create-plan.
 
-[CLI / terminal] copy-paste this:
+Preferred (opens a fresh interactive `claude --agent qs-create-plan` session):
   {{new_context}}
 
-[Claude Desktop] manually:
+Fallback (stay in this session, degraded one-shot UX via the Agent tool —
+kept for Claude Desktop and any chat without a CLI launcher):
+  {{same_context}}
+
+[Claude Desktop] no `--agent` equivalent exists on Desktop. Manual route:
   • New session → open folder → pick
         {{worktree_path}}
   • The worktree is already on QS_{{issue_number}}. If Desktop's
     auto-isolation spawns a `claude/...` sub-worktree, that sub-tree
     inherits HEAD, so you still land on QS_{{issue_number}}.
-
-Then in the new session type:
-  /create-plan
+  • Then type `/create-plan` in the new chat (the degraded path).
 ```
 
-If PyCharm options are present in the payload, mention them as
-alternatives after the two flows above.
+If `pycharm_context` is present in the payload, mention it as a bridge
+for IDE-embedded terminals (clipboard / AppleScript helpers).
 
 Do NOT attempt to spawn the next agent in this session — the ergonomic
-flow is one session per workspace.
+flow is one session per phase.
 
 ## Hard rules
 

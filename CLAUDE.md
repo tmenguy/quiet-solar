@@ -7,15 +7,22 @@ before doing substantive work.
 
 ## Commands
 
-| Command                  | Phase            | Where                  |
-| ------------------------ | ---------------- | ---------------------- |
-| `/setup-task`            | Create issue + branch + worktree | main checkout |
-| `/create-plan`           | Story + adversarial review       | worktree      |
-| `/implement-task`        | TDD product code → PR            | worktree      |
-| `/implement-setup-task`  | TDD dev-env code → PR            | worktree      |
-| `/review-task`           | 4-reviewer adversarial review    | worktree      |
-| `/finish-task`           | Merge PR + cleanup worktree      | worktree      |
-| `/release`               | Tag and ship                     | main checkout |
+Each phase runs as an interactive `claude --agent qs-<phase>` session
+(preferred — fresh terminal) or as a `/<phase>` slash command
+(fallback — degraded one-shot UX kept for Claude Desktop). See
+[docs/workflow/overview.md](docs/workflow/overview.md) section
+"Orchestrators are interactive sessions; sub-agents are parallel
+fan-out" for the rationale.
+
+| Phase                | Preferred (interactive)                      | Fallback (degraded)      | Where         |
+| -------------------- | -------------------------------------------- | ------------------------ | ------------- |
+| Setup task           | `claude --agent qs-setup-task`               | `/setup-task`            | main checkout |
+| Create plan          | `claude --agent qs-create-plan`              | `/create-plan`           | worktree      |
+| Implement (product)  | `claude --agent qs-implement-task`           | `/implement-task`        | worktree      |
+| Implement (dev-env)  | `claude --agent qs-implement-setup-task`     | `/implement-setup-task`  | worktree      |
+| Review task          | `claude --agent qs-review-task`              | `/review-task`           | worktree      |
+| Finish task          | `claude --agent qs-finish-task`              | `/finish-task`           | worktree      |
+| Release              | `claude --agent qs-release`                  | `/release`               | main checkout |
 
 Static agents live in [.claude/agents/](.claude/agents/); slash commands
 in [.claude/commands/](.claude/commands/). Agents discover task context

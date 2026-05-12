@@ -5,7 +5,10 @@ Cursor exposes two launchers:
 - ``cursor <path>`` — opens the Cursor IDE on a folder. Best for an
   interactive workflow where the user wants the GUI.
 - ``cursor-agent --workspace <path> [prompt]`` — the headless Cursor CLI
-  agent. Best for scripted / terminal-only flows.
+  agent. Best for scripted / terminal-only flows. When the binary is on
+  PATH we add ``--agent qs-<phase>`` so the new session boots directly
+  into the phase orchestrator (parity with Claude's ``claude --agent``,
+  see QS-175).
 
 We emit a short ``sh /tmp/qs_cursor_<N>.sh`` one-liner that prefers
 ``cursor`` (the IDE launcher — most common dev experience) and falls
@@ -25,6 +28,10 @@ import shlex
 import shutil
 import tempfile
 from pathlib import Path
+
+from launchers.phases import (  # type: ignore[import-not-found]
+    _resolve_agent_for_next_cmd,
+)
 
 
 def _cursor_ide_command(
@@ -68,12 +75,32 @@ def _cursor_cli_command(
     *,
     next_cmd: str,
     next_prompt: str | None,
+    agent: str | None,
 ) -> str:
-    """Build the equivalent headless ``cursor-agent`` invocation."""
+    """Build the equivalent headless ``cursor-agent`` invocation.
+
+    When ``cursor-agent`` is on PATH we add ``--agent qs-<phase>`` so the
+    new session boots straight into the phase orchestrator (QS-175,
+    parity with Claude's ``claude --agent``).
+
+    When the binary is missing we fall back to the legacy prompt-positional
+    form — the user is expected to type ``/<phase>`` themselves in chat
+    once they open Cursor manually. The manual equivalent is documented
+    in ``build_payload``'s fallback ``instructions`` block.
+    """
     safe_dir = shlex.quote(work_dir)
-    # Cursor CLI passes the prompt as a positional arg.  We pre-fill it with
-    # the slash command (and optional preload prompt) so the agent kicks
-    # off on its own when the session opens.
+    if agent is not None:
+        # Preferred path — Cursor 2.4+ supports ``--agent <name>``. The
+        # next_prompt is appended as the initial chat message; the agent
+        # body is loaded as the system prompt.
+        invocation = f"cursor-agent --workspace {safe_dir} --agent {shlex.quote(agent)}"
+        if next_prompt:
+            invocation += f" {shlex.quote(next_prompt)}"
+        return invocation
+    # Fallback — older cursor-agent binaries / no binary at all. Pre-fill
+    # the prompt with the slash command so the user lands on the right
+    # phase once the session opens. Manual equivalent: open Cursor on the
+    # worktree → in chat, type ``/<phase>``.
     prompt_parts = [next_cmd]
     if next_prompt:
         prompt_parts.append(next_prompt)
@@ -91,16 +118,34 @@ def build_payload(
 ) -> dict:
     """Return launcher payload for Cursor.
 
-    Always returns ``new_context`` (the IDE launcher script) and
-    ``cli_context`` (the ``cursor-agent`` invocation).  When the
-    ``cursor`` CLI is not on PATH, ``new_context`` falls back to plain
-    instructions so the user can act manually.
+    Always returns ``new_context`` (the IDE launcher script), ``agent``
+    (the resolved ``qs-<phase>`` name) and ``cli_context`` (the
+    ``cursor-agent`` invocation). When ``cursor-agent`` is on PATH the
+    ``cli_context`` includes ``--agent qs-<phase>`` so the new session
+    boots straight into the phase orchestrator (parity with Claude's
+    ``claude --agent``). When ``cursor-agent`` is missing, ``cli_context``
+    falls back to the legacy prompt-positional form and the user types
+    ``/<phase>`` manually in Cursor's chat after the IDE opens.
+
+    Raises:
+        ValueError: if ``next_cmd`` is not a known phase. No silent
+            fallback — same contract as the Claude launcher.
     """
+    agent = _resolve_agent_for_next_cmd(next_cmd)
+    # Use ``--agent`` only when the cursor-agent binary is on PATH; older
+    # versions don't understand it. We probe presence rather than
+    # ``--help``-sniffing to keep this cheap and version-agnostic.
+    agent_for_cli = agent if shutil.which("cursor-agent") else None
+
     payload: dict = {
         "tool": "cursor",
+        "agent": agent,
         "same_context": next_cmd,
         "cli_context": _cursor_cli_command(
-            work_dir, next_cmd=next_cmd, next_prompt=next_prompt,
+            work_dir,
+            next_cmd=next_cmd,
+            next_prompt=next_prompt,
+            agent=agent_for_cli,
         ),
         "issue": issue,
         "work_dir": work_dir,
@@ -118,6 +163,9 @@ def build_payload(
             "Or use the headless Cursor agent CLI:",
             f"    {payload['cli_context']}",
             "",
+            # Manual equivalent of the ``--agent`` path: the user opens
+            # Cursor and types the slash command in chat. Same degraded
+            # one-shot UX as Claude Desktop, documented honestly.
             f"Then in chat, type: {next_cmd}",
         ]
         if next_prompt:

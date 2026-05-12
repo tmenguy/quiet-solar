@@ -14,6 +14,16 @@ Usage::
         --title "Story 3.2: foo bar" \\
         [--next-prompt "Begin your phase protocol."] \\
         [--harness HARNESS_OVERRIDE]
+
+``--next-cmd`` accepts both ``/create-plan`` (back-compat) and
+``create-plan`` (bare phase name). Anything else raises ``ValueError`` —
+the launcher writes a JSON error to stdout and exits non-zero. No silent
+fallback; free-form prompts get the separate ``--next-prompt`` arg.
+
+The phase-name → agent-name resolution is a static dict
+(``launchers/phases.py``) — no filesystem scan, no ``Path.cwd()`` call —
+so this script works from any CWD (worktree, main checkout, ``/tmp``,
+…). That's AC-9 of QS-175.
 """
 
 from __future__ import annotations
@@ -27,6 +37,10 @@ from launchers import claude as claude_launcher  # type: ignore[import-not-found
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
 from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+from launchers.phases import (  # type: ignore[import-not-found]
+    _PHASE_TO_AGENT,
+    _resolve_agent_for_next_cmd,
+)
 
 from utils import output_json  # type: ignore[import-not-found]
 
@@ -40,7 +54,16 @@ _LAUNCHERS = {
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Emit a harness-aware handoff payload.")
-    parser.add_argument("--next-cmd", required=True, help="Slash command for the next phase (e.g. /create-plan)")
+    parser.add_argument(
+        "--next-cmd",
+        required=True,
+        help=(
+            "Phase name for the next step. Accepts either the bare form "
+            "('create-plan') or the slash form ('/create-plan') for "
+            "back-compat. Unknown values are rejected — see --next-prompt "
+            "for free-form initial prompts."
+        ),
+    )
     parser.add_argument("--work-dir", required=True, help="Worktree the new session should open in")
     parser.add_argument("--issue", type=int, required=True)
     parser.add_argument("--title", required=True)
@@ -56,6 +79,18 @@ def main() -> None:
         help="Override the detected harness.",
     )
     args = parser.parse_args()
+
+    # Validate the phase up front so a typo fails loudly with a JSON
+    # error payload instead of producing a junk launcher script downstream.
+    try:
+        _resolve_agent_for_next_cmd(args.next_cmd)
+    except ValueError:
+        output_json({
+            "error": "unknown phase",
+            "value": args.next_cmd,
+            "known": sorted(_PHASE_TO_AGENT),
+        })
+        sys.exit(1)
 
     harness = args.harness or detect_harness()
     launcher = _LAUNCHERS[harness]

@@ -50,7 +50,14 @@ Agent invocations**:
 - `qs-review-acceptance-auditor` — pass PR number + `{{story_file}}`.
 - `qs-review-coderabbit` — pass PR number.
 
-See [docs/workflow/adversarial-review.md](../../docs/workflow/adversarial-review.md).
+This step is the orchestrator-vs-sub-agent split in action: **I'm an
+interactive orchestrator (the user is talking to me right now), but the
+4 reviewers below are non-interactive `Agent`-tool fan-out**. See
+[docs/workflow/overview.md](../../docs/workflow/overview.md) section
+"Orchestrators are interactive sessions; sub-agents are parallel
+fan-out" for the rationale and
+[docs/workflow/adversarial-review.md](../../docs/workflow/adversarial-review.md)
+for each reviewer's lens.
 
 ### 3. Consolidate findings
 
@@ -64,12 +71,30 @@ Deduplicate across reviewers (`file:line` + similar text → one entry).
 
 ### 4. Zero-findings fast path
 
-If there are no must-fix or should-fix findings, present:
+If there are no must-fix or should-fix findings, build the launcher
+payload for `/finish-task`:
+
+```bash
+python scripts/qs/next_step.py \
+    --next-cmd "finish-task" \
+    --work-dir "{{worktree}}" \
+    --issue {{issue}} \
+    --title "{{title}}"
+```
+
+Parse the JSON; capture `new_context`. Then present both blocks:
 
 ```text
 ✅ Adversarial review complete. No blocking findings.
-Next: type in this session.
-  → /finish-task
+
+Next phase: finish-task.
+
+Preferred (opens a fresh interactive `claude --agent qs-finish-task` session):
+  {{new_context}}
+
+Fallback (stay in this session, degraded one-shot UX via the Agent tool —
+kept for Claude Desktop and any chat without a CLI launcher):
+  /finish-task
 ```
 
 Stop here.
@@ -133,16 +158,33 @@ git commit -m "QS-{{issue}}: review fix plan #NN"
 git push origin {{branch}}
 ```
 
-Then present a ready-to-copy prompt for the user:
+Then build the launcher payload for `/implement-task`:
+
+```bash
+python scripts/qs/next_step.py \
+    --next-cmd "implement-task" \
+    --work-dir "{{worktree}}" \
+    --issue {{issue}} \
+    --title "{{title}}"
+```
+
+Parse the JSON; capture `new_context`. Then present both blocks:
 
 ```text
 ✅ Fix plan written: {{fix_plan_path}}
 ✅ Committed and pushed.
 
-Next: type in this session.
-  → /implement-task
+Next phase: implement-task.
 
-Then come back to this session and re-run /review-task to verify.
+Preferred (opens a fresh interactive `claude --agent qs-implement-task` session):
+  {{new_context}}
+
+Fallback (stay in this session, degraded one-shot UX via the Agent tool —
+kept for Claude Desktop and any chat without a CLI launcher):
+  /implement-task
+
+Then re-run /review-task (or open a fresh `claude --agent qs-review-task`
+session) to verify.
 ```
 
 ### 7. Re-review loop

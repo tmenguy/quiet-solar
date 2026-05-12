@@ -60,7 +60,13 @@ noted, an additional artifact):
   project-context.md.
 - `qs-plan-scope-guardian` — plan + the issue body.
 
-See [docs/workflow/adversarial-review.md](../../docs/workflow/adversarial-review.md)
+This step is the orchestrator-vs-sub-agent split in action: **I'm an
+interactive orchestrator (the user is talking to me right now), but the
+4 plan reviewers below are non-interactive `Agent`-tool fan-out**. See
+[docs/workflow/overview.md](../../docs/workflow/overview.md) section
+"Orchestrators are interactive sessions; sub-agents are parallel
+fan-out" for the rationale and
+[docs/workflow/adversarial-review.md](../../docs/workflow/adversarial-review.md)
 for the lens of each reviewer. Each returns a structured findings list
 with categories `critical` / `redesign` / `improve` / `clarify`.
 
@@ -94,12 +100,31 @@ Inspect the file paths your task breakdown will touch:
 
 ### 8. Tell the user the next command
 
+Build the launcher payload for the next phase so the user has a copy/paste
+command to open a fresh interactive `claude --agent` session:
+
+```bash
+python scripts/qs/next_step.py \
+    --next-cmd "{{NEXT_PHASE}}" \
+    --work-dir "{{worktree}}" \
+    --issue {{issue}} \
+    --title "{{title}}"
+```
+
+Parse the JSON; capture `new_context`. Then print both blocks:
+
 ```text
 ✅ Story written: docs/stories/QS-{{issue}}.story.md
 ✅ Committed and pushed to {{branch}}.
 
-Next: type the implement command in this session.
-  → /{{NEXT_PHASE}}
+Next phase: {{NEXT_PHASE}}.
+
+Preferred (opens a fresh interactive `claude --agent qs-{{NEXT_PHASE}}` session):
+  {{new_context}}
+
+Fallback (stay in this session, degraded one-shot UX via the Agent tool —
+kept for Claude Desktop and any chat without a CLI launcher):
+  /{{NEXT_PHASE}}
 ```
 
 ## Hard rules

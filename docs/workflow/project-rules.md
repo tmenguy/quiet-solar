@@ -43,18 +43,23 @@ source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 
 ## Workflow routing
 
-Use slash commands for all development work. Do NOT ask which to use —
-infer from context.
+Each phase runs as an interactive `claude --agent qs-<phase>` session
+(preferred — open a fresh terminal) or as a `/<phase>` slash command
+(fallback — degraded one-shot UX kept for Claude Desktop). Do NOT ask
+which phase to use — infer from context.
 
-| You say                                                      | Command            |
-| ------------------------------------------------------------ | ------------------ |
-| "Setup task 3.2" / describe feature / "work on issue #42"    | `/setup-task`      |
-| "Create plan" (inside worktree)                              | `/create-plan`     |
-| "Implement task" (inside worktree)                           | `/implement-task`  |
-| "Review PR #5" or "review task"                              | `/review-task`     |
-| "Merge PR #5" or "finish task"                               | `/finish-task`     |
-| "Create a release"                                           | `/release`         |
-| Bug fix / small fix                                          | `/setup-task`      |
+| You say                                                      | Preferred launcher                       | Fallback           |
+| ------------------------------------------------------------ | ---------------------------------------- | ------------------ |
+| "Setup task 3.2" / describe feature / "work on issue #42"    | `claude --agent qs-setup-task` on main   | `/setup-task`      |
+| "Create plan" (inside worktree)                              | `claude --agent qs-create-plan`          | `/create-plan`     |
+| "Implement task" (inside worktree)                           | `claude --agent qs-implement-task`       | `/implement-task`  |
+| "Review PR #5" or "review task"                              | `claude --agent qs-review-task`          | `/review-task`     |
+| "Merge PR #5" or "finish task"                               | `claude --agent qs-finish-task`          | `/finish-task`     |
+| "Create a release"                                           | `claude --agent qs-release` on main      | `/release`         |
+| Bug fix / small fix                                          | `claude --agent qs-setup-task` on main   | `/setup-task`      |
+
+See [overview.md](overview.md) section "Orchestrators are interactive
+sessions; sub-agents are parallel fan-out" for the rationale.
 
 Each command delegates to a static agent under `.claude/agents/` (or
 `.cursor/agents/`). Agents discover task context at runtime from

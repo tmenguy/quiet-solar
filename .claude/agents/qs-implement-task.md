@@ -87,13 +87,32 @@ workflow — no user confirmation needed for any of these three.
 
 ### 6. Tell the user the next command
 
+Build the launcher payload for `/review-task` so the user has a copy/paste
+command to open a fresh interactive `claude --agent qs-review-task` session:
+
+```bash
+python scripts/qs/next_step.py \
+    --next-cmd "review-task" \
+    --work-dir "{{worktree}}" \
+    --issue {{issue}} \
+    --title "{{title}}"
+```
+
+Parse the JSON; capture `new_context`. Then print both blocks:
+
 ```text
 ✅ Implementation complete — quality gate passed.
 ✅ Committed and pushed to {{branch}}.
 ✅ PR #{{pr_number}} opened: {{pr_url}}
 
-Next: type in this session.
-  → /review-task
+Next phase: review-task.
+
+Preferred (opens a fresh interactive `claude --agent qs-review-task` session):
+  {{new_context}}
+
+Fallback (stay in this session, degraded one-shot UX via the Agent tool —
+kept for Claude Desktop and any chat without a CLI launcher):
+  /review-task
 ```
 
 ## Hard rules
