@@ -30,7 +30,7 @@ import re
 import subprocess
 import sys
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Resolve paths relative to repo root
@@ -48,14 +48,13 @@ VENV_PYTHON = str(VENV_BIN / "python")
 # Patterns for files that are "dev-only" (no production code impact)
 _DEV_ONLY_PATTERNS = (
     "tests/",
-    "_qsprocess/",
     "_qsprocess_opencode/",
-    "_bmad-output/",
     "scripts/",
     "docs/",
     ".claude/",
     ".cursor/",
     ".opencode/",
+    ".github/",
 )
 _DEV_ONLY_EXTENSIONS = (".md",)
 
@@ -163,7 +162,7 @@ def _write_cache(branch: str, commit: str, results: list[dict]) -> None:
         "commit": commit,
         "all_passed": True,
         "results": results,
-        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        "timestamp": datetime.now(tz=UTC).isoformat(),
     }
     CACHE_FILE.write_text(json.dumps(data, indent=2))
 

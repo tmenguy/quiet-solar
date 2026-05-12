@@ -10,13 +10,12 @@ Output: JSON with tag, version, and status.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from utils import get_main_worktree, get_current_branch, output_json, run_git
+from utils import get_current_branch, get_main_worktree, output_json, run_git
 
 
 def determine_next_tag() -> str:

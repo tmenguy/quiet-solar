@@ -1,4 +1,4 @@
-"""Migrate implementation artifacts from _bmad-output/ to _qsprocess_opencode/stories/.
+"""Migrate implementation artifacts from _bmad-output/ to docs/stories/.
 
 Copies markdown files verbatim (no content scrubbing) with naming convention:
 - Files containing Github-#N → QS-N.story.md

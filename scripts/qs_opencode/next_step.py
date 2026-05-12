@@ -18,7 +18,7 @@ Usage::
         --issue 42 --pr 5 \\
         --work-dir /path/to/worktree \\
         --title "Story 3.2: foo bar" \\
-        --story-file _qsprocess_opencode/stories/QS-42.story.md
+        --story-file docs/stories/QS-42.story.md
 
 The ``--phase`` argument is the phase that is **finishing** (not the next
 one). The script maps it to the next agent via ``PHASE_TRANSITIONS``.

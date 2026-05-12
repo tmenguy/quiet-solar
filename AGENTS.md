@@ -1,7 +1,10 @@
 # Quiet Solar — OpenCode Rules
 
-This file is the OpenCode entry point. It is self-contained — OpenCode does NOT
-read `CLAUDE.md` or any file under `_qsprocess/`.
+This file is the OpenCode entry point. It is self-contained — OpenCode
+does NOT read `CLAUDE.md`. Project rules and code-style rules are
+canonical under `docs/workflow/` (shared with the new static-agent
+pipeline); OpenCode-specific machinery lives under `_qsprocess_opencode/`,
+`scripts/qs_opencode/`, and `.opencode/`.
 
 ## Project overview
 
@@ -13,8 +16,8 @@ self-consumption through a constraint-based solver.
 OpenCode does not auto-parse `@file` references in `AGENTS.md`, so explicitly
 load these before doing any substantive work:
 
-- `_qsprocess_opencode/project-rules.md` — project rules (commands, architecture constraints, workflow routing)
-- `_qsprocess_opencode/project-context.md` — 42-rule code style set (naming, async, logging, testing patterns)
+- `docs/workflow/project-rules.md` — project rules (commands, architecture constraints, workflow routing)
+- `docs/workflow/project-context.md` — 42-rule code style set (naming, async, logging, testing patterns)
 - `_qsprocess_opencode/README.md` — this workflow's directory layout and conventions
 
 ## Commands
@@ -127,15 +130,17 @@ performing those git operations.
 
 ## Hands-off areas
 
-Do **not** modify these while working in OpenCode — they are the
-Claude/Cursor source of truth and must remain bit-identical:
+Do **not** modify these while working in OpenCode — they belong to the
+new static-agent pipeline (Claude Code / Cursor) and remain its source
+of truth:
 
-- `_qsprocess/**`
-- `scripts/qs/**`
-- `docs/development-workflow-guide.md`
-- `.claude/**`
-- `CLAUDE.md`
+- `.claude/**`, `CLAUDE.md`
 - `.cursor/**`, `.cursorrules`
+- `scripts/qs/**` (except shared utilities both pipelines read)
 
-OpenCode-flavored siblings live under `_qsprocess_opencode/`,
-`scripts/qs_opencode/`, `.opencode/`, and `docs/opencode-workflow-guide.md`.
+OpenCode owns: `_qsprocess_opencode/agent_templates/`, `scripts/qs_opencode/`,
+`.opencode/`, `AGENTS.md` (this file), `opencode.json`, and
+`docs/opencode-workflow-guide.md`.
+
+Shared, read-only from both pipelines: `docs/workflow/`, `docs/stories/`,
+`docs/product/`, and `scripts/qs/quality_gate.py`.

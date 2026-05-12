@@ -43,8 +43,8 @@ its own worktree and are cleaned up at finish-task time.
 | Tools served | Claude Code, Cursor | OpenCode |
 | Phase materialization | static skill files | **per-task agent files rendered from templates** |
 | Handoff between phases | terminal launcher or instruction text | Phase 1: launcher for new OpenCode session on worktree. Phases 2–5: new interactive session via HTTP API (`spawn_session.py`). Review sub-roles: Task-spawn (non-interactive). |
-| Source of project rules | `_qsprocess/rules/project-rules.md` | `_qsprocess_opencode/project-rules.md` (own copy) |
-| Code-style rule set | `_bmad-output/project-context.md` | `_qsprocess_opencode/project-context.md` (own copy) |
+| Source of project rules | `_qsprocess/rules/project-rules.md` | `docs/workflow/project-rules.md` (own copy) |
+| Code-style rule set | `_bmad-output/project-context.md` | `docs/workflow/project-context.md` (own copy) |
 | Quality gate | `python scripts/qs/quality_gate.py` | same command — no fork |
 | Phase scripts | `scripts/qs/` | `scripts/qs_opencode/` (sibling, no import) |
 
@@ -150,4 +150,4 @@ which the orchestrator consolidates and triages with the user.
 When the user is ready to drop the Claude/Cursor integration, they can
 promote this tree to `_qsprocess/` and retire the scripts. Until then,
 keep both trees in parallel. Rule changes for OpenCode belong in
-`_qsprocess_opencode/project-rules.md`.
+`docs/workflow/project-rules.md`.

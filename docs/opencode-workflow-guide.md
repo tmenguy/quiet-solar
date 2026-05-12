@@ -1,13 +1,15 @@
 # Quiet Solar OpenCode Workflow Guide
 
 This guide describes the Quiet Solar development workflow **as it runs in
-OpenCode**. It is the sibling of `docs/development-workflow-guide.md` (which
-remains the Claude Code / Cursor reference, unchanged).
+OpenCode** (the legacy per-task-rendered pipeline). The Claude Code /
+Cursor reference is [docs/workflow/overview.md](workflow/overview.md) —
+the static-agent pipeline. Both pipelines coexist; the OpenCode one is
+slated for retirement once the static-agent one is proven.
 
 Both workflows drive the same lifecycle (setup → plan → implement → review
 → finish → release) against the same git worktree layout, the same quality
 gate (`python scripts/qs/quality_gate.py`), and the same story artifacts
-under `_qsprocess_opencode/stories/`. The difference is purely in how phases are
+under `docs/stories/`. The difference is purely in how phases are
 materialized and hand off to each other.
 
 ## Architecture — per-task agents
@@ -90,8 +92,8 @@ name if the Task tool can't dispatch dynamically-named agents).
 
 `qs-setup-task` runs in the home OpenCode on `main`:
 
-1. Follow `_qsprocess/skills/setup-task.md` to create/reuse the issue,
-   branch, and worktree.
+1. Follow [`docs/workflow/phase-protocols.md` — `setup-task`](workflow/phase-protocols.md#setup-task-agent-qs-setup-task)
+   to create/reuse the issue, branch, and worktree.
 2. Render `qs-create-plan-QS-<N>.md` into the worktree:
 
    ```bash
@@ -172,7 +174,7 @@ Every agent declares an explicit `permission` block in its YAML
 frontmatter:
 
 - `edit`: narrow allowlist of paths the phase is expected to touch
-  (e.g. create-plan: only `_qsprocess_opencode/stories/QS-<N>.story.md`;
+  (e.g. create-plan: only `docs/stories/QS-<N>.story.md`;
   review-*: `deny`; setup-task: `deny`).
 - `bash`: known-script allowlist (`python scripts/qs/*`,
   `python scripts/qs_opencode/*`, `git *`, `gh *` as each phase needs).
@@ -202,23 +204,29 @@ opencode.json                             # instructions list
   command/
     setup-task.md                         # STATIC — only slash command
 
-_qsprocess_opencode/                      # sibling of _qsprocess
+_qsprocess_opencode/                      # OpenCode-owned templates + history
   README.md
   PLAN.md
   SMOKE_TEST.md
+  SESSION_LOG.md
   agent_templates/                        # per-task agent templates
     qs-create-plan.md.tmpl
     qs-implement-task.md.tmpl
+    qs-implement-setup-task.md.tmpl
     qs-review-task.md.tmpl
     qs-review-blind-hunter.md.tmpl
     qs-review-edge-case-hunter.md.tmpl
     qs-review-acceptance-auditor.md.tmpl
     qs-review-coderabbit.md.tmpl
+    qs-plan-critic.md.tmpl
+    qs-plan-concrete-planner.md.tmpl
+    qs-plan-dev-proxy.md.tmpl
+    qs-plan-scope-guardian.md.tmpl
     qs-finish-task.md.tmpl
-    qs-release.md.tmpl
-  skills/*.md                             # OpenCode-flavored skill docs
+  product/product-brief.md                # historical (canonical at docs/product/)
+  tests/                                  # pipeline test suite
 
-scripts/qs_opencode/                      # sibling of scripts/qs
+scripts/qs_opencode/                      # OpenCode-specific machinery
   __init__.py
   utils.py                                # self-contained; no import from scripts/qs
   render_agent.py                         # template → per-task agent file
@@ -252,23 +260,26 @@ translations validation. Must be green before any commit.
 
 ## Hands-off areas
 
-OpenCode must not modify any of:
+OpenCode must not modify any of these (they belong to the new
+static-agent pipeline, which is the path forward):
 
-- `_qsprocess/**`
-- `scripts/qs/**`
-- `docs/development-workflow-guide.md`
 - `.claude/**`, `CLAUDE.md`
 - `.cursor/**`, `.cursorrules`
+- `scripts/qs/**` (excluding shared utilities both pipelines read)
 
-These remain the Claude/Cursor source of truth and must stay bit-identical.
-OpenCode-flavored siblings are `_qsprocess_opencode/`, `scripts/qs_opencode/`,
-`.opencode/`, `AGENTS.md`, `opencode.json`, and this document.
+These are the static-agent pipeline's source of truth.
+
+OpenCode owns: `_qsprocess_opencode/agent_templates/`,
+`scripts/qs_opencode/`, `.opencode/`, `AGENTS.md`, `opencode.json`, and
+this document.
+
+Shared (read-only from both pipelines): `docs/workflow/`, `docs/stories/`,
+`docs/product/`, `scripts/qs/quality_gate.py`, the worktree layout.
 
 ## Cross-reference
 
-- Claude / Cursor equivalent: `docs/development-workflow-guide.md`
-- Phase protocol source: `_qsprocess/skills/*.md` (authoritative for
-  both Claude and OpenCode flows)
+- Static-agent pipeline reference: [docs/workflow/overview.md](workflow/overview.md)
+- Phase protocol source (canonical for both flows): [docs/workflow/phase-protocols.md](workflow/phase-protocols.md)
 - OpenCode-specific deltas: embedded directly in the rendered per-task
   agents (see `_qsprocess_opencode/agent_templates/*.md.tmpl`)
 - Full implementation plan: `_qsprocess_opencode/PLAN.md`

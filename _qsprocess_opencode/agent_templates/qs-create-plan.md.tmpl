@@ -12,7 +12,7 @@ permission:
   edit:
     "*": deny
     "{{STORY_FILE}}": allow
-    "_qsprocess_opencode/stories/**": allow
+    "docs/stories/**": allow
   bash:
     "*": ask
     "grep *": allow
@@ -25,7 +25,7 @@ permission:
     "git diff*": allow
     "git log*": allow
     "git add {{STORY_FILE}}": allow
-    "git add _qsprocess_opencode/stories/*": allow
+    "git add docs/stories/*": allow
     "git commit *": allow
     "git push*": allow
     "python scripts/qs_opencode/next_step.py *": allow
@@ -59,8 +59,8 @@ permission:
    ```
 
 2. Read project rules and context:
-   - `_qsprocess_opencode/project-rules.md`
-   - `_qsprocess_opencode/project-context.md`
+   - `docs/workflow/project-rules.md`
+   - `docs/workflow/project-context.md`
 
 3. Explore affected codebase areas referenced by the issue.
 

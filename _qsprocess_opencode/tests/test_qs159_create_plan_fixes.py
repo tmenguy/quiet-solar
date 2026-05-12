@@ -43,7 +43,7 @@ class TestImplementPhaseDefault:
             "--title",
             "Test story",
             "--story-file",
-            "_qsprocess_opencode/stories/QS-99.story.md",
+            "docs/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
             # Should NOT raise — IMPLEMENT_PHASE should be provided by default
@@ -71,7 +71,7 @@ class TestImplementPhaseDefault:
             "--title",
             "Test story",
             "--story-file",
-            "_qsprocess_opencode/stories/QS-99.story.md",
+            "docs/stories/QS-99.story.md",
             "--extra",
             "IMPLEMENT_PHASE=implement-setup-task",
         ]
@@ -100,7 +100,7 @@ class TestImplementPhaseDefault:
             "--title",
             "Test story",
             "--story-file",
-            "_qsprocess_opencode/stories/QS-99.story.md",
+            "docs/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
             render_agent.main()

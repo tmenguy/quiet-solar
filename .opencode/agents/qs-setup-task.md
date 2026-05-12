@@ -107,7 +107,7 @@ python scripts/qs_opencode/render_agent.py \
     --work-dir "{{worktree_path}}" \
     --issue {{issue_number}} \
     --title "{{title}}" \
-    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+    --story-file "docs/stories/QS-{{issue_number}}.story.md"
 ```
 
 Also render the 4 plan reviewer sub-agents so `create-plan` can
@@ -119,28 +119,28 @@ python scripts/qs_opencode/render_agent.py \
     --work-dir "{{worktree_path}}" \
     --issue {{issue_number}} \
     --title "{{title}}" \
-    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+    --story-file "docs/stories/QS-{{issue_number}}.story.md"
 
 python scripts/qs_opencode/render_agent.py \
     --phase plan-concrete-planner \
     --work-dir "{{worktree_path}}" \
     --issue {{issue_number}} \
     --title "{{title}}" \
-    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+    --story-file "docs/stories/QS-{{issue_number}}.story.md"
 
 python scripts/qs_opencode/render_agent.py \
     --phase plan-dev-proxy \
     --work-dir "{{worktree_path}}" \
     --issue {{issue_number}} \
     --title "{{title}}" \
-    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+    --story-file "docs/stories/QS-{{issue_number}}.story.md"
 
 python scripts/qs_opencode/render_agent.py \
     --phase plan-scope-guardian \
     --work-dir "{{worktree_path}}" \
     --issue {{issue_number}} \
     --title "{{title}}" \
-    --story-file "_qsprocess_opencode/stories/QS-{{issue_number}}.story.md"
+    --story-file "docs/stories/QS-{{issue_number}}.story.md"
 ```
 
 Verify all 5 render_agent.py calls exited 0 and the files exist at
@@ -200,8 +200,9 @@ to the next phase. Just print the directions and stop.
 
 ## Hard rules
 
-- Do NOT create or modify any file under `_qsprocess/`, `scripts/qs/`,
-  `.claude/`, `CLAUDE.md`, `.cursor/`, or `.cursorrules`.
+- Do NOT create or modify any file under `scripts/qs/`, `.claude/`,
+  `CLAUDE.md`, `.cursor/`, or `.cursorrules` — those belong to the new
+  static-agent pipeline.
 - Do NOT run `python scripts/qs/setup_task.py` — it generates Claude Code
   launchers, not OpenCode launchers. Use `bash scripts/worktree-setup.sh`
   directly as shown in step 2.
