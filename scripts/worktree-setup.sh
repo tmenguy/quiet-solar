@@ -100,7 +100,26 @@ if [ -d "${MAIN_DIR}/custom_components" ]; then
     done
 fi
 
+# Verify the worktree's HEAD landed on the expected branch. A downstream
+# session (e.g. Claude Desktop auto-isolation) that creates its own
+# worktree on top of this one inherits HEAD — if HEAD is wrong here, the
+# user ends up needing to "change the branch" manually after opening.
+ACTUAL_BRANCH="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD)"
+if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
+    echo "Error: worktree HEAD is on '${ACTUAL_BRANCH}', expected '${BRANCH}'"
+    echo "Attempting recovery with explicit checkout..."
+    if ! git -C "$WORKTREE_DIR" checkout "$BRANCH"; then
+        echo "Recovery failed. Worktree at ${WORKTREE_DIR} is in an inconsistent state."
+        exit 1
+    fi
+    ACTUAL_BRANCH="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD)"
+    if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
+        echo "Recovery still failed. HEAD is on '${ACTUAL_BRANCH}'."
+        exit 1
+    fi
+fi
+
 echo ""
 echo "Worktree ready: ${WORKTREE_DIR}"
-echo "Branch: ${BRANCH}"
+echo "Branch: ${BRANCH} (HEAD verified)"
 echo "To start working: cd ${WORKTREE_DIR} && source venv/bin/activate"
