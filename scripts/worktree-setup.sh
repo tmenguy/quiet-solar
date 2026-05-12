@@ -53,7 +53,19 @@ if git -C "$MAIN_DIR" show-ref --verify --quiet "refs/heads/${BRANCH}" 2>/dev/nu
     git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" "$BRANCH"
 else
     echo "Creating worktree at ${WORKTREE_DIR} on new branch ${BRANCH}..."
-    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH" origin/main
+    git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH" --no-track origin/main
+fi
+
+# Belt-and-suspenders: if the branch ended up tracking origin/main —
+# either because --no-track was silently ignored on some git version,
+# or because we re-attached to an existing branch that was created
+# under the old buggy setup — drop the upstream so `git push` won't
+# try to push to main.
+if upstream="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+    if [ "$upstream" = "origin/main" ]; then
+        echo "Detected upstream origin/main on ${BRANCH}; unsetting."
+        git -C "$WORKTREE_DIR" branch --unset-upstream
+    fi
 fi
 
 # P2: Symlink venv using derived basename (not hardcoded)
