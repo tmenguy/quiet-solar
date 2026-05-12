@@ -27,13 +27,45 @@ MAIN_DIR="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
 
 # P2: Derive directory name from main worktree path (not hardcoded)
 MAIN_BASENAME="$(basename "$MAIN_DIR")"
-WORKTREES_DIR="${MAIN_DIR}/../${MAIN_BASENAME}-worktrees"
+WORKTREES_DIR_RAW="${MAIN_DIR}/../${MAIN_BASENAME}-worktrees"
+# Canonicalize: git records the resolved path in `worktree list --porcelain`,
+# so subsequent string-matching against that listing must use the same form
+# (no `..` segments). mkdir + cd resolves the parent reliably without
+# requiring GNU realpath / readlink -f (portability for macOS).
+mkdir -p "$WORKTREES_DIR_RAW"
+WORKTREES_DIR="$(cd "$WORKTREES_DIR_RAW" && pwd -P)"
 WORKTREE_DIR="${WORKTREES_DIR}/${BRANCH}"
 
-# Check worktree doesn't already exist
+# Worktree directory present? Distinguish fully-set-up (idempotent no-op)
+# from partially-set-up (recover by removing and continuing). The previous
+# unconditional `exit 1` here was a partial-state trap: any failure later
+# in the script (e.g. a non-fast-forward `push -u`, network blip, or
+# missing remote) left the worktree directory on disk and blocked all
+# subsequent retries.
 if [ -d "$WORKTREE_DIR" ]; then
-    echo "Error: Worktree directory ${WORKTREE_DIR} already exists"
-    exit 1
+    # Treat as fully set up only if git agrees this is a tracked worktree
+    # whose HEAD is on $BRANCH AND whose upstream is origin/$BRANCH.
+    IS_TRACKED_WORKTREE="no"
+    if git -C "$MAIN_DIR" worktree list --porcelain \
+        | grep -qF "worktree ${WORKTREE_DIR}"; then
+        IS_TRACKED_WORKTREE="yes"
+    fi
+    if [ "$IS_TRACKED_WORKTREE" = "yes" ]; then
+        ACTUAL_HEAD="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+        ACTUAL_UPSTREAM="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")"
+        if [ "$ACTUAL_HEAD" = "$BRANCH" ] && [ "$ACTUAL_UPSTREAM" = "origin/${BRANCH}" ]; then
+            echo "Worktree ${WORKTREE_DIR} already set up on ${BRANCH} tracking origin/${BRANCH}."
+            exit 0
+        fi
+        echo "Worktree ${WORKTREE_DIR} exists but is in a partial state"
+        echo "  (HEAD='${ACTUAL_HEAD}', upstream='${ACTUAL_UPSTREAM}')."
+        echo "Removing tracked worktree to recover..."
+        git -C "$MAIN_DIR" worktree remove --force "$WORKTREE_DIR"
+    else
+        echo "Directory ${WORKTREE_DIR} exists but is not a tracked git worktree."
+        echo "Removing stale directory to recover..."
+        rm -rf "$WORKTREE_DIR"
+    fi
 fi
 
 # Fetch latest so origin/main is up to date (safe even if main is not checked out)
@@ -55,16 +87,6 @@ else
     echo "Creating worktree at ${WORKTREE_DIR} on new branch ${BRANCH}..."
     git -C "$MAIN_DIR" worktree add "$WORKTREE_DIR" -b "$BRANCH" origin/main
 fi
-
-# Publish the branch to origin and set upstream → origin/${BRANCH}.
-# This makes `git push` / `git pull` Just Work without flags and guarantees
-# the upstream is the feature branch, never origin/main (regardless of
-# git's branch.autoSetupMerge default). Idempotent: if origin/${BRANCH}
-# already exists and matches the local tip, push is a no-op but still
-# (re)sets the upstream — repairing any pre-existing branch that was
-# created with the old buggy origin/main upstream.
-echo "Publishing ${BRANCH} to origin and setting upstream..."
-git -C "$WORKTREE_DIR" push -u origin "$BRANCH"
 
 # P2: Symlink venv using derived basename (not hardcoded)
 if [ -d "${MAIN_DIR}/venv" ]; then
@@ -128,6 +150,18 @@ if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
         exit 1
     fi
 fi
+
+# Publish the branch to origin and set upstream → origin/${BRANCH}.
+# This makes `git push` / `git pull` Just Work without flags and guarantees
+# the upstream is the feature branch, never origin/main (regardless of
+# git's branch.autoSetupMerge default). Idempotent: if origin/${BRANCH}
+# already exists and matches the local tip, push is a no-op but still
+# (re)sets the upstream — repairing any pre-existing branch that was
+# created with the old buggy origin/main upstream.
+# Positioned AFTER the HEAD verification block so we never publish content
+# from an unexpected HEAD to origin/${BRANCH}.
+echo "Publishing ${BRANCH} to origin and setting upstream..."
+git -C "$WORKTREE_DIR" push -u origin "${BRANCH}"
 
 echo ""
 echo "Worktree ready: ${WORKTREE_DIR}"
