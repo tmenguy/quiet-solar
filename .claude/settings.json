@@ -23,6 +23,8 @@
       "Bash(python **/scripts/qs/release.py:*)",
       "Bash(python scripts/qs/harness.py:*)",
       "Bash(python **/scripts/qs/harness.py:*)",
+      "Bash(python scripts/qs/utils.py:*)",
+      "Bash(python **/scripts/qs/utils.py:*)",
       "Bash(python -m scripts.qs:*)",
       "Bash(python -c *scripts.qs*)",
       "Bash(bash scripts/worktree-setup.sh:*)",

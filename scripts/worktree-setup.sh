@@ -45,9 +45,12 @@ WORKTREE_DIR="${WORKTREES_DIR}/${BRANCH}"
 if [ -d "$WORKTREE_DIR" ]; then
     # Treat as fully set up only if git agrees this is a tracked worktree
     # whose HEAD is on $BRANCH AND whose upstream is origin/$BRANCH.
+    # `grep -qxF` requires a full-line match (porcelain emits one entry per
+    # line with the exact path) so a sibling prefix collision — e.g.
+    # checking QS_17 while QS_173 also exists — cannot false-positive.
     IS_TRACKED_WORKTREE="no"
     if git -C "$MAIN_DIR" worktree list --porcelain \
-        | grep -qF "worktree ${WORKTREE_DIR}"; then
+        | grep -qxF "worktree ${WORKTREE_DIR}"; then
         IS_TRACKED_WORKTREE="yes"
     fi
     if [ "$IS_TRACKED_WORKTREE" = "yes" ]; then
@@ -59,8 +62,36 @@ if [ -d "$WORKTREE_DIR" ]; then
         fi
         echo "Worktree ${WORKTREE_DIR} exists but is in a partial state"
         echo "  (HEAD='${ACTUAL_HEAD}', upstream='${ACTUAL_UPSTREAM}')."
+        # Refuse to silently destroy uncommitted work or stashes. The
+        # recovery branch runs `worktree remove --force` which drops
+        # uncommitted edits without warning — guard with an explicit
+        # cleanliness check before touching disk.
+        DIRTY=""
+        STASHES=""
+        if [ -d "${WORKTREE_DIR}/.git" ] || [ -f "${WORKTREE_DIR}/.git" ]; then
+            DIRTY="$(git -C "$WORKTREE_DIR" status --porcelain 2>/dev/null || true)"
+            STASHES="$(git -C "$WORKTREE_DIR" stash list 2>/dev/null || true)"
+        fi
+        if [ -n "$DIRTY" ] || [ -n "$STASHES" ]; then
+            echo "Error: worktree ${WORKTREE_DIR} has uncommitted changes or stashes."
+            echo "  Status: ${DIRTY:-(none)}"
+            echo "  Stashes: ${STASHES:-(none)}"
+            echo "Refusing to destructively recover. Resolve manually:"
+            echo "  cd ${WORKTREE_DIR} && git status"
+            exit 1
+        fi
         echo "Removing tracked worktree to recover..."
-        git -C "$MAIN_DIR" worktree remove --force "$WORKTREE_DIR"
+        # Surface a clear remediation message if `worktree remove --force`
+        # fails (locked worktree, corrupted .git file, permission). Without
+        # this, `set -e` aborts with no actionable hint.
+        if ! git -C "$MAIN_DIR" worktree remove --force "$WORKTREE_DIR"; then
+            echo "Error: 'git worktree remove --force' failed on ${WORKTREE_DIR}."
+            echo "The worktree may be locked. Try:"
+            echo "  git worktree unlock ${WORKTREE_DIR}"
+            echo "  git worktree remove --force ${WORKTREE_DIR}"
+            echo "…then re-run this script."
+            exit 1
+        fi
     else
         echo "Directory ${WORKTREE_DIR} exists but is not a tracked git worktree."
         echo "Removing stale directory to recover..."
@@ -147,6 +178,28 @@ if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
     ACTUAL_BRANCH="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD)"
     if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
         echo "Recovery still failed. HEAD is on '${ACTUAL_BRANCH}'."
+        exit 1
+    fi
+fi
+
+# Detect non-fast-forward divergence BEFORE attempting `push -u`. Without
+# this, a relaxed re-run after a failed push against a diverged
+# origin/${BRANCH} always re-attempts the push and re-hits the same
+# failure ad infinitum until the operator intervenes manually. Use
+# `ls-remote` rather than a full `fetch` — cheaper and avoids mutating
+# local refs in a setup script.
+REMOTE_TIP="$(git -C "$WORKTREE_DIR" ls-remote origin "$BRANCH" 2>/dev/null | awk '{print $1}')"
+if [ -n "$REMOTE_TIP" ]; then
+    LOCAL_TIP="$(git -C "$WORKTREE_DIR" rev-parse "$BRANCH")"
+    if [ "$REMOTE_TIP" != "$LOCAL_TIP" ] && \
+       ! git -C "$WORKTREE_DIR" merge-base --is-ancestor "$REMOTE_TIP" "$LOCAL_TIP" 2>/dev/null; then
+        echo "Error: origin/${BRANCH} has commits not in local ${BRANCH}."
+        echo "  Remote tip: ${REMOTE_TIP}"
+        echo "  Local tip:  ${LOCAL_TIP}"
+        echo "Refusing to push (would be non-fast-forward)."
+        echo "Resolve manually:"
+        echo "  cd ${WORKTREE_DIR} && git fetch && git rebase origin/${BRANCH}"
+        echo "…then re-run this script (or just 'git push')."
         exit 1
     fi
 fi
