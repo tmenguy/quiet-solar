@@ -6,7 +6,7 @@ description: >-
   sub-agents, then commits the story. Runs inside the worktree after
   /setup-task. Use when the user says "create plan" or "plan this
   issue".
-tools: Bash, Read, Edit, Grep, Glob, Agent, TodoWrite, WebFetch
+tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch
 ---
 
 # qs-create-plan — story drafting + adversarial review

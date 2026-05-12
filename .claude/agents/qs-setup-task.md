@@ -71,28 +71,36 @@ Capture `worktree_path`, `branch`, and the launcher payload
 
 ### 3. Tell the user what to do next
 
-Present a clean summary:
+The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
+`scripts/worktree-setup.sh`). Surface BOTH a CLI flow and a Claude
+Desktop flow, because the friction is different in each.
 
 ```text
 Task #{{issue_number}} set up.
   Worktree:  {{worktree_path}}
-  Branch:    QS_{{issue_number}}
+  Branch:    QS_{{issue_number}}  (HEAD already checked out)
 
-Open a new session on the worktree:
+Pick whichever opens a new session for you:
 
-  {{new_context}}    ← copy-paste this
+[CLI / terminal] copy-paste this:
+  {{new_context}}
 
-Then type:
+[Claude Desktop] manually:
+  • New session → open folder → pick
+        {{worktree_path}}
+  • The worktree is already on QS_{{issue_number}}. If Desktop's
+    auto-isolation spawns a `claude/...` sub-worktree, that sub-tree
+    inherits HEAD, so you still land on QS_{{issue_number}}.
 
+Then in the new session type:
   /create-plan
 ```
 
 If PyCharm options are present in the payload, mention them as
-alternatives.
+alternatives after the two flows above.
 
-Do NOT attempt to spawn the next agent in this session — the new agent
-file lives in the worktree's `.claude/agents/`, but more importantly the
-ergonomic flow is one session per workspace.
+Do NOT attempt to spawn the next agent in this session — the ergonomic
+flow is one session per workspace.
 
 ## Hard rules
 

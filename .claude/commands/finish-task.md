@@ -1,18 +1,25 @@
 ---
-description: Verify CI green, merge PR with user authorization, delete remote branch, remove worktree.
+description: Callable any time. If a PR exists, merge it (with auth) then clean up. Otherwise just clean up the worktree + remote branch.
 ---
 
 Use the **qs-finish-task** subagent to handle this. The subagent
-discovers PR + branch + worktree from the current branch name.
+discovers PR + branch + worktree from the current branch name and
+branches behavior on whether a PR exists.
 
 Expected outcome:
-- CI status verified (`gh pr checks <PR>`); blocked if checks failed.
-- User explicitly authorizes merge.
-- `gh pr merge --merge` succeeds.
-- Remote branch deleted (refuses to delete `main`/`master`).
-- Worktree removed via `python scripts/qs/cleanup_worktree.py --force`.
-- If production code was touched, user is reminded to run `/release`
-  from main.
+
+- **PR exists, open** — CI verified, user authorizes, `gh pr merge`,
+  remote branch deleted, worktree removed.
+- **PR exists, already merged** — skip merge, just clean up branch +
+  worktree.
+- **PR exists, closed unmerged** — user authorizes cleanup, then clean
+  up.
+- **No PR** — fast-path cleanup. If worktree has uncommitted/unpushed
+  work, user is shown what would be lost and asked for force-delete
+  authorization. Otherwise removed immediately.
+
+Hard rules: never runs the quality gate, refuses to delete
+`main`/`master`, never auto-runs `/release`.
 
 User request:
 $ARGUMENTS

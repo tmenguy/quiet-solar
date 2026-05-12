@@ -6,7 +6,7 @@ description: >-
   consolidates findings, drives interactive triage, and emits a fix
   plan or routes the user to /finish-task. Use when the user says
   "review task" or "review PR".
-tools: Bash, Read, Edit, Grep, Glob, Agent, TodoWrite
+tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite
 ---
 
 # qs-review-task — orchestrator (does not review code itself)
