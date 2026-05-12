@@ -22,8 +22,11 @@ Expected outcome:
 - Findings consolidated and triaged interactively with the user.
 - If findings remain, a fix plan written to
   `docs/stories/QS-<N>.story_review_fix_#NN.md`, plus the launcher form
-  (`claude --agent qs-implement-task`) and slash-command fallback
-  (`/implement-task`) for the user to apply it.
+  (`claude --agent qs-implement-task` or `claude --agent
+  qs-implement-setup-task`, chosen by the file scope of the findings —
+  same rule as `/create-plan`) and a matching slash-command fallback
+  (`/implement-task` or `/implement-setup-task`) for the user to apply
+  it.
 - If clean, next-phase command printed: launcher form (`claude --agent
   qs-finish-task`) plus slash-command fallback (`/finish-task`).
 
