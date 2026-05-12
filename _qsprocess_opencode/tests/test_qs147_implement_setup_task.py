@@ -53,7 +53,7 @@ class TestRenderAgentPhaseRegistration:
             "--title",
             "Test story",
             "--story-file",
-            "_qsprocess_opencode/stories/QS-99.story.md",
+            "docs/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
             render_agent.main()
@@ -165,7 +165,7 @@ class TestCreatePlanTemplate:
             "--title",
             "Test story",
             "--story-file",
-            "_qsprocess_opencode/stories/QS-99.story.md",
+            "docs/stories/QS-99.story.md",
         ]
         with patch("sys.argv", args), patch("render_agent.output_json"):
             render_agent.main()
@@ -192,7 +192,7 @@ class TestCreatePlanTemplate:
             "--title",
             "Test story",
             "--story-file",
-            "_qsprocess_opencode/stories/QS-99.story.md",
+            "docs/stories/QS-99.story.md",
             "--extra",
             "IMPLEMENT_PHASE=implement-task",
         ]

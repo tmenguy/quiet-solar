@@ -1,1 +1,1 @@
-# Quiet Solar development automation scripts.
+"""Quiet Solar development scripts (harness-aware)."""

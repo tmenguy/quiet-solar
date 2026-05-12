@@ -1,12 +1,39 @@
-Read `_qsprocess/rules/project-rules.md` before doing any work.
+# Quiet Solar — Cursor entry point
 
-Use these skills for development workflows:
-- `/setup-task` — create GitHub issue + feature branch + worktree (never touches main checkout)
-- `/create-plan` — create story artifact in worktree, commit and push
-- `/implement-story` — TDD implementation with enforced quality gates
-- `/review-story` — code review + Copilot + process feedback
-- `/finish-story` — merge PR, cleanup worktree, update epics
-- `/release` — tag and ship
+Static-agent pipeline. Read
+`docs/workflow/project-rules.md` and `docs/workflow/project-context.md`
+before doing substantive work.
 
-Quality gates: `python scripts/qs/quality_gate.py` (runs pytest 100% cov + ruff + mypy + translations).
-Code rules: `_bmad-output/project-context.md`
+## Commands
+
+Invoke phase agents directly via slash commands:
+
+| Slash command            | Phase                              | Where        |
+| ------------------------ | ---------------------------------- | ------------ |
+| `/qs-setup-task`         | Create issue + branch + worktree   | main checkout |
+| `/qs-create-plan`        | Story + adversarial review         | worktree     |
+| `/qs-implement-task`     | TDD product code → PR              | worktree     |
+| `/qs-implement-setup-task` | TDD dev-env code → PR            | worktree     |
+| `/qs-review-task`        | 4-reviewer adversarial review      | worktree     |
+| `/qs-finish-task`        | Merge PR + cleanup worktree        | worktree     |
+| `/qs-release`            | Tag and ship                       | main checkout |
+
+Agents live in `.cursor/agents/`. They discover task context at runtime
+via `python scripts/qs/context.py`.
+
+## Pipeline architecture
+
+- `docs/workflow/overview.md` — the static-agent pipeline
+- `docs/workflow/phase-protocols.md` — each phase's contract
+- `docs/workflow/adversarial-review.md` — the 4-reviewer pattern
+- `docs/workflow/harness.md` — multi-harness abstraction
+
+## Quality gate
+
+`python scripts/qs/quality_gate.py`
+
+## Legacy OpenCode pipeline (unchanged)
+
+`.opencode/`, `_qsprocess_opencode/`, `scripts/qs_opencode/` remain
+intact for the legacy OpenCode workflow. `AGENTS.md` is its entry
+point. Cursor uses the new static-agent pipeline above.
