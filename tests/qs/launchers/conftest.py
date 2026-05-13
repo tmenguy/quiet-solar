@@ -11,8 +11,8 @@ runs in its own interpreter and is unaffected).
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -37,7 +37,12 @@ def _add_scripts_qs_to_syspath() -> Iterator[None]:
         new = set(sys.modules) - before
         for name in new:
             mod = sys.modules.get(name)
-            mod_file = getattr(mod, "__file__", None) or ""
+            # Namespace/frozen packages may carry ``__file__ is None``;
+            # skip them outright instead of falling through to the
+            # substring check on a bare empty string.
+            mod_file = getattr(mod, "__file__", None)
+            if not mod_file:
+                continue
             if path_str in mod_file:
                 sys.modules.pop(name, None)
         if added:

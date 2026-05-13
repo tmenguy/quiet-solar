@@ -16,9 +16,12 @@ Usage::
         [--harness HARNESS_OVERRIDE]
 
 ``--next-cmd`` accepts both ``/create-plan`` (back-compat) and
-``create-plan`` (bare phase name). Anything else raises ``ValueError`` —
-the launcher writes a JSON error to stdout and exits non-zero. No silent
-fallback; free-form prompts get the separate ``--next-prompt`` arg.
+``create-plan`` (bare phase name) for the claude/cursor launchers.
+Validation is delegated to the launcher's ``build_payload`` so the
+codex and opencode launchers — which have no agent mapping today —
+accept ANY ``--next-cmd`` string unchanged. On a known harness with an
+unknown phase, ``build_payload`` raises ``ValueError`` and this script
+writes a JSON error to stdout + exits non-zero.
 
 The phase-name → agent-name resolution is a static dict
 (``launchers/phases.py``) — no filesystem scan, no ``Path.cwd()`` call —
@@ -38,8 +41,7 @@ from launchers import codex as codex_launcher  # type: ignore[import-not-found]
 from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 from launchers.phases import (  # type: ignore[import-not-found]
-    _PHASE_TO_AGENT,
-    _resolve_agent_for_next_cmd,
+    PHASE_TO_AGENT,
 )
 
 from utils import output_json  # type: ignore[import-not-found]
@@ -60,8 +62,10 @@ def main() -> None:
         help=(
             "Phase name for the next step. Accepts either the bare form "
             "('create-plan') or the slash form ('/create-plan') for "
-            "back-compat. Unknown values are rejected — see --next-prompt "
-            "for free-form initial prompts."
+            "back-compat under the claude/cursor launchers. Free-form "
+            "strings are passed through unchanged under codex/opencode "
+            "(no agent mapping there). See --next-prompt for an initial "
+            "prompt that loads into the new session."
         ),
     )
     parser.add_argument("--work-dir", required=True, help="Worktree the new session should open in")
@@ -80,27 +84,28 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Validate the phase up front so a typo fails loudly with a JSON
-    # error payload instead of producing a junk launcher script downstream.
+    harness = args.harness or detect_harness()
+    launcher = _LAUNCHERS[harness]
+    # Delegate validation to the launcher: claude/cursor enforce the
+    # phase mapping inside ``build_payload``; codex/opencode accept any
+    # ``next_cmd`` string. This is the QS-175-review-fix-#1 contract —
+    # no top-level pre-validation that would regress the legacy
+    # free-form harnesses.
     try:
-        _resolve_agent_for_next_cmd(args.next_cmd)
+        payload = launcher.build_payload(
+            args.work_dir,
+            args.issue,
+            args.title,
+            next_cmd=args.next_cmd,
+            next_prompt=args.next_prompt,
+        )
     except ValueError:
         output_json({
             "error": "unknown phase",
             "value": args.next_cmd,
-            "known": sorted(_PHASE_TO_AGENT),
+            "known": sorted(PHASE_TO_AGENT),
         })
         sys.exit(1)
-
-    harness = args.harness or detect_harness()
-    launcher = _LAUNCHERS[harness]
-    payload = launcher.build_payload(
-        args.work_dir,
-        args.issue,
-        args.title,
-        next_cmd=args.next_cmd,
-        next_prompt=args.next_prompt,
-    )
     payload["harness"] = harness
     output_json(payload)
     sys.exit(0)

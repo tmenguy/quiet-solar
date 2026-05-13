@@ -129,3 +129,66 @@ def test_every_known_phase_resolves(phase: str, tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["agent"] == f"qs-{phase}"
+
+
+# --------------------------------------------------------------------------- #
+# Free-form harnesses (codex, opencode) must NOT be regressed by the strict
+# claude/cursor validation. These launchers carry no agent mapping today, so
+# next_step.py must let them pass any --next-cmd value through unchanged.
+# Regression catch for review-fix #1 + #5.
+# --------------------------------------------------------------------------- #
+
+
+def test_codex_accepts_free_form_next_cmd(tmp_path: Path) -> None:
+    """Codex launcher must accept any --next-cmd string (no agent mapping)."""
+    result = _run(
+        [
+            "--next-cmd", "anything-goes-here",
+            "--work-dir", "/tmp/work",
+            "--issue", "42",
+            "--title", "Title",
+            "--harness", "codex",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["tool"] == "codex"
+    assert payload["same_context"] == "anything-goes-here"
+
+
+def test_opencode_accepts_free_form_next_cmd(tmp_path: Path) -> None:
+    """OpenCode launcher must accept any --next-cmd string (legacy pipeline)."""
+    result = _run(
+        [
+            "--next-cmd", "legacy-skill-name",
+            "--work-dir", "/tmp/work",
+            "--issue", "42",
+            "--title", "Title",
+            "--harness", "opencode",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["tool"] == "opencode"
+    assert payload["same_context"] == "legacy-skill-name"
+
+
+def test_codex_passes_known_phase_through_unchanged(tmp_path: Path) -> None:
+    """Even a known phase under codex stays free-form — no agent key added."""
+    result = _run(
+        [
+            "--next-cmd", "create-plan",
+            "--work-dir", "/tmp/work",
+            "--issue", "42",
+            "--title", "Title",
+            "--harness", "codex",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["tool"] == "codex"
+    # codex launcher is a stub; it doesn't resolve agents.
+    assert "agent" not in payload

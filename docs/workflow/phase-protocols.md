@@ -168,9 +168,12 @@ When fixes are needed, re-run `claude --agent qs-implement-task` (or
 **Output**: confirmation; user is directed to `/release` if appropriate.
 **Next phase**: `/release` from the main checkout (independent), or
 `claude --agent qs-release` if the user prefers the interactive form.
-Note that `qs-finish-task` does **not** emit a launcher payload for
-release — it lives on the main checkout, which is a different
-workspace, and the user invokes it manually (see QS-175 OUT OF SCOPE).
+Note that `qs-finish-task` does **not** call
+`scripts/qs/next_step.py --next-cmd release` to build a launcher
+payload — release lives on the main checkout, which is a different
+workspace, and the user invokes it manually. The agent body still
+mentions both `/release` and `claude --agent qs-release` in plain prose
+as alternatives (see QS-175 OUT OF SCOPE).
 
 **Phase protocol**:
 1. Show PR summary.

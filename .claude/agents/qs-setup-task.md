@@ -88,7 +88,7 @@ Preferred (opens a fresh interactive `claude --agent qs-create-plan` session):
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
 kept for Claude Desktop and any chat without a CLI launcher):
-  {{same_context}}
+  /create-plan
 
 [Claude Desktop] no `--agent` equivalent exists on Desktop. Manual route:
   • New session → open folder → pick

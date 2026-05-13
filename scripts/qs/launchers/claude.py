@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 
 from launchers.phases import (  # type: ignore[import-not-found]
-    _resolve_agent_for_next_cmd,
+    resolve_agent_for_next_cmd,
 )
 
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose
@@ -174,7 +174,7 @@ def build_payload(
         ValueError: if ``next_cmd`` is not a known phase. No silent
             fallback — free-form prompts go through ``--next-prompt``.
     """
-    agent = _resolve_agent_for_next_cmd(next_cmd)
+    agent = resolve_agent_for_next_cmd(next_cmd)
     new_context = _claude_command(
         work_dir, issue, title, agent=agent, next_prompt=next_prompt,
     )

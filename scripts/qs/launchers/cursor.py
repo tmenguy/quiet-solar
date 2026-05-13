@@ -30,7 +30,7 @@ import tempfile
 from pathlib import Path
 
 from launchers.phases import (  # type: ignore[import-not-found]
-    _resolve_agent_for_next_cmd,
+    resolve_agent_for_next_cmd,
 )
 
 
@@ -70,6 +70,17 @@ def _cursor_ide_command(
     return f"sh {script_path}"
 
 
+def _slash_form(next_cmd: str) -> str:
+    """Normalize a phase reference to its slash form (``"/create-plan"``).
+
+    Used in the Cursor fallback prompt so the user lands on a slash
+    command they can paste into Cursor's chat — review-fix #2 catches
+    the regression where a bare phase (``"create-plan"``) was embedded
+    in the fallback prompt with no leading slash.
+    """
+    return next_cmd if next_cmd.startswith("/") else f"/{next_cmd}"
+
+
 def _cursor_cli_command(
     work_dir: str,
     *,
@@ -98,10 +109,10 @@ def _cursor_cli_command(
             invocation += f" {shlex.quote(next_prompt)}"
         return invocation
     # Fallback — older cursor-agent binaries / no binary at all. Pre-fill
-    # the prompt with the slash command so the user lands on the right
-    # phase once the session opens. Manual equivalent: open Cursor on the
-    # worktree → in chat, type ``/<phase>``.
-    prompt_parts = [next_cmd]
+    # the prompt with the SLASH form of the command (review-fix #2) so the
+    # user lands on the right phase once the session opens. Manual
+    # equivalent: open Cursor on the worktree → in chat, type ``/<phase>``.
+    prompt_parts = [_slash_form(next_cmd)]
     if next_prompt:
         prompt_parts.append(next_prompt)
     prompt = "\n\n".join(prompt_parts)
@@ -131,7 +142,7 @@ def build_payload(
         ValueError: if ``next_cmd`` is not a known phase. No silent
             fallback — same contract as the Claude launcher.
     """
-    agent = _resolve_agent_for_next_cmd(next_cmd)
+    agent = resolve_agent_for_next_cmd(next_cmd)
     # Use ``--agent`` only when the cursor-agent binary is on PATH; older
     # versions don't understand it. We probe presence rather than
     # ``--help``-sniffing to keep this cheap and version-agnostic.
@@ -165,8 +176,11 @@ def build_payload(
             "",
             # Manual equivalent of the ``--agent`` path: the user opens
             # Cursor and types the slash command in chat. Same degraded
-            # one-shot UX as Claude Desktop, documented honestly.
-            f"Then in chat, type: {next_cmd}",
+            # one-shot UX as Claude Desktop, documented honestly. The
+            # slash form is what Cursor's chat expects, so we normalize
+            # here too (review-fix #2) — a bare phase name would not be
+            # recognized as a slash command.
+            f"Then in chat, type: {_slash_form(next_cmd)}",
         ]
         if next_prompt:
             instructions.extend(["", "Initial prompt:", next_prompt])
