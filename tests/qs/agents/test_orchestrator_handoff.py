@@ -2,11 +2,22 @@
 BOTH a launcher block (``claude --agent qs-<phase>``) AND a slash-command
 fallback block (``/<phase>``).
 
-This is the regression catch for QS-175 review-fix #7 — without it the
-two-block pattern is enforced only by manual review. The test also catches
-review-fix #3 (qs-setup-task fallback drift): it asserts each fallback
-mentions ``/<phase>`` for a concrete known phase, not a verbatim template
-variable like ``{{same_context}}``.
+This is the regression catch for QS-175 review-fix #07 — without it the
+two-block pattern is enforced only by manual review.
+
+Round-2 review-fix #03 / #04 / #05 / #06 cleanups:
+- ``qs-create-plan`` is split out into a dedicated test because its
+  ``NEXT_PHASE`` is dynamic (the orchestrator picks
+  ``implement-task`` vs ``implement-setup-task`` at runtime) and a
+  hardcoded slash form isn't possible there.
+- The parametrise lists are split so unused ``expected_slash`` params
+  don't trigger ruff ``ARG001``.
+- The ``Fallback`` line scan is now a line-by-line walk rather than a
+  brittle ``re.search`` with a greedy ``[^:]*`` pattern that could match
+  past a future "Note:" parenthetical.
+- The ``does-not-call-next-step-for-release`` regex strips inline +
+  fenced backticks before scanning so a backtick-wrapped ``python ...
+  --next-cmd release`` invocation can't slip past.
 """
 
 from __future__ import annotations
@@ -19,24 +30,36 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 
-# Each entry: (orchestrator file, the next-phase slash that MUST appear in
-# the handoff wording somewhere). The five "normal" orchestrators ship the
-# strict two-block ``Preferred`` / ``Fallback`` pattern; qs-finish-task is
-# the deliberate exception — see ``_FINISH_TASK_EXCEPTIONS`` below.
+
+# All 6 orchestrators that ship the strict two-block ``Preferred`` /
+# ``Fallback`` pattern. ``qs-finish-task`` is the deliberate exception
+# (release follow-up is text-only — see QS-175 OUT OF SCOPE) and gets
+# its own dedicated tests below.
 _TWO_BLOCK_ORCHESTRATORS = [
+    "qs-setup-task.md",
+    "qs-create-plan.md",
+    "qs-implement-task.md",
+    "qs-implement-setup-task.md",
+    "qs-review-task.md",
+]
+
+# Five of those orchestrators emit a hardcoded ``/<phase>`` in the
+# fallback block. ``qs-create-plan`` is dynamic (the NEXT_PHASE depends
+# on the diff) and gets its own dedicated test asserting it uses a
+# placeholder of the right SHAPE, but explicitly NOT
+# ``{{same_context}}``.
+_HARDCODED_FALLBACK = [
     ("qs-setup-task.md", "/create-plan"),
-    ("qs-create-plan.md", "/{{NEXT_PHASE}}"),
     ("qs-implement-task.md", "/review-task"),
     ("qs-implement-setup-task.md", "/review-task"),
     ("qs-review-task.md", "/finish-task"),
 ]
 
 
-@pytest.mark.parametrize(("filename", "expected_slash"), _TWO_BLOCK_ORCHESTRATORS)
-def test_orchestrator_has_two_block_handoff(filename: str, expected_slash: str) -> None:
+@pytest.mark.parametrize("filename", _TWO_BLOCK_ORCHESTRATORS)
+def test_orchestrator_has_two_block_handoff(filename: str) -> None:
     """Every orchestrator's handoff contains 'Preferred' AND 'Fallback' markers."""
-    path = AGENTS_DIR / filename
-    body = path.read_text()
+    body = (AGENTS_DIR / filename).read_text()
     assert "Preferred" in body, (
         f"{filename}: missing 'Preferred' marker — every orchestrator must "
         f"label the interactive launcher path."
@@ -47,13 +70,10 @@ def test_orchestrator_has_two_block_handoff(filename: str, expected_slash: str) 
     )
 
 
-@pytest.mark.parametrize(("filename", "expected_slash"), _TWO_BLOCK_ORCHESTRATORS)
-def test_orchestrator_handoff_mentions_claude_agent_invocation(
-    filename: str, expected_slash: str,
-) -> None:
+@pytest.mark.parametrize("filename", _TWO_BLOCK_ORCHESTRATORS)
+def test_orchestrator_handoff_mentions_claude_agent_invocation(filename: str) -> None:
     """Handoff text references ``claude --agent qs-<phase>`` — the preferred path."""
-    path = AGENTS_DIR / filename
-    body = path.read_text()
+    body = (AGENTS_DIR / filename).read_text()
     # The orchestrator may emit either a literal ``claude --agent qs-...``
     # string (qs-setup-task) or use the new_context variable that resolves
     # to one at runtime (qs-create-plan, qs-implement-task, etc.). Either
@@ -64,24 +84,75 @@ def test_orchestrator_handoff_mentions_claude_agent_invocation(
     )
 
 
-@pytest.mark.parametrize(("filename", "expected_slash"), _TWO_BLOCK_ORCHESTRATORS)
+@pytest.mark.parametrize(("filename", "expected_slash"), _HARDCODED_FALLBACK)
 def test_orchestrator_fallback_uses_concrete_slash_form(
     filename: str, expected_slash: str,
 ) -> None:
-    """Each fallback block names a real ``/<phase>`` slash, not ``{{same_context}}``."""
-    path = AGENTS_DIR / filename
-    body = path.read_text()
+    """Each fixed-next-phase fallback block names a real ``/<phase>``."""
+    body = (AGENTS_DIR / filename).read_text()
     assert expected_slash in body, (
         f"{filename}: expected fallback to mention {expected_slash!r}; "
-        f"this catches the qs-setup-task regression where {{{{same_context}}}} "
-        f"was emitted instead of a hardcoded slash form."
+        f"this catches the qs-setup-task-style regression where "
+        f"{{{{same_context}}}} or another verbatim template variable "
+        f"would be emitted instead of a hardcoded slash form."
     )
 
 
+# --------------------------------------------------------------------------- #
+# qs-create-plan is the dynamic-next-phase exception. The fallback line
+# can't be a single hardcoded ``/<phase>`` because the orchestrator picks
+# ``implement-task`` vs ``implement-setup-task`` based on its task
+# breakdown. The fallback uses a ``/{{NEXT_PHASE}}`` placeholder that
+# the persona substitutes at runtime — what we forbid is the
+# ``{{same_context}}`` shape that caused the qs-setup-task regression.
+# --------------------------------------------------------------------------- #
+
+
+def test_create_plan_fallback_uses_next_phase_placeholder_not_same_context() -> None:
+    """qs-create-plan fallback uses ``/<NEXT_PHASE>`` placeholder, not ``{{same_context}}``."""
+    body = (AGENTS_DIR / "qs-create-plan.md").read_text()
+    fallback_line = _find_fallback_line(body)
+    assert fallback_line is not None, "qs-create-plan: 'Fallback' block not found"
+    assert "{{same_context}}" not in fallback_line, (
+        f"qs-create-plan fallback uses {{{{same_context}}}} — that's the "
+        f"verbatim template variable that caused the qs-setup-task "
+        f"regression; use a slash-form placeholder like /{{{{NEXT_PHASE}}}} "
+        f"instead. Got: {fallback_line!r}"
+    )
+    assert fallback_line.lstrip().startswith("/"), (
+        f"qs-create-plan fallback should start with '/' (slash form). "
+        f"Got: {fallback_line!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# qs-setup-task: same dedicated assertion as before — hardcode /create-plan,
+# don't fall back to a {{same_context}} template. This is the case the
+# round-1 fix targeted.
+# --------------------------------------------------------------------------- #
+
+
+def test_setup_task_fallback_does_not_use_same_context_template() -> None:
+    """qs-setup-task's fallback block must hardcode ``/create-plan``, not template."""
+    body = (AGENTS_DIR / "qs-setup-task.md").read_text()
+    fallback_line = _find_fallback_line(body)
+    assert fallback_line is not None, "qs-setup-task: 'Fallback' block not found"
+    assert "{{same_context}}" not in fallback_line, (
+        "qs-setup-task fallback uses {{same_context}} template — must hardcode "
+        "/create-plan to match the four peer orchestrators (review-fix #03)."
+    )
+    assert "/create-plan" in fallback_line, (
+        f"qs-setup-task fallback should hardcode '/create-plan', got: "
+        f"{fallback_line!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # qs-finish-task is the deliberate exception — release runs on a different
 # workspace (main checkout), so the agent body shows both forms as
 # alternatives in plain prose rather than the strict two-block pattern.
 # Per QS-175 OUT OF SCOPE: "DO NOT call the launcher with --next-cmd release".
+# --------------------------------------------------------------------------- #
 
 
 def test_finish_task_mentions_both_release_forms() -> None:
@@ -101,17 +172,19 @@ def test_finish_task_does_not_call_next_step_for_release() -> None:
     don't build a launcher with `--next-cmd release`" — that's the OUT OF
     SCOPE explanation). What's forbidden is an ACTIVE invocation: a
     ``scripts/qs/next_step.py`` call followed by ``--next-cmd release``
-    in the same code block.
+    in real source, not inside backticks.
+
+    We strip both inline and fenced backticks before scanning so a stray
+    backtick-wrapped ``python scripts/qs/next_step.py --next-cmd release``
+    on a single line can't bypass the check.
     """
     body = (AGENTS_DIR / "qs-finish-task.md").read_text()
-    # Look for an active invocation: next_step.py + --next-cmd "release"
-    # within a window of ~200 chars (a single code block). This pattern
-    # would be the real OUT OF SCOPE violation.
+    stripped = _strip_backticks(body)
     forbidden = re.compile(
-        r"scripts/qs/next_step\.py[^\n`]{0,200}?--next-cmd\s+[\"']?release",
+        r"scripts/qs/next_step\.py[^\n]{0,200}?--next-cmd\s+[\"']?release",
         re.DOTALL,
     )
-    match = forbidden.search(body)
+    match = forbidden.search(stripped)
     assert not match, (
         f"qs-finish-task: active 'next_step.py --next-cmd release' invocation "
         f"found ({match.group()!r}). Release runs on the main checkout "
@@ -120,22 +193,57 @@ def test_finish_task_does_not_call_next_step_for_release() -> None:
     )
 
 
-def test_setup_task_fallback_does_not_use_same_context_template() -> None:
-    """qs-setup-task's fallback block must hardcode ``/create-plan``, not template."""
-    body = (AGENTS_DIR / "qs-setup-task.md").read_text()
-    # Find the fallback block content — between the literal ``Fallback``
-    # marker (capital F, distinguishing it from prose mentions of
-    # "fallback" earlier in the file) and its captured line.
-    fallback_match = re.search(
-        r"Fallback[^:]*:[^\n]*\n([^\n]+)\n", body,
-    )
-    assert fallback_match, "qs-setup-task: 'Fallback' block not found"
-    fallback_line = fallback_match.group(1)
-    assert "{{same_context}}" not in fallback_line, (
-        "qs-setup-task fallback uses {{same_context}} template — must hardcode "
-        "/create-plan to match the five peer orchestrators (review-fix #3)."
-    )
-    assert "/create-plan" in fallback_line, (
-        f"qs-setup-task fallback should hardcode '/create-plan', got: "
-        f"{fallback_line!r}"
-    )
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
+
+
+def _find_fallback_line(body: str) -> str | None:
+    """Return the first non-empty line following the literal ``Fallback`` marker.
+
+    Replaces the brittle ``re.search(r"Fallback[^:]*:...")`` pattern (review-
+    fix #02 NTH2). Iterates lines: once a line starting with ``Fallback``
+    (capital F — the marker, not a prose mention) is found, walk forward
+    until a content line that starts with ``/`` is reached. That's the
+    slash-fallback line.
+    """
+    lines = body.splitlines()
+    in_fallback_block = False
+    for line in lines:
+        stripped = line.strip()
+        if not in_fallback_block:
+            # Match a ``Fallback`` marker — must start with that literal
+            # word (after any leading whitespace). Excludes prose
+            # mentions like "the fallback path" that appear earlier in
+            # the file body.
+            if stripped.startswith("Fallback"):
+                in_fallback_block = True
+            continue
+        # In the fallback block — find the first line whose stripped
+        # content begins with ``/`` (the slash-form fallback) or with
+        # ``{{`` (a placeholder, e.g. ``{{same_context}}``). Either is a
+        # candidate "fallback line" for downstream tests to inspect.
+        if stripped.startswith(("/", "{{")):
+            return line
+        # Skip blank lines and the closing ``):`` line of the
+        # "Fallback (stay in this session...)" preamble.
+        if stripped and not stripped.endswith(":"):
+            continue
+    return None
+
+
+def _strip_backticks(text: str) -> str:
+    """Remove single and triple backtick fences, keeping the inner content.
+
+    Review-fix #02 NTH3: without this, a fenced one-line invocation
+    like a backtick-wrapped ``python scripts/qs/next_step.py
+    --next-cmd release`` would slip past the
+    ``does-not-call-next-step-for-release`` regex.
+    """
+    # Strip triple-fence blocks first (they may span multiple lines), then
+    # single-tick inline code. Both forms are replaced with their inner
+    # text so the search can find an active invocation regardless of
+    # markdown formatting.
+    text = re.sub(r"```[a-zA-Z]*\n?([\s\S]*?)```", r"\1", text)
+    text = re.sub(r"`([^`]+)`", r"\1", text)
+    return text

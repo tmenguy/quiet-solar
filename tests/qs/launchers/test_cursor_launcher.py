@@ -185,3 +185,58 @@ def test_cursor_source_documents_fallback_rationale() -> None:
         "Fallback rationale should document the manual equivalent for the "
         "user (open Cursor → type the slash command in chat)."
     )
+
+
+# --------------------------------------------------------------------------- #
+# _slash_form defense-in-depth — review-fix #02 NTH8.
+#
+# The helper is upstream-protected by ``resolve_agent_for_next_cmd``, so
+# the empty / double-slash cases are currently unreachable from
+# ``build_payload``. But a future refactor could call ``_slash_form``
+# outside that validation path. The function should be a leaf with its
+# own preconditions encoded.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(("input_val", "expected"), [
+    ("create-plan", "/create-plan"),
+    ("/create-plan", "/create-plan"),
+    # ``//create-plan`` is a contract violation but the function's job is
+    # to NORMALIZE to slash form — passing through here is acceptable.
+    # The upstream resolver is what rejects ``//<anything>``.
+    ("//create-plan", "//create-plan"),
+])
+def test_slash_form_normalizes_to_slash_prefix(input_val: str, expected: str) -> None:
+    """``_slash_form`` adds a leading slash iff one is missing."""
+    from launchers.cursor import _slash_form  # type: ignore[import-not-found]
+
+    assert _slash_form(input_val) == expected
+
+
+@pytest.mark.parametrize("bad", ["", " ", "  ", "\t", "\n"])
+def test_slash_form_rejects_empty_or_whitespace(bad: str) -> None:
+    """Empty/whitespace input is a contract violation — ``_slash_form`` raises."""
+    from launchers.cursor import _slash_form  # type: ignore[import-not-found]
+
+    with pytest.raises(ValueError):
+        _slash_form(bad)
+
+
+# --------------------------------------------------------------------------- #
+# build_payload-level rejection of invalid next_cmd values — review-fix #02
+# NTH10. Symmetric with the claude.py contract.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_next_cmd", ["/", "//create-plan", "unknown", "/nope"])
+def test_cursor_build_payload_rejects_invalid_next_cmd(
+    bad_next_cmd: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``build_payload`` raises for invalid next_cmd at the public boundary."""
+    from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    with pytest.raises(ValueError):
+        cursor_launcher.build_payload(
+            "/tmp/work", 1, "Title", next_cmd=bad_next_cmd,
+        )

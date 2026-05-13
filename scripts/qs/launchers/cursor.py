@@ -20,6 +20,11 @@ Cursor 2.4+ supports subagents in `.cursor/agents/` and slash-command
 invocation (`/<name>`). The same set of phase agents we ship for Claude
 Code is mirrored under `.cursor/agents/` with `readonly:` instead of
 `tools:` in the frontmatter.
+
+Concurrency note: the cursor IDE script path is deterministic per issue
+(``/tmp/qs_cursor_<N>.sh``), so two simultaneous setup-task runs on the
+SAME issue would race on the file. Fine for the single-user dev
+pipeline; same trade-off as the Claude launcher.
 """
 
 from __future__ import annotations
@@ -77,7 +82,18 @@ def _slash_form(next_cmd: str) -> str:
     command they can paste into Cursor's chat — review-fix #2 catches
     the regression where a bare phase (``"create-plan"``) was embedded
     in the fallback prompt with no leading slash.
+
+    Defense-in-depth (review-fix #02 NTH8): the helper is currently
+    upstream-protected by ``resolve_agent_for_next_cmd`` (called before
+    we land here), but rejecting empty / whitespace-only input here too
+    keeps the contract local — a future refactor that wires
+    ``_slash_form`` into a different call path can't silently produce
+    ``"/"`` from ``""``.
     """
+    if not next_cmd or not next_cmd.strip():
+        raise ValueError(
+            f"_slash_form requires a non-empty next_cmd; got {next_cmd!r}",
+        )
     return next_cmd if next_cmd.startswith("/") else f"/{next_cmd}"
 
 
@@ -101,9 +117,11 @@ def _cursor_cli_command(
     """
     safe_dir = shlex.quote(work_dir)
     if agent is not None:
-        # Preferred path — Cursor 2.4+ supports ``--agent <name>``. The
-        # next_prompt is appended as the initial chat message; the agent
-        # body is loaded as the system prompt.
+        # Preferred path — uses ``--agent <name>`` when ``cursor-agent``
+        # is on PATH. The next_prompt is appended as the initial chat
+        # message; the agent body is loaded as the system prompt. (We
+        # gate purely on PATH presence rather than a version cutoff — the
+        # runtime check is what actually decides.)
         invocation = f"cursor-agent --workspace {safe_dir} --agent {shlex.quote(agent)}"
         if next_prompt:
             invocation += f" {shlex.quote(next_prompt)}"

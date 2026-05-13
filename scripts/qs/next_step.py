@@ -19,9 +19,16 @@ Usage::
 ``create-plan`` (bare phase name) for the claude/cursor launchers.
 Validation is delegated to the launcher's ``build_payload`` so the
 codex and opencode launchers — which have no agent mapping today —
-accept ANY ``--next-cmd`` string unchanged. On a known harness with an
-unknown phase, ``build_payload`` raises ``ValueError`` and this script
-writes a JSON error to stdout + exits non-zero.
+accept any non-empty ``--next-cmd`` string unchanged. On a known
+harness with an unknown phase, ``build_payload`` raises
+``UnknownPhaseError`` and this script writes a JSON error to stdout +
+exits non-zero. Other ``ValueError`` subclasses (from future launcher
+code) are deliberately NOT caught — review-fix #02 SF1.
+
+Empty / whitespace-only ``--next-cmd`` is rejected at the argparse
+layer for ALL harnesses (review-fix #02 SF2): without this guard,
+codex/opencode would silently accept the empty string and emit a
+garbled handoff payload.
 
 The phase-name → agent-name resolution is a static dict
 (``launchers/phases.py``) — no filesystem scan, no ``Path.cwd()`` call —
@@ -40,9 +47,7 @@ from launchers import claude as claude_launcher  # type: ignore[import-not-found
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
 from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
-from launchers.phases import (  # type: ignore[import-not-found]
-    PHASE_TO_AGENT,
-)
+from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
 
 from utils import output_json  # type: ignore[import-not-found]
 
@@ -84,13 +89,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Reject empty / whitespace-only --next-cmd for every harness
+    # (review-fix #02 SF2). Without this, codex/opencode would silently
+    # pass the empty string through to ``build_payload`` and emit a
+    # garbled payload with ``same_context: ""``.
+    if not args.next_cmd or not args.next_cmd.strip():
+        output_json({
+            "error": "empty next-cmd",
+            "value": args.next_cmd,
+            "detail": "--next-cmd must be a non-empty, non-whitespace string",
+        })
+        sys.exit(1)
+
     harness = args.harness or detect_harness()
     launcher = _LAUNCHERS[harness]
     # Delegate validation to the launcher: claude/cursor enforce the
     # phase mapping inside ``build_payload``; codex/opencode accept any
-    # ``next_cmd`` string. This is the QS-175-review-fix-#1 contract —
-    # no top-level pre-validation that would regress the legacy
-    # free-form harnesses.
+    # ``next_cmd`` string. We catch only ``UnknownPhaseError`` here —
+    # other ``ValueError`` subclasses must propagate so a future failure
+    # mode isn't misreported as "unknown phase" (review-fix #02 SF1).
     try:
         payload = launcher.build_payload(
             args.work_dir,
@@ -99,11 +116,11 @@ def main() -> None:
             next_cmd=args.next_cmd,
             next_prompt=args.next_prompt,
         )
-    except ValueError:
+    except UnknownPhaseError as exc:
         output_json({
             "error": "unknown phase",
-            "value": args.next_cmd,
-            "known": sorted(PHASE_TO_AGENT),
+            "value": exc.value,
+            "known": exc.known,
         })
         sys.exit(1)
     payload["harness"] = harness

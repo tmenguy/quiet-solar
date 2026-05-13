@@ -192,3 +192,38 @@ def test_codex_passes_known_phase_through_unchanged(tmp_path: Path) -> None:
     assert payload["tool"] == "codex"
     # codex launcher is a stub; it doesn't resolve agents.
     assert "agent" not in payload
+
+
+# --------------------------------------------------------------------------- #
+# Empty / whitespace --next-cmd must be rejected for ALL harnesses, including
+# codex/opencode (which previously accepted it silently and produced a
+# garbled payload with same_context: ""). Review-fix #02 SF2.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "harness", ["claude-code", "cursor", "codex", "opencode"],
+)
+@pytest.mark.parametrize("bad_next_cmd", ["", "   ", "\t"])
+def test_empty_or_whitespace_next_cmd_rejected_for_all_harnesses(
+    harness: str, bad_next_cmd: str, tmp_path: Path,
+) -> None:
+    """Empty / whitespace-only --next-cmd → JSON error + exit 1, every harness."""
+    result = _run(
+        [
+            "--next-cmd", bad_next_cmd,
+            "--work-dir", "/tmp/work",
+            "--issue", "42",
+            "--title", "Title",
+            "--harness", harness,
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode != 0, (
+        f"--harness {harness} accepted empty --next-cmd silently (regression)"
+    )
+    # JSON error shape is identical to the unknown-phase case so downstream
+    # parsing stays simple.
+    payload = json.loads(result.stdout)
+    assert payload["error"] == "empty next-cmd"
+    assert payload["value"] == bad_next_cmd

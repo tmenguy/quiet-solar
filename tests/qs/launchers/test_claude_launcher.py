@@ -148,28 +148,34 @@ def test_build_payload_appends_next_prompt_when_provided() -> None:
 # ``shlex.quote`` so a hypothetical agent name with whitespace or quotes
 # cannot break the shell command. The current mapping never produces
 # metacharacters; this test guards the contract anyway. Review-fix #11.
+#
+# Round-2 review-fix #02 NTH7: this used to reach into the private
+# ``_claude_command`` helper (ruff ``SLF001``). The refactored version
+# monkeypatches the resolver so the synthetic agent name flows through
+# the public ``build_payload`` API instead.
 # --------------------------------------------------------------------------- #
 
 
-def test_claude_command_quotes_agent_name_with_metacharacters() -> None:
-    """``_claude_command`` must shlex.quote the agent name."""
+def test_build_payload_shlex_quotes_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``build_payload`` must shlex.quote whatever the resolver returns."""
+    import shlex
+
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
-    # Bypass build_payload (which goes through the validated mapping) and
-    # exercise the private helper directly with a synthetic name that has
-    # whitespace + a single quote — exactly the chars shlex.quote handles.
-    script_invocation = claude_launcher._claude_command(
-        "/tmp/work",
-        99,
-        "Title",
-        agent="qs-test agent's-name",
-        next_prompt=None,
+    # Inject a synthetic agent name via the public path — the resolver is
+    # what build_payload consults, so monkeypatching it puts a value with
+    # metacharacters into the shell command without reaching for any
+    # private helper.
+    monkeypatch.setattr(
+        claude_launcher,
+        "resolve_agent_for_next_cmd",
+        lambda _next_cmd: "qs-test agent's-name",
     )
-    script = _read_script(script_invocation)
-    # The dangerous chars must be quoted, not spliced raw into the shell line.
-    # shlex.quote wraps the whole token in single quotes and escapes inner
-    # single quotes — the literal substring is the safe form, not the raw.
-    import shlex
+    payload = claude_launcher.build_payload(
+        "/tmp/work", 99, "Title", next_cmd="create-plan",
+    )
+    script = _read_script(payload["new_context"])
+
     expected_safe = shlex.quote("qs-test agent's-name")
     assert expected_safe in script, (
         f"Expected shlex-quoted agent in script; got: {script!r}"
@@ -177,3 +183,21 @@ def test_claude_command_quotes_agent_name_with_metacharacters() -> None:
     # And the raw form (with unescaped space + apostrophe) must NOT appear
     # outside the quoted block.
     assert "qs-test agent's-name " not in script.replace(expected_safe, "")
+
+
+# --------------------------------------------------------------------------- #
+# build_payload-level rejection of invalid next_cmd values — review-fix #02
+# NTH10. Each input below should raise ``ValueError`` (or a subclass) so
+# the launcher contract stays end-to-end strict.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_next_cmd", ["/", "//create-plan", "unknown", "/nope"])
+def test_claude_build_payload_rejects_invalid_next_cmd(bad_next_cmd: str) -> None:
+    """``build_payload`` raises for invalid next_cmd at the public boundary."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    with pytest.raises(ValueError):
+        claude_launcher.build_payload(
+            "/tmp/work", 1, "Title", next_cmd=bad_next_cmd,
+        )

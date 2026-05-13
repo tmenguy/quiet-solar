@@ -82,3 +82,44 @@ def test_resolve_strips_only_leading_slash() -> None:
 
     with pytest.raises(ValueError):
         resolve_agent_for_next_cmd("//create-plan")
+
+
+# --------------------------------------------------------------------------- #
+# UnknownPhaseError contract — review-fix #02 SF1.
+#
+# The narrowing requires a dedicated exception so next_step.py can catch
+# JUST the "unknown phase" case (not every ValueError raised by build_payload
+# or its callees). The exception subclasses ValueError to preserve back-compat
+# with any legacy ``except ValueError`` block.
+# --------------------------------------------------------------------------- #
+
+
+def test_unknown_phase_error_is_a_value_error() -> None:
+    """``UnknownPhaseError`` is a subclass of ``ValueError`` (back-compat)."""
+    from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
+
+    assert issubclass(UnknownPhaseError, ValueError)
+
+
+def test_unknown_phase_error_carries_value_and_known_attrs() -> None:
+    """The exception exposes ``.value`` and ``.known`` so callers needn't re-parse."""
+    from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
+
+    exc = UnknownPhaseError("bogus", ["a", "b"])
+    assert exc.value == "bogus"
+    assert exc.known == ["a", "b"]
+    # Message names the invalid value so a bare ``str(exc)`` is useful too.
+    assert "bogus" in str(exc)
+
+
+def test_resolve_raises_unknown_phase_error_specifically() -> None:
+    """``resolve_agent_for_next_cmd`` raises ``UnknownPhaseError``, not plain ``ValueError``."""
+    from launchers.phases import (  # type: ignore[import-not-found]
+        UnknownPhaseError,
+        resolve_agent_for_next_cmd,
+    )
+
+    with pytest.raises(UnknownPhaseError) as excinfo:
+        resolve_agent_for_next_cmd("bogus-phase")
+    assert excinfo.value.value == "bogus-phase"
+    assert "create-plan" in excinfo.value.known

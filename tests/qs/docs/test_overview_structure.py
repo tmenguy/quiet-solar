@@ -15,6 +15,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OVERVIEW = REPO_ROOT / "docs" / "workflow" / "overview.md"
 
+# Canonical title of the QS-175 paragraph section in overview.md. Centralised
+# here so a doc edit doesn't drift between the multiple assertions that
+# reference it (review-fix #02 NTH11).
+CANONICAL_QS175_HEADING = (
+    "Orchestrators are interactive sessions; sub-agents are parallel fan-out"
+)
+
 
 def _section_headings() -> list[tuple[int, str]]:
     """Return list of ``(line_index, heading_text)`` for every H2 heading."""
@@ -29,7 +36,7 @@ def _section_headings() -> list[tuple[int, str]]:
 def test_overview_has_canonical_qs175_section() -> None:
     """The canonical paragraph section exists."""
     headings = [h for _, h in _section_headings()]
-    target = "Orchestrators are interactive sessions; sub-agents are parallel fan-out"
+    target = CANONICAL_QS175_HEADING
     assert target in headings, (
         f"overview.md is missing the canonical QS-175 section. Headings: {headings}"
     )
@@ -47,7 +54,7 @@ def test_canonical_section_immediately_follows_adversarial_review() -> None:
         f"overview.md: 'Adversarial review' section heading not found. "
         f"Headings: {headings}"
     )
-    target = "Orchestrators are interactive sessions; sub-agents are parallel fan-out"
+    target = CANONICAL_QS175_HEADING
     assert adversarial_idx + 1 < len(headings), (
         "overview.md: no heading after 'Adversarial review'"
     )
