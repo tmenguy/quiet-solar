@@ -51,10 +51,16 @@ def _cursor_ide_command(
     tab_title = f"QS_{issue}: {title}"
     safe_title = shlex.quote(tab_title)
     safe_dir = shlex.quote(work_dir)
+    # Normalize the user-facing "type this in chat" instruction to the
+    # slash form. Round-2 SF2 fixed the fallback path; this is the
+    # parallel fix for the IDE path (review-fix #04 SF3). The user types
+    # the result into Cursor's chat where ``/<phase>`` is the recognized
+    # slash-command form.
+    chat_slash = slash_form(next_cmd)
 
     banner_lines = [
         f"echo '── Cursor opening on {tab_title} ──'",
-        f"echo '── In the chat, type: {next_cmd} ──'",
+        f"echo '── In the chat, type: {chat_slash} ──'",
     ]
     if next_prompt:
         banner_lines.append(
@@ -104,15 +110,21 @@ def slash_form(next_cmd: str) -> str:
     NOT need to follow — the resolver remains the single source of
     truth for what counts as a valid phase form.
 
-    Failure mode (review-fix #03 NTH8): the ``ValueError`` raised here
-    is a programmer-error signal — ``slash_form`` is unreachable from
-    ``build_payload`` with empty input because the resolver guards
-    that path. If this defense ever fires in production, the user gets
-    a Python traceback rather than the JSON ``{"error": ...}``
-    contract used for user errors. This is intentional and matches the
-    bimodal contract documented in ``scripts/qs/next_step.py``.
+    Failure mode (review-fix #03 NTH8 / #04 NTH9): the ``ValueError``
+    raised here is a programmer-error signal — ``slash_form`` is
+    unreachable from ``build_payload`` with empty input because the
+    resolver guards that path. If this defense ever fires in
+    production, the user gets a Python traceback rather than the JSON
+    ``{"error": ...}`` contract used for user errors. This matches the
+    "Error contract" paragraph in ``scripts/qs/next_step.py``: user
+    errors get JSON, programmer errors get tracebacks. The cross-
+    reference is intentional so a future reader auditing the JSON
+    contract sees the same philosophy in both places.
     """
-    if not next_cmd or not next_cmd.strip():
+    # ``"".strip()`` is also falsy, so a single check covers both empty
+    # and whitespace cases (review-fix #04 NTH1; matches the round-3
+    # NTH2 simplification in next_step.py).
+    if not next_cmd.strip():
         raise ValueError(
             f"slash_form requires a non-empty next_cmd; got {next_cmd!r}",
         )
@@ -169,14 +181,24 @@ def build_payload(
 ) -> dict:
     """Return launcher payload for Cursor.
 
-    Always returns ``new_context`` (the IDE launcher script), ``agent``
-    (the resolved ``qs-<phase>`` name) and ``cli_context`` (the
-    ``cursor-agent`` invocation). When ``cursor-agent`` is on PATH the
-    ``cli_context`` includes ``--agent qs-<phase>`` so the new session
-    boots straight into the phase orchestrator (parity with Claude's
-    ``claude --agent``). When ``cursor-agent`` is missing, ``cli_context``
-    falls back to the legacy prompt-positional form and the user types
-    ``/<phase>`` manually in Cursor's chat after the IDE opens.
+    Always returns a ``new_context`` key (review-fix #04 NTH8: the
+    return shape is uniform, but the CONTENT depends on PATH state):
+
+    - When the ``cursor`` CLI is on PATH, ``new_context`` is a shell
+      command running the generated IDE launcher script
+      (``sh /tmp/qs_cursor_<N>.sh``).
+    - When ``cursor`` is missing, ``new_context`` is free-text
+      fallback instructions for the user to follow manually
+      (open the worktree, run ``cursor-agent``, etc.).
+
+    Also always returns ``agent`` (the resolved ``qs-<phase>`` name)
+    and ``cli_context`` (the ``cursor-agent`` invocation). When
+    ``cursor-agent`` is on PATH the ``cli_context`` includes
+    ``--agent qs-<phase>`` so the new session boots straight into the
+    phase orchestrator (parity with Claude's ``claude --agent``). When
+    ``cursor-agent`` is missing, ``cli_context`` falls back to the
+    legacy prompt-positional form and the user types ``/<phase>``
+    manually in Cursor's chat after the IDE opens.
 
     Raises:
         ValueError: if ``next_cmd`` is not a known phase. No silent

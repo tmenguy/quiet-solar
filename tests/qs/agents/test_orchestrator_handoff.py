@@ -30,6 +30,17 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
 
+# Pattern for an ACTIVE ``next_step.py --next-cmd release`` invocation.
+# Uses ``.`` with ``re.DOTALL`` so backslash-continued multi-line shell
+# forms (``python ... \\\n    --next-cmd release``) are caught — the
+# previous ``[^\n]`` form silently let them through (review-fix #04
+# SF2). Compiled once at module load and shared between the
+# qs-finish-task assertion and the regex-shape regression tests.
+_FORBIDDEN_RELEASE_INVOCATION = re.compile(
+    r"scripts/qs/next_step\.py.{0,200}?--next-cmd\s+[\"']?release",
+    re.DOTALL,
+)
+
 
 # All 6 orchestrators that ship the strict two-block ``Preferred`` /
 # ``Fallback`` pattern. ``qs-finish-task`` is the deliberate exception
@@ -176,21 +187,56 @@ def test_finish_task_does_not_call_next_step_for_release() -> None:
 
     We strip both inline and fenced backticks before scanning so a stray
     backtick-wrapped ``python scripts/qs/next_step.py --next-cmd release``
-    on a single line can't bypass the check.
+    on a single line can't bypass the check. The regex uses ``.`` with
+    ``re.DOTALL`` (instead of ``[^\\n]``) so a backslash-continued
+    multi-line invocation also gets caught (review-fix #04 SF2).
     """
     body = (AGENTS_DIR / "qs-finish-task.md").read_text()
     stripped = _strip_backticks(body)
-    forbidden = re.compile(
-        r"scripts/qs/next_step\.py[^\n]{0,200}?--next-cmd\s+[\"']?release",
-        re.DOTALL,
-    )
-    match = forbidden.search(stripped)
+    match = _FORBIDDEN_RELEASE_INVOCATION.search(stripped)
     assert not match, (
         f"qs-finish-task: active 'next_step.py --next-cmd release' invocation "
         f"found ({match.group()!r}). Release runs on the main checkout "
         f"(different workspace); per QS-175 OUT OF SCOPE the agent surfaces "
         f"the text suggestion but does not emit a launcher payload."
     )
+
+
+# Regression patterns the forbidden-invocation regex MUST catch. Round-4
+# SF2: the round-2 implementation used ``[^\n]`` which silently let
+# backslash-continued multi-line invocations through.
+_MULTILINE_INVOCATION = (
+    "python scripts/qs/next_step.py \\\n"
+    "    --next-cmd release\n"
+)
+_SINGLE_LINE_INVOCATION = (
+    "python scripts/qs/next_step.py --next-cmd release\n"
+)
+_INVOCATION_QUOTED = (
+    'python scripts/qs/next_step.py --next-cmd "release"\n'
+)
+
+
+@pytest.mark.parametrize("snippet", [
+    _SINGLE_LINE_INVOCATION,
+    _MULTILINE_INVOCATION,
+    _INVOCATION_QUOTED,
+])
+def test_forbidden_release_regex_catches_invocation_forms(snippet: str) -> None:
+    """The regex catches every active invocation shape — single, multi, quoted."""
+    assert _FORBIDDEN_RELEASE_INVOCATION.search(snippet), (
+        f"Forbidden-invocation regex missed {snippet!r}. Without DOTALL + "
+        f"``.`` across newlines, a backslash-continued shell line slips "
+        f"through (review-fix #04 SF2)."
+    )
+
+
+def test_forbidden_release_regex_ignores_prose_mention() -> None:
+    """Bare prose mentioning ``--next-cmd release`` (without the script path) is fine."""
+    # The agent body uses this exact wording in its OUT OF SCOPE note —
+    # only an ACTIVE invocation paired with the script path is forbidden.
+    prose = "We don't build a launcher with --next-cmd release."
+    assert _FORBIDDEN_RELEASE_INVOCATION.search(prose) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -204,8 +250,8 @@ def _find_fallback_line(body: str) -> str | None:
     Replaces the brittle ``re.search(r"Fallback[^:]*:...")`` pattern (review-
     fix #02 NTH2). Iterates lines: once a line starting with ``Fallback``
     (capital F — the marker, not a prose mention) is found, walk forward
-    until a content line that starts with ``/`` is reached. That's the
-    slash-fallback line.
+    until a content line that starts with ``/`` or ``{{`` is reached.
+    That's the slash-fallback (or placeholder) line.
     """
     lines = body.splitlines()
     in_fallback_block = False
@@ -223,12 +269,12 @@ def _find_fallback_line(body: str) -> str | None:
         # content begins with ``/`` (the slash-form fallback) or with
         # ``{{`` (a placeholder, e.g. ``{{same_context}}``). Either is a
         # candidate "fallback line" for downstream tests to inspect.
+        # Blank lines, the preamble's closing ``):`` line, and any
+        # other intermediate content are naturally skipped by the
+        # implicit loop continuation (review-fix #04 NTH2: the trailing
+        # explicit ``if/continue`` was dead code).
         if stripped.startswith(("/", "{{")):
             return line
-        # Skip blank lines and the closing ``):`` line of the
-        # "Fallback (stay in this session...)" preamble.
-        if stripped and not stripped.endswith(":"):
-            continue
     return None
 
 

@@ -111,14 +111,44 @@ def test_unknown_phase_error_is_a_value_error() -> None:
 
 
 def test_unknown_phase_error_carries_value_and_known_attrs() -> None:
-    """The exception exposes ``.value`` and ``.known`` so callers needn't re-parse."""
+    """The exception exposes ``.value``, ``.phase``, and ``.known`` (review-fix #04 NTH4)."""
     from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
 
     exc = UnknownPhaseError("bogus", ["a", "b"])
     assert exc.value == "bogus"
     assert exc.known == ["a", "b"]
+    # When ``value`` has no leading slash, ``.phase`` defaults to the
+    # same string — no normalization needed.
+    assert exc.phase == "bogus"
     # Message names the invalid value so a bare ``str(exc)`` is useful too.
     assert "bogus" in str(exc)
+
+
+def test_unknown_phase_error_phase_strips_leading_slash() -> None:
+    """``.phase`` carries the post-normalization lookup key (review-fix #04 NTH4)."""
+    from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
+
+    exc = UnknownPhaseError("/bogus", ["a", "b"])
+    assert exc.value == "/bogus"
+    # ``.phase`` is what ``resolve_agent_for_next_cmd`` actually looked
+    # up — strips the single leading slash. Saves the debugger from
+    # re-deriving the lookup key.
+    assert exc.phase == "bogus"
+    # Message surfaces BOTH so the caller sees the user's input AND the
+    # internal lookup key.
+    msg = str(exc)
+    assert "/bogus" in msg
+    assert "bogus" in msg
+
+
+def test_unknown_phase_error_accepts_tuple_for_known() -> None:
+    """``known`` accepts any Sequence (review-fix #04 NTH3)."""
+    from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
+
+    exc = UnknownPhaseError("bogus", ("a", "b"))
+    # Internally normalized to list so callers don't get surprised by
+    # mismatched return types.
+    assert exc.known == ["a", "b"]
 
 
 def test_resolve_raises_unknown_phase_error_specifically() -> None:

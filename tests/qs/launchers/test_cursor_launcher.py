@@ -145,6 +145,43 @@ def test_cursor_fallback_new_context_uses_slash_form(
     )
 
 
+# --------------------------------------------------------------------------- #
+# IDE-path slash-form coverage — review-fix #04 SF3 + NTH11.
+#
+# Round 2 SF2 normalized the FALLBACK-path prompt to slash form, but the
+# IDE-path banner script kept interpolating the raw ``next_cmd`` — so a
+# bare phase was rendered as ``type create-plan`` in the user-facing
+# instruction. The IDE path is the more common one (cursor IDE on PATH),
+# so this gap was the more user-visible of the two.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("next_cmd", ["create-plan", "/create-plan"])
+def test_cursor_ide_banner_uses_slash_form(
+    next_cmd: str, monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    """IDE launcher script's user-facing instruction shows ``/<phase>``."""
+    from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
+
+    # Pretend ``cursor`` is on PATH so the IDE path is selected (not the
+    # text-instructions fallback). The IDE script lands under
+    # tempfile.gettempdir() — read it back to inspect the rendered text.
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/local/bin/cursor" if name == "cursor" else None)
+    payload = cursor_launcher.build_payload(
+        "/tmp/work", 42, "T", next_cmd=next_cmd,
+    )
+    assert payload["new_context"].startswith("sh "), payload["new_context"]
+    script_path = Path(payload["new_context"][len("sh "):])
+    script_body = script_path.read_text()
+
+    # The "In the chat, type: ..." banner is the user-facing instruction
+    # at the top of the IDE script. It must show ``/create-plan`` with a
+    # leading slash regardless of the input form.
+    assert "/create-plan" in script_body, (
+        f"IDE banner missed the slash form. Got script body:\n{script_body!r}"
+    )
+
+
 def test_cursor_same_context_preserves_input_verbatim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -101,13 +101,18 @@ def test_harness_doc_documents_codex_opencode_agent_exception() -> None:
         "agent-contract paragraph."
     )
     # Either explicit "do not emit agent" wording or "without agent" form
-    # is acceptable; we look for the conceptual marker.
-    has_exception_clause = (
-        "do NOT emit" in body
-        or "do not emit `agent`" in body
-        or "without `agent`" in body
-        or "skip `agent`" in body
-        or "no `agent`" in body
+    # is acceptable; we look for the conceptual marker. Normalize to
+    # lowercase so case variations like "Do not emit `agent`" don't make
+    # the test brittle (review-fix #04 NTH10).
+    body_lower = body.lower()
+    has_exception_clause = any(
+        candidate in body_lower
+        for candidate in (
+            "do not emit",
+            "without `agent`",
+            "skip `agent`",
+            "no `agent`",
+        )
     )
     assert has_exception_clause, (
         "harness.md must explicitly state that Codex / OpenCode launchers "

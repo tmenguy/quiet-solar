@@ -37,13 +37,27 @@ preserved verbatim under codex/opencode (review-fix #03 NTH7); those
 launchers treat ``--next-cmd`` as free-form, so an intentional space
 is the user's call.
 
-**Bimodal error contract** (review-fix #03 NTH9): expected failures
-(unknown phase, empty next-cmd) emit a JSON ``{"error": ...}`` payload
-and exit 1. Programmer errors (any other exception from a launcher,
-including non-phase ``ValueError`` from future launcher code) propagate
-uncaught — the user gets a Python traceback. This is intentional:
-programmer errors should fail loudly so the bug is visible in CI logs;
-user errors should emit a parseable JSON contract.
+**Error contract** (review-fix #03 NTH9, extended in review-fix #04
+NTH5/NTH6/NTH7). Four exit shapes, ordered by where they're caught:
+
+- **Argparse user errors** (exit 2, stderr banner) — missing required
+  flag, unknown ``--harness`` value (constrained by ``choices=`` so
+  the harness name is rejected before dispatch instead of
+  ``KeyError``-ing inside ``LAUNCHERS[harness]``). Standard argparse
+  contract; we do not catch or reformat.
+- **Expected user errors** (exit 1, JSON payload) — unknown phase
+  (caught as ``UnknownPhaseError``) and empty / whitespace-only
+  ``--next-cmd`` (rejected in main()). Both emit
+  ``{"error": ..., "value": ..., ...}`` so downstream scripts can
+  parse the failure mode programmatically.
+- **Programmer errors** (Python traceback, non-zero exit) — any other
+  exception from a launcher, including non-phase ``ValueError`` from
+  future launcher code. NOT caught: programmer errors should fail
+  loudly so the bug is visible in CI logs.
+- **KeyboardInterrupt** (Python traceback) — Ctrl-C during a
+  ``build_payload`` call propagates uncaught. Acceptable because a
+  half-written launcher script in ``/tmp`` doesn't break anything; the
+  user re-runs the phase and the script is overwritten.
 
 The phase-name → agent-name resolution is a static dict
 (``launchers/phases.py``) — no filesystem scan, no ``Path.cwd()`` call —
@@ -56,7 +70,6 @@ from __future__ import annotations
 import argparse
 import sys
 
-from harness import VALID_HARNESSES  # type: ignore[import-not-found]
 from harness import detect as detect_harness
 from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
@@ -103,7 +116,15 @@ def main() -> None:
     parser.add_argument(
         "--harness",
         default=None,
-        choices=list(VALID_HARNESSES),
+        # Use ``LAUNCHERS`` (this module's dispatch table) rather than
+        # ``VALID_HARNESSES`` (harness.py's enum) as the choices source.
+        # The two sets are identical today but ``LAUNCHERS`` is the
+        # actual source of truth for what this script can dispatch — if
+        # someone ever adds a harness to ``VALID_HARNESSES`` without a
+        # corresponding launcher, argparse rejects the bad value cleanly
+        # instead of letting it KeyError inside main(). Review-fix #04
+        # NTH7.
+        choices=list(LAUNCHERS),
         help="Override the detected harness.",
     )
     args = parser.parse_args()
