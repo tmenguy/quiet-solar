@@ -16,15 +16,21 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 ## Development Lifecycle
 
-The development pipeline uses slash commands that route to static phase
-agents + Python scripts:
-- **`/setup-task`** → **`/create-plan`** → **`/implement-task`** → **`/review-task`** → **`/finish-task`** → **`/release`**
+The development pipeline runs each phase as an interactive
+`claude --agent qs-<phase>` session (preferred) or via the
+slash-command fallback (`/<phase>`, kept for Claude Desktop):
+
+- **`qs-setup-task`** → **`qs-create-plan`** → **`qs-implement-task`** → **`qs-review-task`** → **`qs-finish-task`** → **`qs-release`**
 
 Agents are defined in `.claude/agents/` (and mirrored to `.cursor/agents/`).
 They delegate creative work to themselves and mechanical work to Python
 scripts in `scripts/qs/`. Stories live under
 `docs/stories/QS-<N>.story.md` — shared by the new pipeline and the
 legacy OpenCode pipeline (whose templates were updated to point here).
+
+See [overview.md](overview.md) section "Orchestrators are interactive
+sessions; sub-agents are parallel fan-out" for the rationale behind the
+launcher-vs-slash distinction.
 
 Quality gates: `python scripts/qs/quality_gate.py` (pytest 100% coverage
 + ruff + mypy + translations).

@@ -27,23 +27,57 @@ mechanics** are isolated in Python.
 
 ## Launcher dispatch — `scripts/qs/launchers/`
 
-When a phase finishes and the next phase runs in a new session
-(e.g., `setup-task` → `create-plan` crosses workspaces), the agent
-calls `python scripts/qs/next_step.py --phase <p> --next-cmd
-"/create-plan"`. That delegates to the harness-specific launcher:
+When a phase finishes and the user is about to start the next phase
+(typically in a fresh interactive session), the agent calls
+`python scripts/qs/next_step.py --next-cmd <phase> --work-dir <wd>
+--issue <N> --title <t>`. The `--next-cmd` arg accepts either the bare
+phase name (`create-plan`) or the slash form (`/create-plan`) for
+back-compat; unknown phases raise `ValueError` and produce a JSON
+error payload (no silent fallback). The phase-name → agent-name
+mapping lives in `scripts/qs/launchers/phases.py` as a static dict —
+no filesystem scan, so this works from any CWD.
+
+`next_step.py` delegates to the harness-specific launcher:
 
 - **`launchers/claude.py`** — emits a `sh /tmp/qs_launch_<N>.sh` one-liner
-  that opens a terminal in the worktree and runs `claude` with launch
-  options.
-- **`launchers/cursor.py`** — emits instructions to open the worktree as
-  a new Cursor workspace and type the next slash command. Cursor doesn't
-  have a CLI launcher equivalent today.
+  whose generated script runs `claude --agent qs-<phase>` in the
+  worktree. The `--agent` flag is what makes the new session
+  interactive — Claude Code loads the agent body as the system prompt
+  and the user can converse with the phase persona mid-flight (QS-175).
+- **`launchers/cursor.py`** — emits a `cursor-agent --workspace <wd>
+  --agent qs-<phase>` invocation (the `cli_context`) when
+  `cursor-agent` is on PATH. When the binary is missing, falls back to
+  the legacy prompt-positional form (the user opens Cursor manually
+  and types `/<phase>` in chat). The IDE launcher (`new_context`)
+  invokes `cursor <wd>` directly — Cursor doesn't expose a `--agent`
+  flag for the IDE path, so the user types the slash command in chat
+  once the IDE opens.
 - **`launchers/opencode.py`** — emits the same OpenCode HTTP-API spawn
   approach as the legacy pipeline (delegates to `scripts/qs_opencode/`).
 - **`launchers/codex.py`** — stub.
 
-All launchers return a dict with at minimum `tool`, `same_context`,
-`new_context`. PyCharm convenience commands (`pycharm_context`,
+All launchers return a dict with at minimum:
+
+- `tool` (string, e.g. `"claude-code"`)
+- `same_context` (string, slash-form fallback command)
+- `new_context` (string, shell command to spawn a fresh session)
+
+The **Claude** and **Cursor** launchers additionally emit `agent` (the
+resolved `qs-<phase>` name). The **Codex** and **OpenCode** launchers
+do NOT emit `agent` because they accept free-form `--next-cmd` values
+that may not map to a static phase — see
+`tests/qs/launchers/test_next_step_cli.py::test_codex_passes_known_phase_through_unchanged`
+for the grep-able contract pin.
+
+**Whitespace in `--next-cmd`** (review-fix #03 NTH7): codex/opencode
+treat `--next-cmd` as a free-form string, so trailing or leading
+whitespace inside an otherwise-non-empty value is preserved verbatim
+(`--next-cmd "create-plan "` → `same_context: "create-plan "`). This is
+intentional — explicit free-form is a feature, not a bug. The
+empty / whitespace-only case is rejected for all harnesses by
+`next_step.main()` after `parse_args()` returns.
+
+PyCharm convenience commands (`pycharm_context`,
 `pycharm_applescript_context`) are added when PyCharm is detected on
 macOS and the work dir is a worktree.
 

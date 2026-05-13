@@ -142,12 +142,18 @@ The standard merge flow.
    ✅ Remote branch {{branch}} deleted.
    ✅ Worktree removed.
 
-   Production code was touched → run /release from the main checkout
-   when you're ready to ship a release.
+   Production code was touched → from the main checkout, run /release
+   (or `claude --agent qs-release` for the interactive path) when
+   you're ready to ship a release.
    ```
    (Skip the release suggestion when no `custom_components/quiet_solar/`
    files were in the diff — check `gh pr diff {{pr_number}} --name-only`
    or just inspect the file list.)
+
+   **Why no launcher payload here**: `/release` runs on the main
+   checkout, not the worktree (which is now gone). We intentionally
+   don't build a launcher with `--next-cmd release` — see QS-175 OUT OF
+   SCOPE. The user invokes release manually after switching workspaces.
 
 ## Hard rules
 

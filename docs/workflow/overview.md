@@ -55,6 +55,55 @@ invocations** — serial spawning defeats the design (later reviewers see
 earlier findings and conform to them). See
 [adversarial-review.md](adversarial-review.md) for the full pattern.
 
+## Orchestrators are interactive sessions; sub-agents are parallel fan-out
+
+The pipeline runs two fundamentally different kinds of agent, and the
+launcher distinction matters.
+
+**Phase orchestrators** (`qs-setup-task`, `qs-create-plan`,
+`qs-implement-task`, `qs-implement-setup-task`, `qs-review-task`,
+`qs-finish-task`, `qs-release`) are meant to run as **interactive
+`claude --agent qs-<phase>` sessions**. Claude Code launches a fresh
+session whose system prompt IS the agent body, and the user converses
+with the persona mid-flight — answering clarifying questions in
+`qs-create-plan` step 2, authorizing the quality gate in
+`qs-implement-task` step 4, driving "fix all / skip all" triage in
+`qs-review-task`, and so on. One phase = one session (the system prompt
+is immutable mid-session). The launcher (`scripts/qs/launchers/`) emits
+a `claude --agent qs-<phase>` invocation in the new_context for exactly
+this reason.
+
+**Sub-agents** are the 4 plan reviewers spawned by `qs-create-plan` and
+the 4 code reviewers spawned by `qs-review-task`. They **stay as
+`Agent`-tool fan-out** — non-interactive, parallel, returning a final
+findings report. That's the right shape for them: they're independent
+parallel workers, which is exactly what the `Agent` tool is good at.
+Making them interactive would defeat the design (later reviewers would
+see earlier findings and conform).
+
+**Slash commands stay as a degraded fallback.** Running `/create-plan`
+(or any `/qs-*` slash) from the default Claude Code session spawns the
+phase orchestrator via the `Agent` tool — non-interactive, one-shot,
+returning a final summary with no way for the user to interject. The
+persona body executes, but the per-phase "answer mid-flight" UX is
+gone. This is broken-by-design UX kept **only as a fallback path** for
+environments without the CLI launcher (notably Claude Desktop). The
+slash command files under `.claude/commands/` are reworded — not
+deleted — to flag this distinction.
+
+### Claude Desktop limitation
+
+Claude Desktop has no equivalent to `claude --agent`: no URL scheme, no
+CLI argument pass-through, no UI gesture to pre-load an agent persona
+into a new chat. Desktop users land on the slash-command fallback path
+by necessity. The existing `pycharm_context` (clipboard / AppleScript)
+helpers in `scripts/qs/launchers/claude.py` remain the suggested
+bridge: setup-task emits a `pycharm_context` shell command that copies
+the launcher invocation to the clipboard and opens PyCharm on the
+worktree — users then paste into PyCharm's embedded terminal to get
+the interactive path. This is honest about the limitation, not an
+attempt to automate Desktop with brittle clipboard tricks.
+
 ## Phase routing
 
 `create-plan` chooses between two implement-phase variants based on the

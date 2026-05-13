@@ -31,7 +31,14 @@ from utils import (  # type: ignore[import-not-found]
     run_git,
 )
 
-_LAUNCHERS = {
+# Public mapping (review-fix #04 SF1) — promoted to match the
+# round-3 SF1 rename of next_step.LAUNCHERS. The two dispatch tables
+# are conceptually the same configuration; keeping the naming
+# convention aligned avoids drift and lets test code monkeypatch
+# either via the public attribute. Kept as a local copy (not imported
+# from ``next_step``) so ``setup_task`` stays independent of the
+# next-phase dispatcher.
+LAUNCHERS = {
     "claude-code": claude_launcher,
     "cursor": cursor_launcher,
     "opencode": opencode_launcher,
@@ -93,7 +100,7 @@ def main() -> None:
     title = args.title or f"Issue #{issue}"
 
     harness = args.harness or detect_harness()
-    launcher = _LAUNCHERS[harness]
+    launcher = LAUNCHERS[harness]
     launcher_payload = launcher.build_payload(
         work_dir,
         issue,

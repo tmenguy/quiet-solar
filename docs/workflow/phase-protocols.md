@@ -5,6 +5,14 @@ Each phase has a static agent under `.claude/agents/` (and
 `python scripts/qs/context.py`. This document captures the contract for
 each phase — inputs, outputs, hand-off, hard rules.
 
+Each phase is invoked **as an interactive session** via
+`claude --agent qs-<phase>` (the launcher form — preferred). The
+slash-command form (`/<phase>`) is kept as a **degraded fallback** for
+Claude Desktop and any chat without a CLI launcher. See
+[overview.md](overview.md) section "Orchestrators are interactive
+sessions; sub-agents are parallel fan-out" for the full rationale —
+this document does not duplicate it.
+
 ---
 
 ## `setup-task` (agent: `qs-setup-task`)
@@ -16,8 +24,8 @@ existing GitHub issue, OR `--plan /path/to/plan.md`.
 worktree at `<repo>-worktrees/QS_<N>/`.
 **Output**: launcher command (`scripts/qs/launchers/<harness>.py`-generated)
 the user runs to open a new session on the worktree.
-**Next phase**: user opens new session on the worktree, invokes
-`/create-plan`.
+**Next phase**: `claude --agent qs-create-plan` in the worktree
+(preferred — fresh interactive session), or `/create-plan` as fallback.
 
 **Hard rules**:
 - Do NOT analyze, diagnose, or interpret user input. Pass the text
@@ -36,8 +44,11 @@ the user runs to open a new session on the worktree.
 `docs/stories/QS-<N>.story.md`, commits and pushes.
 **Output**: story file with acceptance criteria + task breakdown +
 adversarial review notes appended.
-**Next phase**: `/implement-task` or `/implement-setup-task` (the agent
-decides based on the file paths in its task breakdown).
+**Next phase**: `claude --agent qs-implement-task` or
+`claude --agent qs-implement-setup-task` in the worktree (preferred —
+fresh interactive session), or `/implement-task` /
+`/implement-setup-task` as fallback. The agent decides which based on
+the file paths in its task breakdown.
 
 **Phase protocol**:
 1. Read the issue (`gh issue view`). Read `docs/workflow/project-rules.md`
@@ -57,8 +68,10 @@ decides based on the file paths in its task breakdown).
    otherwise `implement-task`.
 7. Write the story file. Append "Adversarial Review Notes". Commit and
    push.
-8. Tell the user the next command (`/implement-task` or
-   `/implement-setup-task`).
+8. Tell the user the next command — emit the launcher payload (preferred,
+   `claude --agent qs-implement-task` or `claude --agent
+   qs-implement-setup-task`) plus the slash-command fallback
+   (`/implement-task` or `/implement-setup-task`).
 
 **Hard rules**:
 - Do not write code in this phase.
@@ -75,7 +88,8 @@ decides based on the file paths in its task breakdown).
 `tests/` (or `scripts/`, `.claude/`, etc. for `implement-setup-task`);
 auto-commits, pushes, opens PR after green quality gate.
 **Output**: PR opened with quality checklist and risk assessment.
-**Next phase**: `/review-task`.
+**Next phase**: `claude --agent qs-review-task` in the worktree
+(preferred — fresh interactive session), or `/review-task` as fallback.
 
 **Phase protocol**:
 1. Read story file. Confirm branch state.
@@ -111,8 +125,11 @@ auto-commits, pushes, opens PR after green quality gate.
 are needed).
 **Output**: triaged findings; either "ready for finish-task" or a fix
 plan + instructions for the user to apply fixes.
-**Next phase**: `/finish-task` (when clean) or re-run `/implement-task`
-followed by `/review-task` (when fixes are needed).
+**Next phase**: `claude --agent qs-finish-task` in the worktree
+(preferred — fresh interactive session), or `/finish-task` as fallback.
+When fixes are needed, re-run `claude --agent qs-implement-task` (or
+`/implement-task`) and then `claude --agent qs-review-task` (or
+`/review-task`).
 
 **Phase protocol**:
 1. Fetch PR diff.
@@ -124,14 +141,16 @@ followed by `/review-task` (when fixes are needed).
    - `qs-review-coderabbit` — wraps CodeRabbit's review
 3. Consolidate into must-fix / should-fix / nice-to-have / invalid.
 4. **Zero-findings fast path**: if no must-fix or should-fix findings,
-   tell the user to run `/finish-task`.
+   emit the launcher payload (preferred, `claude --agent
+   qs-finish-task`) plus the slash-command fallback (`/finish-task`).
 5. Interactive triage: present table → ask "fix all / skip all / one by
    one?" → collect decisions → confirm.
 6. If fixes needed, write fix-plan file (auto-incremented suffix
-   `#01`, `#02`, …) and emit a ready-to-paste prompt for the user to
-   invoke `/implement-task` against the fix plan.
-7. When fixes pushed, the user re-invokes `/review-task` — loop back to
-   step 1 until clean.
+   `#01`, `#02`, …) and emit the launcher payload (`claude --agent
+   qs-implement-task`) plus the slash-command fallback (`/implement-task`)
+   for the user to apply the fix plan.
+7. When fixes pushed, the user re-runs `claude --agent qs-review-task`
+   (or `/review-task` as fallback) — loop back to step 1 until clean.
 
 **Hard rules**:
 - This agent is an orchestrator — do not review code yourself. Always
@@ -147,7 +166,14 @@ followed by `/review-task` (when fixes are needed).
 **Inputs**: PR number.
 **Side effects**: merges PR, deletes branch on origin, removes worktree.
 **Output**: confirmation; user is directed to `/release` if appropriate.
-**Next phase**: `/release` (independent — runs from main checkout).
+**Next phase**: `/release` from the main checkout (independent), or
+`claude --agent qs-release` if the user prefers the interactive form.
+Note that `qs-finish-task` does **not** call
+`scripts/qs/next_step.py --next-cmd release` to build a launcher
+payload — release lives on the main checkout, which is a different
+workspace, and the user invokes it manually. The agent body still
+mentions both `/release` and `claude --agent qs-release` in plain prose
+as alternatives (see QS-175 OUT OF SCOPE).
 
 **Phase protocol**:
 1. Show PR summary.

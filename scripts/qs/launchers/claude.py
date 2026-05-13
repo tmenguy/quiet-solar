@@ -1,4 +1,27 @@
-"""Launcher payload for Claude Code (CLI + Desktop on macOS)."""
+"""Launcher payload for Claude Code (CLI + Desktop on macOS).
+
+The Claude launcher emits a ``sh /tmp/qs_launch_<N>.sh`` one-liner whose
+generated script invokes::
+
+    claude {CLAUDE_LAUNCH_OPTS} --agent qs-<phase> --name 'QS_<N>: <title>'
+
+(Single quotes — ``shlex.quote`` wraps the ``--name`` argument and the
+``--agent`` agent name in single-quote form; the docstring example
+mirrors the rendered shell line.)
+
+The ``--agent`` flag is what makes the new session interactive: Claude
+Code loads the matching ``.claude/agents/qs-<phase>.md`` body as the
+system prompt and the user can converse with the persona mid-flight.
+This is the QS-175 fix for the "non-interactive Agent-tool sub-process"
+UX of the older slash-command path.
+
+Concurrency note: the script path is deterministic per issue number
+(``/tmp/qs_launch_<N>.sh``), so two simultaneous setup-task runs on the
+SAME issue would race on the file. This is fine for the single-user
+dev pipeline this script is built for; switching to
+``NamedTemporaryFile`` would lose the predictable path that the
+``new_context`` consumers rely on.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +30,10 @@ import shlex
 import shutil
 import tempfile
 from pathlib import Path
+
+from launchers.phases import (  # type: ignore[import-not-found]
+    resolve_agent_for_next_cmd,
+)
 
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose
 # — users can override via env or by editing this constant.
@@ -42,17 +69,23 @@ def _claude_command(
     issue: int | str,
     title: str,
     *,
+    agent: str,
     next_prompt: str | None,
 ) -> str:
-    """Build a short ``sh /tmp/qs_launch_<N>.sh`` one-liner to open Claude."""
+    """Build a short ``sh /tmp/qs_launch_<N>.sh`` one-liner to open Claude.
+
+    The generated script invokes ``claude --agent <agent>`` so the new
+    session boots straight into the phase orchestrator persona (QS-175).
+    """
     tab_title = f"QS_{issue}: {title}"
     safe_title = shlex.quote(tab_title)
     safe_dir = shlex.quote(work_dir)
+    safe_agent = shlex.quote(agent)
 
     full_cmd = (
         f"printf '\\033]0;%s\\007' {safe_title} && "
         f"cd {safe_dir} && "
-        f"claude {CLAUDE_LAUNCH_OPTS} --name {safe_title}"
+        f"claude {CLAUDE_LAUNCH_OPTS} --agent {safe_agent} --name {safe_title}"
     )
     if next_prompt is not None:
         full_cmd += f" {shlex.quote(next_prompt)}"
@@ -144,14 +177,22 @@ def build_payload(
         next_prompt: Optional preload prompt for the new session.
 
     Returns:
-        A dict with ``tool``, ``same_context``, ``new_context`` and
-        (on macOS with PyCharm installed) ``pycharm_context`` /
+        A dict with ``tool``, ``agent``, ``same_context``, ``new_context``
+        and (on macOS with PyCharm installed) ``pycharm_context`` /
         ``pycharm_applescript_context`` keys.
+
+    Raises:
+        ValueError: if ``next_cmd`` is not a known phase. No silent
+            fallback — free-form prompts go through ``--next-prompt``.
     """
-    new_context = _claude_command(work_dir, issue, title, next_prompt=next_prompt)
+    agent = resolve_agent_for_next_cmd(next_cmd)
+    new_context = _claude_command(
+        work_dir, issue, title, agent=agent, next_prompt=next_prompt,
+    )
 
     payload: dict = {
         "tool": "claude-code",
+        "agent": agent,
         "same_context": next_cmd,
         "new_context": new_context,
     }
