@@ -65,6 +65,44 @@ if [ -d "$WORKTREE_DIR" ]; then
         | grep -qxF -e "$WORKTREE_DIR" -e "$WORKTREE_DIR_CANON"; then
         IS_TRACKED_WORKTREE="yes"
     fi
+    # FIX #04 MF-1: the cleanliness gate must run only on the destructive
+    # arms, NOT before the happy-path no-op detection. A developer with
+    # uncommitted edits in a healthy QS_<N> worktree re-running setup
+    # (re-symlink, re-verify upstream) was previously blocked by the
+    # cleanliness check before reaching the "already set up" early-return.
+    # Resolve happy path / detached-HEAD first; only then gate destructive
+    # recovery on cleanliness.
+    if [ "$IS_TRACKED_WORKTREE" = "yes" ]; then
+        ACTUAL_HEAD="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
+        # `rev-parse --abbrev-ref HEAD` returns the literal string 'HEAD'
+        # in detached state — the equality check below would silently
+        # fail and fall through to destructive recovery, but detached
+        # HEAD is often intentional inspection. Refuse and ask the
+        # operator to resolve.
+        if [ "$ACTUAL_HEAD" = "HEAD" ]; then
+            echo "Error: worktree ${WORKTREE_DIR} is in detached-HEAD state."
+            echo "Refusing to recover automatically — this may be intentional inspection."
+            echo "Resolve manually:"
+            echo "  cd ${WORKTREE_DIR} && git checkout ${BRANCH}   # or git switch -"
+            echo "…then re-run this script."
+            exit 1
+        fi
+        ACTUAL_UPSTREAM="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")"
+        if [ "$ACTUAL_HEAD" = "$BRANCH" ] && [ "$ACTUAL_UPSTREAM" = "origin/${BRANCH}" ]; then
+            echo "Worktree ${WORKTREE_DIR} already set up on ${BRANCH} tracking origin/${BRANCH}."
+            exit 0
+        fi
+    fi
+    # FIX #04 SF-5: refuse to proceed when $WORKTREE_DIR is unreadable.
+    # Otherwise `find` emits nothing, HAS_NONGIT_CONTENT stays empty, and
+    # recovery falls through to `rm -rf` which then fails messily.
+    if ! { [ -r "$WORKTREE_DIR" ] && [ -x "$WORKTREE_DIR" ]; }; then
+        echo "Error: ${WORKTREE_DIR} exists but is not readable/executable."
+        echo "Permission issue (possibly sudo-owned from a prior run). Resolve manually:"
+        echo "  ls -la ${WORKTREE_DIR}"
+        echo "  sudo chown -R \$(whoami) ${WORKTREE_DIR}   # if appropriate"
+        exit 1
+    fi
     # Refuse to silently destroy uncommitted work, stashes, or stray
     # user-created files. Both destructive recovery arms below
     # (`worktree remove --force` and `rm -rf`) drop content without
@@ -93,12 +131,26 @@ if [ -d "$WORKTREE_DIR" ]; then
             STASHES=""
         fi
     fi
-    # Even without a .git, the directory may contain user files. Detect
-    # any visible content (excluding .git*) so the `rm -rf` arm doesn't
-    # vaporize a user's notes/scratch files.
+    # FIX #04 MF-2 / SF-1 / SF-3: detect visible content in the directory,
+    # capturing the first few offending filenames into the diagnostic.
+    # Exclusions:
+    #   - `.git` (exact): the tracked worktree's git dir/file.
+    #   - `.DS_Store`, `.idea`, `.vscode`, `.envrc`, `.python-version`:
+    #     common macOS/IDE/tool dotfiles that aren't user-meaningful.
+    # Do NOT exclude `.gitignore`, `.gitattributes`, `.gitmodules` —
+    # if those are loose in a stale directory, the operator probably
+    # wants to know before we wipe them.
     if [ -d "$WORKTREE_DIR" ]; then
-        if find "$WORKTREE_DIR" -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '.git*' -print -quit 2>/dev/null | grep -q .; then
-            HAS_NONGIT_CONTENT="yes"
+        OFFENDING="$(find "$WORKTREE_DIR" -mindepth 1 -maxdepth 1 \
+            ! -name '.git' \
+            ! -name '.DS_Store' \
+            ! -name '.idea' \
+            ! -name '.vscode' \
+            ! -name '.envrc' \
+            ! -name '.python-version' \
+            -print 2>/dev/null | head -5)"
+        if [ -n "$OFFENDING" ]; then
+            HAS_NONGIT_CONTENT="$OFFENDING"
         fi
     fi
     if [ -n "$DIRTY" ] || [ -n "$STASHES" ] || \
@@ -112,25 +164,6 @@ if [ -d "$WORKTREE_DIR" ]; then
         exit 1
     fi
     if [ "$IS_TRACKED_WORKTREE" = "yes" ]; then
-        ACTUAL_HEAD="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")"
-        # `rev-parse --abbrev-ref HEAD` returns the literal string 'HEAD'
-        # in detached state — the equality check below would silently
-        # fail and fall through to destructive recovery, but detached
-        # HEAD is often intentional inspection. Refuse and ask the
-        # operator to resolve.
-        if [ "$ACTUAL_HEAD" = "HEAD" ]; then
-            echo "Error: worktree ${WORKTREE_DIR} is in detached-HEAD state."
-            echo "Refusing to recover automatically — this may be intentional inspection."
-            echo "Resolve manually:"
-            echo "  cd ${WORKTREE_DIR} && git checkout ${BRANCH}   # or git switch -"
-            echo "…then re-run this script."
-            exit 1
-        fi
-        ACTUAL_UPSTREAM="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")"
-        if [ "$ACTUAL_HEAD" = "$BRANCH" ] && [ "$ACTUAL_UPSTREAM" = "origin/${BRANCH}" ]; then
-            echo "Worktree ${WORKTREE_DIR} already set up on ${BRANCH} tracking origin/${BRANCH}."
-            exit 0
-        fi
         echo "Worktree ${WORKTREE_DIR} exists but is in a partial state"
         echo "  (HEAD='${ACTUAL_HEAD}', upstream='${ACTUAL_UPSTREAM}')."
         echo "Removing tracked worktree to recover..."
@@ -241,7 +274,23 @@ fi
 # failure ad infinitum until the operator intervenes manually. Use
 # `ls-remote` rather than a full `fetch` — cheaper and avoids mutating
 # local refs in a setup script.
-REMOTE_TIP="$(git -C "$WORKTREE_DIR" ls-remote --heads origin "$BRANCH" 2>/dev/null | awk '{print $1}')"
+# FIX #04 SF-4: previously `2>/dev/null` suppressed network/auth errors,
+# leaving REMOTE_TIP empty and silently turning the divergence guard
+# into a no-op. Capture stderr alongside stdout and check the exit code
+# explicitly so a genuine ls-remote failure is surfaced. An empty
+# REMOTE_TIP now unambiguously means "branch doesn't exist on origin"
+# rather than "we couldn't tell".
+REMOTE_TIP_OUTPUT=""
+LS_REMOTE_RC=0
+REMOTE_TIP_OUTPUT="$(git -C "$WORKTREE_DIR" ls-remote --heads origin "$BRANCH" 2>&1)" || LS_REMOTE_RC=$?
+if [ "$LS_REMOTE_RC" -ne 0 ]; then
+    echo "Error: 'git ls-remote --heads origin ${BRANCH}' failed."
+    echo "  Output: ${REMOTE_TIP_OUTPUT}"
+    echo "Cannot verify divergence before push. Resolve manually:"
+    echo "  cd ${WORKTREE_DIR} && git ls-remote --heads origin ${BRANCH}"
+    exit 1
+fi
+REMOTE_TIP="$(echo "$REMOTE_TIP_OUTPUT" | awk '{print $1}')"
 if [ -n "$REMOTE_TIP" ]; then
     LOCAL_TIP="$(git -C "$WORKTREE_DIR" rev-parse "$BRANCH")"
     if [ "$REMOTE_TIP" != "$LOCAL_TIP" ]; then
@@ -283,16 +332,21 @@ fi
 echo "Publishing ${BRANCH} to origin and setting upstream..."
 # Wrap the push with explicit failure handling: under bare `set -e` the
 # script aborts with no actionable hint on auth expiry, network drop,
-# pre-push hook reject, or credential prompt hang. The "fully set up
-# locally" line matters because the partial-state recovery branch
-# re-does work on the next run — the operator should know they can
-# just retry the push instead.
+# pre-push hook reject, or credential prompt hang.
+# FIX #04 SF-2: previous wording said "Worktree IS fully set up locally
+# — only the publish step failed", which misled operators into thinking
+# a re-run would skip straight past setup. In fact the partial-state
+# recovery arm rebuilds the worktree from scratch on the next run.
+# Point at the manual retry as the primary remediation; note re-running
+# as a slower-but-safe alternative.
 if ! git -C "$WORKTREE_DIR" push -u origin "${BRANCH}"; then
     echo "Error: 'git push -u origin ${BRANCH}' failed."
     echo "Common causes: auth expired, network drop, pre-push hook reject."
-    echo "Worktree IS fully set up locally — only the publish step failed."
-    echo "Resolve manually:"
+    echo "The worktree is built locally and the failure is just in the"
+    echo "publish step. The simplest fix is to retry the push directly:"
     echo "  cd ${WORKTREE_DIR} && git push -u origin ${BRANCH}"
+    echo "Re-running this script would rebuild the worktree from scratch"
+    echo "(slower, but harmless if you prefer that)."
     exit 1
 fi
 
