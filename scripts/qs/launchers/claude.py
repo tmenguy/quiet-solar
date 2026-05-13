@@ -30,10 +30,18 @@ import shlex
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from launchers.phases import (  # type: ignore[import-not-found]
     resolve_agent_for_next_cmd,
 )
+
+# ``caller`` literal — reserved for harness-specific bifurcation
+# (the OpenCode launcher uses it to switch between HTTP-API and
+# CLI-form payloads; Claude's path is identical for both). Kept as a
+# no-op kwarg so all launchers can be dispatched uniformly from
+# ``setup_task.py`` and ``next_step.py``.
+Caller = Literal["setup_task", "next_step"]
 
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose
 # — users can override via env or by editing this constant.
@@ -163,6 +171,7 @@ def build_payload(
     *,
     next_cmd: str,
     next_prompt: str | None = None,
+    caller: Caller = "next_step",
 ) -> dict:
     """Build the launcher payload for Claude Code.
 
@@ -175,6 +184,9 @@ def build_payload(
             the agent can suggest the user run it in the current session
             if they prefer.
         next_prompt: Optional preload prompt for the new session.
+        caller: Reserved for harness-specific bifurcation (used by the
+            OpenCode launcher). Claude's behaviour is identical for
+            both call sites, so the value is accepted and ignored.
 
     Returns:
         A dict with ``tool``, ``agent``, ``same_context``, ``new_context``
@@ -185,6 +197,7 @@ def build_payload(
         ValueError: if ``next_cmd`` is not a known phase. No silent
             fallback — free-form prompts go through ``--next-prompt``.
     """
+    del caller  # reserved for harness-specific bifurcation; not used here
     agent = resolve_agent_for_next_cmd(next_cmd)
     new_context = _claude_command(
         work_dir, issue, title, agent=agent, next_prompt=next_prompt,

@@ -7,6 +7,15 @@ the contents of ``build_payload`` below.
 
 from __future__ import annotations
 
+from typing import Literal
+
+# ``caller`` literal — reserved for harness-specific bifurcation
+# (the OpenCode launcher uses it to switch between HTTP-API and
+# CLI-form payloads; Codex is a stub today). Kept as a no-op kwarg so
+# all launchers can be dispatched uniformly from ``setup_task.py`` and
+# ``next_step.py``.
+Caller = Literal["setup_task", "next_step"]
+
 
 def build_payload(
     work_dir: str,
@@ -15,9 +24,15 @@ def build_payload(
     *,
     next_cmd: str,
     next_prompt: str | None = None,
+    caller: Caller = "next_step",
 ) -> dict:
-    """Return a placeholder launcher payload for Codex."""
-    del title  # unused
+    """Return a placeholder launcher payload for Codex.
+
+    The ``caller`` kwarg is reserved for harness-specific bifurcation
+    (used by the OpenCode launcher). Codex is a stub today and
+    accepts/ignores it.
+    """
+    del title, caller  # unused
     return {
         "tool": "codex",
         "same_context": next_cmd,
