@@ -32,8 +32,12 @@ class UnknownPhaseError(ValueError):
     """
 
     def __init__(self, value: str, known: list[str]) -> None:
+        # Comma-separated rendering reads more cleanly than ``repr(list)``
+        # — the latter mixes square brackets and single quotes that look
+        # like noise when ``value`` is also a short string (review-fix
+        # #03 NTH5).
         super().__init__(
-            f"Unknown phase {value!r}; known phases: {known}",
+            f"Unknown phase {value!r}; known phases: {', '.join(known)}",
         )
         self.value = value
         self.known = known

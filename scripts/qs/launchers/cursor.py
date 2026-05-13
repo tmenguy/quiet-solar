@@ -75,7 +75,7 @@ def _cursor_ide_command(
     return f"sh {script_path}"
 
 
-def _slash_form(next_cmd: str) -> str:
+def slash_form(next_cmd: str) -> str:
     """Normalize a phase reference to its slash form (``"/create-plan"``).
 
     Used in the Cursor fallback prompt so the user lands on a slash
@@ -83,16 +83,38 @@ def _slash_form(next_cmd: str) -> str:
     the regression where a bare phase (``"create-plan"``) was embedded
     in the fallback prompt with no leading slash.
 
+    **Public surface** (review-fix #03 SF2): exposed without a leading
+    underscore so tests can pin its contract without reaching for a
+    "private" name. The function is a pure helper with no
+    module-internal invariants — making it public matches the
+    ``PHASE_TO_AGENT`` / ``LAUNCHERS`` promotion pattern.
+
     Defense-in-depth (review-fix #02 NTH8): the helper is currently
     upstream-protected by ``resolve_agent_for_next_cmd`` (called before
     we land here), but rejecting empty / whitespace-only input here too
     keeps the contract local — a future refactor that wires
-    ``_slash_form`` into a different call path can't silently produce
+    ``slash_form`` into a different call path can't silently produce
     ``"/"`` from ``""``.
+
+    Asymmetry note (review-fix #03 NTH3): we reject empty input but
+    accept ``"//create-plan"`` unchanged (pass-through). Double-slash
+    inputs are rejected upstream by ``resolve_agent_for_next_cmd``;
+    re-checking here would create drift risk between the two guards.
+    If the resolver's policy on ``//`` ever changes, this guard does
+    NOT need to follow — the resolver remains the single source of
+    truth for what counts as a valid phase form.
+
+    Failure mode (review-fix #03 NTH8): the ``ValueError`` raised here
+    is a programmer-error signal — ``slash_form`` is unreachable from
+    ``build_payload`` with empty input because the resolver guards
+    that path. If this defense ever fires in production, the user gets
+    a Python traceback rather than the JSON ``{"error": ...}``
+    contract used for user errors. This is intentional and matches the
+    bimodal contract documented in ``scripts/qs/next_step.py``.
     """
     if not next_cmd or not next_cmd.strip():
         raise ValueError(
-            f"_slash_form requires a non-empty next_cmd; got {next_cmd!r}",
+            f"slash_form requires a non-empty next_cmd; got {next_cmd!r}",
         )
     return next_cmd if next_cmd.startswith("/") else f"/{next_cmd}"
 
@@ -130,7 +152,7 @@ def _cursor_cli_command(
     # the prompt with the SLASH form of the command (review-fix #2) so the
     # user lands on the right phase once the session opens. Manual
     # equivalent: open Cursor on the worktree → in chat, type ``/<phase>``.
-    prompt_parts = [_slash_form(next_cmd)]
+    prompt_parts = [slash_form(next_cmd)]
     if next_prompt:
         prompt_parts.append(next_prompt)
     prompt = "\n\n".join(prompt_parts)
@@ -198,7 +220,7 @@ def build_payload(
             # slash form is what Cursor's chat expects, so we normalize
             # here too (review-fix #2) — a bare phase name would not be
             # recognized as a slash command.
-            f"Then in chat, type: {_slash_form(next_cmd)}",
+            f"Then in chat, type: {slash_form(next_cmd)}",
         ]
         if next_prompt:
             instructions.extend(["", "Initial prompt:", next_prompt])

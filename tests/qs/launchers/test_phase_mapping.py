@@ -57,9 +57,18 @@ def test_resolve_slash_phase_name(phase: str) -> None:
     assert resolve_agent_for_next_cmd(f"/{phase}") == f"qs-{phase}"
 
 
-@pytest.mark.parametrize("bogus", ["foo", "", "  ", "/nope", "/", "create plan"])
+@pytest.mark.parametrize("bogus", ["foo", "  ", "/nope", "/", "create plan"])
 def test_resolve_unknown_phase_raises(bogus: str) -> None:
-    """Unknown phase raises ValueError naming the value and listing known phases."""
+    """Unknown phase raises ValueError naming the value and listing known phases.
+
+    Note: the empty string ``""`` is intentionally excluded from this
+    parametrise list (review-fix #03 MF1). It would make
+    ``bogus in msg`` vacuously true (every string contains ``""``),
+    silently masking a regression in error-message formatting. The
+    empty-input invariant is pinned at the CLI layer instead by
+    ``test_empty_or_whitespace_next_cmd_rejected_for_all_harnesses``
+    in ``test_next_step_cli.py``.
+    """
     from launchers.phases import (  # type: ignore[import-not-found]
         PHASE_TO_AGENT,
         resolve_agent_for_next_cmd,

@@ -12,7 +12,6 @@ which adds ``scripts/qs/`` to ``sys.path`` and tears it down per-test.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -48,7 +47,7 @@ def test_next_step_propagates_non_phase_value_error(monkeypatch: pytest.MonkeyPa
         def build_payload(*_args: object, **_kwargs: object) -> dict:
             raise ValueError("totally unrelated failure mode")
 
-    monkeypatch.setitem(next_step._LAUNCHERS, "claude-code", FaultyLauncher)
+    monkeypatch.setitem(next_step.LAUNCHERS, "claude-code", FaultyLauncher)
     _set_argv(monkeypatch, harness="claude-code")
 
     with pytest.raises(ValueError) as excinfo:
@@ -71,7 +70,7 @@ def test_next_step_catches_unknown_phase_error(monkeypatch: pytest.MonkeyPatch, 
         def build_payload(*_args: object, **_kwargs: object) -> dict:
             raise UnknownPhaseError("synthetic-bad", ["a", "b"])
 
-    monkeypatch.setitem(next_step._LAUNCHERS, "claude-code", PhaseRejectingLauncher)
+    monkeypatch.setitem(next_step.LAUNCHERS, "claude-code", PhaseRejectingLauncher)
     _set_argv(monkeypatch, harness="claude-code")
 
     with pytest.raises(SystemExit) as excinfo:
@@ -96,7 +95,7 @@ def test_next_step_exits_zero_on_happy_path(monkeypatch: pytest.MonkeyPatch, cap
         def build_payload(*_args: object, **_kwargs: object) -> dict:
             return {"tool": "fake", "same_context": "x", "new_context": "y"}
 
-    monkeypatch.setitem(next_step._LAUNCHERS, "claude-code", HappyLauncher)
+    monkeypatch.setitem(next_step.LAUNCHERS, "claude-code", HappyLauncher)
     _set_argv(monkeypatch, harness="claude-code")
 
     with pytest.raises(SystemExit) as excinfo:
@@ -106,8 +105,3 @@ def test_next_step_exits_zero_on_happy_path(monkeypatch: pytest.MonkeyPatch, cap
     payload = json.loads(capsys.readouterr().out)
     assert payload["tool"] == "fake"
     assert payload["harness"] == "claude-code"
-
-
-# Path imported only to satisfy ruff's "module first uses imports" check
-# for the absolute paths the conftest fixture relies on.
-_ = Path

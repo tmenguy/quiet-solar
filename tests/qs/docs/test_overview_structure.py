@@ -14,6 +14,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OVERVIEW = REPO_ROOT / "docs" / "workflow" / "overview.md"
+HARNESS_DOC = REPO_ROOT / "docs" / "workflow" / "harness.md"
 
 # Canonical title of the QS-175 paragraph section in overview.md. Centralised
 # here so a doc edit doesn't drift between the multiple assertions that
@@ -62,6 +63,55 @@ def test_canonical_section_immediately_follows_adversarial_review() -> None:
     assert next_heading == target, (
         f"AC-6: '{target}' must immediately follow 'Adversarial review', "
         f"got {next_heading!r} instead."
+    )
+
+
+def test_harness_doc_does_not_claim_agent_is_always_emitted() -> None:
+    """``harness.md`` must NOT claim every launcher emits ``agent`` (review-fix #03 SF3).
+
+    Codex and OpenCode launchers accept free-form ``--next-cmd`` values
+    that don't map to a static phase, so they don't emit an ``agent``
+    key in the payload. The contract paragraph must reflect this — a
+    blanket "all launchers return agent" claim contradicts
+    ``test_codex_passes_known_phase_through_unchanged``.
+    """
+    body = HARNESS_DOC.read_text()
+    # Forbid the over-broad claim. We accept any rewording that doesn't
+    # assert "agent" is part of the minimum surface for every launcher.
+    forbidden_phrasings = [
+        "at minimum `tool`, `agent`, `same_context`, `new_context`",
+        "minimum: tool, agent, same_context",
+    ]
+    for phrase in forbidden_phrasings:
+        assert phrase not in body, (
+            f"harness.md contains the wrong agent-is-universal claim "
+            f"({phrase!r}). Codex/opencode payloads don't include "
+            f"``agent`` — see test_codex_passes_known_phase_through_unchanged."
+        )
+
+
+def test_harness_doc_documents_codex_opencode_agent_exception() -> None:
+    """``harness.md`` must explicitly note that codex/opencode skip the ``agent`` key."""
+    body = HARNESS_DOC.read_text()
+    # The doc must say codex and opencode don't emit agent. Tolerant of
+    # markdown line wrap via simple whitespace collapse.
+    normalized = " ".join(body.split())
+    assert "codex" in normalized.lower() and "opencode" in normalized.lower(), (
+        "harness.md must name both codex and opencode launchers in the "
+        "agent-contract paragraph."
+    )
+    # Either explicit "do not emit agent" wording or "without agent" form
+    # is acceptable; we look for the conceptual marker.
+    has_exception_clause = (
+        "do NOT emit" in body
+        or "do not emit `agent`" in body
+        or "without `agent`" in body
+        or "skip `agent`" in body
+        or "no `agent`" in body
+    )
+    assert has_exception_clause, (
+        "harness.md must explicitly state that Codex / OpenCode launchers "
+        "don't emit the ``agent`` key (review-fix #03 SF3)."
     )
 
 

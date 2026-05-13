@@ -30,6 +30,13 @@ def _add_scripts_qs_to_syspath() -> Iterator[None]:
 
     # Snapshot modules originating from scripts/qs/ so we can purge them after
     # the test and avoid cross-test pollution from module-level state.
+    #
+    # Limitation (review-fix #03 NTH6): this only purges modules imported
+    # BY OR AFTER our autouse fixture. If a higher-level conftest
+    # pre-imported ``next_step`` or ``launchers.*`` before we entered
+    # here, they survive teardown. The remaining cross-test pollution is
+    # bounded by ``monkeypatch`` (which reverts its own setattr/setitem
+    # changes on teardown), so the practical exposure is small.
     before = set(sys.modules)
     try:
         yield

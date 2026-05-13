@@ -56,10 +56,30 @@ no filesystem scan, so this works from any CWD.
   approach as the legacy pipeline (delegates to `scripts/qs_opencode/`).
 - **`launchers/codex.py`** — stub.
 
-All launchers return a dict with at minimum `tool`, `agent` (the
-`qs-<phase>` name), `same_context`, `new_context`. PyCharm convenience
-commands (`pycharm_context`, `pycharm_applescript_context`) are added
-when PyCharm is detected on macOS and the work dir is a worktree.
+All launchers return a dict with at minimum:
+
+- `tool` (string, e.g. `"claude-code"`)
+- `same_context` (string, slash-form fallback command)
+- `new_context` (string, shell command to spawn a fresh session)
+
+The **Claude** and **Cursor** launchers additionally emit `agent` (the
+resolved `qs-<phase>` name). The **Codex** and **OpenCode** launchers
+do NOT emit `agent` because they accept free-form `--next-cmd` values
+that may not map to a static phase — see
+`tests/qs/launchers/test_next_step_cli.py::test_codex_passes_known_phase_through_unchanged`
+for the grep-able contract pin.
+
+**Whitespace in `--next-cmd`** (review-fix #03 NTH7): codex/opencode
+treat `--next-cmd` as a free-form string, so trailing or leading
+whitespace inside an otherwise-non-empty value is preserved verbatim
+(`--next-cmd "create-plan "` → `same_context: "create-plan "`). This is
+intentional — explicit free-form is a feature, not a bug. The
+empty / whitespace-only case is rejected for all harnesses by
+`next_step.main()` after `parse_args()` returns.
+
+PyCharm convenience commands (`pycharm_context`,
+`pycharm_applescript_context`) are added when PyCharm is detected on
+macOS and the work dir is a worktree.
 
 ## Why not synchronize agent files via a script?
 

@@ -25,10 +25,25 @@ harness with an unknown phase, ``build_payload`` raises
 exits non-zero. Other ``ValueError`` subclasses (from future launcher
 code) are deliberately NOT caught — review-fix #02 SF1.
 
-Empty / whitespace-only ``--next-cmd`` is rejected at the argparse
-layer for ALL harnesses (review-fix #02 SF2): without this guard,
-codex/opencode would silently accept the empty string and emit a
-garbled handoff payload.
+Empty / whitespace-only ``--next-cmd`` is rejected by ``main()`` after
+``parser.parse_args()`` returns, for ALL harnesses (review-fix #02
+SF2). The check sits after parse rather than inside an argparse
+``type=`` callable because argparse type errors print a usage banner
+to stderr, but the rest of this script speaks a JSON error contract
+(``{"error": ..., "value": ..., ...}``) — putting the check in main()
+keeps the contract uniform. Trailing/leading whitespace inside an
+otherwise-non-empty ``--next-cmd`` (e.g. ``"create-plan "``) IS
+preserved verbatim under codex/opencode (review-fix #03 NTH7); those
+launchers treat ``--next-cmd`` as free-form, so an intentional space
+is the user's call.
+
+**Bimodal error contract** (review-fix #03 NTH9): expected failures
+(unknown phase, empty next-cmd) emit a JSON ``{"error": ...}`` payload
+and exit 1. Programmer errors (any other exception from a launcher,
+including non-phase ``ValueError`` from future launcher code) propagate
+uncaught — the user gets a Python traceback. This is intentional:
+programmer errors should fail loudly so the bug is visible in CI logs;
+user errors should emit a parseable JSON contract.
 
 The phase-name → agent-name resolution is a static dict
 (``launchers/phases.py``) — no filesystem scan, no ``Path.cwd()`` call —
@@ -51,7 +66,11 @@ from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
 
 from utils import output_json  # type: ignore[import-not-found]
 
-_LAUNCHERS = {
+# Public mapping (review-fix #03 SF1) — tests and future extension code
+# treat this as the harness-dispatch configuration table. Keeping it
+# under a public name avoids SLF001-style import smells in test code
+# that monkeypatches the dispatcher.
+LAUNCHERS = {
     "claude-code": claude_launcher,
     "cursor": cursor_launcher,
     "opencode": opencode_launcher,
@@ -92,8 +111,10 @@ def main() -> None:
     # Reject empty / whitespace-only --next-cmd for every harness
     # (review-fix #02 SF2). Without this, codex/opencode would silently
     # pass the empty string through to ``build_payload`` and emit a
-    # garbled payload with ``same_context: ""``.
-    if not args.next_cmd or not args.next_cmd.strip():
+    # garbled payload with ``same_context: ""``. The first ``not`` form
+    # is dropped (review-fix #03 NTH2) — ``"".strip()`` is also falsy,
+    # so a single check covers both empty and whitespace cases.
+    if not args.next_cmd.strip():
         output_json({
             "error": "empty next-cmd",
             "value": args.next_cmd,
@@ -102,7 +123,7 @@ def main() -> None:
         sys.exit(1)
 
     harness = args.harness or detect_harness()
-    launcher = _LAUNCHERS[harness]
+    launcher = LAUNCHERS[harness]
     # Delegate validation to the launcher: claude/cursor enforce the
     # phase mapping inside ``build_payload``; codex/opencode accept any
     # ``next_cmd`` string. We catch only ``UnknownPhaseError`` here —

@@ -192,9 +192,16 @@ def test_build_payload_shlex_quotes_agent_name(monkeypatch: pytest.MonkeyPatch) 
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("bad_next_cmd", ["/", "//create-plan", "unknown", "/nope"])
+@pytest.mark.parametrize(
+    "bad_next_cmd", ["", "/", "//create-plan", "unknown", "/nope"],
+)
 def test_claude_build_payload_rejects_invalid_next_cmd(bad_next_cmd: str) -> None:
-    """``build_payload`` raises for invalid next_cmd at the public boundary."""
+    """``build_payload`` raises for invalid next_cmd at the public boundary.
+
+    ``""`` is included for parity with the CLI-layer check
+    (review-fix #03 NTH1): a direct caller importing ``build_payload``
+    must hit the same contract as a user passing ``--next-cmd ""``.
+    """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     with pytest.raises(ValueError):

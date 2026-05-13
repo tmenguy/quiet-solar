@@ -188,13 +188,17 @@ def test_cursor_source_documents_fallback_rationale() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# _slash_form defense-in-depth — review-fix #02 NTH8.
+# slash_form defense-in-depth — review-fix #02 NTH8.
 #
 # The helper is upstream-protected by ``resolve_agent_for_next_cmd``, so
 # the empty / double-slash cases are currently unreachable from
-# ``build_payload``. But a future refactor could call ``_slash_form``
+# ``build_payload``. But a future refactor could call ``slash_form``
 # outside that validation path. The function should be a leaf with its
 # own preconditions encoded.
+#
+# Round-3 review-fix #03 SF2: the helper was promoted to a public name
+# (``slash_form`` without leading underscore) so tests can pin its
+# contract directly without reaching for a "private" import.
 # --------------------------------------------------------------------------- #
 
 
@@ -207,19 +211,19 @@ def test_cursor_source_documents_fallback_rationale() -> None:
     ("//create-plan", "//create-plan"),
 ])
 def test_slash_form_normalizes_to_slash_prefix(input_val: str, expected: str) -> None:
-    """``_slash_form`` adds a leading slash iff one is missing."""
-    from launchers.cursor import _slash_form  # type: ignore[import-not-found]
+    """``slash_form`` adds a leading slash iff one is missing."""
+    from launchers.cursor import slash_form  # type: ignore[import-not-found]
 
-    assert _slash_form(input_val) == expected
+    assert slash_form(input_val) == expected
 
 
 @pytest.mark.parametrize("bad", ["", " ", "  ", "\t", "\n"])
 def test_slash_form_rejects_empty_or_whitespace(bad: str) -> None:
-    """Empty/whitespace input is a contract violation — ``_slash_form`` raises."""
-    from launchers.cursor import _slash_form  # type: ignore[import-not-found]
+    """Empty/whitespace input is a contract violation — ``slash_form`` raises."""
+    from launchers.cursor import slash_form  # type: ignore[import-not-found]
 
     with pytest.raises(ValueError):
-        _slash_form(bad)
+        slash_form(bad)
 
 
 # --------------------------------------------------------------------------- #
@@ -228,11 +232,17 @@ def test_slash_form_rejects_empty_or_whitespace(bad: str) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("bad_next_cmd", ["/", "//create-plan", "unknown", "/nope"])
+@pytest.mark.parametrize(
+    "bad_next_cmd", ["", "/", "//create-plan", "unknown", "/nope"],
+)
 def test_cursor_build_payload_rejects_invalid_next_cmd(
     bad_next_cmd: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``build_payload`` raises for invalid next_cmd at the public boundary."""
+    """``build_payload`` raises for invalid next_cmd at the public boundary.
+
+    ``""`` is included for parity with the CLI-layer check
+    (review-fix #03 NTH1).
+    """
     from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
 
     monkeypatch.setattr(shutil, "which", lambda _name: None)
