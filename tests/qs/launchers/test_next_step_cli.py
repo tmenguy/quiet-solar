@@ -132,10 +132,17 @@ def test_every_known_phase_resolves(phase: str, tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Free-form harnesses (codex, opencode) must NOT be regressed by the strict
-# claude/cursor validation. These launchers carry no agent mapping today, so
-# next_step.py must let them pass any --next-cmd value through unchanged.
-# Regression catch for review-fix #1 + #5.
+# Free-form harness (codex) must NOT be regressed by the strict
+# claude/cursor validation. The codex launcher carries no agent mapping
+# today, so next_step.py must let it pass any --next-cmd value through
+# unchanged. Regression catch for review-fix #1 + #5.
+#
+# OpenCode used to be in this list, but with the new static-agent
+# pipeline (QS-177) opencode now resolves agents like claude/cursor —
+# unknown phases raise UnknownPhaseError and emit the
+# `{"error": "unknown phase", ...}` JSON contract. See
+# `test_opencode_rejects_unknown_phase` and `test_opencode_happy_path`
+# below for the new pins.
 # --------------------------------------------------------------------------- #
 
 
@@ -157,11 +164,16 @@ def test_codex_accepts_free_form_next_cmd(tmp_path: Path) -> None:
     assert payload["same_context"] == "anything-goes-here"
 
 
-def test_opencode_accepts_free_form_next_cmd(tmp_path: Path) -> None:
-    """OpenCode launcher must accept any --next-cmd string (legacy pipeline)."""
+def test_opencode_rejects_unknown_phase(tmp_path: Path) -> None:
+    """OpenCode now resolves agents like claude/cursor — unknown phase → JSON error, exit 1.
+
+    Contract change from the legacy pipeline (QS-177 Task 7.3). The
+    OpenCode launcher is no longer a free-form passthrough; it enforces
+    the same phase mapping as claude/cursor.
+    """
     result = _run(
         [
-            "--next-cmd", "legacy-skill-name",
+            "--next-cmd", "bogus",
             "--work-dir", "/tmp/work",
             "--issue", "42",
             "--title", "Title",
@@ -169,10 +181,36 @@ def test_opencode_accepts_free_form_next_cmd(tmp_path: Path) -> None:
         ],
         cwd=str(tmp_path),
     )
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["error"] == "unknown phase"
+    assert payload["value"] == "bogus"
+
+
+def test_opencode_happy_path(tmp_path: Path) -> None:
+    """OpenCode happy path → JSON payload with spawn_session invocation, exit 0.
+
+    QS-177 Task 7.4 — the new opencode launcher emits a
+    ``python scripts/qs/spawn_session.py …`` ``new_context`` for
+    ``caller='next_step'`` (the default when dispatched via
+    ``next_step.py``).
+    """
+    result = _run(
+        [
+            "--next-cmd", "create-plan",
+            "--work-dir", "/tmp/wt",
+            "--issue", "42",
+            "--title", "Foo",
+            "--harness", "opencode",
+        ],
+        cwd=str(tmp_path),
+    )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["tool"] == "opencode"
-    assert payload["same_context"] == "legacy-skill-name"
+    assert payload["agent"] == "qs-create-plan"
+    assert payload["same_context"] == "create-plan"
+    assert payload["new_context"].startswith("python scripts/qs/spawn_session.py")
 
 
 def test_codex_passes_known_phase_through_unchanged(tmp_path: Path) -> None:
