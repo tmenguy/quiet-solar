@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Literal
 
 from launchers.phases import (  # type: ignore[import-not-found]
+    build_existing_session_prompt,
     resolve_agent_for_next_cmd,
 )
 
@@ -172,6 +173,8 @@ def build_payload(
     next_cmd: str,
     next_prompt: str | None = None,
     caller: Caller = "next_step",
+    fix_plan_path: str | None = None,
+    pr_number: int | None = None,
 ) -> dict:
     """Build the launcher payload for Claude Code.
 
@@ -187,10 +190,19 @@ def build_payload(
         caller: Reserved for harness-specific bifurcation (used by the
             OpenCode launcher). Claude's behaviour is identical for
             both call sites, so the value is accepted and ignored.
+        fix_plan_path: Optional path to a review-fix plan markdown
+            file. When both ``fix_plan_path`` and ``pr_number`` are
+            provided, the payload gains an ``existing_session_prompt``
+            field — the prompt the user can paste into an already-
+            running ``qs-implement-task`` session (review-task →
+            implement-task common loop). See
+            ``launchers/phases.py::build_existing_session_prompt``.
+        pr_number: Optional PR number for the existing-session prompt.
 
     Returns:
-        A dict with ``tool``, ``agent``, ``same_context``, ``new_context``
-        and (on macOS with PyCharm installed) ``pycharm_context`` /
+        A dict with ``tool``, ``agent``, ``same_context``, ``new_context``,
+        optionally ``existing_session_prompt``, and (on macOS with
+        PyCharm installed) ``pycharm_context`` /
         ``pycharm_applescript_context`` keys.
 
     Raises:
@@ -209,6 +221,12 @@ def build_payload(
         "same_context": next_cmd,
         "new_context": new_context,
     }
+
+    existing_prompt = build_existing_session_prompt(
+        work_dir, fix_plan_path, pr_number,
+    )
+    if existing_prompt is not None:
+        payload["existing_session_prompt"] = existing_prompt
 
     pycharm_bin = _pycharm_bin()
     if pycharm_bin:

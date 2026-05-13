@@ -170,6 +170,10 @@ def test_opencode_rejects_unknown_phase(tmp_path: Path) -> None:
     Contract change from the legacy pipeline (QS-177 Task 7.3). The
     OpenCode launcher is no longer a free-form passthrough; it enforces
     the same phase mapping as claude/cursor.
+
+    AC #4 mandates exit code **1 specifically** (parity with
+    claude/cursor) AND a ``known: [...]`` key in the JSON error
+    payload — both pinned here (review fix #01 must-fix #3).
     """
     result = _run(
         [
@@ -181,10 +185,18 @@ def test_opencode_rejects_unknown_phase(tmp_path: Path) -> None:
         ],
         cwd=str(tmp_path),
     )
-    assert result.returncode != 0
+    # AC #4 — exit 1 (not just non-zero) to match the claude/cursor
+    # contract; ``2`` is reserved for argparse user errors.
+    assert result.returncode == 1, result.stderr
     payload = json.loads(result.stdout)
     assert payload["error"] == "unknown phase"
     assert payload["value"] == "bogus"
+    # AC #4 — ``known`` list must surface so the user can see what
+    # they meant to type (and downstream tooling can render hints).
+    assert "known" in payload
+    assert isinstance(payload["known"], list)
+    assert len(payload["known"]) > 0
+    assert "create-plan" in payload["known"]
 
 
 def test_opencode_happy_path(tmp_path: Path) -> None:
@@ -237,6 +249,117 @@ def test_codex_passes_known_phase_through_unchanged(tmp_path: Path) -> None:
 # codex/opencode (which previously accepted it silently and produced a
 # garbled payload with same_context: ""). Review-fix #02 SF2.
 # --------------------------------------------------------------------------- #
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — should-fix #17: existing-session prompt for the
+# review-task → implement-task common loop. When both `--fix-plan-path`
+# and `--pr-number` are provided, the payload carries an
+# `existing_session_prompt` field; either flag absent omits the key.
+# --------------------------------------------------------------------------- #
+
+
+def test_existing_session_prompt_emitted_when_fix_plan_and_pr_provided(tmp_path: Path) -> None:
+    """Both flags present → payload has ``existing_session_prompt`` with #PR and rel path."""
+    result = _run(
+        [
+            "--next-cmd", "implement-task",
+            "--work-dir", "/tmp/wt",
+            "--issue", "177",
+            "--title", "Test",
+            "--harness", "claude-code",
+            "--fix-plan-path", "/tmp/wt/docs/stories/QS-177.story_review_fix_#01.md",
+            "--pr-number", "179",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "existing_session_prompt" in payload
+    prompt = payload["existing_session_prompt"]
+    # Path is worktree-relative — no absolute prefix leakage.
+    assert "docs/stories/QS-177.story_review_fix_#01.md" in prompt
+    assert "/tmp/wt/" not in prompt
+    # PR number is surfaced for the user.
+    assert "#179" in prompt
+
+
+def test_existing_session_prompt_omitted_when_flags_missing(tmp_path: Path) -> None:
+    """Neither flag provided → payload has NO ``existing_session_prompt`` key."""
+    result = _run(
+        [
+            "--next-cmd", "implement-task",
+            "--work-dir", "/tmp/wt",
+            "--issue", "177",
+            "--title", "Test",
+            "--harness", "claude-code",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "existing_session_prompt" not in payload
+
+
+def test_existing_session_prompt_omitted_when_only_fix_plan_provided(tmp_path: Path) -> None:
+    """``--fix-plan-path`` alone (no PR) → key omitted (back-compat preservation)."""
+    result = _run(
+        [
+            "--next-cmd", "implement-task",
+            "--work-dir", "/tmp/wt",
+            "--issue", "177",
+            "--title", "Test",
+            "--harness", "claude-code",
+            "--fix-plan-path", "/tmp/wt/docs/stories/QS-177.story_review_fix_#01.md",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "existing_session_prompt" not in payload
+
+
+def test_existing_session_prompt_omitted_when_only_pr_provided(tmp_path: Path) -> None:
+    """``--pr-number`` alone (no fix-plan path) → key omitted (back-compat preservation)."""
+    result = _run(
+        [
+            "--next-cmd", "implement-task",
+            "--work-dir", "/tmp/wt",
+            "--issue", "177",
+            "--title", "Test",
+            "--harness", "claude-code",
+            "--pr-number", "179",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "existing_session_prompt" not in payload
+
+
+@pytest.mark.parametrize("harness", ["claude-code", "cursor", "codex", "opencode"])
+def test_existing_session_prompt_emitted_for_all_harnesses(
+    harness: str, tmp_path: Path,
+) -> None:
+    """Every launcher emits ``existing_session_prompt`` with the same prompt body."""
+    result = _run(
+        [
+            "--next-cmd", "implement-task",
+            "--work-dir", "/tmp/wt",
+            "--issue", "177",
+            "--title", "Test",
+            "--harness", harness,
+            "--fix-plan-path", "/tmp/wt/docs/stories/QS-177.story_review_fix_#01.md",
+            "--pr-number", "179",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert "existing_session_prompt" in payload
+    prompt = payload["existing_session_prompt"]
+    assert "docs/stories/QS-177.story_review_fix_#01.md" in prompt
+    assert "#179" in prompt
 
 
 @pytest.mark.parametrize(

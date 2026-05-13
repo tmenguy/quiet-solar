@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Literal
 
 from launchers.phases import (  # type: ignore[import-not-found]
+    build_existing_session_prompt,
     resolve_agent_for_next_cmd,
 )
 
@@ -90,7 +91,7 @@ def _opencode_cli_command(
     agent: str,
     kickoff: str,
 ) -> str:
-    """Return a ``sh /tmp/qs_oc_launch_<N>.sh`` one-liner (CLI form).
+    """Return a ``sh <tempfile>`` one-liner (CLI form).
 
     Parallel to ``scripts/qs_opencode/utils.py:opencode_launch_command``
     — but re-implemented here to keep this module self-contained
@@ -101,28 +102,85 @@ def _opencode_cli_command(
     shell-escaped via ``shlex.quote``. A short banner echoes the
     intended phase + kickoff so the user can paste the prompt
     manually if the ``--prompt`` flag ever changes.
+
+    Security / robustness (review fix #01):
+
+    - ``issue`` is coerced via ``int()`` so a malicious string value
+      (e.g. ``"42; rm -rf $HOME"``) raises ``ValueError`` upfront
+      rather than producing a script path with shell metacharacters
+      (must-fix #2).
+    - The script is written via ``tempfile.NamedTemporaryFile`` to a
+      uniquely-named path under ``tempfile.gettempdir()`` — eliminates
+      the symlink-attack vector against a deterministic
+      ``/tmp/qs_oc_launch_<N>.sh`` path (should-fix #4).
+    - Every interpolated value in the generated shell script — banner
+      echo arguments included — is ``shlex.quote``'d to handle quotes
+      or backslashes in synthetic agent names (should-fix #5).
+    - The returned ``sh <path>`` invocation has its path
+      ``shlex.quote``'d so a ``TMPDIR`` with embedded whitespace
+      doesn't split the command (covered by must-fix #2 too).
+    - On ``OSError`` during file write / chmod (read-only filesystem,
+      sandboxed CI, etc.), we fall back to returning the bare
+      ``opencode <worktree> --agent <name> --prompt <kickoff>``
+      command inline — the user still gets a working command instead
+      of an uncaught traceback (should-fix #6).
     """
-    tab_title = f"QS_{issue}: {title}"
+    # Coerce ``issue`` to int up-front (review fix #01 must-fix #2 —
+    # closes the shell-injection vector at the type boundary).
+    issue_int = int(issue)
+
+    tab_title = f"QS_{issue_int}: {title}"
     safe_title = shlex.quote(tab_title)
     safe_dir = shlex.quote(work_dir)
     safe_agent = shlex.quote(agent)
     safe_kickoff = shlex.quote(kickoff)
+    # Shell-quote the entire banner echo argument so a synthetic
+    # agent name containing single quotes or backslashes still
+    # produces a syntactically valid script (review fix #01
+    # should-fix #5).
+    safe_activate_banner = shlex.quote(f"── Activating agent: {agent} ──")
+    safe_preload_banner = shlex.quote(
+        "── Initial prompt (paste manually if preload fails) ──",
+    )
 
     opencode_cmd = (
         f"opencode {safe_dir} --agent {safe_agent} --prompt {safe_kickoff}"
     )
     full_cmd = (
         f"printf '\\033]0;%s\\007' {safe_title} && "
-        f"echo '── Activating agent: {agent} ──' && "
-        f"echo '── Initial prompt (paste manually if preload fails) ──' && "
+        f"echo {safe_activate_banner} && "
+        f"echo {safe_preload_banner} && "
         f"echo {safe_kickoff} && "
         f"{opencode_cmd}"
     )
 
-    script_path = Path(tempfile.gettempdir()) / f"qs_oc_launch_{issue}.sh"
-    script_path.write_text(f"#!/bin/sh\n{full_cmd}\n")
-    script_path.chmod(0o755)
-    return f"sh {script_path}"
+    try:
+        # ``NamedTemporaryFile`` generates a unique path under
+        # ``tempfile.gettempdir()`` — concurrent invocations can't
+        # race on a shared filename and a hostile symlink at a
+        # deterministic path can't redirect our write.
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            prefix=f"qs_oc_launch_{issue_int}_",
+            suffix=".sh",
+            dir=tempfile.gettempdir(),
+            delete=False,
+        ) as f:
+            f.write(f"#!/bin/sh\n{full_cmd}\n")
+            script_path = Path(f.name)
+        # Owner-only rwx: ``sh <path>`` only needs read perm to
+        # execute the contents, so 0o700 is the strictest safe
+        # mode.
+        script_path.chmod(0o700)
+    except OSError:
+        # Read-only filesystem, sandboxed CI, non-POSIX share —
+        # any I/O failure here lands us in the inline-command
+        # fallback so the launcher still emits a working
+        # ``new_context`` instead of an uncaught traceback
+        # propagating to ``setup_task.main()``.
+        return opencode_cmd
+
+    return f"sh {shlex.quote(str(script_path))}"
 
 
 def build_payload(
@@ -133,6 +191,8 @@ def build_payload(
     next_cmd: str,
     next_prompt: str | None = None,
     caller: Caller = "next_step",
+    fix_plan_path: str | None = None,
+    pr_number: int | None = None,
 ) -> dict:
     """Return the OpenCode launcher payload for ``next_cmd``.
 
@@ -147,9 +207,16 @@ def build_payload(
             ``DEFAULT_KICKOFF`` when ``None``.
         caller: ``"next_step"`` (default) → HTTP API form; or
             ``"setup_task"`` → CLI form (cross-workspace launch).
+        fix_plan_path: Optional path to a review-fix plan markdown
+            file. When both ``fix_plan_path`` and ``pr_number`` are
+            provided, the payload gains an ``existing_session_prompt``
+            field — the paste-into-existing-session prompt for the
+            review-task → implement-task common loop.
+        pr_number: Optional PR number for the existing-session prompt.
 
     Returns:
-        Dict with ``tool``, ``agent``, ``same_context``, ``new_context``.
+        Dict with ``tool``, ``agent``, ``same_context``,
+        ``new_context``, and optionally ``existing_session_prompt``.
 
     Raises:
         UnknownPhaseError: when ``next_cmd`` is not a known phase. The
@@ -168,9 +235,15 @@ def build_payload(
             work_dir, issue, title, agent=agent, kickoff=kickoff,
         )
 
-    return {
+    payload: dict = {
         "tool": "opencode",
         "agent": agent,
         "same_context": next_cmd,
         "new_context": new_context,
     }
+    existing_prompt = build_existing_session_prompt(
+        work_dir, fix_plan_path, pr_number,
+    )
+    if existing_prompt is not None:
+        payload["existing_session_prompt"] = existing_prompt
+    return payload

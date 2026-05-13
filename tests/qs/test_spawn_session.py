@@ -31,13 +31,9 @@ import socket
 import subprocess
 import urllib.error
 import urllib.request
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 
 # --------------------------------------------------------------------------- #
@@ -60,27 +56,6 @@ def _http_error(status: int = 500, msg: str = "Server Error") -> urllib.error.HT
     return urllib.error.HTTPError(
         "http://127.0.0.1:4096/session", status, msg, {}, None,  # type: ignore[arg-type]
     )
-
-
-def _sequence_urlopen(responses: Iterable[object]) -> MagicMock:
-    """Return a urlopen mock whose side_effect cycles through ``responses``.
-
-    Each entry is either a ``MagicMock`` (returned) or an exception
-    instance (raised). Exception classes are NOT supported — pass an
-    instance so the test reads naturally.
-    """
-    items: list[object] = list(responses)
-
-    def _side(*_args: object, **_kwargs: object) -> object:
-        if not items:
-            raise AssertionError("urlopen called more times than expected")
-        value = items.pop(0)
-        if isinstance(value, BaseException):
-            raise value
-        return value
-
-    mock = MagicMock(side_effect=_side)
-    return mock
 
 
 def _run_main(monkeypatch: pytest.MonkeyPatch, *argv: str) -> int | None:
@@ -566,7 +541,13 @@ def test_prompt_async_failure_delete_fails_emits_orphan(
     assert payload["agent"] == "qs-create-plan"
     assert payload["directory"] == "/tmp/x"
     assert "new_context_cli" in payload
-    assert "prompt boom" in payload["detail"] or "delete boom" in payload["detail"]
+    # Both error halves must be present in the combined detail — using
+    # ``and`` (not ``or``) so a future regression that drops one half
+    # cannot pass silently. The combined-detail structure is pinned by
+    # the literal ``"; DELETE"`` separator.
+    assert "prompt boom" in payload["detail"]
+    assert "delete boom" in payload["detail"]
+    assert "; DELETE" in payload["detail"]
 
 
 # --------------------------------------------------------------------------- #
@@ -687,3 +668,251 @@ def test_base_url_defaults_to_4096(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.delenv("OPENCODE_SERVER_PORT", raising=False)
     assert spawn_session._base_url() == "http://127.0.0.1:4096"
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — must-fix #1: http.client.InvalidURL crashes the script
+# --------------------------------------------------------------------------- #
+
+
+def test_invalid_url_falls_back(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``http.client.InvalidURL`` (malformed port, control chars) routes through fallback.
+
+    A malformed ``OPENCODE_SERVER_PORT`` (e.g. ``"4096 "``), or a
+    control character in ``session_id``, causes ``urllib.request`` to
+    raise ``InvalidURL`` — which does NOT subclass ``URLError`` /
+    ``HTTPError`` / ``OSError``. The fix extends the except tuple to
+    catch ``http.client.HTTPException`` (the broader superclass).
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    monkeypatch.setattr(
+        spawn_session.urllib.request, "urlopen",
+        MagicMock(side_effect=http.client.InvalidURL("bad url")),
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fallback_cli"
+    assert "bad url" in payload["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — should-fix #7: session_id must be URL-escaped
+# --------------------------------------------------------------------------- #
+
+
+def test_spawn_session_url_escapes_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A server-provided ``id`` with path-traversal chars is URL-escaped before interpolation."""
+    import spawn_session  # type: ignore[import-not-found]
+
+    seen_urls: list[str] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        seen_urls.append(req.full_url)
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "abc/../delete-me"}).encode())
+        return _mock_response(b"")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    # The second urlopen call should hit a URL-escaped session_id.
+    prompt_calls = [u for u in seen_urls if "prompt_async" in u]
+    assert len(prompt_calls) == 1
+    assert "abc%2F..%2Fdelete-me" in prompt_calls[0], prompt_calls
+    # And the raw "/abc/../delete-me/" pattern must NOT appear (no
+    # path traversal vector reaching the server).
+    assert "/abc/../delete-me/prompt_async" not in prompt_calls[0]
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — should-fix #8: empty --directory rejected upfront
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_dir", ["", "   ", "\t"])
+def test_empty_directory_rejected(monkeypatch: pytest.MonkeyPatch, bad_dir: str) -> None:
+    """An empty / whitespace-only ``--directory`` exits 2 via argparse error.
+
+    Without this guard, ``if directory:`` in ``_api`` evaluates ``""``
+    as falsy and silently omits the ``x-opencode-directory`` header
+    → session lands in the global workspace, not the worktree.
+    """
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", bad_dir,
+    )
+    assert exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — should-fix #11: dedicated OSError regression test
+# --------------------------------------------------------------------------- #
+
+
+def test_oserror_falls_back(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A bare ``OSError`` (disk-level / socket-level) routes through the fallback path.
+
+    ``socket.timeout`` is an ``OSError`` subclass in 3.10+, so the
+    timeout test exercises the except clause transitively — but AC #5
+    enumerates ``OSError`` as a distinct failure class. This pins the
+    enumeration.
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    monkeypatch.setattr(
+        spawn_session.urllib.request, "urlopen",
+        MagicMock(side_effect=OSError("disk-level")),
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fallback_cli"
+    assert "disk-level" in payload["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — should-fix #12: timeout-on-prompt_async regression test
+# --------------------------------------------------------------------------- #
+
+
+def test_prompt_async_timeout_attempts_delete(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A ``socket.timeout`` raised by prompt_async still triggers DELETE cleanup.
+
+    AC #7 wording is "on either ``POST /session`` or
+    ``POST /session/<id>/prompt_async``". The earlier
+    ``test_timeout_falls_back`` only exercises the first call. This
+    pins the second-call timeout path.
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    seen_methods: list[tuple[str, str]] = []
+
+    def _side(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        seen_methods.append((req.get_method(), req.full_url))
+        url = req.full_url
+        method = req.get_method()
+        if method == "POST" and url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        if method == "POST" and "prompt_async" in url:
+            raise socket.timeout("timed out")
+        if method == "DELETE":
+            return _mock_response(b"true")
+        raise AssertionError(f"unexpected: {method} {url}")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _side)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fallback_cli"
+    # DELETE was actually issued — orphan cleaned up.
+    assert any(m == "DELETE" for m, _ in seen_methods)
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — nice-to-have #22: orphan branch without opencode CLI
+# --------------------------------------------------------------------------- #
+
+
+def test_orphan_without_opencode_cli(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Orphan + no opencode CLI on PATH → drop ``new_context_cli``, surface the issue.
+
+    When the server creates a session but then becomes unreachable for
+    both prompt_async AND DELETE, AND the user has no opencode CLI to
+    fall back on, the orphan-session payload would otherwise emit a
+    ``new_context_cli`` that the user cannot execute. The fix probes
+    ``shutil.which`` in the orphan branch too and drops the key when
+    no CLI is available, appending a clearer recovery note to ``detail``.
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    def _side(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        url = req.full_url
+        method = req.get_method()
+        if method == "POST" and url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        if method == "POST" and "prompt_async" in url:
+            raise _http_error(500, "prompt boom")
+        if method == "DELETE":
+            raise _http_error(404, "delete boom")
+        raise AssertionError(f"unexpected: {method} {url}")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _side)
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "session_orphaned"
+    assert payload["session_id"] == "sess-X"
+    # ``new_context_cli`` is dropped because the CLI binary isn't on PATH.
+    assert "new_context_cli" not in payload
+    assert "opencode CLI" in payload["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — nice-to-have #23: empty --prompt / --title rejected
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_prompt", ["", "   ", "\t"])
+def test_empty_prompt_rejected(monkeypatch: pytest.MonkeyPatch, bad_prompt: str) -> None:
+    """An empty / whitespace-only ``--prompt`` exits 2 via argparse error."""
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+        "--prompt", bad_prompt,
+    )
+    assert exit_code == 2
+
+
+@pytest.mark.parametrize("bad_title", ["", "   ", "\t"])
+def test_empty_title_rejected(monkeypatch: pytest.MonkeyPatch, bad_title: str) -> None:
+    """An explicitly empty ``--title`` exits 2; omitting the flag still works."""
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+        "--title", bad_title,
+    )
+    assert exit_code == 2

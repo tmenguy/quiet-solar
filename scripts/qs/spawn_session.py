@@ -60,12 +60,14 @@ agent activation happens in-band on ``POST /session/<id>/prompt_async``.
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import shlex
 import shutil
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from utils import output_json  # type: ignore[import-not-found]
@@ -166,11 +168,19 @@ def _api(
             if not raw:
                 return None
             return json.loads(raw)
-    except (urllib.error.HTTPError, urllib.error.URLError, OSError) as exc:
+    except (
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+        OSError,
+        http.client.HTTPException,
+    ) as exc:
         # ``OSError`` covers ``socket.timeout`` / ``TimeoutError`` in
         # modern Python; ``URLError`` covers DNS failure, connection
         # refused, and other transport errors; ``HTTPError`` covers
-        # non-2xx HTTP status codes.
+        # non-2xx HTTP status codes; ``http.client.HTTPException``
+        # covers ``InvalidURL`` (malformed port, control char in
+        # session_id) and other protocol-layer failures that don't
+        # subclass any of the above. Review fix #01 must-fix #1.
         raise SpawnSessionError(
             f"{method} {path} failed: {exc}", url=url, cause=exc,
         ) from exc
@@ -223,18 +233,29 @@ def spawn_session(
             f"Unexpected /session response (not a dict): {session!r}",
             url=f"{_base_url()}/session",
         )
-    session_id = session.get("id") or session.get("ID")
-    if not session_id:
+    # The verified OpenCode API contract returns the session id under
+    # the lowercase ``id`` key only — the legacy ``or session.get('ID')``
+    # fallback was YAGNI defensive code with no actual server support
+    # (review fix #01 nice-to-have #18).
+    session_id = session.get("id")
+    if session_id is None:
         raise SpawnSessionError(
             f"No id in /session response: {session!r}",
             url=f"{_base_url()}/session",
         )
+    session_id_str = str(session_id)
+
+    # URL-escape the session id before path interpolation so a hostile
+    # / buggy server response (e.g. ``{"id": "abc/../delete-me"}``)
+    # cannot cause path traversal or other URL-shape attacks against
+    # the OpenCode API. Review fix #01 should-fix #7.
+    safe_id = urllib.parse.quote(session_id_str, safe="")
 
     # 2. Send prompt + activate agent (in-band, single call)
     try:
         _api(
             "POST",
-            f"/session/{session_id}/prompt_async",
+            f"/session/{safe_id}/prompt_async",
             {"agent": agent, "parts": [{"type": "text", "text": prompt}]},
             directory=directory,
         )
@@ -243,7 +264,7 @@ def spawn_session(
         # the OpenCode UI. If DELETE also fails, surface the orphan
         # id via ``orphan_session_id`` so main() can emit the
         # ``session_orphaned`` payload (AC #6).
-        delete_path = f"/session/{session_id}"
+        delete_path = f"/session/{safe_id}"
         try:
             _api("DELETE", delete_path, directory=directory)
         except SpawnSessionError as delete_exc:
@@ -255,7 +276,7 @@ def spawn_session(
                 combined,
                 url=f"{_base_url()}{delete_path}",
                 cause=prompt_exc,
-                orphan_session_id=str(session_id),
+                orphan_session_id=session_id_str,
             ) from prompt_exc
         # DELETE succeeded — re-raise the original prompt_async error
         # so main() falls back to the CLI form (the user still needs
@@ -263,7 +284,7 @@ def spawn_session(
         raise
 
     return {
-        "session_id": str(session_id),
+        "session_id": session_id_str,
         "agent": agent,
         "title": actual_title,
         "directory": directory,
@@ -296,12 +317,30 @@ def _emit_fallback(
 
     Decision tree:
 
-    - Orphan (``exc.orphan_session_id`` set) → ``session_orphaned``,
+    - Orphan (``exc.orphan_session_id`` set) AND ``opencode`` on PATH
+      → ``session_orphaned`` with ``new_context_cli``, exit 2.
+    - Orphan AND ``opencode`` missing → ``session_orphaned`` WITHOUT
+      ``new_context_cli`` (we have no working recovery path; the
+      ``detail`` field calls out the missing CLI), exit 2.
+    - ``opencode`` on PATH → ``fallback_cli`` with ``new_context_cli``,
+      exit 0.
+    - ``opencode`` missing → ``fallback_unavailable`` (no
+      ``new_context_cli``, recovery hint appended to ``detail``),
       exit 2.
-    - ``opencode`` on PATH → ``fallback_cli``, exit 0.
-    - ``opencode`` missing → ``fallback_unavailable``, exit 2.
+
+    Detail-shape asymmetry (review fix #01 nice-to-have #19): the
+    ``fallback_cli`` and ``session_orphaned`` (with CLI) payloads
+    carry the bare ``str(exc)`` in ``detail`` — the recovery path
+    lives in ``new_context_cli``. The ``fallback_unavailable`` and
+    ``session_orphaned`` (without CLI) payloads append the
+    "opencode CLI not on PATH" recovery hint directly to ``detail``
+    because they have no ``new_context_cli`` key. This is deliberate
+    — payloads that surface a CLI fallback keep the bare error
+    visible; payloads without a CLI fallback fold the recovery hint
+    into ``detail`` so the user sees it in one place.
     """
     detail = str(exc)
+    has_cli = bool(shutil.which("opencode"))
     new_context_cli = _build_cli_command(agent, directory, prompt)
 
     if exc.orphan_session_id is not None:
@@ -311,17 +350,27 @@ def _emit_fallback(
             f"clean up the orphan session manually in the OpenCode UI.",
             file=sys.stderr,
         )
-        output_json({
+        orphan_payload: dict = {
             "status": "session_orphaned",
             "session_id": exc.orphan_session_id,
             "agent": agent,
             "directory": directory,
-            "new_context_cli": new_context_cli,
             "detail": detail,
-        })
+        }
+        if has_cli:
+            orphan_payload["new_context_cli"] = new_context_cli
+        else:
+            # No CLI to recover with — append a clearer note so the
+            # user knows the orphan is the only thing left to clean up
+            # (review fix #01 nice-to-have #22).
+            orphan_payload["detail"] = (
+                f"{detail}; opencode CLI also not on PATH — clean up "
+                f"session {exc.orphan_session_id} manually in the OpenCode UI"
+            )
+        output_json(orphan_payload)
         return 2
 
-    if shutil.which("opencode"):
+    if has_cli:
         print(
             f"WARNING: OpenCode HTTP API unreachable ({detail}); "
             f"falling back to opencode CLI.",
@@ -389,6 +438,21 @@ def main() -> None:
         ),
     )
     args = parser.parse_args()
+
+    # Reject empty / whitespace-only values upfront so we don't silently
+    # drop the `x-opencode-directory` header (review fix #01 should-fix
+    # #8) or send an empty prompt body that the server would 422 on
+    # with an opaque error (review fix #01 nice-to-have #23).
+    if not args.directory.strip():
+        parser.error("--directory must be a non-empty path")
+    if not args.prompt.strip():
+        parser.error("--prompt must be a non-empty string")
+    # ``--title`` is optional — omitting it defaults to the agent name.
+    # An explicitly-empty value is rejected for the same reason as
+    # ``--prompt`` (an empty session title surfaces as a blank entry
+    # in the OpenCode sidebar).
+    if args.title is not None and not args.title.strip():
+        parser.error("--title must be a non-empty string when provided")
 
     try:
         result = spawn_session(

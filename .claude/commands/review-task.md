@@ -21,9 +21,12 @@ Expected outcome:
   edge-case-hunter, acceptance-auditor, coderabbit).
 - Findings consolidated and triaged interactively with the user.
 - If findings remain, a fix plan written to
-  `docs/stories/QS-<N>.story_review_fix_#NN.md`, plus the launcher form
-  (`claude --agent qs-implement-task`) and slash-command fallback
-  (`/implement-task`) for the user to apply it.
+  `docs/stories/QS-<N>.story_review_fix_#NN.md`, plus THREE
+  presentation options: (a) the launcher form (`claude --agent
+  qs-implement-task`) for a fresh terminal, (b) an
+  `existing_session_prompt` to paste into an already-running
+  implementation session (the most common loop), and (c) the
+  slash-command fallback (`/implement-task`).
 - If clean, next-phase command printed: launcher form (`claude --agent
   qs-finish-task`) plus slash-command fallback (`/finish-task`).
 

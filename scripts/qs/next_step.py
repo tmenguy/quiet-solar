@@ -127,6 +127,33 @@ def main() -> None:
         choices=list(LAUNCHERS),
         help="Override the detected harness.",
     )
+    # Optional flags for the review-task → implement-task common loop.
+    # When BOTH are provided, the launcher payload gains an
+    # ``existing_session_prompt`` field — the paste-into-existing-
+    # session prompt the user can drop into an already-running
+    # ``qs-implement-task`` session instead of spinning up a fresh
+    # terminal. Either flag absent → field omitted from the payload
+    # entirely (preserves back-compat with every existing caller).
+    # Review fix #01 should-fix #17.
+    parser.add_argument(
+        "--fix-plan-path",
+        default=None,
+        help=(
+            "Path to the review-fix plan markdown file (absolute or "
+            "worktree-relative). When provided alongside `--pr-number`, "
+            "the payload includes an `existing_session_prompt` for "
+            "pasting into an already-running implement-task session."
+        ),
+    )
+    parser.add_argument(
+        "--pr-number",
+        type=int,
+        default=None,
+        help=(
+            "PR number for the existing-session prompt. Paired with "
+            "`--fix-plan-path`; either flag alone is a no-op."
+        ),
+    )
     args = parser.parse_args()
 
     # Reject empty / whitespace-only --next-cmd for every harness
@@ -157,6 +184,8 @@ def main() -> None:
             args.title,
             next_cmd=args.next_cmd,
             next_prompt=args.next_prompt,
+            fix_plan_path=args.fix_plan_path,
+            pr_number=args.pr_number,
         )
     except UnknownPhaseError as exc:
         output_json({

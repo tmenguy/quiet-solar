@@ -158,17 +158,25 @@ git commit -m "QS-{{issue}}: review fix plan #NN"
 git push origin {{branch}}
 ```
 
-Then build the launcher payload for `/implement-task`:
+Then build the launcher payload for `/implement-task`. Pass
+`--fix-plan-path` and `--pr-number` so the payload also carries an
+`existing_session_prompt` for the user's already-running
+implementation session (review-task → implement-task is the most
+common loop; pasting a prompt into the existing terminal is faster
+than opening a new one):
 
 ```bash
 python scripts/qs/next_step.py \
     --next-cmd "implement-task" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --fix-plan-path "{{fix_plan_path}}" \
+    --pr-number {{pr_number}}
 ```
 
-Parse the JSON; capture `new_context`. Then present both blocks:
+Parse the JSON; capture `new_context` and `existing_session_prompt`.
+Then present three blocks:
 
 ```text
 ✅ Fix plan written: {{fix_plan_path}}
@@ -178,6 +186,10 @@ Next phase: implement-task.
 
 Preferred (opens a fresh interactive `claude --agent qs-implement-task` session):
   {{new_context}}
+
+Already running an implementation session?
+Paste this prompt into it:
+  {{existing_session_prompt}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
 kept for Claude Desktop and any chat without a CLI launcher):
