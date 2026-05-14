@@ -657,6 +657,9 @@ class LoadConstraint:
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
         power_headroom: npt.NDArray[np.float64] | None = None,
+        *,
+        bat_charge_traj: npt.NDArray[np.float64] | None = None,
+        battery_min_wh: float = 0.0,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the power repartition of the constraint over the given period."""
 
@@ -1308,6 +1311,9 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
         power_headroom: npt.NDArray[np.float64] | None = None,
+        *,
+        bat_charge_traj: npt.NDArray[np.float64] | None = None,
+        battery_min_wh: float = 0.0,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -1317,6 +1323,15 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         # apply power headroom guard for all loads consuming energy (not just auto)
         use_headroom = energy_delta >= 0.0 and power_headroom is not None
+
+        # Per-slot battery-charge guard: when increasing consumption with a
+        # battery-discharge envelope, clamp each placement so the running
+        # minimum charge stays above the safety floor.  Inert when
+        # init_energy_delta < 0 (reclaim path) or no trajectory was passed.
+        use_battery_floor = energy_delta >= 0.0 and bat_charge_traj is not None
+        forward_min: npt.NDArray[np.float64] | None = None
+        if use_battery_floor and bat_charge_traj is not None:
+            forward_min = np.minimum.accumulate(bat_charge_traj[::-1])[::-1]
 
         if energy_delta >= 0.0:
             _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
@@ -1567,6 +1582,31 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     ) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
                                     base_cmd = new_base_cmd
 
+                        # Per-slot battery-floor clamp: if the proposed delta_power
+                        # would drain the forward-min charge below the safety floor,
+                        # try to find a lower command that fits, or skip the slot.
+                        if use_battery_floor and forward_min is not None and delta_power > 0:
+                            max_drain_wh = max(0.0, float(forward_min[i]) - battery_min_wh)
+                            max_delta_power_floor = max_drain_wh * 3600.0 / float(power_slots_duration_s[i])
+                            if delta_power > max_delta_power_floor:
+                                if max_delta_power_floor < power_sorted_cmds[0].power_consign:
+                                    continue
+                                # The check above guarantees a non-negative
+                                # result here — _get_lower_consign_idx_for_power
+                                # finds the largest j with cmd <= power, and
+                                # cmds[0] always fits since power >= cmds[0].
+                                j = self._get_lower_consign_idx_for_power(power_sorted_cmds, max_delta_power_floor)
+                                base_cmd = power_sorted_cmds[j]
+                                delta_power = base_cmd.power_consign - current_command_power
+                                if is_current_empty_command:
+                                    delta_power += possible_power_piloted_delta
+                                if delta_power <= 0:
+                                    continue
+                                d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0
+                                d_budget_quantity = self.get_delta_budget_quantity(
+                                    base_cmd.power_consign, power_slots_duration_s[i]
+                                ) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
+
                         out_commands[i] = copy_command_and_change_type(
                             cmd=base_cmd, new_type=pass_through_command.command
                         )
@@ -1579,6 +1619,17 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             power_headroom[i] -= delta_power
                         delta_budget_quantity += d_budget_quantity
                         energy_delta -= d_energy
+
+                        # Forward-propagate the drain through bat_charge_traj
+                        # and forward_min so subsequent slots respect the running
+                        # minimum.  Both arrays decrement by the same constant
+                        # over the same slice, preserving the invariant
+                        # forward_min[k] == min(bat_charge_traj[k:last_slot+1])
+                        # across both passes of the multi-pass loop.
+                        if use_battery_floor and forward_min is not None and bat_charge_traj is not None:
+                            state_delta_wh = delta_power * float(power_slots_duration_s[i]) / 3600.0
+                            bat_charge_traj[i : last_slot + 1] -= state_delta_wh
+                            forward_min[i : last_slot + 1] -= state_delta_wh
 
                         if first_modified_slot is None:
                             first_modified_slot = i
