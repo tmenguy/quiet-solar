@@ -916,3 +916,185 @@ def test_empty_title_rejected(monkeypatch: pytest.MonkeyPatch, bad_title: str) -
         "--title", bad_title,
     )
     assert exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #02 — must-fix #1: falsy / non-string `id` falls back too
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("session_body", [
+    b'{"id": ""}',      # empty string — currently survives the None check
+    b'{"id": 0}',       # zero — currently produces /session/0/prompt_async
+    b'{"id": false}',   # bool — same
+    b'{"id": ["x"]}',   # list — survives, str(list) is unhelpful in URL
+    b'{"id": null}',    # the case the None-guard already caught
+])
+def test_falsy_or_non_string_id_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    session_body: bytes,
+) -> None:
+    """A non-string / falsy / whitespace ``id`` triggers the CLI fallback upfront.
+
+    The tightened guard rejects the response BEFORE attempting
+    ``POST /session/<id>/prompt_async`` so we don't issue nonsense
+    URLs like ``/session/0/prompt_async`` or ``/session//prompt_async``.
+    Only the initial ``POST /session`` urlopen call should be made;
+    prompt_async must not be reached.
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    seen_urls: list[str] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        seen_urls.append(req.full_url)
+        if req.full_url.endswith("/session"):
+            return _mock_response(session_body)
+        raise AssertionError(f"unexpected call: {req.full_url}")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fallback_cli"
+    # Only one urlopen call — the bad id was rejected before
+    # prompt_async, no nonsense URL was issued.
+    assert len(seen_urls) == 1, f"expected 1 urlopen call, got: {seen_urls}"
+    assert seen_urls[0].endswith("/session")
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #02 — must-fix #2: empty --agent rejected
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_agent", ["", "   ", "\t"])
+def test_empty_agent_rejected(monkeypatch: pytest.MonkeyPatch, bad_agent: str) -> None:
+    """An empty / whitespace-only ``--agent`` exits 2 via argparse error.
+
+    Parallel guard to ``--directory`` / ``--prompt`` / ``--title``
+    (fix plan #01 should-fix #8 + nice-to-have #23). Without it, an
+    empty agent reaches ``prompt_async`` as ``{"agent": ""}`` and the
+    server returns an opaque error.
+    """
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", bad_agent,
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #02 — should-fix #8: surrounding whitespace stripped
+# --------------------------------------------------------------------------- #
+
+
+def test_directory_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--directory '  /tmp/wt  '`` lands ``"/tmp/wt"`` (no surrounding ws) in the header.
+
+    Shell-history copy-paste artifacts shouldn't break the
+    worktree-to-server binding silently.
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    seen_headers: list[str | None] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        seen_headers.append(req.get_header("X-opencode-directory"))
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        return _mock_response(b"")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "  /tmp/wt  ",
+    )
+    assert exit_code == 0
+    assert seen_headers
+    assert seen_headers[0] == "/tmp/wt", f"header was not stripped: {seen_headers[0]!r}"
+
+
+def test_agent_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--agent '  qs-create-plan  '`` lands stripped in the prompt_async body."""
+    import spawn_session  # type: ignore[import-not-found]
+
+    bodies: list[bytes | None] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        bodies.append(req.data)
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        return _mock_response(b"")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "  qs-create-plan  ",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    prompt_body = json.loads(bodies[1] or b"{}")
+    assert prompt_body["agent"] == "qs-create-plan"
+
+
+def test_prompt_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--prompt '  hi  '`` lands stripped in the prompt_async body."""
+    import spawn_session  # type: ignore[import-not-found]
+
+    bodies: list[bytes | None] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        bodies.append(req.data)
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        return _mock_response(b"")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+        "--prompt", "  hi  ",
+    )
+    assert exit_code == 0
+    prompt_body = json.loads(bodies[1] or b"{}")
+    assert prompt_body["parts"][0]["text"] == "hi"
+
+
+def test_title_whitespace_stripped_when_provided(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--title '  T  '`` (explicit) lands stripped in the /session body."""
+    import spawn_session  # type: ignore[import-not-found]
+
+    bodies: list[bytes | None] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        bodies.append(req.data)
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        return _mock_response(b"")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+        "--title", "  My Title  ",
+    )
+    assert exit_code == 0
+    session_body = json.loads(bodies[0] or b"{}")
+    assert session_body == {"title": "My Title"}

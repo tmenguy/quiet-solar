@@ -238,12 +238,18 @@ def spawn_session(
     # fallback was YAGNI defensive code with no actual server support
     # (review fix #01 nice-to-have #18).
     session_id = session.get("id")
-    if session_id is None:
+    # Reject not just ``None`` but any non-string or whitespace-only
+    # value. A server returning ``{"id": ""}``, ``{"id": 0}``,
+    # ``{"id": False}``, or ``{"id": ["x"]}`` would otherwise survive
+    # ``if session_id is None`` and produce a nonsense URL like
+    # ``/session//prompt_async`` or ``/session/False/prompt_async``
+    # (review fix #02 must-fix #1).
+    if not isinstance(session_id, str) or not session_id.strip():
         raise SpawnSessionError(
-            f"No id in /session response: {session!r}",
+            f"server response missing or invalid 'id' field: {session!r}",
             url=f"{_base_url()}/session",
         )
-    session_id_str = str(session_id)
+    session_id_str = session_id
 
     # URL-escape the session id before path interpolation so a hostile
     # / buggy server response (e.g. ``{"id": "abc/../delete-me"}``)
@@ -306,6 +312,19 @@ def _build_cli_command(agent: str, directory: str, prompt: str) -> str:
     )
 
 
+def _emit(payload: dict, *, stderr_msg: str, exit_code: int) -> int:
+    """Helper for ``_emit_fallback``: write stderr + JSON, return exit code.
+
+    Eliminates the triplicate ``print(...) + output_json(...) +
+    sys.exit(N)`` pattern in ``_emit_fallback``'s three branches —
+    a single typo in one branch's stderr message can't drift away
+    from the others (review fix #02 should-fix #5).
+    """
+    print(stderr_msg, file=sys.stderr)
+    output_json(payload)
+    return exit_code
+
+
 def _emit_fallback(
     *,
     agent: str,
@@ -344,12 +363,6 @@ def _emit_fallback(
     new_context_cli = _build_cli_command(agent, directory, prompt)
 
     if exc.orphan_session_id is not None:
-        print(
-            f"ERROR: OpenCode session {exc.orphan_session_id} was created "
-            f"but agent activation failed and cleanup also failed; "
-            f"clean up the orphan session manually in the OpenCode UI.",
-            file=sys.stderr,
-        )
         orphan_payload: dict = {
             "status": "session_orphaned",
             "session_id": exc.orphan_session_id,
@@ -367,39 +380,48 @@ def _emit_fallback(
                 f"{detail}; opencode CLI also not on PATH — clean up "
                 f"session {exc.orphan_session_id} manually in the OpenCode UI"
             )
-        output_json(orphan_payload)
-        return 2
+        return _emit(
+            orphan_payload,
+            stderr_msg=(
+                f"ERROR: OpenCode session {exc.orphan_session_id} was created "
+                f"but agent activation failed and cleanup also failed; "
+                f"clean up the orphan session manually in the OpenCode UI."
+            ),
+            exit_code=2,
+        )
 
     if has_cli:
-        print(
-            f"WARNING: OpenCode HTTP API unreachable ({detail}); "
-            f"falling back to opencode CLI.",
-            file=sys.stderr,
+        return _emit(
+            {
+                "status": "fallback_cli",
+                "agent": agent,
+                "directory": directory,
+                "new_context_cli": new_context_cli,
+                "detail": detail,
+            },
+            stderr_msg=(
+                f"WARNING: OpenCode HTTP API unreachable ({detail}); "
+                f"falling back to opencode CLI."
+            ),
+            exit_code=0,
         )
-        output_json({
-            "status": "fallback_cli",
+
+    return _emit(
+        {
+            "status": "fallback_unavailable",
             "agent": agent,
             "directory": directory,
-            "new_context_cli": new_context_cli,
-            "detail": detail,
-        })
-        return 0
-
-    print(
-        f"ERROR: OpenCode HTTP API unreachable AND opencode CLI not on "
-        f"PATH ({detail}); cannot launch the next phase.",
-        file=sys.stderr,
-    )
-    output_json({
-        "status": "fallback_unavailable",
-        "agent": agent,
-        "directory": directory,
-        "detail": (
-            f"{detail}; opencode CLI not on PATH — install or activate "
-            f"the server manually"
+            "detail": (
+                f"{detail}; opencode CLI not on PATH — install or activate "
+                f"the server manually"
+            ),
+        },
+        stderr_msg=(
+            f"ERROR: OpenCode HTTP API unreachable AND opencode CLI not on "
+            f"PATH ({detail}); cannot launch the next phase."
         ),
-    })
-    return 2
+        exit_code=2,
+    )
 
 
 def main() -> None:
@@ -442,7 +464,10 @@ def main() -> None:
     # Reject empty / whitespace-only values upfront so we don't silently
     # drop the `x-opencode-directory` header (review fix #01 should-fix
     # #8) or send an empty prompt body that the server would 422 on
-    # with an opaque error (review fix #01 nice-to-have #23).
+    # with an opaque error (review fix #01 nice-to-have #23). ``--agent``
+    # added for parity in review fix #02 must-fix #2.
+    if not args.agent.strip():
+        parser.error("--agent must be a non-empty string")
     if not args.directory.strip():
         parser.error("--directory must be a non-empty path")
     if not args.prompt.strip():
@@ -453,6 +478,16 @@ def main() -> None:
     # in the OpenCode sidebar).
     if args.title is not None and not args.title.strip():
         parser.error("--title must be a non-empty string when provided")
+
+    # Strip surrounding whitespace from the validated values so a
+    # shell-history copy-paste artifact (e.g. ``--directory '  /tmp/wt
+    # '``) doesn't break the worktree-to-server binding silently
+    # (review fix #02 should-fix #8).
+    args.agent = args.agent.strip()
+    args.directory = args.directory.strip()
+    args.prompt = args.prompt.strip()
+    if args.title is not None:
+        args.title = args.title.strip()
 
     try:
         result = spawn_session(

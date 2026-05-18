@@ -59,6 +59,33 @@ DEFAULT_KICKOFF = "Begin your phase protocol."
 Caller = Literal["setup_task", "next_step"]
 
 
+def _coerce_issue_to_int(issue: int | str) -> int:
+    """Return ``issue`` as an ``int``, raising ``ValueError`` on anything else.
+
+    Wrapper around ``int(issue)`` that:
+
+    - Catches both ``ValueError`` (``int("abc")``) and ``TypeError``
+      (``int(None)``) and re-raises a uniform ``ValueError`` so the
+      public contract reads "non-integer issue raises ValueError".
+    - Rejects ``bool`` early — ``int(True) == 1`` would silently
+      coerce, almost certainly a programmer error.
+
+    Review fix #02 should-fix #10 + recommendation footnote.
+    """
+    if isinstance(issue, bool):
+        # ``bool`` is a subclass of ``int`` in Python, so without an
+        # explicit guard ``int(True)`` returns ``1`` silently.
+        raise ValueError(
+            f"issue must be an integer, got bool: {issue!r}",
+        )
+    try:
+        return int(issue)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"issue must be an integer, got {issue!r}",
+        ) from exc
+
+
 def _spawn_session_command(
     work_dir: str,
     issue: int | str,
@@ -72,8 +99,16 @@ def _spawn_session_command(
     Single-line shell command (no newlines, no ``sh /tmp/…`` wrapper);
     every interpolated value is shell-escaped via ``shlex.quote``
     matching the convention in ``scripts/qs/launchers/claude.py``.
+
+    ``issue`` is coerced via ``_coerce_issue_to_int`` upfront (parity
+    with ``_opencode_cli_command``). Without this coercion the
+    ``shlex.quote`` on the title interpolation is the only defence
+    against a malicious string value — a future refactor that drops
+    the quoting would reopen the shell-injection vector. Review fix
+    #02 should-fix #3.
     """
-    tab_title = f"QS_{issue}: {title}"
+    issue_int = _coerce_issue_to_int(issue)
+    tab_title = f"QS_{issue_int}: {title}"
     return (
         "python scripts/qs/spawn_session.py "
         f"--agent {shlex.quote(agent)} "
@@ -103,12 +138,13 @@ def _opencode_cli_command(
     intended phase + kickoff so the user can paste the prompt
     manually if the ``--prompt`` flag ever changes.
 
-    Security / robustness (review fix #01):
+    Security / robustness (review fix #01 + #02):
 
-    - ``issue`` is coerced via ``int()`` so a malicious string value
-      (e.g. ``"42; rm -rf $HOME"``) raises ``ValueError`` upfront
-      rather than producing a script path with shell metacharacters
-      (must-fix #2).
+    - ``issue`` is coerced via ``_coerce_issue_to_int`` so a
+      malicious string value (e.g. ``"42; rm -rf $HOME"``) raises
+      ``ValueError`` upfront rather than producing a script path with
+      shell metacharacters. ``None`` and ``bool`` are also rejected
+      (must-fix #2 + review fix #02 should-fix #10).
     - The script is written via ``tempfile.NamedTemporaryFile`` to a
       uniquely-named path under ``tempfile.gettempdir()`` — eliminates
       the symlink-attack vector against a deterministic
@@ -123,11 +159,24 @@ def _opencode_cli_command(
       sandboxed CI, etc.), we fall back to returning the bare
       ``opencode <worktree> --agent <name> --prompt <kickoff>``
       command inline — the user still gets a working command instead
-      of an uncaught traceback (should-fix #6).
+      of an uncaught traceback (should-fix #6). **This is a
+      degraded path**: the inline fallback drops the tab-title
+      printf, the activate-agent echo banner, the preload echo
+      banner, and the kickoff echo — the user gets a functional
+      command but no visual confirmation of the new session setup
+      (review fix #02 should-fix #7). The trade-off is intentional;
+      the failure path is rare and adding more shell to the inline
+      form makes the failure-mode debugging harder.
+    - If the temp file was created but ``chmod`` failed (FAT32 /
+      some NFS mounts that don't support POSIX permissions), the
+      orphaned file is best-effort unlinked before returning the
+      inline fallback so we don't leak files in the temp dir
+      (review fix #02 should-fix #9).
     """
     # Coerce ``issue`` to int up-front (review fix #01 must-fix #2 —
-    # closes the shell-injection vector at the type boundary).
-    issue_int = int(issue)
+    # closes the shell-injection vector at the type boundary; review
+    # fix #02 should-fix #10 widens the exception handling).
+    issue_int = _coerce_issue_to_int(issue)
 
     tab_title = f"QS_{issue_int}: {title}"
     safe_title = shlex.quote(tab_title)
@@ -154,6 +203,7 @@ def _opencode_cli_command(
         f"{opencode_cmd}"
     )
 
+    script_path: Path | None = None
     try:
         # ``NamedTemporaryFile`` generates a unique path under
         # ``tempfile.gettempdir()`` — concurrent invocations can't
@@ -178,6 +228,19 @@ def _opencode_cli_command(
         # fallback so the launcher still emits a working
         # ``new_context`` instead of an uncaught traceback
         # propagating to ``setup_task.main()``.
+        #
+        # If the temp file was already created (chmod failed but
+        # write succeeded), best-effort unlink it so we don't leak
+        # files in the temp dir over time (review fix #02
+        # should-fix #9).
+        if script_path is not None:
+            try:
+                script_path.unlink(missing_ok=True)
+            except OSError:
+                # Best-effort — already in a degraded path, don't
+                # let secondary I/O failure replace the original
+                # message.
+                pass
         return opencode_cmd
 
     return f"sh {shlex.quote(str(script_path))}"

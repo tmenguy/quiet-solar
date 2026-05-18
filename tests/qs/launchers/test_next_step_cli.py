@@ -337,6 +337,29 @@ def test_existing_session_prompt_omitted_when_only_pr_provided(tmp_path: Path) -
     assert "existing_session_prompt" not in payload
 
 
+# --------------------------------------------------------------------------- #
+# Review fix plan #02 — should-fix #11: --pr-number rejects non-positive values
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_pr", ["0", "-1", "-100"])
+def test_pr_number_rejects_non_positive(tmp_path: Path, bad_pr: str) -> None:
+    """``--pr-number 0`` / negative exits 2 — GitHub PR numbers are always positive."""
+    result = _run(
+        [
+            "--next-cmd", "implement-task",
+            "--work-dir", "/tmp/wt",
+            "--issue", "177",
+            "--title", "Test",
+            "--harness", "claude-code",
+            "--fix-plan-path", "/tmp/wt/x.md",
+            "--pr-number", bad_pr,
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 2, result.stderr
+
+
 @pytest.mark.parametrize("harness", ["claude-code", "cursor", "codex", "opencode"])
 def test_existing_session_prompt_emitted_for_all_harnesses(
     harness: str, tmp_path: Path,

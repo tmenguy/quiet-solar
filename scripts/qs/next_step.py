@@ -31,11 +31,16 @@ SF2). The check sits after parse rather than inside an argparse
 ``type=`` callable because argparse type errors print a usage banner
 to stderr, but the rest of this script speaks a JSON error contract
 (``{"error": ..., "value": ..., ...}``) — putting the check in main()
-keeps the contract uniform. Trailing/leading whitespace inside an
-otherwise-non-empty ``--next-cmd`` (e.g. ``"create-plan "``) IS
-preserved verbatim under codex/opencode (review-fix #03 NTH7); those
-launchers treat ``--next-cmd`` as free-form, so an intentional space
-is the user's call.
+keeps the contract uniform.
+
+Trailing/leading whitespace inside an otherwise-non-empty
+``--next-cmd`` IS preserved verbatim under codex (the only remaining
+free-form harness). Claude, cursor, and opencode resolve
+``--next-cmd`` strictly via ``PHASE_TO_AGENT`` and reject unknown
+values (including those with stray whitespace) with exit code 1
+(review fix #02 should-fix #13 — the pre-QS-177 docstring claimed
+opencode was free-form too, but the new pipeline made opencode
+strict).
 
 **Error contract** (review-fix #03 NTH9, extended in review-fix #04
 NTH5/NTH6/NTH7). Four exit shapes, ordered by where they're caught:
@@ -169,6 +174,14 @@ def main() -> None:
             "detail": "--next-cmd must be a non-empty, non-whitespace string",
         })
         sys.exit(1)
+
+    # GitHub PR numbers are always positive integers. ``type=int``
+    # accepts the full int range, so ``--pr-number 0`` or
+    # ``--pr-number -1`` would otherwise build a confusing
+    # ``existing_session_prompt`` with literal ``#0`` / ``#-1``
+    # (review fix #02 should-fix #11).
+    if args.pr_number is not None and args.pr_number <= 0:
+        parser.error("--pr-number must be a positive integer")
 
     harness = args.harness or detect_harness()
     launcher = LAUNCHERS[harness]

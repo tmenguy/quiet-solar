@@ -237,22 +237,93 @@ def test_build_payload_default_kickoff_used_when_no_next_prompt() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_opencode_cli_command_rejects_non_integer_issue() -> None:
+@pytest.mark.parametrize(
+    "bad_issue",
+    [
+        "42; rm -rf $HOME",  # shell-injection vector
+        "abc",               # plain non-numeric string
+        None,                # programmer error — int(None) raises TypeError
+    ],
+)
+def test_opencode_cli_command_rejects_non_integer_issue(bad_issue: object) -> None:
     """A non-integer ``issue`` raises ``ValueError`` — closes the shell-injection vector.
 
     The signature admits ``int | str`` but the body coerces via
     ``int(issue)`` so a payload like ``issue="42; rm -rf $HOME"``
     raises rather than producing a script path with a ``;`` injected.
+
+    Review fix #02 should-fix #10: widen the exception handling to
+    convert both ``TypeError`` (from ``int(None)``) and ``ValueError``
+    (from ``int("abc")``) into a single ``ValueError`` so the public
+    contract is uniform.
     """
     from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 
     with pytest.raises(ValueError):
         opencode_launcher.build_payload(
             "/tmp/work",
-            "42; rm -rf $HOME",
+            bad_issue,  # type: ignore[arg-type]
             "Fix bug",
             next_cmd="create-plan",
             caller="setup_task",
+        )
+
+
+def test_opencode_cli_command_rejects_bool_issue() -> None:
+    """Bool subclass of int is explicitly rejected.
+
+    ``int(True) == 1`` / ``int(False) == 0`` would silently coerce —
+    almost certainly a programmer error. Reject upfront so the type
+    contract reads "actual integers only" (review fix #02 should-fix
+    #10).
+    """
+    from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    with pytest.raises(ValueError):
+        opencode_launcher.build_payload(
+            "/tmp/work",
+            True,  # type: ignore[arg-type]
+            "Fix bug",
+            next_cmd="create-plan",
+            caller="setup_task",
+        )
+
+
+@pytest.mark.parametrize("issue", [42, "42"])
+def test_build_payload_returns_spawn_session_invocation_int_str_parity(
+    issue: int | str,
+) -> None:
+    """``_spawn_session_command`` accepts ``int`` and ``str`` issue equivalently.
+
+    Parity gap with ``_opencode_cli_command`` (which already coerces
+    via ``int(issue)``). Review fix #02 should-fix #3.
+    """
+    from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    payload = opencode_launcher.build_payload(
+        "/tmp/work", issue, "Fix bug", next_cmd="create-plan", caller="next_step",
+    )
+    # Title uses the post-coercion integer form.
+    assert "QS_42: Fix bug" in payload["new_context"]
+
+
+def test_spawn_session_command_rejects_non_integer_issue() -> None:
+    """``_spawn_session_command`` also rejects shell-injection-style strings.
+
+    Parity with ``_opencode_cli_command``'s upfront ``int(issue)``
+    coercion (review fix #02 should-fix #3). Without this, a future
+    refactor that drops ``shlex.quote`` on the title interpolation
+    would reopen the shell-injection vector via the next_step path.
+    """
+    from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    with pytest.raises(ValueError):
+        opencode_launcher.build_payload(
+            "/tmp/work",
+            "42; rm -rf",
+            "Fix bug",
+            next_cmd="create-plan",
+            caller="next_step",
         )
 
 
@@ -265,6 +336,10 @@ def test_opencode_cli_command_shell_quotes_script_path(
     ``new_context`` would split on the embedded whitespace and the
     shell would execute the first token as the script and treat the
     rest as separate arguments.
+
+    Structural pin (review fix #02 should-fix #4): use ``shlex.split``
+    to assert the EXACT tokenization rather than a substring-or-quote
+    OR-disjunction that any unrelated single quote could satisfy.
     """
     import shlex
     import tempfile as tempfile_module
@@ -282,9 +357,13 @@ def test_opencode_cli_command_shell_quotes_script_path(
     # Either the path was written and shlex-quoted, or the write
     # failed and we fell back to the inline command. Both are safe.
     if new_context.startswith("sh "):
-        # The script-path argument must be shlex-quoted (whitespace
-        # cannot leak unquoted into the shell command).
-        assert shlex.quote(str(weird_tmp)) in new_context or "'" in new_context, new_context
+        # Structural assertion: after ``shlex.split`` the second token
+        # must be EXACTLY the absolute script path under ``weird_tmp``.
+        # A regression that drops the path quoting would split the
+        # path on the embedded space and fail this pin.
+        parts = shlex.split(new_context)
+        assert parts[0] == "sh", parts
+        assert parts[1].startswith(str(weird_tmp)), parts
 
 
 # --------------------------------------------------------------------------- #
@@ -452,3 +531,77 @@ def test_default_kickoff_constants_match() -> None:
     from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 
     assert opencode_launcher.DEFAULT_KICKOFF == spawn_session.DEFAULT_KICKOFF
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #02 — should-fix #7: inline fallback degradation documented
+# --------------------------------------------------------------------------- #
+
+
+def test_opencode_cli_command_inline_fallback_documented() -> None:
+    """``_opencode_cli_command`` docstring documents the degraded inline-fallback path.
+
+    The fallback drops the tab-title banner + activate/preload echoes
+    — a degraded UX. The docstring must call this out so a future
+    reader doesn't assume the fallback is feature-parity with the
+    script path.
+    """
+    from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    doc = opencode_launcher._opencode_cli_command.__doc__
+    assert doc is not None
+    doc_lower = doc.lower()
+    assert "degraded" in doc_lower or "inline fallback drops" in doc_lower, (
+        "_opencode_cli_command docstring must document the inline-fallback "
+        "degradation (banner UX dropped on temp filesystem write failure). "
+        "See review fix #02 should-fix #7."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #02 — should-fix #9: chmod failure cleans up temp file
+# --------------------------------------------------------------------------- #
+
+
+def test_opencode_cli_command_cleans_temp_file_on_chmod_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``chmod`` raises ``OSError``, the orphaned temp file is unlinked.
+
+    On filesystems that don't support POSIX permissions (FAT32, some
+    NFS mounts), ``tempfile.NamedTemporaryFile`` creates the file
+    successfully but the subsequent ``chmod(0o700)`` raises
+    ``OSError``. Without cleanup, every failed run leaks a file
+    in the temp directory.
+    """
+    import tempfile as tempfile_module
+
+    from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    created_paths: list[str] = []
+    original_named_temp = tempfile_module.NamedTemporaryFile
+
+    def _tracking(*args: object, **kwargs: object) -> object:
+        f = original_named_temp(*args, **kwargs)  # type: ignore[arg-type]
+        created_paths.append(f.name)
+        return f
+
+    monkeypatch.setattr(tempfile_module, "NamedTemporaryFile", _tracking)
+
+    # Force chmod to fail.
+    def _failing_chmod(self: Path, mode: int) -> None:
+        del self, mode
+        raise OSError("FAT32 perm not supported")
+
+    monkeypatch.setattr(Path, "chmod", _failing_chmod)
+
+    payload = opencode_launcher.build_payload(
+        "/tmp/work", 42, "Fix bug", next_cmd="create-plan", caller="setup_task",
+    )
+    # Inline fallback was taken (no script wrapper).
+    assert not payload["new_context"].startswith("sh ")
+    # The temp file was created but cleaned up.
+    assert len(created_paths) == 1, created_paths
+    assert not Path(created_paths[0]).exists(), (
+        f"temp file should have been cleaned up: {created_paths[0]}"
+    )

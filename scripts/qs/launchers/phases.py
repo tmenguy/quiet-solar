@@ -158,7 +158,11 @@ def build_existing_session_prompt(
     agent presentation differs per harness but the prompt body does
     not.
     """
-    if not fix_plan_path or pr_number is None:
+    # Reject whitespace-only ``fix_plan_path`` — a value like ``"   "``
+    # is truthy in Python and would otherwise render a confusing
+    # ``"A new review fix plan landed:    \n..."`` artifact (review
+    # fix #02 should-fix #12).
+    if not fix_plan_path or not fix_plan_path.strip() or pr_number is None:
         return None
 
     # Normalise the path to worktree-relative. If ``fix_plan_path`` is
@@ -166,12 +170,20 @@ def build_existing_session_prompt(
     # it's already relative, pass it through verbatim. Anything
     # outside the worktree (rare) goes through ``os.path.relpath``
     # which returns a ``../...`` form.
+    #
+    # ``os.path.relpath`` can also raise ``ValueError`` in two
+    # additional cases not handled by the "abs vs rel" branching:
+    # (a) Windows cross-drive paths (``C:\foo`` vs ``D:\bar``) and
+    # (b) one path absolute + the other relative. Wrapping the call
+    # in ``try/except ValueError`` and falling back to the absolute
+    # path keeps the prompt functional (the user can copy the
+    # absolute path) instead of propagating an uncaught exception
+    # through ``build_payload`` → ``next_step.py`` (review fix #02
+    # should-fix #6).
     if os.path.isabs(fix_plan_path):
         try:
             fix_plan_rel = os.path.relpath(fix_plan_path, work_dir)
         except ValueError:
-            # Cross-drive on Windows or similar — fall back to the
-            # raw absolute path. Acceptable degraded UX.
             fix_plan_rel = fix_plan_path
     else:
         fix_plan_rel = fix_plan_path

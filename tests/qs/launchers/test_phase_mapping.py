@@ -162,3 +162,72 @@ def test_resolve_raises_unknown_phase_error_specifically() -> None:
         resolve_agent_for_next_cmd("bogus-phase")
     assert excinfo.value.value == "bogus-phase"
     assert "create-plan" in excinfo.value.known
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #02 — should-fix #6 / #12: build_existing_session_prompt edge cases
+# --------------------------------------------------------------------------- #
+
+
+def test_build_existing_session_prompt_happy_path() -> None:
+    """Happy path: absolute fix-plan-path under work-dir → worktree-relative + #PR."""
+    from launchers.phases import build_existing_session_prompt  # type: ignore[import-not-found]
+
+    result = build_existing_session_prompt(
+        "/tmp/wt",
+        "/tmp/wt/docs/stories/QS-177.story_review_fix_#01.md",
+        179,
+    )
+    assert result is not None
+    assert "docs/stories/QS-177.story_review_fix_#01.md" in result
+    assert "#179" in result
+    assert "/tmp/wt/" not in result
+
+
+def test_build_existing_session_prompt_omits_when_inputs_missing() -> None:
+    """Either input missing → ``None`` (caller omits the key)."""
+    from launchers.phases import build_existing_session_prompt  # type: ignore[import-not-found]
+
+    assert build_existing_session_prompt("/work", None, 42) is None
+    assert build_existing_session_prompt("/work", "/work/x.md", None) is None
+    assert build_existing_session_prompt("/work", "", 42) is None
+
+
+@pytest.mark.parametrize("bad_path", ["   ", "\t", "\n", " \t \n "])
+def test_build_existing_session_prompt_rejects_whitespace_fix_plan_path(bad_path: str) -> None:
+    """Whitespace-only ``fix_plan_path`` is also rejected.
+
+    Without this guard, a value like ``"   "`` would produce a
+    confusing ``"A new review fix plan landed:    \n…"`` prompt.
+    Review fix #02 should-fix #12.
+    """
+    from launchers.phases import build_existing_session_prompt  # type: ignore[import-not-found]
+
+    assert build_existing_session_prompt("/work", bad_path, 42) is None
+
+
+def test_build_existing_session_prompt_handles_relpath_value_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``os.path.relpath`` raises ``ValueError`` (cross-drive on Windows etc.), fall back to absolute.
+
+    On POSIX we simulate the failure by monkeypatching ``os.path.relpath``
+    to raise — the function should still return a valid prompt with
+    the absolute path embedded (the user can copy it).
+    """
+    import os.path
+
+    from launchers.phases import build_existing_session_prompt  # type: ignore[import-not-found]
+
+    def _raise(*_args: object, **_kwargs: object) -> str:
+        raise ValueError("path is on mount '/' which is not the start of work_dir")
+
+    monkeypatch.setattr(os.path, "relpath", _raise)
+
+    result = build_existing_session_prompt(
+        "/work", "/somewhere/else/fix-plan.md", 42,
+    )
+    assert result is not None
+    # Falls back to the absolute path verbatim — still functional.
+    assert "/somewhere/else/fix-plan.md" in result
+    assert "#42" in result
