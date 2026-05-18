@@ -23,10 +23,13 @@ Expected outcome:
 - If findings remain, a fix plan written to
   `docs/stories/QS-<N>.story_review_fix_#NN.md`, plus THREE
   presentation options: (a) the launcher form (`claude --agent
-  qs-implement-task`) for a fresh terminal, (b) an
+  qs-implement-task` or `claude --agent qs-implement-setup-task`,
+  chosen by the file scope of the findings — same rule as
+  `/create-plan`) for a fresh terminal, (b) an
   `existing_session_prompt` to paste into an already-running
-  implementation session (the most common loop), and (c) the
-  slash-command fallback (`/implement-task`).
+  implementation session (the most common loop), and (c) the matching
+  slash-command fallback (`/implement-task` or
+  `/implement-setup-task`).
 - If clean, next-phase command printed: launcher form (`claude --agent
   qs-finish-task`) plus slash-command fallback (`/finish-task`).
 

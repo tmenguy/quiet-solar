@@ -26,7 +26,8 @@ python scripts/qs/context.py
 
 Capture `issue`, `title`, `branch`, `story_file`, `pr_number`,
 `pr_url`. If `pr_number` is null, STOP — the PR must exist before
-review (run `/implement-task` first).
+review (run `/implement-task` or `/implement-setup-task` first,
+whichever the story scope requires).
 
 ## Phase protocol
 
@@ -118,6 +119,21 @@ decisions?".
 
 If any decisions are "fix":
 
+**Determine the next implement variant.** Collect the set of unique
+file paths from the findings you decided to fix. Apply the same rule
+as `/create-plan` (see
+[phase-protocols.md](../../docs/workflow/phase-protocols.md)):
+
+- If **every** touched file is under `scripts/`, `.claude/`,
+  `.cursor/`, `.opencode/`, `_qsprocess_opencode/`, `docs/`,
+  `.github/`, or is a top-level config file:
+  `{{next_implement}} = /implement-setup-task`
+- Otherwise: `{{next_implement}} = /implement-task`
+
+Substitute `{{next_implement}}` consistently in both the fix-plan
+template and the ready-to-copy prompt below — never hardcode one
+variant.
+
 ```bash
 python -c "from scripts.qs.utils import next_review_fix_path; print(next_review_fix_path({{issue}}))"
 ```
@@ -132,6 +148,7 @@ to that file. Format:
 - Source PR: #{{pr_number}}
 - Source story: {{story_file}}
 - Findings to fix: <count>
+- Next implement phase: `{{next_implement}}`
 
 ## Findings to fix
 
@@ -146,8 +163,8 @@ to that file. Format:
 
 ## How to apply
 
-Run `/implement-task` against this fix plan. When done, return and run
-`/review-task` again to re-verify.
+Run `{{next_implement}}` against this fix plan. When done, return and
+run `/review-task` again to re-verify.
 ```
 
 Commit and push:
@@ -158,16 +175,18 @@ git commit -m "QS-{{issue}}: review fix plan #NN"
 git push origin {{branch}}
 ```
 
-Then build the launcher payload for `/implement-task`. Pass
+Then build the launcher payload for the chosen `{{next_implement}}`
+phase (use the bare phase name — `implement-task` or
+`implement-setup-task` — never the slash form, never hardcoded). Pass
 `--fix-plan-path` and `--pr-number` so the payload also carries an
 `existing_session_prompt` for the user's already-running
-implementation session (review-task → implement-task is the most
-common loop; pasting a prompt into the existing terminal is faster
-than opening a new one):
+implementation session (review-task → `{{next_implement}}` is the
+most common loop; pasting a prompt into the existing terminal is
+faster than opening a new one):
 
 ```bash
 python scripts/qs/next_step.py \
-    --next-cmd "implement-task" \
+    --next-cmd "{{next_implement}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
     --title "{{title}}" \
@@ -176,15 +195,16 @@ python scripts/qs/next_step.py \
 ```
 
 Parse the JSON; capture `new_context` and `existing_session_prompt`.
-Then present three blocks:
+Then present three blocks (substitute `{{next_implement}}`
+consistently — same value the launcher payload was built with):
 
 ```text
 ✅ Fix plan written: {{fix_plan_path}}
 ✅ Committed and pushed.
 
-Next phase: implement-task.
+Next phase: {{next_implement}}.
 
-Preferred (opens a fresh interactive `claude --agent qs-implement-task` session):
+Preferred (opens a fresh interactive `claude --agent qs-{{next_implement}}` session):
   {{new_context}}
 
 Already running an implementation session?
@@ -193,7 +213,7 @@ Paste this prompt into it:
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
 kept for Claude Desktop and any chat without a CLI launcher):
-  /implement-task
+  /{{next_implement}}
 
 Then re-run /review-task (or open a fresh `claude --agent qs-review-task`
 session) to verify.

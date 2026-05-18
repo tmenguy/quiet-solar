@@ -127,9 +127,11 @@ are needed).
 plan + instructions for the user to apply fixes.
 **Next phase**: `claude --agent qs-finish-task` in the worktree
 (preferred — fresh interactive session), or `/finish-task` as fallback.
-When fixes are needed, re-run `claude --agent qs-implement-task` (or
-`/implement-task`) and then `claude --agent qs-review-task` (or
-`/review-task`).
+When fixes are needed, re-run `claude --agent qs-implement-task` or
+`claude --agent qs-implement-setup-task` (chosen by file scope of the
+findings, same rule as `/create-plan`) — with `/implement-task` or
+`/implement-setup-task` as the slash-command fallback — then re-run
+`claude --agent qs-review-task` (or `/review-task`).
 
 **Phase protocol**:
 1. Fetch PR diff.
@@ -147,8 +149,10 @@ When fixes are needed, re-run `claude --agent qs-implement-task` (or
    one?" → collect decisions → confirm.
 6. If fixes needed, write fix-plan file (auto-incremented suffix
    `#01`, `#02`, …) and emit the launcher payload (`claude --agent
-   qs-implement-task`) plus the slash-command fallback (`/implement-task`)
-   for the user to apply the fix plan.
+   qs-implement-task` or `claude --agent qs-implement-setup-task`,
+   chosen by file scope of the findings — same rule as `/create-plan`)
+   plus the matching slash-command fallback (`/implement-task` or
+   `/implement-setup-task`) for the user to apply the fix plan.
 7. When fixes pushed, the user re-runs `claude --agent qs-review-task`
    (or `/review-task` as fallback) — loop back to step 1 until clean.
 

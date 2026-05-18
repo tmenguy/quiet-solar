@@ -7,6 +7,20 @@
 
 set -euo pipefail
 
+# FIX #05: consolidate temp-file cleanup into a single EXIT trap. Each
+# task below that needs a stderr-capture file pushes its mktemp result
+# into TMPFILES; the trap rms them all on any exit path. This avoids the
+# per-task-trap-overwrites-previous-trap foot-gun (bash only keeps one
+# trap per signal).
+TMPFILES=()
+# shellcheck disable=SC2317  # invoked via trap, not directly
+_qs_cleanup_tmpfiles() {
+    if [ "${#TMPFILES[@]}" -gt 0 ]; then
+        rm -f "${TMPFILES[@]}"
+    fi
+}
+trap _qs_cleanup_tmpfiles EXIT
+
 if [ $# -ne 1 ]; then
     echo "Usage: $0 <issue_number>"
     exit 1
@@ -27,13 +41,214 @@ MAIN_DIR="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
 
 # P2: Derive directory name from main worktree path (not hardcoded)
 MAIN_BASENAME="$(basename "$MAIN_DIR")"
-WORKTREES_DIR="${MAIN_DIR}/../${MAIN_BASENAME}-worktrees"
+WORKTREES_DIR_RAW="${MAIN_DIR}/../${MAIN_BASENAME}-worktrees"
+mkdir -p "$WORKTREES_DIR_RAW"
+# Use the verbatim form for `git worktree add` — git records this exact
+# path in `worktree list --porcelain`. Also compute the canonical form
+# (`pwd -P` resolves symlinks like macOS's /var → /private/var). The
+# membership check below accepts either representation, because git's
+# own canonicalization rules vary across versions and platforms — and
+# `pwd -P` alone diverges from `git worktree add`'s recorded path on
+# macOS, breaking the membership match and triggering an unsafe
+# `rm -rf` against a live tracked worktree.
+WORKTREES_DIR="$WORKTREES_DIR_RAW"
+WORKTREES_DIR_CANON="$(cd "$WORKTREES_DIR_RAW" && pwd -P)"
 WORKTREE_DIR="${WORKTREES_DIR}/${BRANCH}"
+WORKTREE_DIR_CANON="${WORKTREES_DIR_CANON}/${BRANCH}"
 
-# Check worktree doesn't already exist
+# FIX #05 SF-6: track whether this run rebuilt the worktree directory.
+# If we rebuilt it (either `worktree remove --force` or `rm -rf`), the
+# divergence check at the end of the script must not refuse-and-loop
+# against a pre-existing diverged origin/${BRANCH}: there is no operator
+# work to preserve in a worktree we just threw away. Default "no" so
+# the divergence check still fires on the no-rebuild path (e.g. a fresh
+# `git worktree add` followed by an out-of-band manual push from another
+# checkout).
+WORKTREE_RECOVERED="no"
+
+# Worktree directory present? Distinguish fully-set-up (idempotent no-op)
+# from partially-set-up (recover by removing and continuing). The previous
+# unconditional `exit 1` here was a partial-state trap: any failure later
+# in the script (e.g. a non-fast-forward `push -u`, network blip, or
+# missing remote) left the worktree directory on disk and blocked all
+# subsequent retries.
 if [ -d "$WORKTREE_DIR" ]; then
-    echo "Error: Worktree directory ${WORKTREE_DIR} already exists"
-    exit 1
+    # Treat as fully set up only if git agrees this is a tracked worktree
+    # whose HEAD is on $BRANCH AND whose upstream is origin/$BRANCH.
+    # `grep -qxF` requires a full-line match (porcelain emits one entry per
+    # line with the exact path) so a sibling prefix collision — e.g.
+    # checking QS_17 while QS_173 also exists — cannot false-positive.
+    IS_TRACKED_WORKTREE="no"
+    # Accept either the verbatim or canonical form: `git worktree add`'s
+    # recorded path may match either, depending on git version and
+    # platform symlink layout (macOS /var → /private/var). Multiple `-e`
+    # patterns to `grep -F` are portable on macOS bash 3.2 and Linux.
+    if git -C "$MAIN_DIR" worktree list --porcelain \
+        | grep -E "^worktree " \
+        | sed 's/^worktree //' \
+        | grep -qxF -e "$WORKTREE_DIR" -e "$WORKTREE_DIR_CANON"; then
+        IS_TRACKED_WORKTREE="yes"
+    fi
+    # FIX #04 MF-1: the cleanliness gate must run only on the destructive
+    # arms, NOT before the happy-path no-op detection. A developer with
+    # uncommitted edits in a healthy QS_<N> worktree re-running setup
+    # (re-symlink, re-verify upstream) was previously blocked by the
+    # cleanliness check before reaching the "already set up" early-return.
+    # Resolve happy path / detached-HEAD first; only then gate destructive
+    # recovery on cleanliness.
+    if [ "$IS_TRACKED_WORKTREE" = "yes" ]; then
+        # FIX #05 SF-4: previously `|| echo ""` silently swallowed
+        # rev-parse failure, which `git status` at L121 catches in *most*
+        # cases — but not when `.git` is a *file* with a bad gitdir
+        # pointer (rev-parse fails first, status path never runs because
+        # the if-block at L117 sees `.git` as present). Capture stderr
+        # and surface it; the operator gets a real remediation hint.
+        RP_STDERR="$(mktemp -t worktree-setup.XXXXXX)"
+        TMPFILES+=("$RP_STDERR")
+        if ! ACTUAL_HEAD="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref HEAD 2>"$RP_STDERR")"; then
+            echo "Error: 'git rev-parse --abbrev-ref HEAD' failed in ${WORKTREE_DIR}."
+            echo "  Stderr: $(cat "$RP_STDERR")"
+            echo "The worktree's git metadata may be corrupted or the main repo's"
+            echo "worktree entry for it may have been removed. Resolve manually:"
+            echo "  cd ${WORKTREE_DIR} && cat .git   # inspect gitdir pointer"
+            echo "  ls -la ${MAIN_DIR}/.git/worktrees/"
+            exit 1
+        fi
+        # `rev-parse --abbrev-ref HEAD` returns the literal string 'HEAD'
+        # in detached state — the equality check below would silently
+        # fail and fall through to destructive recovery, but detached
+        # HEAD is often intentional inspection. Refuse and ask the
+        # operator to resolve.
+        if [ "$ACTUAL_HEAD" = "HEAD" ]; then
+            echo "Error: worktree ${WORKTREE_DIR} is in detached-HEAD state."
+            echo "Refusing to recover automatically — this may be intentional inspection."
+            echo "Resolve manually:"
+            echo "  cd ${WORKTREE_DIR} && git checkout ${BRANCH}   # or git switch -"
+            echo "…then re-run this script."
+            exit 1
+        fi
+        ACTUAL_UPSTREAM="$(git -C "$WORKTREE_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")"
+        if [ "$ACTUAL_HEAD" = "$BRANCH" ] && [ "$ACTUAL_UPSTREAM" = "origin/${BRANCH}" ]; then
+            echo "Worktree ${WORKTREE_DIR} already set up on ${BRANCH} tracking origin/${BRANCH}."
+            exit 0
+        fi
+    fi
+    # FIX #04 SF-5: refuse to proceed when $WORKTREE_DIR is unreadable.
+    # Otherwise `find` emits nothing, HAS_NONGIT_CONTENT stays empty, and
+    # recovery falls through to `rm -rf` which then fails messily.
+    if ! { [ -r "$WORKTREE_DIR" ] && [ -x "$WORKTREE_DIR" ]; }; then
+        echo "Error: ${WORKTREE_DIR} exists but is not readable/executable."
+        echo "Permission issue (possibly sudo-owned from a prior run). Resolve manually:"
+        echo "  ls -la ${WORKTREE_DIR}"
+        echo "  sudo chown -R \$(whoami) ${WORKTREE_DIR}   # if appropriate"
+        exit 1
+    fi
+    # Refuse to silently destroy uncommitted work, stashes, or stray
+    # user-created files. Both destructive recovery arms below
+    # (`worktree remove --force` and `rm -rf`) drop content without
+    # warning — guard with an explicit cleanliness check before touching
+    # disk. The check has to cope with both a real tracked worktree
+    # (`.git` present, `git status`/`git stash list` work) and an
+    # untracked stale directory (may have no `.git`, may just contain
+    # user-created files).
+    DIRTY=""
+    STASHES=""
+    HAS_NONGIT_CONTENT=""
+    if [ -d "${WORKTREE_DIR}/.git" ] || [ -f "${WORKTREE_DIR}/.git" ]; then
+        # `if ! ...` rather than `2>/dev/null || true`: a real `git
+        # status` failure (corrupt index, broken .git file) must surface
+        # — not be swallowed and mistaken for "clean".
+        if ! DIRTY="$(git -C "$WORKTREE_DIR" status --porcelain 2>/dev/null)"; then
+            echo "Error: 'git status' failed in ${WORKTREE_DIR}."
+            echo "The worktree's git metadata may be corrupted. Resolve manually:"
+            echo "  cd ${WORKTREE_DIR} && git status   # inspect error"
+            exit 1
+        fi
+        if ! STASHES="$(git -C "$WORKTREE_DIR" stash list 2>/dev/null)"; then
+            # stash list is repo-wide; a failure here means the git command
+            # itself broke. Leave STASHES empty rather than abort — the
+            # status check above already gates real metadata corruption.
+            STASHES=""
+        fi
+    fi
+    # FIX #04 MF-2 / SF-1 / SF-3: detect visible content in the directory,
+    # capturing the first few offending filenames into the diagnostic.
+    # Exclusions:
+    #   - `.git` (exact): the tracked worktree's git dir/file.
+    #   - `.DS_Store`, `.idea`, `.vscode`, `.envrc`, `.python-version`:
+    #     common macOS/IDE/tool dotfiles that aren't user-meaningful.
+    #   - FIX #05 SF-3: `.venv`, `__pycache__`, `.pytest_cache`,
+    #     `.mypy_cache`, `.ruff_cache`, `.tox`, `node_modules`:
+    #     transient build/cache directories from prior Python/Node
+    #     sessions. A stale worktree dir is full of these and would
+    #     otherwise false-positive HAS_NONGIT_CONTENT and block recovery.
+    # Do NOT exclude `.gitignore`, `.gitattributes`, `.gitmodules` —
+    # if those are loose in a stale directory, the operator probably
+    # wants to know before we wipe them.
+    if [ -d "$WORKTREE_DIR" ]; then
+        OFFENDING="$(find "$WORKTREE_DIR" -mindepth 1 -maxdepth 1 \
+            ! -name '.git' \
+            ! -name '.DS_Store' \
+            ! -name '.idea' \
+            ! -name '.vscode' \
+            ! -name '.envrc' \
+            ! -name '.python-version' \
+            ! -name '.venv' \
+            ! -name '__pycache__' \
+            ! -name '.pytest_cache' \
+            ! -name '.mypy_cache' \
+            ! -name '.ruff_cache' \
+            ! -name '.tox' \
+            ! -name 'node_modules' \
+            -print 2>/dev/null | head -5)"
+        if [ -n "$OFFENDING" ]; then
+            HAS_NONGIT_CONTENT="$OFFENDING"
+        fi
+    fi
+    # FIX #05 SF-5: when the worktree is tracked by porcelain but `.git`
+    # has been manually removed, DIRTY/STASHES are empty (the
+    # `.git`-present guard at L117 short-circuits) and the prior
+    # HAS_NONGIT_CONTENT clause was gated on `IS_TRACKED_WORKTREE="no"`.
+    # Recovery would then `worktree remove --force` and wipe user
+    # content. Gate destructive recovery on HAS_NONGIT_CONTENT whenever
+    # `.git` is absent, regardless of tracked-status — DIRTY/STASHES are
+    # unknowable in that state so they can't speak for cleanliness.
+    NO_GIT_PRESENT="no"
+    if [ ! -d "${WORKTREE_DIR}/.git" ] && [ ! -f "${WORKTREE_DIR}/.git" ]; then
+        NO_GIT_PRESENT="yes"
+    fi
+    if [ -n "$DIRTY" ] || [ -n "$STASHES" ] || \
+       { [ "$NO_GIT_PRESENT" = "yes" ] && [ -n "$HAS_NONGIT_CONTENT" ]; }; then
+        echo "Error: ${WORKTREE_DIR} has uncommitted changes, stashes, or non-git content."
+        echo "  Status:  ${DIRTY:-(none)}"
+        echo "  Stashes: ${STASHES:-(none)}"
+        echo "  Other:   ${HAS_NONGIT_CONTENT:-(none)}"
+        echo "Refusing to destructively recover. Resolve manually:"
+        echo "  ls -la ${WORKTREE_DIR}"
+        exit 1
+    fi
+    if [ "$IS_TRACKED_WORKTREE" = "yes" ]; then
+        echo "Worktree ${WORKTREE_DIR} exists but is in a partial state"
+        echo "  (HEAD='${ACTUAL_HEAD}', upstream='${ACTUAL_UPSTREAM}')."
+        echo "Removing tracked worktree to recover..."
+        # Surface a clear remediation message if `worktree remove --force`
+        # fails (locked worktree, corrupted .git file, permission). Without
+        # this, `set -e` aborts with no actionable hint.
+        if ! git -C "$MAIN_DIR" worktree remove --force "$WORKTREE_DIR"; then
+            echo "Error: 'git worktree remove --force' failed on ${WORKTREE_DIR}."
+            echo "The worktree may be locked. Try:"
+            echo "  git worktree unlock ${WORKTREE_DIR}"
+            echo "  git worktree remove --force ${WORKTREE_DIR}"
+            echo "…then re-run this script."
+            exit 1
+        fi
+        WORKTREE_RECOVERED="yes"
+    else
+        echo "Directory ${WORKTREE_DIR} exists but is not a tracked git worktree."
+        echo "Removing stale directory to recover..."
+        rm -rf "$WORKTREE_DIR"
+        WORKTREE_RECOVERED="yes"
+    fi
 fi
 
 # Fetch latest so origin/main is up to date (safe even if main is not checked out)
@@ -117,6 +332,159 @@ if [ "$ACTUAL_BRANCH" != "$BRANCH" ]; then
         echo "Recovery still failed. HEAD is on '${ACTUAL_BRANCH}'."
         exit 1
     fi
+fi
+
+# Detect non-fast-forward divergence BEFORE attempting `push -u`. Without
+# this, a relaxed re-run after a failed push against a diverged
+# origin/${BRANCH} always re-attempts the push and re-hits the same
+# failure ad infinitum until the operator intervenes manually. Use
+# `ls-remote` rather than a full `fetch` — cheaper and avoids mutating
+# local refs in a setup script.
+# FIX #04 SF-4: previously `2>/dev/null` suppressed network/auth errors,
+# leaving REMOTE_TIP empty and silently turning the divergence guard
+# into a no-op. Capture stderr alongside stdout and check the exit code
+# explicitly so a genuine ls-remote failure is surfaced. An empty
+# REMOTE_TIP now unambiguously means "branch doesn't exist on origin"
+# rather than "we couldn't tell".
+# FIX #05 MF-1: the previous `2>&1` capture mixed SSH banners / MOTD /
+# known_hosts warnings / X11-forwarding warnings into REMOTE_TIP_OUTPUT
+# on *successful* ls-remote runs. `awk '{print $1}'` then emitted the
+# first column of every line → REMOTE_TIP became multi-line garbage,
+# downstream `cat-file -e`, fetch retry, and `merge-base --is-ancestor`
+# misbehaved, and the operator saw a bogus non-fast-forward error.
+# Route stdout (the SHA line — authoritative) and stderr (banners +
+# error messages) to separate channels; report stderr only on failure.
+LS_REMOTE_STDERR="$(mktemp -t worktree-setup.XXXXXX)"
+TMPFILES+=("$LS_REMOTE_STDERR")
+if ! REMOTE_TIP_OUTPUT="$(git -C "$WORKTREE_DIR" ls-remote --heads origin "$BRANCH" 2>"$LS_REMOTE_STDERR")"; then
+    echo "Error: 'git ls-remote --heads origin ${BRANCH}' failed."
+    echo "  Stderr: $(cat "$LS_REMOTE_STDERR")"
+    echo "Cannot verify divergence before push. Resolve manually:"
+    echo "  cd ${WORKTREE_DIR} && git ls-remote --heads origin ${BRANCH}"
+    exit 1
+fi
+REMOTE_TIP="$(echo "$REMOTE_TIP_OUTPUT" | awk '{print $1}')"
+# Empty REMOTE_TIP now genuinely means "branch doesn't exist on origin",
+# not "ls-remote failed" and not "stderr contaminated the SHA pipeline".
+
+# FIX #05 SF-6: when this run rebuilt the worktree, the local ${BRANCH}
+# may have been recreated from origin/main (if refs/heads/${BRANCH} was
+# also deleted before the rerun). If origin/${BRANCH} has commits not in
+# origin/main, the divergence check below would refuse-and-loop forever:
+# every rerun re-recreates the same fresh branch, the same divergence
+# reappears, the push refuses, the partial-state arm fires next time,
+# and the cycle repeats. Since the rebuild path threw away local state
+# deliberately, resetting local to origin/${BRANCH} loses no work and
+# turns `push -u` below into a no-op upload + upstream-set.
+if [ "$WORKTREE_RECOVERED" = "yes" ] && [ -n "$REMOTE_TIP" ]; then
+    echo "Worktree was rebuilt; resetting local ${BRANCH} to match origin/${BRANCH}..."
+    # Need the remote ref locally before we can reset to it.
+    FETCH_RECOVERY_STDERR="$(mktemp -t worktree-setup.XXXXXX)"
+    TMPFILES+=("$FETCH_RECOVERY_STDERR")
+    if ! git -C "$WORKTREE_DIR" fetch origin "$BRANCH" 2>"$FETCH_RECOVERY_STDERR"; then
+        echo "Warning: fetch of origin/${BRANCH} for post-recovery reset failed."
+        echo "  Stderr: $(cat "$FETCH_RECOVERY_STDERR")"
+        echo "Continuing — divergence check below will report if push would non-FF."
+    elif ! git -C "$WORKTREE_DIR" reset --hard "origin/$BRANCH"; then
+        echo "Error: failed to reset local ${BRANCH} to origin/${BRANCH}."
+        echo "Resolve manually:"
+        echo "  cd ${WORKTREE_DIR} && git reset --hard origin/${BRANCH}"
+        exit 1
+    fi
+fi
+
+if [ -n "$REMOTE_TIP" ]; then
+    LOCAL_TIP="$(git -C "$WORKTREE_DIR" rev-parse "$BRANCH")"
+    if [ "$REMOTE_TIP" != "$LOCAL_TIP" ]; then
+        # `merge-base --is-ancestor` errors (not "false") if REMOTE_TIP
+        # isn't reachable locally. The outer `!` inversion would then
+        # misclassify "unfetched" as "divergence". Guarantee reachability
+        # by fetching the branch once if needed.
+        # The `cat-file -e` probe stays with `2>/dev/null` — non-zero
+        # there just means "not in local objects" (i.e. need to fetch),
+        # not a real error worth surfacing.
+        if ! git -C "$WORKTREE_DIR" cat-file -e "${REMOTE_TIP}^{commit}" 2>/dev/null; then
+            echo "Fetching origin/${BRANCH} to compare ancestry..."
+            # FIX #05 SF-1: previously `2>/dev/null` swallowed the
+            # `fatal: …` line the same way ls-remote did before fix #04
+            # SF-4. Capture stderr and surface it on failure.
+            FETCH_STDERR="$(mktemp -t worktree-setup.XXXXXX)"
+            TMPFILES+=("$FETCH_STDERR")
+            if ! git -C "$WORKTREE_DIR" fetch origin "$BRANCH" 2>"$FETCH_STDERR"; then
+                echo "Error: failed to fetch origin/${BRANCH} for divergence check."
+                echo "  Stderr: $(cat "$FETCH_STDERR")"
+                echo "Network or remote-access issue. Resolve manually:"
+                echo "  cd ${WORKTREE_DIR} && git fetch origin ${BRANCH}"
+                exit 1
+            fi
+        fi
+        # FIX #05 SF-2: previously a boolean `if ! merge-base …` and
+        # `2>/dev/null` collapsed rc=1 ("not ancestor", i.e. genuine
+        # non-fast-forward) with rc>1 ("real git error": bad ref, broken
+        # repo, etc.) into the same misleading "rebase manually"
+        # message. Capture rc and stderr explicitly so each path gets
+        # the right diagnostic. `set +e … set -e` around the bare call
+        # is safest — pipefail / -e interactions in command-sub form are
+        # subtle (the same reason fix #04 spelled this out for ls-remote).
+        MB_STDERR="$(mktemp -t worktree-setup.XXXXXX)"
+        TMPFILES+=("$MB_STDERR")
+        set +e
+        git -C "$WORKTREE_DIR" merge-base --is-ancestor "$REMOTE_TIP" "$LOCAL_TIP" 2>"$MB_STDERR"
+        MB_RC=$?
+        set -e
+        if [ "$MB_RC" -eq 0 ]; then
+            : # remote tip is ancestor of local → fast-forward push is safe
+        elif [ "$MB_RC" -eq 1 ]; then
+            # genuine non-fast-forward
+            echo "Error: origin/${BRANCH} has commits not in local ${BRANCH}."
+            echo "  Remote tip: ${REMOTE_TIP}"
+            echo "  Local tip:  ${LOCAL_TIP}"
+            echo "Refusing to push (would be non-fast-forward)."
+            echo "Resolve manually:"
+            echo "  cd ${WORKTREE_DIR} && git fetch && git rebase origin/${BRANCH}"
+            echo "…then re-run this script (or just 'git push')."
+            exit 1
+        else
+            # rc > 1 → genuine git error (bad ref, broken repo, etc.)
+            echo "Error: 'git merge-base --is-ancestor' failed (rc=${MB_RC})."
+            echo "  Stderr: $(cat "$MB_STDERR")"
+            echo "  Remote tip: ${REMOTE_TIP}"
+            echo "  Local tip:  ${LOCAL_TIP}"
+            echo "Cannot verify divergence. Resolve manually:"
+            echo "  cd ${WORKTREE_DIR} && git log --oneline ${LOCAL_TIP} ${REMOTE_TIP}"
+            exit 1
+        fi
+    fi
+fi
+
+# Publish the branch to origin and set upstream → origin/${BRANCH}.
+# This makes `git push` / `git pull` Just Work without flags and guarantees
+# the upstream is the feature branch, never origin/main (regardless of
+# git's branch.autoSetupMerge default). Idempotent: if origin/${BRANCH}
+# already exists and matches the local tip, push is a no-op but still
+# (re)sets the upstream — repairing any pre-existing branch that was
+# created with the old buggy origin/main upstream.
+# Positioned AFTER the HEAD verification block so we never publish content
+# from an unexpected HEAD to origin/${BRANCH}.
+echo "Publishing ${BRANCH} to origin and setting upstream..."
+# Wrap the push with explicit failure handling: under bare `set -e` the
+# script aborts with no actionable hint on auth expiry, network drop,
+# pre-push hook reject, or credential prompt hang.
+# FIX #04 SF-2: previous wording said "Worktree IS fully set up locally
+# — only the publish step failed", which misled operators into thinking
+# a re-run would skip straight past setup. In fact the partial-state
+# recovery arm rebuilds the worktree from scratch on the next run.
+# Point at the manual retry as the primary remediation; note re-running
+# as a slower-but-safe alternative.
+if ! git -C "$WORKTREE_DIR" push -u origin "${BRANCH}"; then
+    echo "Error: 'git push -u origin ${BRANCH}' failed."
+    echo "Common causes: auth expired, network drop, pre-push hook reject."
+    echo "The worktree is built locally and the failure is just in the"
+    echo "publish step. The simplest fix is to retry the push directly:"
+    echo "  cd ${WORKTREE_DIR} && git push -u origin ${BRANCH}"
+    echo "Re-running this script would rebuild the worktree from scratch"
+    echo "(slower, but harmless if you prefer that)."
+    exit 1
 fi
 
 echo ""
