@@ -150,11 +150,12 @@ def test_layer3_required_for_overnight_pre_discharge():
     assert constraint_a is not None
 
     # Manually drive the no-guard adapt_repartition with a big energy
-    # delta and verify the unbounded drain shows up.  This is the
-    # explicit regression demonstration.
+    # delta and verify the trajectory would dip BELOW the safety floor.
+    # AC-9 RED phase: min(bat_charge_no_guard) < battery_min + safety_margin.
     durations = solver_a._durations_s
     big_delta = 10_000.0  # Wh — large enough to drain the whole battery
     existing_cmds: list[LoadCommand | None] = [None] * num_slots_a
+    initial_traj_no_guard = solver_a._battery_get_charging_power()[1].copy()
     _, _, changed_no_guard, _, _, deltas_no_guard = constraint_a.adapt_repartition(
         first_slot=0,
         last_slot=num_slots_a - 1,
@@ -168,9 +169,23 @@ def test_layer3_required_for_overnight_pre_discharge():
     )
     assert changed_no_guard is True
     total_drain_no_guard = float(np.sum(deltas_no_guard * durations / 3600.0))
-    # Without the guard, the drain is bounded only by energy_delta, not
-    # by the floor — proves the bug is present.
     assert total_drain_no_guard > 0.0
+
+    # Reconstruct the no-guard trajectory: each placement at slot i adds
+    # `state_delta[i] = delta_power[i] * dt[i] / 3600` of drain to slots
+    # [i, num_slots-1] of the trajectory (mirroring the in-place
+    # propagation Layer 3 would have done).
+    no_guard_traj = initial_traj_no_guard.copy()
+    state_deltas = deltas_no_guard * durations / 3600.0
+    for i in range(num_slots_a):
+        if state_deltas[i] > 0:
+            no_guard_traj[i:] -= float(state_deltas[i])
+    min_traj_no_guard = float(np.min(no_guard_traj))
+    # AC-9 RED: without Layer 3, the trajectory dips below the safety floor.
+    assert min_traj_no_guard < floor, (
+        f"AC-9 RED: expected min(bat_charge_no_guard)={min_traj_no_guard:.1f} "
+        f"< floor={floor:.1f} (initial min was {float(np.min(initial_traj_no_guard)):.1f})"
+    )
 
     # Phase 2 GREEN: same call but with bat_charge_traj passed.  The
     # guard clamps placements so the trajectory stays above the floor.

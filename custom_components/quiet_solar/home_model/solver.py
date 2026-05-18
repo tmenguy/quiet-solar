@@ -527,59 +527,81 @@ class PeriodSolver:
                 if sustained_s >= _DUSK_SUSTAIN_S:
                     return i
                 j += 1
+            # Inner loop exited because pv[j] >= threshold (sun returned
+            # for a single-slot spike) or because j == num_slots.  When
+            # sun returned, mark have_seen_sun for that slot — currently
+            # harmless because the outer loop's main branch sets the flag,
+            # but explicit is safer than relying on prior-iteration state.
+            if j < num_slots:
+                have_seen_sun = True
             i = j + 1
         return None
 
     def _compute_expected_solar_waste(
         self,
         battery_charge: npt.NDArray[np.float64],
-    ) -> tuple[float, int | None, int | None, int]:
+    ) -> tuple[float, int | None, int | None]:
         """Compute the expected solar waste over the day until dusk.
 
         Sums per-slot waste — AC excess fed back to grid PLUS DC-clamping at
         the inverter — across slots where the battery is full (so the energy
         is truly unrecoverable).  Returns the tuple
-        ``(expected_waste_wh, first_surplus_idx, last_surplus_idx,
-        horizon_idx)``.
+        ``(expected_waste_wh, first_surplus_idx, last_surplus_idx)``.
 
         - ``expected_waste_wh``: total waste in Wh across the considered
           horizon.
         - ``first_surplus_idx`` / ``last_surplus_idx``: first/last slot
           index where ``waste_w > 0`` AND ``is_value_full``; both ``None``
           when no such slot exists.
-        - ``horizon_idx``: the inclusive upper bound used for iteration:
-          ``_find_next_dusk_idx()`` if not None, else ``num_slots - 1``.
+
+        The iteration upper bound is ``_find_next_dusk_idx()`` if not
+        None, else ``num_slots - 1``.
 
         Battery-fullness is tested via the same ``possible_charge``-clamped
         trajectory as the rest of the solver (see
         ``Battery.get_charger_power``), so numeric drift cannot fake a
         false positive.
+
+        Precondition: ``len(battery_charge) == len(self._durations_s)``.
         """
         num_slots: int = len(self._durations_s)
+        assert len(battery_charge) == num_slots, (
+            f"battery_charge length {len(battery_charge)} != slot count {num_slots}"
+        )
+        battery = self._battery
+        if battery is None:
+            return 0.0, None, None
+
         dusk_idx = self._find_next_dusk_idx()
         horizon_idx: int = dusk_idx if dusk_idx is not None else num_slots - 1
+        end = horizon_idx + 1
 
+        # Build the "battery is full" mask via the canonical
+        # `Battery.is_value_full` method so the test semantic stays in
+        # sync with the rest of the solver (the method also handles
+        # value_full <= 0 edge cases).
+        full_mask = np.array(
+            [battery.is_value_full(float(battery_charge[i])) for i in range(end)],
+            dtype=bool,
+        )
+
+        ac_excess = np.maximum(0.0, -self._available_power[:end])
         clamp_array = self._battery_charge_power_by_inverter_AC_clamping
-        battery = self._battery
+        clamp = clamp_array[:end] if clamp_array is not None else np.zeros(end, dtype=np.float64)
+        waste_w = ac_excess + clamp
 
-        expected_waste_wh = 0.0
-        first_surplus_idx: int | None = None
-        last_surplus_idx: int | None = None
+        contributing = full_mask & (waste_w > 0.0)
+        expected_waste_wh = float(np.sum(waste_w * contributing * self._durations_s[:end] / 3600.0))
 
-        for i in range(horizon_idx + 1):
-            if battery is None or not battery.is_value_full(float(battery_charge[i])):
-                continue
-            ac_excess = max(0.0, -float(self._available_power[i]))
-            clamp_w = float(clamp_array[i]) if clamp_array is not None else 0.0
-            waste_w = ac_excess + clamp_w
-            if waste_w <= 0.0:
-                continue
-            expected_waste_wh += waste_w * float(self._durations_s[i]) / 3600.0
-            if first_surplus_idx is None:
-                first_surplus_idx = i
-            last_surplus_idx = i
+        contributing_idx = np.flatnonzero(contributing)
+        if contributing_idx.size == 0:
+            first_surplus_idx: int | None = None
+            last_surplus_idx: int | None = None
+        else:
+            first_surplus_idx = int(contributing_idx[0])
+            last_surplus_idx = int(contributing_idx[-1])
 
-        return expected_waste_wh, first_surplus_idx, last_surplus_idx, horizon_idx
+        return expected_waste_wh, first_surplus_idx, last_surplus_idx
 
     def _build_surplus_probe_constraints(
         self,
@@ -754,10 +776,14 @@ class PeriodSolver:
         # When increasing consumption with a battery present, seed the
         # per-slot battery-charge guard with a fresh sim trajectory.  This
         # array is OWNED by _constraints_delta — adapt_repartition mutates
-        # it in place via a reference, and we re-seed after every successful
-        # placement so cross-call drift is not carried over.  For
-        # energy_delta < 0 (segmentation cap loop), no trajectory is passed
-        # and the guard inside adapt_repartition stays inert.
+        # it in place via a reference, and we re-seed after every
+        # SUCCESSFUL placement (has_changes=True).  Failed iterations
+        # (has_changes=False) leave the trajectory unchanged from the
+        # last re-seed; the next entry to _constraints_delta re-seeds
+        # from a fresh sim regardless, so cross-call drift is bounded
+        # to a single iteration.  For energy_delta < 0 (segmentation
+        # cap loop), no trajectory is passed and the guard inside
+        # adapt_repartition stays inert.
         bat_charge_traj: npt.NDArray[np.float64] | None = None
         if energy_delta > 0 and self._battery is not None:
             bat_charge_traj = self._battery_get_charging_power()[1].copy()
@@ -1316,9 +1342,7 @@ class PeriodSolver:
             # Layer 3: per-slot battery-floor guard threaded into
             # _constraints_delta keeps cross-slot drain above the safety
             # margin even in overnight / early-morning probe windows.
-            expected_waste_wh, first_surplus_idx, last_surplus_idx, _horizon_idx = self._compute_expected_solar_waste(
-                battery_charge
-            )
+            expected_waste_wh, first_surplus_idx, last_surplus_idx = self._compute_expected_solar_waste(battery_charge)
 
             if (
                 expected_waste_wh >= SOLAR_WASTE_TRIGGER_THRESHOLD_WH
@@ -1330,18 +1354,22 @@ class PeriodSolver:
 
                 usable_capacity_wh = self._battery.get_value_full() - self._battery.get_value_empty()
                 safety_margin_wh = SOLAR_WASTE_SAFETY_MARGIN_FRACTION * usable_capacity_wh
-                current_charge_wh = (
-                    self._battery.current_charge
-                    if self._battery.current_charge is not None
-                    else self._battery.get_value_empty()
-                )
+                # Drain budget is bounded by the SIMULATED peak charge over
+                # the probe window, not the NOW-time charge.  Rationale: a
+                # battery that's currently 5 % but the trajectory says will
+                # hit 90 % at noon has plenty of room for pre-discharge —
+                # using the now-time charge would zero the budget out and
+                # block the surplus block.  (QS-178 review fix #1
+                # should-fix #12; supersedes #8.)
+                max_future_charge_wh = float(np.max(battery_charge[probe_window_start : probe_window_end + 1]))
                 battery_drain_budget_wh = max(
                     0.0,
-                    current_charge_wh - self._battery.get_value_empty() - safety_margin_wh,
+                    max_future_charge_wh - self._battery.get_value_empty() - safety_margin_wh,
                 )
 
-                # First-pass envelope using the full probe — this is the
-                # AC-3 upper bound on energy_to_be_spent.
+                # AC-3 first-pass envelope using the full probe.
+                #   energy_to_be_spent = min(0.7 * waste,
+                #                            solar_in_probe + drain_budget)
                 slice_avail = self._available_power[probe_window_start : probe_window_end + 1]
                 slice_dur = self._durations_s[probe_window_start : probe_window_end + 1]
                 solar_in_probe_wh = float(np.sum(np.where(slice_avail < 0.0, -slice_avail, 0.0) * slice_dur / 3600.0))
@@ -1350,22 +1378,30 @@ class PeriodSolver:
                     solar_in_probe_wh + battery_drain_budget_wh,
                 )
 
-                # Refill-feasibility shrink: walk back from last_surplus_idx
-                # so the remaining surplus between probe_window_end+1 and
-                # last_surplus_idx is large enough to refill the pre-drain
-                # we are about to spend.  Layer 3's per-slot floor still
-                # caps the cross-slot drain inside adapt_repartition, but
+                # Refill-feasibility shrink: a refinement on top of AC-4's
+                # `probe_window_end = last_surplus_idx`.  Walk back from
+                # last_surplus_idx so the remaining surplus between
+                # probe_window_end+1 and last_surplus_idx is large enough
+                # to refill the pre-drain we're about to spend.  Layer 3
+                # caps cross-slot drain inside adapt_repartition, but
                 # without this end-shrink the surplus block would push the
-                # last probe slots to high power without any refill source
-                # — surfaced by the existing test suite as a regression
-                # when filler loads sneak into late slots.
+                # last probe slots to high power without any refill source.
+                # The break-slot's surplus is EXCLUDED from the probe
+                # window (probe_window_end = i + 1) — it satisfied the
+                # refill, not the placement.
                 nrj_to_recharge = energy_to_be_spent
                 for i in range(last_surplus_idx, probe_window_start - 1, -1):
                     if self._available_power[i] < 0.0:
                         nrj_to_recharge += float(self._available_power[i]) * float(self._durations_s[i]) / 3600.0
-                    probe_window_end = i
                     if nrj_to_recharge <= 0.0:
+                        # The slot at index i satisfied the refill — its
+                        # surplus is the refill source, NOT placement
+                        # capacity.  Exclude it from the probe window so
+                        # the in-slot solar isn't double-counted (once for
+                        # refill, once as available power for placements).
+                        probe_window_end = min(i + 1, last_surplus_idx)
                         break
+                    probe_window_end = i
 
                 # Re-cap energy_to_be_spent by the shrunk probe's actually
                 # usable surplus: solar AFTER probe_window_end is the

@@ -867,11 +867,19 @@ class TestSolver(TestCase):
         # QS-178: the aggressive surplus pre-discharge block (wider waste
         # accounting horizon + probe_window_start=0) intentionally bumps
         # every probe slot above the minimum power band on big-sun /
-        # forecast-rich days.  The original "min power periods" check
-        # captured the OLD conservative allocation; with the new envelope
-        # the energy_utilization > 110% assertion above already proves
-        # battery supplementing, so the min-power check is downgraded to
-        # diagnostic-only.
+        # forecast-rich days.  The original `has_min_power_periods`
+        # assertion captured the OLD conservative allocation; the new
+        # envelope DELIBERATELY fills these slots at a higher rate.
+        # Replace with a positive assertion that captures the new
+        # intended behavior — average commanded power must exceed the
+        # minimum power band (otherwise the surplus block didn't fire).
+        avg_power_w = sum(cmd[1].power_consign for cmd in car_cmds if cmd[1].power_consign > 0) / max(
+            1, sum(1 for cmd in car_cmds if cmd[1].power_consign > 0)
+        )
+        assert avg_power_w > car_minimum_power * 1.2, (
+            f"QS-178 aggressive pre-discharge: expected avg car power {avg_power_w:.0f}W "
+            f"to exceed minimum-band upper bound {car_minimum_power * 1.2:.0f}W"
+        )
 
         print("✅ Fixed supplement scenario test passed!")
 

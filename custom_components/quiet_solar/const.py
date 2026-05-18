@@ -349,20 +349,22 @@ MAX_POWER_INFINITE = 1e12
 MAX_AMP_INFINITE = 1e12
 
 SOLAR_WASTE_CONFIDENCE_FACTOR = 0.7
-# 30% slop covers typical day-ahead PV forecast error ranges
-# (industry benchmark ~15-25% nMAE for clear-sky, larger under cloud
-# cover); halving would over-trigger, doubling would leave most surplus
-# unaddressed. Initial default pending field tuning.
+# Fraction of the estimated waste we're willing to spend on pre-discharge.
+# Leaves a 30 % buffer for forecast error; halving would over-trigger,
+# doubling would leave most surplus unaddressed.  Initial default pending
+# field tuning.
 
 SOLAR_WASTE_SAFETY_MARGIN_FRACTION = 0.1
-# 10% of usable capacity absorbs a typical pre-dawn UA bump
-# (~500 W x 2 h = 1 kWh on a 10 kWh battery = 10%) plus a single small
-# mandatory load slip. Initial default pending tuning.
+# Safety margin above the battery's empty SOC, expressed as a fraction
+# of usable capacity.  10 % absorbs a typical pre-dawn UA bump (~500 W ×
+# 2 h = 1 kWh on a 10 kWh battery = 10 %) plus a single small mandatory
+# load slip.  Initial default pending tuning.
 
 SOLAR_WASTE_TRIGGER_THRESHOLD_WH = 500
-# 500 Wh is comparable to the smallest meaningfully-controllable load
-# (1.5 kW water heater x ~20 min); below this the surplus block can't
-# usefully redistribute. Round number, initial default pending tuning.
+# Below this expected waste the surplus block can't usefully redistribute
+# energy — comparable to the smallest meaningfully-controllable load
+# (1.5 kW water heater × ~20 min).  Round number, initial default pending
+# tuning.
 
 MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 30  # keep last 14 days of data
 PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS = "charger_constraints"
