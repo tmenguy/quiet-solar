@@ -682,8 +682,19 @@ class TestOffGridSolverEdgeCases:
         # The "load shedding" invariant only meaningfully applies when the
         # mandatory load has a feasible slot; otherwise filler-on-solar is
         # strictly better than wasting the energy.
-        car_min_step = 7 * 3 * 230  # 7A * 3p * 230V — smallest car charge step
-        max_instant_headroom = 1500.0 + 3000.0  # peak solar + max battery discharge
+        # Derive from the actual scenario inputs rather than hard-coding:
+        # car_steps starts at 7 A (range(7, 33)), 3 phases, 230 V mains.
+        # max_instant_headroom = solar peak (1500 W passed to the
+        # factory) + battery max_discharge_power (3000 W from
+        # create_test_battery).  Keep magic numbers visible as named
+        # locals so a future scenario change is obvious.
+        car_min_amps = 7
+        car_phases = 3
+        mains_voltage = 230
+        solar_peak_w = 1500.0  # matches solver setup `solar_power=1500.0`
+        battery_max_discharge_w = 3000.0  # matches `create_test_battery(max_discharge_power=3000.0)`
+        car_min_step = car_min_amps * car_phases * mains_voltage
+        max_instant_headroom = solar_peak_w + battery_max_discharge_w
         car_can_fit_anywhere = car_min_step <= max_instant_headroom
 
         if car_can_fit_anywhere:

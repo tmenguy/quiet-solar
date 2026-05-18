@@ -933,14 +933,46 @@ def replay_solver_with_pv_scaling(
     Reads the inputs the solver was constructed with off the solver
     instance attributes; reconstructs a new ``PeriodSolver`` with the
     rescaled PV.  Loads / battery / UA / tariffs are reused as-is.
+
+    NOTE: accesses private PeriodSolver attributes; update this helper
+    if `PeriodSolver` is refactored.  Test-only.
     """
+    import math
+
     from custom_components.quiet_solar.home_model.solver import PeriodSolver
+
+    # Defensive factor sanity — NaN / negative would silently corrupt
+    # the rescaled forecast.
+    assert not math.isnan(factor), "factor must not be NaN"
+    assert factor >= 0, f"factor must be non-negative; got {factor}"
+
+    # Defensive attribute checks — fail loudly if PeriodSolver's
+    # private surface changed.
+    required = (
+        "_pv_forecast",
+        "_ua_forecast",
+        "_tariffs",
+        "_loads",
+        "_max_inverter_dc_to_ac_power",
+        "_start_time",
+        "_end_time",
+        "_battery",
+    )
+    for attr in required:
+        if not hasattr(solver, attr):
+            raise AttributeError(
+                f"replay_solver_with_pv_scaling: PeriodSolver missing "
+                f"required attribute '{attr}'.  Implementation may have "
+                f"changed; update this factory."
+            )
 
     scaled_pv = [(t, max(0.0, v * factor)) for t, v in (solver._pv_forecast or [])]
     return PeriodSolver(
         start_time=solver._start_time,
         end_time=solver._end_time,
-        tariffs=solver._tariffs[0][1] if len(solver._tariffs) == 1 else solver._tariffs,
+        # Pass the full tariff list deterministically — the constructor
+        # handles both single-entry and multi-entry shapes.
+        tariffs=solver._tariffs,
         actionable_loads=solver._loads,
         battery=solver._battery,
         pv_forecast=scaled_pv,

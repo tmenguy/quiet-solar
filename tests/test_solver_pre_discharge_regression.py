@@ -73,8 +73,11 @@ def _build_pre_discharge_scenario() -> tuple[PeriodSolver, TestLoad, MultiStepsP
     battery._current_charge_value = 7_000.0
     battery.min_charge_SOC_percent = 5.0
     battery.max_charge_SOC_percent = 90.0
-    # min_soc / max_soc are derived in __init__ from the percent fields and
-    # don't auto-refresh — set them explicitly to match the percent values.
+    # Test-only: mutate min_soc / max_soc directly to force SOC bounds
+    # without re-initializing the Battery.  The public Battery API does
+    # not expose a setter for these derived attributes; if it ever does,
+    # prefer that.  (min_soc / max_soc are derived in __init__ from the
+    # percent fields and don't auto-refresh.)
     battery.min_soc = 0.05
     battery.max_soc = 0.90
     battery.is_dc_coupled = True
@@ -214,11 +217,13 @@ def test_layer3_required_for_overnight_pre_discharge():
         f"Layer 3 floor breached: min(bat_traj)={float(np.min(bat_traj)):.1f} "
         f"< floor={floor:.1f} (initial min was {pre_min:.1f})"
     )
-    # And the total state-delta is bounded by what the floor allowed —
-    # never more than pre_min - floor in aggregate.
+    # Layer 3 bound: total drain across the run must not exceed the
+    # distance from peak charge to the safety floor.  (Simplified from
+    # `pre_min - floor + (max(initial_traj) - pre_min)` — algebraically
+    # equals `max(initial_traj) - floor`.)
     total_state_delta = float(np.sum(deltas_with_guard * durations_b / 3600.0))
-    max_allowed = pre_min - floor + float(np.max(initial_traj) - pre_min)
-    assert total_state_delta <= max_allowed + 1.0  # 1 Wh tolerance for fp
+    max_allowed = float(np.max(initial_traj)) - floor + 1.0  # +1 Wh slack
+    assert total_state_delta <= max_allowed
 
 
 def test_full_solver_keeps_battery_above_floor_on_big_sun_day():
@@ -238,6 +243,10 @@ def test_full_solver_keeps_battery_above_floor_on_big_sun_day():
     final = solver._battery_get_charging_power(existing_battery_commands=None)
     battery_charge = final[1]
     min_in_horizon = float(np.min(battery_charge))
-    assert min_in_horizon >= battery.get_value_empty(), (
-        f"Battery dropped below absolute empty: {min_in_horizon:.1f} < {battery.get_value_empty():.1f}"
+    # AC-9 GREEN: full-solver run must respect the SAFETY FLOOR (empty
+    # + safety_margin), not just absolute empty.  Matches the paired
+    # manual-call assertion in test_layer3_required_for_overnight_pre_discharge.
+    assert min_in_horizon >= floor, (
+        f"Full-solver run dipped below the safety floor: "
+        f"min={min_in_horizon:.1f}, floor={floor:.1f} (AC-9 GREEN)"
     )

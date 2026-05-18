@@ -870,15 +870,18 @@ class TestSolver(TestCase):
         # forecast-rich days.  The original `has_min_power_periods`
         # assertion captured the OLD conservative allocation; the new
         # envelope DELIBERATELY fills these slots at a higher rate.
-        # Replace with a positive assertion that captures the new
-        # intended behavior — average commanded power must exceed the
-        # minimum power band (otherwise the surplus block didn't fire).
-        avg_power_w = sum(cmd[1].power_consign for cmd in car_cmds if cmd[1].power_consign > 0) / max(
-            1, sum(1 for cmd in car_cmds if cmd[1].power_consign > 0)
+        # Replace with a STRUCTURAL assertion: at least 3 distinct
+        # slots must be commanded above the minimum-band upper bound
+        # (1.2× the min).  Stable under tuning drift and clearly
+        # captures the new behavior: the surplus block deliberately
+        # bumps multiple slots above the minimum band on big-sun days.
+        slots_above_min_band = sum(
+            1 for cmd in car_cmds if cmd[1].power_consign > car_minimum_power * 1.2
         )
-        assert avg_power_w > car_minimum_power * 1.2, (
-            f"QS-178 aggressive pre-discharge: expected avg car power {avg_power_w:.0f}W "
-            f"to exceed minimum-band upper bound {car_minimum_power * 1.2:.0f}W"
+        assert slots_above_min_band >= 3, (
+            f"QS-178 aggressive pre-discharge: expected at least 3 slots "
+            f"above the minimum-band upper bound "
+            f"({car_minimum_power * 1.2:.0f}W); got {slots_above_min_band}"
         )
 
         print("✅ Fixed supplement scenario test passed!")

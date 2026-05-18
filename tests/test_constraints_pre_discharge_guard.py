@@ -475,6 +475,12 @@ def test_guard_running_min_correct_when_post_window_slots_lower():
     Reproducer for Mode A (over-conservative): if forward_min were built
     over the full array, the lower out-of-window slots would underestimate
     real in-window budget after a single decrement.
+
+    NOTE on tail-slot mutation: per QS-178 review fix #02 must-fix #2,
+    `bat_charge_traj` propagates OPEN-ENDED beyond `last_slot` (the
+    physical battery state carries forward).  So slots [3, 4] DO see
+    their charge decremented after each placement — but no commands are
+    PLACED there (they're outside the working window).
     """
     constraint = _make_constraint(
         target_value=10_000.0,
@@ -488,6 +494,7 @@ def test_guard_running_min_correct_when_post_window_slots_lower():
     # Floor 800 → max_drain in-range = 4200 Wh per slot.
     durations = _durations(5)
     bat_traj = np.array([5000.0, 5000.0, 5000.0, 1000.0, 1000.0], dtype=np.float64)
+    pre_tail = (float(bat_traj[3]), float(bat_traj[4]))
     now = datetime.now(tz=pytz.UTC)
 
     _, _, changed, _, cmds, _ = constraint.adapt_repartition(
@@ -506,12 +513,25 @@ def test_guard_running_min_correct_when_post_window_slots_lower():
     assert changed is True
     placed_count = sum(1 for c in cmds if c is not None)
     assert placed_count >= 1
-    # Slots 3,4 must remain UNTOUCHED (outside the working window).
+    # No PLACEMENTS in slots 3,4 (outside the working window).
     assert cmds[3] is None
     assert cmds[4] is None
-    # Their bat_charge_traj values must be unchanged.
-    assert float(bat_traj[3]) == 1000.0
-    assert float(bat_traj[4]) == 1000.0
+    # But their bat_charge_traj DOES decrement (open-ended slice per
+    # QS-178 review fix #02 must-fix #2) — physical reality: every
+    # placement at slot i decrements bat_charge_traj[i:] including the
+    # tail.  Slot 3/4 accumulate ALL state_deltas from placements at
+    # slots 0..2; slot 2 only accumulates its own.
+    assert float(bat_traj[3]) < pre_tail[0]
+    assert float(bat_traj[4]) < pre_tail[1]
+    assert float(bat_traj[3]) == float(bat_traj[4])  # both see all 3 decrements
+    # The post-last_slot drop equals the cumulative state_delta moved
+    # across all placements.
+    expected_drop = pre_tail[0] - float(bat_traj[3])
+    assert expected_drop > 0
+    # Sanity: the in-window slot 0 saw only ONE placement (its own); the
+    # tail saw THREE.  So slot 3's drop ≥ slot 0's drop.
+    in_window_drop = 5000.0 - float(bat_traj[0])
+    assert expected_drop >= in_window_drop
 
 
 def test_guard_running_min_back_propagates_after_late_slot_placement():
@@ -651,3 +671,210 @@ def test_guard_skips_zero_duration_slot_without_crashing():
     # No crash; slot 0 (zero duration) is skipped.
     assert cmds[0] is None
     assert deltas[0] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# (j) Clamp lookup uses delta-vs-absolute correctly — review fix #02 must-fix #1
+# ---------------------------------------------------------------------------
+
+
+def test_guard_picks_intermediate_step_when_current_command_nonzero():
+    """Given an existing command at non-zero power, a multi-step ladder, and
+    a max_delta_power_floor that allows ONE intermediate step (not the
+    bumped max, not the smallest)
+    When the floor clamp triggers
+    Then it picks the intermediate command whose absolute power respects
+    the floor budget — NOT the smallest command (which would yield a
+    negative delta and a skipped slot).
+
+    Reproducer (review fix #02 must-fix #1):
+    - existing = 1500 W, cmds = [500, 1500, 2000, 2500].
+    - max_delta_power_floor = 800 W (drain budget for the slot).
+    - Original delta = 2500 - 1500 = 1000 > 800 → clamp triggers.
+    - Skip check: allowed_base_power = 1500 + 800 - 0 = 2300 > cmds[0]=500
+      → don't skip.
+    - Lookup `_get_lower_consign_idx_for_power(cmds, 2300)` finds j=2
+      (cmds[2]=2000 ≤ 2300).
+    - delta = 2000 - 1500 = 500 ≤ 800 — safe placement.
+
+    Before the fix, the lookup used `max_delta_power_floor` (raw delta
+    budget = 800) directly, so it picked cmds[0]=500, computed
+    delta = 500 - 1500 = -1000, hit the `delta <= 0` guard, and
+    SKIPPED the slot — losing the intermediate-step opportunity.
+    """
+    # Battery floor: 800 Wh; trajectory at 1000 → max_drain = 200 Wh →
+    # max_delta_power = 200 * 3600 / SOLVER_STEP_S (= 800 W when 900 s).
+    constraint = _make_constraint(
+        target_value=10_000.0,
+        current_value=200.0,
+        power_steps=[
+            LoadCommand(command="on", power_consign=500.0),
+            LoadCommand(command="on", power_consign=1500.0),
+            LoadCommand(command="on", power_consign=2000.0),
+            LoadCommand(command="on", power_consign=2500.0),
+        ],
+    )
+    durations = _durations(1)
+    bat_traj = np.array([1000.0], dtype=np.float64)
+    now = datetime.now(tz=pytz.UTC)
+
+    existing = [LoadCommand(command="on", power_consign=1500.0)]
+    _, _, changed, _, cmds, deltas = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=0,
+        energy_delta=2000.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=now,
+        bat_charge_traj=bat_traj,
+        battery_min_wh=800.0,
+    )
+    assert changed is True
+    assert cmds[0] is not None
+    # Picked the intermediate step (2000 W cmd, delta = 500 W ≤ 800 W).
+    assert cmds[0].power_consign == 2000.0
+    assert deltas[0] == 500.0
+
+
+# ---------------------------------------------------------------------------
+# (k) Open-ended decrement protects downstream constraint — review fix #02 must-fix #2
+# ---------------------------------------------------------------------------
+
+
+def test_open_ended_decrement_protects_downstream_constraint_floor():
+    """Given two adapt_repartition calls in sequence (simulating two
+    constraints inside a single _constraints_delta iteration), where
+    constraint A spans [0, 1] and constraint B spans [3, 4]
+    When A places enough energy to drag the physical battery trajectory
+    at slots ≥ 3 toward the safety floor
+    Then B's Layer-3 sees the open-ended decrement in `bat_charge_traj`
+    and refuses an unsafe placement.
+
+    With the prior `[i:last_slot+1]` slice (closed-ended), B would see
+    a stale tail and wrongly allow the placement.  The open-ended slice
+    fix (must-fix #2) ensures physical state propagates across the
+    constraint boundary.
+    """
+    # Battery floor 900 Wh.  Shared 5-slot trajectory at 1100 Wh.
+    # Constraint A places one 800 W cmd at slot 0, drains 200 Wh.  After
+    # the placement, the open-ended decrement reduces bat_charge_traj
+    # for ALL slots ≥ 0 to 900 Wh — exactly at the floor.  A's second
+    # iteration (slot 1) would breach the floor → Layer 3 clamps it to
+    # skip.  Hence A places EXACTLY 1 slot, and the tail (slots ≥ 2)
+    # carries the post-placement state forward.
+    bat_traj = np.array([1100.0, 1100.0, 1100.0, 1100.0, 1100.0], dtype=np.float64)
+    durations = _durations(5)
+    now = datetime.now(tz=pytz.UTC)
+
+    constraint_a = _make_constraint(
+        name="A",
+        target_value=10_000.0,
+        power_steps=[LoadCommand(command="on", power_consign=800.0)],
+        num_slots=5,
+    )
+    _, _, ch_a, _, _cmds_a, _ = constraint_a.adapt_repartition(
+        first_slot=0,
+        last_slot=1,
+        energy_delta=1000.0,  # budget large enough — Layer 3 is the binding limit
+        power_slots_duration_s=durations,
+        existing_commands=[None] * 5,
+        allow_change_state=True,
+        time=now,
+        bat_charge_traj=bat_traj,
+        battery_min_wh=900.0,
+    )
+    assert ch_a is True
+    # Open-ended: slots 3-4 must have decremented along with slot 0.
+    assert float(bat_traj[3]) < 1100.0
+    assert float(bat_traj[4]) < 1100.0
+    # All slots ≥ 0 carry slot-0's placement forward.
+    assert float(bat_traj[3]) == float(bat_traj[4])
+    assert float(bat_traj[3]) == float(bat_traj[2])  # slot 2 = tail since no placement at 2
+    # Tail at-or-just-above the floor — A's drain absorbed the head-room.
+    assert float(bat_traj[3]) <= 900.0 + 1e-3
+
+    # Constraint B at slots 3-4: with the open-ended decrement applied,
+    # bat_traj[3] = 900 (floor) → no drain budget → no placement.
+    constraint_b = _make_constraint(
+        name="B",
+        target_value=10_000.0,
+        power_steps=[LoadCommand(command="on", power_consign=800.0)],
+        num_slots=5,
+    )
+    _, _, ch_b, _, cmds_b, _ = constraint_b.adapt_repartition(
+        first_slot=3,
+        last_slot=4,
+        energy_delta=1000.0,
+        power_slots_duration_s=durations,
+        existing_commands=[None] * 5,
+        allow_change_state=True,
+        time=now,
+        bat_charge_traj=bat_traj,
+        battery_min_wh=900.0,
+    )
+    # B must NOT place; the floor is exhausted by A's open-ended drain.
+    assert ch_b is False
+    assert cmds_b[3] is None
+    assert cmds_b[4] is None
+
+
+# ---------------------------------------------------------------------------
+# (l) Focused unit test for _back_propagate_forward_min — review fix #02 should-fix #12
+# ---------------------------------------------------------------------------
+
+
+def test_back_propagate_forward_min_clamps_earlier_slots_to_new_min():
+    """Unit test for the extracted `_back_propagate_forward_min` helper.
+
+    Given a forward_min array where slot `i`'s running-min value has
+    just been decremented below earlier slots'
+    When `_back_propagate_forward_min(forward_min, i, first_slot)` runs
+    Then earlier slots `[first_slot, i)` are clamped downward to
+    forward_min[i] where they currently exceed it.
+
+    Isolates the algorithmic invariant from multi-pass orchestration —
+    catches breakage in the back-prop logic alone.
+    """
+    from custom_components.quiet_solar.home_model.constraints import (
+        _back_propagate_forward_min,
+    )
+
+    # Before placement: forward_min sorted descending — each earlier
+    # slot sees a higher running min than later slots.  After a
+    # placement at i=2 decremented forward_min[2:] by 100, slot 2's
+    # value is now 600 (below slots 0 and 1).  Back-prop must clamp
+    # slots 0 and 1 to 600.
+    forward_min = np.array([1000.0, 900.0, 600.0, 700.0], dtype=np.float64)
+    _back_propagate_forward_min(forward_min, i=2, first_slot=0)
+    assert np.allclose(forward_min[:2], [600.0, 600.0])
+    # Slots >= i unchanged.
+    assert forward_min[2] == 600.0
+    assert forward_min[3] == 700.0
+
+
+def test_back_propagate_forward_min_noop_when_i_equals_first_slot():
+    """No earlier slots to clamp — helper must be a no-op."""
+    from custom_components.quiet_solar.home_model.constraints import (
+        _back_propagate_forward_min,
+    )
+
+    forward_min = np.array([1000.0, 900.0, 800.0], dtype=np.float64)
+    before = forward_min.copy()
+    _back_propagate_forward_min(forward_min, i=0, first_slot=0)
+    assert np.array_equal(forward_min, before)
+
+
+def test_back_propagate_forward_min_preserves_already_lower_slots():
+    """Slots that are ALREADY <= forward_min[i] must not be raised."""
+    from custom_components.quiet_solar.home_model.constraints import (
+        _back_propagate_forward_min,
+    )
+
+    # Slot 0 is already at 500 (below the new pivot 700).  Slot 1 at
+    # 900 must be clamped to 700.
+    forward_min = np.array([500.0, 900.0, 700.0, 800.0], dtype=np.float64)
+    _back_propagate_forward_min(forward_min, i=2, first_slot=0)
+    assert forward_min[0] == 500.0  # unchanged
+    assert forward_min[1] == 700.0  # clamped down
+    assert forward_min[2] == 700.0  # unchanged

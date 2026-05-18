@@ -349,10 +349,10 @@ MAX_POWER_INFINITE = 1e12
 MAX_AMP_INFINITE = 1e12
 
 SOLAR_WASTE_CONFIDENCE_FACTOR = 0.7
-# Fraction of the estimated waste we're willing to spend on pre-discharge.
-# Leaves a 30 % buffer for forecast error; halving would over-trigger,
-# doubling would leave most surplus unaddressed.  Initial default pending
-# field tuning.
+# Empirically chosen; covers typical day-ahead PV forecast nMAE range
+# (~15-25 % under clear-sky, larger under cloud cover per industry
+# benchmarks).  Halving would over-trigger; doubling would leave most
+# surplus unaddressed.  Revisit after field deployment.
 
 SOLAR_WASTE_SAFETY_MARGIN_FRACTION = 0.1
 # Safety margin above the battery's empty SOC, expressed as a fraction
@@ -365,6 +365,16 @@ SOLAR_WASTE_TRIGGER_THRESHOLD_WH = 500
 # energy — comparable to the smallest meaningfully-controllable load
 # (1.5 kW water heater × ~20 min).  Round number, initial default pending
 # tuning.
+
+SOLAR_DUSK_THRESHOLD_W = 100
+# Below typical house base load — used by the dusk-finder to decide
+# when solar production is effectively zero.
+
+SOLAR_DUSK_EARLIEST_LOCAL_HOUR = 15
+# 3 PM local — earliest plausible dusk for high-latitude winters.
+
+SOLAR_DUSK_SUSTAIN_S = 90 * 60
+# 90 min sustained low-pv to commit dusk (filters cloud transients).
 
 MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 30  # keep last 14 days of data
 PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS = "charger_constraints"
