@@ -231,3 +231,75 @@ def test_build_existing_session_prompt_handles_relpath_value_error(
     # Falls back to the absolute path verbatim — still functional.
     assert "/somewhere/else/fix-plan.md" in result
     assert "#42" in result
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — should-fix #2: pr_number > 0 at helper boundary
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_pr", [0, -1, -100])
+def test_build_existing_session_prompt_rejects_non_positive_pr(bad_pr: int) -> None:
+    """Non-positive ``pr_number`` returns ``None`` at the helper boundary.
+
+    Parity with the CLI-layer ``parser.error("--pr-number must be a
+    positive integer")`` in ``next_step.py``. Programmer-direct
+    callers (and unit tests) get the same contract.
+    """
+    from launchers.phases import build_existing_session_prompt  # type: ignore[import-not-found]
+
+    assert build_existing_session_prompt("/work", "/work/fix.md", bad_pr) is None
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — should-fix #8: empty work_dir falls back to absolute
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_work_dir", ["", "   ", "\t"])
+def test_build_existing_session_prompt_handles_empty_work_dir(bad_work_dir: str) -> None:
+    """Empty / whitespace ``work_dir`` falls back to the verbatim absolute path.
+
+    Without this guard, ``os.path.relpath("/abs/path/to/fix.md", "")``
+    returns ``"../../../../../abs/path/to/fix.md"`` (relative from
+    the CWD up to root, then back down) — a confusing artifact in
+    the user-visible prompt.
+    """
+    from launchers.phases import build_existing_session_prompt  # type: ignore[import-not-found]
+
+    result = build_existing_session_prompt(
+        bad_work_dir, "/abs/path/to/fix.md", 42,
+    )
+    assert result is not None
+    assert "/abs/path/to/fix.md" in result
+    # The traversal artifact must NOT appear.
+    assert "../" not in result
+    assert "#42" in result
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — should-fix #10: strip fix_plan_path after guard
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("path", [
+    "  docs/foo.md",      # leading
+    "docs/foo.md  ",      # trailing
+    "  docs/foo.md  ",    # both
+])
+def test_build_existing_session_prompt_strips_fix_plan_path(path: str) -> None:
+    """Surrounding whitespace is stripped from ``fix_plan_path`` after the empty guard.
+
+    The empty/whitespace guard validates a stripped view, but the
+    untrimmed value was then passed to ``os.path.isabs`` /
+    ``relpath`` — producing a prompt with leading or trailing
+    whitespace artifacts (review fix #03 should-fix #10).
+    """
+    from launchers.phases import build_existing_session_prompt  # type: ignore[import-not-found]
+
+    result = build_existing_session_prompt("/work", path, 42)
+    assert result is not None
+    # The path appears stripped in the prompt — no whitespace
+    # adjacent to ``landed:`` or just before ``\nRe-run``.
+    assert "landed: docs/foo.md\n" in result, result
+    assert "docs/foo.md  " not in result  # no trailing space

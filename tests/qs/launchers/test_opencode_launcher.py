@@ -68,7 +68,13 @@ def test_build_payload_setup_task_uses_cli_form() -> None:
     )
     new_context = payload["new_context"]
     assert new_context.startswith("sh "), new_context
-    script_path = Path(new_context[len("sh "):])
+    # Structural pin via ``shlex.split`` so a future quote-aware
+    # variation of ``sh`` invocation still yields the script path
+    # correctly (review fix #03 should-fix #11).
+    import shlex as _shlex
+    parts = _shlex.split(new_context)
+    assert parts[0] == "sh"
+    script_path = Path(parts[1])
     assert script_path.name.startswith("qs_oc_launch_42")
     script_body = script_path.read_text()
     # The generated script invokes opencode <worktree> --agent <name> --prompt <kickoff>.
@@ -215,7 +221,11 @@ def test_build_payload_setup_task_next_prompt_forwarded() -> None:
         next_prompt="Custom kickoff",
         caller="setup_task",
     )
-    script_path = Path(payload["new_context"][len("sh "):])
+    # Structural pin via ``shlex.split`` (review fix #03 should-fix #11).
+    import shlex as _shlex
+    parts = _shlex.split(payload["new_context"])
+    assert parts[0] == "sh"
+    script_path = Path(parts[1])
     body = script_path.read_text()
     assert "Custom kickoff" in body
 
@@ -371,7 +381,9 @@ def test_opencode_cli_command_shell_quotes_script_path(
 # --------------------------------------------------------------------------- #
 
 
-def test_opencode_cli_command_uses_unique_paths() -> None:
+def test_opencode_cli_command_uses_unique_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
     """Two ``build_payload`` calls with the same issue produce different script paths.
 
     The legacy implementation wrote to a deterministic
@@ -379,8 +391,16 @@ def test_opencode_cli_command_uses_unique_paths() -> None:
     setup-task runs raced on the file and a malicious symlink could
     redirect the write. ``tempfile.NamedTemporaryFile`` generates
     unique names so each invocation lands on its own path.
+
+    Tempfile sandbox via ``tmp_path`` (review fix #03 nice-to-have
+    #17): pytest auto-cleans the directory so we don't accumulate
+    artefacts in the real ``/tmp`` across CI runs.
     """
+    import tempfile as tempfile_module
+
     from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    monkeypatch.setattr(tempfile_module, "gettempdir", lambda: str(tmp_path))
 
     p1 = opencode_launcher.build_payload(
         "/tmp/work", 42, "Fix bug", next_cmd="create-plan", caller="setup_task",
@@ -440,8 +460,13 @@ def test_generated_script_handles_quotes_in_agent_name(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.parametrize("weird_work_dir", [
+    "/tmp/work",                # baseline
+    "/tmp/with space/wt",       # whitespace
+    "/tmp/with'quote/wt",       # quote
+])
 def test_opencode_cli_command_falls_back_to_inline_on_write_failure(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, weird_work_dir: str,
 ) -> None:
     """When ``NamedTemporaryFile`` raises ``OSError`` (read-only fs, etc.), fall back to inline command.
 
@@ -449,6 +474,11 @@ def test_opencode_cli_command_falls_back_to_inline_on_write_failure(
     ``OSError`` uncaught all the way out to ``setup_task.main()``
     with no JSON error payload — the user gets a Python traceback
     instead of a working command.
+
+    Shell-safety pin (review fix #03 should-fix #6): use
+    ``shlex.split`` so a regression producing an unquoted directory
+    with spaces / quotes is caught by tokenisation, not just by
+    substring presence.
     """
     import shlex
     import tempfile as tempfile_module
@@ -462,15 +492,81 @@ def test_opencode_cli_command_falls_back_to_inline_on_write_failure(
     )
 
     payload = opencode_launcher.build_payload(
-        "/tmp/work", 42, "Fix bug", next_cmd="create-plan", caller="setup_task",
+        weird_work_dir, 42, "Fix bug", next_cmd="create-plan", caller="setup_task",
     )
     new_context = payload["new_context"]
     # No script-file wrapper — the bare ``opencode …`` command is
     # returned directly.
     assert not new_context.startswith("sh "), new_context
-    assert new_context.startswith("opencode "), new_context
-    assert shlex.quote("/tmp/work") in new_context
-    assert "--agent qs-create-plan" in new_context
+
+    # Structural pin: tokenise and check exact layout.
+    parts = shlex.split(new_context)
+    assert parts[0] == "opencode", parts
+    # parts[1] is the worktree path — equal to the input post-unquoting.
+    assert parts[1] == weird_work_dir, parts
+    assert "--agent" in parts
+    assert "qs-create-plan" in parts
+    assert "--prompt" in parts
+
+
+def test_opencode_cli_command_cleans_temp_file_on_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``f.write`` raises mid-stream → temp file unlinked, inline fallback returned.
+
+    The legacy flow was:
+
+        with NamedTemporaryFile(..., delete=False) as f:
+            f.write(...)                  # ← raises here
+            script_path = Path(f.name)    # ← never assigned
+
+    If ``f.write`` raised (disk full, quota exceeded, broken pipe),
+    the file was already created on disk but ``script_path`` was
+    still ``None``, and the cleanup branch did nothing. Review fix
+    #03 should-fix #7 captures the path BEFORE writing so cleanup
+    always knows what to unlink.
+    """
+    import tempfile as tempfile_module
+
+    from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    created_paths: list[str] = []
+    original_named_temp = tempfile_module.NamedTemporaryFile
+
+    class _WrappedFile:
+        """File wrapper that raises ``OSError`` from ``write``."""
+
+        def __init__(self, real: object) -> None:
+            self._real = real
+            self.name = real.name  # type: ignore[attr-defined]
+
+        def write(self, _data: str) -> int:
+            raise OSError("disk full")
+
+        def __enter__(self) -> _WrappedFile:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            self._real.__exit__(None, None, None)  # type: ignore[attr-defined]
+
+    def _wrapping_temp(*args: object, **kwargs: object) -> _WrappedFile:
+        real = original_named_temp(*args, **kwargs)  # type: ignore[arg-type]
+        created_paths.append(real.name)
+        return _WrappedFile(real)
+
+    monkeypatch.setattr(tempfile_module, "NamedTemporaryFile", _wrapping_temp)
+
+    payload = opencode_launcher.build_payload(
+        "/tmp/work", 42, "Fix bug", next_cmd="create-plan", caller="setup_task",
+    )
+    # Inline fallback was taken.
+    assert not payload["new_context"].startswith("sh ")
+    # The temp file was created (so we know the write path ran) but
+    # cleanup unlinked it (review fix #03 should-fix #7).
+    assert len(created_paths) == 1
+    assert not Path(created_paths[0]).exists(), (
+        f"temp file should have been cleaned up: {created_paths[0]}"
+    )
 
 
 # --------------------------------------------------------------------------- #

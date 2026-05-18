@@ -175,6 +175,16 @@ def main() -> None:
         })
         sys.exit(1)
 
+    # Reject empty / whitespace ``--work-dir`` upstream — without
+    # this guard, the opencode launcher would build a
+    # ``python scripts/qs/spawn_session.py … --directory ''``
+    # invocation, the user pastes it, and the failure fires far from
+    # the original mistake (review fix #03 should-fix #9). Strip
+    # back after validation for parity with spawn_session's main().
+    if not args.work_dir.strip():
+        parser.error("--work-dir must be a non-empty path")
+    args.work_dir = args.work_dir.strip()
+
     # GitHub PR numbers are always positive integers. ``type=int``
     # accepts the full int range, so ``--pr-number 0`` or
     # ``--pr-number -1`` would otherwise build a confusing
@@ -191,12 +201,19 @@ def main() -> None:
     # other ``ValueError`` subclasses must propagate so a future failure
     # mode isn't misreported as "unknown phase" (review-fix #02 SF1).
     try:
+        # Pass ``caller="next_step"`` explicitly rather than relying
+        # on the launcher signature default — if a launcher ever
+        # changes its default, this call site would silently drift
+        # (review fix #03 nice-to-have #23). The matching
+        # ``caller="setup_task"`` is already explicit in
+        # ``setup_task.py``.
         payload = launcher.build_payload(
             args.work_dir,
             args.issue,
             args.title,
             next_cmd=args.next_cmd,
             next_prompt=args.next_prompt,
+            caller="next_step",
             fix_plan_path=args.fix_plan_path,
             pr_number=args.pr_number,
         )

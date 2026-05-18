@@ -161,31 +161,50 @@ def build_existing_session_prompt(
     # Reject whitespace-only ``fix_plan_path`` — a value like ``"   "``
     # is truthy in Python and would otherwise render a confusing
     # ``"A new review fix plan landed:    \n..."`` artifact (review
-    # fix #02 should-fix #12).
-    if not fix_plan_path or not fix_plan_path.strip() or pr_number is None:
+    # fix #02 should-fix #12). Also reject non-positive ``pr_number``
+    # at the helper boundary — parity with the CLI-layer
+    # ``parser.error`` in ``next_step.py`` so programmer-direct
+    # callers (and unit tests) get a uniform contract (review fix
+    # #03 should-fix #2).
+    if (
+        not fix_plan_path
+        or not fix_plan_path.strip()
+        or pr_number is None
+        or pr_number <= 0
+    ):
         return None
 
-    # Normalise the path to worktree-relative. If ``fix_plan_path`` is
-    # absolute and lives under ``work_dir``, strip the prefix; if
-    # it's already relative, pass it through verbatim. Anything
-    # outside the worktree (rare) goes through ``os.path.relpath``
-    # which returns a ``../...`` form.
-    #
-    # ``os.path.relpath`` can also raise ``ValueError`` in two
-    # additional cases not handled by the "abs vs rel" branching:
-    # (a) Windows cross-drive paths (``C:\foo`` vs ``D:\bar``) and
-    # (b) one path absolute + the other relative. Wrapping the call
-    # in ``try/except ValueError`` and falling back to the absolute
-    # path keeps the prompt functional (the user can copy the
-    # absolute path) instead of propagating an uncaught exception
-    # through ``build_payload`` → ``next_step.py`` (review fix #02
-    # should-fix #6).
-    if os.path.isabs(fix_plan_path):
+    # Strip surrounding whitespace from ``fix_plan_path`` after the
+    # empty-guard — the untrimmed value would otherwise feed
+    # ``os.path.isabs`` / ``relpath`` and leak leading or trailing
+    # whitespace into the prompt text (review fix #03 should-fix #10).
+    fix_plan_path = fix_plan_path.strip()
+
+    # Empty / whitespace ``work_dir`` would feed
+    # ``os.path.relpath("/abs/path", "")`` which returns
+    # ``"../../../../abs/path"`` (relative from CWD up to root, then
+    # back down) — a confusing artefact in the user-visible prompt.
+    # Short-circuit to the verbatim ``fix_plan_path`` like the
+    # ``ValueError`` branch below (review fix #03 should-fix #8).
+    if not work_dir or not work_dir.strip():
+        fix_plan_rel = fix_plan_path
+    elif os.path.isabs(fix_plan_path):
+        # Normalise the absolute path to worktree-relative.
+        # ``os.path.relpath`` can also raise ``ValueError`` in two
+        # additional cases not handled by the "abs vs rel" branching:
+        # (a) Windows cross-drive paths (``C:\foo`` vs ``D:\bar``) and
+        # (b) one path absolute + the other relative. Wrapping the
+        # call in ``try/except ValueError`` and falling back to the
+        # absolute path keeps the prompt functional (the user can
+        # copy the absolute path) instead of propagating an uncaught
+        # exception through ``build_payload`` → ``next_step.py``
+        # (review fix #02 should-fix #6).
         try:
             fix_plan_rel = os.path.relpath(fix_plan_path, work_dir)
         except ValueError:
             fix_plan_rel = fix_plan_path
     else:
+        # Already a relative path — pass through verbatim.
         fix_plan_rel = fix_plan_path
 
     return (

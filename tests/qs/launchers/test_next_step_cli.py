@@ -360,6 +360,35 @@ def test_pr_number_rejects_non_positive(tmp_path: Path, bad_pr: str) -> None:
     assert result.returncode == 2, result.stderr
 
 
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — should-fix #9: --work-dir empty rejected upstream
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_work_dir", ["", "   ", "\t"])
+def test_next_step_rejects_empty_work_dir(
+    tmp_path: Path, bad_work_dir: str,
+) -> None:
+    """Empty / whitespace ``--work-dir`` exits 2 via parser.error.
+
+    Without this guard, the opencode launcher builds a
+    ``python scripts/qs/spawn_session.py … --directory ''``
+    invocation — the user pastes it, runs it, and the failure fires
+    far from the original mistake (review fix #03 should-fix #9).
+    """
+    result = _run(
+        [
+            "--next-cmd", "create-plan",
+            "--work-dir", bad_work_dir,
+            "--issue", "42",
+            "--title", "T",
+            "--harness", "claude-code",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 2, result.stderr
+
+
 @pytest.mark.parametrize("harness", ["claude-code", "cursor", "codex", "opencode"])
 def test_existing_session_prompt_emitted_for_all_harnesses(
     harness: str, tmp_path: Path,

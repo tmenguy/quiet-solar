@@ -711,7 +711,13 @@ def test_invalid_url_falls_back(
 
 
 def test_spawn_session_url_escapes_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A server-provided ``id`` with path-traversal chars is URL-escaped before interpolation."""
+    """A server-provided ``id`` with embedded ``/`` is URL-escaped before interpolation.
+
+    Note: ids containing ``..`` are now rejected upfront by review fix
+    #03 should-fix #4 (see ``test_spawn_session_rejects_traversal_id``).
+    This test uses ``abc/foo/delete-me`` (slashes, no traversal
+    pattern) to pin the URL-quoting behaviour on its own.
+    """
     import spawn_session  # type: ignore[import-not-found]
 
     seen_urls: list[str] = []
@@ -720,7 +726,7 @@ def test_spawn_session_url_escapes_session_id(monkeypatch: pytest.MonkeyPatch) -
         del timeout
         seen_urls.append(req.full_url)
         if req.full_url.endswith("/session"):
-            return _mock_response(json.dumps({"id": "abc/../delete-me"}).encode())
+            return _mock_response(json.dumps({"id": "abc/foo/delete-me"}).encode())
         return _mock_response(b"")
 
     monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
@@ -733,10 +739,10 @@ def test_spawn_session_url_escapes_session_id(monkeypatch: pytest.MonkeyPatch) -
     # The second urlopen call should hit a URL-escaped session_id.
     prompt_calls = [u for u in seen_urls if "prompt_async" in u]
     assert len(prompt_calls) == 1
-    assert "abc%2F..%2Fdelete-me" in prompt_calls[0], prompt_calls
-    # And the raw "/abc/../delete-me/" pattern must NOT appear (no
-    # path traversal vector reaching the server).
-    assert "/abc/../delete-me/prompt_async" not in prompt_calls[0]
+    assert "abc%2Ffoo%2Fdelete-me" in prompt_calls[0], prompt_calls
+    # And the raw "/abc/foo/delete-me/" pattern must NOT appear in
+    # the path — slashes are escaped to %2F.
+    assert "/abc/foo/delete-me/prompt_async" not in prompt_calls[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -1098,3 +1104,250 @@ def test_title_whitespace_stripped_when_provided(monkeypatch: pytest.MonkeyPatch
     assert exit_code == 0
     session_body = json.loads(bodies[0] or b"{}")
     assert session_body == {"title": "My Title"}
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — must-fix #1: embedded CR/LF in header raises ValueError
+# --------------------------------------------------------------------------- #
+
+
+def test_invalid_header_value_falls_back(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A ``ValueError`` from ``urlopen`` (invalid header value) routes through fallback.
+
+    ``http.client`` raises ``ValueError: Invalid header value`` when
+    CR/LF or other illegal chars sneak into the header value (e.g.
+    via a header-injection attempt). ``ValueError`` is not a subclass
+    of ``HTTPError`` / ``URLError`` / ``OSError`` /
+    ``HTTPException`` / ``JSONDecodeError``, so before this fix the
+    exception would propagate out and crash the script with a
+    traceback (review fix #03 must-fix #1).
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    monkeypatch.setattr(
+        spawn_session.urllib.request, "urlopen",
+        MagicMock(side_effect=ValueError("Invalid header value b'/tmp/wt\\nfoo'")),
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fallback_cli"
+    assert "Invalid header value" in payload["detail"]
+
+
+@pytest.mark.parametrize("bad_value", [
+    "/tmp/wt\n",
+    "/tmp/wt\r",
+    "/tmp/wt\x00",
+    "/tmp\nwt",         # interior newline
+    "/tmp\x01wt",       # interior control char
+])
+def test_control_chars_in_directory_rejected(
+    monkeypatch: pytest.MonkeyPatch, bad_value: str,
+) -> None:
+    """Control characters in ``--directory`` exit 2 via parser.error.
+
+    Layered defense alongside the widened ``_api`` except (review fix
+    #03 must-fix #1). The upstream guard gives a clearer message;
+    the downstream except is the safety net.
+    """
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", bad_value,
+    )
+    assert exit_code == 2
+
+
+@pytest.mark.parametrize("bad_value", ["qs\n", "qs\r", "qs\x00", "qs\x01plan"])
+def test_control_chars_in_agent_rejected(
+    monkeypatch: pytest.MonkeyPatch, bad_value: str,
+) -> None:
+    """Control characters in ``--agent`` exit 2 via parser.error."""
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", bad_value,
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 2
+
+
+@pytest.mark.parametrize("bad_value", ["hi\n", "hi\r", "hi\x00", "hi\x01there"])
+def test_control_chars_in_prompt_rejected(
+    monkeypatch: pytest.MonkeyPatch, bad_value: str,
+) -> None:
+    """Control characters in ``--prompt`` exit 2 via parser.error."""
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+        "--prompt", bad_value,
+    )
+    assert exit_code == 2
+
+
+@pytest.mark.parametrize("bad_value", ["T\n", "T\r", "T\x00", "T\x01end"])
+def test_control_chars_in_title_rejected(
+    monkeypatch: pytest.MonkeyPatch, bad_value: str,
+) -> None:
+    """Control characters in ``--title`` exit 2 via parser.error."""
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+        "--title", bad_value,
+    )
+    assert exit_code == 2
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — should-fix #4: reject `..` traversal segments in id
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("bad_id", [
+    "abc/../delete-me",   # traversal pattern
+    "..",                 # bare parent
+    "../etc/passwd",      # rooted traversal
+    "abc..def",           # interior `..` (rejected for uniformity)
+])
+def test_spawn_session_rejects_traversal_id(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    bad_id: str,
+) -> None:
+    """A server-returned ``id`` containing ``..`` is rejected upfront.
+
+    Even after ``urllib.parse.quote`` escaping, ``..`` literally
+    passes through (it's in the RFC 3986 unreserved set). A
+    URL-normalizing middleware (corporate proxy / reverse proxy /
+    container ingress) could rewrite the path and forward a
+    traversal-resolved URL to the OpenCode server. Two-layer
+    defense: pre-call validation + URL escaping (review fix #03
+    should-fix #4).
+    """
+    import spawn_session  # type: ignore[import-not-found]
+
+    seen_urls: list[str] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        seen_urls.append(req.full_url)
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": bad_id}).encode())
+        raise AssertionError(f"unexpected call: {req.full_url}")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "fallback_cli"
+    # Only the initial /session POST happened — the bad id was
+    # rejected before any prompt_async URL with `..` could be issued.
+    assert len(seen_urls) == 1, f"prompt_async should NOT have been called: {seen_urls}"
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — should-fix #5: orphan stderr mentions missing CLI
+# --------------------------------------------------------------------------- #
+
+
+def test_orphan_stderr_mentions_missing_cli(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When orphan + no opencode CLI, stderr line includes the CLI-missing hint."""
+    import spawn_session  # type: ignore[import-not-found]
+
+    def _side(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        url = req.full_url
+        method = req.get_method()
+        if method == "POST" and url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        if method == "POST" and "prompt_async" in url:
+            raise _http_error(500, "prompt boom")
+        if method == "DELETE":
+            raise _http_error(404, "delete boom")
+        raise AssertionError(f"unexpected: {method} {url}")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _side)
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", "/tmp/x",
+    )
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    # User-visible stderr line must surface the missing-CLI hint
+    # (not just buried in the JSON detail).
+    assert "opencode CLI" in err
+    assert "sess-X" in err
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 — nice-to-have #21: spawn_session() normalizes empty title
+# --------------------------------------------------------------------------- #
+
+
+def test_spawn_session_normalizes_empty_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``spawn_session(title="")`` (programmer-direct) → falls back to agent name."""
+    import spawn_session  # type: ignore[import-not-found]
+
+    bodies: list[bytes | None] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        bodies.append(req.data)
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        return _mock_response(b"")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    result = spawn_session.spawn_session(
+        agent="qs-create-plan", directory="/tmp/x", title="",
+    )
+    # title falls back to the agent name when empty / whitespace.
+    assert result["title"] == "qs-create-plan"
+    session_body = json.loads(bodies[0] or b"{}")
+    assert session_body == {"title": "qs-create-plan"}
+
+
+@pytest.mark.parametrize("bad_title", ["   ", "\t", "\n"])
+def test_spawn_session_normalizes_whitespace_title(
+    monkeypatch: pytest.MonkeyPatch, bad_title: str,
+) -> None:
+    """Whitespace-only ``title`` from programmer-direct call → also falls back."""
+    import spawn_session  # type: ignore[import-not-found]
+
+    bodies: list[bytes | None] = []
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        bodies.append(req.data)
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        return _mock_response(b"")
+
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", _capture)
+    result = spawn_session.spawn_session(
+        agent="qs-create-plan", directory="/tmp/x", title=bad_title,
+    )
+    assert result["title"] == "qs-create-plan"

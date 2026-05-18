@@ -70,6 +70,13 @@ def _coerce_issue_to_int(issue: int | str) -> int:
     - Rejects ``bool`` early — ``int(True) == 1`` would silently
       coerce, almost certainly a programmer error.
 
+    Other int-coercible types (``numpy.int64``, ``decimal.Decimal``,
+    ``Path("42")``-style fractional duck-types) silently coerce via
+    ``int()`` — this is intentional pass-through (review fix #03
+    nice-to-have #14). Programmer-error contract: only ``int`` and
+    decimal-string ``str`` are part of the documented public
+    surface; everything else is best-effort.
+
     Review fix #02 should-fix #10 + recommendation footnote.
     """
     if isinstance(issue, bool):
@@ -84,6 +91,16 @@ def _coerce_issue_to_int(issue: int | str) -> int:
         raise ValueError(
             f"issue must be an integer, got {issue!r}",
         ) from exc
+
+
+def _tab_title(issue_int: int, title: str) -> str:
+    """Return the shared ``QS_<issue>: <title>`` tab-title format.
+
+    Centralises the literal so future format changes (e.g. switching
+    to ``QS-<issue>`` to match branch naming) are a single-line
+    edit. Review fix #03 nice-to-have #18.
+    """
+    return f"QS_{issue_int}: {title}"
 
 
 def _spawn_session_command(
@@ -108,7 +125,7 @@ def _spawn_session_command(
     #02 should-fix #3.
     """
     issue_int = _coerce_issue_to_int(issue)
-    tab_title = f"QS_{issue_int}: {title}"
+    tab_title = _tab_title(issue_int, title)
     return (
         "python scripts/qs/spawn_session.py "
         f"--agent {shlex.quote(agent)} "
@@ -178,7 +195,7 @@ def _opencode_cli_command(
     # fix #02 should-fix #10 widens the exception handling).
     issue_int = _coerce_issue_to_int(issue)
 
-    tab_title = f"QS_{issue_int}: {title}"
+    tab_title = _tab_title(issue_int, title)
     safe_title = shlex.quote(tab_title)
     safe_dir = shlex.quote(work_dir)
     safe_agent = shlex.quote(agent)
@@ -216,8 +233,13 @@ def _opencode_cli_command(
             dir=tempfile.gettempdir(),
             delete=False,
         ) as f:
-            f.write(f"#!/bin/sh\n{full_cmd}\n")
+            # Capture the path BEFORE writing — if ``f.write`` raises
+            # (disk full, quota exceeded, broken pipe), the file is
+            # already on disk via ``delete=False`` and the cleanup
+            # branch needs ``script_path`` to know what to unlink
+            # (review fix #03 should-fix #7).
             script_path = Path(f.name)
+            f.write(f"#!/bin/sh\n{full_cmd}\n")
         # Owner-only rwx: ``sh <path>`` only needs read perm to
         # execute the contents, so 0o700 is the strictest safe
         # mode.
