@@ -101,12 +101,19 @@ def main() -> None:
 
     harness = args.harness or detect_harness()
     launcher = LAUNCHERS[harness]
+    # ``caller="setup_task"`` tells the OpenCode launcher that this is
+    # the Phase 1 → create-plan cross-workspace handoff (the new worktree
+    # is a different OpenCode workspace than the main checkout), so it
+    # should emit the CLI-form launcher instead of the HTTP-API
+    # ``spawn_session.py`` invocation. Other launchers accept and ignore
+    # the kwarg (QS-177 AC #8 / #9).
     launcher_payload = launcher.build_payload(
         work_dir,
         issue,
         title,
         next_cmd=args.next_cmd,
         next_prompt=args.next_prompt,
+        caller="setup_task",
     )
 
     output_json({

@@ -7,6 +7,7 @@ The pipeline runs across four harnesses with different mechanics:
 | Claude Code     | `.claude/agents/`  | `.claude/commands/`| `claude` CLI on worktree      | `tools:` frontmatter  |
 | Cursor 2.4+     | `.cursor/agents/`  | `/<name>`          | New Cursor workspace          | `readonly:` boolean   |
 | OpenCode (legacy)| `.opencode/agents/`| `.opencode/commands/`| HTTP API + `/instance/reload` | `permission:` block   |
+| OpenCode (new pipeline) | `.opencode/agents/` | `.opencode/commands/` | HTTP API: POST /session + POST /session/<id>/prompt_async (no reload) | `permission:` block |
 | Codex (future)  | `.codex/agents/`   | TBD                | TBD                           | TBD                   |
 
 The agent **bodies** are identical across harnesses (same protocol, same
@@ -52,8 +53,20 @@ no filesystem scan, so this works from any CWD.
   invokes `cursor <wd>` directly — Cursor doesn't expose a `--agent`
   flag for the IDE path, so the user types the slash command in chat
   once the IDE opens.
-- **`launchers/opencode.py`** — emits the same OpenCode HTTP-API spawn
-  approach as the legacy pipeline (delegates to `scripts/qs_opencode/`).
+- **`launchers/opencode.py`** — under `caller='next_step'`
+  (intermediate phases), POSTs to the OpenCode HTTP API via
+  `scripts/qs/spawn_session.py` to create a new session in the same
+  OpenCode instance with the next phase's agent already activated and
+  a kickoff prompt sent. Under `caller='setup_task'` (Phase 1 →
+  create-plan, cross-workspace), emits a CLI-form
+  `opencode <worktree> --agent <name>` invocation instead, because
+  the new worktree is a different OpenCode workspace. Falls back to
+  the CLI form when the OpenCode server is unreachable
+  (`shutil.which('opencode')` probe required). **Known limitation**:
+  requires static `.opencode/agents/qs-<phase>.md` files (mirror of
+  `.claude/agents/`); without them, the API call succeeds but the
+  session lands on the default OpenCode agent. Mirroring these files
+  is a follow-up task; this PR only ships the launcher.
 - **`launchers/codex.py`** — stub.
 
 All launchers return a dict with at minimum:

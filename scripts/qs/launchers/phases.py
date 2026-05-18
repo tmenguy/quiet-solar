@@ -13,14 +13,15 @@ the mapping stays as an explicit dict so that adding a new phase
 remains a single-line, reviewable change.
 
 Public names (``PHASE_TO_AGENT``, ``resolve_agent_for_next_cmd``,
-``UnknownPhaseError``) are intentional — they are imported across
-modules (``claude.py``, ``cursor.py``, ``next_step.py``, tests). Ruff's
-``PLC2701`` would flag underscore-prefixed names as private-import
-violations.
+``UnknownPhaseError``, ``build_existing_session_prompt``) are
+intentional — they are imported across modules (``claude.py``,
+``cursor.py``, ``next_step.py``, tests). Ruff's ``PLC2701`` would
+flag underscore-prefixed names as private-import violations.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 
 
@@ -121,3 +122,95 @@ def resolve_agent_for_next_cmd(next_cmd: str) -> str:
     # Pass ``phase`` explicitly so the exception's ``.phase`` attribute
     # records the post-normalization lookup key (review-fix #04 NTH4).
     raise UnknownPhaseError(next_cmd, sorted(PHASE_TO_AGENT), phase=phase)
+
+
+def build_existing_session_prompt(
+    work_dir: str,
+    fix_plan_path: str | None,
+    pr_number: int | None,
+) -> str | None:
+    """Return the existing-session kickoff prompt, or ``None`` if inputs are incomplete.
+
+    Review-task → implement-task is the most common loop in the
+    pipeline. After ``qs-review-task`` writes a fix plan and lands a
+    new commit, the user often has an already-running
+    ``qs-implement-task`` session they can paste a short prompt into
+    instead of spinning up a fresh terminal. This helper builds that
+    paste-into-existing-session prompt.
+
+    Args:
+        work_dir: Worktree directory. Used as the base for normalising
+            ``fix_plan_path`` to a worktree-relative path so the
+            prompt does not leak an absolute ``/Users/...`` prefix.
+        fix_plan_path: Absolute or relative path to the fix-plan
+            markdown file. ``None`` (or empty) → no prompt is built.
+        pr_number: The open PR number that the next implement-task
+            session should push back to. ``None`` → no prompt is built.
+
+    Returns:
+        A multi-line prompt string when both inputs are present, else
+        ``None`` (callers omit the ``existing_session_prompt`` key
+        from their payload entirely).
+
+    Review fix plan #01 — should-fix #17: shared helper so the prompt
+    content stays harness-agnostic. Each launcher decides whether to
+    surface the field via ``build_payload``; the wrapper text in the
+    agent presentation differs per harness but the prompt body does
+    not.
+    """
+    # Reject whitespace-only ``fix_plan_path`` — a value like ``"   "``
+    # is truthy in Python and would otherwise render a confusing
+    # ``"A new review fix plan landed:    \n..."`` artifact (review
+    # fix #02 should-fix #12). Also reject non-positive ``pr_number``
+    # at the helper boundary — parity with the CLI-layer
+    # ``parser.error`` in ``next_step.py`` so programmer-direct
+    # callers (and unit tests) get a uniform contract (review fix
+    # #03 should-fix #2).
+    if (
+        not fix_plan_path
+        or not fix_plan_path.strip()
+        or pr_number is None
+        or pr_number <= 0
+    ):
+        return None
+
+    # Strip surrounding whitespace from ``fix_plan_path`` after the
+    # empty-guard — the untrimmed value would otherwise feed
+    # ``os.path.isabs`` / ``relpath`` and leak leading or trailing
+    # whitespace into the prompt text (review fix #03 should-fix #10).
+    fix_plan_path = fix_plan_path.strip()
+
+    # Empty / whitespace ``work_dir`` would feed
+    # ``os.path.relpath("/abs/path", "")`` which returns
+    # ``"../../../../abs/path"`` (relative from CWD up to root, then
+    # back down) — a confusing artefact in the user-visible prompt.
+    # Short-circuit to the verbatim ``fix_plan_path`` like the
+    # ``ValueError`` branch below (review fix #03 should-fix #8).
+    if not work_dir or not work_dir.strip():
+        fix_plan_rel = fix_plan_path
+    elif os.path.isabs(fix_plan_path):
+        # Normalise the absolute path to worktree-relative.
+        # ``os.path.relpath`` can also raise ``ValueError`` in two
+        # additional cases not handled by the "abs vs rel" branching:
+        # (a) Windows cross-drive paths (``C:\foo`` vs ``D:\bar``) and
+        # (b) one path absolute + the other relative. Wrapping the
+        # call in ``try/except ValueError`` and falling back to the
+        # absolute path keeps the prompt functional (the user can
+        # copy the absolute path) instead of propagating an uncaught
+        # exception through ``build_payload`` → ``next_step.py``
+        # (review fix #02 should-fix #6).
+        try:
+            fix_plan_rel = os.path.relpath(fix_plan_path, work_dir)
+        except ValueError:
+            fix_plan_rel = fix_plan_path
+    else:
+        # Already a relative path — pass through verbatim.
+        fix_plan_rel = fix_plan_path
+
+    return (
+        f"A new review fix plan landed: {fix_plan_rel}\n"
+        f"Re-run `python scripts/qs/context.py` to pick up "
+        f"`latest_review_fix`, then apply the plan per your phase "
+        f"protocol (TDD, quality gate, push to the existing PR "
+        f"#{pr_number})."
+    )
