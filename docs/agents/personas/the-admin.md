@@ -63,6 +63,9 @@ Install via HACS → config flow steps → device-type wizard
   notifications TheAdmin's config produced.
 - [the-dev.md](the-dev.md) — the developer (often the same person)
   improving the code.
+- [../concepts/dashboard-and-cards.md](../concepts/dashboard-and-cards.md)
+  — the two auto-generated dashboards + four JS cards that ARE
+  TheAdmin's primary UX.
 - [use-cases/external-override.md](../use-cases/external-override.md)
   — what happens when TheAdmin (or anyone) controls a device
   outside quiet-solar.

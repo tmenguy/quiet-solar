@@ -92,7 +92,8 @@ table to find the right doc.
   [notification-routing.md](../agents/concepts/notification-routing.md),
   [user-override.md](../agents/concepts/user-override.md).
 - UI & configuration layer — see
-  [config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md).
+  [config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md)
+  and [dashboard-and-cards.md](../agents/concepts/dashboard-and-cards.md).
 - Testing layers — see
   [testing-layers.md](../agents/concepts/testing-layers.md).
 
@@ -769,7 +770,7 @@ All decisions work together without conflicts:
 | Smart device handling (external control) | `external_user_initiated_state` detection | [external-control-detection.md](../agents/concepts/external-control-detection.md) |
 | Off-grid resilience | Grid outage row in resilience table | Decision 1 + [off-grid-mode.md](../agents/concepts/off-grid-mode.md) |
 | Tariff-aware scheduling | Solver accepts tariff tuples; dynamic tariffs deferred | Decision 3 + [cheap-grid-charging.md](../agents/use-cases/cheap-grid-charging.md) |
-| UI dashboards | Jinja2 + 4 custom JS cards + programmatic HA API | This document (UI layer) |
+| UI dashboards | Jinja2 + 4 custom JS cards + programmatic HA API | [dashboard-and-cards.md](../agents/concepts/dashboard-and-cards.md) |
 | Notification & override flows | `on_device_state_change()`, per-person routing, dedup | [notification-routing.md](../agents/concepts/notification-routing.md), [user-override.md](../agents/concepts/user-override.md) |
 | Multi-protocol charger support | OCPP/Wallbox/Generic variants | [charger-budgeting.md](../agents/concepts/charger-budgeting.md) |
 | Real-time charger budgeting | Tactical layer, QSDynamicGroup tree, staged transitions | [strategic-tactical-control.md](../agents/principles/strategic-tactical-control.md) |

@@ -121,6 +121,35 @@ to grep the entire tree to figure out what an `ack` is.
 - **Person-car allocation** — which car is "assigned" to which
   person, affects prediction targeting.
 
+## UI & dashboard
+
+- **Storage-mode Lovelace dashboard** — a dashboard whose content
+  lives in HA's `.storage/` directory (not in `configuration.yaml`).
+  Quiet-solar uses storage mode so manual edits survive component
+  upgrades.
+- **Jinja2 dashboard template** — one of the two files under
+  `ui/*.yaml.j2`; rendered against the live `QSHome` to produce
+  Lovelace YAML on first install.
+- **"Quiet Solar" dashboard** — the custom-cards variant
+  (`quiet-solar` URL), uses the four bundled JS cards.
+- **"Quiet Std" dashboard** — the standard-cards variant
+  (`quiet-solar-standard` URL), uses only built-in HA cards.
+- **JS Lovelace card** — a custom HA frontend card. Quiet-solar
+  ships four: `qs-car-card`, `qs-climate-card`,
+  `qs-on-off-duration-card`, `qs-pool-card`. Outside the quality
+  pipeline (no JS tests / linter / build).
+- **Dashboard section** — one of `cars`, `climates`, `pools`,
+  `others`, `settings` (`DASHBOARD_DEFAULT_SECTIONS` in `const.py`).
+  Each device type maps to a default section via
+  `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION`; TheAdmin can override
+  per-device.
+- **`ha_entities` dict** — every `HADeviceMixin` instance exposes
+  `device.ha_entities.get("key")` so dashboards translate
+  description keys → entity IDs without hard-coding entity strings.
+- **`qs_tag` cache-buster** — epoch query parameter appended to JS
+  resource URLs (`?qs_tag=<epoch>`) so browsers reload updated card
+  code on component upgrade.
+
 ## Workflow & infrastructure
 
 - **HACS** — Home Assistant Community Store. Quiet-solar's

@@ -104,5 +104,8 @@ device.attach_ha_state_to_probe(...) for each tracked entity
   every HA device class uses.
 - [qs-home-orchestrator.md](qs-home-orchestrator.md) — what
   `QSDataHandler` instantiates.
+- [dashboard-and-cards.md](dashboard-and-cards.md) — step 0 of
+  the device-type checklist (the `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION`
+  mapping) decides whether the new device appears on the dashboard.
 - [../../workflow/project-rules.md](../../workflow/project-rules.md)
   — the `const.py` and translations rules.

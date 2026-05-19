@@ -43,6 +43,7 @@ docs covering it before you write the change.
 | `ha_model/bistate_duration.py`, `ha_model/on_off_duration.py`, `ha_model/pool.py` | [concepts/bistate-duration-devices.md](concepts/bistate-duration-devices.md) |
 | `ha_model/solar.py` | [concepts/solar-providers.md](concepts/solar-providers.md) |
 | `config_flow.py`, `__init__.py`, `data_handler.py`, `const.py` | [concepts/config-and-setup-flow.md](concepts/config-and-setup-flow.md) |
+| `ui/dashboard.py`, `ui/*.yaml.j2`, `ui/resources/qs-*.js` | [concepts/dashboard-and-cards.md](concepts/dashboard-and-cards.md) |
 | `tests/conftest.py`, `tests/factories.py`, `tests/ha_tests/` | [concepts/testing-layers.md](concepts/testing-layers.md) |
 
 ## Lookup by concept
@@ -68,6 +69,7 @@ docs covering it before you write the change.
 | User override | concept | [concepts/user-override.md](concepts/user-override.md) |
 | Solar providers + dampening | concept | [concepts/solar-providers.md](concepts/solar-providers.md) |
 | Config flow & setup | concept | [concepts/config-and-setup-flow.md](concepts/config-and-setup-flow.md) |
+| Dashboard generation & JS Lovelace cards | concept | [concepts/dashboard-and-cards.md](concepts/dashboard-and-cards.md) |
 | Testing layers (FakeHass vs real HA) | concept | [concepts/testing-layers.md](concepts/testing-layers.md) |
 | Observe → predict → optimize | principle | [principles/observe-predict-optimize.md](principles/observe-predict-optimize.md) |
 | Two-layer boundary | principle | [principles/two-layer-boundary.md](principles/two-layer-boundary.md) |
