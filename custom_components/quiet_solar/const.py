@@ -348,6 +348,44 @@ CAR_HARD_WIRED_CHARGER = "Hard Wired Charger"
 MAX_POWER_INFINITE = 1e12
 MAX_AMP_INFINITE = 1e12
 
+SOLAR_WASTE_CONFIDENCE_FACTOR = 0.7
+# Empirically chosen; covers typical day-ahead PV forecast nMAE range
+# (~15-25 % under clear-sky, larger under cloud cover per industry
+# benchmarks).  Halving would over-trigger; doubling would leave most
+# surplus unaddressed.  Revisit after field deployment.
+
+SOLAR_WASTE_SAFETY_MARGIN_FRACTION = 0.1
+# Safety margin above the battery's empty SOC, expressed as a fraction
+# of usable capacity.  10 % absorbs a typical pre-dawn UA bump (~500 W ×
+# 2 h = 1 kWh on a 10 kWh battery = 10 %) plus a single small mandatory
+# load slip.  Initial default pending tuning.
+
+SOLAR_WASTE_TRIGGER_THRESHOLD_WH = 500
+# Below this expected waste the surplus block can't usefully redistribute
+# energy — comparable to the smallest meaningfully-controllable load
+# (1.5 kW water heater × ~20 min).  Round number, initial default pending
+# tuning.
+
+SOLAR_DUSK_THRESHOLD_W = 100
+# Below typical house base load — used by the dusk-finder to decide
+# when solar production is effectively zero.
+
+SOLAR_DUSK_EARLIEST_LOCAL_HOUR = 15
+# 3 PM local — earliest plausible dusk for high-latitude winters.
+# Module-load invariant: a typo (e.g., 25) would silently disable
+# dusk detection forever, so we validate the range here and log an
+# error on misconfiguration (rather than asserting — survives `-O`
+# and matches the project's no-assert-in-production-code policy).
+# if not 0 <= SOLAR_DUSK_EARLIEST_LOCAL_HOUR <= 23:
+#    _LOGGER.error(
+#        "SOLAR_DUSK_EARLIEST_LOCAL_HOUR=%s must be in [0, 23]; "
+#       "dusk detection may be silently disabled until this is fixed",
+#        SOLAR_DUSK_EARLIEST_LOCAL_HOUR,
+#    )
+
+SOLAR_DUSK_SUSTAIN_S = 90 * 60
+# 90 min sustained low-pv to commit dusk (filters cloud transients).
+
 MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 30  # keep last 14 days of data
 PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS = "charger_constraints"
 PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER = "daily_reminder_no_charger_car"

@@ -913,6 +913,79 @@ def create_test_dynamic_group_double(**kwargs) -> TestDynamicGroupDouble:
 
 
 # =============================================================================
+# Solver replay helper (QS-178)
+# =============================================================================
+
+
+def replay_solver_with_pv_scaling(
+    solver: Any,
+    factor: float,
+) -> Any:
+    """Build a fresh PeriodSolver from an existing one with pv_forecast
+    rescaled by `factor`.
+
+    Used for the AC-11 pessimistic-forecast re-run: pass 1 plans against
+    the sunny forecast, pass 2 reuses the same scenario with PV halved
+    (factor=0.5) and verifies the battery trajectory still respects the
+    safety floor and mandatory-constraint satisfaction does not regress
+    below the pass-1 baseline.
+
+    Reads the inputs the solver was constructed with off the solver
+    instance attributes; reconstructs a new ``PeriodSolver`` with the
+    rescaled PV.  Loads / battery / UA / tariffs are reused as-is.
+
+    NOTE: accesses private PeriodSolver attributes; update this helper
+    if `PeriodSolver` is refactored.  Test-only.
+    """
+    import math
+
+    from custom_components.quiet_solar.home_model.solver import PeriodSolver
+
+    # Defensive factor sanity — NaN / inf / negative would silently
+    # corrupt the rescaled forecast.  `isfinite` rejects both NaN and
+    # ±inf in a single check.  Raise (not assert) so the guard survives
+    # `python -O`.
+    if not math.isfinite(factor):
+        raise ValueError(f"factor must be finite; got {factor}")
+    if factor < 0:
+        raise ValueError(f"factor must be non-negative; got {factor}")
+
+    # Defensive attribute checks — fail loudly if PeriodSolver's
+    # private surface changed.
+    required = (
+        "_pv_forecast",
+        "_ua_forecast",
+        "_tariffs",
+        "_loads",
+        "_max_inverter_dc_to_ac_power",
+        "_start_time",
+        "_end_time",
+        "_battery",
+    )
+    for attr in required:
+        if not hasattr(solver, attr):
+            raise AttributeError(
+                f"replay_solver_with_pv_scaling: PeriodSolver missing "
+                f"required attribute '{attr}'.  Implementation may have "
+                f"changed; update this factory."
+            )
+
+    scaled_pv = [(t, max(0.0, v * factor)) for t, v in (solver._pv_forecast or [])]
+    return PeriodSolver(
+        start_time=solver._start_time,
+        end_time=solver._end_time,
+        # Pass the full tariff list deterministically — the constructor
+        # handles both single-entry and multi-entry shapes.
+        tariffs=solver._tariffs,
+        actionable_loads=solver._loads,
+        battery=solver._battery,
+        pv_forecast=scaled_pv,
+        unavoidable_consumption_forecast=solver._ua_forecast,
+        max_inverter_dc_to_ac_power=solver._max_inverter_dc_to_ac_power,
+    )
+
+
+# =============================================================================
 # Constraint Type Constants (re-exported for convenience)
 # =============================================================================
 

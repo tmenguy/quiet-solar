@@ -67,6 +67,30 @@ def get_readable_date_string(time: datetime | None, for_small_standalone: bool =
     return target
 
 
+def _back_propagate_forward_min(
+    forward_min: npt.NDArray[np.float64],
+    i: int,
+    first_slot: int,
+) -> None:
+    """Clamp forward_min[first_slot:i] downward to forward_min[i].
+
+    Used by ``MultiStepsPowerLoadConstraint.adapt_repartition``'s Layer-3
+    floor guard.  After a placement at slot ``i`` decrements
+    ``forward_min[i:]``, the running-minimum argmin for earlier slots
+    may have shifted to ``i`` (or beyond).  This helper restores the
+    invariant ``forward_min[k] == min(bat_charge_traj[k:last_slot+1])``
+    for ``k in [first_slot, i)`` in-place.
+
+    No-op when ``i <= first_slot`` (no earlier slots to clamp).
+    """
+    if i > first_slot:
+        np.minimum(
+            forward_min[first_slot:i],
+            forward_min[i],
+            out=forward_min[first_slot:i],
+        )
+
+
 class LoadConstraint:
     def __init__(
         self,
@@ -657,6 +681,8 @@ class LoadConstraint:
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
         power_headroom: npt.NDArray[np.float64] | None = None,
+        bat_charge_traj: npt.NDArray[np.float64] | None = None,
+        battery_min_wh: float = 0.0,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the power repartition of the constraint over the given period."""
 
@@ -1308,6 +1334,8 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
         power_headroom: npt.NDArray[np.float64] | None = None,
+        bat_charge_traj: npt.NDArray[np.float64] | None = None,
+        battery_min_wh: float = 0.0,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -1318,17 +1346,57 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         # apply power headroom guard for all loads consuming energy (not just auto)
         use_headroom = energy_delta >= 0.0 and power_headroom is not None
 
+        # Per-slot battery-charge guard: when increasing consumption with a
+        # battery-discharge envelope, clamp each placement so the running
+        # minimum charge stays above the safety floor.  Inert when
+        # init_energy_delta < 0 (reclaim path) or no trajectory was passed.
+        #
+        # Invariant maintained throughout the placement loop:
+        #   forward_min[k] == min(bat_charge_traj[k:last_slot+1])
+        # for first_slot <= k <= last_slot.  Slots outside [first_slot,
+        # last_slot] are initialized to +inf so any future read that
+        # accidentally picks them up hits `max(0, inf - floor) = inf`
+        # and fail-safes to "allow maximum delta" rather than reading
+        # uninitialized memory.
+        use_battery_floor = energy_delta >= 0.0 and bat_charge_traj is not None
+        forward_min: npt.NDArray[np.float64] | None = None
+        if use_battery_floor and bat_charge_traj is not None:
+            # NaN invariant documentation — the load-bearing runtime
+            # check lives upstream in `_constraints_delta` (where the
+            # trajectory is seeded from `_battery_get_charging_power`).
+            # Here we log + disable Layer 3 for this call if NaN is
+            # seen, rather than asserting (the upstream check is the
+            # primary safety guard).
+            if np.any(np.isnan(bat_charge_traj)):
+                _LOGGER.error(
+                    "adapt_repartition: %s received bat_charge_traj with NaN values; "
+                    "disabling Layer 3 floor guard for this call (upstream guard in "
+                    "_constraints_delta should have caught this)",
+                    self.name,
+                )
+                use_battery_floor = False
+                forward_min = None
+            else:
+                forward_min = np.full_like(bat_charge_traj, np.inf)
+                forward_min[first_slot : last_slot + 1] = np.minimum.accumulate(
+                    bat_charge_traj[first_slot : last_slot + 1][::-1]
+                )[::-1]
+                # forward_min is initialised iff use_battery_floor is
+                # True — invariant documented in the type-narrowing
+                # branch above; downstream reads rely on it.
+
         if energy_delta >= 0.0:
             _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
-            # start from the end as future is more uncertain, so take actions far from now, and we will see later if it was worth it
-            # sorted_available_power = range(last_slot, first_slot - 1, -1)
-
-            # well not sure of the statement above as the solver will assess stuff differently depending on what we consumed
+            # Forward iteration over the working window: the solver
+            # re-assesses placement opportunities slot-by-slot in order so
+            # earlier placements influence later ones via power_headroom
+            # and (when active) forward_min back-propagation.
             sorted_available_power = range(first_slot, last_slot + 1)
         else:
             _LOGGER.info("adapt_repartition: for %s reclaim energy %sWh from %s", self.name, energy_delta, log_msg)
-            # try to reclaim energy to fill the battery as requested by the energy delta
-            # start as soon as possible to get a chance to fill the battery as needed
+            # Forward iteration: try to reclaim energy starting from the
+            # earliest slot so the battery fill window is recovered as
+            # soon as possible.
             sorted_available_power = range(first_slot, last_slot + 1)
 
         init_energy_delta = energy_delta
@@ -1385,6 +1453,24 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
                 for i in sorted_available_power:
                     if i in forced_slot_commands:
+                        continue
+
+                    # Multi-pass guard — gated on `use_battery_floor`
+                    # AND `battery_min_wh > 0`:
+                    # the double-decrement hazard only exists when
+                    # `bat_charge_traj` is being mutated under an active
+                    # Layer-3 floor (review fix #1 must-fix #2).  Outside
+                    # that scope, pass-2's legitimate upgrade path
+                    # (revisiting a slot placed in pass-1 to bump it to a
+                    # higher command) is preserved — that's the
+                    # pre-QS-178 behavior the 49+ existing call sites
+                    # rely on.  Review fix #03 must-fix #2 restored the
+                    # gate; review fix #04 must-fix #2 added the
+                    # defense-in-depth `battery_min_wh > 0` term so even
+                    # if a future change re-introduces an over-broad
+                    # `bat_charge_traj` injection, the multi-pass skip
+                    # stays contained to true surplus-block callers.
+                    if use_battery_floor and battery_min_wh > 0 and out_commands[i] is not None:
                         continue
 
                     slot_transition_cost = 0
@@ -1567,6 +1653,47 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                                     ) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
                                     base_cmd = new_base_cmd
 
+                        # Per-slot battery-floor clamp: if the proposed delta_power
+                        # would drain the forward-min charge below the safety floor,
+                        # try to find a lower command that fits, or skip the slot.
+                        #
+                        # `max_delta_power_floor` is the INCREMENTAL drain
+                        # budget at this slot; the clamp's skip and lookup
+                        # must therefore compare against the ABSOLUTE
+                        # base_cmd power (current + delta budget) rather
+                        # than the raw delta budget — otherwise valid
+                        # intermediate placements get skipped when
+                        # current_command_power > 0.
+                        if use_battery_floor and delta_power > 0:
+                            # Defensive: zero, NaN, or inf durations are
+                            # degenerate.  `NaN <= 0` is False (would
+                            # fall through with NaN division producing
+                            # NaN); `inf <= 0` is also False (division
+                            # yields 0 and the clamp picks unhelpful
+                            # bounds).  Skip via an explicit positive-
+                            # finite check.
+                            duration_s = float(power_slots_duration_s[i])
+                            if not (duration_s > 0.0) or not np.isfinite(duration_s):
+                                continue
+                            max_drain_wh = max(0.0, float(forward_min[i]) - battery_min_wh)
+                            max_delta_power_floor = max_drain_wh * 3600.0 / duration_s
+                            if delta_power > max_delta_power_floor:
+                                piloted_offset = possible_power_piloted_delta if is_current_empty_command else 0.0
+                                allowed_base_power = current_command_power + max_delta_power_floor - piloted_offset
+                                if allowed_base_power < power_sorted_cmds[0].power_consign:
+                                    continue
+                                j = self._get_lower_consign_idx_for_power(power_sorted_cmds, allowed_base_power)
+                                base_cmd = power_sorted_cmds[j]
+                                delta_power = base_cmd.power_consign - current_command_power
+                                if is_current_empty_command:
+                                    delta_power += possible_power_piloted_delta
+                                if delta_power <= 0:
+                                    continue
+                                d_energy = (delta_power * power_slots_duration_s[i]) / 3600.0
+                                d_budget_quantity = self.get_delta_budget_quantity(
+                                    base_cmd.power_consign, power_slots_duration_s[i]
+                                ) - self.get_delta_budget_quantity(current_command_power, power_slots_duration_s[i])
+
                         out_commands[i] = copy_command_and_change_type(
                             cmd=base_cmd, new_type=pass_through_command.command
                         )
@@ -1579,6 +1706,34 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                             power_headroom[i] -= delta_power
                         delta_budget_quantity += d_budget_quantity
                         energy_delta -= d_energy
+
+                        # Open-ended forward-propagation: physical battery
+                        # state carries forward across the constraint's
+                        # last_slot boundary into ALL later slots.  A
+                        # subsequent constraint in the same
+                        # `_constraints_delta` call (before the next
+                        # has_changes=True reseed) inherits the
+                        # in-place-mutated trajectory and reads the tail
+                        # `bat_charge_traj[> last_slot]` for its OWN
+                        # floor check.  Decrementing only
+                        # `bat_charge_traj[i:last_slot+1]` would leave
+                        # that tail stale and permit drains that breach
+                        # the floor in reality.
+                        #
+                        # Back-propagate the running minimum after the
+                        # decrement so the invariant
+                        #   forward_min[k] == min(bat_charge_traj[k:last_slot+1])
+                        # holds for k in [first_slot, last_slot] —
+                        # including slots BEFORE `i` whose running-min
+                        # argmin may have shifted to `i`.
+                        if use_battery_floor:
+                            state_delta_wh = delta_power * float(power_slots_duration_s[i]) / 3600.0
+                            bat_charge_traj[i:] -= state_delta_wh
+                            forward_min[i:] -= state_delta_wh
+                            # Back-propagate the running minimum into
+                            # earlier slots so the invariant holds across
+                            # the placement.
+                            _back_propagate_forward_min(forward_min, i, first_slot)
 
                         if first_modified_slot is None:
                             first_modified_slot = i

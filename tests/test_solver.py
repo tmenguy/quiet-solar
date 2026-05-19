@@ -11,6 +11,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     FLOATING_PERIOD_S,
+    SOLVER_STEP_S,
 )
 from custom_components.quiet_solar.home_model.battery import Battery
 from custom_components.quiet_solar.home_model.commands import (
@@ -864,7 +865,42 @@ class TestSolver(TestCase):
         assert total_car_energy > 0, "Car should get some energy allocation"
 
         assert energy_utilization > 110, "Expected energy utilization should be > 110% indicating battery supplementing"
-        assert has_min_power_periods, "Expected periods should be there where car runs at/near minimum power"
+        # QS-178: the aggressive surplus pre-discharge block (wider waste
+        # accounting horizon + probe_window_start=0) intentionally bumps
+        # every probe slot above the minimum power band on big-sun /
+        # forecast-rich days.  The original `has_min_power_periods`
+        # assertion captured the OLD conservative allocation; the new
+        # envelope DELIBERATELY fills these slots at a higher rate.
+        # Replace with a STRUCTURAL assertion: count SLOTS (not command
+        # entries — review fix #03 must-fix #7) commanded above the
+        # minimum-band upper bound (1.2× the min).  A single high-
+        # power command can span many slots; without expansion the
+        # previous sum would misclassify the QS-178 behavior.
+        # Threshold: at least 25% of the run's slots above the min
+        # band (must-fix #7 + nice-to-have #3).
+        # Build a (start, end) → cmd list by pairing consecutive command
+        # entries.  end of the last command = end_time of the scenario.
+        # Use the imported SOLVER_STEP_S constant so the test arithmetic
+        # tracks future changes to the solver's slot granularity
+        # (review fix #04 should-fix #7).
+        slot_s = float(SOLVER_STEP_S)
+        slots_above_min_band = 0
+        for k, (cmd_start, cmd) in enumerate(car_cmds):
+            cmd_end = car_cmds[k + 1][0] if k + 1 < len(car_cmds) else end_time
+            # Defensive max(0, ...): negative slot count would
+            # spuriously decrement the accumulator if the command list
+            # is ever unordered (review fix #04 should-fix #12).
+            slot_count = max(0, int(round((cmd_end - cmd_start).total_seconds() / slot_s)))
+            if cmd.power_consign > car_minimum_power * 1.2:
+                slots_above_min_band += slot_count
+        total_slots = int(round((end_time - start_time).total_seconds() / slot_s))
+        min_expected_slots = max(3, total_slots // 4)
+        assert slots_above_min_band >= min_expected_slots, (
+            f"QS-178 aggressive pre-discharge: expected at least "
+            f"{min_expected_slots} slots ({total_slots // 4}/{total_slots}, "
+            f"i.e. 25%) above the minimum-band upper bound "
+            f"({car_minimum_power * 1.2:.0f}W); got {slots_above_min_band}"
+        )
 
         print("✅ Fixed supplement scenario test passed!")
 
