@@ -3,8 +3,6 @@
   "model": "github-copilot/claude-opus-4.6",
   "instructions": [
     "AGENTS.md",
-    "CLAUDE.md",
-    "_qsprocess/rules/project-rules.md",
     "_qsprocess_opencode/README.md"
   ]
 }
