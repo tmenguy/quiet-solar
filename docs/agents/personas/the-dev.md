@@ -41,7 +41,7 @@ TheDev demands:
 
 ## Characteristic interaction path
 
-```
+```text
 Idea → /setup-task → worktree on QS_<N>
 → /create-plan → story + 4-reviewer adversarial review
 → /implement-task or /implement-setup-task → TDD loop, quality gate, PR

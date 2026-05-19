@@ -45,7 +45,7 @@ Per-phase operations on amp arrays:
 
 Tree topology:
 
-```
+```text
 QSHome (root, phase limit = main breaker)
 ├── QSDynamicGroup "EV charging circuit" (limit = sub-breaker)
 │   ├── QSChargerGeneric "car_1"

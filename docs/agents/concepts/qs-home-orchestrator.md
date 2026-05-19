@@ -63,7 +63,7 @@ than the cycle completes.
 
 ## Lifecycle
 
-```
+```text
 QSDataHandler.async_setup_entry()
   → creates QSHome
   → registers async_track_time_interval for the 3 cycles

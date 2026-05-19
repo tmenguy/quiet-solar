@@ -40,7 +40,7 @@ modifies `configuration.yaml`. They need:
 
 ## Characteristic interaction path
 
-```
+```text
 Install via HACS → config flow steps → device-type wizard
 → Dashboard with constraint progress, command history, forecast accuracy
 → "Why didn't the car charge last night?" → diagnostic sensors + logs

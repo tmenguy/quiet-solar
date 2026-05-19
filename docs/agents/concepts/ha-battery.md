@@ -49,7 +49,7 @@ device's `external_user_initiated_state` is updated.
 
 ## Lifecycle
 
-```
+```text
 Config flow → QSBattery created → attach HA probes
   ↓
 update_states() reads HA → updates Battery SOC, power

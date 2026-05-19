@@ -63,7 +63,7 @@ constraint-specific criteria (e.g., deadline proximity).
 
 ## Lifecycle / sequence
 
-```
+```text
 update_loads() cycle (~7s)
   ↓
 update_loads_constraints()           ← constraints pushed here

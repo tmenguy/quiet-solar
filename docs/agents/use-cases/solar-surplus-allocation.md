@@ -25,7 +25,7 @@ day-to-day "where does the surplus go?" use case.
 
 ## End-to-end sequence
 
-```
+```text
 1. Solar production rises → QSSolar updates merged forecast (~30s
    refresh)
    ↓

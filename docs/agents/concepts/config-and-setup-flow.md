@@ -35,7 +35,7 @@ strings are never hardcoded anywhere else.
 
 **Hierarchical menu pattern**:
 
-```
+```text
 async_step_user (top-level menu)
   ├── async_step_<device_type> (per-type steps)
   │   └── get_common_schema() → vol.Schema(...)
@@ -70,7 +70,7 @@ async_step_user (top-level menu)
 
 ## Lifecycle
 
-```
+```text
 HA UI → config_flow.py step → ConfigEntry created
   ↓
 __init__.py:async_setup_entry → QSDataHandler.async_add_entry

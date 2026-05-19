@@ -114,13 +114,14 @@ Must exit 0: pytest 100% coverage + ruff + mypy + translations. If it
 fails, fix autonomously and re-run. Only ask the user for direction
 after 2–3 unsuccessful attempts.
 
-**Doc-maintenance pre-commit sub-step.** Before staging, run
+**Doc-maintenance pre-commit sub-step.** After staging your
+intended changes (`git add` first so the diff is populated), run
 
 ```bash
 python scripts/qs/check_doc_drift.py
 ```
 
-on the staged diff. If exit 1, either update the listed
+against the staged diff. If exit 1, either update the listed
 `docs/agents/` docs and re-stage, or include a justification
 paragraph in the PR body under a `## Doc maintenance` heading
 explaining why the docs are unaffected. See

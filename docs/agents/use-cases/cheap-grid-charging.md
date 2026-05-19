@@ -25,7 +25,7 @@ those windows. This is the "no surplus available" complement to
 
 ## End-to-end sequence
 
-```
+```text
 1. Evening: PV forecast = 0 from sundown to sunup
    ↓
 2. Tariff schedule: peak 18:00–22:00; off-peak 22:00–06:00; peak

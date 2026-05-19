@@ -41,7 +41,7 @@ Magali is **passive 95% of the time**. She:
 
 ## Characteristic interaction path
 
-```
+```text
 Magali plugs car in → person presence + trip prediction
 → Constraint created (load_info: {originator: "prediction"})
 → Solver allocates power → charger executes

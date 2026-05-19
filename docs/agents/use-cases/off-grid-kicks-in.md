@@ -27,7 +27,7 @@ trustworthy in homes that get grid outages.
 
 ## End-to-end sequence
 
-```
+```text
 1. Grid sensor: 4200W → 0W (outage)
    ↓
 2. State-polling cycle (~4s) detects the drop; debounces (~10s) to

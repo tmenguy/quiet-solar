@@ -53,7 +53,29 @@ HARNESS_DIRS: tuple[Path, ...] = (
 DRIFT_CHECKER_TOKEN: str = "scripts/qs/check_doc_drift.py"
 
 
-@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=lambda p: p.parent.name)
+# Implement-variant agents (run between TDD red-green-refactor and
+# the commit): the doc-maintenance step must instruct the agent to
+# stage first, then run the checker. Pinned post-review-fix #01 S1.
+IMPLEMENT_AGENT_NAMES: tuple[str, ...] = (
+    "qs-implement-task",
+    "qs-implement-setup-task",
+)
+
+# Review-variant agents (post-PR): the doc-maintenance step inspects
+# the PR diff, not a "staged" diff (no canonical staged state exists
+# at review time). Pinned post-review-fix #01 S1.
+REVIEW_AGENT_NAMES: tuple[str, ...] = ("qs-review-task",)
+
+
+# Review-fix #01 N6: strip the leading dot from harness ids so
+# ``pytest -k claude`` works without quoting concerns. Without
+# ``lstrip('.')``, the id is ``.claude`` and the dot is treated as a
+# regex meta-char in ``-k`` expressions.
+def _harness_id(p: Path) -> str:
+    return p.parent.name.lstrip(".")
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
 @pytest.mark.parametrize("agent_name", DOC_MAINTENANCE_AGENT_NAMES)
 def test_agent_body_invokes_drift_checker(harness_dir: Path, agent_name: str) -> None:
     """Every orchestrator agent in every harness mentions the drift checker."""
@@ -65,4 +87,47 @@ def test_agent_body_invokes_drift_checker(harness_dir: Path, agent_name: str) ->
         f"QS-185 AC-9 / AC-10 require every orchestrator agent to wire "
         f"the doc-maintenance step into its phase protocol; this test "
         f"pins the contract across .claude/, .cursor/, and .opencode/."
+    )
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+@pytest.mark.parametrize("agent_name", IMPLEMENT_AGENT_NAMES)
+def test_implement_agents_say_after_staging(harness_dir: Path, agent_name: str) -> None:
+    """Implement-variant agents must say "After staging", not "Before staging".
+
+    Review-fix #01 S1: a pre-stage drift check sees an empty cached
+    diff and silently no-ops. The contract is now: stage first
+    (``git add``), then run the checker.
+    """
+    body = (harness_dir / f"{agent_name}.md").read_text(encoding="utf-8")
+    assert "After staging" in body, (
+        f"{harness_dir / f'{agent_name}.md'}: implement-variant agents "
+        "must instruct the agent to stage *first* and then run the "
+        "drift checker (review-fix #01 S1). Look for 'After staging'."
+    )
+    assert "Before staging," not in body, (
+        f"{harness_dir / f'{agent_name}.md'}: the legacy 'Before "
+        "staging,' wording silently no-ops because the cached diff "
+        "is empty (review-fix #01 S1)."
+    )
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+@pytest.mark.parametrize("agent_name", REVIEW_AGENT_NAMES)
+def test_review_agents_avoid_pr_staged_diff(harness_dir: Path, agent_name: str) -> None:
+    """Review-variant agents must reference "PR diff", not "PR's staged diff".
+
+    Review-fix #01 S1: there is no canonical staged state at review
+    time; the reviewer evaluates the PR diff directly.
+    """
+    body = (harness_dir / f"{agent_name}.md").read_text(encoding="utf-8")
+    assert "PR's staged diff" not in body, (
+        f"{harness_dir / f'{agent_name}.md'}: 'PR's staged diff' is "
+        "meaningless at review time (review-fix #01 S1). Reference "
+        "the PR diff directly."
+    )
+    assert "PR diff" in body, (
+        f"{harness_dir / f'{agent_name}.md'}: review-variant agents "
+        "must explain the doc-maintenance audit against the PR diff "
+        "(review-fix #01 S1)."
     )

@@ -70,7 +70,7 @@ Then `apply_budget_strategy()`:
 
 ## Lifecycle / sequence (one update cycle)
 
-```
+```text
 All chargers stable for 45s? → dampening update (measure real power)
   ↓
 Detect transitions (single charger change → record power delta)

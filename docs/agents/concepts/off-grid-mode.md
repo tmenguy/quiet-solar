@@ -58,7 +58,7 @@ mode for maintenance windows. It does not auto-recover.
 
 ## Lifecycle
 
-```
+```text
 Grid sensor steady at 0W (debounced) → mode = OFF_GRID
   ↓
 suspend FILLER constraints

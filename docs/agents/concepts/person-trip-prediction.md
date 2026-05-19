@@ -62,7 +62,7 @@ prediction_kWh + margin` is pushed for the car's charger.
 
 ## Lifecycle
 
-```
+```text
 GPS reading → presence state → trip detection
   ↓
 Trip ended → distance recorded → mileage ring updated

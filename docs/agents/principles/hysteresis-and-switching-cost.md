@@ -14,7 +14,7 @@ change has a **real cost** (mechanical wear on relays, user
 confusion, transient over-current). Quiet-solar uses three layered
 defences to keep plans stable: a **daily on/off budget**
 (`num_max_on_off`), **time-based hysteresis**
-(`CHANGE_ON_OFF_STATE_HYSTERESIS_S = 600`s = 10 minutes minimum
+(`CHANGE_ON_OFF_STATE_HYSTERESIS_S = 600s` — 10 minutes minimum
 between state changes), and **multi-pass constraint adaptation**
 (try free transitions first, only spend budget on the second pass).
 This is an architectural principle, not a per-device tweak.

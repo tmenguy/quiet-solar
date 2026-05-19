@@ -20,7 +20,12 @@ script:
 Exit codes (AC-7):
     0 — clean
     1 — drift detected (covered source changed, covering doc did not)
-    2 — malformed frontmatter or missing ``covers:`` path
+    2 — malformed frontmatter, missing ``covers:`` path, or
+        non-existent ``--repo-root``
+
+Exit-code precedence (review-fix #01 N4): when both stale docs and
+malformed/missing covers are present, **exit 2 wins**. Drift (exit 1)
+is reported only when the doc tree is internally consistent.
 
 Output (non-JSON) is human-readable lines on stdout. ``--json``
 switches to the machine-readable schema:
@@ -64,6 +69,12 @@ DEFAULT_REPO_ROOT = SCRIPT_DIR.parent.parent
 # without tripping exit 2.
 TRACKED_PREFIX = "custom_components/quiet_solar/"
 
+# Subprocess hard timeout. Long enough that a healthy ``git diff
+# --cached`` returns; short enough that an index-lock-contention hang
+# can't stall the implement/review agents indefinitely. Review-fix
+# #01 S4.
+GIT_TIMEOUT_S = 30
+
 
 # ---------------------------------------------------------------------------
 # Frontmatter parsing
@@ -75,14 +86,33 @@ def _parse_frontmatter(path: Path) -> dict[str, Any]:
     Raises ``ValueError`` (or ``yaml.YAMLError``) if the frontmatter
     can't be parsed — main()'s scan loop turns those into the
     ``malformed_frontmatter`` bucket.
+
+    Robust to:
+    - UTF-8 BOM (``utf-8-sig`` — review-fix #01 S6).
+    - CRLF and bare ``\\r`` (legacy macOS / corrupted) line endings
+      (review-fix #01 S5).
+    - Closing ``---`` at end of file with no trailing newline
+      (review-fix #01 S5).
     """
-    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    # ``utf-8-sig`` transparently strips a UTF-8 BOM if present.
+    text = path.read_text(encoding="utf-8-sig")
+    # Normalize all common line-ending variants. Replace CRLF before
+    # bare CR so we don't double-replace the LF.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
     if not text.startswith("---\n"):
         raise ValueError(f"{path}: missing opening '---' delimiter")
     rest = text[len("---\n") :]
+
     end = rest.find("\n---\n")
     if end == -1:
-        raise ValueError(f"{path}: missing closing '---' delimiter")
+        # Fall back to ``\n---`` at end-of-file (no trailing newline).
+        stripped = rest.rstrip()
+        if stripped.endswith("\n---"):
+            end = len(stripped) - len("\n---")
+        else:
+            raise ValueError(f"{path}: missing closing '---' delimiter")
+
     data = yaml.safe_load(rest[:end])
     if not isinstance(data, dict):
         raise ValueError(f"{path}: frontmatter is not a mapping")
@@ -100,6 +130,48 @@ def _stringify_last_verified(value: Any) -> str:
     if value is None:
         return ""
     return str(value)
+
+
+# ---------------------------------------------------------------------------
+# Path normalization
+
+
+def _normalize_path(raw: str, repo_root: Path) -> str:
+    """Normalize a path string for comparison with ``source_to_docs`` keys.
+
+    Review-fix #01 M2: covers a list of malformations that agents and
+    automation realistically produce — Windows backslashes, leading
+    ``./``, absolute paths from ``$PWD`` expansion, trailing slashes,
+    stray whitespace.
+
+    - Backslashes → forward slashes.
+    - Strip leading ``./`` (any number of times).
+    - If absolute, attempt to relativize against ``repo_root``; if the
+      path lives outside the repo, leave it absolute (the caller will
+      then see no match in ``source_to_docs``, which is correct —
+      drift detection only fires for in-tree paths).
+    - Strip trailing ``/``.
+    """
+    s = raw.strip().replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+
+    # Detect absolute paths. POSIX: leading ``/``. Windows-style drive
+    # letters (``C:/...``) are not used in this repo but we tolerate
+    # them for forward compatibility.
+    is_absolute = s.startswith("/") or (len(s) >= 2 and s[1] == ":")
+    if is_absolute:
+        try:
+            s = Path(s).resolve().relative_to(repo_root).as_posix()
+        except (ValueError, OSError):
+            # Outside ``repo_root`` (or unresolvable): leave the
+            # absolute string alone. No source under
+            # ``custom_components/quiet_solar/`` could ever match.
+            pass
+
+    while s.endswith("/") and len(s) > 1:
+        s = s[:-1]
+    return s
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +197,11 @@ def _scan_docs(
         return source_to_docs, malformed, missing, last_verified
 
     for doc_path in sorted(docs_root.rglob("*.md")):
+        # Skip symlinks. ``rglob`` follows them by default; a self-
+        # referential symlink would hang the scan, and a symlink into
+        # another tree would duplicate reports (review-fix #01 N9).
+        if doc_path.is_symlink():
+            continue
         try:
             fm = _parse_frontmatter(doc_path)
         except (ValueError, yaml.YAMLError) as exc:
@@ -141,6 +218,17 @@ def _scan_docs(
             continue
 
         covers = fm["covers"]
+        # Review-fix #01 N10: surface a clearer message when the
+        # ``covers:`` key parses to ``None`` (the author wrote
+        # ``covers:`` with no value).
+        if covers is None:
+            print(
+                f"warning: {doc_path}: 'covers:' has no value — either "
+                "omit the key or write 'covers: []'.",
+                file=sys.stderr,
+            )
+            malformed.append(doc_path)
+            continue
         if not isinstance(covers, list):
             print(
                 f"warning: {doc_path}: 'covers' must be a list, got {type(covers).__name__}",
@@ -149,16 +237,23 @@ def _scan_docs(
             malformed.append(doc_path)
             continue
 
-        doc_is_malformed = False
-        for entry in covers:
+        # De-duplicate while preserving first-occurrence order
+        # (review-fix #01 S7). A typo / paste error in a ``covers:``
+        # list shouldn't double-report drift in the JSON output.
+        deduped: list[Any] = list(dict.fromkeys(covers))
+        for entry in deduped:
             if not isinstance(entry, str):
                 print(
                     f"warning: {doc_path}: 'covers' entry must be a string, got {type(entry).__name__}",
                     file=sys.stderr,
                 )
                 malformed.append(doc_path)
-                doc_is_malformed = True
                 break
+
+            # Review-fix #01 N7: strip stray whitespace so a YAML
+            # quoted-string indent doesn't silently demote a
+            # ``covers:`` entry to "off-tree".
+            entry = entry.strip()
 
             if not entry.startswith(TRACKED_PREFIX):
                 # Off-tree entry — warn but don't flag as error or
@@ -175,11 +270,19 @@ def _scan_docs(
                 missing.append((doc_path, entry))
                 continue
 
-            source_to_docs.setdefault(entry, []).append(doc_path)
+            # Review-fix #01 N8: directory entries don't cascade.
+            # Reject them explicitly so the author writes a file
+            # path (or a glob, when we support that).
+            if full.is_dir():
+                print(
+                    f"warning: {doc_path}: covers entry {entry!r} is a directory; "
+                    "use a file path (directory entries don't cascade).",
+                    file=sys.stderr,
+                )
+                malformed.append(doc_path)
+                break
 
-        # If a covers item was malformed (not a string), break already
-        # ran and skipped further entries; nothing else to do here.
-        del doc_is_malformed
+            source_to_docs.setdefault(entry, []).append(doc_path)
 
     return source_to_docs, malformed, missing, last_verified
 
@@ -191,22 +294,48 @@ def _scan_docs(
 def _git_staged_paths(repo_root: Path) -> list[str]:
     """Return the staged file paths via ``git diff --cached``.
 
-    On non-zero exit (e.g., not a git repo), log to stderr and return
-    an empty list. The caller treats "no modifications" as a clean
-    gate, which is the right behaviour for a non-git environment.
+    On non-zero exit (e.g., not a git repo), missing ``git`` binary
+    (review-fix #01 M1), or hung index lock (review-fix #01 S4), log
+    to stderr and return an empty list. The caller treats "no
+    modifications" as a clean gate, which is the right behaviour for
+    a non-git environment.
+
+    ``-c core.quotepath=false`` (review-fix #01 S8) disables git's
+    default C-style escaping of non-ASCII paths so the returned
+    strings match ``source_to_docs`` keys directly.
     """
-    result = subprocess.run(
-        [
-            "git",
-            "diff",
-            "--cached",
-            "--diff-filter=ACMRD",
-            "--name-only",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(repo_root),
-    )
+    cmd = [
+        "git",
+        "-c",
+        "core.quotepath=false",
+        "diff",
+        "--cached",
+        "--diff-filter=ACMRD",
+        "--name-only",
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(repo_root),
+            check=False,
+            timeout=GIT_TIMEOUT_S,
+        )
+    except FileNotFoundError:
+        print(
+            "warning: git binary not found on PATH; treating as no staged changes",
+            file=sys.stderr,
+        )
+        return []
+    except subprocess.TimeoutExpired:
+        print(
+            f"warning: git diff timeout exceeded ({GIT_TIMEOUT_S}s); "
+            "treating as no staged changes",
+            file=sys.stderr,
+        )
+        return []
+
     if result.returncode != 0:
         print(
             f"warning: git diff failed (exit {result.returncode}): "
@@ -238,12 +367,19 @@ def _detect_drift(
             candidate = repo_root / candidate
         modified_docs.add(candidate.resolve())
 
+    # Pre-resolve every doc once so the inner loop is a hash lookup
+    # rather than an O(N) resolve per source (review-fix #01 S9).
+    # On Windows / network filesystems, ``Path.resolve()`` is non-
+    # trivial; hoisting the call here turns O(N×M) into O(N+M).
+    all_docs = {doc for docs in source_to_docs.values() for doc in docs}
+    resolved: dict[Path, Path] = {doc: doc.resolve() for doc in all_docs}
+
     stale: dict[Path, list[str]] = {}
     for source, docs in source_to_docs.items():
         if source not in modified:
             continue
         for doc in docs:
-            if doc.resolve() in modified_docs:
+            if resolved[doc] in modified_docs:
                 continue
             stale.setdefault(doc, []).append(source)
     return stale
@@ -267,9 +403,14 @@ def main(argv: list[str] | None = None) -> int:
         "--paths",
         nargs="*",
         default=None,
-        help="Override the staged-diff source. Any number of paths "
-        "(0 = 'no modifications'). When omitted, the script runs "
-        "git diff --cached.",
+        help=(
+            "Override the staged-diff source. ``--paths`` with no "
+            "arguments explicitly means 'no modifications' (clean "
+            "gate). Omit the flag entirely to read modifications from "
+            "``git diff --cached``. Path forms are normalized: "
+            "backslashes → forward slashes, leading ``./`` stripped, "
+            "absolute paths inside ``--repo-root`` relativized."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -280,12 +421,22 @@ def main(argv: list[str] | None = None) -> int:
 
     repo_root = Path(args.repo_root).resolve()
 
+    # Review-fix #01 N11: a typo in ``--repo-root`` previously
+    # produced a silent green gate (the scan returns an empty index).
+    # Fail loudly instead so misconfiguration is visible.
+    if not repo_root.is_dir():
+        print(
+            f"error: --repo-root does not exist or is not a directory: {repo_root}",
+            file=sys.stderr,
+        )
+        return 2
+
     source_to_docs, malformed, missing, last_verified = _scan_docs(repo_root)
 
     if args.paths is not None:
-        modified = set(args.paths)
+        modified = {_normalize_path(p, repo_root) for p in args.paths}
     else:
-        modified = set(_git_staged_paths(repo_root))
+        modified = {_normalize_path(p, repo_root) for p in _git_staged_paths(repo_root)}
 
     stale = _detect_drift(source_to_docs, modified, repo_root)
 
@@ -299,7 +450,12 @@ def main(argv: list[str] | None = None) -> int:
         "stale_docs": [
             {
                 "doc": _rel(doc),
-                "stale_sources": sorted(sources),
+                # Dedup sources defensively for the JSON output —
+                # the dedup at parse-time handles the common case
+                # but two ``covers:`` entries could still differ
+                # by whitespace and resolve to the same canonical
+                # form (review-fix #01 S7).
+                "stale_sources": sorted(set(sources)),
                 "last_verified": last_verified.get(doc, ""),
             }
             for doc, sources in sorted(stale.items(), key=lambda kv: _rel(kv[0]))

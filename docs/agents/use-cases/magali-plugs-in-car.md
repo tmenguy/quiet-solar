@@ -26,7 +26,7 @@ she needs it. **This is the use case quiet-solar exists for.**
 
 ## End-to-end sequence
 
-```
+```text
 1. Magali parks her car → HA detects presence (GPS + zone)
    ↓
 2. QSPerson.update_states() observes presence transition
@@ -65,7 +65,7 @@ she needs it. **This is the use case quiet-solar exists for.**
 Magali knows she has an unplanned trip tomorrow. She opens the
 mobile app, taps "extend trip", picks "350km tomorrow":
 
-```
+```text
 1. Override UI captures input → user_override constraint pushed
    with load_info={originator: "user_override"}
    ↓

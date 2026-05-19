@@ -29,7 +29,7 @@ principle made concrete: quiet-solar doesn't fight the human.
 
 ## End-to-end sequence
 
-```
+```text
 1. Solver decided: car charges at 11kW between 22:00 and 06:00.
    Charger executes — observed power matches plan.
    ↓

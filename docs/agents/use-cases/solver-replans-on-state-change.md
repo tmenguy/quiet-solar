@@ -26,7 +26,7 @@ event-driven-with-fallback principle in action.
 
 ## End-to-end sequence
 
-```
+```text
 1. Some event happens (one of):
    a. New constraint pushed (push_live_constraint or push_agenda_
       constraints)
