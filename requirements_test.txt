@@ -6,9 +6,9 @@ pytest-timeout>=2.1.0
 pytest-xdist>=3.5.0
 
 # Mock and testing utilities
-pytest-homeassistant-custom-component>=0.13.0
+pytest-homeassistant-custom-component>=0.13.331  # 0.13.331 moved snapshots to __snapshots__/
 freezegun>=1.4.0
-syrupy>=4.6.0
+syrupy>=5.0.0  # 5.x default snapshot dir is __snapshots__/
 
 scipy>=1.11.0
 
