@@ -177,19 +177,26 @@ git push origin {{branch}}
 
 Then build the launcher payload for the chosen `{{next_implement}}`
 phase (use the bare phase name — `implement-task` or
-`implement-setup-task` — never the slash form, never hardcoded):
+`implement-setup-task` — never the slash form, never hardcoded). Pass
+`--fix-plan-path` and `--pr-number` so the payload also carries an
+`existing_session_prompt` for the user's already-running
+implementation session (review-task → `{{next_implement}}` is the
+most common loop; pasting a prompt into the existing terminal is
+faster than opening a new one):
 
 ```bash
 python scripts/qs/next_step.py \
     --next-cmd "{{next_implement}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --fix-plan-path "{{fix_plan_path}}" \
+    --pr-number {{pr_number}}
 ```
 
-Parse the JSON; capture `new_context`. Then present both blocks
-(substitute `{{next_implement}}` consistently — same value the launcher
-payload was built with):
+Parse the JSON; capture `new_context` and `existing_session_prompt`.
+Then present three blocks (substitute `{{next_implement}}`
+consistently — same value the launcher payload was built with):
 
 ```text
 ✅ Fix plan written: {{fix_plan_path}}
@@ -199,6 +206,10 @@ Next phase: {{next_implement}}.
 
 Preferred (opens a fresh interactive `claude --agent qs-{{next_implement}}` session):
   {{new_context}}
+
+Already running an implementation session?
+Paste this prompt into it:
+  {{existing_session_prompt}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
 kept for Claude Desktop and any chat without a CLI launcher):

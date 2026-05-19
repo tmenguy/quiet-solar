@@ -33,10 +33,19 @@ import shlex
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from launchers.phases import (  # type: ignore[import-not-found]
+    build_existing_session_prompt,
     resolve_agent_for_next_cmd,
 )
+
+# ``caller`` literal — reserved for harness-specific bifurcation
+# (the OpenCode launcher uses it to switch between HTTP-API and
+# CLI-form payloads; Cursor's path is identical for both). Kept as a
+# no-op kwarg so all launchers can be dispatched uniformly from
+# ``setup_task.py`` and ``next_step.py``.
+Caller = Literal["setup_task", "next_step"]
 
 
 def _cursor_ide_command(
@@ -178,6 +187,9 @@ def build_payload(
     *,
     next_cmd: str,
     next_prompt: str | None = None,
+    caller: Caller = "next_step",
+    fix_plan_path: str | None = None,
+    pr_number: int | None = None,
 ) -> dict:
     """Return launcher payload for Cursor.
 
@@ -203,7 +215,18 @@ def build_payload(
     Raises:
         ValueError: if ``next_cmd`` is not a known phase. No silent
             fallback — same contract as the Claude launcher.
+
+    The ``caller`` kwarg is reserved for harness-specific bifurcation
+    (used by the OpenCode launcher). Cursor's behaviour is identical
+    for both call sites, so the value is accepted and ignored.
+
+    ``fix_plan_path`` + ``pr_number`` populate an
+    ``existing_session_prompt`` field when both are provided — the
+    paste-into-existing-session prompt for the review-task →
+    implement-task common loop. See
+    ``launchers/phases.py::build_existing_session_prompt``.
     """
+    del caller  # reserved for harness-specific bifurcation; not used here
     agent = resolve_agent_for_next_cmd(next_cmd)
     # Use ``--agent`` only when the cursor-agent binary is on PATH; older
     # versions don't understand it. We probe presence rather than
@@ -223,6 +246,12 @@ def build_payload(
         "issue": issue,
         "work_dir": work_dir,
     }
+
+    existing_prompt = build_existing_session_prompt(
+        work_dir, fix_plan_path, pr_number,
+    )
+    if existing_prompt is not None:
+        payload["existing_session_prompt"] = existing_prompt
 
     if shutil.which("cursor"):
         payload["new_context"] = _cursor_ide_command(

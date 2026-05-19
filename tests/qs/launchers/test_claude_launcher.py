@@ -192,6 +192,45 @@ def test_build_payload_shlex_quotes_agent_name(monkeypatch: pytest.MonkeyPatch) 
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — should-fix #17: existing_session_prompt key.
+# Parallel pin in test_cursor_launcher / test_codex_launcher /
+# test_opencode_launcher. The shared helper lives in
+# launchers/phases.py::build_existing_session_prompt; each launcher
+# threads the kwargs through ``build_payload``.
+# --------------------------------------------------------------------------- #
+
+
+def test_build_payload_includes_existing_session_prompt() -> None:
+    """Both ``fix_plan_path`` and ``pr_number`` provided → payload carries the prompt."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    payload = claude_launcher.build_payload(
+        "/tmp/wt",
+        177,
+        "Test",
+        next_cmd="implement-task",
+        fix_plan_path="/tmp/wt/docs/stories/QS-177.story_review_fix_#01.md",
+        pr_number=179,
+    )
+    assert "existing_session_prompt" in payload
+    prompt = payload["existing_session_prompt"]
+    assert "docs/stories/QS-177.story_review_fix_#01.md" in prompt
+    assert "#179" in prompt
+    # Worktree-relative path — no absolute prefix leak.
+    assert "/tmp/wt/" not in prompt
+
+
+def test_build_payload_omits_existing_session_prompt_when_inputs_missing() -> None:
+    """Neither ``fix_plan_path`` nor ``pr_number`` provided → key omitted."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    payload = claude_launcher.build_payload(
+        "/tmp/wt", 177, "Test", next_cmd="implement-task",
+    )
+    assert "existing_session_prompt" not in payload
+
+
 @pytest.mark.parametrize(
     "bad_next_cmd", ["", "/", "//create-plan", "unknown", "/nope"],
 )

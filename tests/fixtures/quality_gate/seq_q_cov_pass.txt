@@ -1,0 +1,15 @@
+.....................                                                    [100%]
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.14.3-final-0 _______________
+
+Name                                                           Stmts   Miss  Cover   Missing
+--------------------------------------------------------------------------------------------
+custom_components/quiet_solar/__init__.py                        129    106    18%   30-45, 49-80, 87-91, 103-151, 156-190, 195-205, 210-229, 234-238
+custom_components/quiet_solar/binary_sensor.py                    88     88     0%   1-210
+custom_components/quiet_solar/const.py                           255      0   100%
+custom_components/quiet_solar/data_handler.py                     88     70    20%   26-36, 39-47, 51-108, 111-118, 121-128, 131-138
+custom_components/quiet_solar/entity.py                           66     29    56%   65-73, 84-93, 96, 101, 112-120, 124, 128-133, 136-139
+--------------------------------------------------------------------------------------------
+TOTAL                                                          15142  13438    11%
+Coverage HTML written to dir htmlcov
+21 passed in 3.55s
