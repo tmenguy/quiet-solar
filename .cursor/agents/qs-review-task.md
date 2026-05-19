@@ -49,6 +49,14 @@ invocations**:
 Bucket: must-fix / should-fix / nice-to-have / invalid. Dedupe across
 reviewers.
 
+**Doc-maintenance audit.** Inspect the PR body. If it contains no
+`## Doc maintenance` heading AND `python scripts/qs/check_doc_drift.py`
+against the PR's staged diff would exit 1 (drift detected), add a
+**must-fix** finding: "PR touches docs-tracked source without
+updating `docs/agents/` or providing a `## Doc maintenance`
+justification." See `docs/workflow/project-rules.md` "Doc
+maintenance".
+
 ### 4. Zero-findings fast path
 
 If no must-fix or should-fix:

@@ -47,6 +47,19 @@ Acceptance criteria as Given/When/Then. Task breakdown with concrete
 file paths and function names. Holds in memory — do NOT write the file
 yet.
 
+**Doc-maintenance sub-step.** Before finalising the breakdown, run
+
+```bash
+python scripts/qs/check_doc_drift.py --paths <planned_files>
+```
+
+(pass the list of files the plan intends to touch). For every doc
+surfaced by the checker, add a "Update `docs/agents/<path>`" task to
+the breakdown, OR add an explicit `Doc-OK: <reason>` note in the
+story explaining why the doc is unaffected. See
+[docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
+"Doc maintenance".
+
 ### 4. Adversarial review (parallel)
 
 Spawn the four plan-reviewer subagents in **one message with four

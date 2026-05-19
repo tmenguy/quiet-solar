@@ -61,6 +61,22 @@ directory instead.
 - **Logging**: lazy `%s`, no f-strings in log calls, no periods at end.
 - **Translations**: NEVER edit `translations/en.json` — edit `strings.json`, run `bash scripts/generate-translations.sh`.
 
+### Doc maintenance
+
+The agent-facing documentation hierarchy lives under
+[../agents/](../agents/) — short, addressable files anchored to source
+via `covers:` frontmatter. The drift checker
+`scripts/qs/check_doc_drift.py` validates that every `covers:` path
+exists and flags docs whose source was modified without a
+co-modification. The four orchestrator agents
+([qs-create-plan](../../.claude/agents/qs-create-plan.md),
+[qs-implement-task](../../.claude/agents/qs-implement-task.md),
+[qs-implement-setup-task](../../.claude/agents/qs-implement-setup-task.md),
+[qs-review-task](../../.claude/agents/qs-review-task.md)) wire the
+checker into their phase protocol. Taxonomy: **concept** (one source
+file), **principle** (cross-cutting rule), **use-case** (end-to-end
+scenario), **persona** (user archetype).
+
 ## Workflow routing
 
 Each phase runs as an interactive `claude --agent qs-<phase>` session

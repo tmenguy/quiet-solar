@@ -14,6 +14,20 @@ date: '2026-03-18'
 
 # Architecture Decision Document
 
+> **See also**: [docs/agents/index.md](../agents/index.md) — the
+> addressable documentation hierarchy for plan / implement / review
+> agents. Per-concept files live under `docs/agents/concepts/`,
+> `docs/agents/principles/`, `docs/agents/use-cases/`, and
+> `docs/agents/personas/`. This architecture document keeps the
+> **decisions log**, **CI/CD strategy**, **validation tables**, and
+> **architectural boundaries** — everything *not* covered by the
+> per-concept docs.
+>
+> QS-185 trimmed sections describing concepts, hierarchical control
+> mechanics, user interaction architecture, and the 9 implementation
+> patterns. Where content was relocated, this document now points to
+> the new home rather than duplicating it.
+
 _This document builds collaboratively through step-by-step discovery. Sections are appended as we work through each architectural decision together._
 
 ## Project Context Analysis
@@ -52,194 +66,62 @@ _This document builds collaboratively through step-by-step discovery. Sections a
 
 ### Conceptual Component Model
 
-#### Domain Layer (`home_model/`)
+The per-concept descriptions live under
+[docs/agents/concepts/](../agents/concepts/). Use the
+[docs/agents/index.md](../agents/index.md) "Lookup by source file"
+table to find the right doc.
 
-**LoadCommand** (`commands.py`)
-- Represents a discrete action at a specific power level
-- 10 command types ordered by priority score (CMD_ON=100 down to CMD_OFF=10)
-- Commands merge by taking the higher-scored type and max power
-- Command scores determine which command wins when two constraints overlap on the same load. Higher score = more aggressive intervention. This is the semantic meaning of the command hierarchy — an AI agent implementing constraint logic must understand that score ordering drives conflict resolution.
-- Key distinction: `is_auto()` (green/price-aware modes) vs forced modes vs `is_off_or_idle()`
-
-**LoadConstraint** (`constraints.py`)
-- Time-windowed demand on a load with progress tracking
-- Five priority tiers determine solver allocation order:
-  - MANDATORY_AS_FAST_AS_POSSIBLE (9) — highest priority, minimize time
-  - MANDATORY_END_TIME (7) — must complete by deadline
-  - BEFORE_BATTERY_GREEN (5) — before battery goes solar-only
-  - FILLER (3) — uses surplus energy, non-mandatory
-  - FILLER_AUTO (1) — lowest priority, auto-only
-- Tracks: initial_value -> current_value -> target_value with percent completion
-- Carries metadata (`load_info` dict) for origin tracking (user override, agenda, prediction)
-- Subclasses: MultiStepsPowerLoadConstraint (power-based with step options), ChargePercent variant (SOC-based), TimeBasedSimplePower (duration-based)
-
-**AbstractDevice** (`load.py`)
-- Base for all controllable devices. Manages configuration, command lifecycle, and state tracking
-- Command lifecycle: pending -> launched (running_command) -> acked (current_command), with stacking for busy devices
-- Switching cost protection: `num_max_on_off` daily budget, hysteresis enforcement (CHANGE_ON_OFF_STATE_HYSTERESIS_S = 10 min minimum between changes), multi-pass adaptation that tries free transitions first
-- 3-phase aware: tracks phase configuration, converts power to per-phase amps for budgeting
-- **AbstractLoad behavioral contract**: AbstractLoad defines a behavioral contract that all device types must honor. Device-specific tests should validate deviations from that contract, not re-test the contract itself. This is a contract testing pattern — test the guarantees once at the base level, then test device-specific behavior in isolation.
-
-**PilotedDevice** (`load.py`)
-- Extends AbstractDevice for devices that pilot other devices (e.g., heat pump with auxiliary heater)
-- Tracks client list and per-slot demand counts
-
-**AbstractLoad** (`load.py`)
-- Extends AbstractDevice. Adds constraint management and solver interface
-- Provides `get_for_solver_constraints()` — the solver's entry point to read active constraints
-- Supports green-only mode, user override state, external control detection
-- Tracks constraint progress for UI display
-
-**Battery** (`battery.py`)
-- Charge/discharge model with SOC bounds, power limits, DC-coupled awareness
-- Calculates safe charge/discharge power respecting inverter limits and capacity boundaries
-
-**PeriodSolver** (`solver.py`)
-- The strategic optimization engine. Creates 15-minute time slots aligned with constraint boundaries and tariff changes
-- **Optimization hierarchy** (strict priority ordering): maximize solar self-consumption, then minimize energy cost, then maintain comfort commitments. This hierarchy governs all solver trade-off decisions.
-- Allocation algorithm:
-  1. Create time slots and power slots from PV forecast + unavoidable consumption
-  2. Allocate mandatory constraints (highest priority first, by score)
-  3. Optimize battery charge/discharge to minimize grid imports
-  4. Allocate filler constraints with remaining surplus
-  5. Return command timeline: list of (load, [(time, LoadCommand)]) tuples
-- Constraint scoring determines allocation order within each tier
-- Re-evaluation trigger: event-driven (constraint/state changes reset `_last_solve_done`) with 5-minute periodic fallback
-
-#### HA Integration Layer (`ha_model/`)
-
-**HADeviceMixin** (`device.py`)
-- The bridge pattern. Every HA device inherits from this + a domain class
-- State tracking: polls HA entities into time-series history (`_entity_probed_state`), auto-trims to 3 days
-- Power measurement: attaches power sensors with unit conversion, computes energy via Riemann sum
-- Entity probing: `attach_ha_state_to_probe()` with numerical conversion, custom getters, transform functions
-- Maintains reverse index of HA entities by description key (`ha_entities` dict) for dashboard template queries
-
-**QSHome** (`home.py`)
-- The orchestrator. Extends QSDynamicGroup (which extends HADeviceMixin + AbstractDevice)
-- Root of the dynamic group tree — enforces phase-by-phase amperage budgets
-- Three async cycles driven by QSDataHandler:
-  - State polling (~4s): updates all device states from HA, refreshes forecasts
-  - Load management (~7s): updates constraints, checks command ACKs, triggers solver, launches commands
-  - Forecast refresh (~30s): solar forecast API polling
-- Command launch: rate-limited to max 1 per load per cycle, validates amp budget before each launch
-
-**QSDataHandler** (`data_handler.py`)
-- HA config entry lifecycle manager. Creates QSHome on first entry, queues subsequent device entries
-- Sets up `async_track_time_interval` for the three timing cycles
-- Uses `asyncio.Lock` to prevent re-entrance on all cycles
-
-**Charger Dynamic Budgeting** (`charger.py`, `dynamic_group.py`) — TRUST-CRITICAL COMPONENT
-- This is where quiet-solar's value proposition is most visible to users. When Magali plugs in her car and the system seamlessly redistributes power — that's the "magic moment." When it fails and a breaker trips at 2am — that's a household incident. Changes to this component require extra scrutiny because failures are physically visible and immediate.
-- See dedicated section: "Hierarchical Control Architecture" below
-
-**Device Implementations:**
-- QSChargerGeneric / QSChargerOCPP / QSChargerWallbox (`charger.py`): EV charging with power ramping, phase switching, multi-protocol adaptation. OCPP adds transaction handling; Wallbox maps vendor status enums
-- QSCar (`car.py`): SOC tracking, charger assignment, person allocation, custom power-to-amperage lookup tables per car
-- QSBattery (`battery.py`): Charge/discharge control via HA number and switch entities
-- QSSolar (`solar.py`): Production tracking + forecast provider integration (Solcast, OpenMeteo)
-- QSPerson (`person.py`): Presence tracking, GPS-based trip detection, historical mileage prediction (31-day window)
-- QSPool (`pool.py`): Temperature-dependent filter duration, extends QSOnOffDuration
-- QSOnOffDuration (`on_off_duration.py`): Simple binary switch loads via HA switch service calls
-- QSHeatPump (`heat_pump.py`): Wraps PilotedDevice for multi-client control
-- QSDynamicGroup (`dynamic_group.py`): Tree topology for hierarchical amperage budgeting
-
-#### UI & Configuration Layer
-
-**Config Flow** (`config_flow.py`):
-- Hierarchical menu -> device-type steps -> common schema builder pattern
-- `get_common_schema()` provides reusable field composition (power, 3-phase, calendar, groups, max on/off)
-- Entity selectors filter by unit of measurement, exclude quiet-solar's own entities
-
-**Platform Files** (sensor.py, switch.py, number.py, select.py, button.py):
-- Factory pattern: type-specific creator functions -> polymorphic dispatcher -> platform setup
-- Custom EntityDescription dataclasses with callable value_fn, option_fn, set_fn for dynamic behavior
-
-**Dashboard Generation** (`ui/dashboard.py`):
-- Jinja2 template iterates devices, accesses `device.ha_entities.get(key)` for entity IDs
-- 4 custom JS Lovelace cards (car, pool, climate, on-off-duration)
-- Programmatic registration via HA's lovelace API, version-tagged for cache busting
+- Domain layer (`home_model/`) — see
+  [commands.md](../agents/concepts/commands.md),
+  [constraints.md](../agents/concepts/constraints.md),
+  [solver.md](../agents/concepts/solver.md),
+  [load-base.md](../agents/concepts/load-base.md),
+  [home-model-battery.md](../agents/concepts/home-model-battery.md).
+- HA integration layer (`ha_model/`) — see
+  [ha-device-mixin.md](../agents/concepts/ha-device-mixin.md),
+  [qs-home-orchestrator.md](../agents/concepts/qs-home-orchestrator.md),
+  [charger-budgeting.md](../agents/concepts/charger-budgeting.md),
+  [dynamic-group-tree.md](../agents/concepts/dynamic-group-tree.md),
+  [ha-battery.md](../agents/concepts/ha-battery.md),
+  [solar-providers.md](../agents/concepts/solar-providers.md),
+  [person-trip-prediction.md](../agents/concepts/person-trip-prediction.md),
+  [bistate-duration-devices.md](../agents/concepts/bistate-duration-devices.md),
+  [piloted-device-and-heat-pump.md](../agents/concepts/piloted-device-and-heat-pump.md),
+  [off-grid-mode.md](../agents/concepts/off-grid-mode.md),
+  [external-control-detection.md](../agents/concepts/external-control-detection.md),
+  [notification-routing.md](../agents/concepts/notification-routing.md),
+  [user-override.md](../agents/concepts/user-override.md).
+- UI & configuration layer — see
+  [config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md).
+- Testing layers — see
+  [testing-layers.md](../agents/concepts/testing-layers.md).
 
 ### Hierarchical Control Architecture
 
-The system operates as a **two-level hierarchical control architecture**:
-
-**Strategic Layer: PeriodSolver**
-- Plans in 15-minute discrete windows
-- Produces optimal command timelines: "charger A should get 7kW for the next 2 hours"
-- Optimizes across all loads simultaneously
-- Re-evaluates when triggered by constraint/state changes, or every 5 minutes as fallback (runs within the ~7s load management cycle)
-
-**Tactical Layer: Charger Dynamic Budgeting**
-- Operates in continuous real-time with 45-second adaptation windows
-- Manages the physical realities of power distribution within circuit constraints
-- **Can override the strategic layer.** If the solver says "charge at 7kW" but the amp budget only allows 5kW, the tactical layer wins
-- Has its own independent state machine (adaptation windows, staged transitions, dampening measurements) that persists between solver runs
-
-**Why this distinction matters for AI agents:**
-- Modifying the solver modifies only the strategic half. The tactical layer may constrain or override solver intentions.
-- A solver bug produces a bad plan. A budgeting bug can trip a breaker. The blast radius is physical, not just computational.
-- An agent implementing a "charging improvement" must understand both layers and their interaction.
-
-#### Charger Dynamic Budgeting: Detailed Architecture
-
-**QSDynamicGroup Tree** (`dynamic_group.py`):
-- Tree topology where QSHome is root, dynamic groups are interior nodes, chargers are leaves
-- Phase-aware budget: always represented as `[phase1, phase2, phase3]` arrays
-- Per-phase operations: `add_amps()`, `diff_amps()`, `is_amps_greater()`, `min_amps()`, `max_amps()`
-- Budget validation propagates recursively up the tree (child -> parent -> root)
-- Two validation methods:
-  - `is_delta_current_acceptable()`: planning-phase check — "will this change fit?"
-  - `is_current_acceptable_and_diff()`: execution-phase check — takes worst-case max of actual + estimated consumption
-
-**Charger Group State Machine** (`charger.py`):
-- QSChargerGroup aggregates chargers on the same circuit
-- QSChargerStatus tracks per-charger state (amps, phases, real power, adaptation state)
-- Each charger has a `charge_score` — higher priority chargers get power first when budget conflicts arise
-
-**Budgeting Algorithm** (`budgeting_algorithm_minimize_diffs`):
-1. Priority check: if highest-priority charger isn't charging but a lower one is, trigger reset allocation
-2. Prepare budgets: either keep current amps (minimize transitions) or reset to minimum (rebalance)
-3. Shave mandatory: if minimum amps still exceed group limit, stop lowest-score chargers first
-4. Shave current: try phase switching (1P->3P) for lower-score chargers before reducing amps
-5. Smart allocation loop: iteratively adjust each charger's budget toward power target while respecting all constraints
-
-**Phase Switching** (3P <-> 1P):
-- Tactical power redistribution: 1P@32A -> 3P@11A (reduces per-phase load)
-- Phase switch attempted before amp reduction (less disruptive)
-- May require charger reboot (`do_reboot_on_phase_switch`)
-
-**Staged Transitions** (`apply_budget_strategy`):
-- Large budget changes split into two phases to prevent transient overages:
-  - Phase 1: Reduce decreasing chargers first (frees up amps)
-  - Phase 2: Increase other chargers in next cycle (already validated safe)
-- `remaining_budget_to_apply` persists between cycles to complete Phase 2
-
-**Adaptation Windows**:
-- CHARGER_ADAPTATION_WINDOW_S = 45 seconds — chargers must be stable before rebalancing
-- CHARGER_STATE_REFRESH_INTERVAL_S = 14 seconds — state polling frequency
-- Dampening: real power measurements (not just targets) drive future estimates
+The strategic (PeriodSolver) vs tactical (charger dynamic budgeting)
+split is the central control architecture. Full description in
+[docs/agents/principles/strategic-tactical-control.md](../agents/principles/strategic-tactical-control.md).
+Charger-budgeting detail (algorithm, phase switching, staged
+transitions, adaptation windows) lives in
+[docs/agents/concepts/charger-budgeting.md](../agents/concepts/charger-budgeting.md);
+the tree topology in
+[docs/agents/concepts/dynamic-group-tree.md](../agents/concepts/dynamic-group-tree.md).
 
 ### Key Architectural Patterns
 
-**1. Hysteresis-as-Stabilizer**
-The solver re-evaluates when triggered by constraint or state changes (with a 5-minute periodic fallback via `_last_solve_done`), but switching budgets (`num_max_on_off` daily limit) and hysteresis (10-minute minimum between state changes) prevent plan instability. This is an explicit architectural principle: event-driven re-evaluation for responsiveness, budget-limited actuation for stability.
+The reusable architectural patterns are now formalised as
+**principles** under
+[docs/agents/principles/](../agents/principles/):
 
-**2. Switching Cost Protection** (reusable pattern)
-Daily on/off budget + hysteresis + multi-pass constraint adaptation (try free transitions first, then spend budget). All on/off device types (pool, heat pump, on/off duration) inherit this pattern. New device types should use it.
-
-**3. AbstractLoad Behavioral Contract**
-AbstractLoad defines guarantees (constraint management, command lifecycle, solver interface). Device-specific tests validate deviations from the contract. This is a contract testing pattern.
-
-**4. Bridge Pattern (HADeviceMixin)**
-Every HA device inherits from HADeviceMixin + a domain class. All HA state flows through `add_to_history()`. All commands flow through `execute_command()` -> HA service calls. This is the single integration seam.
-
-**5. Recursive Budget Validation**
-Amp budget checks propagate up the QSDynamicGroup tree. No charger can exceed its parent group's limit, which in turn respects the home's total circuit capacity.
+- [observe-predict-optimize.md](../agents/principles/observe-predict-optimize.md)
+- [two-layer-boundary.md](../agents/principles/two-layer-boundary.md)
+- [hysteresis-and-switching-cost.md](../agents/principles/hysteresis-and-switching-cost.md)
+- [strategic-tactical-control.md](../agents/principles/strategic-tactical-control.md)
+- [event-driven-with-fallback.md](../agents/principles/event-driven-with-fallback.md)
 
 ### Key Data Flows
 
-**Runtime Solve Cycle:**
+**Runtime solve cycle:**
 ```
 HA State Changes -> HADeviceMixin.add_to_history() [~4s polling]
 -> QSHome.update_all_states() -> device.update_states() for all devices
@@ -252,7 +134,7 @@ HA State Changes -> HADeviceMixin.add_to_history() [~4s polling]
     -> device.execute_command() -> HA service calls
 ```
 
-**Charger Dynamic Budgeting Cycle** (within update_loads):
+**Charger dynamic budgeting cycle** (within update_loads):
 ```
 All chargers stable for 45s? -> dampening update (measure real power)
 -> Detect transitions (single charger change -> record power delta)
@@ -265,7 +147,7 @@ All chargers stable for 45s? -> dampening update (measure real power)
   -> ELSE: apply directly
 ```
 
-**Device Configuration Flow:**
+**Device configuration flow:**
 ```
 HA UI -> config_flow.py step -> ConfigEntry created
 -> __init__.py async_setup_entry() -> QSDataHandler.async_add_entry()
@@ -276,35 +158,18 @@ HA UI -> config_flow.py step -> ConfigEntry created
 
 ### User Interaction Architecture
 
-The system serves three user personas through distinct architectural paths:
+Persona-by-persona interaction paths are extracted to
+[docs/agents/personas/](../agents/personas/) (TheAdmin, TheDev,
+Magali). The canonical end-to-end magic-moment scenario lives in
+[docs/agents/use-cases/magali-plugs-in-car.md](../agents/use-cases/magali-plugs-in-car.md).
 
-**TheAdmin's Path (Home Energy Manager):**
-```
-Config flow -> device setup -> entity creation
--> Dashboard (Jinja2 template -> custom JS cards) -> monitoring sensors
--> Constraint tuning (number/select entities) -> solver re-plan
--> Troubleshooting: constraint progress sensors, command history, forecast accuracy
-```
-
-**Magali's Path (Household Member):**
-```
-Person model -> trip prediction (GPS/mileage history)
--> Constraint creation (load_info: {originator: "prediction"})
--> Solver allocates power -> charger executes
--> Notification (via HA mobile app)
--> Override needed? -> user_override state -> constraint update (load_info: {originator: "user_override"})
--> Solver re-plans -> charger budgeting rebalances -> confirmation notification
-```
-
-**TheDev's Path (Developer):**
-```
-Code change -> pytest (100% coverage gate) -> Ruff + MyPy
--> CI pipeline (PR quality gate -> merge gate -> release pipeline)
--> Test infrastructure: factories (domain) + FakeHass (lightweight) + real HA fixtures (integration)
--> Failure mode catalog -> scenario-based tests -> confident deployment
-```
-
-**Architectural implication**: An agent implementing a notification or override story must trace through the full path: person prediction -> constraint metadata -> solver -> charger budgeting -> notification service. These are not isolated components. An agent implementing developer workflow improvements must understand the dual test infrastructure (FakeHass vs real HA fixtures) and the risk-weighted CI strategy.
+**Architectural implication**: An agent implementing a notification
+or override story must trace through the full path: person
+prediction → constraint metadata → solver → charger budgeting →
+notification. These are not isolated components. An agent
+implementing developer workflow improvements must understand the
+dual test infrastructure (FakeHass vs real HA fixtures) and the
+risk-weighted CI strategy.
 
 ### Technical Constraints & Dependencies
 
@@ -318,26 +183,28 @@ Code change -> pytest (100% coverage gate) -> Ruff + MyPy
 
 ### Cross-Cutting Concerns
 
-- **Domain/HA boundary enforcement**: Every feature must respect the strict two-layer separation. Domain logic receives data as parameters, never imports HA
-- **Device lifecycle management**: Adding a new device type touches 6+ files (const, home_model, ha_model, config_flow, platforms, tests)
-- **Async discipline**: Event loop safety across all layers — @callback decorators, executor jobs for blocking ops, gather over await-in-loops
-- **State consistency**: Three async cycles (4s/7s/30s) share device state via asyncio.Lock guards. Solver re-evaluates frequently but hysteresis and switching budgets prevent plan instability. Charger budgeting has its own 45-second adaptation windows that interleave with the solver cycles.
-- **Constraint propagation**: Constraints from multiple sources (predictions, calendar, manual overrides) must compose correctly. Metadata tracking (load_info dict) preserves origin for conflict resolution
-- **Hierarchical amperage budgeting**: QSDynamicGroup tree (rooted at QSHome) enforces per-phase current limits during command acceptance. Budget checks are recursive and phase-aware.
-- **Switching cost protection**: num_max_on_off daily budget + hysteresis + multi-pass constraint adaptation is a reusable pattern all on/off device types inherit
-- **Testing infrastructure**: Domain factories for real objects (not mocks), FakeHass for HA layer — both must stay in sync with production code
+Most cross-cutting concerns are now expressed as **principles**
+under [docs/agents/principles/](../agents/principles/). The
+remaining architecture-specific concerns:
+
+- **State consistency**: Three async cycles (4s/7s/30s) share device
+  state via asyncio.Lock guards. See
+  [qs-home-orchestrator.md](../agents/concepts/qs-home-orchestrator.md).
+- **Device lifecycle management**: Adding a new device type touches
+  6+ files. See pattern reference below + the 7-file checklist in
+  [docs/agents/concepts/config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md).
+- **Async discipline**: Event loop safety across all layers — see
+  the relevant code-level rules in
+  [docs/workflow/project-context.md](../workflow/project-context.md).
+- **Testing infrastructure**: Domain factories for real objects (not
+  mocks), FakeHass for HA layer — see
+  [testing-layers.md](../agents/concepts/testing-layers.md).
 
 ### Decision Map for AI Agents
 
-| If you're implementing... | You need to understand... | Key files |
-|---|---|---|
-| A new device type | AbstractLoad behavioral contract, config flow pattern, platform factories, const.py, 6-file checklist in project-context.md | load.py, config_flow.py, const.py, sensor.py/switch.py/etc |
-| A constraint change | LoadConstraint hierarchy, solver allocation order, switching budget interaction, command score semantics | constraints.py, solver.py, load.py |
-| A notification/override | Person model -> constraint metadata (load_info) -> QSHome command flow -> notification. Trace the full Magali path. | person.py, home.py, constraints.py, charger.py |
-| A solver improvement | PeriodSolver algorithm, constraint scoring, battery optimization. Remember: solver is strategic only — tactical charger budgeting may override. | solver.py, constraints.py, battery.py |
-| A charger budgeting change | TRUST-CRITICAL. Dynamic group tree, QSChargerGroup state machine, phase switching protocol, staged transitions, adaptation windows. Failures trip breakers. | charger.py, dynamic_group.py, home.py |
-| A dashboard change | Jinja2 template, ha_entities dict lookup, JS card API, dashboard section organization | ui/dashboard.py, device.py, const.py |
-| A config flow change | Common schema builder, entity selectors, data cleaning, config entry -> device creation flow | config_flow.py, const.py, data_handler.py |
+The full Decision Map is now hosted in the
+[docs/agents/index.md](../agents/index.md) "Lookup by source file"
+table. Use it as the entry point.
 
 ### Architectural Gaps (Prioritized by Risk)
 
@@ -374,7 +241,9 @@ CI must validate the full chain, not just quiet-solar in isolation. Pin to HA's 
 - syrupy >= 4.6.0 (snapshot testing, used sparingly)
 - pytest-homeassistant-custom-component >= 0.13.0 (real HA fixtures)
 - Factory-based test doubles (not mocks) for domain objects
-- **Dual test infrastructure**: FakeHass (lightweight, fast) for domain/unit tests AND real HA fixtures (pytest-homeassistant-custom-component) for integration tests. Document which tests use which — mixing them creates confusion about what's being tested.
+- **Dual test infrastructure**: see
+  [testing-layers.md](../agents/concepts/testing-layers.md) for the
+  full FakeHass vs real-HA layer rules.
 
 **Code Quality:**
 - Ruff for formatting and linting
@@ -517,6 +386,15 @@ As the test suite grows, support targeted execution via existing pytest markers 
 
 **Note**: No starter template initialization story needed. CI/CD pipeline setup (GitHub Actions) is the first infrastructure story per the product brief. Test infrastructure smoke tests (verify FakeHass behaves like real HA) should ship as part of the CI/CD story, not as a separate item — the CI pipeline's own self-test.
 
+## Checklist
+
+(Pre-implementation checklist for AI agents — kept in place; the
+content has been moved into the validation tables below.)
+
+## Risk Assessment
+
+See the Risk-Weighted CI Strategy table above.
+
 ## Core Architectural Decisions
 
 ### Decision Priority Analysis
@@ -597,163 +475,62 @@ As the test suite grows, support targeted execution via existing pytest markers 
 - Solver optimization touches: solver.py, constraints.py only (stable interface protects other components)
 - Both testing and resilience decisions feed into the CI/CD risk-weighted strategy from step 3
 
-**Documentation note**: This architecture document partially satisfies product brief success criterion #5 ("documentation started"). Combined with the project-context.md, the foundational documentation is in place.
+**Documentation note**: This architecture document partially satisfies product brief success criterion #5 ("documentation started"). Combined with the project-context.md and the new `docs/agents/` hierarchy, the foundational documentation is in place.
 
 ## Implementation Patterns & Consistency Rules
 
-### Relationship to project-context.md
+### Relationship to project-context.md and docs/agents/
 
-project-context.md contains 42 rules covering code-level conventions (naming, async, logging, error handling, testing anti-patterns). This section covers **architectural-level patterns** — how to extend and modify the system without breaking its design. AI agents MUST read both documents before implementing any code.
+[docs/workflow/project-context.md](../workflow/project-context.md)
+contains 42 rules covering code-level conventions (naming, async,
+logging, error handling, testing anti-patterns).
+[docs/agents/principles/](../agents/principles/) covers the
+**architectural-level patterns** — how to extend and modify the
+system without breaking its design. AI agents MUST read both
+project-context and the relevant concept/principle docs before
+implementing any code.
 
-### Pattern 1: Adding a New Device Type
+The 9 extension patterns previously described here have been moved
+to the addressable docs:
 
-This is the most common extension pattern and touches 7+ files. Follow this exact sequence:
-
-0. **const.py** (dashboard): Map device to dashboard section in `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION`. Without this, the device is functional but invisible on the dashboard.
-1. **const.py** (config): Add `CONF_TYPE_NAME_QS<Name>` constant + all `CONF_<NAME>_*` config keys
-2. **home_model/<name>.py**: Create domain class extending `AbstractLoad` or `AbstractDevice` (pure Python, zero HA imports)
-3. **ha_model/<name>.py**: Create HA class extending `HADeviceMixin` + domain class. Implement:
-   - `__init__()`: call `attach_ha_state_to_probe()` for each tracked entity
-   - `execute_command()`: translate LoadCommand -> HA service calls
-   - `probe_if_command_set()`: verify command took effect by reading entity state
-4. **config_flow.py**: Add `async_step_<name>()` using `get_common_schema()` builder
-5. **Platform files**: Add `create_ha_<platform>_for_<Name>()` factory in each relevant platform
-6. **Tests**: Full coverage for domain logic (using factories in `tests/`) AND HA integration (using real fixtures in `tests/ha_tests/`)
-7. **Verify**: Device appears on dashboard with correct section mapping
-
-**Anti-pattern**: Adding a device only in ha_model/ without a domain model class. Even simple devices need a domain layer presence to participate in the solver. Also: forgetting the dashboard section mapping — creates a ghost device that works but nobody can see.
-
-### Pattern 2: Creating and Managing Constraints
-
-Constraints are the system's demand language. When implementing features that create demand:
-
-- **Choose the right constraint type** by priority: MANDATORY_AS_FAST_AS_POSSIBLE (must happen now) > MANDATORY_END_TIME (must happen by deadline) > BEFORE_BATTERY_GREEN (before battery goes solar) > FILLER (use surplus) > FILLER_AUTO (lowest priority)
-- **Always include load_info metadata**: `{originator: "user_override" | "agenda" | "prediction" | "system"}` — this traces where the constraint came from for notification and debugging
-- **Push constraints through the correct API**: `push_live_constraint()` for dynamic runtime constraints, `push_agenda_constraints()` for calendar/schedule-based constraints
-- **Create constraints in the right lifecycle phase**: Create and push constraints in `update_loads_constraints()` (called during the 7s load management cycle). Never in `__init__()` (too early, solver hasn't started) or `update_states()` (wrong cycle, creates timing issues with the solver).
-- **Never modify constraints directly** — create new ones. The solver reads constraints via `get_for_solver_constraints()` each cycle.
-
-**Anti-pattern**: Creating a constraint without load_info metadata. This breaks notification tracing — the system can't tell the user why a decision was made. Also: creating constraints in the wrong lifecycle phase causes solver timing issues.
-
-### Pattern 3: Command Execution & Verification
-
-All device commands follow a launch -> execute -> verify cycle:
-
-- **execute_command(time, command)**: Translate the domain LoadCommand into HA service calls. Return False (async, not awaiting ACK).
-- **probe_if_command_set(time, command)**: Read the actual device state from HA and compare to expected state. Return True only when the device has confirmed the command.
-- **Respect rate limiting**: Max 1 command per load per solve cycle. The orchestrator handles timing — individual devices should not implement their own scheduling.
-- **Handle external control**: If the device state doesn't match any command quiet-solar sent, someone controlled it externally. Detect this in `update_states()` and set `external_user_initiated_state` appropriately.
-
-**Anti-pattern**: Awaiting inside execute_command(). The HA event loop must not be blocked. All verification happens asynchronously via probe_if_command_set().
-
-### Pattern 4: State Tracking via HADeviceMixin
-
-All HA entity state flows through HADeviceMixin:
-
-- **Attach entities on init**: `attach_ha_state_to_probe(entity_id, is_numerical=True, conversion_fn=...)` for auto-polled entities
-- **Use standard conversion functions**: `convert_power_to_w`, `convert_amps`, `convert_km` — don't invent new converters
-- **Query state via the mixin API**: `get_sensor_latest_possible_valid_value()` for current state, `get_state_history_data()` for time-series
-- **Polling vs event-driven**: Most entities go in `_entity_probed_auto` (polled every 4s). High-frequency or critical-change entities can use `_entity_on_change` (event-driven). When in doubt, use auto-polled — it's the safer default.
-- **Never access hass.states directly** in ha_model code — always go through the mixin's history
-
-**Anti-pattern**: Reading HA state directly via `hass.states.get()` in device code. This bypasses history tracking and conversion functions.
-
-### Pattern 5: Charger Budgeting Interaction
-
-When modifying charger behavior or the dynamic group tree:
-
-- **Budget validation is recursive**: Always call `is_delta_current_acceptable()` or `is_current_acceptable_and_diff()` before changing charger amps. These propagate up the tree.
-- **Phase switching before amp reduction**: Try 1P->3P conversion (reduces per-phase load) before reducing amperage. Less disruptive.
-- **Staged transitions for large changes**: If changing multiple chargers, reduce first (Phase 1), then increase (Phase 2 in next cycle). Never increase and decrease simultaneously — transient overages trip breakers.
-- **Respect the 45-second adaptation window**: No budget changes until all chargers in the group have been stable for CHARGER_ADAPTATION_WINDOW_S.
-- **Per-car charging curves**: Amp-to-power conversion uses per-car lookup tables (`amp_to_power_1p[amps]`, `amp_to_power_3p[amps]`), not linear calculation. Different EVs have different charging curves. Always use the car's LUT for power budget calculations.
-
-**Anti-pattern**: Changing charger amps without calling budget validation. This bypasses circuit protection and can cause physical damage. Also: using linear amp-to-power conversion instead of per-car lookup tables — gives wrong power budget for every car except the one you tested with.
-
-### Pattern 6: Solver Extension
-
-When modifying the solver (within the stable interface per Decision 3):
-
-- **Input contract**: (constraints, tariffs, PV forecast, battery state, loads) — don't add new input types without explicit architectural decision
-- **Output contract**: list of (load, [(time, LoadCommand)]) — don't change the output format
-- **Constraint scoring drives allocation order**: Modify scoring to change priorities, don't hardcode allocation sequences
-- **15-minute time slots are fixed**: SOLVER_STEP_S = 900. Don't change without understanding the full impact on all constraint and budgeting logic.
-- **Optimization hierarchy**: maximize solar self-consumption → minimize energy cost → maintain comfort. All trade-off decisions follow this strict priority ordering.
-- **Mandatory before filler**: The allocation sequence (mandatory constraints -> battery optimization -> filler constraints) is an architectural invariant, not an implementation detail.
-- **Battery is the ONE exception**: Battery has dedicated solver phases (`_battery_get_charging_power`, `_prepare_battery_segmentation`). All OTHER device types are device-agnostic in the solver. Don't add new device-specific logic — express device behavior through constraints and commands.
-
-**Anti-pattern**: Adding special-case logic for a specific device type inside the solver. The solver is device-agnostic (except battery). Device-specific behavior belongs in the constraint or load implementation.
-
-### Pattern 7: Notification Triggers
-
-When implementing features that should notify household members:
-
-- **Use `on_device_state_change()`** with the appropriate status type: `DEVICE_STATUS_CHANGE_CONSTRAINT`, `DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED`, `DEVICE_STATUS_CHANGE_ERROR`
-- **Notification routing**: Charger notifications route to the car's forecasted person's mobile app. Person notifications use the person's configured mobile app. Device notifications use the device's own mobile_app config.
-- **Off-grid broadcasts**: Only QSHome sends emergency broadcasts to ALL mobile apps. Individual devices should never broadcast.
-- **Human-readable messages**: Use `get_active_readable_name(time, filter_for_human_notification=True)` for constraint descriptions. Never expose internal IDs or technical details in notifications.
-- **Deduplication is automatic**: The system tracks `_last_notification_hash` to avoid sending duplicates. When using `on_device_state_change()`, deduplication is handled for you. If you bypass this and call notify directly, you will spam the user every load management cycle (~7 seconds).
-
-**Anti-pattern**: Sending notifications directly via hass.services.async_call(notify, ...) from device code. Always go through on_device_state_change() for consistent routing, message formatting, and deduplication.
-
-### Pattern 8: Config Entry Persistence
-
-When a device needs to persist runtime data back to its configuration:
-
-- **Use `save_entry_data_no_reload()`** to persist data without triggering a reload. This updates the config entry data in place.
-- **Never call `hass.config_entries.async_update_entry()`** for runtime data updates — this triggers a full reload cycle: all devices re-initialize, solver restarts, chargers lose their adaptation state, adaptation windows reset. A full reload for a config update is destructive.
-
-**Anti-pattern**: Using `async_update_entry()` for runtime persistence. This causes a cascade: reload -> all devices re-init -> solver cold start -> charger adaptation lost -> 45-second stabilization delay before budgeting resumes.
-
-### Pattern 9: Test Layer Selection
-
-Tests live in two distinct layers. Choosing the wrong layer creates slow, brittle, or misleading tests:
-
-| What you're testing | Where to write tests | Infrastructure to use |
-|---|---|---|
-| Domain logic (solver, constraints, commands, load behavior) | `tests/` | FakeHass + factories from `factories.py` |
-| HA integration (entity lifecycle, service calls, state tracking, config flow) | `tests/ha_tests/` | Real HA fixtures from `tests/ha_tests/conftest.py` |
-| Cross-cutting integration (full device setup + solver + command execution) | `tests/` with composite fixtures | `home_and_charger`, `home_charger_and_car` fixtures |
-
-- **Never test pure domain logic through real HA fixtures** — slow, brittle, tests the framework more than your code
-- **Never test HA-specific behavior with FakeHass** — misses real HA interactions, gives false confidence
-- **Use factories for domain objects, mock configs for HA objects**: Check `factories.py` and `tests/ha_tests/const.py` before writing new test infrastructure
-
-**Anti-pattern**: Writing all tests in `tests/ha_tests/` because "it's more realistic." Domain logic tests should be fast and isolated. Reserve HA fixtures for testing the HA integration surface.
+| Pattern | New home |
+|---|---|
+| Pattern 1 — Adding a New Device Type | [config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md) (6-file checklist) + [load-base.md](../agents/concepts/load-base.md) (`AbstractLoad` contract) |
+| Pattern 2 — Creating and Managing Constraints | [constraints.md](../agents/concepts/constraints.md) |
+| Pattern 3 — Command Execution & Verification | [commands.md](../agents/concepts/commands.md) + [ha-device-mixin.md](../agents/concepts/ha-device-mixin.md) |
+| Pattern 4 — State Tracking via HADeviceMixin | [ha-device-mixin.md](../agents/concepts/ha-device-mixin.md) |
+| Pattern 5 — Charger Budgeting Interaction | [charger-budgeting.md](../agents/concepts/charger-budgeting.md) + [dynamic-group-tree.md](../agents/concepts/dynamic-group-tree.md) |
+| Pattern 6 — Solver Extension | [solver.md](../agents/concepts/solver.md) + [strategic-tactical-control.md](../agents/principles/strategic-tactical-control.md) |
+| Pattern 7 — Notification Triggers | [notification-routing.md](../agents/concepts/notification-routing.md) |
+| Pattern 8 — Config Entry Persistence | [config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md) |
+| Pattern 9 — Test Layer Selection | [testing-layers.md](../agents/concepts/testing-layers.md) |
 
 ### Enforcement Guidelines
 
 **All AI Agents MUST:**
-1. Read project-context.md (code-level rules) AND this architecture document (architectural patterns) before implementing
-2. Follow the Decision Map (step 2) to identify which components are affected
+1. Read [docs/workflow/project-context.md](../workflow/project-context.md) (code-level rules) AND the relevant `docs/agents/` files (architectural patterns) before implementing
+2. Use the [docs/agents/index.md](../agents/index.md) "Lookup by source file" table to identify which concept docs apply to your change
 3. Check the Risk-Weighted CI table (step 3) to understand the blast radius of their changes
 4. Use the correct extension pattern for the type of change (device, constraint, command, state, notification)
 5. Never bypass budget validation, rate limiting, or the domain/HA boundary
-6. Choose the correct test layer (Pattern 9) before writing any tests
-7. Use `save_entry_data_no_reload()` for runtime persistence, never `async_update_entry()`
+6. Choose the correct test layer ([testing-layers.md](../agents/concepts/testing-layers.md)) before writing any tests
+7. Use `save_entry_data_no_reload()` for runtime persistence, never `async_update_entry()` (see [config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md))
 
 **Pattern Violations:**
 - Ruff and MyPy catch code-level violations automatically
 - Architectural violations (wrong layer, missing load_info, bypassed budget validation) must be caught in code review
 - CI risk assessment comment (auto-review workflow) flags changes to trust-critical components
+- The drift checker (`scripts/qs/check_doc_drift.py`) catches docs falling out of sync — see
+  [docs/workflow/project-rules.md](../workflow/project-rules.md) "Doc maintenance".
 
 ## Project Structure & Boundaries
 
 ### Quick Navigation for AI Agents
 
-When implementing a story, use this decision tree to find your files. For deeper context on what you need to *understand* before modifying those files, see the Decision Map in the Conceptual Component Model section.
-
-| If you're implementing... | Start here | Test location |
-|---|---|---|
-| New device type | Pattern 1 (7-file checklist) | `tests/` (domain) + `tests/ha_tests/` (HA) |
-| New constraint behavior | `home_model/constraints.py` | `tests/test_constraints*.py` |
-| New HA integration for existing device | `ha_model/<device>.py` | `tests/ha_tests/test_<device>.py` |
-| New platform entity | `<platform>.py` (factory pattern) | `tests/test_platform_<platform>.py` |
-| Notification or override flow | Trace full path: `person.py` → `home.py` → notify | Tests across domain + HA layers |
-| CI/CD change | `.github/workflows/` | Validate by running pipeline on test PR |
-| Before writing test helpers | Check `tests/utils/` first | `energy_validation.py`, `scenario_builders.py` |
-
-**Marker legend**: `[PLANNED]` = committed in the implementation sequence. `[FUTURE]` = architectural preparation, no commitment yet.
+The Quick Navigation table has moved to
+[docs/agents/index.md](../agents/index.md). Use it to find concept
+docs by source file; come back here for the architectural
+boundaries and the directory tree.
 
 ### Complete Project Directory Structure
 
@@ -836,7 +613,7 @@ quiet-solar/
 
 **[FUTURE] — Provider abstractions**: When dynamic tariff support (deferred decision) or additional forecast providers are implemented, provider abstractions would live in `home_model/providers/` (domain interface) + `ha_model/providers/` (HA-specific bridges). Do not create these directories until needed.
 
-**CLAUDE.md role**: CLAUDE.md is the Claude Code bootstrap file (auto-loaded at conversation start). It should contain only operational essentials (venv, commands) and point to `docs/workflow/project-context.md` and `docs/product/architecture.md` (this document) for the full rules. Do not duplicate content between CLAUDE.md and the project context files.
+**CLAUDE.md role**: CLAUDE.md is the Claude Code bootstrap file (auto-loaded at conversation start). It should contain only operational essentials (venv, commands) and point to `docs/workflow/project-context.md`, this document, and `docs/agents/index.md` for the full rules. Do not duplicate content between CLAUDE.md and the project context files.
 
 #### Runtime Data
 
@@ -851,50 +628,30 @@ Runtime data at `{HA config dir}/quiet_solar/` is distinct from the component so
 
 ```
 quiet-solar/
-├── CLAUDE.md                          # AI agent bootstrap (points to project context files for full rules)
+├── CLAUDE.md                          # AI agent bootstrap (points to project context + docs/agents/)
 ├── requirements_test.txt              # Test dependencies
 ├── pytest.ini                         # Pytest configuration (asyncio_mode=auto, pythonpath=., markers)
 ├── setenv.sh                          # Development environment setup (venv + pip install)
 │
-├── docs/                              # [PLANNED — documentation story, does not exist yet]
-│                                      # User guide, setup guide, contribution guide
-│                                      # Do NOT create documentation files under legacy/ (frozen)
+├── docs/                              # Documentation hierarchy
+│   ├── product/                       # product-brief.md, this document
+│   ├── workflow/                      # process / pipeline rules
+│   └── agents/                        # AI-agent addressable concept hierarchy (QS-185)
 │
-├── .github/                           # [PLANNED — CI/CD story, does not exist yet]
-│   ├── workflows/
-│   │   ├── pr-quality.yml             # Tier 1: lint + typecheck + test + HACS
-│   │   ├── pr-merge.yml               # Tier 2: matrix test + coverage report
-│   │   ├── release.yml                # Tier 3: release pipeline
-│   │   ├── auto-review.yml            # Auto-label, auto-assign, risk assessment
-│   │   ├── issue-triage.yml           # Issue auto-labeling
-│   │   └── stale.yml                  # Stale issue/PR management
-│   ├── CODEOWNERS
-│   ├── labeler.yml
-│   ├── ISSUE_TEMPLATE/
-│   │   ├── bug_report.yml
-│   │   └── feature_request.yml
-│   └── PULL_REQUEST_TEMPLATE.md
+├── .github/                           # [PLANNED — CI/CD story]
 │
 ├── tests/                             # === TEST SUITE (~3,800+ tests) ===
-│   ├── __init__.py
 │   ├── conftest.py                    # ⚠ PROTECTED: FakeHass, FakeConfigEntry, FakeState
-│   ├── factories.py                   # ⚠ PROTECTED: Factory functions for domain test doubles
-│   │
-│   ├── [domain + cross-cutting tests — see Test File Organization below]
-│   │
-│   ├── ha_tests/                      # === HA INTEGRATION TESTS (real HA fixtures) ===
-│   │   ├── __init__.py
-│   │   ├── conftest.py                # ⚠ PROTECTED: Real HA fixtures (hass, mock_config_entry)
-│   │   ├── const.py                   # ⚠ PROTECTED: MOCK_HOME_CONFIG, MOCK_CAR_CONFIG, etc.
-│   │   └── [test files using real HA fixtures]
-│   │
-│   └── utils/                         # === TEST UTILITIES ===
-│       ├── __init__.py
-│       ├── energy_validation.py       # Energy conservation assertion helpers
-│       └── scenario_builders.py       # Scenario construction for multi-device tests
+│   ├── factories.py                   # ⚠ PROTECTED: factory functions
+│   ├── ha_tests/                      # === HA integration layer (real HA fixtures) ===
+│   │   ├── conftest.py                # ⚠ PROTECTED
+│   │   └── const.py                   # ⚠ PROTECTED
+│   ├── qs/                            # tests for dev-tooling (scripts/qs/, agents)
+│   └── utils/                         # test helpers (energy_validation, scenario_builders)
 │
+├── scripts/qs/                        # dev-pipeline scripts (quality_gate, context, ...)
+├── .claude/, .cursor/, .opencode/     # per-harness agent definitions + slash commands
 └── legacy/                            # === FROZEN HISTORICAL CODE ===
-    └── (retired per-task-rendering OpenCode pipeline; do not modify)
 ```
 
 **Build artifacts** (`coverage.xml`, `*.pyc`, `__pycache__/`) live at project root and should be gitignored. Do not commit build artifacts.
@@ -909,12 +666,17 @@ quiet-solar/
 | Domain purity | Domain layer receives all HA data as parameters | Code review |
 | Constant centralization | All config keys in `const.py`, never hardcoded | Ruff linting |
 
+See [two-layer-boundary.md](../agents/principles/two-layer-boundary.md)
+for the full rule and rationale.
+
 **Strategic/Tactical boundary:**
 
 | Layer | Component | Scope | Override behavior |
 |---|---|---|---|
 | Strategic | PeriodSolver | 15-min windows, all loads | Plans optimal allocation |
 | Tactical | Charger dynamic budgeting | Real-time, chargers only | Can override strategic layer when amp budget constrains |
+
+See [strategic-tactical-control.md](../agents/principles/strategic-tactical-control.md).
 
 **Component Communication Boundaries:**
 
@@ -946,20 +708,18 @@ quiet-solar/
 |---|---|---|---|
 | CI/CD pipeline | `.github/` (entire directory) | `pytest.ini` (markers) | First structural addition. Creates all `[PLANNED]` .github files. Implement `paths:` filters in workflow triggers to map to the risk-weighted CI strategy (step 3). |
 | CLAUDE.md slim-down | None | `CLAUDE.md` | Reduce to bootstrap: commands + pointers to project context files. Remove duplicated content. |
-| Legacy cleanup | None | Remove `setup.py` | Not needed — `pytest.ini` handles pythonpath, `manifest.json` handles distribution. |
 | Bug fix: person-car assignment | None | `ha_model/person.py`, `ha_model/car.py`, `ha_model/home.py`, tests | First story through CI pipeline. Contained changes. |
-| Trust-critical component tests | New test file(s) for scenario-based charger integration tests — exact structure TBD during test design story. Name should reflect test *type* (scenario sequences), not coverage target. | `tests/conftest.py` (new fixtures) | Add infrastructure smoke tests alongside. |
+| Trust-critical component tests | New test file(s) for scenario-based charger integration tests — exact structure TBD during test design story. | `tests/conftest.py` (new fixtures) | Add infrastructure smoke tests alongside. |
 | Resilience strategy | None | `ha_model/solar.py`, `ha_model/charger.py`, `ha_model/home.py`, `ha_model/device.py`, `ha_model/person.py` | Touches many files but each change is contained (fallback logic per dependency). |
 | Solver optimization | None | `home_model/solver.py`, `home_model/constraints.py` | Contained within stable interface (Decision 3). |
-| Documentation | `docs/` directory at project root | None | Not in current implementation sequence. When stories are created, establish `docs/` — do NOT put user-facing docs under `legacy/` (frozen). |
 
 ### Test File Organization
 
-**File selection rule for agents**: When adding tests, extend existing files by test type rather than creating new files. If a file exceeds ~500 tests, split by sub-concern (e.g., phase switching, budgeting, dampening). Do not create `test_*_additional_coverage.py` or `test_*_deep.py` files — these names reflect organic growth, not intentional structure.
+**File selection rule for agents**: When adding tests, extend existing files by test type rather than creating new files. If a file exceeds ~500 tests, split by sub-concern. Do not create `test_*_additional_coverage.py` or `test_*_deep.py` files.
 
-**Root `tests/` naming clarification**: Files prefixed `test_ha_*` in `tests/` root use **FakeHass infrastructure** (lightweight, fast). Files in `tests/ha_tests/` use **real HA fixtures** (full HA instance). The naming overlap is historical. When determining which infrastructure a test uses, **check the imports** (FakeHass from `conftest.py` vs real `hass` fixture from `ha_tests/conftest.py`), not the file name.
+**Root `tests/` naming clarification**: Files prefixed `test_ha_*` in `tests/` root use **FakeHass infrastructure** (lightweight, fast). Files in `tests/ha_tests/` use **real HA fixtures**. When determining which infrastructure a test uses, **check the imports**, not the file name. See [testing-layers.md](../agents/concepts/testing-layers.md).
 
-**Shared test utilities**: Before writing test helper functions, check `tests/utils/` for existing utilities. `energy_validation.py` provides energy conservation assertion helpers. `scenario_builders.py` provides scenario construction helpers for multi-device tests. Do not reinvent helpers that already exist.
+**Shared test utilities**: Before writing test helper functions, check `tests/utils/` for existing utilities. `energy_validation.py` provides energy conservation assertion helpers. `scenario_builders.py` provides scenario construction helpers for multi-device tests.
 
 ### Protected Infrastructure Files
 
@@ -971,8 +731,6 @@ These files are load-bearing — changes silently affect the behavior of hundred
 | `tests/factories.py` | Factory functions for all domain test doubles | Same — silently alters 100+ test files |
 | `tests/ha_tests/conftest.py` | Real HA fixtures | Every HA integration test affected |
 | `tests/ha_tests/const.py` | Standard mock configurations | HA tests use wrong config silently |
-
-These files are covered by the CI/CD risk-weighted strategy (HIGH blast radius) and should be included in CODEOWNERS for mandatory review. When modifying these files, check for in-flight PRs that touch the same file to avoid merge conflicts on load-bearing test infrastructure.
 
 ## Architecture Validation Results
 
@@ -989,15 +747,13 @@ All decisions work together without conflicts:
 - No contradictory decisions found
 
 **Pattern Consistency:**
-- All 9 implementation patterns reference correct APIs, files, and lifecycle phases
+- The 9 extension patterns have been relocated to the per-concept docs under [docs/agents/](../agents/) (table above). The patterns themselves remain consistent in their new locations.
 - Naming conventions are consistent: `CONF_*` for config keys, `CONF_TYPE_NAME_QS*` for device types, `*_SENSOR` suffixes
-- Pattern 9 (test layer selection) aligns with the test file organization in Step 6
-- Pattern 1 references "7+ files" which correctly matches the 0-7 numbered sequence (including step 0: dashboard mapping)
-- Anti-patterns complement the positive patterns — no gaps where an agent could follow the pattern correctly but still make a mistake
+- Anti-patterns are documented alongside their patterns in each concept doc
 
 **Structure Alignment:**
 - Directory structure supports all 3 architectural layers with clear separation
-- Quick Navigation cross-references the Decision Map — agents have both "where" and "why"
+- Architectural boundaries (this document) + the per-source-file lookup ([docs/agents/index.md](../agents/index.md)) provide both "why" and "where"
 - Structural notes explain anomalies (data_handler.py location, thin wrapper devices) so agents don't try to "fix" what isn't broken
 - `[PLANNED]` vs `[FUTURE]` markers distinguish committed work from speculative preparation
 
@@ -1007,16 +763,16 @@ All decisions work together without conflicts:
 
 | Product brief requirement | Architectural support | Covered in |
 |---|---|---|
-| Whole-house energy orchestration | PeriodSolver + constraint system + 8+ device types | Conceptual Component Model |
-| Constraint-based solver (4 priority tiers) | PeriodSolver, LoadConstraint hierarchy | Component Model + Pattern 6 |
-| People-aware automation | Person model, trip prediction, person-car allocation | Component Model + Pattern 2 |
-| Smart device handling (external control) | `external_user_initiated_state` detection | Pattern 3 |
-| Off-grid resilience | Grid outage row in resilience table | Decision 1 |
-| Tariff-aware scheduling | Solver accepts tariff tuples; dynamic tariffs deferred | Decision 3 + Deferred |
-| UI dashboards | Jinja2 + 4 custom JS cards + programmatic HA API | Component Model (UI layer) |
-| Notification & override flows | `on_device_state_change()`, per-person routing, dedup | Pattern 7 |
-| Multi-protocol charger support | OCPP/Wallbox/Generic variants | Component Model |
-| Real-time charger budgeting | Tactical layer, QSDynamicGroup tree, staged transitions | Hierarchical Control Architecture |
+| Whole-house energy orchestration | PeriodSolver + constraint system + 8+ device types | [solver.md](../agents/concepts/solver.md), [constraints.md](../agents/concepts/constraints.md) |
+| Constraint-based solver (4 priority tiers) | PeriodSolver, LoadConstraint hierarchy | [solver.md](../agents/concepts/solver.md), [constraints.md](../agents/concepts/constraints.md) |
+| People-aware automation | Person model, trip prediction, person-car allocation | [person-trip-prediction.md](../agents/concepts/person-trip-prediction.md) |
+| Smart device handling (external control) | `external_user_initiated_state` detection | [external-control-detection.md](../agents/concepts/external-control-detection.md) |
+| Off-grid resilience | Grid outage row in resilience table | Decision 1 + [off-grid-mode.md](../agents/concepts/off-grid-mode.md) |
+| Tariff-aware scheduling | Solver accepts tariff tuples; dynamic tariffs deferred | Decision 3 + [cheap-grid-charging.md](../agents/use-cases/cheap-grid-charging.md) |
+| UI dashboards | Jinja2 + 4 custom JS cards + programmatic HA API | This document (UI layer) |
+| Notification & override flows | `on_device_state_change()`, per-person routing, dedup | [notification-routing.md](../agents/concepts/notification-routing.md), [user-override.md](../agents/concepts/user-override.md) |
+| Multi-protocol charger support | OCPP/Wallbox/Generic variants | [charger-budgeting.md](../agents/concepts/charger-budgeting.md) |
+| Real-time charger budgeting | Tactical layer, QSDynamicGroup tree, staged transitions | [strategic-tactical-control.md](../agents/principles/strategic-tactical-control.md) |
 | 100% test coverage | CI pipeline threshold = 100%, mandatory | CI/CD Pipeline Architecture |
 | HACS distribution | manifest.json, hacs.json, HACS validation in CI | Technology Stack + CI |
 
@@ -1028,8 +784,8 @@ All decisions work together without conflicts:
 | Development workflow validated | Bug fix as first story through pipeline | ✅ Sequenced as step 2 |
 | Solver improved | Stable interface boundary (Decision 3) | ✅ Boundary defined |
 | 100% coverage maintained | CI enforces, risk-weighted strategy prioritizes | ✅ Pipeline designed |
-| Documentation started | Architecture doc + project-context.md | ✅ This document |
-| Ready for structured feature work | 9 patterns + structure mapping + decision map | ✅ Complete |
+| Documentation started | Architecture doc + project-context.md + docs/agents/ hierarchy | ✅ This document + QS-185 |
+| Ready for structured feature work | Patterns relocated to concept docs + structure mapping + drift checker | ✅ Complete |
 
 **Non-Functional Requirements:**
 
@@ -1053,23 +809,21 @@ All decisions work together without conflicts:
 - Full directory tree with per-file annotations ✅
 - Structural notes for 4 anomalies/clarifications ✅
 - Runtime data paths documented ✅
-- Near-term work → structure mapping (8 work items) ✅
+- Near-term work → structure mapping ✅
 - Protected infrastructure files identified ✅
 
 **Pattern Completeness:**
-- 9 patterns covering all extension types ✅
-- Every pattern has an anti-pattern ✅
-- Decision Map (step 2) provides component-level guidance ✅
-- Quick Navigation (step 6) provides file-level guidance ✅
-- Enforcement guidelines with 7 mandatory agent rules ✅
-- Patterns cover *extension* (add device, add constraint, add notification). *Modification* stories (bug fixes, behavior changes in existing code) require agents to read existing code and apply patterns contextually — this is expected and correct behavior.
+- 9 patterns relocated to [docs/agents/](../agents/) with cross-references in this document ✅
+- Every pattern has an anti-pattern in its new home ✅
+- Lookup-by-source-file table provides component-level guidance ([docs/agents/index.md](../agents/index.md)) ✅
+- Enforcement guidelines preserved ✅
 
 **Agent Navigation Test** — can an agent find what it needs?
-- "I need to add a new device" → Quick Nav → Pattern 1 → 7-file checklist → test layer (Pattern 9) ✅
-- "I need to fix a charger bug" → Decision Map → charger files → Risk table (CRITICAL, physical) → trust-critical testing ✅
-- "I need to set up CI/CD" → Quick Nav → `.github/` → CI/CD Pipeline Architecture → risk-weighted strategy → Near-Term Work mapping ✅
-- "I need to understand why the solver made this decision" → Data Flows → PeriodSolver → constraint scoring → command timeline ✅
-- "I need to add a notification for a new event" → Pattern 7 → notification routing → `on_device_state_change()` → trace Magali path (person → constraint → solver → charger → notification) → test in domain + HA layers ✅
+- "I need to add a new device" → [docs/agents/index.md](../agents/index.md) → concept docs for relevant device-base patterns + [config-and-setup-flow.md](../agents/concepts/config-and-setup-flow.md) ✅
+- "I need to fix a charger bug" → [docs/agents/index.md](../agents/index.md) → [charger-budgeting.md](../agents/concepts/charger-budgeting.md) + risk table in this doc (CRITICAL, physical) ✅
+- "I need to set up CI/CD" → CI/CD Pipeline Architecture (this doc) → risk-weighted strategy → Near-Term Work mapping ✅
+- "I need to understand why the solver made this decision" → [solver.md](../agents/concepts/solver.md) → Data Flows (this doc) ✅
+- "I need to add a notification for a new event" → [notification-routing.md](../agents/concepts/notification-routing.md) + [magali-plugs-in-car.md](../agents/use-cases/magali-plugs-in-car.md) ✅
 
 ### Gap Analysis Results
 
@@ -1100,12 +854,12 @@ All decisions work together without conflicts:
 - [x] Project context analyzed with codebase deep dive
 - [x] Scale and complexity assessed (8+ device types, 2 optimization engines)
 - [x] Technical constraints identified (HA platform, physical circuits, async discipline)
-- [x] Cross-cutting concerns mapped (7 concerns with interaction points)
-- [x] Decision Map created for agent guidance
+- [x] Cross-cutting concerns mapped (now expressed as principles under [docs/agents/principles/](../agents/principles/))
+- [x] Decision Map relocated to [docs/agents/index.md](../agents/index.md)
 
 **✅ Technology Stack & CI/CD (Step 3)**
 - [x] Technology stack fully specified with version pinning concerns
-- [x] Dual test infrastructure documented (FakeHass + real HA fixtures)
+- [x] Dual test infrastructure documented (pointer to [testing-layers.md](../agents/concepts/testing-layers.md))
 - [x] Risk-weighted CI strategy mapping change areas to blast radius
 - [x] 3-tier CI/CD pipeline architecture with 3 automation workflows
 - [x] Test suite inventory with gap analysis
@@ -1118,10 +872,9 @@ All decisions work together without conflicts:
 - [x] Cross-component dependency analysis
 
 **✅ Implementation Patterns (Step 5)**
-- [x] 9 patterns covering all extension types
-- [x] Anti-patterns for each pattern
-- [x] Enforcement guidelines with 7 mandatory rules
-- [x] Relationship to project-context.md clarified
+- [x] 9 patterns covering all extension types (relocated to [docs/agents/](../agents/))
+- [x] Anti-patterns documented in each concept doc
+- [x] Enforcement guidelines preserved here
 
 **✅ Project Structure (Step 6)**
 - [x] Complete directory tree with annotations
@@ -1130,7 +883,7 @@ All decisions work together without conflicts:
 - [x] External integration points with failure modes
 - [x] Near-term work → structure mapping
 - [x] Test file organization with protected files
-- [x] Quick Navigation for agent file discovery
+- [x] Quick Navigation moved to [docs/agents/index.md](../agents/index.md)
 
 **✅ Architecture Validation (Step 7)**
 - [x] Coherence validation passed
@@ -1144,14 +897,15 @@ All decisions work together without conflicts:
 
 **Confidence Level: HIGH**
 
-The architecture document covers a mature, production brownfield codebase with established patterns. Most decisions were "already decided" by the existing code — this document makes them explicit and navigable for AI agents.
+The architecture document covers a mature, production brownfield codebase with established patterns. Most decisions were "already decided" by the existing code — this document makes them explicit and navigable for AI agents. As of QS-185, per-concept documentation lives in [docs/agents/](../agents/); this document is the decisions / CI / structure layer above it.
 
 **Key Strengths:**
-- Two-level hierarchy (Decision Map + Quick Navigation) provides both understanding and file-level navigation
+- Two-level hierarchy ([docs/agents/index.md](../agents/index.md) Decision Map + Quick Navigation) provides both understanding and file-level navigation
 - Risk-weighted CI strategy connects code changes to their real-world impact
 - Trust-critical components (charger budgeting, constraint interactions) are explicitly flagged with testing commitments
-- 9 implementation patterns with anti-patterns cover all common extension types
+- 9 implementation patterns relocated to per-concept docs — agents pull just the pattern they need
 - Protected infrastructure files identified to prevent silent test regression
+- Drift checker (`scripts/qs/check_doc_drift.py`) catches docs falling out of sync with their `covers:` source
 
 **Areas for Future Enhancement:**
 - Solver quality benchmarks (when refactoring begins)
@@ -1163,13 +917,13 @@ The architecture document covers a mature, production brownfield codebase with e
 ### Implementation Handoff
 
 **AI Agent Guidelines:**
-1. Read `docs/workflow/project-context.md` (42 code-level rules) AND this architecture document before implementing any code
-2. Use the Quick Navigation table (step 6) to find your files
-3. Use the Decision Map (step 2) to understand what you need to know
-4. Check the Risk-Weighted CI table (step 3) to understand your blast radius
-5. Follow the correct implementation pattern (step 5) for your change type
-6. Choose the correct test layer (Pattern 9) before writing tests
-7. Never bypass budget validation, rate limiting, or the domain/HA boundary
+1. Read [docs/workflow/project-context.md](../workflow/project-context.md) (42 code-level rules), the relevant `docs/agents/concepts/` files for the components you're touching, and this architecture document for decisions / CI / structure context
+2. Use [docs/agents/index.md](../agents/index.md) "Lookup by source file" to find concept docs from a source path
+3. Check the Risk-Weighted CI table (Technology Stack section) to understand your blast radius
+4. Follow the correct extension pattern via the "Pattern N → new home" table in the Implementation Patterns section
+5. Choose the correct test layer ([testing-layers.md](../agents/concepts/testing-layers.md)) before writing tests
+6. Never bypass budget validation, rate limiting, or the domain/HA boundary
+7. Run `python scripts/qs/check_doc_drift.py` before staging — see [docs/workflow/project-rules.md](../workflow/project-rules.md) "Doc maintenance"
 
 **First Implementation Priority:**
 CI/CD pipeline (`.github/` directory) — enables all subsequent work through the structured workflow. After CI/CD, the first *code* story is the person-car assignment bug fix — see implementation sequence in the Decision Impact Analysis section.

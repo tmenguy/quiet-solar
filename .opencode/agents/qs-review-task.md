@@ -102,6 +102,15 @@ Bucket into:
 
 Deduplicate across reviewers (`file:line` + similar text → one entry).
 
+**Doc-maintenance audit.** Inspect the PR body. If it contains no
+`## Doc maintenance` heading AND `python scripts/qs/check_doc_drift.py`
+against the PR's staged diff would exit 1 (drift detected), add a
+**must-fix** finding: "PR touches docs-tracked source without
+updating `docs/agents/` or providing a `## Doc maintenance`
+justification." See
+[docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
+"Doc maintenance".
+
 ### 4. Zero-findings fast path
 
 If there are no must-fix or should-fix findings, build the launcher

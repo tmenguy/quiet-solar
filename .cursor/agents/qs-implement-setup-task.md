@@ -57,6 +57,18 @@ Present, ask "Ready to run the quality gate?".
 python scripts/qs/quality_gate.py
 ```
 
+**Doc-maintenance pre-commit sub-step.** Before staging, run
+
+```bash
+python scripts/qs/check_doc_drift.py
+```
+
+on the staged diff. If exit 1, either update the listed
+`docs/agents/` docs and re-stage, or include a justification
+paragraph in the PR body under a `## Doc maintenance` heading
+explaining why the docs are unaffected. See
+`docs/workflow/project-rules.md` "Doc maintenance".
+
 ### 5. Commit, push, open PR (automatic)
 
 ```bash

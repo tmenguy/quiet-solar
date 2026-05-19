@@ -41,11 +41,17 @@ Quiet Solar follows an **observe-predict-optimize** approach. It continuously ob
 
 ## Target Users
 
-- **TheAdmin** — homeowner with solar, comfortable with Home Assistant. Configures devices, monitors performance, tweaks priorities. Two modes: setup (learning, cautious, needs guidance) and operational (confident, wants efficiency). Trust is built through transparent diagnostics when things go wrong, not through being perfect.
+The full persona descriptions live in
+[docs/agents/personas/](../agents/personas/) as individual files —
+`the-admin.md`, `the-dev.md`, and `magali.md` — so agents can pull
+them addressably without reading the whole product brief. Summary:
 
-- **TheDev** — developer (often the same person as TheAdmin) who finds joy in solving real family problems through code. Building mode: smooth pipeline, no manual GitHub ops, expressive tests. Exploring mode: agentic pairing, fast feedback. Allergic to bureaucracy.
-
-- **Household members** (e.g., Magali) — passive 95% of the time; receive notifications and occasionally override. Override must be a 5-second interaction or trust erodes.
+- **TheAdmin** — homeowner with solar, comfortable with HA. Two modes
+  (setup vs operational); trust built via transparent diagnostics.
+- **TheDev** — developer (often the same person as TheAdmin); building
+  vs exploring modes; allergic to bureaucracy.
+- **Household members** (e.g., Magali) — passive 95% of the time;
+  override must be a 5-second interaction or trust erodes.
 
 ## Optimization Hierarchy
 
