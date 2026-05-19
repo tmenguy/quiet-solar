@@ -5,7 +5,7 @@
 
 class QsPoolCard extends HTMLElement {
 
-  // --- Wave path generation helper (Task 1) ---
+  // Generate an SVG path for a sine-wave-based closed shape
   _generateWavePath(width, amplitude, frequency, phase, yOffset) {
     const points = [];
     const steps = 60;
@@ -19,7 +19,7 @@ class QsPoolCard extends HTMLElement {
            ` L ${width.toFixed(2)} 400 L 0 400 Z`;
   }
 
-  // --- Temperature-based color tinting (Task 6) ---
+  // Map pool temperature to per-layer water HSL colors
   _tempToColor(tempC) {
     // Map 10°C–35°C to HSL interpolation
     // Cool (≤15°C): hsl(195, 70%, 18%) — deeper blue-teal
@@ -32,7 +32,7 @@ class QsPoolCard extends HTMLElement {
         'hsla(185, 60%, 18%, 0.35)',
       ];
     }
-    const t = Math.max(0, Math.min(1, (tempC - 10) / 20)); // 0 at 10°C, 1 at 30°C
+    const t = Math.max(0, Math.min(1, (tempC - 15) / 15)); // 0 at 15°C, 1 at 30°C
     const h = 195 - t * 20;   // 195 → 175
     const s = 70 - t * 15;    // 70 → 55
     const l = 18 + t * 10;    // 18 → 28
@@ -50,6 +50,7 @@ class QsPoolCard extends HTMLElement {
     this._currentSpeed = 0.3;
     this._wavePhase = 0;
     this._lastWaterBaseY = null;
+    this._lastAmplitude = null;
 
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
@@ -64,7 +65,7 @@ class QsPoolCard extends HTMLElement {
         p.setAttribute('stroke-dashoffset', String(-this._animOffset));
       }
 
-      // --- Wave animation update (Task 5) ---
+      // --- Wave animation update ---
       const pumpOn = this._pumpRunning === true;
       const targetAmplitude = pumpOn ? 6 : 2;
       const targetSpeed = pumpOn ? 1.2 : 0.3;
@@ -73,6 +74,7 @@ class QsPoolCard extends HTMLElement {
       this._currentAmplitude += (targetAmplitude - this._currentAmplitude) * lerpFactor;
       this._currentSpeed += (targetSpeed - this._currentSpeed) * lerpFactor;
       this._wavePhase += this._currentSpeed * dt;
+      if (this._wavePhase > 1e6) this._wavePhase -= 1e6;
 
       // Update wave transforms (CSS translateX for GPU compositing)
       // Wave paths span x=[0, 480]. Clip circle spans x=[40, 280].
@@ -83,16 +85,20 @@ class QsPoolCard extends HTMLElement {
         const wEl = this._root?.getElementById('wave' + i);
         if (wEl) {
           const phaseOffset = i * 1.2;
-          const scrollOffset = ((this._wavePhase + phaseOffset) * 60) % waveWidth;
+          const raw = (this._wavePhase + phaseOffset) * 60;
+          const scrollOffset = ((raw % waveWidth) + waveWidth) % waveWidth;
           const tx = -120 - scrollOffset; // -120 centers path over clip circle
           wEl.style.transform = `translateX(${tx.toFixed(1)}px)`;
         }
       }
 
-      // Regenerate wave paths only when water level changes
+      // Regenerate wave paths when water level or amplitude changes
       const waterBaseY = this._waterBaseY;
-      if (waterBaseY != null && waterBaseY !== this._lastWaterBaseY) {
+      const ampDelta = this._lastAmplitude == null ? 1 : Math.abs(this._currentAmplitude - this._lastAmplitude);
+      const levelChanged = waterBaseY != null && waterBaseY !== this._lastWaterBaseY;
+      if (levelChanged || ampDelta > 0.1) {
         this._lastWaterBaseY = waterBaseY;
+        this._lastAmplitude = this._currentAmplitude;
         const colors = this._waterColors || ['hsla(185,60%,22%,0.55)', 'hsla(185,60%,20%,0.45)', 'hsla(185,60%,18%,0.35)'];
         for (let i = 0; i < 3; i++) {
           const wEl = this._root?.getElementById('wave' + i);
@@ -186,30 +192,31 @@ class QsPoolCard extends HTMLElement {
       const maxHours = 24;
       const rawTarget = sDurationLimit ? Number(sDurationLimit.state) : null;
       const targetHours = (rawTarget != null && !Number.isNaN(rawTarget)) ? rawTarget : 0;
-      const hoursRun = Number(sCurrentDailyRunDuration?.state || 0);
+      const hoursRun = Number(sCurrentDailyRunDuration?.state) || 0;
       
       // Determine if pool is running (command state must be "on")
       const commandState = sCommand?.state || '';
       const running = commandState.toLowerCase() === 'on';
 
-      // --- Store pump state for RAF loop (Task 4/5) ---
+      // Store pump state for RAF loop
       this._pumpRunning = running;
 
-      // --- Water level from runtime progress (Task 4) ---
+      // Water level from runtime progress
       const progressRatio = targetHours > 0
           ? Math.min(1, hoursRun / targetHours)
           : 0;
       const clipR = 120;
       // center.cy is always 160; using literal to avoid forward-reference
       const waterBaseY = 160 + clipR - (0.2 + progressRatio * 0.6) * 2 * clipR;
-      this._waterBaseY = waterBaseY;
+      this._waterBaseY = Number.isNaN(waterBaseY) ? null : waterBaseY;
 
-      // --- Temperature-based water colors (Task 6) ---
+      // Temperature-based water colors
       this._waterColors = this._tempToColor(tempNum);
 
-      // --- Instance-unique clip ID (Task 2) ---
+      // Instance-unique clip ID (stable across re-renders)
       if (!this._waterClipId) {
-          this._waterClipId = 'wClip-' + Math.floor(Math.random() * 1e6);
+          QsPoolCard._nextClipId = (QsPoolCard._nextClipId || 0) + 1;
+          this._waterClipId = 'wClip-' + QsPoolCard._nextClipId;
       }
       const waterClipId = this._waterClipId;
 
