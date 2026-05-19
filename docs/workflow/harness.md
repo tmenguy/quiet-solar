@@ -6,8 +6,7 @@ The pipeline runs across four harnesses with different mechanics:
 | --------------- | ------------------ | ------------------ | ----------------------------- | --------------------- |
 | Claude Code     | `.claude/agents/`  | `.claude/commands/`| `claude` CLI on worktree      | `tools:` frontmatter  |
 | Cursor 2.4+     | `.cursor/agents/`  | `/<name>`          | New Cursor workspace          | `readonly:` boolean   |
-| OpenCode (legacy)| `.opencode/agents/`| `.opencode/commands/`| HTTP API + `/instance/reload` | `permission:` block   |
-| OpenCode (new pipeline) | `.opencode/agents/` | `.opencode/commands/` | HTTP API: POST /session + POST /session/<id>/prompt_async (no reload) | `permission:` block |
+| OpenCode        | `.opencode/agents/`| UI agent picker    | HTTP API: POST /session + POST /session/<id>/prompt_async (no reload) | `permission:` block   |
 | Codex (future)  | `.codex/agents/`   | TBD                | TBD                           | TBD                   |
 
 The agent **bodies** are identical across harnesses (same protocol, same

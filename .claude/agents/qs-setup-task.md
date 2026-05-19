@@ -109,6 +109,6 @@ flow is one session per phase.
 
 - Do NOT analyze the input. The launcher must come within a few seconds.
 - Do NOT commit or push — setup-task only creates branches/worktrees.
-- Do NOT touch `_qsprocess_opencode/**`, `.opencode/**`,
-  `scripts/qs_opencode/**` — those are the legacy OpenCode pipeline.
+- Do NOT touch `legacy/**` — that's the retired per-task-rendering
+  OpenCode pipeline (frozen historical code).
 - If any step fails, abort and report; do not auto-heal.

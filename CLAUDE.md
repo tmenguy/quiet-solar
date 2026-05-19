@@ -41,9 +41,6 @@ at runtime via `python scripts/qs/context.py` (no per-task rendering).
 translations. Smart scope detection skips the full suite when only
 dev-infrastructure files changed.
 
-## Legacy OpenCode pipeline (unchanged)
+## Legacy OpenCode pipeline
 
-The legacy OpenCode pipeline lives at `.opencode/`, `_qsprocess_opencode/`,
-and `scripts/qs_opencode/` — kept intact and untouched until the
-new static-agent pipeline is proven, then it will be retired.
-[AGENTS.md](AGENTS.md) remains the OpenCode entry point.
+See `legacy/` for the retired per-task-rendering OpenCode pipeline.

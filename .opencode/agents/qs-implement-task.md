@@ -1,11 +1,50 @@
 ---
-name: qs-implement-task
 description: >-
   Phase 3 of the QS pipeline. TDD implementation of the story under
   custom_components/quiet_solar/, must pass the full quality gate,
   opens a PR. Use when the user says "implement task" or "implement
   story" inside a worktree.
-tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch
+mode: primary
+color: "#22C55E"
+# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
+permission:
+  read: allow
+  edit:
+    "*": deny
+    "custom_components/quiet_solar/**": allow
+    "tests/**": allow
+    "docs/stories/*.story.md": allow
+  bash:
+    "*": ask
+    "echo *": allow
+    "tail*": allow
+    "grep *": allow
+    "sort*": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+    "find *": allow
+    "git status*": allow
+    "git log*": allow
+    "git diff*": allow
+    "git fetch*": allow
+    "git add *": allow
+    "git commit *": allow
+    "git push*": allow
+    "git checkout *": allow
+    "git branch *": allow
+    "gh issue view *": allow
+    "gh issue create *": allow
+    "gh pr view *": allow
+    "gh pr diff *": allow
+    "gh pr checks *": allow
+    "gh pr create *": allow
+    "gh pr merge *": ask
+    "gh repo view *": allow
+    "source venv/bin/activate*": allow
+    "python scripts/qs/*": allow
+    "bash scripts/worktree-setup.sh*": allow
+  webfetch: ask
 ---
 
 # qs-implement-task — TDD implementation (production code scope)
@@ -95,8 +134,8 @@ workflow — no user confirmation needed for any of these three.
 
 ### 6. Tell the user the next command
 
-Build the launcher payload for `/review-task` so the user has a copy/paste
-command to open a fresh interactive `claude --agent qs-review-task` session:
+Build the launcher payload for the review phase so the user has a copy/paste
+command to open a fresh session bound to `qs-review-task`:
 
 ```bash
 python scripts/qs/next_step.py \
@@ -106,7 +145,7 @@ python scripts/qs/next_step.py \
     --title "{{title}}"
 ```
 
-Parse the JSON; capture `new_context`. Then print both blocks:
+Parse the JSON; capture `new_context`. Then print:
 
 ```text
 ✅ Implementation complete — quality gate passed.
@@ -115,12 +154,9 @@ Parse the JSON; capture `new_context`. Then print both blocks:
 
 Next phase: review-task.
 
-Preferred (opens a fresh interactive `claude --agent qs-review-task` session):
+Preferred (activate `qs-review-task` from the OpenCode agent picker,
+or paste the spawn-session one-liner below into a fresh terminal):
   {{new_context}}
-
-Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
-  /review-task
 ```
 
 ## Hard rules

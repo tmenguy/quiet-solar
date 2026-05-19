@@ -1,5 +1,5 @@
 ---
-description: TDD implementation for dev-environment changes (scripts/, .claude/, .cursor/, .opencode/, _qsprocess_opencode/, docs/, .github/, top-level config). Quality gate runs in dev-only fast path.
+description: TDD implementation for dev-environment changes (scripts/, .claude/, .cursor/, .opencode/, legacy/, docs/, .github/, top-level config). Quality gate runs in dev-only fast path.
 ---
 
 > **Preferred entry**: open a fresh terminal in the worktree and run

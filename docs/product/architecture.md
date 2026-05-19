@@ -858,7 +858,7 @@ quiet-solar/
 │
 ├── docs/                              # [PLANNED — documentation story, does not exist yet]
 │                                      # User guide, setup guide, contribution guide
-│                                      # Do NOT create documentation files in _qsprocess_opencode/product/
+│                                      # Do NOT create documentation files under legacy/ (frozen)
 │
 ├── .github/                           # [PLANNED — CI/CD story, does not exist yet]
 │   ├── workflows/
@@ -893,13 +893,8 @@ quiet-solar/
 │       ├── energy_validation.py       # Energy conservation assertion helpers
 │       └── scenario_builders.py       # Scenario construction for multi-device tests
 │
-└── _qsprocess_opencode/               # === WORKFLOW OUTPUT ===
-    ├── project-context.md             # 42 AI agent rules
-    ├── product/
-    │   ├── architecture.md            # THIS DOCUMENT
-    │   └── product-brief.md
-    ├── stories/                       # Story specs
-    └── agent_templates/               # Per-task agent templates
+└── legacy/                            # === FROZEN HISTORICAL CODE ===
+    └── (retired per-task-rendering OpenCode pipeline; do not modify)
 ```
 
 **Build artifacts** (`coverage.xml`, `*.pyc`, `__pycache__/`) live at project root and should be gitignored. Do not commit build artifacts.
@@ -956,7 +951,7 @@ quiet-solar/
 | Trust-critical component tests | New test file(s) for scenario-based charger integration tests — exact structure TBD during test design story. Name should reflect test *type* (scenario sequences), not coverage target. | `tests/conftest.py` (new fixtures) | Add infrastructure smoke tests alongside. |
 | Resilience strategy | None | `ha_model/solar.py`, `ha_model/charger.py`, `ha_model/home.py`, `ha_model/device.py`, `ha_model/person.py` | Touches many files but each change is contained (fallback logic per dependency). |
 | Solver optimization | None | `home_model/solver.py`, `home_model/constraints.py` | Contained within stable interface (Decision 3). |
-| Documentation | `docs/` directory at project root | None | Not in current implementation sequence. When stories are created, establish `docs/` — do NOT put user-facing docs in `_qsprocess_opencode/product/`. |
+| Documentation | `docs/` directory at project root | None | Not in current implementation sequence. When stories are created, establish `docs/` — do NOT put user-facing docs under `legacy/` (frozen). |
 
 ### Test File Organization
 

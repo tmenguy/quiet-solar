@@ -1,10 +1,9 @@
 # Workflow overview — static-agent pipeline
 
 This document describes the development pipeline for Quiet Solar. It works
-identically across Claude Code, Cursor, OpenCode (via the legacy
-`_qsprocess_opencode/` pipeline) and Codex; harness-specific machinery
-(session spawning, launcher emission) is isolated in
-`scripts/qs/launchers/`.
+identically across Claude Code, Cursor, OpenCode, and Codex;
+harness-specific machinery (session spawning, launcher emission) is
+isolated in `scripts/qs/launchers/`.
 
 ## The six phases
 
@@ -34,10 +33,8 @@ There is exactly **one agent file per phase**, checked in to `.claude/agents/`
 there.
 
 This replaces the older per-task rendering model (`qs-implement-task-QS-42.md`
-generated from `.tmpl` files). There is no `render_agent.py`, no
-`cleanup_agents.py`, no template directory in this pipeline. The old
-`_qsprocess_opencode/` rendering pipeline is still functional and unchanged;
-it will be retired once this static-agent pipeline is proven.
+generated from `.tmpl` files). The previous OpenCode pipeline now lives
+under `legacy/`; this is the only supported model going forward.
 
 ## Adversarial review (parallel sub-agents)
 
@@ -111,7 +108,7 @@ files it expects to touch:
 
 - **`implement-setup-task`** — all touched files are in dev-environment
   paths (`scripts/`, `.claude/`, `.cursor/`, `.opencode/`,
-  `_qsprocess_opencode/`, `docs/`, `.github/`, top-level config). Narrower
+  `legacy/`, `docs/`, `.github/`, top-level config). Narrower
   edit scope; the quality gate runs the dev-only fast path.
 - **`implement-task`** — production code under
   `custom_components/quiet_solar/` is touched. Full quality gate

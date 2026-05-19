@@ -81,7 +81,7 @@ DEFAULT_PORT = 4096
 DEFAULT_KICKOFF = "Begin your phase protocol."
 
 # Default HTTP timeout for every OpenCode API call (seconds). Matches
-# the legacy ``scripts/qs_opencode/spawn_session.py:_api`` timeout.
+# the legacy spawn-session helper (under ``legacy/``).
 DEFAULT_TIMEOUT = 10
 
 
@@ -345,7 +345,7 @@ def _build_cli_command(agent: str, directory: str, prompt: str) -> str:
     """Return the bare ``opencode <dir> --agent <a> --prompt <p>`` fallback command.
 
     Every interpolated value is shell-escaped via ``shlex.quote``
-    (parallel to ``scripts/qs_opencode/utils.py:opencode_launch_command``).
+    (parallel to the legacy launch-command helper under ``legacy/``).
     """
     return (
         f"opencode {shlex.quote(directory)} "

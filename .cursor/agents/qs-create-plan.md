@@ -66,7 +66,7 @@ triage. Max 3 review rounds.
 ### 6. Determine NEXT_PHASE
 
 If all touched paths are in `scripts/`, `.claude/`, `.cursor/`,
-`.opencode/`, `_qsprocess_opencode/`, `docs/`, `.github/`, or top-level
+`.opencode/`, `legacy/`, `docs/`, `.github/`, or top-level
 config → `NEXT_PHASE = qs-implement-setup-task`. Otherwise →
 `qs-implement-task`.
 

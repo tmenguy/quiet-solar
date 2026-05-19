@@ -97,6 +97,5 @@ Next: type in this session.
 - No commit without a green quality gate.
 - After a green gate, commit + push + PR are automatic — no prompts.
 - Coverage below 100% is a hard block.
-- Do NOT edit `_qsprocess_opencode/**` (except the story file),
-  `.opencode/**`, `scripts/qs_opencode/**`, `.claude/agents/**`,
-  `.cursor/agents/**`.
+- Do NOT edit `legacy/**`, `.opencode/agents/**`, `.claude/agents/**`,
+  `.cursor/agents/**` (and `legacy/**` is frozen historical code).

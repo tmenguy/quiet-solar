@@ -48,10 +48,15 @@ gh pr merge {{pr_number}} --merge
 
 ### 5. Delete the remote branch
 
-Refuse if `{{branch}}` is `main` or `master`.
+The guard refuses `main` / `master` at the shell level — never rely
+on the agent alone.
 
 ```bash
-git push origin --delete {{branch}}
+if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
+    echo "refusing to delete protected branch: {{branch}}" >&2
+    exit 1
+fi
+git push origin --delete "{{branch}}"
 ```
 
 ### 6. Clean up the worktree

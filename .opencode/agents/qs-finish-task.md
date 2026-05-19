@@ -1,22 +1,55 @@
 ---
-name: qs-finish-task
 description: >-
   Phase 5 of the QS pipeline. Callable at any moment. If a PR exists,
   verifies CI and merges it (with user authorization). Otherwise just
   cleans up the worktree and remote branch — no quality gate, no merge
   dance. Use when the user says "finish task", "merge PR", "abandon
   task", or "clean up worktree".
-tools: Bash, Read
+mode: primary
+color: "#EC4899"
+# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
+permission:
+  read: allow
+  edit: deny
+  bash:
+    "*": ask
+    "echo *": allow
+    "tail*": allow
+    "grep *": allow
+    "sort*": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+    "find *": allow
+    "git status*": allow
+    "git log*": allow
+    "git diff*": allow
+    "git fetch*": allow
+    "git add *": allow
+    "git commit *": allow
+    "git push*": allow
+    "git checkout *": allow
+    "git branch *": allow
+    "git ls-remote *": allow
+    "gh issue view *": allow
+    "gh pr view *": allow
+    "gh pr diff *": allow
+    "gh pr checks *": allow
+    "gh pr merge *": ask
+    "gh repo view *": allow
+    "source venv/bin/activate*": allow
+    "python scripts/qs/*": allow
+  webfetch: ask
 ---
 
 # qs-finish-task — merge (when applicable) and cleanup
 
 You can be invoked at any point in the pipeline — even right after
-`/setup-task` with no commits. Your job is to leave the workspace clean:
+`setup-task` with no commits. Your job is to leave the workspace clean:
 no orphaned worktree, no orphaned remote branch, and (if a PR exists and
 the user authorizes) merge it.
 
-**Never run the quality gate.** That's `/implement-task`'s job. If
+**Never run the quality gate.** That's `implement-task`'s job. If
 there's nothing to merge, just clean up.
 
 ## Discover the task context first
@@ -31,8 +64,8 @@ Capture `issue`, `branch`, `pr_number`, `pr_url`, `worktree`.
 
 ### Case A — `pr_number` is null (no PR was ever opened)
 
-The user is abandoning the task or cleaning up after `/setup-task` /
-`/create-plan` without an implementation. Skip merge logic entirely.
+The user is abandoning the task or cleaning up after `setup-task` /
+`create-plan` without an implementation. Skip merge logic entirely.
 
 1. Inspect the worktree for unsaved work:
    ```bash
@@ -59,7 +92,7 @@ The user is abandoning the task or cleaning up after `/setup-task` /
        move work elsewhere). Do not delete.
 
 3. Skip — no PR to merge, no remote branch to delete (the branch may
-   still exist on origin from `/create-plan`; handle it in step 5).
+   still exist on origin from `create-plan`; handle it in step 5).
 
 4. Remove the worktree:
    ```bash
@@ -93,23 +126,21 @@ The user is abandoning the task or cleaning up after `/setup-task` /
 
 The standard merge flow.
 
-1. Show PR summary:
+1. Fetch PR state in one call — both human-readable summary and
+   machine-parseable fields come from the same JSON. Pretty-print the
+   ``title``/``url``/``headRefName``/``baseRefName`` to the user, then
+   branch on ``state``:
    ```bash
-   gh pr view {{pr_number}}
+   gh pr view {{pr_number}} --json state,mergeable,mergedAt,title,url,headRefName,baseRefName
    ```
 
-2. Inspect PR state from the JSON:
-   ```bash
-   gh pr view {{pr_number}} --json state,mergeable,mergedAt
-   ```
-
-   - **`state: MERGED`** → skip to step 6 (cleanup only).
+   - **`state: MERGED`** → skip to step 5 (cleanup only).
    - **`state: CLOSED`** (not merged) → ask the user: `"PR is closed
      unmerged. Clean up worktree + branch anyway? (yes / no)"`. On
-     `yes` → step 6. On `no` → STOP.
-   - **`state: OPEN`** → continue to step 3.
+     `yes` → step 5. On `no` → STOP.
+   - **`state: OPEN`** → continue to step 2.
 
-3. Verify CI:
+2. Verify CI:
    ```bash
    gh pr checks {{pr_number}}
    ```
@@ -118,17 +149,17 @@ The standard merge flow.
      authorize (`--admin`).
    - Green / no checks → continue.
 
-4. Authorize merge — ask explicitly: `"Ready to merge PR
+3. Authorize merge — ask explicitly: `"Ready to merge PR
    #{{pr_number}}?"`. Wait for `yes` / `merge`. Silence ≠ authorization.
 
-5. Merge:
+4. Merge:
    ```bash
    gh pr merge {{pr_number}} --merge
    ```
-   If the PR was already merged externally between steps 2 and 5, treat
+   If the PR was already merged externally between steps 1 and 4, treat
    as success.
 
-6. Delete the remote branch. The guard refuses `main` / `master` at
+5. Delete the remote branch. The guard refuses `main` / `master` at
    the shell level — never rely on the agent alone:
    ```bash
    if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
@@ -138,7 +169,7 @@ The standard merge flow.
    git push origin --delete "{{branch}}"
    ```
 
-7. Remove the worktree (`--force` is safe — code is merged):
+6. Remove the worktree (`--force` is safe — code is merged):
    ```bash
    python scripts/qs/cleanup_worktree.py \
        --work-dir "{{worktree}}" \
@@ -146,31 +177,31 @@ The standard merge flow.
        --force
    ```
 
-8. Report:
+7. Report:
    ```text
    ✅ PR #{{pr_number}} merged into main.
    ✅ Remote branch {{branch}} deleted.
    ✅ Worktree removed.
 
-   Production code was touched → from the main checkout, run /release
-   (or `claude --agent qs-release` for the interactive path) when
-   you're ready to ship a release.
+   Production code was touched → from the main checkout, activate
+   `qs-release` from the OpenCode agent picker when you're ready to
+   ship a release.
    ```
    (Skip the release suggestion when no `custom_components/quiet_solar/`
    files were in the diff — check `gh pr diff {{pr_number}} --name-only`
    or just inspect the file list.)
 
-   **Why no launcher payload here**: `/release` runs on the main
+   **Why no launcher payload here**: `release` runs on the main
    checkout, not the worktree (which is now gone). We intentionally
-   don't build a launcher with `--next-cmd release` — see QS-175 OUT OF
-   SCOPE. The user invokes release manually after switching workspaces.
+   don't build a launcher with `--next-cmd release`. The user invokes
+   release manually after switching workspaces.
 
 ## Hard rules
 
 - **Never run the quality gate.** Cleanup must succeed even if tests
   would fail.
 - No merge without explicit user authorization in this turn.
-- Never auto-chain to `/release` — it's a separate decision.
+- Never auto-chain to `release` — it's a separate decision.
 - Refuse to delete `main` / `master` even if asked.
 - In Case A, if the user has unsaved work, ALWAYS show what would be
   lost before asking for force-delete authorization.
