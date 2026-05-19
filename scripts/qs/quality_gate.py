@@ -26,12 +26,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 import threading
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 # Resolve paths relative to repo root
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -66,6 +70,86 @@ def _venv_tool(name: str) -> str:
 
 def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd or str(REPO_ROOT))
+
+
+def _emit(name: str, line: str) -> None:
+    """Write a gate-prefixed line to stderr.
+
+    Used by every gate so its log output is line-prefixed exactly once.
+    """
+    print(f"[{name}] {line.rstrip()}", file=sys.stderr)
+
+
+_HAS_XDIST_CACHE: bool | None = None
+
+# The probe runs inside VENV_PYTHON's interpreter so we check the same
+# site-packages pytest will use, not the orchestrator's. Using a triple-quoted
+# `-c` body keeps the cmd line shell-safe (no shell parsing involved — we pass
+# argv directly to subprocess).
+_XDIST_PROBE = "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('xdist') else 1)"
+
+
+def _has_xdist() -> bool:
+    """Return True when `pytest-xdist` is importable from `VENV_PYTHON`'s site-packages.
+
+    Probes the venv interpreter via subprocess rather than the orchestrator
+    process. The orchestrator may be a different Python (system, pyenv shim,
+    Claude harness runtime, etc.) than the venv that pytest will actually be
+    launched against — an in-process `find_spec` would lie in both directions.
+
+    Cached after the first call via `_HAS_XDIST_CACHE` to avoid repeated probes.
+    """
+    global _HAS_XDIST_CACHE  # noqa: PLW0603 — module-level cache
+    if _HAS_XDIST_CACHE is None:
+        result = _run([VENV_PYTHON, "-c", _XDIST_PROBE])
+        _HAS_XDIST_CACHE = result.returncode == 0
+    return _HAS_XDIST_CACHE
+
+
+def _pytest_workers() -> str | None:
+    """Return the worker count for `pytest -n`, or None for serial mode.
+
+    Returns None when:
+    - `pytest-xdist` is not available in the venv, or
+    - `QS_QG_PYTEST_WORKERS` is set to `"0"` or all-whitespace/empty
+      (explicit serial mode).
+
+    Defaults to `"auto"` when xdist is present and no override is set.
+
+    The raw env value is normalized: leading/trailing whitespace is stripped,
+    case-insensitive `"auto"` is accepted, and positive integers are returned
+    as their canonical decimal string. Invalid values (negative numbers,
+    non-numeric text) emit a one-line stderr warning and fall back to `"auto"`
+    rather than silently breaking pytest's argparse with an unfriendly error.
+    """
+    if not _has_xdist():
+        return None
+    raw = os.environ.get("QS_QG_PYTEST_WORKERS", "auto")
+    val = raw.strip()
+    if val == "" or val == "0":
+        return None
+    if val.lower() == "auto":
+        return "auto"
+    try:
+        parsed = int(val)
+    except ValueError:
+        sys.stderr.write(f'[pytest] invalid QS_QG_PYTEST_WORKERS={raw!r}, falling back to "auto"\n')
+        sys.stderr.flush()
+        return "auto"
+    if parsed > 0:
+        return str(parsed)
+    sys.stderr.write(f'[pytest] invalid QS_QG_PYTEST_WORKERS={raw!r}, falling back to "auto"\n')
+    sys.stderr.flush()
+    return "auto"
+
+
+def _pytest_env() -> dict[str, str]:
+    """Return the env mapping for the main pytest subprocess.
+
+    Adds `COVERAGE_CORE=sysmon` on top of the parent env so coverage uses
+    the faster `sys.monitoring` core on Python 3.12+.
+    """
+    return {**os.environ, "COVERAGE_CORE": "sysmon"}
 
 
 CACHE_FILE = REPO_ROOT / ".quality_gate_cache"
@@ -107,8 +191,13 @@ def _is_dev_only(filepath: str) -> bool:
     # Top-level config files
     basename = filepath.split("/")[-1]
     if basename in (
-        "CLAUDE.md", "AGENTS.md", ".cursorrules", ".gitignore",
-        "pyproject.toml", "setup.cfg", "requirements.txt",
+        "CLAUDE.md",
+        "AGENTS.md",
+        ".cursorrules",
+        ".gitignore",
+        "pyproject.toml",
+        "setup.cfg",
+        "requirements.txt",
         "requirements_test.txt",
     ):
         return True
@@ -148,7 +237,7 @@ def _read_cache() -> dict | None:
         return None
     try:
         data = json.loads(CACHE_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError, OSError:
         return None
     if not isinstance(data, dict) or "branch" not in data or "commit" not in data:
         return None
@@ -176,17 +265,128 @@ def _is_cache_valid(cache: dict | None, branch: str, commit: str, is_clean: bool
     return cache.get("branch") == branch and cache.get("commit") == commit
 
 
+_PROGRESS_CHARS = ".FEsxX"
+_XDIST_PREFIX_RE = re.compile(r"^\[gw\d+\]\s*")
+_PERCENT_SUFFIX_RE = re.compile(r"\s*\[\s*\d+%\]\s*$")
+# S2: track xfailed/xpassed/skipped as separate keys; recognize the
+# `error`/`errors` singular/plural collapse on the parser side.
+_COUNT_RE = re.compile(r"(\d+) (passed|failed|errors?|skipped|xfailed|xpassed)")
+# S3: anchor summary parsing to pytest's canonical timing suffix `in <N.NNN>s`
+# to avoid misclassifying noise lines like `"5 passed checks remaining"` as
+# the summary. The token must appear after the counts on the same line.
+_SUMMARY_TIMING_RE = re.compile(r"\bin [\d.]+\s*s\b")
+
+# Counts dict shape used across parser, mid-run tally, and final summary.
+_COUNT_KEYS: tuple[str, ...] = ("passed", "failed", "errors", "skipped", "xfailed", "xpassed")
+
+
+def _new_count_dict() -> dict[str, int]:
+    """Return a fresh zero-filled counts dict matching `_COUNT_KEYS`."""
+    return {k: 0 for k in _COUNT_KEYS}
+
+
+def _clean_pytest_line(line: str) -> str:
+    """Strip xdist worker prefix and trailing `[NN%]` from a pytest stdout line."""
+    line = _XDIST_PREFIX_RE.sub("", line)
+    line = _PERCENT_SUFFIX_RE.sub("", line)
+    return line.rstrip()
+
+
+def _parse_pytest_output(text: str) -> dict[str, int]:
+    """Parse pytest -q stdout into pass/fail/error/skip/xfailed/xpassed counts.
+
+    Counts dotted-progress characters (`.FEsxX`) across the full output AND
+    parses the final `N passed, M failed, …` summary line. The summary
+    line, when present, is authoritative; otherwise the per-character
+    tally is returned.
+
+    Only lines containing the canonical `in <duration>s` timing suffix are
+    treated as summary candidates — this anchors against noise lines such as
+    `"5 passed checks remaining"` that would otherwise overwrite the true
+    summary if they happened to appear later in the stream.
+
+    `x`/`X` in the progress stream map to `xfailed`/`xpassed` rather than
+    `skipped`, matching pytest's actual semantics.
+
+    This parser is output-mode-agnostic — it handles sequential `-q`,
+    sequential `-q --cov`, and xdist `-n auto -q` output uniformly.
+    """
+    tally = _new_count_dict()
+    summary: dict[str, int] | None = None
+
+    for raw in text.splitlines():
+        cleaned = _clean_pytest_line(raw)
+        if not cleaned:
+            continue
+
+        # Progress line — characters only.
+        if all(c in _PROGRESS_CHARS for c in cleaned):
+            tally["passed"] += cleaned.count(".")
+            tally["failed"] += cleaned.count("F")
+            tally["errors"] += cleaned.count("E")
+            tally["skipped"] += cleaned.count("s")
+            tally["xfailed"] += cleaned.count("x")
+            tally["xpassed"] += cleaned.count("X")
+            continue
+
+        # Authoritative summary line — last match wins. S3: require pytest's
+        # canonical "in <duration>s" timing token so we never misclassify a
+        # log line that happens to mention "N passed" as a summary.
+        if not _SUMMARY_TIMING_RE.search(cleaned):
+            continue
+        matches = _COUNT_RE.findall(cleaned)
+        if matches:
+            local = _new_count_dict()
+            for n, label in matches:
+                value = int(n)
+                if label == "passed":
+                    local["passed"] = value
+                elif label == "failed":
+                    local["failed"] = value
+                elif label in ("error", "errors"):
+                    local["errors"] = value
+                elif label == "skipped":
+                    local["skipped"] = value
+                elif label == "xfailed":
+                    local["xfailed"] = value
+                elif label == "xpassed":
+                    local["xpassed"] = value
+            summary = local
+
+    return summary if summary is not None else tally
+
+
 def _stream_pytest(cmd: list[str]) -> dict:
     """Run pytest with real-time progress reporting.
 
     Prints a progress line every ~10% of tests. Returns the same dict
-    format as check_pytest().
+    format as check_pytest(). The main subprocess runs with
+    `COVERAGE_CORE=sysmon` for faster coverage tracking; the upfront
+    `--collect-only` count subprocess uses the parent env (coverage is
+    not active during collection).
+
+    Both subprocess invocations explicitly pass `encoding="utf-8"` and
+    `errors="replace"` so decoding pytest output never crashes under
+    `LANG=C` / `LC_ALL=POSIX` (S5). The default `text=True` would fall
+    back to the system locale and raise `UnicodeDecodeError` mid-stream
+    on non-ASCII content (Unicode ellipses, curly quotes in parametrize
+    ids, non-ASCII assertion messages).
     """
-    # First, collect test count
+    # First, collect test count — single-process, no coverage env override.
+    # We use Popen directly (instead of `_run`) so the test suite can verify
+    # this subprocess gets utf-8 encoding AND does NOT inherit COVERAGE_CORE.
     count_cmd = [VENV_PYTHON, "-m", "pytest", "--collect-only", "-q", str(TESTS_DIR)]
-    count_result = _run(count_cmd)
+    count_proc = subprocess.Popen(
+        count_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(REPO_ROOT),
+    )
+    count_stdout, _ = count_proc.communicate()
     total_tests = 0
-    for line in count_result.stdout.split("\n"):
+    for line in count_stdout.split("\n"):
         m = re.match(r"(\d+) tests? collected", line.strip())
         if m:
             total_tests = int(m.group(1))
@@ -198,15 +398,17 @@ def _stream_pytest(cmd: list[str]) -> dict:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         cwd=str(REPO_ROOT),
+        env=_pytest_env(),
     )
 
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
-    passed_count = 0
-    failed_count = 0
-    error_count = 0
+    live_passed = 0
+    live_failed = 0
+    live_errors = 0
     last_milestone = 0
 
     def _read_stderr() -> None:
@@ -220,20 +422,19 @@ def _stream_pytest(cmd: list[str]) -> dict:
     assert proc.stdout is not None
     for line in proc.stdout:
         stdout_lines.append(line)
-        stripped = line.strip()
+        cleaned = _clean_pytest_line(line)
 
-        # Count test results from -q output lines like ".....F..x.."
-        # Each char is a test result: . = pass, F = fail, E = error, s = skip, x = xfail
-        if stripped and all(c in ".FEsxX" for c in stripped) and len(stripped) > 0:
-            passed_count += stripped.count(".")
-            failed_count += stripped.count("F")
-            error_count += stripped.count("E")
-            current = passed_count + failed_count + error_count
+        # Mid-run progress: count chars on dotted-progress lines.
+        if cleaned and all(c in _PROGRESS_CHARS for c in cleaned):
+            live_passed += cleaned.count(".")
+            live_failed += cleaned.count("F")
+            live_errors += cleaned.count("E")
+            current = live_passed + live_failed + live_errors
             if total_tests > 0 and current >= last_milestone + milestone_every:
                 pct = min(100, int(current / total_tests * 100))
                 sys.stderr.write(
                     f"  pytest: {pct}% ({current}/{total_tests})"
-                    f" | passed={passed_count} failed={failed_count} errors={error_count}\n"
+                    f" | passed={live_passed} failed={live_failed} errors={live_errors}\n"
                 )
                 sys.stderr.flush()
                 last_milestone = current
@@ -241,17 +442,26 @@ def _stream_pytest(cmd: list[str]) -> dict:
     proc.wait()
     stderr_thread.join(timeout=5)
 
-    # Final count line
-    if total_tests > 0:
-        current = passed_count + failed_count + error_count
-        sys.stderr.write(
-            f"  pytest: done ({current}/{total_tests})"
-            f" | passed={passed_count} failed={failed_count} errors={error_count}\n"
-        )
-        sys.stderr.flush()
-
     stdout_text = "".join(stdout_lines)
     stderr_text = "".join(stderr_lines)
+
+    # Final count line uses the authoritative parser (summary line wins).
+    # S2: include skipped/xfailed/xpassed in the total so suites with xfail
+    # markers don't appear short. Suppress zero-count labels for readability.
+    counts = _parse_pytest_output(stdout_text)
+    final_total = sum(counts[k] for k in _COUNT_KEYS)
+    if total_tests > 0 or final_total > 0:
+        denom = total_tests if total_tests > 0 else final_total
+        parts = [
+            f"passed={counts['passed']}",
+            f"failed={counts['failed']}",
+            f"errors={counts['errors']}",
+        ]
+        for optional_key in ("skipped", "xfailed", "xpassed"):
+            if counts[optional_key]:
+                parts.append(f"{optional_key}={counts[optional_key]}")
+        sys.stderr.write(f"  pytest: done ({final_total}/{denom}) | {' '.join(parts)}\n")
+        sys.stderr.flush()
 
     passed = proc.returncode == 0
     coverage = None
@@ -275,14 +485,49 @@ def _stream_pytest(cmd: list[str]) -> dict:
 
 
 def check_pytest() -> dict:
-    """Run pytest with 100% coverage check and progress reporting."""
+    """Run pytest with 100% coverage check and progress reporting.
+
+    Adds `-n <workers>` when `pytest-xdist` is available (configurable via
+    `QS_QG_PYTEST_WORKERS`, default `"auto"`), prepends `--cov-report=`
+    before `--cov-report=term-missing` to override `pytest.ini`'s html
+    default without wiping our explicit report, and runs the subprocess
+    with `COVERAGE_CORE=sysmon` (set inside `_stream_pytest`).
+
+    Stderr warnings (mutually exclusive):
+    - `[pytest] xdist not available, running single-process`
+      when pytest-xdist is missing from the venv (silent fallback would
+      otherwise hide a major perf regression);
+    - `[pytest] QS_QG_PYTEST_WORKERS=<v> — running single-process by request`
+      when xdist is available but the user explicitly forced serial mode
+      via the env var (acknowledges the override took effect).
+    """
     cmd = [
-        VENV_PYTHON, "-m", "pytest", str(TESTS_DIR),
+        VENV_PYTHON,
+        "-m",
+        "pytest",
+        str(TESTS_DIR),
         f"--cov={SRC_DIR}",
+        # S1: clear inherited --cov-report defaults from pytest.ini FIRST,
+        # then add our explicit term-missing report. Reversing this order
+        # lets the trailing empty value wipe term-missing — pytest-cov treats
+        # `--cov-report=` (empty) as "disable all reports".
+        "--cov-report=",
         "--cov-report=term-missing",
         "--cov-fail-under=100",
         "-q",
     ]
+    workers = _pytest_workers()
+    if workers is not None:
+        cmd.extend(["-n", workers])
+    else:
+        # Emit a serial-mode rationale so users see *why* xdist isn't in use.
+        if not _has_xdist():
+            sys.stderr.write("[pytest] xdist not available, running single-process\n")
+        else:
+            # xdist available, but user-forced serial via QS_QG_PYTEST_WORKERS=0 or "".
+            raw = os.environ.get("QS_QG_PYTEST_WORKERS", "").strip()
+            sys.stderr.write(f"[pytest] QS_QG_PYTEST_WORKERS={raw!r} — running single-process by request\n")
+        sys.stderr.flush()
     return _stream_pytest(cmd)
 
 
@@ -298,51 +543,44 @@ def check_pytest_files(test_files: list[str]) -> dict:
 
 def check_ruff_lint(fix: bool = False) -> dict:
     """Run ruff check."""
-    sys.stderr.write("  ruff lint: running...\n")
-    sys.stderr.flush()
+    _emit("ruff_lint", "running")
     cmd = [_venv_tool("ruff"), "check", str(SRC_DIR)]
     if fix:
         cmd.append("--fix")
     result = _run(cmd)
-    status = "PASS" if result.returncode == 0 else "FAIL"
-    sys.stderr.write(f"  ruff lint: {status}\n")
-    sys.stderr.flush()
+    passed = result.returncode == 0
+    _emit("ruff_lint", "PASS" if passed else "FAIL")
     return {
         "name": "ruff_lint",
-        "passed": result.returncode == 0,
-        "detail": result.stdout.strip()[-500:] if result.returncode != 0 else "",
+        "passed": passed,
+        "detail": result.stdout.strip()[-500:] if not passed else "",
     }
 
 
 def check_ruff_format(fix: bool = False) -> dict:
     """Run ruff format check."""
-    sys.stderr.write("  ruff format: running...\n")
-    sys.stderr.flush()
+    _emit("ruff_format", "running")
     if fix:
         cmd = [_venv_tool("ruff"), "format", str(SRC_DIR)]
     else:
         cmd = [_venv_tool("ruff"), "format", "--check", str(SRC_DIR)]
     result = _run(cmd)
-    status = "PASS" if result.returncode == 0 else "FAIL"
-    sys.stderr.write(f"  ruff format: {status}\n")
-    sys.stderr.flush()
+    passed = result.returncode == 0
+    _emit("ruff_format", "PASS" if passed else "FAIL")
     return {
         "name": "ruff_format",
-        "passed": result.returncode == 0,
-        "detail": result.stdout.strip()[-500:] if result.returncode != 0 else "",
+        "passed": passed,
+        "detail": result.stdout.strip()[-500:] if not passed else "",
     }
 
 
 def check_mypy() -> dict:
     """Run mypy."""
-    sys.stderr.write("  mypy: running...\n")
-    sys.stderr.flush()
+    _emit("mypy", "running")
     cmd = [VENV_PYTHON, "-m", "mypy", str(SRC_DIR)]
     result = _run(cmd)
     passed = result.returncode == 0
-    status = "PASS" if passed else "FAIL"
-    sys.stderr.write(f"  mypy: {status}\n")
-    sys.stderr.flush()
+    _emit("mypy", "PASS" if passed else "FAIL")
     return {
         "name": "mypy",
         "passed": passed,
@@ -352,39 +590,75 @@ def check_mypy() -> dict:
 
 def check_translations() -> dict:
     """Check if translations need regeneration."""
-    sys.stderr.write("  translations: checking...\n")
-    sys.stderr.flush()
+    _emit("translations", "checking")
     if not STRINGS_JSON.exists():
-        sys.stderr.write("  translations: SKIP (no strings.json)\n")
-        sys.stderr.flush()
+        _emit("translations", "SKIP (no strings.json)")
         return {"name": "translations", "passed": True, "detail": "no strings.json"}
 
     gen_script = REPO_ROOT / "scripts" / "generate-translations.sh"
     if not gen_script.exists():
-        sys.stderr.write("  translations: SKIP (no generate script)\n")
-        sys.stderr.flush()
+        _emit("translations", "SKIP (no generate script)")
         return {"name": "translations", "passed": True, "detail": "no generate script"}
 
     # Capture current en.json content
     en_before = TRANSLATIONS_EN.read_text() if TRANSLATIONS_EN.exists() else ""
 
     # Run generation — ignore exit code (may fail for unrelated integrations)
-    result = _run(["bash", str(gen_script)])
+    _run(["bash", str(gen_script)])
 
     # Check if our translations file changed (the only thing that matters)
     en_after = TRANSLATIONS_EN.read_text() if TRANSLATIONS_EN.exists() else ""
     if en_before != en_after:
-        sys.stderr.write("  translations: FAIL (outdated)\n")
-        sys.stderr.flush()
+        _emit("translations", "FAIL (outdated)")
         return {
             "name": "translations",
             "passed": False,
             "detail": "translations/en.json was outdated and has been regenerated. Stage the updated file.",
         }
 
-    sys.stderr.write("  translations: PASS\n")
-    sys.stderr.flush()
+    _emit("translations", "PASS")
     return {"name": "translations", "passed": True, "detail": ""}
+
+
+def _run_cheap_gates_parallel(
+    specs: list[tuple[Callable[..., Any], dict[str, Any], list[str]]],
+) -> list[dict]:
+    """Run cheap gates concurrently and return their results (unordered).
+
+    Each spec is `(callable, kwargs, gate_names)`. The callable returns
+    either a single result dict or a list of result dicts (the latter is
+    used by the M1 serialized ruff-pair wrapper that produces two results
+    from one future). `gate_names` lists the gate names this callable
+    is responsible for — used to synthesize failure results when the
+    callable raises (S6), so an unhandled exception in one gate doesn't
+    abort the whole pipeline and let the traceback escape `main()`.
+    """
+    results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=len(specs)) as pool:
+        futures = {pool.submit(fn, **kwargs): names for fn, kwargs, names in specs}
+        for f in as_completed(futures):
+            names = futures[f]
+            try:
+                result = f.result()
+            except Exception as exc:  # noqa: BLE001 — synthesize a failure
+                # Synthesize one failure dict per gate name this future owned.
+                for name in names:
+                    results.append(
+                        {
+                            "name": name,
+                            "passed": False,
+                            "detail": "",
+                            "stderr": f"<exception>: {exc}",
+                        }
+                    )
+                continue
+            # The ruff-pair composite returns list[dict]; everything else
+            # returns a single dict.
+            if isinstance(result, list):
+                results.extend(result)
+            else:
+                results.append(result)
+    return results
 
 
 def _output_results(
@@ -397,12 +671,17 @@ def _output_results(
 ) -> None:
     """Print gate results in human-readable or JSON format."""
     if json_mode:
-        print(json.dumps({
-            "all_passed": all_passed,
-            "cached": cached,
-            "scope": scope,
-            "gates": results,
-        }, indent=2))
+        print(
+            json.dumps(
+                {
+                    "all_passed": all_passed,
+                    "cached": cached,
+                    "scope": scope,
+                    "gates": results,
+                },
+                indent=2,
+            )
+        )
     else:
         if cached:
             print("  [CACHED] All gates passed (cached result)\n")
@@ -468,11 +747,41 @@ def main() -> None:
         sys.stderr.write(f"  scope: FULL ({scope_info['reason']})\n")
         sys.stderr.flush()
 
-        results = []
-        results.append(check_ruff_format(fix=args.fix))
-        results.append(check_ruff_lint(fix=args.fix))
-        results.append(check_mypy())
-        results.append(check_translations())
+        # Run the cheap gates concurrently — they all spawn short-lived
+        # subprocesses and benefit from overlap. Pytest runs serially
+        # afterwards so xdist's `-n auto` workers don't oversubscribe the CPU.
+        #
+        # M1: under --fix, `ruff format` and `ruff check --fix` both rewrite
+        # the same files; running them concurrently produces a write race
+        # (lost edits, truncated writes, non-deterministic results). Serialize
+        # them inside one composite future while the read-only gates (mypy,
+        # translations) keep running concurrently.
+        gate_order = ["ruff_format", "ruff_lint", "mypy", "translations"]
+
+        if args.fix:
+
+            def _ruff_pair_serial() -> list[dict]:
+                """Run the two write-mutating ruff gates back-to-back."""
+                return [
+                    check_ruff_format(fix=True),
+                    check_ruff_lint(fix=True),
+                ]
+
+            specs: list[tuple[Callable[..., Any], dict[str, Any], list[str]]] = [
+                (_ruff_pair_serial, {}, ["ruff_format", "ruff_lint"]),
+                (check_mypy, {}, ["mypy"]),
+                (check_translations, {}, ["translations"]),
+            ]
+        else:
+            specs = [
+                (check_ruff_format, {"fix": False}, ["ruff_format"]),
+                (check_ruff_lint, {"fix": False}, ["ruff_lint"]),
+                (check_mypy, {}, ["mypy"]),
+                (check_translations, {}, ["translations"]),
+            ]
+
+        cheap_results = _run_cheap_gates_parallel(specs)
+        results = sorted(cheap_results, key=lambda r: gate_order.index(r["name"]))
         results.append(check_pytest())
 
     all_passed = all(r["passed"] for r in results)
