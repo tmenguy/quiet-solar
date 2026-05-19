@@ -55,9 +55,12 @@ The PR number, passed in your invocation prompt.
    ```bash
    gh pr view {{pr_number}} --json reviews,comments
    ```
-2. If no CodeRabbit comments/reviews exist, trigger it:
+2. If no CodeRabbit comments/reviews exist, trigger it. Use the
+   `:owner` / `:repo` placeholders `gh api` resolves automatically
+   from the current repo (single-brace `{owner}` / `{repo}` would
+   NOT be substituted by the agent runtime and would 404):
    ```bash
-   gh api repos/{owner}/{repo}/issues/{{pr_number}}/comments \
+   gh api repos/:owner/:repo/issues/{{pr_number}}/comments \
      -f body="@coderabbitai review"
    ```
 3. Poll for results — wait ~30s, then check again. Give it up to

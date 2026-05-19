@@ -135,7 +135,12 @@ picker is the manual one.
 ## Hard rules
 
 - Do NOT analyze the input. The launcher must come within a few seconds.
-- Do NOT commit or push — setup-task only creates branches/worktrees.
+- Do NOT edit any repository files. Setup-task creates the GitHub
+  issue, branch, and worktree only — no source-file commits.
+  (`scripts/worktree-setup.sh` performs the initial `git push -u` to
+  publish the new branch and set its upstream; that's expected and is
+  why `git push*` is in the allowlist. Do not run `git add` / `git
+  commit` / `git push` manually from this phase.)
 - Do NOT touch `legacy/**` — that's frozen historical code (the
   retired per-task-rendering OpenCode pipeline).
 - If any step fails, abort and report; do not auto-heal.

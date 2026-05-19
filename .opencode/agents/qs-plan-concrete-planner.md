@@ -28,8 +28,8 @@ exact function names, exact test specs.
 
 ## Input
 
-The plan draft, passed in your invocation prompt. Use `Glob` and `Grep`
-to verify file references.
+The plan draft, passed in your invocation prompt. Use the read-only
+shell allowlist (`grep` / `rg` / `ls` / `wc`) to verify file references.
 
 ## What to do
 
@@ -56,7 +56,7 @@ For each task in the plan, evaluate:
 
 #### critical
 - **Finding**: <one-line>
-  **Evidence**: "<plan quote>" — verified against <`Glob`/`Grep` result>
+  **Evidence**: "<plan quote>" — verified against <`rg`/`ls` result>
   **Suggestion**: <concrete alternative>
 
 #### redesign
@@ -75,5 +75,5 @@ For each task in the plan, evaluate:
 - NEVER edit files.
 - If the plan says "update the handler", that's a `clarify` finding —
   demand the specific file and function.
-- If the plan references a file you can't find via `Glob`, that's a
+- If the plan references a file you can't find via `rg`/`ls`, that's a
   `critical` finding.

@@ -16,7 +16,6 @@ permission:
     ".claude/**": allow
     ".cursor/**": allow
     ".opencode/**": allow
-    "legacy/**": deny
     "docs/**": allow
     ".github/**": allow
     "tests/**": allow
@@ -94,6 +93,9 @@ Red → green → refactor, scoped to dev-environment paths:
 
 - `scripts/qs/**`, top-level `scripts/*.sh`
 - `.claude/**`, `.cursor/**`, `.opencode/**`
+- `legacy/**` — frozen historical code (`git mv` operations INTO this
+  directory are permitted when the story requires it; in-place edits
+  are forbidden)
 - `docs/**`
 - `.github/**`
 - Top-level config: `pyproject.toml`, `requirements*.txt`, `CLAUDE.md`,
@@ -102,8 +104,6 @@ Red → green → refactor, scoped to dev-environment paths:
 If you need to edit `custom_components/quiet_solar/` or `tests/` (other
 than dev tooling tests), STOP — this should have been routed to
 `implement-task`.
-
-`legacy/**` is frozen historical code — do NOT modify or import.
 
 ### 3. Implementation summary
 
@@ -173,6 +173,6 @@ or paste the spawn-session one-liner below into a fresh terminal):
 - Same TDD discipline as `qs-implement-task`: no code without a failing
   test first, no commit without a green gate.
 - After green gate, commit + push + PR are automatic — no prompts.
-- Do NOT modify files under `legacy/**` — they are frozen historical
-  code. Moving files INTO `legacy/` via `git mv` is allowed when the
-  story explicitly requires it.
+- Do NOT edit `legacy/**` — frozen historical code (`git mv`
+  operations INTO this directory are permitted when the story requires
+  it).

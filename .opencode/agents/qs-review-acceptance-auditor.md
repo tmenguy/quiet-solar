@@ -60,16 +60,26 @@ prompt.
    ```
 4. Build a traceability matrix:
 
-   | AC # | Criterion | Implemented in        | Tested in              | Status |
-   | ---- | --------- | --------------------- | ---------------------- | ------ |
-   | 1    | <text>    | file.py:42–58         | test_x.py:100          | ✅     |
-   | 2    | <text>    | file.py:60–75         | (missing)              | ❌     |
-   | 3    | <text>    | (missing)             | test_y.py:200          | ⚠️     |
+   Use four distinct status glyphs so each row is unambiguous:
 
-5. Produce findings for anything not ✅:
-   - `❌` → must-fix (AC not implemented OR not tested)
-   - `⚠️` → must-fix (tested without implementation = test asserts old
-     behavior?) or should-fix (implemented but no test → coverage gap)
+   - `✅` — implementation + test both present and matched.
+   - `❌ test-without-impl` — test exists, no implementation found
+     (the test asserts old or non-existent behavior). Promotes to
+     **must-fix**.
+   - `⚠️ loose-test` — implementation exists, test covers only the
+     happy path or asserts weakly. Promotes to **should-fix**.
+   - `❌ missing-test` — implementation exists, no test at all.
+     Promotes to **must-fix**.
+
+   | AC # | Criterion | Implemented in        | Tested in              | Status              |
+   | ---- | --------- | --------------------- | ---------------------- | ------------------- |
+   | 1    | <text>    | file.py:42–58         | test_x.py:100          | ✅                  |
+   | 2    | <text>    | file.py:60–75         | (missing)              | ❌ missing-test     |
+   | 3    | <text>    | (missing)             | test_y.py:200          | ❌ test-without-impl|
+   | 4    | <text>    | file.py:80–95         | test_z.py:50 (happy)   | ⚠️ loose-test       |
+
+5. Produce findings for each non-`✅` row using the glyph's promotion
+   rule above (no remaining ambiguity).
 
 ## Output format
 

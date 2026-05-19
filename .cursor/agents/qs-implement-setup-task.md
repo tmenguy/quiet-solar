@@ -36,8 +36,9 @@ Red → green → refactor, scoped to:
 
 - `scripts/qs/**`, top-level `scripts/*.sh`
 - `.claude/**`, `.cursor/**`, `.opencode/**`
-- `legacy/**` (frozen — `git mv` INTO `legacy/` is allowed when the
-  story requires it)
+- `legacy/**` — frozen historical code (`git mv` operations INTO this
+  directory are permitted when the story requires it; in-place edits
+  are forbidden)
 - `docs/**`
 - `.github/**`
 - Top-level config: `pyproject.toml`, `requirements*.txt`, `CLAUDE.md`,

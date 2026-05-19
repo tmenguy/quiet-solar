@@ -102,9 +102,14 @@ The user is abandoning the task or cleaning up after `setup-task` /
        --force
    ```
 
-5. Delete the remote branch if it exists (safety: refuse `main` /
-   `master`):
+5. Delete the remote branch if it exists. The guard refuses
+   `main` / `master` at the shell level — never rely on the agent
+   alone:
    ```bash
+   if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
+       echo "refusing to delete protected branch: {{branch}}" >&2
+       exit 1
+   fi
    if git ls-remote --exit-code --heads origin "{{branch}}" >/dev/null 2>&1; then
        git push origin --delete "{{branch}}"
    fi
@@ -121,23 +126,21 @@ The user is abandoning the task or cleaning up after `setup-task` /
 
 The standard merge flow.
 
-1. Show PR summary:
+1. Fetch PR state in one call — both human-readable summary and
+   machine-parseable fields come from the same JSON. Pretty-print the
+   ``title``/``url``/``headRefName``/``baseRefName`` to the user, then
+   branch on ``state``:
    ```bash
-   gh pr view {{pr_number}}
+   gh pr view {{pr_number}} --json state,mergeable,mergedAt,title,url,headRefName,baseRefName
    ```
 
-2. Inspect PR state from the JSON:
-   ```bash
-   gh pr view {{pr_number}} --json state,mergeable,mergedAt
-   ```
-
-   - **`state: MERGED`** → skip to step 6 (cleanup only).
+   - **`state: MERGED`** → skip to step 5 (cleanup only).
    - **`state: CLOSED`** (not merged) → ask the user: `"PR is closed
      unmerged. Clean up worktree + branch anyway? (yes / no)"`. On
-     `yes` → step 6. On `no` → STOP.
-   - **`state: OPEN`** → continue to step 3.
+     `yes` → step 5. On `no` → STOP.
+   - **`state: OPEN`** → continue to step 2.
 
-3. Verify CI:
+2. Verify CI:
    ```bash
    gh pr checks {{pr_number}}
    ```
@@ -146,22 +149,27 @@ The standard merge flow.
      authorize (`--admin`).
    - Green / no checks → continue.
 
-4. Authorize merge — ask explicitly: `"Ready to merge PR
+3. Authorize merge — ask explicitly: `"Ready to merge PR
    #{{pr_number}}?"`. Wait for `yes` / `merge`. Silence ≠ authorization.
 
-5. Merge:
+4. Merge:
    ```bash
    gh pr merge {{pr_number}} --merge
    ```
-   If the PR was already merged externally between steps 2 and 5, treat
+   If the PR was already merged externally between steps 1 and 4, treat
    as success.
 
-6. Delete the remote branch (refuse `main` / `master`):
+5. Delete the remote branch. The guard refuses `main` / `master` at
+   the shell level — never rely on the agent alone:
    ```bash
-   git push origin --delete {{branch}}
+   if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
+       echo "refusing to delete protected branch: {{branch}}" >&2
+       exit 1
+   fi
+   git push origin --delete "{{branch}}"
    ```
 
-7. Remove the worktree (`--force` is safe — code is merged):
+6. Remove the worktree (`--force` is safe — code is merged):
    ```bash
    python scripts/qs/cleanup_worktree.py \
        --work-dir "{{worktree}}" \
@@ -169,7 +177,7 @@ The standard merge flow.
        --force
    ```
 
-8. Report:
+7. Report:
    ```text
    ✅ PR #{{pr_number}} merged into main.
    ✅ Remote branch {{branch}} deleted.

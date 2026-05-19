@@ -12,7 +12,6 @@ permission:
   read: allow
   edit:
     "*": deny
-    "docs/stories/*.story.md": allow
     "docs/stories/**": allow
   bash:
     "*": ask

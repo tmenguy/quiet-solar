@@ -84,9 +84,10 @@ That's your only input. Look for:
 
 ## Hard rules
 
-- NEVER read repo files. The repo-read commands in your allowlist are
-  a safety net for fetching the diff — don't use them as inputs to
-  your review.
+- NEVER read source files beyond what the diff already shows. PR
+  metadata commands (`gh pr view`, `gh pr diff`, `git log`, `git diff`)
+  are explicitly allowed for fetching the diff itself; do NOT use them
+  as a backdoor to load surrounding source.
 - NEVER fetch the issue body, story file, or any reference material.
 - Stick to issues visible from the diff alone. When uncertain whether
   something is a bug without repo context, flag it as `should-fix`

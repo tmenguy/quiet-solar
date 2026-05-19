@@ -55,7 +55,18 @@ TRANSLATIONS_EN = SRC_DIR / "translations" / "en.json"
 
 VENV_PYTHON = str(VENV_BIN / "python")
 
-# Patterns for files that are "dev-only" (no production code impact)
+# Patterns for files that are "dev-only" (no production code impact).
+#
+# Known gap (QS-184 review-fix #01 N8): a ``git mv
+# custom_components/quiet_solar/foo.py legacy/foo.py`` change registers
+# as dev-only (the post-move path starts with ``legacy/``), even though
+# it has removed production code from coverage. The implement-task
+# agents always run the full gate (their scope detection routes
+# through the production-code path), so the gap only matters when an
+# implement-setup-task agent performs a mixed-source ``git mv``. The
+# implement-setup-task agent's hard rules limit it to dev paths, so
+# this is documented as an accepted edge case rather than fixed by a
+# rename-aware detector.
 _DEV_ONLY_PATTERNS = (
     "tests/",
     "legacy/",

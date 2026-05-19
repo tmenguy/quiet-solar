@@ -27,21 +27,11 @@ and scope detection. Raw `pytest` bypasses all four; use it only for
 ad-hoc single-node debugging (positional must contain `::`).
 
 ```bash
-# Full quality gate (pytest 100% cov + ruff + mypy + translations).
-python scripts/qs/quality_gate.py
-
-# Cached dev-loop default — skips gates when git state matches last pass.
-python scripts/qs/quality_gate.py --cache
-
-# Auto-fix formatting and lint.
-python scripts/qs/quality_gate.py --fix
-
-# Fast iteration on one or more test paths (files or directories).
-python scripts/qs/quality_gate.py --quick tests/test_solver.py
-python scripts/qs/quality_gate.py --quick tests/ha_tests
-
-# JSON output for scripts.
-python scripts/qs/quality_gate.py --json
+python scripts/qs/quality_gate.py          # full gate (cov + ruff + mypy + translations)
+python scripts/qs/quality_gate.py --cache  # skip if git state matches last pass
+python scripts/qs/quality_gate.py --fix    # auto-fix ruff format / lint
+python scripts/qs/quality_gate.py --quick tests/test_solver.py  # fast TDD inner loop
+python scripts/qs/quality_gate.py --json   # JSON output for scripts
 ```
 
 ## Architecture constraints
@@ -83,6 +73,11 @@ OpenCode commands accept a single static `agent:` and cannot
 dynamically dispatch — the UI agent picker is the canonical activation
 surface, so `.opencode/commands/` is intentionally absent.
 
+## Quality gate
+
+`python scripts/qs/quality_gate.py` (full) or `--quick PATH` (fast
+TDD inner loop) — see the Commands section above for the full grammar.
+
 ## Legacy
 
 The previous per-task-rendering OpenCode pipeline lives under
@@ -91,8 +86,9 @@ deleted after the static-agent pipeline is proven in production.
 
 ## Commit discipline
 
-See `docs/workflow/project-rules.md` § "Workflow routing" and "Commit
-authorization". Agents are authorized to commit and push as part of
-their defined workflow steps (e.g., `qs-implement-task` auto-commits
-+ opens a PR after the quality gate passes). Outside of agent-driven
-phases, always ask the user before committing.
+See `docs/workflow/project-rules.md` § "Workflow routing" (specifically
+its "Commit authorization" paragraph). Agents are authorized to commit
+and push as part of their defined workflow steps (e.g.,
+`qs-implement-task` auto-commits + opens a PR after the quality gate
+passes). Outside of agent-driven phases, always ask the user before
+committing.

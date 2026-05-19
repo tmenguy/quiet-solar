@@ -69,9 +69,14 @@ The user is abandoning the task or cleaning up after `/setup-task` /
        --force
    ```
 
-5. Delete the remote branch if it exists (safety: refuse `main` /
-   `master`):
+5. Delete the remote branch if it exists. The guard refuses
+   `main` / `master` at the shell level — never rely on the agent
+   alone:
    ```bash
+   if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
+       echo "refusing to delete protected branch: {{branch}}" >&2
+       exit 1
+   fi
    if git ls-remote --exit-code --heads origin "{{branch}}" >/dev/null 2>&1; then
        git push origin --delete "{{branch}}"
    fi
@@ -123,9 +128,14 @@ The standard merge flow.
    If the PR was already merged externally between steps 2 and 5, treat
    as success.
 
-6. Delete the remote branch (refuse `main` / `master`):
+6. Delete the remote branch. The guard refuses `main` / `master` at
+   the shell level — never rely on the agent alone:
    ```bash
-   git push origin --delete {{branch}}
+   if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
+       echo "refusing to delete protected branch: {{branch}}" >&2
+       exit 1
+   fi
+   git push origin --delete "{{branch}}"
    ```
 
 7. Remove the worktree (`--force` is safe — code is merged):
