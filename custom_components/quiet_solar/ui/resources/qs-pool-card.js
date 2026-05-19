@@ -4,8 +4,53 @@
 */
 
 class QsPoolCard extends HTMLElement {
+
+  // --- Wave path generation helper (Task 1) ---
+  _generateWavePath(width, amplitude, frequency, phase, yOffset) {
+    const points = [];
+    const steps = 60;
+    for (let i = 0; i <= steps; i++) {
+      const x = (i / steps) * width;
+      const y = yOffset + amplitude * Math.sin((i / steps) * frequency * 2 * Math.PI + phase);
+      points.push(`${x.toFixed(2)} ${y.toFixed(2)}`);
+    }
+    return `M ${points[0]} ` +
+           points.slice(1).map(p => `L ${p}`).join(' ') +
+           ` L ${width.toFixed(2)} 400 L 0 400 Z`;
+  }
+
+  // --- Temperature-based color tinting (Task 6) ---
+  _tempToColor(tempC) {
+    // Map 10°C–35°C to HSL interpolation
+    // Cool (≤15°C): hsl(195, 70%, 18%) — deeper blue-teal
+    // Warm (≥30°C): hsl(175, 55%, 28%) — warmer cyan-turquoise
+    if (tempC == null || Number.isNaN(tempC)) {
+      // Neutral teal fallback
+      return [
+        'hsla(185, 60%, 22%, 0.55)',
+        'hsla(185, 60%, 20%, 0.45)',
+        'hsla(185, 60%, 18%, 0.35)',
+      ];
+    }
+    const t = Math.max(0, Math.min(1, (tempC - 10) / 20)); // 0 at 10°C, 1 at 30°C
+    const h = 195 - t * 20;   // 195 → 175
+    const s = 70 - t * 15;    // 70 → 55
+    const l = 18 + t * 10;    // 18 → 28
+    return [
+      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${(l + 2).toFixed(0)}%, 0.55)`,
+      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${l.toFixed(0)}%, 0.45)`,
+      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${(l - 2).toFixed(0)}%, 0.35)`,
+    ];
+  }
+
   connectedCallback() {
     if (this._animRaf != null) return;
+    // Initialize wave animation state
+    this._currentAmplitude = 2;
+    this._currentSpeed = 0.3;
+    this._wavePhase = 0;
+    this._lastWaterBaseY = null;
+
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
@@ -18,6 +63,45 @@ class QsPoolCard extends HTMLElement {
       if (p) {
         p.setAttribute('stroke-dashoffset', String(-this._animOffset));
       }
+
+      // --- Wave animation update (Task 5) ---
+      const pumpOn = this._pumpRunning === true;
+      const targetAmplitude = pumpOn ? 6 : 2;
+      const targetSpeed = pumpOn ? 1.2 : 0.3;
+      // Smooth lerp: 1 - exp(-3 * dt) ≈ 3·dt for small dt
+      const lerpFactor = 1 - Math.exp(-3 * dt);
+      this._currentAmplitude += (targetAmplitude - this._currentAmplitude) * lerpFactor;
+      this._currentSpeed += (targetSpeed - this._currentSpeed) * lerpFactor;
+      this._wavePhase += this._currentSpeed * dt;
+
+      // Update wave transforms (CSS translateX for GPU compositing)
+      const waveWidth = 480; // 2× circle diameter (240)
+      for (let i = 0; i < 3; i++) {
+        const wEl = this._root?.getElementById('wave' + i);
+        if (wEl) {
+          const phaseOffset = i * 1.2;
+          const tx = -((this._wavePhase + phaseOffset) * 60) % waveWidth;
+          wEl.style.transform = `translateX(${tx.toFixed(1)}px)`;
+        }
+      }
+
+      // Regenerate wave paths only when water level changes
+      const waterBaseY = this._waterBaseY;
+      if (waterBaseY != null && waterBaseY !== this._lastWaterBaseY) {
+        this._lastWaterBaseY = waterBaseY;
+        const colors = this._waterColors || ['hsla(185,60%,22%,0.55)', 'hsla(185,60%,20%,0.45)', 'hsla(185,60%,18%,0.35)'];
+        for (let i = 0; i < 3; i++) {
+          const wEl = this._root?.getElementById('wave' + i);
+          if (wEl) {
+            const phaseOffset = i * 2.1;
+            const freq = 2 + i * 0.5;
+            const d = this._generateWavePath(waveWidth, this._currentAmplitude, freq, phaseOffset, waterBaseY);
+            wEl.setAttribute('d', d);
+            wEl.setAttribute('fill', colors[i]);
+          }
+        }
+      }
+
       this._animRaf = requestAnimationFrame(step);
     };
     this._animRaf = requestAnimationFrame(step);
@@ -103,7 +187,27 @@ class QsPoolCard extends HTMLElement {
       // Determine if pool is running (command state must be "on")
       const commandState = sCommand?.state || '';
       const running = commandState.toLowerCase() === 'on';
-      
+
+      // --- Store pump state for RAF loop (Task 4/5) ---
+      this._pumpRunning = running;
+
+      // --- Water level from runtime progress (Task 4) ---
+      const progressRatio = targetHours > 0
+          ? Math.min(1, hoursRun / targetHours)
+          : 0;
+      const clipR = 120;
+      const waterBaseY = center.cy + clipR - (0.2 + progressRatio * 0.6) * 2 * clipR;
+      this._waterBaseY = waterBaseY;
+
+      // --- Temperature-based water colors (Task 6) ---
+      this._waterColors = this._tempToColor(tempNum);
+
+      // --- Instance-unique clip ID (Task 2) ---
+      if (!this._waterClipId) {
+          this._waterClipId = 'wClip-' + Math.floor(Math.random() * 1e6);
+      }
+      const waterClipId = this._waterClipId;
+
       const css = `
       :host { --pad: 18px; display:block; }
       .card { padding: var(--pad); position: relative; }
@@ -143,9 +247,9 @@ class QsPoolCard extends HTMLElement {
       .card.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
       .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(16px); }
-      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; }
-      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
-      .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; }
+      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); }
+      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); }
+      .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); }
       .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; text-align:center; width: 180px; margin: 0 auto; }
       .ring .temp-block { display:flex; flex-direction:column; align-items:center; gap:2px; margin-top:4px; margin-bottom:8px; }
       .ring .stack > * { text-align:center; }
@@ -289,7 +393,15 @@ class QsPoolCard extends HTMLElement {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
+                <clipPath id="${waterClipId}">
+                  <circle cx="160" cy="160" r="120" />
+                </clipPath>
               </defs>
+              <g clip-path="url(#${waterClipId})">
+                <path id="wave0" d="" fill="hsla(185,60%,22%,0.55)" opacity="1" pointer-events="none" style="will-change: transform;" />
+                <path id="wave1" d="" fill="hsla(185,60%,20%,0.45)" opacity="1" pointer-events="none" style="will-change: transform;" />
+                <path id="wave2" d="" fill="hsla(185,60%,18%,0.35)" opacity="1" pointer-events="none" style="will-change: transform;" />
+              </g>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `
@@ -346,6 +458,9 @@ class QsPoolCard extends HTMLElement {
       // Wire events
       const root = this._root;
       const ids = (k) => root.getElementById(k);
+
+      // --- Force initial wave path generation ---
+      this._lastWaterBaseY = null; // reset so RAF loop regenerates paths
 
       // Pool mode selector
       if (selPoolMode) {
