@@ -28,16 +28,20 @@ the cache, xdist, sysmon, and scope detection. Raw `pytest` bypasses
 all four; use it only for ad-hoc single-node debugging.
 
 ```bash
-# Run all quality gates (pytest 100% coverage + ruff + mypy + translations)
+# Run all quality gates (pytest 100% coverage + ruff + mypy + translations).
+# Required before every commit.
 python scripts/qs/quality_gate.py
 
-# Auto-fix formatting and lint
-python scripts/qs/quality_gate.py --fix
+# Cached dev-loop default — skips gates when git state matches last pass.
+python scripts/qs/quality_gate.py --cache
 
 # Fast iteration on one or more test paths (files or directories).
 # xdist + sysmon, skips coverage/ruff/mypy/translations.
 python scripts/qs/quality_gate.py --quick tests/test_<file>.py
 python scripts/qs/quality_gate.py --quick tests/ha_tests
+
+# Auto-fix formatting and lint
+python scripts/qs/quality_gate.py --fix
 ```
 
 ## Architecture constraints

@@ -362,7 +362,10 @@ def _parse_pytest_output(text: str) -> dict[str, int]:
     return summary if summary is not None else tally
 
 
-def _stream_pytest(cmd: list[str]) -> dict:
+def _stream_pytest(
+    cmd: list[str],
+    collect_targets: list[str] | None = None,
+) -> dict:
     """Run pytest with real-time progress reporting.
 
     Prints a progress line every ~10% of tests. Returns the same dict
@@ -370,6 +373,14 @@ def _stream_pytest(cmd: list[str]) -> dict:
     `COVERAGE_CORE=sysmon` for faster coverage tracking; the upfront
     `--collect-only` count subprocess uses the parent env (coverage is
     not active during collection).
+
+    `collect_targets` (review-fix #01 finding 2): when provided, the
+    upfront `--collect-only` subprocess walks ONLY those paths instead
+    of the whole `TESTS_DIR` tree. `check_pytest_files` passes the same
+    `abs_files` it gives to the main run so `--quick tests/test_foo.py`
+    doesn't pay the 1–3 s cold cost of collecting the entire suite.
+    The full-coverage caller (`check_pytest`) passes `None` and keeps
+    the whole-tree collection semantics.
 
     Both subprocess invocations explicitly pass `encoding="utf-8"` and
     `errors="replace"` so decoding pytest output never crashes under
@@ -381,7 +392,8 @@ def _stream_pytest(cmd: list[str]) -> dict:
     # First, collect test count — single-process, no coverage env override.
     # We use Popen directly (instead of `_run`) so the test suite can verify
     # this subprocess gets utf-8 encoding AND does NOT inherit COVERAGE_CORE.
-    count_cmd = [VENV_PYTHON, "-m", "pytest", "--collect-only", "-q", str(TESTS_DIR)]
+    count_targets = collect_targets if collect_targets is not None else [str(TESTS_DIR)]
+    count_cmd = [VENV_PYTHON, "-m", "pytest", "--collect-only", "-q", *count_targets]
     count_proc = subprocess.Popen(
         count_cmd,
         stdout=subprocess.PIPE,
@@ -554,7 +566,9 @@ def check_pytest_files(test_files: list[str]) -> dict:
     cmd = [VENV_PYTHON, "-m", "pytest", *abs_files, "-q"]
     if workers is not None:
         cmd.extend(["-n", workers])
-    return _stream_pytest(cmd)
+    # Narrow the collect-only subprocess to the same paths so we don't
+    # walk the whole `tests/` tree just to count one file's tests.
+    return _stream_pytest(cmd, collect_targets=abs_files)
 
 
 def check_ruff_lint(fix: bool = False) -> dict:
@@ -743,6 +757,24 @@ def main() -> None:
         parser.error(
             "you cannot combine --quick with --cache, --no-cache, --full, or --fix"
         )
+
+    # Review-fix #01 finding 8 — `--quick ""` would otherwise resolve to
+    # REPO_ROOT and silently collect the whole suite. Reject before any
+    # path resolution.
+    if args.quick and any(not p for p in args.quick):
+        parser.error("--quick paths must be non-empty")
+
+    # Review-fix #01 finding 7 — `REPO_ROOT / "/etc/passwd"` discards
+    # REPO_ROOT (pathlib semantics) and `..` escapes the worktree. Both
+    # would silently run pytest outside the repo. Resolve each path and
+    # confirm it sits under REPO_ROOT before continuing.
+    if args.quick:
+        for raw in args.quick:
+            resolved = (REPO_ROOT / raw).resolve()
+            try:
+                resolved.relative_to(REPO_ROOT)
+            except ValueError:
+                parser.error(f"--quick path must be inside the repo: {raw}")
 
     if args.quick:
         sys.stderr.write(

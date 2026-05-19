@@ -84,6 +84,18 @@ def _consume_coro(coro):
     return MagicMock()
 
 
+def _consume_and_raise(coro):
+    """Close the coroutine, then raise — for exception-path tests.
+
+    Single-shot — valid only for tests with one entity in
+    `_entities_to_fill_from_history`, since the production loop in
+    `root_device_post_home_init` would call `async_create_task` once
+    per entity but the very first call raises here.
+    """
+    coro.close()
+    raise Exception("bootstrap failed")
+
+
 # --------------------------------------------------------------------------
 # Fixture helpers
 # --------------------------------------------------------------------------
@@ -972,23 +984,37 @@ async def test_get_next_scheduled_events_duplicate_start_line523():
 # ==========================================================================
 
 
-def test_root_device_post_home_init_exception_lines324_325():
-    """Cover lines 324-325: exception in bootstrap -> log error and continue."""
+def test_root_device_post_home_init_exception_lines324_325(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cover lines 324-325: exception in bootstrap -> log error and continue.
 
-    def _consume_and_raise(coro):
-        # Close the coroutine first so the side-effect Exception doesn't
-        # leave it un-awaited at GC time (RuntimeWarning).
-        coro.close()
-        raise Exception("bootstrap failed")
-
+    Asserts the production `_LOGGER.error(...)` branch at
+    `device.py:407-408` fires (directly via `caplog`, not just via
+    coverage transitivity).
+    """
     hass = _make_fake_hass()
     hass.async_create_task = MagicMock(side_effect=_consume_and_raise)
     dev = _make_load_device(hass=hass)
     dev._entities_to_fill_from_history.add("sensor.test_entity")
 
     now = datetime.now(tz=pytz.UTC)
-    dev.root_device_post_home_init(now)
-    # Should not raise; error is caught and logged
+    with caplog.at_level("ERROR", logger="custom_components.quiet_solar.ha_model.device"):
+        dev.root_device_post_home_init(now)
+        # Should not raise; error is caught and logged.
+
+    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(error_records) == 1, (
+        f"expected exactly one ERROR record from the bootstrap except branch, "
+        f"got {len(error_records)}: {[r.getMessage() for r in error_records]}"
+    )
+    message = error_records[0].getMessage()
+    assert "root_device_post_home_init" in message, (
+        f"log message must reference the bootstrap function; got {message!r}"
+    )
+    assert "bootstrap failed" in message, (
+        f"log message must surface the underlying exception text; got {message!r}"
+    )
 
 
 # ==========================================================================
