@@ -33,15 +33,24 @@ Capture `issue`, `title`, `branch`, `story_file`. Read
 
 ### 2. TDD implementation
 
-Red → green → refactor:
-1. Write failing tests under `tests/` that encode every acceptance
-   criterion.
-2. Implement the minimum code under `custom_components/quiet_solar/` to
-   make them pass.
+Red → green → refactor. For every cycle:
+
+1. Write failing tests under `tests/` for each story acceptance criterion.
+2. Implement the minimum code under `custom_components/quiet_solar/`
+   to make them pass.
 3. Refactor while keeping tests green.
 
+Verify with `python scripts/qs/quality_gate.py --quick <path>` during
+the inner loop (the canonical TDD command; accepts files,
+directories, or both). The full quality gate runs at step 4 before
+commit. See the `## Commands` section of
+[docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
+for the full command grammar and the forbidden-vs-allowed raw-pytest
+rule.
+
 Edit scope: `custom_components/quiet_solar/**`, `tests/**`, plus the
-story file. All other paths are out of scope.
+story file (for progress notes). Stop and escalate if you need to
+edit elsewhere.
 
 ### 3. Implementation summary
 

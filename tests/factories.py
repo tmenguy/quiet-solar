@@ -680,6 +680,12 @@ class TestCarDouble:
     Use this instead of SimpleNamespace for car mocks in unit tests.
     """
 
+    # pytest opt-out: this is a test helper, not a test class, despite the
+    # `Test` prefix.  Pytest's default `python_classes = Test*` collection
+    # rule would otherwise try to instantiate it and emit
+    # `cannot collect test class 'TestCarDouble'` (it has an `__init__`).
+    __test__ = False
+
     def __init__(
         self,
         name: str = "Test Car",
@@ -738,6 +744,12 @@ class TestChargerDouble:
 
     Use this instead of SimpleNamespace for charger mocks in unit tests.
     """
+
+    # pytest opt-out: this is a test helper, not a test class, despite the
+    # `Test` prefix.  Pytest's default `python_classes = Test*` collection
+    # rule would otherwise try to instantiate it and emit
+    # `cannot collect test class 'TestChargerDouble'` (it has an `__init__`).
+    __test__ = False
 
     def __init__(
         self,
@@ -820,6 +832,12 @@ class TestDynamicGroupDouble:
 
     Supports multi-slot amp budgets.
     """
+
+    # pytest opt-out: this is a test helper, not a test class, despite the
+    # `Test` prefix.  Pytest's default `python_classes = Test*` collection
+    # rule would otherwise try to instantiate it and emit
+    # `cannot collect test class 'TestDynamicGroupDouble'` (it has an `__init__`).
+    __test__ = False
 
     def __init__(
         self,

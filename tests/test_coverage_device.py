@@ -68,6 +68,22 @@ class ConcreteLoadDevice(HADeviceMixin, AbstractLoad):
         return False
 
 
+def _consume_coro(coro):
+    """Close a coroutine handed to a mocked `hass.async_create_task`.
+
+    Prevents `RuntimeWarning: coroutine '...' was never awaited` when
+    the test does not actually schedule the task.  Returns a
+    `MagicMock()` so the call site sees a Task-like return value.
+
+    `MagicMock` is permissible here: an `asyncio.Task` is an HA-runtime
+    object, not domain logic, so the "no MagicMock for domain objects"
+    rule does not apply.  The production caller
+    (`root_device_post_home_init`) discards the return value.
+    """
+    coro.close()
+    return MagicMock()
+
+
 # --------------------------------------------------------------------------
 # Fixture helpers
 # --------------------------------------------------------------------------
@@ -831,8 +847,10 @@ def test_get_state_history_data_ret_none_fallback_line1296():
 def test_root_device_post_home_init_with_entities_lines323_325():
     """Cover lines 323-325: entities_to_fill_from_history triggers async_create_task."""
     hass = _make_fake_hass()
-    # Add async_create_task to FakeHass
-    hass.async_create_task = MagicMock()
+    # Add async_create_task to FakeHass — wrap via `_consume_coro` so the
+    # coroutine passed in is closed cleanly (no RuntimeWarning) and the
+    # mock still tracks the call for the assertion below.
+    hass.async_create_task = MagicMock(side_effect=_consume_coro)
     dev = _make_load_device(hass=hass)
 
     # Add an entity to fill from history
@@ -956,8 +974,15 @@ async def test_get_next_scheduled_events_duplicate_start_line523():
 
 def test_root_device_post_home_init_exception_lines324_325():
     """Cover lines 324-325: exception in bootstrap -> log error and continue."""
+
+    def _consume_and_raise(coro):
+        # Close the coroutine first so the side-effect Exception doesn't
+        # leave it un-awaited at GC time (RuntimeWarning).
+        coro.close()
+        raise Exception("bootstrap failed")
+
     hass = _make_fake_hass()
-    hass.async_create_task = MagicMock(side_effect=Exception("bootstrap failed"))
+    hass.async_create_task = MagicMock(side_effect=_consume_and_raise)
     dev = _make_load_device(hass=hass)
     dev._entities_to_fill_from_history.add("sensor.test_entity")
 

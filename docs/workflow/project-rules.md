@@ -14,23 +14,43 @@ energy self-consumption through a constraint-based solver.
 ## Commands
 
 Activate `source venv/bin/activate` for all Python commands.
+`scripts/qs/quality_gate.py` is the **single test entry point** —
+it owns the cache, `pytest-xdist` parallelization,
+`COVERAGE_CORE=sysmon`, and scope detection. Raw `pytest` bypasses
+all four; use it only for ad-hoc single-node debugging.
 
 ```bash
-# Run all quality gates (pytest 100% coverage + ruff + mypy + translations)
+# Full quality gate (pytest 100% cov + ruff + mypy + translations).
+# Required before every commit.
 python scripts/qs/quality_gate.py
 
-# Auto-fix formatting and lint
+# Recommended default for repeated dev-loop runs — skips gates when
+# git state matches a previous pass on a clean tree.
+python scripts/qs/quality_gate.py --cache
+
+# Auto-fix formatting and lint.
 python scripts/qs/quality_gate.py --fix
 
-# JSON output for scripts
+# JSON output for scripts.
 python scripts/qs/quality_gate.py --json
 
-# Run tests only
-source venv/bin/activate && pytest tests/ -v
+# Fast iteration on one or more test paths (files or directories).
+# Uses xdist + sysmon, skips coverage / ruff / mypy / translations.
+# The canonical TDD red/green/refactor command.
+python scripts/qs/quality_gate.py --quick tests/test_solver.py
+python scripts/qs/quality_gate.py --quick tests/ha_tests
+python scripts/qs/quality_gate.py --quick tests/test_solver.py tests/test_constraints.py
 
-# Single test
+# Ad-hoc single-node pytest — debugging only.
 source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 ```
+
+**Raw-`pytest` grammar rule.** Allowed: `pytest <path>::<nodeid> [-v]`
+— the positional argument MUST contain `::`. Forbidden as a habitual
+command: any `pytest` invocation whose positional argument lacks
+`::`, e.g., `pytest tests/`, `pytest tests/ha_tests`,
+`pytest tests/test_foo.py`. Use `--quick` on the enclosing file or
+directory instead.
 
 ## Architecture constraints
 
