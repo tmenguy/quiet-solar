@@ -372,6 +372,13 @@ SOLAR_DUSK_THRESHOLD_W = 100
 
 SOLAR_DUSK_EARLIEST_LOCAL_HOUR = 15
 # 3 PM local — earliest plausible dusk for high-latitude winters.
+# Module-load invariant: a typo (e.g., 25) would silently disable
+# dusk detection forever, so we validate the range here.  `assert`
+# is acceptable for a module-load constant — if it fires under
+# `-O`, the constant is misconfigured and no runtime guard helps.
+assert 0 <= SOLAR_DUSK_EARLIEST_LOCAL_HOUR <= 23, (
+    f"SOLAR_DUSK_EARLIEST_LOCAL_HOUR={SOLAR_DUSK_EARLIEST_LOCAL_HOUR} must be in [0, 23]"
+)
 
 SOLAR_DUSK_SUSTAIN_S = 90 * 60
 # 90 min sustained low-pv to commit dusk (filters cloud transients).

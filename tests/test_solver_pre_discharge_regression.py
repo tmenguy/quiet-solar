@@ -184,7 +184,11 @@ def test_layer3_required_for_overnight_pre_discharge():
         if state_deltas[i] > 0:
             no_guard_traj[i:] -= float(state_deltas[i])
     min_traj_no_guard = float(np.min(no_guard_traj))
-    # AC-9 RED: without Layer 3, the trajectory dips below the safety floor.
+    # AC-9 RED: without Layer 3, the reconstructed trajectory MUST
+    # breach the safety floor; this is the regression demonstration
+    # the test was designed for.  If this assertion ever flips (test
+    # passes without Layer 3), Layer 3 is no longer load-bearing and
+    # the story scope should be revisited.
     assert min_traj_no_guard < floor, (
         f"AC-9 RED: expected min(bat_charge_no_guard)={min_traj_no_guard:.1f} "
         f"< floor={floor:.1f} (initial min was {float(np.min(initial_traj_no_guard)):.1f})"
@@ -246,7 +250,10 @@ def test_full_solver_keeps_battery_above_floor_on_big_sun_day():
     # AC-9 GREEN: full-solver run must respect the SAFETY FLOOR (empty
     # + safety_margin), not just absolute empty.  Matches the paired
     # manual-call assertion in test_layer3_required_for_overnight_pre_discharge.
-    assert min_in_horizon >= floor, (
+    # Tolerance: 1 mWh slack to absorb accumulator rounding noise
+    # (review fix #03 should-fix #13).  Matches the paired unit-test
+    # assertion's tolerance.
+    assert min_in_horizon >= floor - 1e-3, (
         f"Full-solver run dipped below the safety floor: "
-        f"min={min_in_horizon:.1f}, floor={floor:.1f} (AC-9 GREEN)"
+        f"min={min_in_horizon:.1f}, floor={floor:.1f} (AC-9 GREEN, tol=1e-3)"
     )

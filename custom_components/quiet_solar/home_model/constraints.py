@@ -1363,15 +1363,22 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         use_battery_floor = energy_delta >= 0.0 and bat_charge_traj is not None
         forward_min: npt.NDArray[np.float64] | None = None
         if use_battery_floor and bat_charge_traj is not None:
-            # NaN propagates silently through max(0, NaN - floor) = 0,
-            # disabling Layer 3 for the affected slot — catch it here.
-            assert not np.any(np.isnan(bat_charge_traj)), (
-                "bat_charge_traj contains NaN; upstream battery sim produced invalid values."
-            )
+            # NaN invariant documentation — the load-bearing runtime
+            # check lives upstream in `_constraints_delta` (where the
+            # trajectory is seeded from `_battery_get_charging_power`).
+            # Here we keep an inexpensive `assert` so the invariant is
+            # documented at the use site without paying O(n) on every
+            # call.  Acceptable under `-O` stripping because the
+            # production guard is upstream.
+            assert not np.any(np.isnan(bat_charge_traj)), "bat_charge_traj invariant: must not contain NaN"
             forward_min = np.full_like(bat_charge_traj, np.inf)
             forward_min[first_slot : last_slot + 1] = np.minimum.accumulate(
                 bat_charge_traj[first_slot : last_slot + 1][::-1]
             )[::-1]
+            # forward_min is initialised iff use_battery_floor is True —
+            # document the invariant once at gate entry so downstream
+            # reads can rely on it without per-iteration asserts.
+            assert forward_min is not None, "use_battery_floor implies forward_min is initialised"
 
         if energy_delta >= 0.0:
             _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
@@ -1443,16 +1450,16 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if i in forced_slot_commands:
                         continue
 
-                    # Multi-pass guard (QS-178 review fix #1, must-fix #2):
-                    # pass-1 may have placed at slot `i` already.  Pass-2 reads
-                    # `current_command_power` from `existing_commands[i]` (the
-                    # pre-call snapshot), NOT from `out_commands[i]`, so a
-                    # revisit would re-compute a fresh delta and OVERWRITE the
-                    # placement while still applying its own
-                    # bat_charge_traj decrement — net effect: double-decrement
-                    # of the trajectory but only the second placement's energy
-                    # accounted in out_delta_power.  Skip placed slots.
-                    if out_commands[i] is not None:
+                    # Multi-pass guard — gated on `use_battery_floor`:
+                    # the double-decrement hazard only exists when
+                    # `bat_charge_traj` is being mutated (review fix #1
+                    # must-fix #2).  Outside that scope, pass-2's
+                    # legitimate upgrade path (revisiting a slot placed
+                    # in pass-1 to bump it to a higher command) is
+                    # preserved — that's the pre-QS-178 behavior the 49+
+                    # existing call sites rely on.  Review fix #03
+                    # must-fix #2 restored the gate.
+                    if use_battery_floor and out_commands[i] is not None:
                         continue
 
                     slot_transition_cost = 0
@@ -1647,13 +1654,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                         # intermediate placements get skipped when
                         # current_command_power > 0.
                         if use_battery_floor and delta_power > 0:
-                            # Defensive: zero-duration slots are degenerate
-                            # (would raise ZeroDivisionError below) and
-                            # never carry meaningful drain.
-                            if float(power_slots_duration_s[i]) <= 0:
+                            # Defensive: zero, NaN, or inf durations are
+                            # degenerate.  `NaN <= 0` is False (would
+                            # fall through with NaN division producing
+                            # NaN); `inf <= 0` is also False (division
+                            # yields 0 and the clamp picks unhelpful
+                            # bounds).  Skip via an explicit positive-
+                            # finite check.
+                            duration_s = float(power_slots_duration_s[i])
+                            if not (duration_s > 0.0) or not np.isfinite(duration_s):
                                 continue
                             max_drain_wh = max(0.0, float(forward_min[i]) - battery_min_wh)
-                            max_delta_power_floor = max_drain_wh * 3600.0 / float(power_slots_duration_s[i])
+                            max_delta_power_floor = max_drain_wh * 3600.0 / duration_s
                             if delta_power > max_delta_power_floor:
                                 piloted_offset = possible_power_piloted_delta if is_current_empty_command else 0.0
                                 allowed_base_power = current_command_power + max_delta_power_floor - piloted_offset

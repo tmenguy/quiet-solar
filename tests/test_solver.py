@@ -870,17 +870,28 @@ class TestSolver(TestCase):
         # forecast-rich days.  The original `has_min_power_periods`
         # assertion captured the OLD conservative allocation; the new
         # envelope DELIBERATELY fills these slots at a higher rate.
-        # Replace with a STRUCTURAL assertion: at least 3 distinct
-        # slots must be commanded above the minimum-band upper bound
-        # (1.2× the min).  Stable under tuning drift and clearly
-        # captures the new behavior: the surplus block deliberately
-        # bumps multiple slots above the minimum band on big-sun days.
-        slots_above_min_band = sum(
-            1 for cmd in car_cmds if cmd[1].power_consign > car_minimum_power * 1.2
-        )
-        assert slots_above_min_band >= 3, (
-            f"QS-178 aggressive pre-discharge: expected at least 3 slots "
-            f"above the minimum-band upper bound "
+        # Replace with a STRUCTURAL assertion: count SLOTS (not command
+        # entries — review fix #03 must-fix #7) commanded above the
+        # minimum-band upper bound (1.2× the min).  A single high-
+        # power command can span many slots; without expansion the
+        # previous sum would misclassify the QS-178 behavior.
+        # Threshold: at least 25% of the run's slots above the min
+        # band (must-fix #7 + nice-to-have #3).
+        # Build a (start, end) → cmd list by pairing consecutive command
+        # entries.  end of the last command = end_time of the scenario.
+        slot_s = 900.0  # SOLVER_STEP_S
+        slots_above_min_band = 0
+        for k, (cmd_start, cmd) in enumerate(car_cmds):
+            cmd_end = car_cmds[k + 1][0] if k + 1 < len(car_cmds) else end_time
+            slot_count = int(round((cmd_end - cmd_start).total_seconds() / slot_s))
+            if cmd.power_consign > car_minimum_power * 1.2:
+                slots_above_min_band += slot_count
+        total_slots = int(round((end_time - start_time).total_seconds() / slot_s))
+        min_expected_slots = max(3, total_slots // 4)
+        assert slots_above_min_band >= min_expected_slots, (
+            f"QS-178 aggressive pre-discharge: expected at least "
+            f"{min_expected_slots} slots ({total_slots // 4}/{total_slots}, "
+            f"i.e. 25%) above the minimum-band upper bound "
             f"({car_minimum_power * 1.2:.0f}W); got {slots_above_min_band}"
         )
 

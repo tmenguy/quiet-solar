@@ -941,10 +941,14 @@ def replay_solver_with_pv_scaling(
 
     from custom_components.quiet_solar.home_model.solver import PeriodSolver
 
-    # Defensive factor sanity — NaN / negative would silently corrupt
-    # the rescaled forecast.
-    assert not math.isnan(factor), "factor must not be NaN"
-    assert factor >= 0, f"factor must be non-negative; got {factor}"
+    # Defensive factor sanity — NaN / inf / negative would silently
+    # corrupt the rescaled forecast.  `isfinite` rejects both NaN and
+    # ±inf in a single check.  Raise (not assert) so the guard survives
+    # `python -O`.
+    if not math.isfinite(factor):
+        raise ValueError(f"factor must be finite; got {factor}")
+    if factor < 0:
+        raise ValueError(f"factor must be non-negative; got {factor}")
 
     # Defensive attribute checks — fail loudly if PeriodSolver's
     # private surface changed.

@@ -502,6 +502,15 @@ class PeriodSolver:
         Precondition: all ``self._time_slots[i]`` MUST be timezone-aware
         datetimes.  Naive datetimes would silently inherit OS-local tz
         semantics in ``astimezone(tz=None)``.
+
+        Note: dusk detection is biased LATER than reality when a
+        sustained low-pv run starts before SOLAR_DUSK_EARLIEST_LOCAL_HOUR.
+        The pre-EARLIEST slots are skipped (not accumulated into the
+        sustain budget), so the return value may overshoot the actual
+        dusk transition by up to
+        ``SOLAR_DUSK_EARLIEST_LOCAL_HOUR - run_start_hour`` minutes.
+        This bias widens the waste-counting horizon, which is the
+        intended direction on big-sun days.
         """
         num_slots: int = len(self._durations_s)
         pv: npt.NDArray[np.float64] = self._solar_production
@@ -518,7 +527,10 @@ class PeriodSolver:
             if not have_seen_sun:
                 i += 1
                 continue
-            assert time_slots[i].tzinfo is not None, "time_slots[i] must be tz-aware (set start_time with tzinfo)"
+            if time_slots[i].tzinfo is None:
+                raise ValueError(
+                    "time_slots[i] must be tz-aware; start_time should be set with tzinfo for correct dusk detection."
+                )
             if time_slots[i].astimezone(tz=None).hour < SOLAR_DUSK_EARLIEST_LOCAL_HOUR:
                 i += 1
                 continue
@@ -529,11 +541,12 @@ class PeriodSolver:
                 if sustained_s >= SOLAR_DUSK_SUSTAIN_S:
                     return i
                 j += 1
-            # Inner loop exited because pv[j] >= threshold (sun returned
-            # for a single-slot spike) or because j == num_slots.  When
-            # sun returned, mark have_seen_sun for that slot — currently
-            # harmless because the outer loop's main branch sets the flag,
-            # but explicit is safer than relying on prior-iteration state.
+            # Sun-spike fallthrough: when the inner sustain loop exits
+            # because `pv[j] >= threshold`, mark have_seen_sun for that
+            # slot explicitly.  The outer loop's pv>=threshold branch
+            # also sets this flag, but the explicit set here avoids
+            # relying on outer-loop ordering and keeps this branch
+            # self-contained.
             if j < num_slots:
                 have_seen_sun = True
             i = j + 1
@@ -568,9 +581,8 @@ class PeriodSolver:
         Precondition: ``len(battery_charge) == len(self._durations_s)``.
         """
         num_slots: int = len(self._durations_s)
-        assert len(battery_charge) == num_slots, (
-            f"battery_charge length {len(battery_charge)} != slot count {num_slots}"
-        )
+        if len(battery_charge) != num_slots:
+            raise ValueError(f"battery_charge length {len(battery_charge)} does not match slot count {num_slots}.")
         battery = self._battery
         if battery is None:
             return 0.0, None, None
@@ -771,6 +783,7 @@ class PeriodSolver:
         allow_change_state=True,
         *,
         battery_min_wh: float = 0.0,
+        battery_commands: list | None = None,
     ):
 
         solved = False
@@ -789,9 +802,27 @@ class PeriodSolver:
         # refresh is required.  For energy_delta < 0 (segmentation cap
         # loop), no trajectory is passed and the guard inside
         # adapt_repartition stays inert.
+        #
+        # `battery_commands` must be threaded through both
+        # `_battery_get_charging_power()` calls so the floor-guard
+        # trajectory matches the same battery state the surplus-block
+        # budget was sized against (CMD_FORCE_CHARGE / CMD_GREEN_CHARGE_ONLY
+        # slots produce a HIGHER charge trajectory than the default
+        # CMD_GREEN_CHARGE_AND_DISCHARGE).  Without this threading the
+        # budget and the floor-guard read different baselines.
         bat_charge_traj: npt.NDArray[np.float64] | None = None
         if energy_delta > 0 and self._battery is not None:
-            bat_charge_traj = self._battery_get_charging_power()[1].copy()
+            bat_charge_traj = self._battery_get_charging_power(existing_battery_commands=battery_commands)[1].copy()
+            # Load-bearing safety guard (NOT an `assert`, so it survives
+            # `python -O`): NaN in the battery-charge trajectory would
+            # silently disable Layer 3 (since `max(0, NaN - floor) = 0`
+            # opens the floor check).  Catch at the upstream seed point.
+            if np.any(np.isnan(bat_charge_traj)):
+                raise ValueError(
+                    "_battery_get_charging_power returned NaN values in "
+                    "the battery-charge trajectory; check battery "
+                    "configuration or upstream forecast."
+                )
 
         if energy_delta != 0:
             if energy_delta > 0:
@@ -878,14 +909,23 @@ class PeriodSolver:
                     self._add_consumption_delta_power(out_delta_power)
                     self._merge_commands_slots_for_load(actions, ci, st, nd, out_commands_adapted, prio_on_new=True)
 
-                    # recompute battery state and max_possible_production after each delta
+                    # recompute battery state and max_possible_production after each delta.
+                    # Thread `battery_commands` so the refreshed
+                    # trajectory matches the same battery state the
+                    # surplus-block budget was sized against (see entry-
+                    # point comment above).
                     bat_possible_discharge = None
                     if self._battery is not None:
-                        refreshed = self._battery_get_charging_power()
+                        refreshed = self._battery_get_charging_power(existing_battery_commands=battery_commands)
                         bat_possible_discharge = refreshed[7]
                         # re-seed the trajectory for the next constraint's guard
                         if bat_charge_traj is not None:
                             bat_charge_traj = refreshed[1].copy()
+                            if np.any(np.isnan(bat_charge_traj)):
+                                raise ValueError(
+                                    "_battery_get_charging_power returned NaN values during "
+                                    "per-placement refresh; check battery configuration."
+                                )
                     self._max_possible_production = self._compute_max_possible_production(
                         battery_possible_discharge=bat_possible_discharge,
                     )
@@ -1366,8 +1406,15 @@ class PeriodSolver:
                 probe_window_start = 0
                 probe_window_end = last_surplus_idx
 
+                # Floor defined ONCE at the top of the surplus block:
+                # `battery_drain_budget_wh` and Layer-3's `battery_min_wh`
+                # are two encodings of the same quantity (empty +
+                # safety margin); using a single variable removes the
+                # drift risk.
                 usable_capacity_wh = self._battery.get_value_full() - self._battery.get_value_empty()
                 safety_margin_wh = SOLAR_WASTE_SAFETY_MARGIN_FRACTION * usable_capacity_wh
+                floor_wh = self._battery.get_value_empty() + safety_margin_wh
+
                 # Drain budget is bounded by the SIMULATED peak charge over
                 # the probe window, not the NOW-time charge.  Rationale: a
                 # battery that's currently 5 % but the trajectory says will
@@ -1377,10 +1424,7 @@ class PeriodSolver:
                 # refill-feasibility shrink below so the budget reflects
                 # only head-room reachable from inside the shrunk window.
                 max_future_charge_wh = float(np.max(battery_charge[probe_window_start : probe_window_end + 1]))
-                battery_drain_budget_wh = max(
-                    0.0,
-                    max_future_charge_wh - self._battery.get_value_empty() - safety_margin_wh,
-                )
+                battery_drain_budget_wh = max(0.0, max_future_charge_wh - floor_wh)
 
                 # AC-3 first-pass envelope using the full probe.
                 #   energy_to_be_spent = min(0.7 * waste,
@@ -1401,17 +1445,36 @@ class PeriodSolver:
                 # caps cross-slot drain inside adapt_repartition, but
                 # without this end-shrink the surplus block would push the
                 # last probe slots to high power without any refill source.
-                nrj_to_recharge = energy_to_be_spent
+                #
+                # `remaining_refill_demand_wh` semantics: starts at the
+                # positive refill demand (= energy_to_be_spent) and
+                # DECREASES as we add each slot's *available_power* value
+                # (which is NEGATIVE for surplus slots — surplus has
+                # `available_power < 0`).  When the cumulative surplus
+                # has reached the refill demand, the variable hits 0 and
+                # the break fires.
+                #
+                # No-break case (loop exits without break): refill demand
+                # exceeds total surplus on [probe_window_start,
+                # last_surplus_idx].  `probe_window_end` ends up at the
+                # final iteration's `i` (= probe_window_start).  The
+                # break-slot's surplus is then both subtracted into the
+                # refill accounting AND remains in the placement window —
+                # bounded slack of one slot's surplus, accepted.
+                remaining_refill_demand_wh = energy_to_be_spent
                 for i in range(last_surplus_idx, probe_window_start - 1, -1):
                     if self._available_power[i] < 0.0:
-                        nrj_to_recharge += float(self._available_power[i]) * float(self._durations_s[i]) / 3600.0
-                    if nrj_to_recharge <= 0.0:
+                        remaining_refill_demand_wh += (
+                            float(self._available_power[i]) * float(self._durations_s[i]) / 3600.0
+                        )
+                    if remaining_refill_demand_wh <= 0.0:
                         # Break-slot i's surplus is fully consumed by
                         # refill; exclude it from the placement window
                         # (max(...) clamps to >= probe_window_start so we
-                        # never produce a negative index).  If i ==
-                        # probe_window_start the degenerate-window guard
-                        # below catches the case.
+                        # never produce a negative index).  The
+                        # degenerate-window guard below uses STRICT > to
+                        # also drop the
+                        # [probe_window_start, probe_window_start] case.
                         probe_window_end = max(probe_window_start, i - 1)
                         break
                     probe_window_end = i
@@ -1422,12 +1485,9 @@ class PeriodSolver:
                 # When the un-shrunk window's peak sat in the cut tail,
                 # the old budget overstated head-room available to
                 # placements.
-                if probe_window_end >= probe_window_start:
+                if probe_window_end > probe_window_start:
                     max_future_charge_wh = float(np.max(battery_charge[probe_window_start : probe_window_end + 1]))
-                    battery_drain_budget_wh = max(
-                        0.0,
-                        max_future_charge_wh - self._battery.get_value_empty() - safety_margin_wh,
-                    )
+                    battery_drain_budget_wh = max(0.0, max_future_charge_wh - floor_wh)
 
                 # Re-cap energy_to_be_spent by the shrunk probe's actually
                 # usable surplus: solar AFTER probe_window_end is the
@@ -1449,9 +1509,12 @@ class PeriodSolver:
                 # exclusion (probe_window_end = i - 1), a refill that
                 # fires on the very first iteration AND
                 # last_surplus_idx == probe_window_start collapses the
-                # window to an empty range.  Surplus block has nothing
-                # to place; skip it.
-                if energy_to_be_spent > 0 and probe_window_end >= probe_window_start:
+                # window to a degenerate
+                # [probe_window_start, probe_window_start] range whose
+                # only slot was the refill break-slot.  STRICT > drops
+                # both that case AND the empty-range case (window cut
+                # below start) cleanly.
+                if energy_to_be_spent > 0 and probe_window_end > probe_window_start:
                     constraints = self._build_surplus_probe_constraints(
                         constraints_evolution,
                         constraints_bounds,
@@ -1477,7 +1540,6 @@ class PeriodSolver:
                             energy_to_be_spent,
                             expected_waste_wh,
                         )
-                        battery_min_wh = self._battery.get_value_empty() + safety_margin_wh
                         while True:
                             solved, has_changed, energy_to_be_spent = self._constraints_delta(
                                 energy_to_be_spent,
@@ -1487,7 +1549,8 @@ class PeriodSolver:
                                 actions,
                                 probe_window_start,
                                 probe_window_end,
-                                battery_min_wh=battery_min_wh,
+                                battery_min_wh=floor_wh,
+                                battery_commands=battery_commands,
                             )
                             if has_changed:
                                 _LOGGER.info(
