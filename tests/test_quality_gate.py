@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 import sys
+import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -14,6 +16,8 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "qs"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import quality_gate
+
+QG_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "quality_gate"
 
 
 # --- Helpers ---
@@ -415,3 +419,393 @@ class TestCacheCliIntegration:
         output = json.loads(capsys.readouterr().out)
         assert output["scope"] == "dev-only"
         assert output["all_passed"] is True
+
+
+# --- T1: pytest invocation with xdist + sysmon + suppress html ---
+
+
+class TestCheckPytestInvocation:
+    """Tests for the pytest gate command construction (AC1, AC2, AC4)."""
+
+    def test_default_uses_n_auto_and_sysmon(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """check_pytest builds cmd with `-n auto` and runs with COVERAGE_CORE=sysmon."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str]) -> dict:
+            captured["cmd"] = cmd
+            captured["env"] = quality_gate._pytest_env()
+            return {"name": "pytest", "passed": True, "coverage": "100%",
+                    "missing": [], "detail": "", "stderr": ""}
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest()
+
+        cmd = captured["cmd"]
+        assert "-n" in cmd
+        n_index = cmd.index("-n")
+        assert cmd[n_index + 1] == "auto"
+        assert captured["env"]["COVERAGE_CORE"] == "sysmon"
+
+    def test_env_override_changes_workers(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """QS_QG_PYTEST_WORKERS=4 → cmd contains `-n 4`."""
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", "4")
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str]) -> dict:
+            captured["cmd"] = cmd
+            return {"name": "pytest", "passed": True, "coverage": "100%",
+                    "missing": [], "detail": "", "stderr": ""}
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest()
+
+        cmd = captured["cmd"]
+        assert "-n" in cmd
+        assert cmd[cmd.index("-n") + 1] == "4"
+
+    def test_zero_workers_means_serial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """QS_QG_PYTEST_WORKERS=0 → no `-n` in cmd."""
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", "0")
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str]) -> dict:
+            captured["cmd"] = cmd
+            return {"name": "pytest", "passed": True, "coverage": "100%",
+                    "missing": [], "detail": "", "stderr": ""}
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest()
+
+        assert "-n" not in captured["cmd"]
+
+    def test_missing_xdist_falls_back_serial(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """When xdist is not importable, gate runs serially and warns to stderr."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str]) -> dict:
+            captured["cmd"] = cmd
+            return {"name": "pytest", "passed": True, "coverage": "100%",
+                    "missing": [], "detail": "", "stderr": ""}
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=False),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest()
+
+        assert "-n" not in captured["cmd"]
+        err = capsys.readouterr().err
+        assert "xdist not available" in err
+
+    def test_cov_report_empty_appended(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """cmd contains `--cov-report=` (empty value) to override pytest.ini's html default."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str]) -> dict:
+            captured["cmd"] = cmd
+            return {"name": "pytest", "passed": True, "coverage": "100%",
+                    "missing": [], "detail": "", "stderr": ""}
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest()
+
+        assert "--cov-report=" in captured["cmd"]
+
+    def test_collect_only_subprocess_has_no_n_and_no_sysmon(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The --collect-only count subprocess must not get `-n` or COVERAGE_CORE=sysmon."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        run_calls: list = []
+        popen_calls: list = []
+
+        def fake_run(cmd, cwd=None):  # type: ignore[no-untyped-def]
+            run_calls.append({"cmd": list(cmd)})
+            r = MagicMock()
+            r.stdout = "0 tests collected\n"
+            r.stderr = ""
+            r.returncode = 0
+            return r
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):  # type: ignore[no-untyped-def]
+                popen_calls.append({"cmd": list(cmd), "env": kwargs.get("env")})
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO("")
+                self.returncode = 0
+
+            def wait(self):  # type: ignore[no-untyped-def]
+                return 0
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "_run", side_effect=fake_run),
+            patch.object(quality_gate.subprocess, "Popen", FakePopen),
+        ):
+            quality_gate.check_pytest()
+
+        # First call to _run is the --collect-only subprocess
+        collect_cmd = run_calls[0]["cmd"]
+        assert "--collect-only" in collect_cmd
+        assert "-n" not in collect_cmd
+
+        # The main Popen call (pytest run) should have COVERAGE_CORE=sysmon in env
+        main_env = popen_calls[0]["env"]
+        assert main_env is not None
+        assert main_env.get("COVERAGE_CORE") == "sysmon"
+
+
+# --- T2: concurrent cheap gates, pytest serialized last (AC3) ---
+
+
+class TestConcurrentGates:
+    """Tests for parallel execution of cheap gates and serial pytest after."""
+
+    def test_cheap_gates_run_concurrently(self, tmp_path: Path) -> None:
+        """Cheap gates run in parallel — wall-clock well under 4x serial sleep."""
+        sleep_s = 0.3
+
+        def slow(name: str):  # type: ignore[no-untyped-def]
+            def _fn(**kwargs):  # type: ignore[no-untyped-def]
+                time.sleep(sleep_s)
+                return {"name": name, "passed": True, "detail": ""}
+            return _fn
+
+        pytest_result = {
+            "name": "pytest", "passed": True, "coverage": "100%",
+            "missing": [], "detail": "", "stderr": "",
+        }
+
+        start = time.monotonic()
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json"]),
+            _patch_git_state(),
+            _patch_full_scope(),
+            patch.object(quality_gate, "CACHE_FILE", tmp_path / ".quality_gate_cache"),
+            patch.object(quality_gate, "check_ruff_format", side_effect=slow("ruff_format")),
+            patch.object(quality_gate, "check_ruff_lint", side_effect=slow("ruff_lint")),
+            patch.object(quality_gate, "check_mypy", side_effect=slow("mypy")),
+            patch.object(quality_gate, "check_translations", side_effect=slow("translations")),
+            patch.object(quality_gate, "check_pytest", return_value=pytest_result),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        elapsed = time.monotonic() - start
+
+        # 4 cheap gates serial would take 4*sleep_s = 1.2s.
+        # With ThreadPoolExecutor(max_workers=4), should be ~sleep_s = 0.3s.
+        # Generous threshold (3x sleep) avoids flakiness on slow CI machines.
+        assert elapsed < sleep_s * 3, f"expected concurrent execution (<{sleep_s*3}s), took {elapsed:.2f}s"
+
+    def test_pytest_runs_after_cheap_gates(self, tmp_path: Path) -> None:
+        """check_pytest is called only after all 4 cheap gates have completed."""
+        order: list[str] = []
+        cheap_started: list[str] = []
+
+        def make_cheap(name: str):  # type: ignore[no-untyped-def]
+            def _fn(**kwargs):  # type: ignore[no-untyped-def]
+                cheap_started.append(name)
+                # Sleep briefly so all four are in-flight if parallel
+                time.sleep(0.05)
+                order.append(name)
+                return {"name": name, "passed": True, "detail": ""}
+            return _fn
+
+        def fake_pytest():  # type: ignore[no-untyped-def]
+            order.append("pytest")
+            return {"name": "pytest", "passed": True, "coverage": "100%",
+                    "missing": [], "detail": "", "stderr": ""}
+
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json"]),
+            _patch_git_state(),
+            _patch_full_scope(),
+            patch.object(quality_gate, "CACHE_FILE", tmp_path / ".quality_gate_cache"),
+            patch.object(quality_gate, "check_ruff_format", side_effect=make_cheap("ruff_format")),
+            patch.object(quality_gate, "check_ruff_lint", side_effect=make_cheap("ruff_lint")),
+            patch.object(quality_gate, "check_mypy", side_effect=make_cheap("mypy")),
+            patch.object(quality_gate, "check_translations", side_effect=make_cheap("translations")),
+            patch.object(quality_gate, "check_pytest", side_effect=fake_pytest),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+
+        # All 4 cheap gates should be in order before pytest
+        cheap_names = {"ruff_format", "ruff_lint", "mypy", "translations"}
+        pytest_index = order.index("pytest")
+        cheap_completion_indexes = [order.index(name) for name in cheap_names]
+        assert all(i < pytest_index for i in cheap_completion_indexes), (
+            f"pytest must run after all cheap gates; order={order}"
+        )
+
+    def test_results_preserve_canonical_order(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """JSON output gates appear in canonical order regardless of completion order."""
+        def make(name: str, delay: float):  # type: ignore[no-untyped-def]
+            def _fn(**kwargs):  # type: ignore[no-untyped-def]
+                time.sleep(delay)
+                return {"name": name, "passed": True, "detail": ""}
+            return _fn
+
+        # Mypy finishes first, ruff_format last — should still be reported in canonical order
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json"]),
+            _patch_git_state(),
+            _patch_full_scope(),
+            patch.object(quality_gate, "CACHE_FILE", tmp_path / ".quality_gate_cache"),
+            patch.object(quality_gate, "check_ruff_format", side_effect=make("ruff_format", 0.15)),
+            patch.object(quality_gate, "check_ruff_lint", side_effect=make("ruff_lint", 0.10)),
+            patch.object(quality_gate, "check_mypy", side_effect=make("mypy", 0.01)),
+            patch.object(quality_gate, "check_translations", side_effect=make("translations", 0.05)),
+            patch.object(quality_gate, "check_pytest", return_value={
+                "name": "pytest", "passed": True, "coverage": "100%",
+                "missing": [], "detail": "", "stderr": "",
+            }),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+
+        out = json.loads(capsys.readouterr().out)
+        names = [g["name"] for g in out["gates"]]
+        assert names == ["ruff_format", "ruff_lint", "mypy", "translations", "pytest"]
+
+    def test_emit_writes_to_stderr_with_prefix(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """_emit(name, line) writes `[<name>] <line>\\n` to stderr."""
+        quality_gate._emit("mypy", "running")
+        err = capsys.readouterr().err
+        assert err == "[mypy] running\n"
+
+    def test_existing_gates_have_no_self_prefix(self) -> None:
+        """Cheap gates no longer write the legacy `  <gate>:` self-prefix to stderr."""
+        fake_result = MagicMock()
+        fake_result.returncode = 0
+        fake_result.stdout = ""
+        fake_result.stderr = ""
+
+        with (
+            patch.object(quality_gate, "_run", return_value=fake_result),
+            patch("sys.stderr", new_callable=io.StringIO) as fake_err,
+        ):
+            quality_gate.check_ruff_lint(fix=False)
+
+        captured = fake_err.getvalue()
+        # Old self-prefix was "  ruff lint: running..." with two-space indent
+        assert "  ruff lint:" not in captured
+        # New format uses [ruff_lint] prefix
+        assert "[ruff_lint]" in captured
+
+
+# --- T3: output-mode-agnostic progress parser (AC5) ---
+
+
+class TestStreamPytestParser:
+    """Tests for _parse_pytest_output against captured fixtures."""
+
+    def test_parse_seq_q(self) -> None:
+        text = (QG_FIXTURES_DIR / "seq_q_pass.txt").read_text()
+        counts = quality_gate._parse_pytest_output(text)
+        assert counts["passed"] == 21
+        assert counts["failed"] == 0
+        assert counts["errors"] == 0
+
+    def test_parse_seq_q_cov(self) -> None:
+        text = (QG_FIXTURES_DIR / "seq_q_cov_pass.txt").read_text()
+        counts = quality_gate._parse_pytest_output(text)
+        assert counts["passed"] == 21
+        assert counts["failed"] == 0
+        assert counts["errors"] == 0
+
+    def test_parse_xdist_q(self) -> None:
+        text = (QG_FIXTURES_DIR / "xdist_q_pass.txt").read_text()
+        counts = quality_gate._parse_pytest_output(text)
+        assert counts["passed"] == 21
+        assert counts["failed"] == 0
+        assert counts["errors"] == 0
+
+    def test_parse_with_failures(self) -> None:
+        text = (QG_FIXTURES_DIR / "with_failures.txt").read_text()
+        counts = quality_gate._parse_pytest_output(text)
+        assert counts["failed"] == 3
+        # Summary line is authoritative: "3 failed, 18 passed"
+        assert counts["passed"] == 18
+
+    def test_parse_with_xdist_worker_prefix(self) -> None:
+        """Lines like `[gw0] ...` are stripped before progress parsing."""
+        text = "[gw0] .....\n[gw1] .....\n10 passed in 0.50s\n"
+        counts = quality_gate._parse_pytest_output(text)
+        assert counts["passed"] == 10
+
+
+# --- T4: pytest.ini regression guard ---
+
+
+class TestPytestIniRegression:
+    """Regression guard for pytest.ini's --cov-report config."""
+
+    def test_pytest_ini_has_no_html_default(self) -> None:
+        """The pytest.ini default addopts must not include --cov-report=html."""
+        repo_root = Path(__file__).resolve().parent.parent
+        pytest_ini = (repo_root / "pytest.ini").read_text()
+        assert "--cov-report=html" not in pytest_ini
+
+
+# --- T9 regression: CI workflow yaml is valid and uses xdist + sysmon ---
+
+
+class TestCiWorkflowConfig:
+    """Regression guard for .github/workflows/pr-quality.yml."""
+
+    def test_workflow_yaml_is_valid_and_uses_xdist_sysmon(self) -> None:
+        """Workflow parses as YAML, test job uses -n auto and COVERAGE_CORE=sysmon."""
+        try:
+            import yaml
+        except ImportError:
+            pytest.skip("PyYAML not installed")
+
+        repo_root = Path(__file__).resolve().parent.parent
+        wf_path = repo_root / ".github" / "workflows" / "pr-quality.yml"
+        if not wf_path.exists():
+            pytest.skip("workflow file missing")
+
+        data = yaml.safe_load(wf_path.read_text())
+        # Find the `test` job
+        test_job = data["jobs"]["test"]
+        steps = test_job["steps"]
+        run_steps = [s for s in steps if "run" in s and "pytest" in s.get("run", "")]
+        assert run_steps, "no pytest step found in test job"
+        pytest_step = run_steps[0]
+        assert "-n auto" in pytest_step["run"] or "--numprocesses auto" in pytest_step["run"]
+        env = pytest_step.get("env", {})
+        assert env.get("COVERAGE_CORE") == "sysmon"
+
+
+# --- B1: requirements_test.txt includes pytest-xdist ---
+
+
+class TestRequirementsTestDeps:
+    """Regression guard for requirements_test.txt."""
+
+    def test_pytest_xdist_declared(self) -> None:
+        repo_root = Path(__file__).resolve().parent.parent
+        reqs = (repo_root / "requirements_test.txt").read_text()
+        assert "pytest-xdist" in reqs
