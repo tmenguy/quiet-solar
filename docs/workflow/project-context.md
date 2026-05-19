@@ -146,7 +146,10 @@ When adding a new device type, agents must touch:
 ### Coverage
 
 - **100% test coverage is MANDATORY and NON-NEGOTIABLE.** Every PR must maintain 100% coverage.
-- Run: `source venv/bin/activate && pytest tests/ --cov=custom_components/quiet_solar --cov-report=term-missing`
+- `scripts/qs/quality_gate.py` is the single test entry point (owns cache, xdist, sysmon, scope detection). Raw `pytest` bypasses all four.
+- Full gate (pytest 100% cov + ruff + mypy + translations): `python scripts/qs/quality_gate.py`. Add `--cache` for cheap repeat runs on a clean tree.
+- Fast iteration on a single file or directory during TDD: `python scripts/qs/quality_gate.py --quick tests/test_<file>.py` (also accepts `tests/ha_tests`, `tests/`, or multiple paths).
+- Ad-hoc single-node debugging only: `source venv/bin/activate && pytest tests/test_<file>.py::test_specific -v`.
 
 ### Test Infrastructure
 

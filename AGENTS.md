@@ -23,16 +23,25 @@ load these before doing any substantive work:
 ## Commands
 
 Activate with `source venv/bin/activate` for all Python commands.
+`scripts/qs/quality_gate.py` is the single test entry point — it owns
+the cache, xdist, sysmon, and scope detection. Raw `pytest` bypasses
+all four; use it only for ad-hoc single-node debugging.
 
 ```bash
-# Run all quality gates (pytest 100% coverage + ruff + mypy + translations)
+# Run all quality gates (pytest 100% coverage + ruff + mypy + translations).
+# Required before every commit.
 python scripts/qs/quality_gate.py
+
+# Cached dev-loop default — skips gates when git state matches last pass.
+python scripts/qs/quality_gate.py --cache
+
+# Fast iteration on one or more test paths (files or directories).
+# xdist + sysmon, skips coverage/ruff/mypy/translations.
+python scripts/qs/quality_gate.py --quick tests/test_<file>.py
+python scripts/qs/quality_gate.py --quick tests/ha_tests
 
 # Auto-fix formatting and lint
 python scripts/qs/quality_gate.py --fix
-
-# Run tests only
-source venv/bin/activate && pytest tests/ -v
 ```
 
 ## Architecture constraints

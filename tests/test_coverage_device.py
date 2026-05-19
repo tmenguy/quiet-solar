@@ -68,6 +68,34 @@ class ConcreteLoadDevice(HADeviceMixin, AbstractLoad):
         return False
 
 
+def _consume_coro(coro):
+    """Close a coroutine handed to a mocked `hass.async_create_task`.
+
+    Prevents `RuntimeWarning: coroutine '...' was never awaited` when
+    the test does not actually schedule the task.  Returns a
+    `MagicMock()` so the call site sees a Task-like return value.
+
+    `MagicMock` is permissible here: an `asyncio.Task` is an HA-runtime
+    object, not domain logic, so the "no MagicMock for domain objects"
+    rule does not apply.  The production caller
+    (`root_device_post_home_init`) discards the return value.
+    """
+    coro.close()
+    return MagicMock()
+
+
+def _consume_and_raise(coro):
+    """Close the coroutine, then raise — for exception-path tests.
+
+    Single-shot — valid only for tests with one entity in
+    `_entities_to_fill_from_history`, since the production loop in
+    `root_device_post_home_init` would call `async_create_task` once
+    per entity but the very first call raises here.
+    """
+    coro.close()
+    raise Exception("bootstrap failed")
+
+
 # --------------------------------------------------------------------------
 # Fixture helpers
 # --------------------------------------------------------------------------
@@ -831,8 +859,10 @@ def test_get_state_history_data_ret_none_fallback_line1296():
 def test_root_device_post_home_init_with_entities_lines323_325():
     """Cover lines 323-325: entities_to_fill_from_history triggers async_create_task."""
     hass = _make_fake_hass()
-    # Add async_create_task to FakeHass
-    hass.async_create_task = MagicMock()
+    # Add async_create_task to FakeHass — wrap via `_consume_coro` so the
+    # coroutine passed in is closed cleanly (no RuntimeWarning) and the
+    # mock still tracks the call for the assertion below.
+    hass.async_create_task = MagicMock(side_effect=_consume_coro)
     dev = _make_load_device(hass=hass)
 
     # Add an entity to fill from history
@@ -954,16 +984,37 @@ async def test_get_next_scheduled_events_duplicate_start_line523():
 # ==========================================================================
 
 
-def test_root_device_post_home_init_exception_lines324_325():
-    """Cover lines 324-325: exception in bootstrap -> log error and continue."""
+def test_root_device_post_home_init_exception_lines324_325(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Cover lines 324-325: exception in bootstrap -> log error and continue.
+
+    Asserts the production `_LOGGER.error(...)` branch at
+    `device.py:407-408` fires (directly via `caplog`, not just via
+    coverage transitivity).
+    """
     hass = _make_fake_hass()
-    hass.async_create_task = MagicMock(side_effect=Exception("bootstrap failed"))
+    hass.async_create_task = MagicMock(side_effect=_consume_and_raise)
     dev = _make_load_device(hass=hass)
     dev._entities_to_fill_from_history.add("sensor.test_entity")
 
     now = datetime.now(tz=pytz.UTC)
-    dev.root_device_post_home_init(now)
-    # Should not raise; error is caught and logged
+    with caplog.at_level("ERROR", logger="custom_components.quiet_solar.ha_model.device"):
+        dev.root_device_post_home_init(now)
+        # Should not raise; error is caught and logged.
+
+    error_records = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(error_records) == 1, (
+        f"expected exactly one ERROR record from the bootstrap except branch, "
+        f"got {len(error_records)}: {[r.getMessage() for r in error_records]}"
+    )
+    message = error_records[0].getMessage()
+    assert "root_device_post_home_init" in message, (
+        f"log message must reference the bootstrap function; got {message!r}"
+    )
+    assert "bootstrap failed" in message, (
+        f"log message must surface the underlying exception text; got {message!r}"
+    )
 
 
 # ==========================================================================

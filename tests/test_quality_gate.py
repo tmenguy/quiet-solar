@@ -1505,3 +1505,352 @@ class TestHtmlcovNotWritten:
             "htmlcov/ was unexpectedly created — pytest.ini addopts or the QG"
             " cmd construction re-enabled the html report"
         )
+
+
+# --- QS-183 T6: --quick fast-iteration mode ---
+
+
+class TestQuickMode:
+    """Tests for `--quick PATH [PATH ...]` (QS-183 Category B).
+
+    `--quick` runs `pytest` on the cited paths with xdist + sysmon, and
+    skips every other gate (ruff / mypy / translations / coverage / cache
+    / scope detection). Mutually exclusive with `--cache`, `--no-cache`,
+    `--full`, and `--fix`.
+    """
+
+    @pytest.mark.parametrize(
+        "argv_paths",
+        [
+            ["tests/test_foo.py"],
+            ["tests/test_foo.py", "tests/test_bar.py"],
+            ["tests/ha_tests"],
+            ["tests/test_foo.py", "tests/ha_tests"],
+        ],
+        ids=["single-file", "multi-file", "directory", "mixed-file-and-dir"],
+    )
+    def test_quick_invokes_check_pytest_files_with_paths(
+        self,
+        argv_paths: list[str],
+    ) -> None:
+        """`--quick` forwards positional paths to `check_pytest_files` unchanged."""
+        pytest_result = {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch(
+                "sys.argv",
+                ["quality_gate.py", "--quick", *argv_paths],
+            ),
+            patch.object(
+                quality_gate,
+                "check_pytest_files",
+                return_value=pytest_result,
+            ) as mock_pytest_files,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+
+        assert exc_info.value.code == 0
+        mock_pytest_files.assert_called_once_with(argv_paths)
+
+    def test_quick_skips_everything_else(self, tmp_path: Path) -> None:
+        """`--quick` does not call any other gate, cache, or scope helper."""
+        pytest_result = {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", "tests/test_foo.py"]),
+            patch.object(quality_gate, "CACHE_FILE", tmp_path / ".quality_gate_cache"),
+            patch.object(quality_gate, "check_ruff_lint") as mock_ruff_lint,
+            patch.object(quality_gate, "check_ruff_format") as mock_ruff_format,
+            patch.object(quality_gate, "check_mypy") as mock_mypy,
+            patch.object(quality_gate, "check_translations") as mock_trans,
+            patch.object(quality_gate, "check_pytest") as mock_full_pytest,
+            patch.object(quality_gate, "_get_git_state") as mock_git_state,
+            patch.object(quality_gate, "_detect_scope") as mock_detect_scope,
+            patch.object(quality_gate, "_read_cache") as mock_read_cache,
+            patch.object(quality_gate, "_write_cache") as mock_write_cache,
+            patch.object(
+                quality_gate,
+                "check_pytest_files",
+                return_value=pytest_result,
+            ),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+
+        # None of the skipped helpers may have been called.
+        for mock in (
+            mock_ruff_lint,
+            mock_ruff_format,
+            mock_mypy,
+            mock_trans,
+            mock_full_pytest,
+            mock_git_state,
+            mock_detect_scope,
+            mock_read_cache,
+            mock_write_cache,
+        ):
+            mock.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("pytest_passed", "expected_exit"),
+        [(True, 0), (False, 1)],
+        ids=["pass→0", "fail→1"],
+    )
+    def test_quick_exit_code_propagates(
+        self,
+        pytest_passed: bool,
+        expected_exit: int,
+    ) -> None:
+        """`--quick` exits 0 iff the underlying pytest passes, 1 otherwise."""
+        result = {"name": "pytest", "passed": pytest_passed, "detail": ""}
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", "tests/test_foo.py"]),
+            patch.object(quality_gate, "check_pytest_files", return_value=result),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+        assert exc_info.value.code == expected_exit
+
+    def test_quick_emits_banner(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """`--quick` prints a `[quick] running ...` banner to stderr."""
+        result = {"name": "pytest", "passed": True, "detail": ""}
+        with (
+            patch(
+                "sys.argv",
+                ["quality_gate.py", "--quick", "tests/test_foo.py", "tests/ha_tests"],
+            ),
+            patch.object(quality_gate, "check_pytest_files", return_value=result),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        err = capsys.readouterr().err
+        assert err.startswith("[quick] running "), f"banner missing/wrong: {err!r}"
+        assert "xdist + sysmon" in err, f"banner missing 'xdist + sysmon': {err!r}"
+
+    def test_quick_rejects_empty_args(
+        self,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """`--quick` with no paths fails at argparse layer (exit 2)."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick"]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "--quick" in err, f"argparse error must name --quick: {err!r}"
+
+    @pytest.mark.parametrize(
+        "conflict_flag",
+        ["--cache", "--no-cache", "--full", "--fix"],
+    )
+    def test_quick_mutex_matrix(
+        self,
+        conflict_flag: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """`--quick` combined with any of --cache/--no-cache/--full/--fix → exit 2."""
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "quality_gate.py",
+                    "--quick",
+                    "tests/test_x.py",
+                    conflict_flag,
+                ],
+            ),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert (
+            "you cannot combine --quick with --cache, --no-cache, --full, or --fix"
+            in err
+        ), f"mutex message missing/changed: {err!r}"
+
+    @pytest.mark.parametrize(
+        ("workers_value", "expected_in_cmd"),
+        [("auto", True), ("4", True), (None, False)],
+        ids=["auto", "fixed-count", "serial"],
+    )
+    def test_check_pytest_files_uses_workers_when_resolver_returns_value(
+        self,
+        workers_value: str | None,
+        expected_in_cmd: bool,
+    ) -> None:
+        """`check_pytest_files` adds `-n <workers>` iff `_pytest_workers()` returns one."""
+        captured: dict = {}
+
+        def fake_stream(
+            cmd: list[str],
+            collect_targets: list[str] | None = None,
+        ) -> dict:
+            captured["cmd"] = cmd
+            captured["collect_targets"] = collect_targets
+            return {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch.object(quality_gate, "_pytest_workers", return_value=workers_value),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest_files(["tests/test_x.py"])
+
+        cmd = captured["cmd"]
+        assert ("-n" in cmd) is expected_in_cmd, (
+            f"-n presence ({'-n' in cmd}) != expected ({expected_in_cmd}); cmd={cmd!r}"
+        )
+        if expected_in_cmd:
+            n_idx = cmd.index("-n")
+            assert cmd[n_idx + 1] == workers_value, (
+                f"-n value mismatch; want {workers_value!r}, got {cmd[n_idx + 1]!r}"
+            )
+
+    def test_quick_collect_only_uses_cited_paths_not_tests_dir(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Review-fix #01 finding 2: `--quick` count subprocess must collect only
+        the cited paths, not walk the entire `tests/` tree.
+
+        `_stream_pytest`'s upfront `pytest --collect-only` call has historically
+        been hardcoded to `TESTS_DIR`, costing 1–3s cold even when the caller
+        only wants a single file. Wire `collect_targets` end-to-end from
+        `check_pytest_files` so the count subprocess receives the same paths
+        as the main run.
+        """
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        popen_calls: list[dict] = []
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):  # type: ignore[no-untyped-def]
+                popen_calls.append({"cmd": list(cmd), "kwargs": kwargs})
+                self.stdout = io.StringIO("0 tests collected\n")
+                self.stderr = io.StringIO("")
+                self.returncode = 0
+
+            def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+                return ("0 tests collected\n", "")
+
+            def wait(self):  # type: ignore[no-untyped-def]
+                return 0
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=False),
+            patch.object(quality_gate.subprocess, "Popen", FakePopen),
+        ):
+            quality_gate.check_pytest_files(["tests/test_factories_pytest_opt_out.py"])
+
+        assert len(popen_calls) == 2, f"expected 2 Popen calls, got {len(popen_calls)}"
+        collect_cmd = popen_calls[0]["cmd"]
+        assert "--collect-only" in collect_cmd
+
+        # The cited file (resolved against REPO_ROOT) must appear in the count
+        # cmd; the full tests/ tree path must NOT.
+        cited = str(quality_gate.REPO_ROOT / "tests/test_factories_pytest_opt_out.py")
+        assert cited in collect_cmd, (
+            f"collect-only cmd must include the cited path {cited!r}; got {collect_cmd!r}"
+        )
+        assert str(quality_gate.TESTS_DIR) not in collect_cmd, (
+            f"collect-only cmd must NOT walk full TESTS_DIR; got {collect_cmd!r}"
+        )
+
+    def test_check_pytest_full_path_still_uses_tests_dir_for_collect(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Negative half of finding 2 — the full-gate `check_pytest()` caller
+        must KEEP collecting against `TESTS_DIR` (its semantics are
+        "whole-suite coverage", so the count subprocess walking everything
+        is correct there).
+        """
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        popen_calls: list[dict] = []
+
+        class FakePopen:
+            def __init__(self, cmd, **kwargs):  # type: ignore[no-untyped-def]
+                popen_calls.append({"cmd": list(cmd), "kwargs": kwargs})
+                self.stdout = io.StringIO("0 tests collected\n")
+                self.stderr = io.StringIO("")
+                self.returncode = 0
+
+            def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+                return ("0 tests collected\n", "")
+
+            def wait(self):  # type: ignore[no-untyped-def]
+                return 0
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=False),
+            patch.object(quality_gate.subprocess, "Popen", FakePopen),
+        ):
+            quality_gate.check_pytest()
+
+        assert len(popen_calls) == 2, f"expected 2 Popen calls, got {len(popen_calls)}"
+        collect_cmd = popen_calls[0]["cmd"]
+        assert "--collect-only" in collect_cmd
+        assert str(quality_gate.TESTS_DIR) in collect_cmd, (
+            f"full-gate collect-only must include TESTS_DIR; got {collect_cmd!r}"
+        )
+
+    @pytest.mark.parametrize(
+        "bad_path",
+        ["/etc/passwd", "../outside.py", "/tmp/foo.py"],
+        ids=["absolute-system", "parent-escape", "absolute-tmp"],
+    )
+    def test_quick_rejects_paths_outside_repo(
+        self,
+        bad_path: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Review-fix #01 finding 7: `--quick` rejects paths that escape REPO_ROOT.
+
+        `REPO_ROOT / "/etc/passwd"` silently discards REPO_ROOT (pathlib
+        semantics) and `../foo` walks out of the tree. Both must error
+        with exit 2 + a clear message.
+        """
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", bad_path]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "must be inside the repo" in err, (
+            f"path-escape message missing/changed: {err!r}"
+        )
+        assert bad_path in err, f"offending path must appear in error: {err!r}"
+
+    @pytest.mark.parametrize(
+        "argv_tail",
+        [[""], ["tests/test_foo.py", ""], ["", "tests/test_foo.py"]],
+        ids=["only-empty", "trailing-empty", "leading-empty"],
+    )
+    def test_quick_rejects_empty_string_paths(
+        self,
+        argv_tail: list[str],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Review-fix #01 finding 8: `--quick ""` must NOT silently subvert
+        the contract.
+
+        argparse `nargs="+"` accepts an empty string as a positional, and
+        `REPO_ROOT / ""` resolves back to REPO_ROOT, so pytest would walk
+        the entire suite. Reject empty-string paths explicitly.
+        """
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", *argv_tail]),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "must be non-empty" in err, (
+            f"empty-path message missing/changed: {err!r}"
+        )
