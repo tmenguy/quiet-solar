@@ -75,12 +75,16 @@ class QsPoolCard extends HTMLElement {
       this._wavePhase += this._currentSpeed * dt;
 
       // Update wave transforms (CSS translateX for GPU compositing)
+      // Wave paths span x=[0, 480]. Clip circle spans x=[40, 280].
+      // We offset by -120 so the path center aligns with the clip center,
+      // then scroll within one wave-width period.
       const waveWidth = 480; // 2× circle diameter (240)
       for (let i = 0; i < 3; i++) {
         const wEl = this._root?.getElementById('wave' + i);
         if (wEl) {
           const phaseOffset = i * 1.2;
-          const tx = -((this._wavePhase + phaseOffset) * 60) % waveWidth;
+          const scrollOffset = ((this._wavePhase + phaseOffset) * 60) % waveWidth;
+          const tx = -120 - scrollOffset; // -120 centers path over clip circle
           wEl.style.transform = `translateX(${tx.toFixed(1)}px)`;
         }
       }
@@ -196,7 +200,8 @@ class QsPoolCard extends HTMLElement {
           ? Math.min(1, hoursRun / targetHours)
           : 0;
       const clipR = 120;
-      const waterBaseY = center.cy + clipR - (0.2 + progressRatio * 0.6) * 2 * clipR;
+      // center.cy is always 160; using literal to avoid forward-reference
+      const waterBaseY = 160 + clipR - (0.2 + progressRatio * 0.6) * 2 * clipR;
       this._waterBaseY = waterBaseY;
 
       // --- Temperature-based water colors (Task 6) ---
