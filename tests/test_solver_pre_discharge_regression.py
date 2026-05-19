@@ -243,8 +243,14 @@ def test_full_solver_keeps_battery_above_floor_on_big_sun_day():
 
     solver.solve(with_self_test=False)
 
-    # Resimulate the trajectory under the final commands.
-    final = solver._battery_get_charging_power(existing_battery_commands=None)
+    # Resimulate the trajectory under the ACTUAL battery_commands
+    # chosen by `solve()` (review fix #04 should-fix #11).  Using
+    # `existing_battery_commands=None` would resim with the default
+    # CMD_GREEN_CHARGE_AND_DISCHARGE for every slot, producing a
+    # different trajectory when force-charge / charge-only commands
+    # were chosen — false-fail or false-pass risk.
+    actual_battery_commands = solver._final_battery_commands
+    final = solver._battery_get_charging_power(existing_battery_commands=actual_battery_commands)
     battery_charge = final[1]
     min_in_horizon = float(np.min(battery_charge))
     # AC-9 GREEN: full-solver run must respect the SAFETY FLOOR (empty

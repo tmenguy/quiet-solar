@@ -681,7 +681,6 @@ class LoadConstraint:
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
         power_headroom: npt.NDArray[np.float64] | None = None,
-        *,
         bat_charge_traj: npt.NDArray[np.float64] | None = None,
         battery_min_wh: float = 0.0,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
@@ -1335,7 +1334,6 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         allow_no_reclaim: bool = False,
         time_slots: list[datetime] | None = None,
         power_headroom: npt.NDArray[np.float64] | None = None,
-        *,
         bat_charge_traj: npt.NDArray[np.float64] | None = None,
         battery_min_wh: float = 0.0,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
@@ -1366,19 +1364,26 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
             # NaN invariant documentation — the load-bearing runtime
             # check lives upstream in `_constraints_delta` (where the
             # trajectory is seeded from `_battery_get_charging_power`).
-            # Here we keep an inexpensive `assert` so the invariant is
-            # documented at the use site without paying O(n) on every
-            # call.  Acceptable under `-O` stripping because the
-            # production guard is upstream.
-            assert not np.any(np.isnan(bat_charge_traj)), "bat_charge_traj invariant: must not contain NaN"
-            forward_min = np.full_like(bat_charge_traj, np.inf)
-            forward_min[first_slot : last_slot + 1] = np.minimum.accumulate(
-                bat_charge_traj[first_slot : last_slot + 1][::-1]
-            )[::-1]
-            # forward_min is initialised iff use_battery_floor is True —
-            # document the invariant once at gate entry so downstream
-            # reads can rely on it without per-iteration asserts.
-            assert forward_min is not None, "use_battery_floor implies forward_min is initialised"
+            # Here we log + disable Layer 3 for this call if NaN is
+            # seen, rather than asserting (the upstream check is the
+            # primary safety guard).
+            if np.any(np.isnan(bat_charge_traj)):
+                _LOGGER.error(
+                    "adapt_repartition: %s received bat_charge_traj with NaN values; "
+                    "disabling Layer 3 floor guard for this call (upstream guard in "
+                    "_constraints_delta should have caught this)",
+                    self.name,
+                )
+                use_battery_floor = False
+                forward_min = None
+            else:
+                forward_min = np.full_like(bat_charge_traj, np.inf)
+                forward_min[first_slot : last_slot + 1] = np.minimum.accumulate(
+                    bat_charge_traj[first_slot : last_slot + 1][::-1]
+                )[::-1]
+                # forward_min is initialised iff use_battery_floor is
+                # True — invariant documented in the type-narrowing
+                # branch above; downstream reads rely on it.
 
         if energy_delta >= 0.0:
             _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
@@ -1450,16 +1455,22 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     if i in forced_slot_commands:
                         continue
 
-                    # Multi-pass guard — gated on `use_battery_floor`:
+                    # Multi-pass guard — gated on `use_battery_floor`
+                    # AND `battery_min_wh > 0`:
                     # the double-decrement hazard only exists when
-                    # `bat_charge_traj` is being mutated (review fix #1
-                    # must-fix #2).  Outside that scope, pass-2's
-                    # legitimate upgrade path (revisiting a slot placed
-                    # in pass-1 to bump it to a higher command) is
-                    # preserved — that's the pre-QS-178 behavior the 49+
-                    # existing call sites rely on.  Review fix #03
-                    # must-fix #2 restored the gate.
-                    if use_battery_floor and out_commands[i] is not None:
+                    # `bat_charge_traj` is being mutated under an active
+                    # Layer-3 floor (review fix #1 must-fix #2).  Outside
+                    # that scope, pass-2's legitimate upgrade path
+                    # (revisiting a slot placed in pass-1 to bump it to a
+                    # higher command) is preserved — that's the
+                    # pre-QS-178 behavior the 49+ existing call sites
+                    # rely on.  Review fix #03 must-fix #2 restored the
+                    # gate; review fix #04 must-fix #2 added the
+                    # defense-in-depth `battery_min_wh > 0` term so even
+                    # if a future change re-introduces an over-broad
+                    # `bat_charge_traj` injection, the multi-pass skip
+                    # stays contained to true surplus-block callers.
+                    if use_battery_floor and battery_min_wh > 0 and out_commands[i] is not None:
                         continue
 
                     slot_transition_cost = 0

@@ -885,17 +885,15 @@ def test_back_propagate_forward_min_preserves_already_lower_slots():
 # ---------------------------------------------------------------------------
 
 
-def test_nan_in_bat_charge_traj_invariant_documented():
-    """Review fix #03 must-fix #4: `adapt_repartition` keeps an inexpensive
-    invariant `assert` for the NaN-free `bat_charge_traj` precondition;
-    the load-bearing runtime check (which survives `python -O`) lives
-    upstream in `_constraints_delta` at the seed point.
-
-    This test exercises the inner-function `assert` for completeness.
-    Under `-O` the assert is stripped, but the upstream `raise` (tested
-    separately in `test_solver_pre_discharge.py`) still catches NaN.
+def test_nan_in_bat_charge_traj_logs_and_disables_layer3(caplog):
+    """Review fix #03 must-fix #4 + fix #04 user feedback: when
+    `adapt_repartition` is called with a NaN-containing trajectory, it
+    logs an error and disables Layer 3 for that call (the load-bearing
+    upstream `raise` lives in `_constraints_delta` and surfaces the
+    actual failure to callers).  Per-policy: no defensive `assert` in
+    production code — log + fail-safe instead.
     """
-    import pytest
+    import logging
 
     constraint = _make_constraint(
         target_value=5000.0,
@@ -905,10 +903,8 @@ def test_nan_in_bat_charge_traj_invariant_documented():
     bat_traj = np.array([1000.0, float("nan")], dtype=np.float64)
     now = datetime.now(tz=pytz.UTC)
 
-    # Under default Python (no -O), the inner assert fires on NaN.  The
-    # AssertionError message documents the invariant.
-    with pytest.raises(AssertionError, match="must not contain NaN"):
-        constraint.adapt_repartition(
+    with caplog.at_level(logging.ERROR, logger="custom_components.quiet_solar.home_model.constraints"):
+        result = constraint.adapt_repartition(
             first_slot=0,
             last_slot=1,
             energy_delta=400.0,
@@ -919,6 +915,14 @@ def test_nan_in_bat_charge_traj_invariant_documented():
             bat_charge_traj=bat_traj,
             battery_min_wh=800.0,
         )
+
+    # Layer 3 was disabled gracefully — no crash; the error was logged.
+    assert any(
+        "received bat_charge_traj with NaN" in rec.message for rec in caplog.records
+    ), "Expected error log explaining the NaN fallback"
+    # adapt_repartition still returned a valid result tuple (no crash).
+    assert result is not None
+    assert len(result) == 6
 
 
 # ---------------------------------------------------------------------------

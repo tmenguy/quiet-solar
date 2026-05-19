@@ -11,6 +11,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     FLOATING_PERIOD_S,
+    SOLVER_STEP_S,
 )
 from custom_components.quiet_solar.home_model.battery import Battery
 from custom_components.quiet_solar.home_model.commands import (
@@ -879,11 +880,17 @@ class TestSolver(TestCase):
         # band (must-fix #7 + nice-to-have #3).
         # Build a (start, end) → cmd list by pairing consecutive command
         # entries.  end of the last command = end_time of the scenario.
-        slot_s = 900.0  # SOLVER_STEP_S
+        # Use the imported SOLVER_STEP_S constant so the test arithmetic
+        # tracks future changes to the solver's slot granularity
+        # (review fix #04 should-fix #7).
+        slot_s = float(SOLVER_STEP_S)
         slots_above_min_band = 0
         for k, (cmd_start, cmd) in enumerate(car_cmds):
             cmd_end = car_cmds[k + 1][0] if k + 1 < len(car_cmds) else end_time
-            slot_count = int(round((cmd_end - cmd_start).total_seconds() / slot_s))
+            # Defensive max(0, ...): negative slot count would
+            # spuriously decrement the accumulator if the command list
+            # is ever unordered (review fix #04 should-fix #12).
+            slot_count = max(0, int(round((cmd_end - cmd_start).total_seconds() / slot_s)))
             if cmd.power_consign > car_minimum_power * 1.2:
                 slots_above_min_band += slot_count
         total_slots = int(round((end_time - start_time).total_seconds() / slot_s))

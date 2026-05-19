@@ -602,7 +602,13 @@ class PeriodSolver:
 
         ac_excess = np.maximum(0.0, -self._available_power[:end])
         clamp_array = self._battery_charge_power_by_inverter_AC_clamping
-        clamp = clamp_array[:end] if clamp_array is not None else np.zeros(end, dtype=np.float64)
+        # Defensive np.maximum(0.0, ...): a negative DC clamp value
+        # would reduce waste below the true AC-excess level and
+        # under-trigger the surplus block.  Today the inverter-clamp
+        # array is always >= 0, but a defensive wrap protects against
+        # future regressions (review fix #04 should-fix #5).
+        clamp_raw = clamp_array[:end] if clamp_array is not None else np.zeros(end, dtype=np.float64)
+        clamp = np.maximum(0.0, clamp_raw)
         waste_w = ac_excess + clamp
 
         contributing = full_mask & (waste_w > 0.0)
@@ -781,7 +787,6 @@ class PeriodSolver:
         seg_start,
         seg_end,
         allow_change_state=True,
-        *,
         battery_min_wh: float = 0.0,
         battery_commands: list | None = None,
     ):
@@ -810,8 +815,16 @@ class PeriodSolver:
         # slots produce a HIGHER charge trajectory than the default
         # CMD_GREEN_CHARGE_AND_DISCHARGE).  Without this threading the
         # budget and the floor-guard read different baselines.
+        #
+        # Gate on `battery_min_wh > 0`: ONLY the surplus block passes a
+        # positive floor; all 49+ legacy positive-delta callers default
+        # `battery_min_wh=0.0` and must retain pre-QS-178 semantics
+        # (no `bat_charge_traj` injection, no Layer-3 clamp).  Without
+        # this gate, every positive-delta call to `_constraints_delta`
+        # would seed `bat_charge_traj` and silently change solver
+        # behavior across the entire system (review fix #04 must-fix #1).
         bat_charge_traj: npt.NDArray[np.float64] | None = None
-        if energy_delta > 0 and self._battery is not None:
+        if battery_min_wh > 0 and energy_delta > 0 and self._battery is not None:
             bat_charge_traj = self._battery_get_charging_power(existing_battery_commands=battery_commands)[1].copy()
             # Load-bearing safety guard (NOT an `assert`, so it survives
             # `python -O`): NaN in the battery-charge trajectory would
@@ -1395,6 +1408,13 @@ class PeriodSolver:
             # refresh, _compute_expected_solar_waste counts slots that
             # are no longer "full" post-allocation as full, inflating
             # expected_waste_wh and max_future_charge_wh.
+            #
+            # Read-only use here — no .copy() needed (review fix #04
+            # should-fix #8, Option B).  Unlike the _constraints_delta
+            # reseed which mutates the trajectory via the open-ended
+            # decrement in adapt_repartition, the surplus block reads
+            # battery_charge only for waste / budget / drain-budget
+            # computations and never mutates it.
             battery_charge = self._battery_get_charging_power(existing_battery_commands=battery_commands)[1]
             expected_waste_wh, first_surplus_idx, last_surplus_idx = self._compute_expected_solar_waste(battery_charge)
 
@@ -1485,7 +1505,15 @@ class PeriodSolver:
                 # When the un-shrunk window's peak sat in the cut tail,
                 # the old budget overstated head-room available to
                 # placements.
-                if probe_window_end > probe_window_start:
+                #
+                # Gate on `>=` (broad) and let `np.max` handle the
+                # length-1 slice when probe_window_end ==
+                # probe_window_start (review fix #04 should-fix #10).
+                # The strict `>` degenerate-window guard below catches
+                # that edge case for the placement loop; this
+                # always-recompute ensures `battery_drain_budget_wh` is
+                # not stale even if a future change weakens the guard.
+                if probe_window_end >= probe_window_start:
                     max_future_charge_wh = float(np.max(battery_charge[probe_window_start : probe_window_end + 1]))
                     battery_drain_budget_wh = max(0.0, max_future_charge_wh - floor_wh)
 
@@ -1642,6 +1670,14 @@ class PeriodSolver:
 
         if len(bcmd) == 0:
             bcmd = [(self._time_slots[0], copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE))]
+
+        # Expose the per-slot battery_commands array as a private
+        # attribute so test code can resimulate the battery trajectory
+        # using the EXACT commands `solve()` produced (rather than the
+        # default CMD_GREEN_CHARGE_AND_DISCHARGE which can yield a
+        # different trajectory when force-charge / charge-only slots
+        # are present).  Test-only, not part of the public API.
+        self._final_battery_commands = battery_commands
 
         # cmds are correctly ordered by time for each load by construction
         return output_cmds, bcmd
