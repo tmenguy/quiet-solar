@@ -32,8 +32,7 @@ via `python scripts/qs/context.py`.
 
 `python scripts/qs/quality_gate.py`
 
-## Legacy OpenCode pipeline (unchanged)
+## Legacy OpenCode pipeline
 
-`.opencode/`, `_qsprocess_opencode/`, `scripts/qs_opencode/` remain
-intact for the legacy OpenCode workflow. `AGENTS.md` is its entry
-point. Cursor uses the new static-agent pipeline above.
+See `legacy/` for the retired per-task-rendering OpenCode pipeline.
+Cursor uses the new static-agent pipeline above.

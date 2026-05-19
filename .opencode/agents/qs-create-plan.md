@@ -1,12 +1,50 @@
 ---
-name: qs-create-plan
 description: >-
   Phase 2 of the QS pipeline. Drafts a story artifact with acceptance
   criteria and a task breakdown, runs adversarial review with 4 parallel
   sub-agents, then commits the story. Runs inside the worktree after
-  /setup-task. Use when the user says "create plan" or "plan this
+  setup-task. Use when the user says "create plan" or "plan this
   issue".
-tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch
+mode: primary
+color: "#3B82F6"
+# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
+permission:
+  read: allow
+  edit:
+    "*": deny
+    "docs/stories/*.story.md": allow
+    "docs/stories/**": allow
+  bash:
+    "*": ask
+    "echo *": allow
+    "tail*": allow
+    "grep *": allow
+    "sort*": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+    "find *": allow
+    "git status*": allow
+    "git log*": allow
+    "git diff*": allow
+    "git fetch*": allow
+    "git add *": allow
+    "git commit *": allow
+    "git push*": allow
+    "git checkout *": allow
+    "git branch *": allow
+    "gh issue view *": allow
+    "gh issue create *": allow
+    "gh pr view *": allow
+    "gh pr diff *": allow
+    "gh pr checks *": allow
+    "gh pr create *": allow
+    "gh pr merge *": ask
+    "gh repo view *": allow
+    "source venv/bin/activate*": allow
+    "python scripts/qs/*": allow
+    "bash scripts/worktree-setup.sh*": allow
+  webfetch: ask
 ---
 
 # qs-create-plan — story drafting + adversarial review
@@ -50,7 +88,7 @@ yet.
 ### 4. Adversarial review (parallel)
 
 Spawn the four plan-reviewer subagents in **one message with four
-parallel Agent invocations**. Pass each the plan draft (and, where
+parallel sub-agent invocations**. Pass each the plan draft (and, where
 noted, an additional artifact):
 
 - `qs-plan-critic` — plan text only.
@@ -62,7 +100,8 @@ noted, an additional artifact):
 
 This step is the orchestrator-vs-sub-agent split in action: **I'm an
 interactive orchestrator (the user is talking to me right now), but the
-4 plan reviewers below are non-interactive `Agent`-tool fan-out**. See
+4 plan reviewers below are non-interactive parallel sub-agent fan-out**.
+See
 [docs/workflow/overview.md](../../docs/workflow/overview.md) section
 "Orchestrators are interactive sessions; sub-agents are parallel
 fan-out" for the rationale and
@@ -101,7 +140,7 @@ Inspect the file paths your task breakdown will touch:
 ### 8. Tell the user the next command
 
 Build the launcher payload for the next phase so the user has a copy/paste
-command to open a fresh interactive `claude --agent` session:
+command to open a fresh session bound to the next agent:
 
 ```bash
 python scripts/qs/next_step.py \
@@ -111,7 +150,7 @@ python scripts/qs/next_step.py \
     --title "{{title}}"
 ```
 
-Parse the JSON; capture `new_context`. Then print both blocks:
+Parse the JSON; capture `new_context`. Then print:
 
 ```text
 ✅ Story written: docs/stories/QS-{{issue}}.story.md
@@ -119,12 +158,9 @@ Parse the JSON; capture `new_context`. Then print both blocks:
 
 Next phase: {{NEXT_PHASE}}.
 
-Preferred (opens a fresh interactive `claude --agent qs-{{NEXT_PHASE}}` session):
+Preferred (activate `qs-{{NEXT_PHASE}}` from the OpenCode agent picker,
+or paste the spawn-session one-liner below into a fresh terminal):
   {{new_context}}
-
-Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
-  /{{NEXT_PHASE}}
 ```
 
 ## Hard rules

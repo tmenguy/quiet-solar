@@ -1,213 +1,141 @@
 ---
 description: >-
-  Phase 1 of the Quiet Solar pipeline (STATIC entry point). Creates a GitHub
-  issue, feature branch, and worktree. Renders the per-task
-  qs-create-plan-QS-<N>.md agent into the new worktree's .opencode/agents/
-  folder, then prints instructions for the user to open a new session on
-  the worktree (cannot Task-spawn across workspaces).
-  Use when the user says "setup task", "new task", "work on issue #N", or
-  describes a new feature to start.
+  Phase 1 of the QS pipeline. Creates a GitHub issue, feature branch
+  QS_<N>, and worktree, then prints a launcher command to open a new
+  session on the worktree. Runs on the main checkout. Use when the user
+  says "setup task", "new task", "work on issue #N", or describes a new
+  feature to start.
 mode: primary
 color: "#8B5CF6"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
+  read: allow
   edit: deny
   bash:
     "*": ask
-    "gh issue *": allow
+    "echo *": allow
+    "tail*": allow
+    "grep *": allow
+    "sort*": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+    "find *": allow
+    "git status*": allow
+    "git log*": allow
+    "git diff*": allow
+    "git fetch*": allow
+    "git add *": allow
+    "git commit *": allow
+    "git push*": allow
+    "git checkout *": allow
+    "git branch *": allow
     "gh issue view *": allow
+    "gh issue create *": allow
+    "gh pr view *": allow
+    "gh pr diff *": allow
+    "gh pr checks *": allow
+    "gh pr create *": allow
+    "gh pr merge *": ask
     "gh repo view *": allow
-    "git *": allow
-    "source venv/bin/activate": allow
-    "python scripts/qs/fetch_issue.py *": allow
-    "python scripts/qs/create_issue.py *": allow
-    "bash scripts/worktree-setup.sh *": allow
-    "python scripts/qs_opencode/launch_opencode.py *": allow
-    "python scripts/qs_opencode/render_agent.py *": allow
-  webfetch: deny
+    "source venv/bin/activate*": allow
+    "python scripts/qs/*": allow
+    "bash scripts/worktree-setup.sh*": allow
+  webfetch: ask
 ---
 
-# qs-setup-task — static entry point
+# qs-setup-task — entry point (runs on main)
 
-You are one of the **two static agents** in the Quiet Solar OpenCode pipeline
-(the other is `qs-release`).
-Every downstream phase (create-plan, implement-task, review-task, finish-task)
-uses a **per-task agent file** rendered from a template and baked
-with the specific issue's context. Your job is to create that task context
-and render the first downstream agent (qs-create-plan-QS-<N>.md).
+You are Phase 1 of the Quiet Solar pipeline. Your job is to create the
+GitHub issue + branch + worktree and hand off to a fresh session on the
+worktree where the user will activate `qs-create-plan`.
 
-**IMPORTANT: This phase must be fast and automatic.** Do NOT analyze,
-diagnose, or interpret the user's input (e.g., do not read log files to
-understand a bug, do not research the codebase). Just pass the text through
-to the GitHub issue as-is. Deep analysis belongs in create-plan.
+**Be fast and automatic. Do NOT analyze the input.** Don't read log
+files, don't research the codebase, don't propose designs. Pass the
+text through to the GitHub issue verbatim. Deep analysis is
+`qs-create-plan`'s job.
 
 ## Input
 
 The user provides ONE of:
-- A feature description (free text, may include logs or error traces)
-- A path to an external plan `.md` file via `--plan /path/to/plan.md`
-- An existing GitHub issue number via `--issue N` (e.g., `--issue 42`)
+- A feature description (free text — may include logs / error traces)
+- A path to an external plan via `--plan /path/to/plan.md`
+- An existing GitHub issue via `--issue N`
 
-Optional flags:
-- `--no-worktree`: create branch only, skip worktree creation.
+Optional: `--no-worktree` (create branch only, skip worktree).
 
 ## Steps
 
-### 1. Obtain GitHub issue
+### 1. Obtain the GitHub issue
 
-**If `--issue N` was provided** (existing issue):
+**If `--issue N`** (existing issue):
 
 ```bash
 python scripts/qs/fetch_issue.py --issue {{N}}
 ```
 
-Capture `issue_number`, `title`, `body`, `labels` from the JSON output.
-Do NOT create a new issue.
+Capture `issue_number`, `title`, `body`, `labels` from the JSON.
 
-**Otherwise** (new issue — the default):
-
-Derive title and body directly from the input — no codebase analysis:
-- **Plan file**: Read the plan, use its title as issue title. Body: the full
+**Otherwise** (new issue):
+- **Plan file** — read it; use its title as issue title; body is the full
   plan text.
-- **Free text**: Extract a short title (first sentence or ~80 chars). Body:
-  the full text verbatim.
+- **Free text** — extract a short title (first sentence or ~80 chars);
+  body is the full text verbatim.
 
 ```bash
 python scripts/qs/create_issue.py --title "{{title}}" --body "{{body}}"
 ```
 
-Capture the `issue_number` from the JSON output.
+Capture `issue_number` from the JSON output.
 
-### 2. Set up branch and worktree
+### 2. Set up branch and worktree + emit launcher
 
-```bash
-bash scripts/worktree-setup.sh {{issue_number}}
-```
-
-This creates branch `QS_{{issue_number}}` from `origin/main` and a
-worktree at `../<repo>-worktrees/QS_{{issue_number}}/` with symlinked
-venv, config, and non-git custom_components.
-
-Capture the worktree path from the output (line starting with
-`Worktree ready:`). Typically:
-`/path/to/quiet-solar-worktrees/QS_{{issue_number}}`
-
-For `--no-worktree`, create the branch manually instead:
-```bash
-git fetch origin
-git branch QS_{{issue_number}} origin/main
-```
-The work directory is the main repo directory.
-
-### 3. Render qs-create-plan-QS-<N>.md and plan reviewer sub-agents into the worktree
+One command does it all:
 
 ```bash
-python scripts/qs_opencode/render_agent.py \
-    --phase create-plan \
-    --work-dir "{{worktree_path}}" \
-    --issue {{issue_number}} \
-    --title "{{title}}" \
-    --story-file "docs/stories/QS-{{issue_number}}.story.md"
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "create-plan"
 ```
 
-Also render the 4 plan reviewer sub-agents so `create-plan` can
-Task-spawn them in parallel during adversarial review:
+For `--no-worktree`, pass `--no-worktree`. The script:
+- creates branch `QS_{{issue_number}}` from `origin/main`
+- creates the worktree at `../<repo>-worktrees/QS_{{issue_number}}/`
+- detects the harness and emits the appropriate launcher
 
-```bash
-python scripts/qs_opencode/render_agent.py \
-    --phase plan-critic \
-    --work-dir "{{worktree_path}}" \
-    --issue {{issue_number}} \
-    --title "{{title}}" \
-    --story-file "docs/stories/QS-{{issue_number}}.story.md"
+Capture `worktree_path`, `branch`, and the launcher payload
+(`new_context`, `same_context`, plus optional `pycharm_context`).
 
-python scripts/qs_opencode/render_agent.py \
-    --phase plan-concrete-planner \
-    --work-dir "{{worktree_path}}" \
-    --issue {{issue_number}} \
-    --title "{{title}}" \
-    --story-file "docs/stories/QS-{{issue_number}}.story.md"
+### 3. Tell the user what to do next
 
-python scripts/qs_opencode/render_agent.py \
-    --phase plan-dev-proxy \
-    --work-dir "{{worktree_path}}" \
-    --issue {{issue_number}} \
-    --title "{{title}}" \
-    --story-file "docs/stories/QS-{{issue_number}}.story.md"
+The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
+`scripts/worktree-setup.sh`). Surface the launcher (preferred path —
+activate `qs-create-plan` from the OpenCode agent picker in a fresh
+session on the worktree, or paste the spawn-session one-liner below
+into a fresh terminal).
 
-python scripts/qs_opencode/render_agent.py \
-    --phase plan-scope-guardian \
-    --work-dir "{{worktree_path}}" \
-    --issue {{issue_number}} \
-    --title "{{title}}" \
-    --story-file "docs/stories/QS-{{issue_number}}.story.md"
-```
-
-Verify all 5 render_agent.py calls exited 0 and the files exist at
-`{{worktree_path}}/.opencode/agents/`:
-- `qs-create-plan-QS-{{issue_number}}.md`
-- `qs-plan-critic-QS-{{issue_number}}.md`
-- `qs-plan-concrete-planner-QS-{{issue_number}}.md`
-- `qs-plan-dev-proxy-QS-{{issue_number}}.md`
-- `qs-plan-scope-guardian-QS-{{issue_number}}.md`
-
-**MANDATORY VERIFICATION -- DO NOT PROCEED WITHOUT THIS:**
-
-Check each file individually:
-```bash
-ls {{worktree_path}}/.opencode/agents/qs-create-plan-QS-{{issue_number}}.md
-ls {{worktree_path}}/.opencode/agents/qs-plan-critic-QS-{{issue_number}}.md
-ls {{worktree_path}}/.opencode/agents/qs-plan-concrete-planner-QS-{{issue_number}}.md
-ls {{worktree_path}}/.opencode/agents/qs-plan-dev-proxy-QS-{{issue_number}}.md
-ls {{worktree_path}}/.opencode/agents/qs-plan-scope-guardian-QS-{{issue_number}}.md
-```
-
-All 5 commands must succeed. If ANY file is missing, re-run the failed
-`render_agent.py` command. DO NOT print the launcher until all 5 are confirmed.
-
-### 4. Tell the user what to do next
-
-**IMPORTANT**: This agent runs on the **main checkout**, which is a
-different workspace from the new worktree. You cannot `/reload` or
-Task-spawn agents that live in a different worktree. Instead, print
-clear instructions for the user to open a new session:
-
-```
+```text
 Task #{{issue_number}} set up.
-   Worktree:  {{worktree_path}}
-   Branch:    QS_{{issue_number}}
-   Agent:     qs-create-plan-QS-{{issue_number}} (rendered into worktree)
+  Worktree:  {{worktree_path}}
+  Branch:    QS_{{issue_number}}  (HEAD already checked out)
 
-Next: open a new OpenCode session on the worktree and activate the agent:
+Next phase: create-plan.
 
-   opencode {{worktree_path}} --agent qs-create-plan-QS-{{issue_number}}
-
-   Then tell it: "Begin your phase protocol."
+Preferred (activate `qs-create-plan` from the OpenCode agent picker,
+or paste the spawn-session one-liner below into a fresh terminal):
+  {{new_context}}
 ```
 
-Also generate the launcher script for convenience:
+If `pycharm_context` is present in the payload, mention it as a bridge
+for IDE-embedded terminals (clipboard / AppleScript helpers).
 
-```bash
-python scripts/qs_opencode/launch_opencode.py \
-    --work-dir "{{worktree_path}}" \
-    --issue {{issue_number}} \
-    --title "{{title}}" \
-    --agent "qs-create-plan-QS-{{issue_number}}"
-```
-
-Do NOT attempt to Task-spawn, /reload, or otherwise automatically hand off
-to the next phase. Just print the directions and stop.
+Do NOT attempt to spawn the next agent in this session — the ergonomic
+flow is one session per phase. OpenCode's HTTP-API
+`spawn_session.py` one-liner is the in-band activation path; the agent
+picker is the manual one.
 
 ## Hard rules
 
-- Do NOT create or modify any file under `scripts/qs/`, `.claude/`,
-  `CLAUDE.md`, `.cursor/`, or `.cursorrules` — those belong to the new
-  static-agent pipeline.
-- Do NOT run `python scripts/qs/setup_task.py` — it generates Claude Code
-  launchers, not OpenCode launchers. Use `bash scripts/worktree-setup.sh`
-  directly as shown in step 2.
-- Do NOT commit or push anything. setup-task only creates a branch and
-  worktree; there are no file changes in this phase.
-- Do NOT Task-spawn or `/reload` — the rendered agent is in a different
-  workspace. Always print instructions for the user instead.
-- If any step fails, abort and report the failure; do not try to auto-heal.
+- Do NOT analyze the input. The launcher must come within a few seconds.
+- Do NOT commit or push — setup-task only creates branches/worktrees.
+- Do NOT touch `legacy/**` — that's frozen historical code (the
+  retired per-task-rendering OpenCode pipeline).
+- If any step fails, abort and report; do not auto-heal.

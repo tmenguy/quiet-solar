@@ -74,5 +74,5 @@ Open the worktree as a new Cursor workspace, then in chat type:
 
 - Do NOT analyze the input. Launcher must come within seconds.
 - Do NOT commit or push.
-- Do NOT touch `_qsprocess_opencode/**`, `.opencode/**`,
-  `scripts/qs_opencode/**` — those are the legacy OpenCode pipeline.
+- Do NOT touch `legacy/**` — that's the retired per-task-rendering
+  OpenCode pipeline (frozen historical code).

@@ -2,7 +2,7 @@
 name: qs-implement-setup-task
 description: >-
   Phase 3 variant for dev-environment changes only (scripts/, .claude/,
-  .cursor/, .opencode/, _qsprocess_opencode/, docs/, .github/, top-level
+  .cursor/, .opencode/, legacy/, docs/, .github/, top-level
   config). Same TDD flow with narrower edit scope and fast-path quality
   gate.
 model: inherit
@@ -34,9 +34,10 @@ Read `docs/workflow/project-rules.md` if not already loaded.
 
 Red → green → refactor, scoped to:
 
-- `scripts/qs/**`, `scripts/qs_opencode/**`, top-level `scripts/*.sh`
+- `scripts/qs/**`, top-level `scripts/*.sh`
 - `.claude/**`, `.cursor/**`, `.opencode/**`
-- `_qsprocess_opencode/**`
+- `legacy/**` (frozen — `git mv` INTO `legacy/` is allowed when the
+  story requires it)
 - `docs/**`
 - `.github/**`
 - Top-level config: `pyproject.toml`, `requirements*.txt`, `CLAUDE.md`,
@@ -58,7 +59,7 @@ python scripts/qs/quality_gate.py
 ### 5. Commit, push, open PR (automatic)
 
 ```bash
-git add scripts/ .claude/ .cursor/ .opencode/ _qsprocess_opencode/ docs/ .github/ CLAUDE.md AGENTS.md .cursorrules
+git add scripts/ .claude/ .cursor/ .opencode/ legacy/ docs/ .github/ CLAUDE.md AGENTS.md .cursorrules opencode.json
 git commit -m "QS-{{issue}}: {{short summary}}"
 git push origin {{branch}}
 

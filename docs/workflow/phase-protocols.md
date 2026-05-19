@@ -64,7 +64,7 @@ the file paths in its task breakdown.
    review rounds before forcing finalization.
 6. Determine `NEXT_PHASE`: `implement-setup-task` if all touched files
    are in `scripts/`, `.claude/`, `.cursor/`, `.opencode/`,
-   `_qsprocess_opencode/`, `docs/`, `.github/`, or top-level config;
+   `legacy/`, `docs/`, `.github/`, or top-level config;
    otherwise `implement-task`.
 7. Write the story file. Append "Adversarial Review Notes". Commit and
    push.
@@ -105,7 +105,8 @@ auto-commits, pushes, opens PR after green quality gate.
 - `qs-implement-task`: `custom_components/quiet_solar/**`, `tests/**`,
   plus the story file (for progress notes).
 - `qs-implement-setup-task`: `scripts/qs/**`, `.claude/**`, `.cursor/**`,
-  `.opencode/**`, `_qsprocess_opencode/**`, `docs/**`, `.github/**`,
+  `.opencode/**`, `legacy/**` (frozen — `git mv` INTO only),
+  `docs/**`, `.github/**`,
   top-level config files, plus the story file.
 
 **Hard rules**:

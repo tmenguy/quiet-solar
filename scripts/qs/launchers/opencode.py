@@ -17,7 +17,7 @@ This launcher has a bifurcated contract driven by the ``caller=`` kwarg:
   server cannot open it as a project). We emit a CLI-form
   ``sh /tmp/qs_oc_launch_<N>.sh`` one-liner whose generated script
   runs ``opencode <worktree> --agent <name> --prompt <kickoff>``
-  (parallel shape to ``scripts/qs_opencode/utils.py:opencode_launch_command``).
+  (parallel shape to the legacy launch-command helper under ``legacy/``).
 
 The HTTP API path falls back to the CLI form when the OpenCode server
 is unreachable; ``spawn_session.py`` decides the fallback at runtime
@@ -145,7 +145,7 @@ def _opencode_cli_command(
 ) -> str:
     """Return a ``sh <tempfile>`` one-liner (CLI form).
 
-    Parallel to ``scripts/qs_opencode/utils.py:opencode_launch_command``
+    Parallel to the legacy launch-command helper (now under ``legacy/``)
     — but re-implemented here to keep this module self-contained
     (Task 2.4 in QS-177's story).
 

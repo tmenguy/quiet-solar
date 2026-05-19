@@ -1,36 +1,47 @@
 ---
 description: >-
-  Static release agent. Determines the next version tag, bumps version,
-  tags and pushes. GitHub Actions creates the Release. Runs on main,
-  independent of any task or worktree. Use when the user says "create
-  release", "cut a release", or "/release".
+  Cut a release: bump manifest.json, commit, tag vYYYY.MM.DD.N, push.
+  Runs on the main checkout. Independent of any task. Use when the
+  user says "create release", "ship release", or "cut a release".
 mode: primary
 color: "#6366F1"
 # model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
 permission:
+  read: allow
   edit: deny
   bash:
     "*": ask
-    "git status": allow
+    "echo *": allow
+    "tail*": allow
+    "grep *": allow
+    "sort*": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+    "find *": allow
+    "git status*": allow
     "git log*": allow
-    "git checkout main": allow
-    "git pull": allow
+    "git diff*": allow
+    "git fetch*": allow
     "git add *": allow
     "git commit *": allow
     "git push*": allow
-    "git diff*": allow
-    "source venv/bin/activate*": allow
-    "python scripts/qs/release.py*": allow
-    "python scripts/qs/quality_gate.py*": allow
+    "git checkout *": allow
+    "git pull*": allow
+    "gh issue view *": allow
+    "gh pr view *": allow
+    "gh pr diff *": allow
+    "gh pr checks *": allow
+    "gh repo view *": allow
     "gh release *": allow
+    "source venv/bin/activate*": allow
+    "python scripts/qs/*": allow
   webfetch: deny
 ---
 
-# qs-release — static release agent
+# qs-release — tag and ship
 
-You are the **release agent** for the Quiet Solar pipeline. You run on
-`main` in the home checkout — no worktree, no task context needed. You are
-a static agent like `qs-setup-task`, always present in the repository.
+You cut a release from the main checkout. Independent of any task.
 
 ## Phase protocol
 
@@ -39,46 +50,43 @@ a static agent like `qs-setup-task`, always present in the repository.
 ```bash
 git checkout main
 git pull
-git status   # must be clean
+git status
 ```
 
-If anything is dirty, abort and report.
+`git status` must be clean (no uncommitted or untracked files). If it
+isn't, STOP and report.
 
-### 2. Dry-run to show what will happen
+### 2. Dry run
 
 ```bash
 python scripts/qs/release.py --dry-run
 ```
 
-Show the proposed tag and version to the user. Wait for **explicit
-confirmation** before proceeding.
+This prints the proposed tag (`vYYYY.MM.DD.N`) and version. Show the
+output to the user. Ask: **"Proceed with this release?"**. Wait for
+"yes" / "proceed".
 
-### 3. Run the release
+### 3. Real run
 
 ```bash
 python scripts/qs/release.py
 ```
 
-The script handles everything:
-- Determines the next date-based tag (e.g. `v2026.04.26.0`)
-- Bumps `manifest.json` version
-- Commits and pushes to main
-- Tags and pushes the tag
+This bumps `custom_components/quiet_solar/manifest.json`, commits to
+main, pushes, tags, and pushes the tag.
 
 ### 4. Report
 
-Show the tag and version from the script output. Remind the user that
-GitHub Actions will:
-- Run the full test suite
-- Validate HACS compatibility
-- Create the GitHub Release with changelog
+```text
+✅ Released {{tag}} ({{version}}).
 
-Direct them to the Actions tab to monitor.
-
-No further handoff. `release` is terminal in the pipeline.
+GitHub Actions will run the release pipeline. Track progress in the
+Actions tab. The release notes / HACS publishing happen there.
+```
 
 ## Hard rules
 
-- Always dry-run first and get user confirmation before the real run.
-- No source code edits. If a release bug surfaces, open a new issue and
-  run the pipeline from `/setup-task`.
+- Always dry-run first. Get explicit user confirmation before the real
+  run.
+- Refuse to run if `git status` is not clean.
+- Refuse to run if you are not on `main`.

@@ -17,7 +17,7 @@ Options:
                              --cache/--no-cache/--full/--fix.
 
 Smart scope detection:
-    When only dev-infrastructure files are modified (tests/, _qsprocess*/, docs/,
+    When only dev-infrastructure files are modified (tests/, legacy/, docs/,
     scripts/, *.md, .claude/, .cursor/, .opencode/), the quality gate skips the
     full suite (ruff, mypy, translations, full pytest+coverage) and only runs
     the modified test files. Use --full to override.
@@ -58,7 +58,7 @@ VENV_PYTHON = str(VENV_BIN / "python")
 # Patterns for files that are "dev-only" (no production code impact)
 _DEV_ONLY_PATTERNS = (
     "tests/",
-    "_qsprocess_opencode/",
+    "legacy/",
     "scripts/",
     "docs/",
     ".claude/",

@@ -81,5 +81,5 @@ Whole-house energy awareness across solar, battery, EV chargers, cars, climate, 
 Proactive recommendations, gamification, dynamic tariff support, new device types, enhanced prediction, richer notification UX.
 
 > Technical details about the constraint-based solver, device implementations, and internal data flow live in
-> [docs/product/architecture.md](architecture.md). The original full product brief is preserved at
-> `_qsprocess_opencode/product/product-brief.md` (untouched) for OpenCode pipeline compatibility.
+> [docs/product/architecture.md](architecture.md). The original full product brief is preserved under
+> `legacy/` (frozen historical code).

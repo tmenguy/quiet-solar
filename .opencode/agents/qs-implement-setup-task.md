@@ -1,12 +1,67 @@
 ---
-name: qs-implement-setup-task
 description: >-
   Phase 3 variant for dev-environment changes only (scripts/, .claude/,
-  .cursor/, .opencode/, legacy/, docs/, .github/, top-level
-  config). Same TDD flow as qs-implement-task but narrower edit scope
-  and the fast-path quality gate. Use when /create-plan selected
+  .cursor/, .opencode/, legacy/, docs/, .github/, top-level config).
+  Same TDD flow as qs-implement-task but narrower edit scope and the
+  fast-path quality gate. Use when create-plan selected
   implement-setup-task as the next phase.
-tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch
+mode: primary
+color: "#16A34A"
+# model: github-copilot/claude-sonnet-4.5  # uncomment to override project default
+permission:
+  read: allow
+  edit:
+    "*": deny
+    "scripts/**": allow
+    ".claude/**": allow
+    ".cursor/**": allow
+    ".opencode/**": allow
+    "legacy/**": deny
+    "docs/**": allow
+    ".github/**": allow
+    "tests/**": allow
+    "CLAUDE.md": allow
+    "AGENTS.md": allow
+    ".cursorrules": allow
+    ".gitignore": allow
+    "pyproject.toml": allow
+    "requirements*.txt": allow
+    "setup.cfg": allow
+    "opencode.json": allow
+  bash:
+    "*": ask
+    "echo *": allow
+    "tail*": allow
+    "grep *": allow
+    "sort*": allow
+    "rg *": allow
+    "ls *": allow
+    "wc *": allow
+    "find *": allow
+    "git status*": allow
+    "git log*": allow
+    "git diff*": allow
+    "git fetch*": allow
+    "git add *": allow
+    "git commit *": allow
+    "git push*": allow
+    "git checkout *": allow
+    "git branch *": allow
+    "git mv *": allow
+    "git rm --cached*": allow
+    "gh issue view *": allow
+    "gh issue create *": allow
+    "gh pr view *": allow
+    "gh pr diff *": allow
+    "gh pr checks *": allow
+    "gh pr create *": allow
+    "gh pr merge *": ask
+    "gh repo view *": allow
+    "source venv/bin/activate*": allow
+    "python scripts/qs/*": allow
+    "bash scripts/worktree-setup.sh*": allow
+    "mkdir -p *": allow
+  webfetch: ask
 ---
 
 # qs-implement-setup-task — TDD implementation (dev-env scope)
@@ -39,16 +94,16 @@ Red → green → refactor, scoped to dev-environment paths:
 
 - `scripts/qs/**`, top-level `scripts/*.sh`
 - `.claude/**`, `.cursor/**`, `.opencode/**`
-- `legacy/**` (frozen historical code — do not modify; `git mv` INTO
-  `legacy/` is allowed when the story requires it)
 - `docs/**`
 - `.github/**`
 - Top-level config: `pyproject.toml`, `requirements*.txt`, `CLAUDE.md`,
-  `AGENTS.md`, `.cursorrules`, `.gitignore`, `setup.cfg`
+  `AGENTS.md`, `.cursorrules`, `.gitignore`, `setup.cfg`, `opencode.json`
 
 If you need to edit `custom_components/quiet_solar/` or `tests/` (other
 than dev tooling tests), STOP — this should have been routed to
-`/implement-task`.
+`implement-task`.
+
+`legacy/**` is frozen historical code — do NOT modify or import.
 
 ### 3. Implementation summary
 
@@ -79,12 +134,14 @@ python scripts/qs/create_pr.py \
 ```
 
 (Adjust `git add` to only the paths you actually touched — don't stage
-empty directories.)
+empty directories. `legacy/` is only staged when you've performed a
+`git mv` into it; this phase never edits files already under
+`legacy/`.)
 
 ### 6. Tell the user the next command
 
-Build the launcher payload for `/review-task` so the user has a copy/paste
-command to open a fresh interactive `claude --agent qs-review-task` session:
+Build the launcher payload for the review phase so the user has a copy/paste
+command to open a fresh session bound to `qs-review-task`:
 
 ```bash
 python scripts/qs/next_step.py \
@@ -94,7 +151,7 @@ python scripts/qs/next_step.py \
     --title "{{title}}"
 ```
 
-Parse the JSON; capture `new_context`. Then print both blocks:
+Parse the JSON; capture `new_context`. Then print:
 
 ```text
 ✅ Implementation complete — quality gate passed.
@@ -103,19 +160,19 @@ Parse the JSON; capture `new_context`. Then print both blocks:
 
 Next phase: review-task.
 
-Preferred (opens a fresh interactive `claude --agent qs-review-task` session):
+Preferred (activate `qs-review-task` from the OpenCode agent picker,
+or paste the spawn-session one-liner below into a fresh terminal):
   {{new_context}}
-
-Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
-  /review-task
 ```
 
 ## Hard rules
 
 - Edit scope is **strictly** dev-environment paths. If you find yourself
   touching `custom_components/quiet_solar/`, that's a scope violation —
-  re-route to `/implement-task`.
+  re-route to `implement-task`.
 - Same TDD discipline as `qs-implement-task`: no code without a failing
   test first, no commit without a green gate.
 - After green gate, commit + push + PR are automatic — no prompts.
+- Do NOT modify files under `legacy/**` — they are frozen historical
+  code. Moving files INTO `legacy/` via `git mv` is allowed when the
+  story explicitly requires it.
