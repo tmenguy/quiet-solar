@@ -1,11 +1,10 @@
 import logging
 from datetime import datetime
 
-from homeassistant.const import SERVICE_TURN_OFF, SERVICE_TURN_ON, Platform
-
 from ..const import SENSOR_CONSTRAINT_SENSOR_ON_OFF, CONF_TYPE_NAME_QSOnOffDuration
-from ..home_model.commands import CMD_IDLE, CMD_ON, LoadCommand
+from ..home_model.commands import LoadCommand
 from .bistate_duration import QSBiStateDuration
+from .bistate_transport import SwitchTransport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,6 +20,7 @@ class QSOnOffDuration(QSBiStateDuration):
         self._bistate_mode_on = "on_off_mode_on"
         self._bistate_mode_off = "on_off_mode_off"
         self.bistate_entity = self.switch_entity
+        self._transport: SwitchTransport = SwitchTransport(self.switch_entity)
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_ON_OFF
@@ -31,24 +31,4 @@ class QSOnOffDuration(QSBiStateDuration):
 
     # exception catched above execute_command
     async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
-
-        if state is not None:
-            if state == self.expected_state_from_command(CMD_IDLE):
-                action = SERVICE_TURN_OFF
-            else:
-                action = SERVICE_TURN_ON
-        else:
-            if command.is_like(CMD_ON):
-                action = SERVICE_TURN_ON
-            elif command.is_off_or_idle():
-                action = SERVICE_TURN_OFF
-            else:
-                raise ValueError("Invalid command")
-
-        _LOGGER.info("Executing on/off command %s on %s", action, self.bistate_entity)
-
-        # exception catched above execute_command
-        await self.hass.services.async_call(
-            domain=Platform.SWITCH, service=action, target={"entity_id": self.bistate_entity}
-        )
-        return False
+        return await self._transport.execute(self.hass, command, state, self._state_on, self._state_off)

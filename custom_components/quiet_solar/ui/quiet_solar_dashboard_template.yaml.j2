@@ -33,6 +33,8 @@ views:
           - type: custom:qs-pool-card
           {%- elif  device.device_type == "climate" %}
           - type: custom:qs-climate-card
+          {%- elif  device.device_type == "radiator" %}
+          - type: custom:qs-radiator-card
           {%- elif  device.device_type == "on_off_duration" %}
           - type: custom:qs-on-off-duration-card
           {%- else %}
@@ -145,6 +147,37 @@ views:
               {%- set e = ha.get("default_on_duration") %}
               {% if e %}default_on_duration: {{ e.entity_id }}{% endif %}
             {% elif device.device_type == "on_off_duration" -%}
+              {%- set ha = device.home.ha_entities %}
+              {%- set e = ha.get("qs_home_is_off_grid") %}
+              {% if e %}is_off_grid: {{ e.entity_id }}{% endif %}
+              {%- set ha = device.ha_entities %}
+              {%- set e = ha.get("qs_bistate_current_duration_h") %}
+              {% if e %}duration_limit: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_bistate_current_on_h") %}
+              {% if e %}current_duration: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("default_on_duration") %}
+              {% if e %}default_on_duration: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("default_on_finish_time") %}
+              {% if e %}default_on_finish_time: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("load_current_command") %}
+              {% if e %}command: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("bistate_mode") %}
+              {% if e %}bistate_mode: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_best_effort_green_only") %}
+              {% if e %}green_only: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_enable_device") %}
+              {% if e %}enable_device: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_load_reset_override_state") %}
+              {% if e %}override_reset: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("load_override_state") %}
+              {% if e %}override_state: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_next_or_current_constraint_start_time") %}
+              {% if e %}start_time: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_next_or_current_constraint_end_time") %}
+              {% if e %}end_time: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_device_clean_and_reset") %}
+              {% if e %}reset: {{ e.entity_id }}{% endif %}
+            {% elif device.device_type == "radiator" -%}
               {%- set ha = device.home.ha_entities %}
               {%- set e = ha.get("qs_home_is_off_grid") %}
               {% if e %}is_off_grid: {{ e.entity_id }}{% endif %}
@@ -323,7 +356,7 @@ views:
               {{ "    text: 'WARNING: This will reset ALL solar dampening values.'" }}
               {%- endif %}
             {% endif %}
-            {%- if device.device_type not in ["car", "pool", "climate", "on_off_duration"] %}
+            {%- if device.device_type not in ["car", "pool", "climate", "on_off_duration", "radiator"] %}
             show_header_toggle: false
             state_color: true
             {%- endif %}

@@ -9,7 +9,8 @@
         "error": {
             "already_configured_device": "Device is already configured",
             "cannot_connect": "Unable to connect",
-            "cloud_profile_mismatch": "Cloud profile does not match configuration"
+            "cloud_profile_mismatch": "Cloud profile does not match configuration",
+            "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator"
         },
         "step": {
             "battery": {
@@ -337,6 +338,28 @@
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"
             },
+            "radiator": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the radiator (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the radiator being on",
+                    "climate": "Climate entity controlling the radiator (leave empty if using a switch)",
+                    "climate_hvac_off": "HVAC mode to be used when the radiator is off",
+                    "climate_hvac_on": "HVAC mode to be used when the radiator is on",
+                    "device_to_pilot_name": "Optionally attach a heat pump piloted by this radiator",
+                    "dynamic_group_name": "Add to a load group to limit the amps",
+                    "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
+                    "name": "Name",
+                    "num_max_on_off": "Maximum Number of allowed turn on or turn off of the radiator per day",
+                    "power": "Power of the radiator (W)",
+                    "switch": "Switch entity controlling the radiator (leave empty if using a climate entity)"
+                },
+                "data_description": {
+                    "climate_hvac_on": "We suggest `heat` for heating-only radiators.",
+                    "power": "Measured: {measured_power}"
+                },
+                "description": "Heating-only radiator backed by either a switch entity or a climate entity (pick exactly one).",
+                "title": "A heating-only radiator"
+            },
             "solar": {
                 "data": {
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
@@ -364,6 +387,7 @@
                     "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
                     "person": "Add a Person",
                     "pool": "Add a pool",
+                    "radiator": "Add a heating-only radiator (switch-backed or climate-backed)",
                     "solar": "Add a Solar Panel Plant"
                 },
                 "title": "Choose a load or device to add"
@@ -544,6 +568,17 @@
             "qs_solar_provider_mode": {
                 "name": "Solar Provider Mode"
             },
+            "radiator_mode": {
+                "name": "Radiator Mode",
+                "state": {
+                    "bistate_mode_auto": "Calendar: End+Duration",
+                    "bistate_mode_default": "Default: End+Duration",
+                    "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+                    "heat": "Force HEAT",
+                    "off": "Force OFF",
+                    "on": "Force ON"
+                }
+            },
             "selected_car_for_charger": {
                 "name": "Selected Car:"
             },
@@ -614,6 +649,9 @@
             },
             "qs_constraint_sensor_pool": {
                 "name": "Next Pool filter"
+            },
+            "qs_constraint_sensor_radiator": {
+                "name": "Next Radiator Change"
             },
             "qs_constraint_sensor_value": {
                 "name": "Constraint Current Value"
@@ -993,6 +1031,28 @@
                 "description": "This device will compute automatically the needed pump use time to keep the pool clean",
                 "title": "Edit your pool"
             },
+            "radiator": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the radiator (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the radiator being on",
+                    "climate": "Climate entity controlling the radiator (leave empty if using a switch)",
+                    "climate_hvac_off": "HVAC mode to be used when the radiator is off",
+                    "climate_hvac_on": "HVAC mode to be used when the radiator is on",
+                    "device_to_pilot_name": "Optionally attach a heat pump piloted by this radiator",
+                    "dynamic_group_name": "Add to a load group to limit the amps",
+                    "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
+                    "name": "Name",
+                    "num_max_on_off": "Maximum Number of allowed turn on or turn off of the radiator per day",
+                    "power": "Power of the radiator (W)",
+                    "switch": "Switch entity controlling the radiator (leave empty if using a climate entity)"
+                },
+                "data_description": {
+                    "climate_hvac_on": "We suggest `heat` for heating-only radiators.",
+                    "power": "Measured: {measured_power}"
+                },
+                "description": "Heating-only radiator backed by either a switch entity or a climate entity (pick exactly one).",
+                "title": "A heating-only radiator"
+            },
             "solar": {
                 "data": {
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
@@ -1015,9 +1075,10 @@
             "options": {
                 "#1 - cars": "#1 - cars",
                 "#2 - climates": "#2 - climates",
-                "#3 - pools": "#3 - pools",
-                "#4 - others": "#4 - others",
-                "#5 - settings": "#5 - settings",
+                "#3 - radiators": "#3 - radiators",
+                "#4 - pools": "#4 - pools",
+                "#5 - others": "#5 - others",
+                "#6 - settings": "#6 - settings",
                 "Not in dashboard": "Not in dashboard"
             }
         }

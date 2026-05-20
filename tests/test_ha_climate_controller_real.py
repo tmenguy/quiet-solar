@@ -275,7 +275,7 @@ def test_get_possibles_modes(hass: HomeAssistant, climate_config_entry, climate_
     mock_registry.async_get.return_value = mock_entry
 
     with patch(
-        "custom_components.quiet_solar.ha_model.climate_controller.er.async_get",
+        "custom_components.quiet_solar.ha_model.bistate_transport.er.async_get",
         return_value=mock_registry,
     ):
         modes = device.get_possibles_modes()

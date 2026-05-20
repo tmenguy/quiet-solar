@@ -79,6 +79,7 @@ from custom_components.quiet_solar.const import (
     CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
     CONF_SOLAR_MAX_PHASE_AMPS,
     CONF_SOLAR_PROVIDER_DOMAIN,
+    CONF_SWITCH,
     DASHBOARD_NO_SECTION,
     DATA_HANDLER,
     DEVICE_TYPE,
@@ -89,6 +90,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSClimateDuration,
     CONF_TYPE_NAME_QSHeatPump,
     CONF_TYPE_NAME_QSHome,
+    CONF_TYPE_NAME_QSRadiator,
 )
 from custom_components.quiet_solar.ha_model.battery import QSBattery
 from custom_components.quiet_solar.ha_model.car import QSCar
@@ -240,6 +242,8 @@ async def test_flow_user_init_with_home(hass, mock_data_handler):
     assert QSHome.conf_type_name not in result["menu_options"]
     assert "charger" in result["menu_options"]  # Charger is a submenu
     assert QSCar.conf_type_name in result["menu_options"]
+    # Radiator must surface as a top-level menu option (AC-6).
+    assert CONF_TYPE_NAME_QSRadiator in result["menu_options"]
 
 
 @pytest.mark.asyncio
@@ -806,6 +810,124 @@ async def test_options_flow_heat_pump_updates_entry(hass: HomeAssistant, mock_da
 # =============================================================================
 # Climate with Heat Pump Options Tests
 # =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_with_heat_pumps_and_default(hass: HomeAssistant, mock_data_handler):
+    """Test radiator step shows heat pump selector with default value."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_hp_default_123",
+        data={
+            CONF_NAME: "Test Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.living_room",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_DEVICE_TO_PILOT_NAME: "My Heat Pump",
+        },
+        title="radiator: Test Radiator",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp = MagicMock()
+    mock_hp.name = "My Heat Pump"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["off", "heat"],
+    ):
+        result = await flow.async_step_radiator()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_DEVICE_TO_PILOT_NAME)
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_with_heat_pumps_no_default(hass: HomeAssistant, mock_data_handler):
+    """Test radiator step shows heat pump selector without default value."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_hp_nodef_123",
+        data={
+            CONF_NAME: "Test Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.radiator_no_hp",
+        },
+        title="radiator: Test Radiator",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp1 = MagicMock()
+    mock_hp1.name = "Heat Pump A"
+    mock_hp2 = MagicMock()
+    mock_hp2.name = "Heat Pump B"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp1, mock_hp2]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    result = await flow.async_step_radiator()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    assert _schema_has_key(schema, CONF_DEVICE_TO_PILOT_NAME)
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_climate_without_heat_mode_suggests_first_non_off(
+    hass: HomeAssistant, mock_data_handler
+):
+    """AC-6 D10 — radiator climate-mode dropdown falls back to first non-`off` mode.
+
+    When the climate entity advertises HVAC modes but doesn't include
+    `heat`, the form must suggest the first non-`off` mode (`auto` here),
+    not crash and not leave the field empty.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_no_heat_123",
+        data={
+            CONF_NAME: "Test Radiator No Heat",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.heat_less_radiator",
+        },
+        title="radiator: No Heat",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["off", "auto"],
+    ):
+        result = await flow.async_step_radiator()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+    # The HVAC mode selector for ON must be present and default to the
+    # first non-`off` mode (i.e. `auto`).
+    on_default = None
+    for item in schema.schema:
+        if getattr(item, "schema", None) == CONF_CLIMATE_HVAC_MODE_ON:
+            on_default = item.default()
+            break
+    assert on_default == "auto"
 
 
 @pytest.mark.asyncio

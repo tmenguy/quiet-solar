@@ -9,7 +9,8 @@
     "error": {
       "already_configured_device": "Device is already configured",
       "cannot_connect": "Unable to connect",
-      "cloud_profile_mismatch": "Cloud profile does not match configuration"
+      "cloud_profile_mismatch": "Cloud profile does not match configuration",
+      "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator"
     },
     "step": {
       "user": {
@@ -24,6 +25,7 @@
           "pool": "Add a pool",
           "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
           "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
+          "radiator": "Add a heating-only radiator (switch-backed or climate-backed)",
           "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
           "heat_pump": "Add a centralized Heat Pump, to be used in conjunction with climate splits"
         }
@@ -332,6 +334,28 @@
         },
         "data_description": {
           "power": "Measured: {measured_power}"
+        }
+      },
+      "radiator": {
+        "title": "A heating-only radiator",
+        "description": "Heating-only radiator backed by either a switch entity or a climate entity (pick exactly one).",
+        "data": {
+          "name": "Name",
+          "dynamic_group_name": "Add to a load group to limit the amps",
+          "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
+          "switch": "Switch entity controlling the radiator (leave empty if using a climate entity)",
+          "climate": "Climate entity controlling the radiator (leave empty if using a switch)",
+          "climate_hvac_on": "HVAC mode to be used when the radiator is on",
+          "climate_hvac_off": "HVAC mode to be used when the radiator is off",
+          "device_to_pilot_name": "Optionally attach a heat pump piloted by this radiator",
+          "power": "Power of the radiator (W)",
+          "accurate_power_sensor": "Power sensor of the radiator (W, kW)",
+          "num_max_on_off": "Maximum Number of allowed turn on or turn off of the radiator per day",
+          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the radiator being on"
+        },
+        "data_description": {
+          "power": "Measured: {measured_power}",
+          "climate_hvac_on": "We suggest `heat` for heating-only radiators."
         }
       },
       "dynamic_group": {
@@ -679,6 +703,28 @@
           "power": "[%key:component::quiet_solar::config::step::climate::data_description::power%]"
         }
       },
+      "radiator": {
+        "title": "[%key:component::quiet_solar::config::step::radiator::title%]",
+        "description": "[%key:component::quiet_solar::config::step::radiator::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::radiator::data::name%]",
+          "dynamic_group_name": "[%key:component::quiet_solar::config::step::radiator::data::dynamic_group_name%]",
+          "load_is_boost_only": "[%key:component::quiet_solar::config::step::radiator::data::load_is_boost_only%]",
+          "switch": "[%key:component::quiet_solar::config::step::radiator::data::switch%]",
+          "climate": "[%key:component::quiet_solar::config::step::radiator::data::climate%]",
+          "climate_hvac_on": "[%key:component::quiet_solar::config::step::radiator::data::climate_hvac_on%]",
+          "climate_hvac_off": "[%key:component::quiet_solar::config::step::radiator::data::climate_hvac_off%]",
+          "device_to_pilot_name": "[%key:component::quiet_solar::config::step::radiator::data::device_to_pilot_name%]",
+          "power": "[%key:component::quiet_solar::config::step::radiator::data::power%]",
+          "num_max_on_off": "[%key:component::quiet_solar::config::step::radiator::data::num_max_on_off%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::radiator::data::accurate_power_sensor%]",
+          "calendar": "[%key:component::quiet_solar::config::step::radiator::data::calendar%]"
+        },
+        "data_description": {
+          "power": "[%key:component::quiet_solar::config::step::radiator::data_description::power%]",
+          "climate_hvac_on": "[%key:component::quiet_solar::config::step::radiator::data_description::climate_hvac_on%]"
+        }
+      },
       "dynamic_group": {
         "title": "[%key:component::quiet_solar::config::step::dynamic_group::title%]",
         "description": "[%key:component::quiet_solar::config::step::dynamic_group::description%]",
@@ -787,6 +833,9 @@
       },
       "qs_constraint_sensor_climate": {
         "name": "Next climate Change"
+      },
+      "qs_constraint_sensor_radiator": {
+        "name": "Next Radiator Change"
       },
       "qs_constraint_sensor_pool": {
         "name": "Next Pool filter"
@@ -957,6 +1006,17 @@
           "fan_only": "Force HVAC Mode FAN ONLY"
         }
       },
+      "radiator_mode": {
+        "name": "Radiator Mode",
+        "state": {
+          "bistate_mode_auto": "Calendar: End+Duration",
+          "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+          "bistate_mode_default": "Default: End+Duration",
+          "off": "Force OFF",
+          "on": "Force ON",
+          "heat": "Force HEAT"
+        }
+      },
       "climate_state_on": {
         "name": "Climate Control Mode ON",
         "state": {
@@ -1018,9 +1078,10 @@
         "Not in dashboard": "Not in dashboard",
         "#1 - cars": "#1 - cars",
         "#2 - climates": "#2 - climates",
-        "#3 - pools": "#3 - pools",
-        "#4 - others": "#4 - others",
-        "#5 - settings": "#5 - settings"
+        "#3 - radiators": "#3 - radiators",
+        "#4 - pools": "#4 - pools",
+        "#5 - others": "#5 - others",
+        "#6 - settings": "#6 - settings"
       }
     }
   }

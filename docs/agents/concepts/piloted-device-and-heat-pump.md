@@ -6,7 +6,7 @@ covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/heat_pump.py
   - custom_components/quiet_solar/ha_model/climate_controller.py
-last_verified: 2026-05-19
+last_verified: 2026-05-20
 ---
 
 # PilotedDevice and heat pump
@@ -46,6 +46,23 @@ handles most demand; when the compressor is saturated and the
 climate setpoint is still missed, the pilot engages the aux heater.
 This is the structural pattern for "main device with optional
 booster".
+
+### Piloting is data-driven, not class-specific
+
+The pilot/client relationship is wired in `QSHome._set_topology()`
+(`ha_model/home.py:1876-1882`) by walking `self._all_loads` and
+checking `load.piloted_device_name` — that field comes straight
+from `AbstractLoad.__init__` (`home_model/load.py:114`). Any
+`AbstractLoad` subclass can opt into piloting just by reading
+`CONF_DEVICE_TO_PILOT_NAME` from its config. **No edit to
+`home.add_device` is required** when a new device type wants to be
+piloted.
+
+This is why `QSRadiator` can attach to a heat pump regardless of
+its backing (switch OR climate) — both backings go through the
+same `AbstractLoad.__init__` path, and `_set_topology` finds the
+heat pump by name. The climate-controller class isn't the only
+piloting client anymore.
 
 ## Key types / structures
 

@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-19
+last_verified: 2026-05-20
 ---
 
 # Config flow and setup
@@ -50,6 +50,31 @@ async_step_user (top-level menu)
   uniform.
 - Entity selectors filter by unit of measurement and **exclude
   quiet-solar's own entities** (no self-referential setups).
+
+**Cross-field XOR validation pattern** (`async_step_radiator`):
+
+The radiator step shows BOTH a switch selector AND a climate
+selector and validates exactly-one-set via an explicit if/else
+inside the step. On misconfig it re-renders the form with
+`errors={"base": "exactly_one_backing_required"}`. The same
+constraint is enforced in `QSRadiator.__init__` via
+`ServiceValidationError` for any non-UI code path (e.g. tests,
+direct construction). This is the canonical pattern for "pick
+exactly one of these N options" — voluptuous's `vol.Exclusive`
+group only enforces "at most one", not "exactly one".
+
+**Two-pass form pattern** (`async_step_climate`,
+`async_step_radiator`):
+
+When a step needs to render dropdowns derived from another field
+(e.g. HVAC modes that depend on which climate entity the user
+picked), the step issues a self-call with a sentinel token in
+`user_input` (`"force_climate"`, `"force_radiator_climate"`). Pass 1
+captures the climate entity into `self.config_entry.data`
+(creation flow — `FakeConfigEntry`) or via `async_update_entry`
+(options flow — real `ConfigEntry`). Pass 2 reads the available
+HVAC modes from the registry and shows the mode selectors with a
+suggested default.
 
 **Data handler lifecycle** (`data_handler.py`):
 

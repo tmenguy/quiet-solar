@@ -41,6 +41,8 @@ from tests.ha_tests.const import (
     MOCK_HOME_CONFIG,
     MOCK_ON_OFF_DURATION_CONFIG,
     MOCK_PERSON_CONFIG,
+    MOCK_RADIATOR_CLIMATE_CONFIG,
+    MOCK_RADIATOR_SWITCH_CONFIG,
     MOCK_SENSOR_STATES,
     MOCK_SOLAR_CONFIG,
 )
@@ -120,6 +122,8 @@ async def full_dashboard_home(hass):
         ("climate", MOCK_CLIMATE_DURATION_CONFIG),
         ("heat_pump", MOCK_HEAT_PUMP_CONFIG),
         ("pool", MOCK_POOL_CONFIG),
+        ("radiator_switch", MOCK_RADIATOR_SWITCH_CONFIG),
+        ("radiator_climate", MOCK_RADIATOR_CLIMATE_CONFIG),
     ]
 
     entries = {}
@@ -182,6 +186,39 @@ class TestDashboardTemplateRendering:
         parsed = yaml.safe_load(rendered)
         assert parsed is not None
         assert "views" in parsed
+
+    @pytest.mark.asyncio
+    async def test_radiator_devices_use_dedicated_card(self, hass, full_dashboard_home):
+        """AC-14 — radiator devices dispatch to `custom:qs-radiator-card`.
+
+        Both switch-backed and climate-backed radiators must render with
+        the dedicated card type, never the on/off or climate card.
+        """
+        home = full_dashboard_home
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        template_content = template_path.read_text()
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        # The radiators section must be present (AC-8) and must use the
+        # dedicated card type for the two radiator devices.
+        assert "custom:qs-radiator-card" in rendered
+        # Sanity: the section name surfaces in the rendered YAML.
+        assert "radiators" in rendered
+
+    @pytest.mark.asyncio
+    async def test_radiator_card_resource_file_present(self):
+        """AC-11 — `qs-radiator-card.js` ships in the resources directory."""
+        card_path = COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js"
+        assert card_path.is_file(), f"Missing radiator card resource: {card_path}"
+
+        content = card_path.read_text()
+        # Custom-element registration must reference the renamed element.
+        assert "customElements.define('qs-radiator-card'" in content
+        # Class identifier must be renamed (no stale `QsOnOffDurationCard`).
+        assert "QsRadiatorCard" in content
+        assert "QsOnOffDurationCard" not in content
 
     @pytest.mark.asyncio
     async def test_solar_entities_appear_in_rendered_output(self, hass, full_dashboard_home):
@@ -380,6 +417,7 @@ class TestDashboardSectionMapping:
             ("on_off_duration", "others"),
             ("climate", "climates"),
             ("heat_pump", "climates"),
+            ("radiator", "radiators"),
         ],
     )
     def test_device_type_maps_to_section(self, device_type, expected_section):

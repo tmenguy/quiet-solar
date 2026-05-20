@@ -270,7 +270,7 @@ async def test_climate_duration_device_creation(
 
     # Mock get_hvac_modes to return a list without requiring entity registry
     with patch(
-        "custom_components.quiet_solar.ha_model.climate_controller.get_hvac_modes",
+        "custom_components.quiet_solar.ha_model.bistate_transport.get_hvac_modes",
         return_value=["off", "heat", "cool", "auto"],
     ):
         climate_entry = MockConfigEntry(
@@ -313,7 +313,7 @@ async def test_create_ha_select_for_climate_duration_returns_entities(
 
     # Mock get_hvac_modes to return a list without requiring entity registry
     with patch(
-        "custom_components.quiet_solar.ha_model.climate_controller.get_hvac_modes",
+        "custom_components.quiet_solar.ha_model.bistate_transport.get_hvac_modes",
         return_value=["off", "heat", "cool", "auto"],
     ):
         climate_entry = MockConfigEntry(
@@ -387,7 +387,7 @@ async def test_create_ha_select_detects_bistate_and_climate_duration(
 
     # Mock get_hvac_modes for climate device
     with patch(
-        "custom_components.quiet_solar.ha_model.climate_controller.get_hvac_modes",
+        "custom_components.quiet_solar.ha_model.bistate_transport.get_hvac_modes",
         return_value=["off", "heat", "cool", "auto"],
     ):
         # Set up climate_duration device
@@ -491,6 +491,90 @@ async def test_climate_duration_select_unload(
 # =============================================================================
 # Coverage: select.py line 175 - create_ha_select_for_QSSolar early return
 # =============================================================================
+
+
+async def test_radiator_exposes_only_bistate_mode_select(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC-12 — switch-backed radiator exposes exactly one select (`bistate_mode`).
+
+    The radiator inherits from `QSBiStateDuration` (not `QSClimateDuration`),
+    so the `isinstance(device, QSClimateDuration)` branch in
+    `create_ha_select` does NOT create the runtime `climate_state_on` /
+    `climate_state_off` selects.
+    """
+    from .const import MOCK_RADIATOR_SWITCH_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    hass.states.async_set("switch.test_radiator_switch", "off", {})
+
+    radiator_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_RADIATOR_SWITCH_CONFIG,
+        entry_id="radiator_select_test",
+        title=f"radiator: {MOCK_RADIATOR_SWITCH_CONFIG['name']}",
+        unique_id="quiet_solar_radiator_select_test",
+    )
+    radiator_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(radiator_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert radiator_entry.state is ConfigEntryState.LOADED
+
+    entity_entries = er.async_entries_for_config_entry(entity_registry := er.async_get(hass), radiator_entry.entry_id)
+    select_entries = [e for e in entity_entries if e.domain == "select"]
+
+    # Exactly one select: the bistate-mode select. NO climate_state_on /
+    # climate_state_off entries (those only come from QSClimateDuration).
+    assert len(select_entries) == 1
+    assert select_entries[0].translation_key == "radiator_mode"
+
+    # silence unused-fixture lint
+    assert entity_registry is not None
+
+
+async def test_radiator_climate_exposes_only_bistate_mode_select(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC-12 — climate-backed radiator also exposes only one select.
+
+    Even when the radiator wraps a climate entity, it remains a
+    `QSBiStateDuration` (not `QSClimateDuration`), so the runtime
+    HVAC-mode selects are NOT created (config-time only — D4).
+    """
+    from .const import MOCK_RADIATOR_CLIMATE_CONFIG
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    hass.states.async_set(
+        "climate.test_radiator_climate",
+        "off",
+        {"hvac_modes": ["off", "heat", "auto"]},
+    )
+
+    radiator_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_RADIATOR_CLIMATE_CONFIG,
+        entry_id="radiator_climate_select_test",
+        title=f"radiator: {MOCK_RADIATOR_CLIMATE_CONFIG['name']}",
+        unique_id="quiet_solar_radiator_climate_select_test",
+    )
+    radiator_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(radiator_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert radiator_entry.state is ConfigEntryState.LOADED
+
+    entity_entries = er.async_entries_for_config_entry(er.async_get(hass), radiator_entry.entry_id)
+    select_entries = [e for e in entity_entries if e.domain == "select"]
+
+    assert len(select_entries) == 1
+    assert select_entries[0].translation_key == "radiator_mode"
 
 
 def test_create_ha_select_for_qssolar_empty_providers():

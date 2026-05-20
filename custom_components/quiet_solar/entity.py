@@ -22,6 +22,7 @@ from .ha_model.home import QSHome
 from .ha_model.on_off_duration import QSOnOffDuration
 from .ha_model.person import QSPerson
 from .ha_model.pool import QSPool
+from .ha_model.radiator import QSRadiator
 from .ha_model.solar import QSSolar
 from .home_model.load import AbstractDevice
 
@@ -39,6 +40,7 @@ LOAD_TYPE_LIST = [
     QSClimateDuration,
     QSDynamicGroup,
     QSHeatPump,
+    QSRadiator,
 ]
 LOAD_TYPE__DICT = {t.conf_type_name: t for t in LOAD_TYPE_LIST}
 
@@ -57,6 +59,7 @@ LOAD_NAMES = {
     QSClimateDuration.conf_type_name: "climate",
     QSDynamicGroup.conf_type_name: "group",
     QSHeatPump.conf_type_name: "heat pump",
+    QSRadiator.conf_type_name: "radiator",
 }
 
 

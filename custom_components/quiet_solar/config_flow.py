@@ -148,6 +148,7 @@ from .ha_model.home import QSHome
 from .ha_model.on_off_duration import QSOnOffDuration
 from .ha_model.person import QSPerson
 from .ha_model.pool import QSPool
+from .ha_model.radiator import QSRadiator
 from .ha_model.solar import QSSolar
 from .home_model.load import map_section_selected_name_in_section_list
 
@@ -167,6 +168,7 @@ LOAD_TYPES_MENU = {
     QSPool.conf_type_name: None,
     QSOnOffDuration.conf_type_name: None,
     QSClimateDuration.conf_type_name: None,
+    QSRadiator.conf_type_name: None,
     QSDynamicGroup.conf_type_name: None,
     QSHeatPump.conf_type_name: None,
 }
@@ -1606,6 +1608,132 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         schema = vol.Schema(sc_dict)
 
         return self.async_show_form(step_id=TYPE, data_schema=schema, description_placeholders=placeholders)
+
+    async def async_step_radiator(self, user_input=None):
+
+        TYPE = QSRadiator.conf_type_name
+
+        if user_input is not None:
+            # Pass 2 of the climate two-pass flow — fall through to render
+            # the form with the HVAC mode dropdowns. The XOR check below
+            # is skipped because the internal payload (just
+            # `{"force_radiator_climate": True}`) does not echo the entity
+            # selectors.
+            if "force_radiator_climate" not in user_input:
+                climate_entity = user_input.get(CONF_CLIMATE)
+                switch_entity = user_input.get(CONF_SWITCH)
+
+                # AC-6 exactly-one-backing validation (cross-field XOR)
+                if bool(climate_entity) == bool(switch_entity):
+                    return await self._async_show_radiator_form(
+                        errors={"base": "exactly_one_backing_required"},
+                    )
+
+                if climate_entity is not None:
+                    orig_climate_entity = self.config_entry.data.get(CONF_CLIMATE)
+                    if (
+                        climate_entity != orig_climate_entity
+                        or user_input.get(CONF_CLIMATE_HVAC_MODE_OFF) is None
+                        or user_input.get(CONF_CLIMATE_HVAC_MODE_ON) is None
+                    ):
+                        # Re-prompt with HVAC mode dropdowns once the climate
+                        # entity is known. Preserve user-entered fields by
+                        # merging into the config-entry data (the FakeConfigEntry
+                        # used during creation accepts direct assignment; the
+                        # real ConfigEntry used during the options flow needs
+                        # `async_update_entry`).
+                        merged = dict(self.config_entry.data)
+                        merged.update(user_input)
+                        if isinstance(self.config_entry, FakeConfigEntry):
+                            self.config_entry.data = merged
+                        else:
+                            self.hass.config_entries.async_update_entry(self.config_entry, data=merged)
+                        return await self.async_step_radiator({"force_radiator_climate": True})
+
+                    return await self.async_entry_next(user_input, TYPE)
+
+                return await self.async_entry_next(user_input, TYPE)
+
+        return await self._async_show_radiator_form()
+
+    async def _async_show_radiator_form(self, errors=None):
+        """Render the radiator form (extracted so we can re-render on error)."""
+        TYPE = QSRadiator.conf_type_name
+
+        sc_dict, placeholders = self.get_common_schema(
+            type=TYPE,
+            add_power_value_selector=1000,
+            add_load_power_sensor=True,
+            add_calendar=True,
+            add_boost_only=True,
+            add_power_group_selector=True,
+            add_max_on_off=True,
+        )
+
+        # Both selectors are optional — exactly-one validation runs on submit.
+        self.add_entity_selector(sc_dict, CONF_SWITCH, False, domain=[SWITCH_DOMAIN])
+        self.add_entity_selector(sc_dict, CONF_CLIMATE, False, domain=[CLIMATE_DOMAIN])
+
+        climate_entity = self.config_entry.data.get(CONF_CLIMATE)
+
+        if climate_entity is not None:
+            hvac_modes = get_hvac_modes(self.hass, climate_entity)
+
+            # Suggested default: "heat" if available, else first non-"off" mode.
+            existing_on = self.config_entry.data.get(CONF_CLIMATE_HVAC_MODE_ON)
+            if existing_on is None:
+                if "heat" in hvac_modes:
+                    suggested_on = "heat"
+                else:
+                    non_off = [m for m in hvac_modes if m != "off"]
+                    suggested_on = non_off[0] if non_off else (hvac_modes[0] if hvac_modes else "heat")
+            else:
+                suggested_on = existing_on
+
+            existing_off = self.config_entry.data.get(CONF_CLIMATE_HVAC_MODE_OFF)
+            suggested_off = existing_off if existing_off is not None else "off"
+
+            sc_dict[vol.Required(CONF_CLIMATE_HVAC_MODE_OFF, default=suggested_off)] = SelectSelector(
+                SelectSelectorConfig(options=hvac_modes, mode=SelectSelectorMode.DROPDOWN)
+            )
+            sc_dict[vol.Required(CONF_CLIMATE_HVAC_MODE_ON, default=suggested_on)] = SelectSelector(
+                SelectSelectorConfig(options=hvac_modes, mode=SelectSelectorMode.DROPDOWN)
+            )
+
+        # Heat-pump piloting dropdown — shown when at least one heat pump exists.
+        data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+        heat_pump_options = []
+        if data_handler and data_handler.home:
+            heat_pumps = getattr(data_handler.home, "_heat_pumps", [])
+            heat_pump_options = [hp.name for hp in heat_pumps]
+
+        if heat_pump_options:
+            default_heat_pump = self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME)
+            if default_heat_pump:
+                sc_dict[vol.Optional(CONF_DEVICE_TO_PILOT_NAME, description={"suggested_value": default_heat_pump})] = (
+                    selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=heat_pump_options,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    )
+                )
+            else:
+                sc_dict[vol.Optional(CONF_DEVICE_TO_PILOT_NAME)] = selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=heat_pump_options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+
+        schema = vol.Schema(sc_dict)
+
+        return self.async_show_form(
+            step_id=TYPE,
+            data_schema=schema,
+            description_placeholders=placeholders,
+            errors=errors,
+        )
 
     async def async_step_dynamic_group(self, user_input=None):
 

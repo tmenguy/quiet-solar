@@ -1,0 +1,349 @@
+"""Tests for `ha_model/radiator.py` — `QSRadiator` heating-only load.
+
+A radiator is a `QSBiStateDuration` whose backing is either a switch
+(`CONF_SWITCH`) OR a climate entity (`CONF_CLIMATE`), but never both
+and never neither. It picks a `BistateTransport` strategy at
+construction time and inherits the rest of the bistate logic from its
+parent.
+"""
+
+from __future__ import annotations
+
+import datetime
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+import pytz
+from homeassistant.const import CONF_NAME
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+from custom_components.quiet_solar.const import (
+    CONF_CLIMATE,
+    CONF_CLIMATE_HVAC_MODE_OFF,
+    CONF_CLIMATE_HVAC_MODE_ON,
+    CONF_DEVICE_TO_PILOT_NAME,
+    CONF_POWER,
+    CONF_SWITCH,
+    CONF_TYPE_NAME_QSRadiator,
+    DATA_HANDLER,
+    DOMAIN,
+    SENSOR_CONSTRAINT_SENSOR_RADIATOR,
+)
+from custom_components.quiet_solar.ha_model.bistate_transport import (
+    ClimateTransport,
+    SwitchTransport,
+)
+from custom_components.quiet_solar.ha_model.radiator import QSRadiator
+from custom_components.quiet_solar.home_model.commands import CMD_OFF, CMD_ON
+from tests.factories import create_minimal_home_model
+
+
+@pytest.fixture
+def radiator_config_entry() -> MockConfigEntry:
+    """Mock config entry for radiator tests."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_entry",
+        data={CONF_NAME: "Test Radiator"},
+        title="Test Radiator",
+    )
+
+
+@pytest.fixture
+def radiator_home(hass: HomeAssistant):
+    """Home and data handler for radiator tests."""
+    home = create_minimal_home_model()
+    home.is_off_grid = MagicMock(return_value=False)
+    data_handler = MagicMock()
+    data_handler.home = home
+    hass.data.setdefault(DOMAIN, {})[DATA_HANDLER] = data_handler
+    return home
+
+
+def test_radiator_conf_type_name_is_radiator():
+    """`QSRadiator.conf_type_name == "radiator"` (matches the new constant)."""
+    assert QSRadiator.conf_type_name == CONF_TYPE_NAME_QSRadiator
+    assert QSRadiator.conf_type_name == "radiator"
+
+
+def test_radiator_init_with_switch_picks_switch_transport(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """When configured with `CONF_SWITCH`, the radiator picks a `SwitchTransport`."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Bathroom Radiator",
+            CONF_SWITCH: "switch.bathroom_radiator",
+            CONF_POWER: 800,
+        },
+    )
+
+    assert isinstance(device._transport, SwitchTransport)
+    assert device._transport.entity == "switch.bathroom_radiator"
+    assert device.bistate_entity == "switch.bathroom_radiator"
+    assert device._state_on == "on"
+    assert device._state_off == "off"
+
+
+def test_radiator_init_with_climate_picks_climate_transport(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """When configured with `CONF_CLIMATE`, the radiator picks a `ClimateTransport`."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Living Room Radiator",
+            CONF_CLIMATE: "climate.living_room",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            CONF_POWER: 1500,
+        },
+    )
+
+    assert isinstance(device._transport, ClimateTransport)
+    assert device._transport.entity == "climate.living_room"
+    assert device.bistate_entity == "climate.living_room"
+    assert device._state_on == "heat"
+    assert device._state_off == "off"
+
+
+def test_radiator_init_both_raises_service_validation_error(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """Configuring both `CONF_SWITCH` and `CONF_CLIMATE` raises `ServiceValidationError`."""
+    with pytest.raises(ServiceValidationError, match="exactly one of climate or switch"):
+        QSRadiator(
+            hass=hass,
+            config_entry=radiator_config_entry,
+            home=radiator_home,
+            **{
+                CONF_NAME: "Misconfigured Radiator",
+                CONF_SWITCH: "switch.r",
+                CONF_CLIMATE: "climate.r",
+            },
+        )
+
+
+def test_radiator_init_neither_raises_service_validation_error(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """Configuring neither `CONF_SWITCH` nor `CONF_CLIMATE` raises `ServiceValidationError`."""
+    with pytest.raises(ServiceValidationError, match="exactly one of climate or switch"):
+        QSRadiator(
+            hass=hass,
+            config_entry=radiator_config_entry,
+            home=radiator_home,
+            **{CONF_NAME: "Backingless Radiator"},
+        )
+
+
+def test_radiator_climate_defaults_to_heat_off(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """A climate-backed radiator defaults to `heat` / `off` (heating-only)."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Bedroom Radiator",
+            CONF_CLIMATE: "climate.bedroom",
+            # No CONF_CLIMATE_HVAC_MODE_ON / OFF provided
+        },
+    )
+
+    assert device._state_on == "heat"
+    assert device._state_off == "off"
+
+
+def test_radiator_select_translation_key_is_radiator_mode(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """Radiator exposes its own select-translation key (no clash with on/off or climate)."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{CONF_NAME: "Test Radiator", CONF_SWITCH: "switch.r"},
+    )
+
+    assert device.get_select_translation_key() == "radiator_mode"
+
+
+def test_radiator_virtual_current_constraint_translation_key_is_radiator(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """Constraint sensor uses the dedicated `SENSOR_CONSTRAINT_SENSOR_RADIATOR` key."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{CONF_NAME: "Test Radiator", CONF_SWITCH: "switch.r"},
+    )
+
+    assert device.get_virtual_current_constraint_translation_key() == SENSOR_CONSTRAINT_SENSOR_RADIATOR
+
+
+def test_radiator_piloted_device_attaches_for_switch_backing(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """The `device_to_pilot_name` is read by `AbstractLoad.__init__` for any backing."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Piloted Switch Radiator",
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Main Heat Pump",
+        },
+    )
+
+    assert device.piloted_device_name == "Main Heat Pump"
+
+
+def test_radiator_piloted_device_attaches_for_climate_backing(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """Same wiring works with `CONF_CLIMATE` — piloting is data-driven."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Piloted Climate Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Main Heat Pump",
+        },
+    )
+
+    assert device.piloted_device_name == "Main Heat Pump"
+
+
+@pytest.mark.asyncio
+async def test_radiator_execute_command_calls_transport_switch(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """`execute_command_system` delegates to the switch transport."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{CONF_NAME: "Test Radiator", CONF_SWITCH: "switch.r"},
+    )
+    device._transport = MagicMock(spec=SwitchTransport)
+    device._transport.execute = AsyncMock(return_value=False)
+    device._transport.entity = "switch.r"
+
+    time = datetime.datetime.now(pytz.UTC)
+    result = await device.execute_command_system(time, CMD_ON, state=None)
+
+    assert result is False
+    device._transport.execute.assert_awaited_once()
+    args = device._transport.execute.await_args.args
+    assert args[0] is hass
+    assert args[1] is CMD_ON
+    assert args[2] is None
+    # state_on / state_off are the host's values
+    assert args[3] == "on"
+    assert args[4] == "off"
+
+
+@pytest.mark.asyncio
+async def test_radiator_execute_command_calls_transport_climate(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """`execute_command_system` delegates to the climate transport with `heat`/`off`."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Test Climate Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+    device._transport = MagicMock(spec=ClimateTransport)
+    device._transport.execute = AsyncMock(return_value=False)
+    device._transport.entity = "climate.r"
+
+    time = datetime.datetime.now(pytz.UTC)
+    result = await device.execute_command_system(time, CMD_OFF, state=None)
+
+    assert result is False
+    device._transport.execute.assert_awaited_once()
+
+
+def test_radiator_no_climate_state_on_off_attributes(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """Regression (AC-12): radiator does not expose `climate_state_on/off` properties.
+
+    The runtime select for climate state is removed — radiators are
+    heating-only and configured once.
+    """
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Test Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+
+    # The radiator must NOT be a QSClimateDuration (otherwise the select
+    # platform would create the runtime climate_state_on / climate_state_off
+    # selects). It IS a QSBiStateDuration via inheritance.
+    from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
+    from custom_components.quiet_solar.ha_model.climate_controller import QSClimateDuration
+
+    assert isinstance(device, QSBiStateDuration)
+    assert not isinstance(device, QSClimateDuration)
+
+
+def test_radiator_options_flow_backing_swap_picks_new_transport(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """AC-13 — re-creating a radiator with a different backing picks the new transport.
+
+    The options-flow swap is wired through `async_reload_entry` →
+    re-instantiation. Verifying that re-instantiating with the new
+    backing picks the right transport is the same property the reload
+    relies on.
+    """
+    switch_device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{CONF_NAME: "Swap Radiator", CONF_SWITCH: "switch.r"},
+    )
+    assert isinstance(switch_device._transport, SwitchTransport)
+
+    # Simulate the options-flow swap: rebuild the device with the new
+    # config (the same device_id thanks to the stable slug-based id).
+    climate_device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Swap Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+    assert isinstance(climate_device._transport, ClimateTransport)
+    # Stable identity across the swap (device_id is derived from name + type).
+    assert switch_device.device_id == climate_device.device_id

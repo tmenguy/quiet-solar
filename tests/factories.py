@@ -911,6 +911,69 @@ def create_test_car_double(**kwargs) -> TestCarDouble:
     return TestCarDouble(**kwargs)
 
 
+class TestRadiatorDouble:
+    """Lightweight test double for QSRadiator-like behaviour.
+
+    Use this in unit tests that need a radiator-shaped object (with the
+    `_transport`, `_state_on/off`, `bistate_entity`, `piloted_device_name`
+    surface) but don't need to instantiate a full HA-backed device.
+    """
+
+    # pytest opt-out: this is a test helper, not a test class, despite the
+    # `Test` prefix.
+    __test__ = False
+
+    def __init__(
+        self,
+        name: str = "Test Radiator",
+        backing: str = "switch",
+        switch_entity: str = "switch.radiator",
+        climate_entity: str = "climate.radiator",
+        hvac_on: str = "heat",
+        hvac_off: str = "off",
+        piloted_device_name: str | None = None,
+        power: float = 1000.0,
+        **kwargs,
+    ):
+        from custom_components.quiet_solar.ha_model.bistate_transport import (
+            ClimateTransport,
+            SwitchTransport,
+        )
+
+        if backing not in ("switch", "climate"):
+            raise ValueError("backing must be 'switch' or 'climate'")
+
+        self.name = name
+        self.power_use = power
+        self.piloted_device_name = piloted_device_name
+
+        if backing == "switch":
+            self._transport = SwitchTransport(switch_entity)
+        else:
+            self._transport = ClimateTransport(climate_entity, hvac_on, hvac_off)
+
+        self._state_on = self._transport.default_state_on()
+        self._state_off = self._transport.default_state_off()
+        self._bistate_mode_on = self._state_on
+        self._bistate_mode_off = self._state_off
+        self.bistate_entity = self._transport.entity
+        self.conf_type_name = "radiator"
+        self.device_type = "radiator"
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+def create_test_radiator_double(**kwargs) -> TestRadiatorDouble:
+    """Create a TestRadiatorDouble for unit testing.
+
+    Example:
+        radiator = create_test_radiator_double(name="Bathroom", backing="switch")
+        radiator = create_test_radiator_double(name="Living Room", backing="climate")
+    """
+    return TestRadiatorDouble(**kwargs)
+
+
 def create_test_charger_double(car: Any = None, **kwargs) -> TestChargerDouble:
     """Create a TestChargerDouble for unit testing.
 
