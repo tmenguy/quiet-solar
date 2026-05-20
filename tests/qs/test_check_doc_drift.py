@@ -1181,7 +1181,12 @@ def test_harness_sync_ignores_non_agent_files(tmp_path: Path) -> None:
 
 
 def test_harness_sync_handles_missing_harness_dir(tmp_path: Path) -> None:
-    """Agents dir exists in other harnesses but file is absent → drift reported."""
+    """Agents dir exists in other harnesses but file is absent → no drift.
+
+    Harness-specific agents (present in only one harness) are exempt
+    from the co-modification check. Only counterpart files that
+    actually exist on disk trigger drift.
+    """
     repo = _setup_repo(tmp_path)
     _write_agent(repo, "claude", "qs-test-agent")
     # Create the agents dirs (harness is set up) but don't create the files
@@ -1197,4 +1202,4 @@ def test_harness_sync_handles_missing_harness_dir(tmp_path: Path) -> None:
             ".claude/agents/qs-test-agent.md",
         ]
     )
-    assert exit_code == 1
+    assert exit_code == 0

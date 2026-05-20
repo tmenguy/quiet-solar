@@ -20,7 +20,7 @@ python scripts/qs/context.py
 ```
 
 Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
-`latest_review_fix`. The story file is your spec.
+`latest_review_fix`. The story file is your spec (unless a review fix plan is active — see step 1b).
 
 Read [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 and [docs/workflow/project-context.md](../../docs/workflow/project-context.md)

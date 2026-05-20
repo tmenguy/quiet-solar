@@ -352,36 +352,11 @@ def _git_staged_paths(repo_root: Path) -> list[str]:
 HARNESS_DIRS = (".claude", ".cursor", ".opencode")
 
 
-def _extract_body(path: Path) -> str:
-    """Return everything after the YAML frontmatter closing ``---``.
-
-    If the file has no frontmatter, return the entire content.
-    Kept as a utility — not used by the co-modification check but
-    available for future content-level comparisons.
-    """
-    text = path.read_text(encoding="utf-8-sig")
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-
-    if not text.startswith("---\n"):
-        return text
-
-    rest = text[len("---\n"):]
-    end = rest.find("\n---\n")
-    if end == -1:
-        stripped = rest.rstrip()
-        if stripped.endswith("\n---"):
-            end = len(stripped) - len("\n---")
-        else:
-            return text  # no closing delimiter — return all
-        return rest[end + len("\n---"):]
-
-    return rest[end + len("\n---\n"):]
-
 
 def _check_harness_sync(
     modified: set[str],
     repo_root: Path,
-) -> list[dict[str, str]]:
+) -> list[dict[str, str | list[str]]]:
     """Check co-modification of agent files across harness directories.
 
     Agent bodies legitimately differ across harnesses — each has its
@@ -395,6 +370,9 @@ def _check_harness_sync(
     harness directories should also appear in the modified set. This
     catches the common case ("edited .claude/agents/foo.md but forgot
     .cursor/ and .opencode/") without rejecting legitimate differences.
+
+    Only flags drift when the counterpart file actually exists on disk.
+    Harness-specific agents (present in only one harness) are exempt.
 
     Returns a list of drift entries:
     ``{"agent": basename, "out_of_sync": [harness_dirs]}``.
@@ -411,18 +389,17 @@ def _check_harness_sync(
     if not agent_harnesses:
         return []
 
-    drift: list[dict[str, str]] = []
+    drift: list[dict[str, str | list[str]]] = []
 
     for basename, modified_harnesses in agent_harnesses.items():
         out_of_sync: list[str] = []
         for harness in HARNESS_DIRS:
             if harness in modified_harnesses:
                 continue  # This harness was co-modified — OK
-            # Check if counterpart exists (file present or agents dir exists
-            # but file is missing → should have been created/updated)
+            # Only flag drift when the counterpart file actually exists.
+            # Harness-specific agents (no counterpart) are exempt.
             agent_path = repo_root / harness / "agents" / basename
-            agents_dir = repo_root / harness / "agents"
-            if agent_path.is_file() or agents_dir.is_dir():
+            if agent_path.is_file():
                 out_of_sync.append(harness)
 
         if out_of_sync:
