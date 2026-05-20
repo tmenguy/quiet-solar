@@ -43,6 +43,8 @@ from tests.ha_tests.const import (
     MOCK_PERSON_CONFIG,
     MOCK_SENSOR_STATES,
     MOCK_SOLAR_CONFIG,
+    MOCK_WATER_BOILER_CONFIG,
+    MOCK_WATER_BOILER_CONFIG_NO_TEMP,
 )
 
 COMPONENT_ROOT = Path(__file__).parent.parent / "custom_components" / "quiet_solar"
@@ -67,13 +69,19 @@ MOCK_SOLAR_WITH_PROVIDERS_CONFIG = {
     ],
 }
 
-# Extra mock states needed for pool
+# Extra mock states needed for pool + water boiler
 EXTRA_MOCK_STATES = {
     "switch.test_pool_pump": {"state": "off", "attributes": {}},
     "sensor.pool_temperature": {
         "state": "22",
         "attributes": {"unit_of_measurement": "°C"},
     },
+    "switch.test_water_boiler": {"state": "off", "attributes": {}},
+    "sensor.test_water_boiler_temperature": {
+        "state": "55",
+        "attributes": {"unit_of_measurement": "°C"},
+    },
+    "switch.test_water_boiler_no_temp": {"state": "off", "attributes": {}},
 }
 
 
@@ -120,6 +128,7 @@ async def full_dashboard_home(hass):
         ("climate", MOCK_CLIMATE_DURATION_CONFIG),
         ("heat_pump", MOCK_HEAT_PUMP_CONFIG),
         ("pool", MOCK_POOL_CONFIG),
+        ("water_boiler", MOCK_WATER_BOILER_CONFIG),
     ]
 
     entries = {}
@@ -377,6 +386,7 @@ class TestDashboardSectionMapping:
             ("person", "settings"),
             ("car", "cars"),
             ("pool", "pools"),
+            ("water_boiler", "water_boilers"),
             ("on_off_duration", "others"),
             ("climate", "climates"),
             ("heat_pump", "climates"),
@@ -415,7 +425,159 @@ class TestDashboardSectionMapping:
 
         # Home itself plus all devices that were set up
         assert len(all_section_devices) > 0, "No devices found in any dashboard section"
-        # At minimum: home, solar, charger, car, person, battery, on_off, climate, heat_pump, pool
-        assert len(all_section_devices) >= 10, (
-            f"Expected at least 10 devices in dashboard sections, found {len(all_section_devices)}"
+        # At minimum: home, solar, charger, car, person, battery, on_off,
+        # climate, heat_pump, pool, water_boiler
+        assert len(all_section_devices) >= 11, (
+            f"Expected at least 11 devices in dashboard sections, found {len(all_section_devices)}"
         )
+
+
+# ============================================================================
+# Water-boiler-specific dashboard rendering
+# ============================================================================
+
+
+async def _build_water_boiler_home(hass, water_boiler_config: dict):
+    """Build a minimal home with a single water_boiler device.
+
+    Helper for the two parametrised water-boiler dashboard tests below.
+    Seeds all mock states and sets up home + water_boiler config entries.
+    Uses the same add/setup-per-entry pattern as `full_dashboard_home`.
+    """
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    _apply_all_mock_states(hass)
+
+    uid = uuid.uuid4().hex[:8]
+
+    with patch(
+        "custom_components.quiet_solar.ha_model.home.QSHome.update_forecast_probers",
+        new_callable=AsyncMock,
+    ):
+        home_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=MOCK_HOME_CONFIG,
+            entry_id=f"wb_home_{uid}",
+            title="home: Test Home",
+            unique_id=f"wb_home_{uid}",
+        )
+        home_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(home_entry.entry_id) is True
+        await hass.async_block_till_done()
+
+        boiler_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=water_boiler_config,
+            entry_id=f"wb_boiler_{uid}",
+            title="water_boiler: Test Water Boiler",
+            unique_id=f"wb_boiler_{uid}",
+        )
+        boiler_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(boiler_entry.entry_id) is True
+        await hass.async_block_till_done()
+
+    home = hass.data[DOMAIN].get(home_entry.entry_id)
+    assert home is not None
+    return home
+
+
+@pytest.mark.parametrize(
+    "template_name",
+    [
+        "quiet_solar_dashboard_template.yaml.j2",
+        "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_water_boiler_temperature_sensor_row_present_when_configured(
+    hass, template_name
+):
+    """When the temp sensor is configured, its entity id is rendered."""
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
+    template_path = COMPONENT_ROOT / "ui" / template_name
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+    assert "sensor.test_water_boiler_temperature" in rendered
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_does_not_reuse_on_off_duration_card(hass):
+    """Water boiler MUST NOT render as `qs-on-off-duration-card`.
+
+    Per the QS-194 review note: water_boiler gets its own dedicated
+    card in a follow-up story. Until then, it falls through to the
+    generic `- type: entities` card. This regression test guards
+    against accidentally reusing the on/off-duration JS card for
+    boilers — the dedicated boiler card will replace `- type: entities`
+    when the follow-up story lands.
+    """
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
+    template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+
+    # Find the water_boilers section and its single device card
+    water_boiler_section = None
+    for view in parsed.get("views", []):
+        if view.get("path") == "water_boilers":
+            water_boiler_section = view
+            break
+    assert water_boiler_section is not None, "water_boilers view not rendered"
+
+    # The cards under the device grid must NOT include qs-on-off-duration-card
+    sections = water_boiler_section.get("sections", [])
+    assert len(sections) > 0, "water_boilers section has no device grids"
+    card_types: list[str] = []
+    for grid in sections:
+        for card in grid.get("cards", []):
+            card_types.append(card.get("type", ""))
+    assert "custom:qs-on-off-duration-card" not in card_types, (
+        f"water_boiler must NOT reuse qs-on-off-duration-card; got {card_types}"
+    )
+    # It also must NOT (yet) point at the future dedicated card — that
+    # belongs to the follow-up story. Today the dispatcher falls
+    # through to `entities`.
+    assert "custom:qs-water-boiler-card" not in card_types, (
+        "qs-water-boiler-card is out of scope for QS-194; the dispatcher "
+        "entry pointing at it lands in a follow-up story"
+    )
+    assert "entities" in card_types, (
+        f"water_boiler should fall through to `type: entities` until the "
+        f"dedicated JS card story lands; got {card_types}"
+    )
+
+
+@pytest.mark.parametrize(
+    "template_name",
+    [
+        "quiet_solar_dashboard_template.yaml.j2",
+        "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_water_boiler_temperature_sensor_row_absent_when_unset(
+    hass, template_name
+):
+    """When no temp sensor is configured, the entity id is NOT rendered."""
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG_NO_TEMP)
+    template_path = COMPONENT_ROOT / "ui" / template_name
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+    # The specific sensor entity id from the full config must not appear,
+    # since this config omits the field entirely.
+    assert "sensor.test_water_boiler_temperature" not in rendered

@@ -41,6 +41,7 @@ from custom_components.quiet_solar.const import (
     CONF_SOLAR_INVERTER_ACTIVE_POWER_SENSOR,
     CONF_SOLAR_INVERTER_INPUT_POWER_SENSOR,
     CONF_SWITCH,
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR,
     DEVICE_TYPE,
     CONF_TYPE_NAME_QSBattery,
     CONF_TYPE_NAME_QSCar,
@@ -52,6 +53,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSOnOffDuration,
     CONF_TYPE_NAME_QSPerson,
     CONF_TYPE_NAME_QSSolar,
+    CONF_TYPE_NAME_QSWaterBoiler,
 )
 
 # Mock Home configuration
@@ -184,6 +186,23 @@ MOCK_CLIMATE_DURATION_CONFIG = {
     CONF_POWER: 2000,  # 2kW power usage
 }
 
+# Mock WaterBoiler configuration (QSWaterBoiler — subclass of QSOnOffDuration)
+MOCK_WATER_BOILER_CONFIG = {
+    CONF_NAME: "Test Water Boiler",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSWaterBoiler,
+    CONF_SWITCH: "switch.test_water_boiler",
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR: "sensor.test_water_boiler_temperature",
+    CONF_POWER: 1500,  # 1.5kW power usage
+}
+
+# Mock WaterBoiler configuration WITHOUT the optional temperature sensor
+MOCK_WATER_BOILER_CONFIG_NO_TEMP = {
+    CONF_NAME: "Test Water Boiler No Temp",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSWaterBoiler,
+    CONF_SWITCH: "switch.test_water_boiler_no_temp",
+    CONF_POWER: 1500,
+}
+
 # Entry IDs for testing
 MOCK_HOME_ENTRY_ID = "home_entry_123"
 MOCK_CAR_ENTRY_ID = "car_entry_123"
@@ -197,6 +216,8 @@ MOCK_BATTERY_WITH_NUMBERS_ENTRY_ID = "battery_numbers_entry_123"
 MOCK_SOLAR_WITH_INPUT_ENTRY_ID = "solar_input_entry_123"
 MOCK_ON_OFF_DURATION_ENTRY_ID = "on_off_duration_entry_123"
 MOCK_CLIMATE_DURATION_ENTRY_ID = "climate_duration_entry_123"
+MOCK_WATER_BOILER_ENTRY_ID = "water_boiler_entry_123"
+MOCK_WATER_BOILER_NO_TEMP_ENTRY_ID = "water_boiler_no_temp_entry_123"
 
 # Mock sensor states for testing
 MOCK_SENSOR_STATES = {
@@ -227,4 +248,8 @@ MOCK_SENSOR_STATES = {
     "switch.test_on_off_device": {"state": "off", "attributes": {}},
     # ClimateDuration entities
     "climate.test_climate_device": {"state": "off", "attributes": {"hvac_modes": ["off", "heat", "cool", "auto"]}},
+    # WaterBoiler entities
+    "switch.test_water_boiler": {"state": "off", "attributes": {}},
+    "sensor.test_water_boiler_temperature": {"state": "55", "attributes": {"unit_of_measurement": "°C"}},
+    "switch.test_water_boiler_no_temp": {"state": "off", "attributes": {}},
 }

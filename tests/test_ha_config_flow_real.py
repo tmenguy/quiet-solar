@@ -59,6 +59,8 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSOnOffDuration,
     CONF_TYPE_NAME_QSPool,
     CONF_TYPE_NAME_QSSolar,
+    CONF_TYPE_NAME_QSWaterBoiler,
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -353,6 +355,60 @@ async def test_config_flow_on_off_duration_creates_entry(
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+async def test_config_flow_water_boiler_creates_entry(
+    hass: HomeAssistant,
+) -> None:
+    """Test water boiler flow creation (minimum input: name + switch + power)."""
+    await _create_home_entry(hass)
+
+    boiler_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSWaterBoiler)
+    assert boiler_flow["type"] == FlowResultType.FORM
+
+    result = await hass.config_entries.flow.async_configure(
+        boiler_flow["flow_id"],
+        {
+            CONF_NAME: "Cumulus",
+            CONF_POWER: 1500,
+            CONF_SWITCH: "switch.cumulus",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_NAME] == "Cumulus"
+    assert result["data"][DEVICE_TYPE] == CONF_TYPE_NAME_QSWaterBoiler
+    # Optional temperature sensor: not provided → absent from data dict
+    assert CONF_WATER_BOILER_TEMPERATURE_SENSOR not in result["data"]
+
+
+async def test_config_flow_water_boiler_with_temperature_sensor(
+    hass: HomeAssistant,
+) -> None:
+    """Test water boiler flow accepts the optional temperature sensor field."""
+    await _create_home_entry(hass)
+
+    # Seed a temperature sensor so the optional field appears in the schema.
+    hass.states.async_set(
+        "sensor.boiler_tank_temp", "55", {"unit_of_measurement": "°C"}
+    )
+
+    boiler_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSWaterBoiler)
+    assert boiler_flow["type"] == FlowResultType.FORM
+
+    result = await hass.config_entries.flow.async_configure(
+        boiler_flow["flow_id"],
+        {
+            CONF_NAME: "Cumulus With Temp",
+            CONF_POWER: 1500,
+            CONF_SWITCH: "switch.cumulus",
+            CONF_WATER_BOILER_TEMPERATURE_SENSOR: "sensor.boiler_tank_temp",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert (
+        result["data"][CONF_WATER_BOILER_TEMPERATURE_SENSOR]
+        == "sensor.boiler_tank_temp"
+    )
 
 
 async def test_config_flow_climate_forces_hvac_modes(

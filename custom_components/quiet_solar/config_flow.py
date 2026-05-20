@@ -123,6 +123,7 @@ from .const import (
     CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
     CONF_SOLAR_MAX_PHASE_AMPS,
     CONF_SWITCH,
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR,
     DASHBOARD_DEFAULT_SECTIONS,
     DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY,
     DASHBOARD_NO_SECTION,
@@ -149,6 +150,7 @@ from .ha_model.on_off_duration import QSOnOffDuration
 from .ha_model.person import QSPerson
 from .ha_model.pool import QSPool
 from .ha_model.solar import QSSolar
+from .ha_model.water_boiler import QSWaterBoiler
 from .home_model.load import map_section_selected_name_in_section_list
 
 _LOGGER = logging.getLogger(__name__)
@@ -165,6 +167,7 @@ LOAD_TYPES_MENU = {
     QSCar.conf_type_name: None,
     QSPerson.conf_type_name: None,
     QSPool.conf_type_name: None,
+    QSWaterBoiler.conf_type_name: None,
     QSOnOffDuration.conf_type_name: None,
     QSClimateDuration.conf_type_name: None,
     QSDynamicGroup.conf_type_name: None,
@@ -1472,6 +1475,43 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     mode=selector.NumberSelectorMode.BOX,
                     unit_of_measurement=UnitOfTime.HOURS,
                 )
+            )
+
+        schema = vol.Schema(sc_dict)
+
+        return self.async_show_form(step_id=TYPE, data_schema=schema, description_placeholders=placeholders)
+
+    async def async_step_water_boiler(self, user_input=None):
+        """Configure a QSWaterBoiler instance.
+
+        Mirror of async_step_on_off_duration — keep both schemas in
+        lock-step. Water boiler intentionally inherits the same field
+        set, plus an optional water-tank temperature sensor.
+        """
+        TYPE = QSWaterBoiler.conf_type_name
+        if user_input is not None:
+            r = await self.async_entry_next(user_input, TYPE)
+            return r
+
+        sc_dict, placeholders = self.get_common_schema(
+            type=TYPE,
+            add_power_value_selector=1500,
+            add_load_power_sensor=True,
+            add_calendar=True,
+            add_boost_only=True,
+            add_power_group_selector=True,
+            add_max_on_off=True,
+        )
+
+        self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
+
+        temperature_entities = selectable_temperature_entities(self.hass)
+        if len(temperature_entities) > 0:
+            self.add_entity_selector(
+                sc_dict,
+                CONF_WATER_BOILER_TEMPERATURE_SENSOR,
+                False,
+                entity_list=temperature_entities,
             )
 
         schema = vol.Schema(sc_dict)

@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-19
+last_verified: 2026-05-20
 ---
 
 # Config flow and setup
@@ -109,3 +109,6 @@ device.attach_ha_state_to_probe(...) for each tracked entity
   mapping) decides whether the new device appears on the dashboard.
 - [../../workflow/project-rules.md](../../workflow/project-rules.md)
   — the `const.py` and translations rules.
+- `async_step_water_boiler` (in `config_flow.py`) — the latest
+  per-type step, added in QS-194. Mirrors `async_step_on_off_duration`
+  with an extra optional `water_boiler_temperature_sensor` field.

@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-pool-card.js
   - custom_components/quiet_solar/ui/resources/qs-climate-card.js
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
-last_verified: 2026-05-19
+last_verified: 2026-05-20
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -188,6 +188,17 @@ Subsequent HA starts:
 | Pool | `custom:qs-pool-card` | `QSPool` | `ui/resources/qs-pool-card.js` |
 | Climate | `custom:qs-climate-card` | `QSClimateDuration`, `QSHeatPump` | `ui/resources/qs-climate-card.js` |
 | On-off duration | `custom:qs-on-off-duration-card` | `QSOnOffDuration` | `ui/resources/qs-on-off-duration-card.js` |
+
+**`water_boiler` placeholder.** `QSWaterBoiler` (added in QS-194)
+intentionally **does NOT** reuse `qs-on-off-duration-card`. The
+dispatcher in `quiet_solar_dashboard_template.yaml.j2` falls
+through to a generic `- type: entities` card for boilers, and the
+standard template emits `- entity: …` rows directly. A dedicated
+`qs-water-boiler-card.js` plus its dispatcher entry pointing at
+`custom:qs-water-boiler-card` is planned for a follow-up story.
+The auto-registration loop in `dashboard.py:342` (`aiofiles.os.listdir`
+over `ui/resources/`) will pick up the new JS file automatically
+once it lands.
 
 The cards are **outside the quality pipeline**: no JS tests, no JS
 linter, no build step. The product brief explicitly says "don't

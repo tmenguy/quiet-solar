@@ -22,6 +22,7 @@
           "car": "Add an electrical vehicle",
           "person": "Add a Person",
           "pool": "Add a pool",
+          "water_boiler": "Add a water boiler (cumulus or thermodynamic boiler)",
           "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
           "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
           "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
@@ -309,6 +310,24 @@
           "accurate_power_sensor": "Power sensor of the load (W, kW)",
           "num_max_on_off" : "Maximum Number of allowed turn on or turn off of the load per day",
           "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on"
+        },
+        "data_description": {
+          "power": "Measured: {measured_power}"
+        }
+      },
+      "water_boiler": {
+        "title": "Edit your water boiler",
+        "description": "Configure a cumulus (electric resistive water heater) or a thermodynamic water boiler.",
+        "data": {
+          "name": "Name",
+          "dynamic_group_name": "Add water boiler to a load group to limit the amps",
+          "load_is_boost_only": "Is this boiler automatically regulated (QS will only boost on solar surplus)?",
+          "switch": "On/Off switch of the boiler",
+          "water_boiler_temperature_sensor": "Water tank temperature sensor (optional, reserved for future logic)",
+          "power": "Power consumption of the boiler (W)",
+          "accurate_power_sensor": "Power sensor of the boiler (W, kW)",
+          "num_max_on_off": "Maximum number of allowed turn on or turn off of the boiler per day",
+          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the boiler being on"
         },
         "data_description": {
           "power": "Measured: {measured_power}"
@@ -659,6 +678,24 @@
           "power": "[%key:component::quiet_solar::config::step::on_off_duration::data_description::power%]"
         }
       },
+      "water_boiler": {
+        "title": "[%key:component::quiet_solar::config::step::water_boiler::title%]",
+        "description": "[%key:component::quiet_solar::config::step::water_boiler::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::water_boiler::data::name%]",
+          "dynamic_group_name": "[%key:component::quiet_solar::config::step::water_boiler::data::dynamic_group_name%]",
+          "load_is_boost_only": "[%key:component::quiet_solar::config::step::water_boiler::data::load_is_boost_only%]",
+          "switch": "[%key:component::quiet_solar::config::step::water_boiler::data::switch%]",
+          "water_boiler_temperature_sensor": "[%key:component::quiet_solar::config::step::water_boiler::data::water_boiler_temperature_sensor%]",
+          "power": "[%key:component::quiet_solar::config::step::water_boiler::data::power%]",
+          "num_max_on_off": "[%key:component::quiet_solar::config::step::water_boiler::data::num_max_on_off%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::water_boiler::data::accurate_power_sensor%]",
+          "calendar": "[%key:component::quiet_solar::config::step::water_boiler::data::calendar%]"
+        },
+        "data_description": {
+          "power": "[%key:component::quiet_solar::config::step::water_boiler::data_description::power%]"
+        }
+      },
       "climate": {
         "title": "[%key:component::quiet_solar::config::step::climate::title%]",
         "description": "[%key:component::quiet_solar::config::step::climate::description%]",
@@ -931,6 +968,16 @@
           "on_off_mode_on": "Force ON"
         }
       },
+      "water_boiler_mode": {
+        "name": "Water Boiler Mode",
+        "state": {
+          "on_off_mode_off": "Force OFF",
+          "bistate_mode_auto": "Calendar: End+Duration",
+          "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+          "bistate_mode_default": "Default: End+Duration",
+          "on_off_mode_on": "Force ON"
+        }
+      },
       "pool_mode": {
         "name": "Pool Mode",
         "state": {
@@ -1019,8 +1066,9 @@
         "#1 - cars": "#1 - cars",
         "#2 - climates": "#2 - climates",
         "#3 - pools": "#3 - pools",
-        "#4 - others": "#4 - others",
-        "#5 - settings": "#5 - settings"
+        "#4 - water_boilers": "#4 - water_boilers",
+        "#5 - others": "#5 - others",
+        "#6 - settings": "#6 - settings"
       }
     }
   }
