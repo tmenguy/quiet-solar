@@ -32,18 +32,32 @@ up). On DELETE failure the orphan session id is surfaced via
 manually in the OpenCode UI.
 
 - **Agent-file pre-flight** (QS-190): before any HTTP call, ``main()``
-  verifies that ``<directory>/.opencode/agents/<agent>.md`` exists. If
-  not, the script emits ``{"status": "agent_file_missing", ...}`` on
-  stdout, a clear error on stderr, and exits 2 (parallel to the
-  ``fallback_unavailable`` branch shape). This closes the QS-177 AC #12
-  known limitation where a missing agent file silently lands the
-  session on the default OpenCode agent.
+  verifies the worktree and agent file via the ``_preflight`` helper,
+  which returns one of five statuses:
 
-Closed limitation (per QS-177 AC #12, closed by QS-190):
-spawn_session.py performs a pre-flight check that aborts with
-``status: "agent_file_missing"`` before the HTTP API can silently
-land a session on the default agent. The pre-flight is documented
-in the CLI fallback semantics section above.
+    - ``ok`` — proceed to the HTTP call.
+    - ``worktree_invalid`` — ``--directory`` is not a real directory
+      (typo / dangling symlink). Exits 2.
+    - ``agent_file_missing`` — worktree exists but
+      ``.opencode/agents/<agent>.md`` does not. Exits 2.
+    - ``agent_file_unreadable`` — the ``is_file()`` probe raised
+      ``OSError`` (e.g. ``PermissionError``). Exits 2.
+    - ``agent_file_empty`` — file exists but is 0 bytes
+      (``touch``'d placeholder); the server would silently fall back.
+      Exits 2.
+
+  Every non-``ok`` payload carries ``status``, ``agent``, ``directory``,
+  ``expected_path``, ``prompt``, ``detail`` (parallel to the
+  ``fallback_*`` branch shapes), and a clear stderr line.
+
+Closed limitation (per QS-177 AC #12, closed by QS-190 — best-effort):
+spawn_session.py performs a pre-flight check that aborts before
+issuing the HTTP request when the agent file is missing / unreadable /
+empty, or when the worktree itself is invalid, at check time. A
+TOCTOU window remains for files deleted in the millisecond between
+check and request; tightening that window further would only shrink,
+not eliminate, the race. The pre-flight is documented in the CLI
+fallback semantics section above.
 
 Usage::
 
@@ -491,6 +505,101 @@ def _agent_file_path(directory: str, agent: str) -> Path:
     return Path(directory) / ".opencode" / "agents" / f"{agent}.md"
 
 
+def _preflight(directory: str, agent: str) -> tuple[str, Path, str]:
+    """Best-effort pre-flight check for the agent-file landing path.
+
+    Returns a 3-tuple ``(status, expected_path, detail)``:
+
+    - ``("ok", path, "")`` — the worktree exists, the agent file exists,
+      is readable, and is non-empty. Proceed to the HTTP call.
+    - ``("worktree_invalid", path, detail)`` — ``directory`` is not a
+      real directory (typo, dangling symlink, missing worktree).
+      Closes review-fix #01 N6.
+    - ``("agent_file_missing", path, detail)`` — worktree exists but
+      the agent file does not. Closes QS-177 AC #12.
+    - ``("agent_file_unreadable", path, detail)`` — the ``is_file()``
+      probe raised ``OSError`` (e.g. ``PermissionError`` when the
+      parent is ``chmod 0o000``). Closes review-fix #01 M1.
+    - ``("agent_file_empty", path, detail)`` — the file exists but is
+      0 bytes (``touch``'d placeholder). The OpenCode server would
+      silently fall back to the default agent, re-opening the AC #12
+      hole. Closes review-fix #01 S6.
+
+    This is **best-effort** (review-fix #01 S5): a TOCTOU window remains
+    between this check and the subsequent HTTP request — a file
+    deleted in the millisecond between check and request would still
+    cause the silent fallback. Tightening that window would require a
+    second stat call inside ``spawn_session`` and would only shrink,
+    not eliminate, the race.
+    """
+    work_path = Path(directory)
+    if not work_path.is_dir():
+        return (
+            "worktree_invalid",
+            work_path,
+            (
+                f"ERROR: worktree directory does not exist or is not "
+                f"a directory: {directory}. Check the path or recreate "
+                f"the worktree."
+            ),
+        )
+
+    expected = _agent_file_path(directory, agent)
+    try:
+        present = expected.is_file()
+    except OSError as exc:
+        return (
+            "agent_file_unreadable",
+            expected,
+            (
+                f"ERROR: cannot stat OpenCode agent file at {expected}: "
+                f"{exc.strerror or exc} (errno {exc.errno}). The file "
+                f"may exist but the parent directory is unreadable; "
+                f"check permissions with `ls -la "
+                f"{expected.parent}` and `chmod` as needed."
+            ),
+        )
+    if not present:
+        return (
+            "agent_file_missing",
+            expected,
+            (
+                f"ERROR: OpenCode agent file not found at {expected}; "
+                f"the HTTP API would silently fall back to the default "
+                f"agent. Mirror .claude/agents/{agent}.md into "
+                f".opencode/agents/ or create the file before retrying."
+            ),
+        )
+
+    try:
+        size = expected.stat().st_size
+    except OSError as exc:
+        # Very narrow race: file disappeared between is_file() and stat().
+        # Surface as unreadable so the user knows to investigate.
+        return (
+            "agent_file_unreadable",
+            expected,
+            (
+                f"ERROR: cannot stat OpenCode agent file at {expected}: "
+                f"{exc.strerror or exc} (errno {exc.errno})."
+            ),
+        )
+    if size == 0:
+        return (
+            "agent_file_empty",
+            expected,
+            (
+                f"ERROR: OpenCode agent file at {expected} is empty "
+                f"(0 bytes). The OpenCode server would silently fall "
+                f"back to the default agent. Restore the file's "
+                f"contents from .claude/agents/{agent}.md before "
+                f"retrying."
+            ),
+        )
+
+    return ("ok", expected, "")
+
+
 def _reject_control_chars(
     parser: argparse.ArgumentParser, name: str, value: str,
 ) -> None:
@@ -607,24 +716,23 @@ def main() -> None:
     if args.title is not None:
         args.title = args.title.strip()
 
-    # Pre-flight: verify the target agent file exists in the worktree.
-    # Without this, the OpenCode HTTP API silently lands the session on the
-    # default agent if .opencode/agents/<agent>.md is missing — the
-    # QS-177 AC #12 known limitation. Closes that gap (QS-190 AC-2).
-    expected = _agent_file_path(args.directory, args.agent)
-    if not expected.is_file():
-        detail = (
-            f"ERROR: OpenCode agent file not found at {expected}; "
-            f"the HTTP API would silently fall back to the default agent. "
-            f"Mirror .claude/agents/{args.agent}.md into .opencode/agents/ "
-            f"or create the file before retrying."
-        )
+    # Pre-flight: verify the worktree and agent file before any HTTP call.
+    # Closes the QS-177 AC #12 known limitation (best-effort — a TOCTOU
+    # window remains; see _preflight's docstring). Review-fix #01
+    # widens the check to distinguish missing / unreadable / empty
+    # files and an invalid worktree (M1 + S6 + N6).
+    status, expected, detail = _preflight(args.directory, args.agent)
+    if status != "ok":
+        # Every failure payload carries the input ``prompt`` (review-fix
+        # #01 N9) so a consumer (next-phase orchestrator) has the full
+        # original CLI shape for diagnostic / retry.
         sys.exit(_emit(
             {
-                "status": "agent_file_missing",
+                "status": status,
                 "agent": args.agent,
                 "directory": args.directory,
                 "expected_path": str(expected),
+                "prompt": args.prompt,
                 "detail": detail,
             },
             stderr_msg=detail,

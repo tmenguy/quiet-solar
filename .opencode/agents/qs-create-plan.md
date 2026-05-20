@@ -141,6 +141,10 @@ Inspect the file paths your task breakdown will touch:
 Build the launcher payload for the next phase so the user has a copy/paste
 command to open a fresh session bound to the next agent:
 
+**Before running** — substitute `{{NEXT_PHASE}}` with the next phase
+name you determined above (one of: `implement-task`,
+`implement-setup-task`). Run the bash block with the resolved value:
+
 ```bash
 python scripts/qs/next_step.py \
     --next-cmd "{{NEXT_PHASE}}" \
@@ -150,8 +154,12 @@ python scripts/qs/next_step.py \
     --harness opencode
 ```
 
-Parse the JSON output of ``next_step.py``; capture the
-``new_context`` string.
+Parse the JSON output of ``next_step.py``.
+
+**If the `next_step.py` JSON contains an `error` key**, STOP and print
+the raw JSON to the user. Do not proceed to run `new_context`.
+
+Otherwise capture the ``new_context`` string.
 
 **Run `new_context` via the Bash tool**. The string is a
 ``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
@@ -163,22 +171,29 @@ next-phase orchestrator to the new session via OpenCode's HTTP API
 ``POST /session/<id>/prompt_async`` body — strip it and the prompt
 lands on the default agent, breaking the pipeline silently.
 
+**If the Bash tool returns an error before producing any JSON output**
+(e.g., permission denied, missing interpreter), STOP and print the
+Bash tool's error message verbatim. Do not attempt to parse JSON.
+
 Parse the stdout of that command as JSON. The success contract is
 **binary**:
 
-- ``status == "session_created"`` AND ``agent == "qs-{{NEXT_PHASE}}"``
-  → success; report to the user:
+- ``status == "session_created"`` AND ``agent`` equals `qs-` followed
+  by the phase name passed to `--next-cmd` (e.g., `qs-implement-task`
+  when `--next-cmd "implement-task"` was passed) → success; report
+  to the user:
 
   ```text
-  ✅ Next phase session created: qs-{{NEXT_PHASE}}
-     (visible in the OpenCode session list on the left)
+  [OK] Next phase session created: qs-<phase>
+       (visible in the OpenCode session list on the left)
   ```
 
 - **Anything else** (any other ``status`` value, missing or mismatched
   ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
   the raw JSON output verbatim to the user. Do NOT claim the next
   phase started. The user inspects the JSON and acts on the specific
-  failure mode (``agent_file_missing``, ``fallback_cli``,
+  failure mode (``agent_file_missing``, ``agent_file_unreadable``,
+  ``agent_file_empty``, ``worktree_invalid``, ``fallback_cli``,
   ``fallback_unavailable``, ``session_orphaned`` — each documented in
   ``scripts/qs/spawn_session.py``).
 

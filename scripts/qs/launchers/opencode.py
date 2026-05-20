@@ -24,12 +24,16 @@ is unreachable; ``spawn_session.py`` decides the fallback at runtime
 and surfaces the result via stdout JSON. See the script's docstring
 for the full fallback decision tree.
 
-Closed limitation (per QS-177 AC #12, closed by QS-190):
+Closed limitation (per QS-177 AC #12, closed by QS-190 — best-effort):
 spawn_session.py performs a pre-flight check that verifies
-``<work_dir>/.opencode/agents/<agent>.md`` exists before calling the
-HTTP API. If the agent file is missing, the script emits
-``status: "agent_file_missing"`` and exits 2 — the API can no longer
-silently land the session on the default agent.
+``<work_dir>/.opencode/agents/<agent>.md`` exists, is readable, and is
+non-empty before calling the HTTP API; an invalid worktree directory
+is also caught. The script emits ``status: "agent_file_missing"`` /
+``agent_file_unreadable`` / ``agent_file_empty`` / ``worktree_invalid``
+and exits 2 as appropriate — the API can no longer silently land the
+session on the default agent at check time. A TOCTOU window remains
+for files deleted between the pre-flight and the HTTP request; this
+is acceptable.
 """
 
 from __future__ import annotations

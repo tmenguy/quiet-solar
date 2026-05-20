@@ -40,34 +40,44 @@ import pytest
 # --------------------------------------------------------------------------- #
 
 
-@pytest.fixture(autouse=True)
-def _stub_agent_file_preflight(
-    request: pytest.FixtureRequest,
+@pytest.fixture
+def stub_agent_file_preflight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """Auto-stub the QS-190 agent-file pre-flight for post-pre-flight tests.
+    """Opt-in fixture: stub the QS-190 agent-file pre-flight.
 
-    Most tests in this module exercise behaviour AFTER the pre-flight
-    (the urlopen mocks, the fallback branches, the strip / validation
-    guards). They pass hardcoded ``--directory`` paths like ``/tmp/x``
-    that don't exist on disk, so the pre-flight ``is_file()`` check
-    would abort them with ``status: "agent_file_missing"`` before any
+    Tests that exercise behaviour AFTER the pre-flight (urlopen mocks,
+    fallback branches, strip / validation guards) typically pass
+    hardcoded ``--directory`` paths like ``/tmp/x`` that don't exist on
+    disk. Without this stub, the pre-flight check would abort them
+    with one of {``worktree_invalid``, ``agent_file_missing``,
+    ``agent_file_empty``, ``agent_file_unreadable``} before any
     urlopen is reached.
 
-    This autouse fixture monkeypatches ``spawn_session._agent_file_path``
-    to point to a stub file under ``tmp_path``, satisfying the
-    pre-flight. Tests marked with ``@pytest.mark.real_preflight`` opt
-    out and exercise the real path computation against the actual
-    filesystem (using the explicit ``--directory`` they pass).
+    Use opt-in (review fix #01 S4): the dedicated pre-flight tests
+    (``test_preflight_*``) DON'T request this fixture and exercise the
+    real ``_preflight`` against the actual filesystem. Tests that
+    request this fixture explicitly declare "I am bypassing the
+    pre-flight" — no silent bypass, no risk of future tests masking a
+    pre-flight regression.
     """
-    if "real_preflight" in request.keywords:
-        return
     import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
 
     stub = tmp_path / "stub_agent.md"
-    stub.touch()
+    # Write a non-empty body so a future direct ``_agent_file_path``
+    # caller (e.g. a test that monkeypatches only one helper) sees
+    # the same successful-shape file.
+    stub.write_text("---\nmode: subagent\n---\n", encoding="utf-8")
     monkeypatch.setattr(spawn_session, "_agent_file_path", lambda _d, _a: stub)
+    # Stub the full _preflight too — bypasses all four branches
+    # (worktree_invalid / agent_file_missing / agent_file_unreadable /
+    # agent_file_empty) so tests with hardcoded ``--directory /tmp/x``
+    # don't trip the new worktree-existence check.
+    monkeypatch.setattr(
+        spawn_session, "_preflight",
+        lambda _d, _a: ("ok", stub, ""),
+    )
 
 
 def _mock_response(data: bytes = b"", status: int = 200) -> MagicMock:
@@ -126,7 +136,7 @@ def test_api_helper_sends_directory_header() -> None:
 
 
 def test_spawn_session_happy_path(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """``main()`` posts /session, then prompt_async, emits AC #1 payload, exit 0."""
     import spawn_session  # type: ignore[import-not-found]
@@ -179,7 +189,7 @@ def test_spawn_session_happy_path(
 # --------------------------------------------------------------------------- #
 
 
-def test_no_instance_reload_call(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_no_instance_reload_call(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """Happy path must not touch /instance/reload nor spawn a subprocess."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -226,7 +236,7 @@ def test_no_delay_flag_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_default_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_prompt(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """Without ``--prompt``, the prompt_async body carries the default kickoff."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -250,7 +260,7 @@ def test_default_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     assert prompt_body["parts"][0]["text"] == "Begin your phase protocol."
 
 
-def test_custom_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_custom_prompt(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """``--prompt`` is forwarded verbatim into prompt_async."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -281,7 +291,7 @@ def test_custom_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_server_unreachable_fallback_cli(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """URLError + opencode on PATH → fallback_cli, exit 0."""
     import spawn_session  # type: ignore[import-not-found]
@@ -320,7 +330,7 @@ def test_server_unreachable_fallback_cli(
 
 
 def test_server_unreachable_no_cli(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """URLError + no opencode on PATH → fallback_unavailable, exit 2."""
     import spawn_session  # type: ignore[import-not-found]
@@ -354,7 +364,7 @@ def test_server_unreachable_no_cli(
 
 
 def test_timeout_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A socket.timeout raised by urlopen routes through the fallback path."""
     import spawn_session  # type: ignore[import-not-found]
@@ -382,7 +392,7 @@ def test_timeout_falls_back(
 
 
 def test_http_error_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """An HTTPError (e.g. 500) from /session routes through the fallback path."""
     import spawn_session  # type: ignore[import-not-found]
@@ -409,7 +419,7 @@ def test_http_error_falls_back(
 
 
 def test_malformed_json_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A non-JSON response body from /session triggers the fallback path."""
     import spawn_session  # type: ignore[import-not-found]
@@ -436,7 +446,7 @@ def test_malformed_json_falls_back(
 
 
 def test_missing_session_id_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """``/session`` returning ``{}`` (no ``id``) triggers the fallback path."""
     import spawn_session  # type: ignore[import-not-found]
@@ -458,7 +468,7 @@ def test_missing_session_id_falls_back(
 
 
 def test_non_dict_session_response_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """``/session`` returning a JSON array (not a dict) triggers fallback.
 
@@ -493,7 +503,7 @@ def test_non_dict_session_response_falls_back(
 
 
 def test_prompt_async_failure_attempts_delete(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """prompt_async fails → DELETE attempted → on success, fallback_cli."""
     import spawn_session  # type: ignore[import-not-found]
@@ -538,7 +548,7 @@ def test_prompt_async_failure_attempts_delete(
 
 
 def test_prompt_async_failure_delete_fails_emits_orphan(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """If DELETE also fails, surface ``session_orphaned`` with the id, exit 2."""
     import spawn_session  # type: ignore[import-not-found]
@@ -585,7 +595,7 @@ def test_prompt_async_failure_delete_fails_emits_orphan(
 
 
 def test_stderr_message_on_failure(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A human-readable line lands on stderr describing the failure."""
     import spawn_session  # type: ignore[import-not-found]
@@ -612,7 +622,7 @@ def test_stderr_message_on_failure(
 # --------------------------------------------------------------------------- #
 
 
-def test_title_defaults_to_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_title_defaults_to_agent_name(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """Without ``--title``, ``POST /session`` body uses the agent name."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -641,7 +651,7 @@ def test_title_defaults_to_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_custom_title_forwarded_to_session(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_custom_title_forwarded_to_session(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """``--title`` is forwarded verbatim into ``POST /session`` body."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -705,7 +715,7 @@ def test_base_url_defaults_to_4096(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_invalid_url_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """``http.client.InvalidURL`` (malformed port, control chars) routes through fallback.
 
@@ -739,7 +749,7 @@ def test_invalid_url_falls_back(
 # --------------------------------------------------------------------------- #
 
 
-def test_spawn_session_url_escapes_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_spawn_session_url_escapes_session_id(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """A server-provided ``id`` with embedded ``/`` is URL-escaped before interpolation.
 
     Note: ids containing ``..`` are now rejected upfront by review fix
@@ -801,7 +811,7 @@ def test_empty_directory_rejected(monkeypatch: pytest.MonkeyPatch, bad_dir: str)
 
 
 def test_oserror_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A bare ``OSError`` (disk-level / socket-level) routes through the fallback path.
 
@@ -835,7 +845,7 @@ def test_oserror_falls_back(
 
 
 def test_prompt_async_timeout_attempts_delete(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A ``socket.timeout`` raised by prompt_async still triggers DELETE cleanup.
 
@@ -882,7 +892,7 @@ def test_prompt_async_timeout_attempts_delete(
 
 
 def test_orphan_without_opencode_cli(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Orphan + no opencode CLI on PATH → drop ``new_context_cli``, surface the issue.
 
@@ -966,7 +976,7 @@ def test_empty_title_rejected(monkeypatch: pytest.MonkeyPatch, bad_title: str) -
     b'{"id": null}',    # the case the None-guard already caught
 ])
 def test_falsy_or_non_string_id_falls_back(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None,
     capsys: pytest.CaptureFixture[str],
     session_body: bytes,
 ) -> None:
@@ -1033,7 +1043,7 @@ def test_empty_agent_rejected(monkeypatch: pytest.MonkeyPatch, bad_agent: str) -
 # --------------------------------------------------------------------------- #
 
 
-def test_directory_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_directory_whitespace_stripped(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """``--directory '  /tmp/wt  '`` lands ``"/tmp/wt"`` (no surrounding ws) in the header.
 
     Shell-history copy-paste artifacts shouldn't break the
@@ -1061,7 +1071,7 @@ def test_directory_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen_headers[0] == "/tmp/wt", f"header was not stripped: {seen_headers[0]!r}"
 
 
-def test_agent_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_agent_whitespace_stripped(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """``--agent '  qs-create-plan  '`` lands stripped in the prompt_async body."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -1085,7 +1095,7 @@ def test_agent_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert prompt_body["agent"] == "qs-create-plan"
 
 
-def test_prompt_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prompt_whitespace_stripped(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """``--prompt '  hi  '`` lands stripped in the prompt_async body."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -1110,7 +1120,7 @@ def test_prompt_whitespace_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert prompt_body["parts"][0]["text"] == "hi"
 
 
-def test_title_whitespace_stripped_when_provided(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_title_whitespace_stripped_when_provided(monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None) -> None:
     """``--title '  T  '`` (explicit) lands stripped in the /session body."""
     import spawn_session  # type: ignore[import-not-found]
 
@@ -1141,7 +1151,7 @@ def test_title_whitespace_stripped_when_provided(monkeypatch: pytest.MonkeyPatch
 
 
 def test_invalid_header_value_falls_back(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A ``ValueError`` from ``urlopen`` (invalid header value) routes through fallback.
 
@@ -1249,7 +1259,7 @@ def test_control_chars_in_title_rejected(
     "abc..def",           # interior `..` (rejected for uniformity)
 ])
 def test_spawn_session_rejects_traversal_id(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None,
     capsys: pytest.CaptureFixture[str],
     bad_id: str,
 ) -> None:
@@ -1296,7 +1306,7 @@ def test_spawn_session_rejects_traversal_id(
 
 
 def test_orphan_stderr_mentions_missing_cli(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch, stub_agent_file_preflight: None, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """When orphan + no opencode CLI, stderr line includes the CLI-missing hint."""
     import spawn_session  # type: ignore[import-not-found]
@@ -1387,7 +1397,9 @@ def test_spawn_session_normalizes_whitespace_title(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.real_preflight
+_VALID_AGENT_BODY = "---\nmode: subagent\n---\n"
+
+
 def test_preflight_aborts_when_agent_file_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1403,7 +1415,9 @@ def test_preflight_aborts_when_agent_file_missing(
     """
     import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
 
-    # tmp_path has NO .opencode/agents/ subdir → pre-flight must abort.
+    # Worktree dir exists but has NO .opencode/agents/ subdir → pre-flight
+    # must abort with ``agent_file_missing`` (the worktree itself IS
+    # valid; what's missing is the specific agent file).
     mock_urlopen = MagicMock()
     monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
 
@@ -1411,6 +1425,7 @@ def test_preflight_aborts_when_agent_file_missing(
         monkeypatch,
         "--agent", "qs-create-plan",
         "--directory", str(tmp_path),
+        "--prompt", "Custom kickoff prompt",
     )
     assert exit_code == 2
 
@@ -1425,6 +1440,10 @@ def test_preflight_aborts_when_agent_file_missing(
     assert payload["detail"].startswith(
         "ERROR: OpenCode agent file not found at ",
     )
+    # N9: every failure payload carries the input ``prompt`` so the
+    # consumer (next-phase orchestrator) has the full original CLI shape
+    # for diagnostic / retry purposes.
+    assert payload["prompt"] == "Custom kickoff prompt"
 
     # Stderr carries the human-readable line.
     assert "OpenCode agent file not found at " in captured.err
@@ -1433,13 +1452,12 @@ def test_preflight_aborts_when_agent_file_missing(
     mock_urlopen.assert_not_called()
 
 
-@pytest.mark.real_preflight
 def test_preflight_passes_when_agent_file_present(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """When ``<worktree>/.opencode/agents/<agent>.md`` exists, the pre-flight passes silently.
+    """When ``<worktree>/.opencode/agents/<agent>.md`` exists AND is non-empty, the pre-flight passes silently.
 
     The script proceeds to ``POST /session`` (verified by the mock being
     invoked) and emits the standard ``status: "session_created"``
@@ -1447,10 +1465,14 @@ def test_preflight_passes_when_agent_file_present(
     """
     import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
 
-    # Create the expected agent file under tmp_path.
+    # Create the expected agent file with a minimal valid YAML
+    # frontmatter (S6 — pre-flight rejects 0-byte placeholders, so
+    # ``.touch()`` would now flag ``agent_file_empty``).
     agent_dir = tmp_path / ".opencode" / "agents"
     agent_dir.mkdir(parents=True)
-    (agent_dir / "qs-create-plan.md").touch()
+    (agent_dir / "qs-create-plan.md").write_text(
+        _VALID_AGENT_BODY, encoding="utf-8",
+    )
 
     def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
         del timeout
@@ -1474,7 +1496,6 @@ def test_preflight_passes_when_agent_file_present(
     assert mock_urlopen.called
 
 
-@pytest.mark.real_preflight
 def test_preflight_checks_correct_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1488,10 +1509,13 @@ def test_preflight_checks_correct_path(
     """
     import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
 
-    # Wrong agent file present.
+    # Wrong agent file present (non-empty body so the empty-file guard
+    # doesn't preempt the missing-file check).
     agent_dir = tmp_path / ".opencode" / "agents"
     agent_dir.mkdir(parents=True)
-    (agent_dir / "qs-implement-task.md").touch()
+    (agent_dir / "qs-implement-task.md").write_text(
+        _VALID_AGENT_BODY, encoding="utf-8",
+    )
 
     mock_urlopen = MagicMock()
     monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
@@ -1511,3 +1535,165 @@ def test_preflight_checks_correct_path(
     assert payload["expected_path"].endswith("/qs-create-plan.md")
     # And the HTTP API was never reached.
     mock_urlopen.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Review fix #01 — M1: PermissionError → distinct ``agent_file_unreadable``
+# --------------------------------------------------------------------------- #
+
+
+def test_preflight_emits_unreadable_when_parent_dir_unreadable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``is_file()`` raising ``PermissionError`` → ``agent_file_unreadable``.
+
+    Closes M1: when the parent directory is unreadable (e.g. ``0o000``
+    mode), ``Path.is_file`` returns False on most platforms, but on
+    some it raises ``OSError``. Either way, the diagnostic must
+    distinguish "file does not exist" from "file exists but can't be
+    accessed" so the user knows to ``chmod`` instead of creating a
+    duplicate file.
+    """
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    # The worktree directory exists (so we get past the worktree_invalid
+    # branch), and the .opencode/agents/ subdir exists too, BUT
+    # ``is_file()`` will be monkeypatched to raise PermissionError for
+    # the specific agent file (simulating an unreadable parent).
+    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir.mkdir(parents=True)
+
+    real_is_file = Path.is_file
+
+    def _is_file(self: Path) -> bool:
+        if self.name == "qs-create-plan.md":
+            raise PermissionError(13, "Permission denied")
+        return real_is_file(self)
+
+    monkeypatch.setattr(Path, "is_file", _is_file)
+
+    mock_urlopen = MagicMock()
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", str(tmp_path),
+    )
+    assert exit_code == 2
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["status"] == "agent_file_unreadable"
+    assert payload["agent"] == "qs-create-plan"
+    assert payload["expected_path"].endswith("/qs-create-plan.md")
+    # The OS-level errno is surfaced so the user can disambiguate.
+    assert "Permission denied" in payload["detail"]
+    # Stderr surfaces the same line.
+    assert "agent file" in captured.err.lower()
+    # And HTTP was never reached.
+    mock_urlopen.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Review fix #01 — S6: empty agent file → ``agent_file_empty``
+# --------------------------------------------------------------------------- #
+
+
+def test_preflight_emits_empty_when_agent_file_zero_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A 0-byte agent file → ``agent_file_empty``, not ``session_created``.
+
+    Closes S6: ``is_file()`` returns True for a ``touch``'d placeholder,
+    so the QS-190 v1 pre-flight let it through and the OpenCode server
+    silently fell back to the default agent — re-opening the QS-177
+    AC #12 hole.
+    """
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir.mkdir(parents=True)
+    # 0-byte placeholder
+    (agent_dir / "qs-create-plan.md").touch()
+
+    mock_urlopen = MagicMock()
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", str(tmp_path),
+    )
+    assert exit_code == 2
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["status"] == "agent_file_empty"
+    assert payload["agent"] == "qs-create-plan"
+    assert payload["expected_path"].endswith("/qs-create-plan.md")
+    assert "empty" in payload["detail"].lower()
+    assert "empty" in captured.err.lower()
+    mock_urlopen.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Review fix #01 — N6: missing worktree → ``worktree_invalid``
+# --------------------------------------------------------------------------- #
+
+
+def test_preflight_emits_worktree_invalid_when_directory_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A ``--directory`` that isn't a real directory → ``worktree_invalid``.
+
+    Closes N6: pre-pre-flight check on ``args.directory``. Without
+    this, a dangling symlink or typo'd worktree path produces a
+    misleading "agent file not found" diagnostic.
+    """
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    missing_dir = tmp_path / "does_not_exist"
+    # Don't create it.
+
+    mock_urlopen = MagicMock()
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", str(missing_dir),
+    )
+    assert exit_code == 2
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["status"] == "worktree_invalid"
+    assert payload["directory"] == str(missing_dir)
+    assert "directory" in payload["detail"].lower()
+    assert "directory" in captured.err.lower()
+    mock_urlopen.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Review fix #01 — S12: AC-7 docstring pin for spawn_session.py itself
+# --------------------------------------------------------------------------- #
+
+
+def test_spawn_session_docstring_documents_closed_limitation() -> None:
+    """Mirrors the launcher/harness.md AC-7 pins for spawn_session.py's docstring.
+
+    Closes S12: AC-7 mandates the exact substring at three sites
+    (launcher docstring, harness.md, spawn_session.py docstring). The
+    first two were pinned; this closes the third.
+    """
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    assert spawn_session.__doc__ is not None
+    assert "spawn_session.py performs a pre-flight check" in spawn_session.__doc__

@@ -17,8 +17,9 @@ import argparse
 import subprocess
 import sys
 
-from harness import VALID_HARNESSES  # type: ignore[import-not-found]
+from harness import canonicalize as canonicalize_harness  # type: ignore[import-not-found]
 from harness import detect as detect_harness
+from harness import harness_choices
 from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
 from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
@@ -54,7 +55,11 @@ def main() -> None:
     parser.add_argument(
         "--harness",
         default=None,
-        choices=list(VALID_HARNESSES),
+        # ``harness_choices()`` returns the canonical names PLUS the
+        # legacy aliases (review fix #01 N7 + N8) so a user typing
+        # ``--harness claude`` passes argparse and is canonicalized to
+        # ``claude-code`` before dispatch.
+        choices=harness_choices(),
         help="Override the detected harness.",
     )
     parser.add_argument(
@@ -99,7 +104,11 @@ def main() -> None:
 
     title = args.title or f"Issue #{issue}"
 
-    harness = args.harness or detect_harness()
+    # Apply the legacy-alias mapping (review fix #01 N8): argparse
+    # accepted aliases via ``choices=harness_choices()``; canonicalize
+    # collapses them to canonical names before dispatch so the
+    # ``LAUNCHERS[harness]`` lookup never KeyErrors on a legacy alias.
+    harness = canonicalize_harness(args.harness) if args.harness else detect_harness()
     launcher = LAUNCHERS[harness]
     # ``caller="setup_task"`` tells the OpenCode launcher that this is
     # the Phase 1 → create-plan cross-workspace handoff (the new worktree
