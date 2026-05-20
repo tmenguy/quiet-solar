@@ -352,7 +352,6 @@ def _git_staged_paths(repo_root: Path) -> list[str]:
 HARNESS_DIRS = (".claude", ".cursor", ".opencode")
 
 
-
 def _check_harness_sync(
     modified: set[str],
     repo_root: Path,
@@ -528,13 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         ],
         "missing_covers": sorted(f"{_rel(doc)}::{src}" for doc, src in missing),
         "malformed_frontmatter": sorted(_rel(p) for p in malformed),
-        "harness_drift": [
-            {
-                "agent": entry["agent"],
-                "out_of_sync": entry["out_of_sync"],
-            }
-            for entry in sorted(harness_drift, key=lambda e: e["agent"])
-        ],
+        "harness_drift": sorted(harness_drift, key=lambda e: e["agent"]),
     }
 
     if args.json:

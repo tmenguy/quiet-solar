@@ -1110,10 +1110,10 @@ def test_harness_sync_detects_missing_counterpart(tmp_path: Path) -> None:
     assert exit_code == 1
 
 
-def test_harness_sync_detects_body_divergence(
+def test_harness_sync_allows_body_divergence(
     tmp_path: Path,
 ) -> None:
-    """All three agent files in modified set but body content differs → no drift.
+    """Bodies may differ — co-modification is sufficient.
 
     Co-modification check only cares that all three were modified, not
     that their bodies are identical. Bodies legitimately differ across
