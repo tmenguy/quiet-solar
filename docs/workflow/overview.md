@@ -122,6 +122,7 @@ nearly identical across harnesses; only the frontmatter differs
 (`tools:` for Claude Code, `readonly:` for Cursor).
 
 See [harness.md](harness.md) for how to add a new harness.
+See [project-rules.md](project-rules.md) § "Harness sync" for the cross-harness body-parity rule.
 
 ## Required reading
 

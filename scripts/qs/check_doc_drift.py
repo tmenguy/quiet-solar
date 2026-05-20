@@ -347,6 +347,94 @@ def _git_staged_paths(repo_root: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Cross-harness agent sync
+
+HARNESS_DIRS = (".claude", ".cursor", ".opencode")
+
+
+def _extract_body(path: Path) -> str:
+    """Return everything after the YAML frontmatter closing ``---``.
+
+    If the file has no frontmatter, return the entire content.
+    Kept as a utility — not used by the co-modification check but
+    available for future content-level comparisons.
+    """
+    text = path.read_text(encoding="utf-8-sig")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if not text.startswith("---\n"):
+        return text
+
+    rest = text[len("---\n"):]
+    end = rest.find("\n---\n")
+    if end == -1:
+        stripped = rest.rstrip()
+        if stripped.endswith("\n---"):
+            end = len(stripped) - len("\n---")
+        else:
+            return text  # no closing delimiter — return all
+        return rest[end + len("\n---"):]
+
+    return rest[end + len("\n---\n"):]
+
+
+def _check_harness_sync(
+    modified: set[str],
+    repo_root: Path,
+) -> list[dict[str, str]]:
+    """Check co-modification of agent files across harness directories.
+
+    Agent bodies legitimately differ across harnesses — each has its
+    own session-spawn/handoff logic (Claude uses ``claude --agent``,
+    OpenCode uses ``spawn_session.py``, Cursor uses the agent picker).
+    A byte-identical body check would reject valid harness-specific
+    adaptations.
+
+    Instead, this is a **co-modification check**: when an agent file
+    in one harness is modified, the counterpart files in the other
+    harness directories should also appear in the modified set. This
+    catches the common case ("edited .claude/agents/foo.md but forgot
+    .cursor/ and .opencode/") without rejecting legitimate differences.
+
+    Returns a list of drift entries:
+    ``{"agent": basename, "out_of_sync": [harness_dirs]}``.
+    """
+    # Collect which agent basenames were modified and from which harnesses
+    agent_harnesses: dict[str, set[str]] = {}
+    for path_str in modified:
+        for harness in HARNESS_DIRS:
+            prefix = f"{harness}/agents/"
+            if path_str.startswith(prefix) and path_str.endswith(".md"):
+                basename = path_str[len(prefix):]
+                agent_harnesses.setdefault(basename, set()).add(harness)
+
+    if not agent_harnesses:
+        return []
+
+    drift: list[dict[str, str]] = []
+
+    for basename, modified_harnesses in agent_harnesses.items():
+        out_of_sync: list[str] = []
+        for harness in HARNESS_DIRS:
+            if harness in modified_harnesses:
+                continue  # This harness was co-modified — OK
+            # Check if counterpart exists (file present or agents dir exists
+            # but file is missing → should have been created/updated)
+            agent_path = repo_root / harness / "agents" / basename
+            agents_dir = repo_root / harness / "agents"
+            if agent_path.is_file() or agents_dir.is_dir():
+                out_of_sync.append(harness)
+
+        if out_of_sync:
+            drift.append({
+                "agent": basename,
+                "out_of_sync": sorted(out_of_sync),
+            })
+
+    return drift
+
+
+# ---------------------------------------------------------------------------
 # Drift detection
 
 
@@ -439,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         modified = {_normalize_path(p, repo_root) for p in _git_staged_paths(repo_root)}
 
     stale = _detect_drift(source_to_docs, modified, repo_root)
+    harness_drift = _check_harness_sync(modified, repo_root)
 
     def _rel(p: Path) -> str:
         # ``_scan_docs`` walks ``repo_root/docs/agents/``, so every
@@ -462,6 +551,13 @@ def main(argv: list[str] | None = None) -> int:
         ],
         "missing_covers": sorted(f"{_rel(doc)}::{src}" for doc, src in missing),
         "malformed_frontmatter": sorted(_rel(p) for p in malformed),
+        "harness_drift": [
+            {
+                "agent": entry["agent"],
+                "out_of_sync": entry["out_of_sync"],
+            }
+            for entry in sorted(harness_drift, key=lambda e: e["agent"])
+        ],
     }
 
     if args.json:
@@ -477,10 +573,15 @@ def main(argv: list[str] | None = None) -> int:
                 f"(sources: {', '.join(item['stale_sources'])}; "
                 f"last_verified={item['last_verified']})"
             )
+        for item in report["harness_drift"]:
+            print(
+                f"harness drift: {item['agent']} "
+                f"(out of sync: {', '.join(item['out_of_sync'])})"
+            )
 
     if report["malformed_frontmatter"] or report["missing_covers"]:
         return 2
-    if report["stale_docs"]:
+    if report["stale_docs"] or report["harness_drift"]:
         return 1
     return 0
 

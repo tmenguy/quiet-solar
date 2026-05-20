@@ -22,7 +22,9 @@ slash-command fallback (`/<phase>`, kept for Claude Desktop):
 
 - **`qs-setup-task`** → **`qs-create-plan`** → **`qs-implement-task`** → **`qs-review-task`** → **`qs-finish-task`** → **`qs-release`**
 
-Agents are defined in `.claude/agents/` (and mirrored to `.cursor/agents/`).
+Agents are defined in `.claude/agents/` (and mirrored to `.cursor/agents/`
+and `.opencode/agents/` — bodies must stay in sync per the harness-sync
+rule in [project-rules.md](project-rules.md)).
 They delegate creative work to themselves and mechanical work to Python
 scripts in `scripts/qs/`. Stories live under
 `docs/stories/QS-<N>.story.md` — shared by the new pipeline and the

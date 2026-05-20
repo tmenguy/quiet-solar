@@ -75,7 +75,8 @@ paths. The quality gate runs in its dev-only fast path
 python scripts/qs/context.py
 ```
 
-Capture `issue`, `title`, `branch`, `story_file`, `worktree`.
+Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
+`latest_review_fix`.
 
 Read [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 if you haven't this session.
@@ -86,6 +87,25 @@ if you haven't this session.
 
 - Read `{{story_file}}` completely.
 - Confirm branch state.
+
+### 1b. Check for review fix plan
+
+If `latest_review_fix` from `context.py` is non-empty:
+
+1. Read the fix-plan file at that path.
+2. The fix plan is your **primary work list** — each finding marked
+   "fix" is a task. The story file (`{{story_file}}`) provides
+   background context only.
+3. After implementing all findings, proceed to step 3 (implementation
+   summary) as usual.
+
+If `latest_review_fix` is empty, skip this step and implement the
+story from scratch as normal.
+
+**Mid-session re-entry.** If the user says "review done, implement
+it" (or similar) during an existing session, re-run
+`python scripts/qs/context.py`, pick up the new `latest_review_fix`,
+read it, and begin implementing its findings.
 
 ### 2. TDD implementation (dev-env)
 
