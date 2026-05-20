@@ -483,10 +483,10 @@ def _collect_water_boiler_entity_rows(parsed: dict) -> list[str]:
     """Walk the parsed dashboard YAML and return the entity ids in the
     boiler card's `entities:` block.
 
-    Each row in the rendered template may be either:
-    - a bare string entity id (`- entity_id`), or
-    - a dict like `{"entity": "<id>", "name": "..."}`.
-    Both shapes are normalised to the raw entity-id string here.
+    The custom template emits a `key: value` mapping (JS-card input
+    contract) while the standard template emits a list of `- entity:`
+    rows. Both shapes are normalised to a flat list of entity-id
+    strings here.
     """
     entity_ids: list[str] = []
     for view in parsed.get("views", []):
@@ -494,11 +494,17 @@ def _collect_water_boiler_entity_rows(parsed: dict) -> list[str]:
             continue
         for grid in view.get("sections", []):
             for card in grid.get("cards", []):
-                for row in card.get("entities", []) or []:
-                    if isinstance(row, str):
-                        entity_ids.append(row)
-                    elif isinstance(row, dict) and "entity" in row:
-                        entity_ids.append(row["entity"])
+                entities = card.get("entities")
+                if isinstance(entities, dict):
+                    # Custom template: { key: entity_id, ... }
+                    entity_ids.extend(v for v in entities.values() if isinstance(v, str))
+                elif isinstance(entities, list):
+                    # Standard template: [ {entity: id, name: ...}, ... ]
+                    for row in entities:
+                        if isinstance(row, str):
+                            entity_ids.append(row)
+                        elif isinstance(row, dict) and "entity" in row:
+                            entity_ids.append(row["entity"])
     return entity_ids
 
 
@@ -530,31 +536,19 @@ async def test_water_boiler_temperature_sensor_row_present_when_configured(
     )
 
 
-@pytest.mark.parametrize(
-    "template_name",
-    [
-        "quiet_solar_dashboard_template.yaml.j2",
-        "quiet_solar_dashboard_template_standard_ha.yaml.j2",
-    ],
-)
 @pytest.mark.asyncio
-async def test_water_boiler_does_not_reuse_on_off_duration_card(hass, template_name):
-    """Water boiler MUST NOT render as `qs-on-off-duration-card`.
+async def test_water_boiler_renders_dedicated_js_card_in_custom_template(hass):
+    """Water boiler renders as `custom:qs-water-boiler-card` in the custom template.
 
-    Per the QS-194 review note: water_boiler gets its own dedicated
-    card in a follow-up story. Until then, it falls through to the
-    generic `- type: entities` card. This regression test guards
-    against accidentally reusing the on/off-duration JS card for
-    boilers — the dedicated boiler card will replace `- type: entities`
-    when the follow-up story lands.
-
-    The standard template only ever emits `- type: entities` cards (no
-    `custom:qs-*-card` dispatcher block), so the assertions are
-    trivially true there — kept parametrised as a guardrail against
-    accidental future divergence between the two templates.
+    Per the QS-194 contract: water_boiler MUST NOT reuse
+    `qs-on-off-duration-card`; it gets its own dedicated card so future
+    boiler-specific UI (temperature, water usage, anti-legionella) has
+    a place to land without churning every on/off-duration user. The
+    JS file lives at `ui/resources/qs-water-boiler-card.js` and is
+    auto-registered through the listdir loop in `dashboard.py:342`.
     """
     home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
-    template_path = COMPONENT_ROOT / "ui" / template_name
+    template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
     template_content = template_path.read_text()
 
     tpl = Template(template_content, hass)
@@ -563,7 +557,6 @@ async def test_water_boiler_does_not_reuse_on_off_duration_card(hass, template_n
     parsed = yaml.safe_load(rendered)
     assert parsed is not None
 
-    # Find the water_boilers section and its single device card
     water_boiler_section = None
     for view in parsed.get("views", []):
         if view.get("path") == "water_boilers":
@@ -571,26 +564,83 @@ async def test_water_boiler_does_not_reuse_on_off_duration_card(hass, template_n
             break
     assert water_boiler_section is not None, "water_boilers view not rendered"
 
-    # The cards under the device grid must NOT include qs-on-off-duration-card
     sections = water_boiler_section.get("sections", [])
     assert len(sections) > 0, "water_boilers section has no device grids"
     card_types: list[str] = []
     for grid in sections:
         for card in grid.get("cards", []):
             card_types.append(card.get("type", ""))
+
+    assert "custom:qs-water-boiler-card" in card_types, (
+        f"water_boiler must render as custom:qs-water-boiler-card; got {card_types}"
+    )
     assert "custom:qs-on-off-duration-card" not in card_types, (
         f"water_boiler must NOT reuse qs-on-off-duration-card; got {card_types}"
     )
-    # It also must NOT (yet) point at the future dedicated card — that
-    # belongs to the follow-up story. Today the dispatcher falls
-    # through to `entities`.
-    assert "custom:qs-water-boiler-card" not in card_types, (
-        "qs-water-boiler-card is out of scope for QS-194; the dispatcher "
-        "entry pointing at it lands in a follow-up story"
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_card_js_resource_present(hass):
+    """`qs-water-boiler-card.js` is present in `ui/resources/`.
+
+    The auto-registration loop in `dashboard.py:342` walks every file
+    under `ui/resources/` and registers each as a Lovelace resource at
+    `/local/quiet_solar/<filename>`. If the JS file is missing the
+    `custom:qs-water-boiler-card` dispatcher entry above silently
+    breaks for any user. This test guards against the JS file being
+    deleted or renamed.
+    """
+    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    assert js_path.is_file(), (
+        f"Expected the dedicated JS card at {js_path} — the dispatcher "
+        "in quiet_solar_dashboard_template.yaml.j2 references "
+        "`custom:qs-water-boiler-card`, which requires this file to "
+        "exist and be auto-registered via dashboard.py:342."
     )
-    assert "entities" in card_types, (
-        f"water_boiler should fall through to `type: entities` until the "
-        f"dedicated JS card story lands; got {card_types}"
+    content = js_path.read_text(encoding="utf-8")
+    assert "customElements.define('qs-water-boiler-card'" in content, (
+        "qs-water-boiler-card.js must register the `qs-water-boiler-card` "
+        "custom element so HA Lovelace can instantiate the card."
+    )
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_card_input_contract_emits_temperature_sensor_key(hass):
+    """Custom template emits `temperature_sensor: <id>` for the JS card.
+
+    The dedicated `qs-water-boiler-card` reads `entities.temperature_sensor`
+    to render the optional water-tank temperature row. The template
+    must wire the configured `water_boiler_temperature_sensor` to that
+    key so the JS card can display the value.
+    """
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
+    template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+
+    # Find the boiler card and inspect its `entities` mapping
+    water_boiler_section = None
+    for view in parsed.get("views", []):
+        if view.get("path") == "water_boilers":
+            water_boiler_section = view
+            break
+    assert water_boiler_section is not None
+    expected_id = MOCK_WATER_BOILER_CONFIG[CONF_WATER_BOILER_TEMPERATURE_SENSOR]
+    found = False
+    for grid in water_boiler_section.get("sections", []):
+        for card in grid.get("cards", []):
+            entities = card.get("entities")
+            if isinstance(entities, dict) and entities.get("temperature_sensor") == expected_id:
+                found = True
+                break
+    assert found, (
+        f"Expected `temperature_sensor: {expected_id}` in the boiler card's "
+        f"entities mapping; got: {water_boiler_section}"
     )
 
 

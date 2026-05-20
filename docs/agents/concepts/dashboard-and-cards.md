@@ -180,7 +180,7 @@ Subsequent HA starts:
     → dashboard CONTENT is never touched — TheAdmin's edits survive
 ```
 
-## The four JS Lovelace cards
+## The five JS Lovelace cards
 
 | Card | Card type | Device types | Source |
 |---|---|---|---|
@@ -188,17 +188,20 @@ Subsequent HA starts:
 | Pool | `custom:qs-pool-card` | `QSPool` | `ui/resources/qs-pool-card.js` |
 | Climate | `custom:qs-climate-card` | `QSClimateDuration`, `QSHeatPump` | `ui/resources/qs-climate-card.js` |
 | On-off duration | `custom:qs-on-off-duration-card` | `QSOnOffDuration` | `ui/resources/qs-on-off-duration-card.js` |
+| Water boiler | `custom:qs-water-boiler-card` | `QSWaterBoiler` | `ui/resources/qs-water-boiler-card.js` |
 
-**`water_boiler` placeholder.** `QSWaterBoiler` (added in QS-194)
-intentionally **does NOT** reuse `qs-on-off-duration-card`. The
-dispatcher in `quiet_solar_dashboard_template.yaml.j2` falls
-through to a generic `- type: entities` card for boilers, and the
-standard template emits `- entity: …` rows directly. A dedicated
-`qs-water-boiler-card.js` plus its dispatcher entry pointing at
-`custom:qs-water-boiler-card` is planned for a follow-up story.
-The auto-registration loop in `dashboard.py:342` (`aiofiles.os.listdir`
-over `ui/resources/`) will pick up the new JS file automatically
-once it lands.
+**`qs-water-boiler-card` initial release (QS-194).** The water-boiler
+card was forked from `qs-on-off-duration-card` as its starting point
+(water boilers are on/off-duration loads at heart) with one
+boiler-specific extension: an optional `temperature_sensor` entity
+that renders a water-tank temperature row at the top of the card.
+Future iterations will add boiler-specific UI (anti-legionella
+indicators, off-peak preference, water-usage tracking) without
+churning every on/off-duration user. The custom template emits the
+JS card's input contract via `key: value` pairs (e.g.
+`temperature_sensor: {{ device.water_boiler_temperature_sensor }}`)
+just like the other dedicated cards. The standard template still
+falls back to plain `- entity:` rows — that's the no-JS variant.
 
 New Jinja branches added by QS-194 use the idiomatic `is not none`
 test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`
