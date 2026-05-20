@@ -7,7 +7,12 @@
 const CENTER_CY = 160;            // SVG y-center of the ring / clip circle
 const CLIP_R = 120;               // water clip circle radius
 const WAVE_WIDTH = 480;           // single wave period in SVG px (2× clip diameter)
-const WAVE_BOTTOM_Y = 400;        // path closing edge y; outside viewBox, clipped
+// Must be ≥ SVG viewBox max-y (320) so the closing rectangle is clipped.
+const WAVE_BOTTOM_Y = 400;
+
+// --- Per-layer wave offsets (different magic numbers, different purposes) ---
+const LAYER_SCROLL_OFFSET = 1.2;  // per-layer extra scroll phase (visual depth)
+const LAYER_PHASE_OFFSET = 2.1;   // per-layer static sine phase (shape variety)
 
 // --- Water color (HSL endpoints) ---
 const COOL_HUE = 195, WARM_HUE = 175;     // deeper blue-teal → warmer cyan
@@ -16,10 +21,18 @@ const COOL_LIGHT = 18, WARM_LIGHT = 28;
 const COOL_TEMP_C = 15;           // °C at which tint is coolest
 const WARM_TEMP_C = 30;           // °C at which tint is warmest
 
+// --- Fallback water colors (no temp sensor / NaN / non-number input) ---
+const DEFAULT_WATER_COLORS = [
+    'hsla(185, 60%, 22%, 0.55)',
+    'hsla(185, 60%, 20%, 0.45)',
+    'hsla(185, 60%, 18%, 0.35)',
+];
+
 // --- Animation tuning ---
 const LERP_RATE = 2;              // exp time-constant; ~95% of lerp in ~1.5s
 const LERP_DT_CEIL = 0.1;         // s; clamp lerp dt to avoid snap-to after tab hidden
 const AMP_REGEN_THRESHOLD = 0.25; // amplitude delta threshold for path regen (throttle)
+const LEVEL_REGEN_THRESHOLD = 0.01; // px; threshold for water-level path regen (jitter-proof)
 const PHASE_WRAP = 1e6;           // wrap _wavePhase to preserve float precision
 const PHASE_TO_PX = 60;           // scroll px per phase-unit
 
@@ -48,17 +61,13 @@ class QsPoolCard extends HTMLElement {
            ` L ${totalWidth.toFixed(2)} ${WAVE_BOTTOM_Y} L 0 ${WAVE_BOTTOM_Y} Z`;
   }
 
-  // Map pool temperature to per-layer water HSL colors.
+  // Map pool temperature (°C, finite number) to per-layer water HSL colors.
   // Cool end → deeper blue-teal; warm end → warmer cyan-turquoise.
+  // Rejects null, undefined, NaN, Infinity, and any non-number input —
+  // callers must coerce strings via `Number(...)` before calling.
   _tempToColor(tempC) {
-    // Explicit guard: tempC may be null/undefined (no sensor bound) or
-    // NaN (bad parse). Loose equality would also catch this, but be explicit.
-    if (tempC === null || tempC === undefined || Number.isNaN(tempC)) {
-      return [
-        'hsla(185, 60%, 22%, 0.55)',
-        'hsla(185, 60%, 20%, 0.45)',
-        'hsla(185, 60%, 18%, 0.35)',
-      ];
+    if (typeof tempC !== 'number' || !Number.isFinite(tempC)) {
+      return DEFAULT_WATER_COLORS;
     }
     const span = WARM_TEMP_C - COOL_TEMP_C;
     const t = Math.max(0, Math.min(1, (tempC - COOL_TEMP_C) / span));
@@ -72,18 +81,29 @@ class QsPoolCard extends HTMLElement {
     ];
   }
 
-  // Clear the wave-path memoization keys so the next RAF tick regenerates paths.
+  // Clear the wave-path memoization keys and cached DOM refs. Called on
+  // every (re-)connect and after each _render() innerHTML rewrite.
   _invalidateWaveCache() {
     this._lastWaterBaseY = null;
     this._lastAmplitude = null;
+    this._waveEls = null;
   }
 
   connectedCallback() {
     if (this._animRaf != null) return;
-    // Initialize wave animation state
-    this._currentAmplitude = CALM_AMP;
-    this._currentSpeed = CALM_SPEED;
-    this._wavePhase = 0;
+    // Initialize wave animation state ONLY on the first-ever connect, so
+    // that detach/re-attach (HA dashboard rearrangement, tab navigation)
+    // preserves _currentAmplitude/_currentSpeed/_wavePhase. Without this
+    // guard, a pump-on wave would visibly snap back to CALM on each
+    // reconnect and re-lerp up over ~1.5s.
+    if (this._currentAmplitude == null) {
+      this._currentAmplitude = CALM_AMP;
+      this._currentSpeed = CALM_SPEED;
+      this._wavePhase = 0;
+      // Tell the next _render() to prime amp/speed directly to the actual
+      // pump state, skipping the 1.5s lerp envelope at boot.
+      this._needsAnimationPrime = true;
+    }
     this._invalidateWaveCache();
 
     const step = (ts) => {
@@ -112,16 +132,28 @@ class QsPoolCard extends HTMLElement {
       this._currentAmplitude += (targetAmplitude - this._currentAmplitude) * lerpFactor;
       this._currentSpeed += (targetSpeed - this._currentSpeed) * lerpFactor;
       this._wavePhase += this._currentSpeed * dt;
-      if (this._wavePhase > PHASE_WRAP) this._wavePhase -= PHASE_WRAP;
+      // Modulo wrap is robust to any sign / magnitude of accumulated phase.
+      this._wavePhase = this._wavePhase % PHASE_WRAP;
+
+      // Lazy-resolve wave DOM refs once per innerHTML rewrite. This collapses
+      // 6 getElementById calls/frame (3 in transform loop + 3 in regen loop)
+      // down to 3 calls per render.
+      if (!this._waveEls) {
+        this._waveEls = [
+          this._root?.getElementById('wave0') ?? null,
+          this._root?.getElementById('wave1') ?? null,
+          this._root?.getElementById('wave2') ?? null,
+        ];
+      }
 
       // Update wave transforms (CSS translateX for GPU compositing).
       // Path extent is [0, 2*WAVE_WIDTH] so the translated path always
       // covers the clip region. We offset by -CLIP_R to align the path
       // start with the clip's left edge, then scroll within one period.
       for (let i = 0; i < 3; i++) {
-        const wEl = this._root?.getElementById('wave' + i);
+        const wEl = this._waveEls[i];
         if (wEl) {
-          const phaseOffset = i * 1.2;
+          const phaseOffset = i * LAYER_SCROLL_OFFSET;
           const raw = (this._wavePhase + phaseOffset) * PHASE_TO_PX;
           const scrollOffset = ((raw % WAVE_WIDTH) + WAVE_WIDTH) % WAVE_WIDTH;
           const tx = -CLIP_R - scrollOffset;
@@ -137,15 +169,17 @@ class QsPoolCard extends HTMLElement {
       const ampDelta = this._lastAmplitude == null
           ? Infinity
           : Math.abs(this._currentAmplitude - this._lastAmplitude);
-      const levelChanged = waterBaseY !== this._lastWaterBaseY;
+      // Threshold compare for float-jitter robustness vs strict !==.
+      const levelChanged = hasValidBase &&
+          Math.abs(waterBaseY - (this._lastWaterBaseY ?? Number.NEGATIVE_INFINITY)) > LEVEL_REGEN_THRESHOLD;
       if (hasValidBase && (levelChanged || ampDelta > AMP_REGEN_THRESHOLD)) {
         this._lastWaterBaseY = waterBaseY;
         this._lastAmplitude = this._currentAmplitude;
-        const colors = this._waterColors || ['hsla(185,60%,22%,0.55)', 'hsla(185,60%,20%,0.45)', 'hsla(185,60%,18%,0.35)'];
+        const colors = this._waterColors || DEFAULT_WATER_COLORS;
         for (let i = 0; i < 3; i++) {
-          const wEl = this._root?.getElementById('wave' + i);
+          const wEl = this._waveEls[i];
           if (wEl) {
-            const phaseOffset = i * 2.1;
+            const phaseOffset = i * LAYER_PHASE_OFFSET;
             const freq = 2 + i; // integer freq → seamless wrap at WAVE_WIDTH
             const d = this._generateWavePath(WAVE_WIDTH, this._currentAmplitude, freq, phaseOffset, waterBaseY);
             wEl.setAttribute('d', d);
@@ -243,6 +277,16 @@ class QsPoolCard extends HTMLElement {
       // Store pump state for RAF loop
       this._pumpRunning = running;
 
+      // Prime animation state to the actual pump targets on the first
+      // render after connect — avoids a ~1.5s boot transient where the
+      // wave lerps up from CALM_AMP to PUMP_AMP if the pump was already
+      // running when the card mounted.
+      if (this._needsAnimationPrime) {
+        this._currentAmplitude = running ? PUMP_AMP : CALM_AMP;
+        this._currentSpeed = running ? PUMP_SPEED : CALM_SPEED;
+        this._needsAnimationPrime = false;
+      }
+
       // Water level from runtime progress. Clamp on both sides: a negative
       // hoursRun (sensor reset glitch / device reporting -1) would otherwise
       // push waterBaseY past WAVE_BOTTOM_Y and self-intersect the polygon.
@@ -257,6 +301,19 @@ class QsPoolCard extends HTMLElement {
       // Temperature-based water colors
       this._waterColors = this._tempToColor(tempNum);
 
+      // Pre-generate wave paths so the SVG renders with water immediately,
+      // avoiding the empty-d="" flash between the innerHTML rewrite and the
+      // next RAF tick. The RAF loop continues animating from these initial
+      // shapes seamlessly (memo keys synced below after the innerHTML write).
+      const initialAmp = this._currentAmplitude ?? CALM_AMP;
+      const initialBaseY = this._waterBaseY ?? CENTER_CY;
+      const initialColors = this._waterColors ?? DEFAULT_WATER_COLORS;
+      const initialWavePaths = [0, 1, 2].map(i => {
+        const freq = 2 + i;
+        const phaseOffset = i * LAYER_PHASE_OFFSET;
+        return this._generateWavePath(WAVE_WIDTH, initialAmp, freq, phaseOffset, initialBaseY);
+      });
+
       // Instance-unique clip ID (stable across re-renders)
       if (!this._waterClipId) {
           QsPoolCard._nextClipId = (QsPoolCard._nextClipId || 0) + 1;
@@ -265,7 +322,7 @@ class QsPoolCard extends HTMLElement {
       const waterClipId = this._waterClipId;
 
       const css = `
-      :host { --pad: 18px; display:block; }
+      :host { --pad: 18px; --ring-text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); display:block; }
       .card { padding: var(--pad); position: relative; }
       .card.off-grid { background: rgba(244, 67, 54, 0.08); }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
@@ -303,9 +360,9 @@ class QsPoolCard extends HTMLElement {
       .card.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
       .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(16px); }
-      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); }
-      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); }
-      .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); }
+      .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; text-shadow: var(--ring-text-shadow); }
+      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
+      .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; text-shadow: var(--ring-text-shadow); }
       .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; text-align:center; width: 180px; margin: 0 auto; }
       .ring .temp-block { display:flex; flex-direction:column; align-items:center; gap:2px; margin-top:4px; margin-bottom:8px; }
       .ring .stack > * { text-align:center; }
@@ -454,9 +511,9 @@ class QsPoolCard extends HTMLElement {
                 </clipPath>
               </defs>
               <g clip-path="url(#${waterClipId})">
-                <path id="wave0" d="" fill="hsla(185,60%,22%,0.55)" opacity="1" pointer-events="none" style="will-change: transform;" />
-                <path id="wave1" d="" fill="hsla(185,60%,20%,0.45)" opacity="1" pointer-events="none" style="will-change: transform;" />
-                <path id="wave2" d="" fill="hsla(185,60%,18%,0.35)" opacity="1" pointer-events="none" style="will-change: transform;" />
+                <path id="wave0" d="${initialWavePaths[0]}" fill="${initialColors[0]}" opacity="1" pointer-events="none" style="will-change: transform;" />
+                <path id="wave1" d="${initialWavePaths[1]}" fill="${initialColors[1]}" opacity="1" pointer-events="none" style="will-change: transform;" />
+                <path id="wave2" d="${initialWavePaths[2]}" fill="${initialColors[2]}" opacity="1" pointer-events="none" style="will-change: transform;" />
               </g>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
@@ -515,8 +572,14 @@ class QsPoolCard extends HTMLElement {
       const root = this._root;
       const ids = (k) => root.getElementById(k);
 
-      // Force initial wave path generation after each (re-)render.
-      this._invalidateWaveCache();
+      // innerHTML rewrite just replaced the wave <path> nodes. The new nodes
+      // already carry the freshly-generated `d` and `fill` (initialWavePaths
+      // / initialColors), so we sync RAF's memo keys to the rendered state
+      // — this prevents a redundant regen on the next frame. We also clear
+      // the cached wave element refs so RAF re-resolves them lazily.
+      this._lastWaterBaseY = this._waterBaseY;
+      this._lastAmplitude = initialAmp;
+      this._waveEls = null;
 
       // Pool mode selector
       if (selPoolMode) {
