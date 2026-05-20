@@ -26,6 +26,7 @@ from custom_components.quiet_solar.const import (
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
     CONF_SWITCH,
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR,
     DASHBOARD_DEFAULT_SECTIONS,
     DEVICE_TYPE,
     DOMAIN,
@@ -604,14 +605,13 @@ async def test_water_boiler_does_not_reuse_on_off_duration_card(hass, template_n
 async def test_water_boiler_temperature_sensor_row_absent_when_unset(
     hass, template_name
 ):
-    """When no temp sensor is configured, no temp-sensor entity is rendered.
+    """When no temp sensor is configured, the configured entity id is NOT rendered.
 
-    Structural check: walk the rendered YAML to the boiler card's
-    `entities:` block and assert none of its rows reference any sensor
-    in the `sensor.` domain. Avoids the false-positive trap of a future
-    regression that emits a *different* sensor entity id and slips past
-    a substring-only check.
+    Structural check using the configured entity id (not a prefix
+    heuristic) so a future regression that emitted a *different* sensor
+    id couldn't sneak past this assertion.
     """
+    expected_temp_id = MOCK_WATER_BOILER_CONFIG[CONF_WATER_BOILER_TEMPERATURE_SENSOR]
     home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG_NO_TEMP)
     template_path = COMPONENT_ROOT / "ui" / template_name
     template_content = template_path.read_text()
@@ -622,13 +622,9 @@ async def test_water_boiler_temperature_sensor_row_absent_when_unset(
     parsed = yaml.safe_load(rendered)
     assert parsed is not None
     entity_ids = _collect_water_boiler_entity_rows(parsed)
-    # The boiler card's entities block should contain ONLY quiet_solar
-    # device entities (`sensor.<device>_<key>`-style entities live under
-    # the quiet_solar platform). The raw `sensor.test_water_boiler_*`
-    # entity id that the temp-sensor branch emits is NOT a quiet_solar
-    # entity; it's seeded directly in EXTRA_MOCK_STATES.
-    sensor_rows = [eid for eid in entity_ids if eid.startswith("sensor.test_water_boiler")]
-    assert sensor_rows == [], (
-        f"Expected no raw `sensor.test_water_boiler*` rows when no temp "
-        f"sensor is configured; got: {sensor_rows}"
+    assert expected_temp_id not in entity_ids, (
+        f"Configured temp sensor {expected_temp_id!r} leaked into the "
+        f"no-temp boiler card; got rows: {entity_ids}"
     )
+
+

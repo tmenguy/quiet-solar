@@ -252,7 +252,7 @@ views:
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- if device.water_boiler_temperature_sensor %}
+              {%- if device.water_boiler_temperature_sensor is not none %}
               {{ "- entity: " + device.water_boiler_temperature_sensor }}
               {%- endif %}
             {% elif device.device_type == "home" -%}

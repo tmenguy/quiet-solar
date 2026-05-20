@@ -32,25 +32,25 @@ pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 _TEMP_SENSOR_ID = "sensor.test_water_boiler_temperature"
 
 
-def _matching_probe_calls(mock_probe, entity_id: str) -> list:
+def _matching_probe_calls(mock_probe, entity_id: str | None) -> list:
     """Filter the recorded probe calls down to those for a given entity id.
 
     `attach_ha_state_to_probe` is called many times during device init
     (power sensor, amps sensors, etc.). This helper isolates the call(s)
     for a specific entity id so the test can make precise assertions
     without coupling to the unrelated calls.
+
+    All production callers in this repo pass the entity id positionally
+    (see pool.py, car.py, battery.py, etc.); a keyword-form fallback
+    would be dead code, so only positional matching is supported.
+    With ``autospec=True`` the first positional arg is ``self``; the
+    entity id is therefore at index 1.
     """
-    matches = []
-    for call in mock_probe.call_args_list:
-        # autospec=True puts `self` as the first positional arg; the
-        # entity_id may then be positional or keyword.
-        if len(call.args) >= 2:
-            arg = call.args[1]
-        else:
-            arg = call.kwargs.get("entity_id")
-        if arg == entity_id:
-            matches.append(call)
-    return matches
+    return [
+        call
+        for call in mock_probe.call_args_list
+        if len(call.args) >= 2 and call.args[1] == entity_id
+    ]
 
 
 async def test_water_boiler_device_type_registered(
@@ -170,10 +170,55 @@ async def test_water_boiler_without_temperature_sensor(
     assert device is not None
     assert device.water_boiler_temperature_sensor is None
     # No call to attach_ha_state_to_probe was made with the (absent) temp
-    # sensor entity id. Note: the implementation does call
-    # attach_ha_state_to_probe(None, ...) which short-circuits; that
-    # call doesn't match _TEMP_SENSOR_ID so the filter returns empty.
+    # sensor entity id.
     assert _matching_probe_calls(mock_probe, _TEMP_SENSOR_ID) == []
+    # The short-circuit pathway WAS exercised: QSWaterBoiler.__init__
+    # unconditionally calls attach_ha_state_to_probe(None, ...) which
+    # early-returns inside the implementation. Mirrors pool.py:34.
+    none_calls = _matching_probe_calls(mock_probe, None)
+    assert len(none_calls) >= 1, (
+        "Expected at least one attach_ha_state_to_probe(None, ...) call "
+        "to exercise the short-circuit pathway"
+    )
+
+
+async def test_water_boiler_empty_string_temperature_sensor_normalised_to_none(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """WF-3: an empty-string temp sensor value is normalised to None.
+
+    The options-flow form can store `""` when an EntitySelector is
+    cleared; without normalisation that empty string would propagate
+    into `attach_ha_state_to_probe("", ...)` and register `""` as a
+    probe entity id. Water_boiler is the only optional instance of
+    this pattern (pool's field is required).
+    """
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    config = {
+        **MOCK_WATER_BOILER_CONFIG_NO_TEMP,
+        # Inject the empty-string degenerate case
+        "water_boiler_temperature_sensor": "",
+    }
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        entry_id="water_boiler_empty_str_test",
+        title=f"water_boiler: {config['name']}",
+        unique_id="quiet_solar_water_boiler_empty_str_test",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    device = hass.data[DOMAIN].get(entry.entry_id)
+    assert device is not None
+    assert device.water_boiler_temperature_sensor is None, (
+        "Empty string must be normalised to None to avoid registering "
+        '"" as a probe entity id'
+    )
 
 
 async def test_water_boiler_select_translation_key(

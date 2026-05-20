@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-20
+last_verified: 2026-05-21
 ---
 
 # Config flow and setup
@@ -113,4 +113,9 @@ device.attach_ha_state_to_probe(...) for each tracked entity
   per-type step, added in QS-194. Mirrors `async_step_on_off_duration`
   with an extra optional `water_boiler_temperature_sensor` field.
   Uses the canonical `return await self.async_entry_next(...)`
-  direct-return pattern (no intermediate variable).
+  direct-return pattern (no intermediate variable). The optional
+  temperature-sensor selector is surfaced **whenever there are live
+  temperature entities OR a previously-configured id is stored** — the
+  latter rule prevents a stranded entity id from becoming invisible
+  after HA loses the sensor (the form's selector then includes the
+  stored id so the user can replace or keep it).

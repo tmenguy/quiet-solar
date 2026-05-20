@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # QSHome — the orchestrator
@@ -83,6 +83,22 @@ per cycle:
 - Blocking inside a cycle (sync I/O, long compute). All work must
   be async or routed through `hass.async_add_executor_job()`.
 - Hard-coding the cycle intervals — they live in `const.py`.
+
+## Dashboard sections auto-migration
+
+When a new device type adds a new bundled `DASHBOARD_DEFAULT_SECTIONS`
+entry (e.g. `water_boilers` added by QS-194), users who **previously
+customised** their dashboard sections will not have the new section
+in their stored list. `QSHome.add_device` runs
+`_maybe_migrate_missing_default_section(device)` for every device it
+accepts: if the device's requested section is one of
+`DASHBOARD_DEFAULT_SECTIONS` and is missing from `self.dashboard_sections`,
+it is appended **at runtime only** (the config entry is never modified —
+the user's customisation stays user-owned). The complementary tier-1
+diagnostic lives in `home_model/load.py:dashboard_section`: if section
+resolution still fails (i.e. it's not a default-section name), a
+single `_LOGGER.warning` surfaces the device and the unresolved
+section so the issue can be diagnosed from HA logs.
 
 ## See also
 

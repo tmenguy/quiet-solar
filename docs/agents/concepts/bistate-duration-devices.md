@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/ha_model/on_off_duration.py
   - custom_components/quiet_solar/ha_model/pool.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-05-20
+last_verified: 2026-05-21
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler)
@@ -67,7 +67,10 @@ of the on/off behaviour unchanged.
   thermodynamic). Optional `water_boiler_temperature_sensor` field
   is plumbing-only in QS-194; a future story will introduce
   temperature-aware constraint logic, off-peak preference, and
-  anti-legionella cycles.
+  anti-legionella cycles. The constructor normalises an empty-string
+  config value to `None` (the options-flow form can store `""` when
+  the EntitySelector is cleared) so downstream consumers only ever
+  see a real entity id or `None`.
 - `TimeBasedSimplePowerLoadConstraint` (in
   `home_model/constraints.py`) — the constraint subclass these
   devices use.

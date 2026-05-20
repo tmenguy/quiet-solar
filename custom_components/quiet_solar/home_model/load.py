@@ -251,6 +251,22 @@ class AbstractDevice:
             if idx is not None:
                 self._computed_dashboard_section = self.home.dashboard_sections[idx][0]
             else:
+                # WF-5 tier 1: surface the resolution failure in logs.
+                # This happens when the user has a customised
+                # dashboard_sections list that pre-dates a new device
+                # type (e.g. water_boiler added in QS-194). Log once
+                # per device — the cache `_computed_dashboard_section`
+                # prevents repeats on the second property access.
+                if self._conf_dashboard_section_option != DASHBOARD_NO_SECTION:
+                    _LOGGER.warning(
+                        "Device %r requested dashboard section %r but it is "
+                        "not present in home.dashboard_sections (%s); device "
+                        "will not appear on the dashboard until you add the "
+                        "section in home settings",
+                        self.name,
+                        self._conf_dashboard_section_option,
+                        [s[0] for s in self.home.dashboard_sections],
+                    )
                 self._computed_dashboard_section = DASHBOARD_NO_SECTION
 
         if self._computed_dashboard_section == DASHBOARD_NO_SECTION:

@@ -375,79 +375,80 @@ views:
               {# NOTE: water_boiler intentionally falls through to the generic
                  `- type: entities` layout; a dedicated `custom:qs-water-boiler-card`
                  is deferred to a follow-up story. #}
-              {%- set ha_entity = device.ha_entities.get("qs_enable_device") %}
+              {%- set ha = device.ha_entities %}
+              {%- set ha_entity = ha.get("qs_enable_device") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_best_effort_green_only") %}
+              {%- set ha_entity = ha.get("qs_best_effort_green_only") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {{ "  icon: mdi:solar-power" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("default_on_finish_time") %}
+              {%- set ha_entity = ha.get("default_on_finish_time") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("default_on_duration") %}
+              {%- set ha_entity = ha.get("default_on_duration") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("bistate_mode") %}
+              {%- set ha_entity = ha.get("bistate_mode") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("override_duration") %}
+              {%- set ha_entity = ha.get("override_duration") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("current_constraint_current_energy") %}
+              {%- set ha_entity = ha.get("current_constraint_current_energy") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("current_constraint") %}
+              {%- set ha_entity = ha.get("current_constraint") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("load_current_command") %}
+              {%- set ha_entity = ha.get("load_current_command") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("best_power_value") %}
+              {%- set ha_entity = ha.get("best_power_value") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("current_constraint_current_percent_completion") %}
+              {%- set ha_entity = ha.get("current_constraint_current_percent_completion") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {{ "  icon: mdi:gauge" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_load_mark_current_constraint_done") %}
+              {%- set ha_entity = ha.get("qs_load_mark_current_constraint_done") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_load_reset_override_state") %}
+              {%- set ha_entity = ha.get("qs_load_reset_override_state") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- set ha_entity = device.ha_entities.get("qs_device_clean_and_reset") %}
+              {%- set ha_entity = ha.get("qs_device_clean_and_reset") %}
               {%- if ha_entity is not none %}
               {{ "- entity: " + ha_entity.entity_id }}
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
-              {%- if device.water_boiler_temperature_sensor %}
+              {%- if device.water_boiler_temperature_sensor is not none %}
               {{ "- entity: " + device.water_boiler_temperature_sensor }}
               {%- endif %}
             {% elif device.device_type == "home" -%}

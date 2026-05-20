@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/device.py
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # External control detection

@@ -35,6 +35,8 @@ from ..const import (
     CONF_OFF_GRID_INVERTED,
     CONF_OFF_GRID_STATE_VALUE,
     DASHBOARD_DEFAULT_SECTIONS,
+    DASHBOARD_DEFAULT_SECTIONS_DICT,
+    DASHBOARD_NO_SECTION,
     DASHBOARD_NUM_SECTION_MAX,
     DOMAIN,
     FAR_FUTURE_FORECAST_THRESHOLD_S,
@@ -1881,9 +1883,59 @@ class QSHome(QSDynamicGroup):
                     load.devices_to_pilot.append(piloted_device)
                     piloted_device.clients.append(load)
 
+    def _maybe_migrate_missing_default_section(self, device) -> None:
+        """WF-5 tier 2: in-memory auto-migration for missing default sections.
+
+        When a user customised `dashboard_sections` BEFORE QS-194 added
+        the `water_boilers` section (or any future default section),
+        their stored list won't contain it. A device whose default
+        section is missing would silently land in `DASHBOARD_NO_SECTION`
+        and never appear on the dashboard.
+
+        Mitigation: if a device's requested section is one of the
+        `DASHBOARD_DEFAULT_SECTIONS` and isn't already in
+        `self.dashboard_sections`, append it (with its bundled icon) at
+        runtime only. The user's `config_entry.data` is NOT modified —
+        their customisation stays user-owned, this is just a safety net
+        so new device types remain visible after an upgrade.
+        """
+        requested = getattr(device, "_conf_dashboard_section_option", None)
+        if requested is None or requested == DASHBOARD_NO_SECTION:
+            return
+        # Strip any "#N - " prefix that may be present on stored values.
+        section_name = requested
+        if " - " in section_name and section_name.startswith("#"):
+            section_name = section_name.split(" - ", 1)[1]
+        # Already present (by name)? Nothing to do.
+        existing_names = {s[0] for s in self.dashboard_sections}
+        if section_name in existing_names:
+            return
+        # Only auto-add for bundled default sections — never invent a
+        # section name out of thin air.
+        if section_name not in DASHBOARD_DEFAULT_SECTIONS_DICT:
+            return
+        icon = DASHBOARD_DEFAULT_SECTIONS_DICT[section_name]
+        _LOGGER.info(
+            "Auto-appending missing default dashboard section %r (icon %r) "
+            "for device %r; runtime-only — config_entry not modified",
+            section_name,
+            icon,
+            device.name,
+        )
+        self.dashboard_sections.append((section_name, icon))
+        # Invalidate any previously-cached resolution so the next access
+        # picks up the newly-appended section.
+        if hasattr(device, "_computed_dashboard_section"):
+            device._computed_dashboard_section = None
+
     def add_device(self, device):
 
         device.home = self
+
+        # WF-5: in-memory auto-migration for missing default sections.
+        # Run before the topology rebuild below so the device is
+        # immediately reachable via `get_devices_for_dashboard_section`.
+        self._maybe_migrate_missing_default_section(device)
 
         if isinstance(device, QSBattery):
             self.physical_battery = device

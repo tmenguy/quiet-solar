@@ -1504,13 +1504,22 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
+        # WF-4: surface the field even when no live temperature entities
+        # remain — otherwise a previously-configured sensor that's since
+        # been removed from HA stays silently stranded in config_entry.data,
+        # because the OptionsFlow merges user_input onto the prior data
+        # and an absent key never clears the old value.
         temperature_entities = selectable_temperature_entities(self.hass)
-        if len(temperature_entities) > 0:
+        stored_temp_sensor = self.config_entry.data.get(CONF_WATER_BOILER_TEMPERATURE_SENSOR)
+        entity_list = list(temperature_entities)
+        if stored_temp_sensor and stored_temp_sensor not in entity_list:
+            entity_list.append(stored_temp_sensor)
+        if entity_list:
             self.add_entity_selector(
                 sc_dict,
                 CONF_WATER_BOILER_TEMPERATURE_SENSOR,
                 False,
-                entity_list=temperature_entities,
+                entity_list=entity_list,
             )
 
         schema = vol.Schema(sc_dict)

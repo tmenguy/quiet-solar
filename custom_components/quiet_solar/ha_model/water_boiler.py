@@ -24,7 +24,16 @@ class QSWaterBoiler(QSOnOffDuration):
     conf_type_name = CONF_TYPE_NAME_QSWaterBoiler
 
     def __init__(self, **kwargs: Any) -> None:
-        self.water_boiler_temperature_sensor: str | None = kwargs.pop(CONF_WATER_BOILER_TEMPERATURE_SENSOR, None)
+        raw = kwargs.pop(CONF_WATER_BOILER_TEMPERATURE_SENSOR, None)
+        # Normalise empty string → None so downstream consumers
+        # (templates, probe storage) only ever see a real entity id
+        # or None. The option-flow form stores "" when the user clears
+        # the optional field; pool.py's required field never hits this
+        # case, which is why the pattern diverges by design.
+        self.water_boiler_temperature_sensor: str | None = raw or None
+        # super().__init__ initialises HADeviceMixin state (the probe
+        # dicts/sets); attach_ha_state_to_probe below depends on it,
+        # so the order here is load-bearing.
         super().__init__(**kwargs)
         # attach_ha_state_to_probe early-returns on None; no guard
         # needed here. Mirrors pool.py:34.

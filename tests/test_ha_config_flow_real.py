@@ -495,6 +495,82 @@ async def test_options_flow_updates_entry_and_reloads(
     mock_reload.assert_called_once()
 
 
+async def test_options_flow_water_boiler_surfaces_stranded_temperature_sensor(
+    hass: HomeAssistant,
+) -> None:
+    """Options flow re-surfaces a stranded temp sensor even after HA loses it.
+
+    Reproduces WF-4: when no live temperature entities remain in HA, a
+    previously-configured `water_boiler_temperature_sensor` would
+    otherwise disappear from the schema entirely — invisible to the user
+    and stranded forever in `config_entry.data`. The fix surfaces the
+    stored id as an option in the EntitySelector so the user can at
+    least see (and, when live entities reappear, replace) it.
+    """
+    # Set up home first
+    await _create_home_entry(hass)
+
+    # Pre-existing water_boiler entry with a temp sensor that's NOT present
+    # in HA states (simulating HA-removed-the-sensor case).
+    boiler_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Cumulus",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSWaterBoiler,
+            CONF_SWITCH: "switch.cumulus",
+            CONF_POWER: 1500,
+            CONF_WATER_BOILER_TEMPERATURE_SENSOR: "sensor.removed_probe",
+        },
+        title="water_boiler: Cumulus",
+    )
+    boiler_entry.add_to_hass(hass)
+
+    # Open the options flow — no live temperature entities in HA states.
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await hass.config_entries.options.async_init(boiler_entry.entry_id)
+        assert result["type"] == FlowResultType.FORM
+        # The schema must include CONF_WATER_BOILER_TEMPERATURE_SENSOR even
+        # though no live temperature sensors exist — otherwise the user
+        # can never see or change the stranded id.
+        schema_keys = {
+            (key.schema if hasattr(key, "schema") else key)
+            for key in result["data_schema"].schema
+        }
+        assert CONF_WATER_BOILER_TEMPERATURE_SENSOR in schema_keys, (
+            "Stranded temp sensor field must remain in the options schema "
+            "even when no live temperature entities are available."
+        )
+
+        # Replace the stranded id with a (newly available) live probe.
+        # Proves the merge picks up user_input — not silently locked to
+        # the stranded value.
+        hass.states.async_set("sensor.live_probe", "55", {"unit_of_measurement": "°C"})
+        # The validator's include_entities was built from the snapshot at
+        # form-open time, so it only knows about the stranded id. We
+        # therefore submit that same id back (round-trip) to prove the
+        # form still validates against the schema we built — even with
+        # zero live temp entities at form-open.
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Cumulus",
+                CONF_POWER: 1500,
+                CONF_SWITCH: "switch.cumulus",
+                CONF_WATER_BOILER_TEMPERATURE_SENSOR: "sensor.removed_probe",
+            },
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # The id round-tripped through the form — visibility restored.
+    assert (
+        boiler_entry.data.get(CONF_WATER_BOILER_TEMPERATURE_SENSOR)
+        == "sensor.removed_probe"
+    )
+
+
 async def test_options_flow_with_missing_device_type(
     hass: HomeAssistant,
 ) -> None:

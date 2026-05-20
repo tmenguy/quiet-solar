@@ -535,6 +535,137 @@ async def test_home_devices_for_dashboard_section_includes_virtual_devices(
     assert charger_device._default_generic_car.name in device_names
 
 
+async def test_home_auto_migrates_missing_default_section_for_new_device_type(
+    hass: HomeAssistant,
+) -> None:
+    """WF-5 tier 2: a pre-existing user's customised `dashboard_sections`
+    list that's missing `water_boilers` (because it pre-dates QS-194) gets
+    the section appended in-memory when a water_boiler device is added.
+    """
+    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
+
+    # Customised home config that pre-dates QS-194 — no water_boilers
+    # section in the dashboard_section_name_<i> slots.
+    custom_home_config = {
+        **MOCK_HOME_CONFIG,
+        "dashboard_section_name_0": "#1 - cars",
+        "dashboard_section_icon_0": "mdi:car",
+        "dashboard_section_name_1": "#2 - settings",
+        "dashboard_section_icon_1": "mdi:cog-outline",
+    }
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=custom_home_config,
+        entry_id="wf5_home_entry",
+        title="home: WF5 Home",
+        unique_id="wf5_home_entry",
+    )
+    home_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(home_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Sanity: water_boilers is NOT in the customised list yet
+    initial_section_names = {s[0] for s in home.dashboard_sections}
+    assert "water_boilers" not in initial_section_names, (
+        f"Pre-condition: water_boilers must be absent from the customised "
+        f"home.dashboard_sections; got {initial_section_names}"
+    )
+
+    # Add a water_boiler device — it must trigger the migration
+    boiler_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_WATER_BOILER_CONFIG,
+        entry_id="wf5_boiler_entry",
+        title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
+        unique_id="wf5_boiler_entry",
+    )
+    boiler_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(boiler_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # The section was appended at runtime
+    post_section_names = {s[0] for s in home.dashboard_sections}
+    assert "water_boilers" in post_section_names, (
+        f"Auto-migration should have appended `water_boilers` to "
+        f"home.dashboard_sections; got {post_section_names}"
+    )
+
+    # The device's dashboard_section resolves (not None) and reaches the
+    # right bucket
+    boiler_device = hass.data[DOMAIN].get(boiler_entry.entry_id)
+    assert boiler_device.dashboard_section == "water_boilers"
+    devices_in_section = home.get_devices_for_dashboard_section("water_boilers")
+    assert boiler_device in devices_in_section
+
+
+async def test_home_logs_warning_when_device_section_is_unknown(
+    hass: HomeAssistant,
+    caplog,
+) -> None:
+    """WF-5 tier 1: a device whose requested section can neither be found
+    nor auto-migrated (because it's not a `DASHBOARD_DEFAULT_SECTIONS`
+    entry) logs a clear warning naming the device and the bad section.
+    """
+    import logging
+
+    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
+
+    # Customised home WITHOUT water_boilers
+    custom_home_config = {
+        **MOCK_HOME_CONFIG,
+        "dashboard_section_name_0": "#1 - cars",
+        "dashboard_section_icon_0": "mdi:car",
+    }
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=custom_home_config,
+        entry_id="wf5_logger_home_entry",
+        title="home: WF5 Logger Home",
+        unique_id="wf5_logger_home_entry",
+    )
+    home_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(home_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Boiler device with a NON-default section name — auto-migration
+    # won't kick in (only default sections can be auto-added), so the
+    # tier-1 warning must surface in logs.
+    bogus_section_config = {
+        **MOCK_WATER_BOILER_CONFIG,
+        "device_dashboard_section": "#9 - my_custom_section_that_doesnt_exist",
+    }
+    boiler_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=bogus_section_config,
+        entry_id="wf5_logger_boiler_entry",
+        title=f"water_boiler: {bogus_section_config['name']}",
+        unique_id="wf5_logger_boiler_entry",
+    )
+    boiler_entry.add_to_hass(hass)
+
+    caplog.set_level(logging.WARNING, logger="custom_components.quiet_solar.home_model.load")
+    await hass.config_entries.async_setup(boiler_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Force section resolution (caches the warning emission)
+    boiler_device = hass.data[DOMAIN].get(boiler_entry.entry_id)
+    _ = boiler_device.dashboard_section
+
+    warnings = [
+        rec for rec in caplog.records
+        if rec.levelno == logging.WARNING
+        and "dashboard section" in rec.getMessage()
+        and "my_custom_section_that_doesnt_exist" in rec.getMessage()
+    ]
+    assert warnings, (
+        "Expected a WARNING log naming the missing section; got: "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+
+
 async def test_home_best_tariff_selection(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,

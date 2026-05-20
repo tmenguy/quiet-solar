@@ -325,8 +325,8 @@
           "switch": "On/Off switch of the boiler",
           "water_boiler_temperature_sensor": "Water tank temperature sensor (optional, reserved for future logic)",
           "power": "Power consumption of the boiler (W)",
-          "num_max_on_off": "Maximum number of allowed turn on or turn off of the boiler per day",
           "accurate_power_sensor": "Power sensor of the boiler (W, kW)",
+          "num_max_on_off": "Maximum number of allowed turn on or turn off of the boiler per day",
           "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the boiler being on"
         },
         "data_description": {
@@ -688,8 +688,8 @@
           "switch": "[%key:component::quiet_solar::config::step::water_boiler::data::switch%]",
           "water_boiler_temperature_sensor": "[%key:component::quiet_solar::config::step::water_boiler::data::water_boiler_temperature_sensor%]",
           "power": "[%key:component::quiet_solar::config::step::water_boiler::data::power%]",
-          "num_max_on_off": "[%key:component::quiet_solar::config::step::water_boiler::data::num_max_on_off%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::water_boiler::data::accurate_power_sensor%]",
+          "num_max_on_off": "[%key:component::quiet_solar::config::step::water_boiler::data::num_max_on_off%]",
           "calendar": "[%key:component::quiet_solar::config::step::water_boiler::data::calendar%]"
         },
         "data_description": {

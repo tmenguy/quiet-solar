@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-pool-card.js
   - custom_components/quiet_solar/ui/resources/qs-climate-card.js
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
-last_verified: 2026-05-20
+last_verified: 2026-05-21
 ---
 
 # Dashboard generation and JS Lovelace cards
