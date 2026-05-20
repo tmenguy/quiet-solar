@@ -3,39 +3,68 @@
   Zero-build single-file Lit-style web component compatible with Home Assistant
 */
 
+// --- Geometry (must match the SVG <clipPath> circle attributes below) ---
+const CENTER_CY = 160;            // SVG y-center of the ring / clip circle
+const CLIP_R = 120;               // water clip circle radius
+const WAVE_WIDTH = 480;           // single wave period in SVG px (2× clip diameter)
+const WAVE_BOTTOM_Y = 400;        // path closing edge y; outside viewBox, clipped
+
+// --- Water color (HSL endpoints) ---
+const COOL_HUE = 195, WARM_HUE = 175;     // deeper blue-teal → warmer cyan
+const COOL_SAT = 70,  WARM_SAT = 55;
+const COOL_LIGHT = 18, WARM_LIGHT = 28;
+const COOL_TEMP_C = 15;           // °C at which tint is coolest
+const WARM_TEMP_C = 30;           // °C at which tint is warmest
+
+// --- Animation tuning ---
+const LERP_RATE = 2;              // exp time-constant; ~95% of lerp in ~1.5s
+const LERP_DT_CEIL = 0.1;         // s; clamp lerp dt to avoid snap-to after tab hidden
+const AMP_REGEN_THRESHOLD = 0.25; // amplitude delta threshold for path regen (throttle)
+const PHASE_WRAP = 1e6;           // wrap _wavePhase to preserve float precision
+const PHASE_TO_PX = 60;           // scroll px per phase-unit
+
+// --- Wave dynamics targets (calm vs pumping) ---
+const CALM_AMP = 2,  PUMP_AMP = 6;
+const CALM_SPEED = 0.3, PUMP_SPEED = 1.2;
+
 class QsPoolCard extends HTMLElement {
 
-  // Generate an SVG path for a sine-wave-based closed shape
+  // Generate an SVG path for a sine-wave-based closed shape.
+  // Emits TWO repetitions of the wave (path extent = [0, 2*width]) so the
+  // translated path always covers the clip region regardless of scroll offset.
+  // `frequency` is in cycles per `width`, so each period is identical.
   _generateWavePath(width, amplitude, frequency, phase, yOffset) {
     const points = [];
-    const steps = 60;
-    for (let i = 0; i <= steps; i++) {
-      const x = (i / steps) * width;
-      const y = yOffset + amplitude * Math.sin((i / steps) * frequency * 2 * Math.PI + phase);
+    const stepsPerPeriod = 60;
+    const totalSteps = stepsPerPeriod * 2;
+    const totalWidth = 2 * width;
+    for (let i = 0; i <= totalSteps; i++) {
+      const x = (i / stepsPerPeriod) * width; // 0 .. 2*width
+      const y = yOffset + amplitude * Math.sin((x / width) * frequency * 2 * Math.PI + phase);
       points.push(`${x.toFixed(2)} ${y.toFixed(2)}`);
     }
     return `M ${points[0]} ` +
            points.slice(1).map(p => `L ${p}`).join(' ') +
-           ` L ${width.toFixed(2)} 400 L 0 400 Z`;
+           ` L ${totalWidth.toFixed(2)} ${WAVE_BOTTOM_Y} L 0 ${WAVE_BOTTOM_Y} Z`;
   }
 
-  // Map pool temperature to per-layer water HSL colors
+  // Map pool temperature to per-layer water HSL colors.
+  // Cool end → deeper blue-teal; warm end → warmer cyan-turquoise.
   _tempToColor(tempC) {
-    // Map 10°C–35°C to HSL interpolation
-    // Cool (≤15°C): hsl(195, 70%, 18%) — deeper blue-teal
-    // Warm (≥30°C): hsl(175, 55%, 28%) — warmer cyan-turquoise
-    if (tempC == null || Number.isNaN(tempC)) {
-      // Neutral teal fallback
+    // Explicit guard: tempC may be null/undefined (no sensor bound) or
+    // NaN (bad parse). Loose equality would also catch this, but be explicit.
+    if (tempC === null || tempC === undefined || Number.isNaN(tempC)) {
       return [
         'hsla(185, 60%, 22%, 0.55)',
         'hsla(185, 60%, 20%, 0.45)',
         'hsla(185, 60%, 18%, 0.35)',
       ];
     }
-    const t = Math.max(0, Math.min(1, (tempC - 15) / 15)); // 0 at 15°C, 1 at 30°C
-    const h = 195 - t * 20;   // 195 → 175
-    const s = 70 - t * 15;    // 70 → 55
-    const l = 18 + t * 10;    // 18 → 28
+    const span = WARM_TEMP_C - COOL_TEMP_C;
+    const t = Math.max(0, Math.min(1, (tempC - COOL_TEMP_C) / span));
+    const h = COOL_HUE + t * (WARM_HUE - COOL_HUE);
+    const s = COOL_SAT + t * (WARM_SAT - COOL_SAT);
+    const l = COOL_LIGHT + t * (WARM_LIGHT - COOL_LIGHT);
     return [
       `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${(l + 2).toFixed(0)}%, 0.55)`,
       `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${l.toFixed(0)}%, 0.45)`,
@@ -43,14 +72,19 @@ class QsPoolCard extends HTMLElement {
     ];
   }
 
+  // Clear the wave-path memoization keys so the next RAF tick regenerates paths.
+  _invalidateWaveCache() {
+    this._lastWaterBaseY = null;
+    this._lastAmplitude = null;
+  }
+
   connectedCallback() {
     if (this._animRaf != null) return;
     // Initialize wave animation state
-    this._currentAmplitude = 2;
-    this._currentSpeed = 0.3;
+    this._currentAmplitude = CALM_AMP;
+    this._currentSpeed = CALM_SPEED;
     this._wavePhase = 0;
-    this._lastWaterBaseY = null;
-    this._lastAmplitude = null;
+    this._invalidateWaveCache();
 
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
@@ -67,36 +101,44 @@ class QsPoolCard extends HTMLElement {
 
       // --- Wave animation update ---
       const pumpOn = this._pumpRunning === true;
-      const targetAmplitude = pumpOn ? 6 : 2;
-      const targetSpeed = pumpOn ? 1.2 : 0.3;
-      // Smooth lerp: 1 - exp(-3 * dt) ≈ 3·dt for small dt
-      const lerpFactor = 1 - Math.exp(-3 * dt);
+      const targetAmplitude = pumpOn ? PUMP_AMP : CALM_AMP;
+      const targetSpeed = pumpOn ? PUMP_SPEED : CALM_SPEED;
+      // Clamp the lerp dt: after a tab is hidden for several seconds, the
+      // first frame back has huge dt and lerpFactor ≈ 1, which would snap
+      // the amplitude/speed to target. The story requires a ~1–2 s smooth
+      // interpolation. Wave phase keeps using raw dt so scroll catches up.
+      const lerpDt = Math.min(dt, LERP_DT_CEIL);
+      const lerpFactor = 1 - Math.exp(-LERP_RATE * lerpDt);
       this._currentAmplitude += (targetAmplitude - this._currentAmplitude) * lerpFactor;
       this._currentSpeed += (targetSpeed - this._currentSpeed) * lerpFactor;
       this._wavePhase += this._currentSpeed * dt;
-      if (this._wavePhase > 1e6) this._wavePhase -= 1e6;
+      if (this._wavePhase > PHASE_WRAP) this._wavePhase -= PHASE_WRAP;
 
-      // Update wave transforms (CSS translateX for GPU compositing)
-      // Wave paths span x=[0, 480]. Clip circle spans x=[40, 280].
-      // We offset by -120 so the path center aligns with the clip center,
-      // then scroll within one wave-width period.
-      const waveWidth = 480; // 2× circle diameter (240)
+      // Update wave transforms (CSS translateX for GPU compositing).
+      // Path extent is [0, 2*WAVE_WIDTH] so the translated path always
+      // covers the clip region. We offset by -CLIP_R to align the path
+      // start with the clip's left edge, then scroll within one period.
       for (let i = 0; i < 3; i++) {
         const wEl = this._root?.getElementById('wave' + i);
         if (wEl) {
           const phaseOffset = i * 1.2;
-          const raw = (this._wavePhase + phaseOffset) * 60;
-          const scrollOffset = ((raw % waveWidth) + waveWidth) % waveWidth;
-          const tx = -120 - scrollOffset; // -120 centers path over clip circle
+          const raw = (this._wavePhase + phaseOffset) * PHASE_TO_PX;
+          const scrollOffset = ((raw % WAVE_WIDTH) + WAVE_WIDTH) % WAVE_WIDTH;
+          const tx = -CLIP_R - scrollOffset;
           wEl.style.transform = `translateX(${tx.toFixed(1)}px)`;
         }
       }
 
-      // Regenerate wave paths when water level or amplitude changes
+      // Regenerate wave paths when water level or amplitude changes.
+      // Guard against undefined/NaN base — the RAF loop can fire before
+      // _render() populates _waterBaseY on cold start.
       const waterBaseY = this._waterBaseY;
-      const ampDelta = this._lastAmplitude == null ? 1 : Math.abs(this._currentAmplitude - this._lastAmplitude);
-      const levelChanged = waterBaseY != null && waterBaseY !== this._lastWaterBaseY;
-      if (levelChanged || ampDelta > 0.1) {
+      const hasValidBase = waterBaseY != null && !Number.isNaN(waterBaseY);
+      const ampDelta = this._lastAmplitude == null
+          ? Infinity
+          : Math.abs(this._currentAmplitude - this._lastAmplitude);
+      const levelChanged = waterBaseY !== this._lastWaterBaseY;
+      if (hasValidBase && (levelChanged || ampDelta > AMP_REGEN_THRESHOLD)) {
         this._lastWaterBaseY = waterBaseY;
         this._lastAmplitude = this._currentAmplitude;
         const colors = this._waterColors || ['hsla(185,60%,22%,0.55)', 'hsla(185,60%,20%,0.45)', 'hsla(185,60%,18%,0.35)'];
@@ -104,8 +146,8 @@ class QsPoolCard extends HTMLElement {
           const wEl = this._root?.getElementById('wave' + i);
           if (wEl) {
             const phaseOffset = i * 2.1;
-            const freq = 2 + i * 0.5;
-            const d = this._generateWavePath(waveWidth, this._currentAmplitude, freq, phaseOffset, waterBaseY);
+            const freq = 2 + i; // integer freq → seamless wrap at WAVE_WIDTH
+            const d = this._generateWavePath(WAVE_WIDTH, this._currentAmplitude, freq, phaseOffset, waterBaseY);
             wEl.setAttribute('d', d);
             wEl.setAttribute('fill', colors[i]);
           }
@@ -201,13 +243,15 @@ class QsPoolCard extends HTMLElement {
       // Store pump state for RAF loop
       this._pumpRunning = running;
 
-      // Water level from runtime progress
+      // Water level from runtime progress. Clamp on both sides: a negative
+      // hoursRun (sensor reset glitch / device reporting -1) would otherwise
+      // push waterBaseY past WAVE_BOTTOM_Y and self-intersect the polygon.
       const progressRatio = targetHours > 0
-          ? Math.min(1, hoursRun / targetHours)
+          ? Math.max(0, Math.min(1, hoursRun / targetHours))
           : 0;
-      const clipR = 120;
-      // center.cy is always 160; using literal to avoid forward-reference
-      const waterBaseY = 160 + clipR - (0.2 + progressRatio * 0.6) * 2 * clipR;
+      // Map 0..1 progress → 1/5..4/5 fill of the clip circle.
+      // CENTER_CY / CLIP_R MUST match the <clipPath> circle attributes below.
+      const waterBaseY = CENTER_CY + CLIP_R - (0.2 + progressRatio * 0.6) * 2 * CLIP_R;
       this._waterBaseY = Number.isNaN(waterBaseY) ? null : waterBaseY;
 
       // Temperature-based water colors
@@ -406,7 +450,7 @@ class QsPoolCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${waterClipId}">
-                  <circle cx="160" cy="160" r="120" />
+                  <circle cx="160" cy="${CENTER_CY}" r="${CLIP_R}" />
                 </clipPath>
               </defs>
               <g clip-path="url(#${waterClipId})">
@@ -471,8 +515,8 @@ class QsPoolCard extends HTMLElement {
       const root = this._root;
       const ids = (k) => root.getElementById(k);
 
-      // --- Force initial wave path generation ---
-      this._lastWaterBaseY = null; // reset so RAF loop regenerates paths
+      // Force initial wave path generation after each (re-)render.
+      this._invalidateWaveCache();
 
       // Pool mode selector
       if (selPoolMode) {
