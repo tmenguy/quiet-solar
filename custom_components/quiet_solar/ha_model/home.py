@@ -1455,6 +1455,18 @@ class QSHome(QSDynamicGroup):
                 return car
         return None
 
+    def get_heat_pumps(self) -> list[QSHeatPump]:
+        """Public accessor for registered heat pumps.
+
+        Callers outside this class (notably the config-flow's radiator
+        and climate steps) should prefer this over reaching into
+        `home._heat_pumps` directly — the private list may move or be
+        renamed and `getattr` lookups silently return an empty list,
+        making the heat-pump piloting dropdown vanish without warning
+        (M3 review-fix).
+        """
+        return self._heat_pumps
+
     def get_person_by_name(self, name: str | None) -> QSPerson | None:
         if name is None:
             return None

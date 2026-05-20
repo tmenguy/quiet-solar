@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime
 
 from homeassistant.components.climate import HVACMode
 
@@ -10,7 +9,6 @@ from ..const import (
     SENSOR_CONSTRAINT_SENSOR_CLIMATE,
     CONF_TYPE_NAME_QSClimateDuration,
 )
-from ..home_model.commands import LoadCommand
 from .bistate_duration import QSBiStateDuration
 from .bistate_transport import ClimateTransport, get_hvac_modes
 
@@ -28,39 +26,69 @@ class QSClimateDuration(QSBiStateDuration):
 
     def __init__(self, **kwargs):
 
+        # S2/S5 — build the transport BEFORE `super().__init__` so the
+        # property-based `_state_on/_state_off` shadows below can
+        # delegate to it during the base ctor's seed assignments. The
+        # transport is the single source of truth for the HVAC modes;
+        # the base ctor's `self._state_on = "on"` lands as
+        # `self._transport.state_on = "on"` and gets overwritten with
+        # the actual HVAC mode below.
+        climate_entity = kwargs.pop(CONF_CLIMATE, None)
+        state_off = kwargs.pop(CONF_CLIMATE_HVAC_MODE_OFF, str(HVACMode.OFF.value))
+        state_on = kwargs.pop(CONF_CLIMATE_HVAC_MODE_ON, str(HVACMode.AUTO.value))
+        self.climate_entity = climate_entity
+        self._transport: ClimateTransport = ClimateTransport(climate_entity, state_on, state_off)
+
         super().__init__(**kwargs)
 
-        self.climate_entity = kwargs.pop(CONF_CLIMATE, None)
-        self._state_off = kwargs.pop(CONF_CLIMATE_HVAC_MODE_OFF, str(HVACMode.OFF.value))
-        self._state_on = kwargs.pop(CONF_CLIMATE_HVAC_MODE_ON, str(HVACMode.AUTO.value))
-
-        # get the HVAC mode for on / off for the climate entity
-        self._bistate_mode_on = self._state_on
-        self._bistate_mode_off = self._state_off
-        self.bistate_entity = self.climate_entity
+        # Re-pin the transport's modes from the climate-specific HVAC
+        # config (super() seeded them to "on"/"off" via the shadow
+        # properties below).
+        self._transport.state_on = state_on
+        self._transport.state_off = state_off
+        self._bistate_mode_on = state_on
+        self._bistate_mode_off = state_off
+        self.bistate_entity = climate_entity
         self.is_load_time_sensitive = True
 
-        self._transport: ClimateTransport = ClimateTransport(self.climate_entity, self._state_on, self._state_off)
-
+    # S5 — `_state_on` / `_state_off` are thin views over the transport
+    # so a direct write through either name always updates the
+    # transport, never leaving it stale. Without these, code that does
+    # `device._state_on = "auto"` would bypass the climate setter and
+    # `execute_command_system` would still issue the old HVAC mode.
     @property
-    def climate_state_on(self):
-        return self._state_on
+    def _state_on(self):
+        return self._transport.state_on
 
-    @climate_state_on.setter
-    def climate_state_on(self, value):
-        self._state_on = value
-        self._bistate_mode_on = value
+    @_state_on.setter
+    def _state_on(self, value):
         self._transport.state_on = value
 
     @property
+    def _state_off(self):
+        return self._transport.state_off
+
+    @_state_off.setter
+    def _state_off(self, value):
+        self._transport.state_off = value
+
+    @property
+    def climate_state_on(self):
+        return self._transport.state_on
+
+    @climate_state_on.setter
+    def climate_state_on(self, value):
+        self._transport.state_on = value
+        self._bistate_mode_on = value
+
+    @property
     def climate_state_off(self):
-        return self._state_off
+        return self._transport.state_off
 
     @climate_state_off.setter
     def climate_state_off(self, value):
-        self._state_off = value
-        self._bistate_mode_off = value
         self._transport.state_off = value
+        self._bistate_mode_off = value
 
     def get_possibles_modes(self):
         """return the possible modes for the climate entity"""
@@ -73,8 +101,8 @@ class QSClimateDuration(QSBiStateDuration):
         """return the translation key for the select"""
         return "climate_mode"
 
-    # exception catched above execute_command
-    async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
-        return await self._transport.execute(
-            self.hass, command, state, self._transport.state_on, self._transport.state_off
-        )
+    # `execute_command_system` is inherited from `QSBiStateDuration` and
+    # delegates to `self._transport.execute(...)` (N2 review-fix). The
+    # base passes `self._state_on/_state_off`, which thanks to the S5
+    # property shadows defined above resolve to the transport's modes —
+    # so this stays in sync with `climate_state_on/off` mutations.

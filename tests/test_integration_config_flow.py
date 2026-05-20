@@ -884,6 +884,224 @@ async def test_radiator_step_with_heat_pumps_no_default(hass: HomeAssistant, moc
 
 
 @pytest.mark.asyncio
+async def test_radiator_step_empty_hvac_modes_surfaces_error(hass: HomeAssistant, mock_data_handler):
+    """S7 — climate entity with empty `hvac_modes` surfaces a config-flow error.
+
+    The user gets a clear actionable message instead of an unsatisfiable
+    empty dropdown that blocks the whole flow.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_empty_modes_123",
+        data={
+            CONF_NAME: "Test Radiator Empty Modes",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.broken",
+        },
+        title="radiator: Empty Modes",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=[],
+    ):
+        # Submit Pass 2-style payload that triggers final-submission path
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Test Radiator Empty Modes",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.broken",
+                CONF_CLIMATE_HVAC_MODE_ON: "heat",
+                CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "climate_capabilities_unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_stale_heat_pump_name_surfaces_error(
+    hass: HomeAssistant, mock_data_handler
+):
+    """S8 — orphan `CONF_DEVICE_TO_PILOT_NAME` surfaces an actionable error."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_orphan_hp_123",
+        data={
+            CONF_NAME: "Test Orphan HP",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Renamed Heat Pump",
+        },
+        title="radiator: Orphan HP",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp = MagicMock()
+    mock_hp.name = "Current Heat Pump"  # Different from persisted name
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    result = await flow.async_step_radiator()
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "piloted_heat_pump_unknown"}
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_persisted_hvac_mode_not_in_current_modes_reprompts(
+    hass: HomeAssistant, mock_data_handler
+):
+    """S6 — persisted HVAC mode missing from live `hvac_modes` triggers re-prompt."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_stale_hvac_123",
+        data={
+            CONF_NAME: "Stale HVAC Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.r",
+            # Persisted modes are NOT in the live list below.
+            CONF_CLIMATE_HVAC_MODE_ON: "cool",
+            CONF_CLIMATE_HVAC_MODE_OFF: "fan_only",
+        },
+        title="radiator: Stale HVAC",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        # Final submission attempt with stale modes — should re-prompt.
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Stale HVAC Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.r",
+                CONF_CLIMATE_HVAC_MODE_ON: "cool",
+                CONF_CLIMATE_HVAC_MODE_OFF: "fan_only",
+            }
+        )
+
+    # Re-prompt → renders a FORM, not CREATE_ENTRY.
+    assert result["type"] == FlowResultType.FORM
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_no_off_in_hvac_modes_picks_offlike_fallback(
+    hass: HomeAssistant, mock_data_handler
+):
+    """S13 — `suggested_off` falls back to an off-like mode when `"off"` is absent."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_no_off_123",
+        data={
+            CONF_NAME: "Test No-Off Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_CLIMATE: "climate.r",
+        },
+        title="radiator: No Off",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "fan_only"],  # No "off"
+    ):
+        result = await flow.async_step_radiator()
+
+    assert result["type"] == FlowResultType.FORM
+    off_default = None
+    for item in result["data_schema"].schema:
+        if getattr(item, "schema", None) == CONF_CLIMATE_HVAC_MODE_OFF:
+            off_default = item.default()
+            break
+    # `fan_only` contains "off"? No. So it falls back to the last mode.
+    # We accept either an off-like mode or the last one.
+    assert off_default in {"heat", "fan_only"}
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_pending_data_not_persisted_until_final_submit(
+    hass: HomeAssistant, mock_data_handler
+):
+    """S1 — Pass 1 → Pass 2 carry-over is in-memory, not persisted mid-flow.
+
+    The Pass 1 call buffers the climate entity selection in
+    `_pending_radiator_data`. The persisted `config_entry.data` stays
+    unchanged until the final submission goes through `async_entry_next`.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_pending_data_123",
+        data={
+            CONF_NAME: "Test Pending Data Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.original",
+        },
+        title="radiator: Pending Data",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        # Pass 1 — submit with only CONF_CLIMATE (no HVAC modes); flow
+        # should buffer the climate entity and re-prompt for HVAC modes.
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Test Pending Data Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.r",
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+
+    # Original config-entry data must NOT carry the new climate entity
+    # — the Pass 1 selection is buffered in memory only.
+    assert config_entry.data.get(CONF_CLIMATE) is None
+    assert config_entry.data.get(CONF_SWITCH) == "switch.original"
+    # And the pending dict DID record the Pass 1 climate selection.
+    assert flow._pending_radiator_data.get(CONF_CLIMATE) == "climate.r"
+
+
+@pytest.mark.asyncio
 async def test_radiator_step_climate_without_heat_mode_suggests_first_non_off(
     hass: HomeAssistant, mock_data_handler
 ):

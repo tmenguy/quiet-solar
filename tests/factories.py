@@ -38,11 +38,16 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_MONO_PHASE,
+    CONF_TYPE_NAME_QSRadiator,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
+)
+from custom_components.quiet_solar.ha_model.bistate_transport import (
+    ClimateTransport,
+    SwitchTransport,
 )
 from custom_components.quiet_solar.home_model.commands import (
     CMD_ON,
@@ -336,6 +341,7 @@ def create_minimal_home_model(
     home._cars = []
     home._chargers = []
     home._loads = []
+    home._heat_pumps = []
     home._last_persons_car_allocation = {}
     home.available_amps_for_group = [[max_phase_amps] * 3]
     home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
@@ -348,6 +354,14 @@ def create_minimal_home_model(
         return None
 
     home.get_car_by_name = get_car_by_name
+
+    # M3 — mirror the canonical `QSHome.get_heat_pumps()` accessor so tests
+    # can keep setting `home._heat_pumps = [...]` and observe the change
+    # through the public method the config flow now uses.
+    def get_heat_pumps():
+        return home._heat_pumps
+
+    home.get_heat_pumps = get_heat_pumps
     home._consumption_forecast = None
     return home
 
@@ -935,11 +949,6 @@ class TestRadiatorDouble:
         power: float = 1000.0,
         **kwargs,
     ):
-        from custom_components.quiet_solar.ha_model.bistate_transport import (
-            ClimateTransport,
-            SwitchTransport,
-        )
-
         if backing not in ("switch", "climate"):
             raise ValueError("backing must be 'switch' or 'climate'")
 
@@ -957,8 +966,9 @@ class TestRadiatorDouble:
         self._bistate_mode_on = self._state_on
         self._bistate_mode_off = self._state_off
         self.bistate_entity = self._transport.entity
-        self.conf_type_name = "radiator"
-        self.device_type = "radiator"
+        # N12 — use the canonical constant rather than the literal `"radiator"`.
+        self.conf_type_name = CONF_TYPE_NAME_QSRadiator
+        self.device_type = CONF_TYPE_NAME_QSRadiator
 
         for key, value in kwargs.items():
             setattr(self, key, value)

@@ -9,8 +9,10 @@
         "error": {
             "already_configured_device": "Device is already configured",
             "cannot_connect": "Unable to connect",
+            "climate_capabilities_unavailable": "Climate entity advertises no HVAC modes; pick a different climate entity or check the device",
             "cloud_profile_mismatch": "Cloud profile does not match configuration",
-            "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator"
+            "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator",
+            "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
         },
         "step": {
             "battery": {
@@ -713,7 +715,10 @@
         "error": {
             "already_configured_device": "Device is already configured",
             "cannot_connect": "Unable to connect",
-            "cloud_profile_mismatch": "Cloud profile does not match configuration"
+            "climate_capabilities_unavailable": "Climate entity advertises no HVAC modes; pick a different climate entity or check the device",
+            "cloud_profile_mismatch": "Cloud profile does not match configuration",
+            "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator",
+            "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
         },
         "step": {
             "battery": {
@@ -1075,10 +1080,10 @@
             "options": {
                 "#1 - cars": "#1 - cars",
                 "#2 - climates": "#2 - climates",
-                "#3 - radiators": "#3 - radiators",
-                "#4 - pools": "#4 - pools",
-                "#5 - others": "#5 - others",
-                "#6 - settings": "#6 - settings",
+                "#3 - pools": "#3 - pools",
+                "#4 - others": "#4 - others",
+                "#5 - settings": "#5 - settings",
+                "#6 - radiators": "#6 - radiators",
                 "Not in dashboard": "Not in dashboard"
             }
         }

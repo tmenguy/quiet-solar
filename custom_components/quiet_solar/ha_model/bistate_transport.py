@@ -48,21 +48,27 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ..home_model.commands import CMD_IDLE, CMD_ON, LoadCommand
+from ..home_model.commands import CMD_ON, LoadCommand
 
 _LOGGER = logging.getLogger(__name__)
+
+_HVAC_MODE_DEFAULTS: list[str] = [HVACMode.AUTO.value, HVACMode.OFF.value]
 
 
 def get_hvac_modes(hass: HomeAssistant, entity_id: str) -> list[str]:
     """Return the HVAC modes advertised by a climate entity.
 
-    Falls back to `[AUTO, OFF]` when the entity has no `hvac_modes`
-    capability (mirrors the legacy helper in `climate_controller.py`,
-    which is re-exported here for backwards compatibility).
+    Falls back to `[AUTO, OFF]` when the entity is missing from the
+    registry, has no advertised capabilities, or has no `hvac_modes`
+    capability. The fallback list is the same in all three branches so
+    the config-flow and runtime selectors never render an empty
+    dropdown (M6).
     """
     registry = er.async_get(hass)
     entry = registry.async_get(entity_id)
-    return entry.capabilities.get("hvac_modes", [HVACMode.AUTO.value, HVACMode.OFF.value])
+    if entry is None or entry.capabilities is None:
+        return list(_HVAC_MODE_DEFAULTS)
+    return entry.capabilities.get("hvac_modes", list(_HVAC_MODE_DEFAULTS))
 
 
 class BistateTransport(ABC):
@@ -157,16 +163,37 @@ class SwitchTransport(BistateTransport):
         state_off: str,
     ) -> bool | None:
         # The host's `state_on` / `state_off` map override states 1:1 to
-        # the switch's "on" / "off" service. Unused locals are silenced
-        # so the parameter list stays symmetric with `ClimateTransport`.
-        del state_off
+        # the switch's "on" / "off" service. `state_on` stays unused here
+        # so the param list stays symmetric with `ClimateTransport`.
+        del state_on
 
         if override_state is not None:
-            if override_state == state_on:
-                action = SERVICE_TURN_ON
-            else:
+            # M1 regression — legacy semantics: only TURN_OFF when the
+            # override state matches `state_off`. Any other value
+            # (including unexpected ones) defaults to TURN_ON, matching
+            # the pre-refactor `execute_command_system` branch:
+            #   if state == expected_state_from_command(CMD_IDLE):
+            #       action = SERVICE_TURN_OFF
+            #   else:
+            #       action = SERVICE_TURN_ON
+            if override_state == state_off:
                 action = SERVICE_TURN_OFF
+            else:
+                if override_state != self.default_state_on():
+                    # N1 — surface unexpected override states so a typo or
+                    # firmware change is debuggable rather than silent.
+                    _LOGGER.warning(
+                        "Unexpected override_state %s for %s (expected %s or %s); defaulting to TURN_ON",
+                        override_state,
+                        self.entity,
+                        self.default_state_on(),
+                        state_off,
+                    )
+                action = SERVICE_TURN_ON
         else:
+            # N5 — surface a None command BEFORE attempting attribute access.
+            if command is None:
+                raise ValueError("Invalid command: None")
             if command.is_like(CMD_ON):
                 action = SERVICE_TURN_ON
             elif command.is_off_or_idle():
@@ -207,7 +234,6 @@ class ClimateTransport(BistateTransport):
     def mode_options(self, hass: HomeAssistant) -> list[str]:
         return get_hvac_modes(hass, self.entity)
 
-    # Unused param: CMD_IDLE — covered indirectly through `is_off_or_idle()`
     async def execute(
         self,
         hass: HomeAssistant,
@@ -216,13 +242,12 @@ class ClimateTransport(BistateTransport):
         state_on: str,
         state_off: str,
     ) -> bool | None:
-        # Cheap silencing — keep CMD_IDLE imported so it stays linked to
-        # the contract this branch checks.
-        _ = CMD_IDLE
-
         if override_state is not None:
             hvac_mode = override_state
         else:
+            # N5 — surface a None command BEFORE attempting attribute access.
+            if command is None:
+                raise ValueError("Invalid command: None")
             if command.is_like(CMD_ON):
                 hvac_mode = state_on
             elif command.is_off_or_idle():

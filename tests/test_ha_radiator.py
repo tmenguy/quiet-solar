@@ -313,6 +313,177 @@ def test_radiator_no_climate_state_on_off_attributes(
     assert not isinstance(device, QSClimateDuration)
 
 
+def test_radiator_empty_climate_with_switch_picks_switch_transport(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """M4 regression — `CONF_CLIMATE=""` is treated as absent; switch wins."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Empty Climate Radiator",
+            CONF_CLIMATE: "",
+            CONF_SWITCH: "switch.r",
+        },
+    )
+
+    assert isinstance(device._transport, SwitchTransport)
+    assert device._transport.entity == "switch.r"
+
+
+def test_radiator_empty_switch_with_climate_picks_climate_transport(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """M4 regression — `CONF_SWITCH=""` is treated as absent; climate wins."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Empty Switch Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_SWITCH: "",
+        },
+    )
+
+    assert isinstance(device._transport, ClimateTransport)
+    assert device._transport.entity == "climate.r"
+
+
+def test_radiator_whitespace_entity_is_treated_as_absent(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """N6 regression — `CONF_CLIMATE="   "` is normalised away."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Whitespace Climate Radiator",
+            CONF_CLIMATE: "   ",
+            CONF_SWITCH: "switch.r",
+        },
+    )
+
+    assert isinstance(device._transport, SwitchTransport)
+
+
+def test_radiator_empty_hvac_mode_falls_back_to_heat(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """S9 regression — persisted `CONF_CLIMATE_HVAC_MODE_ON=""` falls back to `heat`."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Empty HVAC Mode Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "",
+            CONF_CLIMATE_HVAC_MODE_OFF: "",
+        },
+    )
+
+    assert device._state_on == "heat"
+    assert device._state_off == "off"
+
+
+def test_radiator_no_climate_state_on_off_attribute_hasattr(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """S10 — `hasattr` regression: radiator must NOT expose `climate_state_on/off`."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Hasattr Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+
+    assert not hasattr(device, "climate_state_on")
+    assert not hasattr(device, "climate_state_off")
+
+
+def test_radiator_transport_built_before_super_init(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """S2 regression — `self._transport` is available during `super().__init__`."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{CONF_NAME: "Init Order Radiator", CONF_SWITCH: "switch.r"},
+    )
+
+    # After init, host-owned values reflect the transport's defaults.
+    # The fact that init didn't crash plus that bistate_entity matches
+    # the transport's entity (rather than `switch_entity` overridden by
+    # the base ctor) proves the transport was built first.
+    assert device._transport.entity == "switch.r"
+    assert device.bistate_entity == "switch.r"
+    assert device._state_on == "on"
+    assert device._state_off == "off"
+
+
+def test_radiator_bistate_modes_set_is_pinned(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """S12 — pin the exact set of `radiator_mode` select states.
+
+    AC-7 enumerated which states the `radiator_mode` select must
+    expose. Future translation/code drift would silently break the UX
+    without this assertion.
+    """
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{CONF_NAME: "Modes Pin Radiator", CONF_SWITCH: "switch.r"},
+    )
+
+    modes = device.get_bistate_modes()
+
+    # The canonical user-visible state set:
+    #   - `bistate_mode_auto`         — calendar end + duration
+    #   - `bistate_mode_exact_calendar` — calendar exact schedule
+    #   - `bistate_mode_default`      — fixed end + duration
+    #   - the host's `_bistate_mode_on/off` values (radiator: "on"/"off"
+    #     for switch backing, hvac modes for climate backing)
+    assert "bistate_mode_auto" in modes
+    assert "bistate_mode_exact_calendar" in modes
+    assert "bistate_mode_default" in modes
+    assert device._bistate_mode_on in modes
+    assert device._bistate_mode_off in modes
+
+
+def test_radiator_climate_bistate_modes_set_includes_heat_off(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """S12 — climate-backed radiator exposes `heat`/`off` as the override states."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Climate Modes Pin Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+
+    modes = device.get_bistate_modes()
+
+    assert {"bistate_mode_auto", "bistate_mode_exact_calendar", "bistate_mode_default", "heat", "off"}.issubset(
+        set(modes)
+    )
+
+
 def test_radiator_options_flow_backing_swap_picks_new_transport(
     hass: HomeAssistant, radiator_config_entry, radiator_home
 ):

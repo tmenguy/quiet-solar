@@ -135,6 +135,26 @@ def test_climate_state_on_setter(climate_device):
     assert climate_device._state_on == "heat"
 
 
+def test_direct_state_on_write_flows_through_to_transport(climate_device):
+    """S5 regression — `device._state_on = …` keeps the transport in sync.
+
+    Direct writes to the shadow field MUST update the underlying
+    transport, otherwise `execute_command_system` would still emit the
+    old HVAC mode and behaviour silently diverges from the host's
+    advertised state.
+    """
+    climate_device._state_on = "cool"
+    assert climate_device._transport.state_on == "cool"
+    assert climate_device.climate_state_on == "cool"
+
+
+def test_direct_state_off_write_flows_through_to_transport(climate_device):
+    """S5 regression — same for `_state_off`."""
+    climate_device._state_off = "fan_only"
+    assert climate_device._transport.state_off == "fan_only"
+    assert climate_device.climate_state_off == "fan_only"
+
+
 def test_climate_state_off_getter(climate_device):
     """Test climate_state_off getter."""
     assert climate_device.climate_state_off == str(HVACMode.OFF.value)

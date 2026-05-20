@@ -1,8 +1,23 @@
 /*
   QS Radiator Card - custom:qs-radiator-card
   Zero-build single-file Lit-style web component compatible with Home Assistant.
-  This is a verbatim clone of qs-on-off-duration-card.js with the custom-element
-  renamed; UX redesign is deferred to a follow-up story.
+
+  Provenance and divergence (S4 review-fix note):
+  This file started as a clone of qs-on-off-duration-card.js with the
+  custom-element renamed. Per QS-195 review-fix #01 it has since picked up:
+    - S14 — `_safeNumber` coercion (NaN-safe state reads)
+    - S15 — `_escapeHtml` for innerHTML-bound strings (title + mode labels)
+    - S16 — keyboard-accessible action buttons (role="button" + tabindex
+            + Enter/Space activation)
+    - S17 — try/finally around async service calls so interaction
+            guards never leak on transient failures
+    - N7  — cold-start `running` derivation OR-s in the underlying
+            backing entity state when published
+  The two cards are intentionally not yet collapsed into a shared base
+  module — the on/off card is older and broadly deployed; a clean
+  shared-base extraction is a larger refactor scheduled as a follow-up.
+  When that lands, the on/off card SHOULD adopt the same S14-S17/N7
+  safety improvements that this card already has.
 */
 
 class QsRadiatorCard extends HTMLElement {
@@ -96,10 +111,18 @@ class QsRadiatorCard extends HTMLElement {
       // Check if system is off-grid
       const isOffGrid = sIsOffGrid?.state === 'on';
       
+      // S14 — `Number(state || fallback)` yields NaN for truthy non-numeric
+      // states like "unknown" or "unavailable". Coerce explicitly and
+      // fall back when the result isn't finite.
+      const _safeNumber = (value, fallback) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : fallback;
+      };
+
       // Get target hours and current run hours directly (in hours)
-      const targetHours = Number(sDurationLimit?.state || 12);
-      const hoursRun = Number(sCurrentDuration?.state || 0);
-      const defaultDuration = Number(sDefaultOnDuration?.state || 6);
+      const targetHours = _safeNumber(sDurationLimit?.state, 12);
+      const hoursRun = _safeNumber(sCurrentDuration?.state, 0);
+      const defaultDuration = _safeNumber(sDefaultOnDuration?.state, 6);
       
       // Get bistate mode
       const bistateMode = selBistateMode?.state || 'bistate_mode_default';
@@ -110,9 +133,18 @@ class QsRadiatorCard extends HTMLElement {
       const isOverridden = overrideState !== 'NO OVERRIDE';
       const isResettingOverride = overrideState === 'ASKED FOR RESET OVERRIDE';
       
-      // Determine if device is running (command state must be "on")
+      // Determine if device is running (command state must be "on").
+      // N7 cold-start fallback: when the QS command sensor hasn't been
+      // published yet, also recognise the backing entity's state if the
+      // dashboard template passes it through `entities.backing_entity`.
       const commandState = sCommand?.state || '';
-      const running = commandState.toLowerCase() === 'on';
+      const commandReportsOn = commandState.toLowerCase() === 'on';
+      const backingEntityId = e.backing_entity;
+      const liveBackingState = backingEntityId
+          ? (this._hass?.states?.[backingEntityId]?.state || '').toLowerCase()
+          : '';
+      const liveBackingOn = liveBackingState === 'on' || liveBackingState === 'heat';
+      const running = commandReportsOn || liveBackingOn;
       
       // Determine max hours and what to display
       let maxHours, displayTargetHours;
@@ -304,20 +336,33 @@ class QsRadiatorCard extends HTMLElement {
       const activeGradId = running ? gradRunningId : gradGreenId;
       const showAnimation = (running && segLen > 6);
 
+      // S15 — escape values before they reach `innerHTML`. Mode labels,
+      // entity names, and other HA-supplied strings could otherwise
+      // inject markup or scripts via translated values / entity names.
+      const _escapeHtml = (value) => {
+        if (value == null) return '';
+        return String(value)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      };
+
       // Bistate mode selector options with translations
       const modeOptions = selBistateMode?.attributes?.options || [];
       const modeState = (selBistateMode?.state || '').trim();
-      
+
       // Helper to translate bistate mode options
       const translateBistateMode = (value) => {
-          const key = `component.quiet_solar.entity.select.on_off_mode.state.${value}`;
+          const key = `component.quiet_solar.entity.select.radiator_mode.state.${value}`;
           const translated = this._hass?.localize?.(key);
           // If translation not found or returns the key itself, fall back to the raw value
           return (translated && translated !== key) ? translated : value;
       };
-      
-      const modeOptionsHtml = modeOptions.map(o => 
-          `<option value="${o}" ${o === modeState ? 'selected' : ''}>${translateBistateMode(o)}</option>`
+
+      const modeOptionsHtml = modeOptions.map(o =>
+          `<option value="${_escapeHtml(o)}" ${o === modeState ? 'selected' : ''}>${_escapeHtml(translateBistateMode(o))}</option>`
       ).join('');
 
       // Parse override command from override state
@@ -377,15 +422,20 @@ class QsRadiatorCard extends HTMLElement {
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
+      // S15 — sanitise the title (a user-supplied entity / device name)
+      // before it lands in innerHTML.
+      // S16 — primary action `<div>`s get `role="button"` + `tabindex="0"`
+      // so keyboard-only users can tab to and activate them. The Enter/
+      // Space handlers are wired in the event-binding loops below.
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
-        <div class="card-title">${title}</div>
+        <div class="card-title">${_escapeHtml(title)}</div>
         <div class="top"></div>
 
         <div class="hero">
           <div class="ring">
-            ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
+            ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle device"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
             <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -449,13 +499,13 @@ class QsRadiatorCard extends HTMLElement {
                 ${isDefaultMode && !isOverridden && sDefaultOnFinishTime ? `
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div style="color: var(--secondary-text-color); font-weight:700; font-size: .75rem;">Change Finish Time</div>
-                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}">${formatTime(finishTimeStr)}</div>
+                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}" role="button" tabindex="0" aria-label="Change finish time">${formatTime(finishTimeStr)}</div>
                 </div>
                 ` : ''}
               </div>
             </div>
-            ${e.override_reset ? `<div id="override_btn" class="${overrideBtnClass}"><ha-icon icon="${overrideBtnIcon}"></ha-icon></div>` : ''}
-            ${swGreenOnly ? `<div id="green_btn" class="green-btn ${swGreenOnly.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:leaf"></ha-icon></div>` : ''}
+            ${e.override_reset ? `<div id="override_btn" class="${overrideBtnClass}" role="button" tabindex="0" aria-label="Reset override"><ha-icon icon="${overrideBtnIcon}"></ha-icon></div>` : ''}
+            ${swGreenOnly ? `<div id="green_btn" class="green-btn ${swGreenOnly.state === 'on' ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle solar-only mode"><ha-icon icon="mdi:leaf"></ha-icon></div>` : ''}
           </div>
         </div>
 
@@ -531,18 +581,26 @@ class QsRadiatorCard extends HTMLElement {
           modeSel?.addEventListener('change', async (ev) => {
               const option = ev.target.value;
               if (!option) return;
-              
+
               this._isProcessingModeChange = true;
-              
-              // Call the service and wait for it to complete
-              await this._select(e.bistate_mode, option);
-              
-              // Wait a bit for HA state to propagate, then allow re-render
-              setTimeout(() => {
-                  this._isProcessingModeChange = false;
-                  this._isInteractingMode = false;
-                  this._render();
-              }, 300);
+
+              // S17 — wrap the async service call so the interaction
+              // guards always clear, even if `_select` rejects. Without
+              // this the card would get stuck (no further rerender, no
+              // further mode-change accepted) on a single transient
+              // service-call failure.
+              try {
+                  await this._select(e.bistate_mode, option);
+              } catch (_) {
+                  // swallow — HA state will resync on the next push
+              } finally {
+                  // Wait a bit for HA state to propagate, then allow re-render
+                  setTimeout(() => {
+                      this._isProcessingModeChange = false;
+                      this._isInteractingMode = false;
+                      this._render();
+                  }, 300);
+              }
           });
           const modePill = modeSel?.closest('.pill');
           if (modePill && modeSel) {
@@ -559,6 +617,21 @@ class QsRadiatorCard extends HTMLElement {
       // DOM node is destroyed before the synthetic click fires, so the tap is lost. The
       // touchend handler fires immediately, calls preventDefault() to suppress the delayed
       // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
+
+      // S16 — keyboard activation helper: registers Enter/Space handlers
+      // on a `role="button" tabindex="0"` div so keyboard-only users can
+      // trigger the same action as click/touchend. Stops the default
+      // Space-scroll behaviour and the synthetic click that would
+      // double-fire otherwise.
+      const _registerKeyActivation = (el, action) => {
+          if (!el) return;
+          el.addEventListener('keydown', (ev) => {
+              if (ev.key === 'Enter' || ev.key === ' ') {
+                  ev.preventDefault();
+                  action();
+              }
+          });
+      };
 
       // Green-only toggle button
       if (swGreenOnly) {
@@ -581,6 +654,7 @@ class QsRadiatorCard extends HTMLElement {
               gbtn.style.pointerEvents = 'auto';
               gbtn.addEventListener('click', toggleGreen);
               gbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
+              _registerKeyActivation(gbtn, toggleGreen);
           }
       }
 
@@ -605,6 +679,7 @@ class QsRadiatorCard extends HTMLElement {
               pbtn.style.pointerEvents = 'auto';
               pbtn.addEventListener('click', togglePower);
               pbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
+              _registerKeyActivation(pbtn, togglePower);
           }
       }
 
@@ -629,6 +704,7 @@ class QsRadiatorCard extends HTMLElement {
               };
               obtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); obtnAction(); });
               obtn.addEventListener('touchend', (ev) => { ev.preventDefault(); obtnAction(); });
+              _registerKeyActivation(obtn, obtnAction);
           }
       }
 
@@ -681,6 +757,7 @@ class QsRadiatorCard extends HTMLElement {
               tbtn.style.pointerEvents = 'auto';
               tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); timeAction(); });
               tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); timeAction(); });
+              _registerKeyActivation(tbtn, timeAction);
           }
       }
 
@@ -773,21 +850,28 @@ class QsRadiatorCard extends HTMLElement {
                   const dragPct = this._targetDragPct;
                   const dragValue = this._targetDragValue;
 
-                  if (dragValue != null && e.default_on_duration) {
-                      await this._setNumber(e.default_on_duration, dragValue);
-                      this._localTargetPct = dragPct;
-                      this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
-                      this._pendingClearLocalTarget = setTimeout(() => {
-                          this._localTargetPct = null;
-                          this._pendingClearLocalTarget = null;
-                          this._render();
-                      }, 5000);
+                  // S17 — wrap the service call so the drag-release
+                  // guards always clear, even if `_setNumber` throws.
+                  try {
+                      if (dragValue != null && e.default_on_duration) {
+                          await this._setNumber(e.default_on_duration, dragValue);
+                          this._localTargetPct = dragPct;
+                          this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
+                          this._pendingClearLocalTarget = setTimeout(() => {
+                              this._localTargetPct = null;
+                              this._pendingClearLocalTarget = null;
+                              this._render();
+                          }, 5000);
+                      }
+                  } catch (_) {
+                      // swallow — HA state will resync on the next push
+                  } finally {
+                      this._targetDragPct = null;
+                      this._targetDragValue = null;
+                      this._isInteractingTarget = false;
+                      this._upInProgress = false;
+                      handle.style.cursor = 'grab';
                   }
-                  this._targetDragPct = null;
-                  this._targetDragValue = null;
-                  this._isInteractingTarget = false;
-                  this._upInProgress = false;
-                  handle.style.cursor = 'grab';
               };
 
               if (window.PointerEvent) {

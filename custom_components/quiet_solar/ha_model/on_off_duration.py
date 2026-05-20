@@ -1,8 +1,6 @@
 import logging
-from datetime import datetime
 
 from ..const import SENSOR_CONSTRAINT_SENSOR_ON_OFF, CONF_TYPE_NAME_QSOnOffDuration
-from ..home_model.commands import LoadCommand
 from .bistate_duration import QSBiStateDuration
 from .bistate_transport import SwitchTransport
 
@@ -29,6 +27,5 @@ class QSOnOffDuration(QSBiStateDuration):
         """return the translation key for the select"""
         return "on_off_mode"
 
-    # exception catched above execute_command
-    async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
-        return await self._transport.execute(self.hass, command, state, self._state_on, self._state_off)
+    # `execute_command_system` is inherited from `QSBiStateDuration` and
+    # delegates to `self._transport.execute(...)` (N2 review-fix).

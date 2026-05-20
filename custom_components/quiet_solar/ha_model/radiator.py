@@ -48,24 +48,43 @@ class QSRadiator(QSBiStateDuration):
     conf_type_name = CONF_TYPE_NAME_QSRadiator
 
     def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+        # N6 — normalise whitespace-only entity_ids so they're treated as
+        # absent (YAML imports occasionally yield `"   "`).
+        raw_climate = kwargs.get(CONF_CLIMATE)
+        raw_switch = kwargs.get(CONF_SWITCH)
+        climate_entity = raw_climate.strip() if isinstance(raw_climate, str) else raw_climate
+        switch_entity = raw_switch.strip() if isinstance(raw_switch, str) else raw_switch
 
-        climate_entity = kwargs.get(CONF_CLIMATE)
-        switch_entity = kwargs.get(CONF_SWITCH)
-
-        # Cross-field exactly-one validation (mirrored by config_flow's
-        # `errors={"base": "exactly_one_backing_required"}` for UI paths).
+        # M4 — use truthy checks consistently with the transport-picker
+        # below; `bool("")` is `False`, so an empty-string backing is
+        # treated as "not set". This keeps XOR and transport-selection
+        # in agreement.
         if bool(climate_entity) == bool(switch_entity):
             raise ServiceValidationError("Radiator requires exactly one of climate or switch backing")
 
+        # S2 — Build the transport BEFORE calling `super().__init__` so
+        # the base class can observe a fully-formed `_transport` during
+        # any future initialisation hook. The host-owned `_state_on/off`
+        # are re-pinned AFTER super() because the base ctor
+        # unconditionally seeds them to `"on"` / `"off"`.
         self._transport: BistateTransport
-        if climate_entity is not None:
-            hvac_on = kwargs.get(CONF_CLIMATE_HVAC_MODE_ON, "heat")
-            hvac_off = kwargs.get(CONF_CLIMATE_HVAC_MODE_OFF, "off")
+        if climate_entity:
+            # S9 — `kwargs.get(..., default)` only fires the default when
+            # the key is MISSING; a persisted `""` would otherwise slip
+            # through and crash `set_hvac_mode("")`. Use `or` to also
+            # fall back on empty/None.
+            hvac_on = kwargs.get(CONF_CLIMATE_HVAC_MODE_ON) or "heat"
+            hvac_off = kwargs.get(CONF_CLIMATE_HVAC_MODE_OFF) or "off"
             self._transport = ClimateTransport(climate_entity, hvac_on, hvac_off)
         else:
             self._transport = SwitchTransport(switch_entity)
 
+        super().__init__(**kwargs)
+
+        # Re-pin host-owned state AFTER `super().__init__` because the
+        # base constructor seeds `_state_on/off`, `_bistate_mode_*`, and
+        # `bistate_entity` to switch defaults — they must reflect the
+        # radiator's chosen transport instead.
         self._state_on = self._transport.default_state_on()
         self._state_off = self._transport.default_state_off()
         self._bistate_mode_on = self._state_on
@@ -79,6 +98,5 @@ class QSRadiator(QSBiStateDuration):
         """Return the translation key for the bistate-mode select."""
         return "radiator_mode"
 
-    # exception catched above execute_command
-    async def execute_command_system(self, time, command, state):
-        return await self._transport.execute(self.hass, command, state, self._state_on, self._state_off)
+    # `execute_command_system` is inherited from `QSBiStateDuration` and
+    # delegates to `self._transport.execute(...)` (N2 review-fix).

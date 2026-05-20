@@ -208,6 +208,7 @@ views:
               {% if e %}end_time: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_device_clean_and_reset") %}
               {% if e %}reset: {{ e.entity_id }}{% endif %}
+              {% if device.bistate_entity %}backing_entity: {{ device.bistate_entity }}{% endif %}
             {% elif device.device_type == "home" -%}
               {%- set ha_entity = device.ha_entities.get("home_mode") %}
               {%- if  ha_entity != None %}

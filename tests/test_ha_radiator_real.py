@@ -233,32 +233,98 @@ async def test_radiator_attaches_to_heat_pump_for_climate_backing(
 
 @pytest.mark.asyncio
 async def test_radiator_topology_pilot_wires_through_set_topology(hass: HomeAssistant):
-    """AC-10 end-to-end — `home._set_topology()` populates `devices_to_pilot` for a radiator.
+    """AC-10 end-to-end — `QSHome._set_topology()` populates `devices_to_pilot`.
 
-    Uses a stub home that mirrors the relevant slice of `QSHome` and runs
-    the data-driven pilot wiring identically to production code.
+    S11 review-fix — exercises the REAL `QSHome._set_topology()` method
+    against a real `QSRadiator` + `QSHeatPump`, rather than re-implementing
+    the loop locally on `MagicMock`s. A future regression in the
+    production method now actually fails the test.
     """
-    radiator = MagicMock()
+    # Build a stub-but-real QSHome by bypassing the heavy `__init__`. We
+    # populate the in-memory lists `_set_topology` reads from and call
+    # the method directly, mirroring how `add_device` / `remove_device`
+    # would orchestrate it in production.
+    from custom_components.quiet_solar.ha_model.heat_pump import QSHeatPump
+    from custom_components.quiet_solar.ha_model.home import QSHome
+    from custom_components.quiet_solar.ha_model.radiator import QSRadiator
+
+    home = QSHome.__new__(QSHome)
+    home._all_dynamic_groups = []
+    home._all_loads = []
+    home._all_piloted_devices = []
+    home._name_to_groups = {}
+    home._name_to_piloted_devices = {}
+    home._heat_pumps = []
+    home._cars = []
+    home._chargers = []
+    home._persons = []
+    home._disabled_devices = []
+    home._all_devices = []
+    # `_set_topology` re-parents each load into `home._childrens` when
+    # the load has no `dynamic_group_name`, so the attribute must exist.
+    home._childrens = []
+    home.dynamic_group_name = None
+
+    heat_pump = QSHeatPump.__new__(QSHeatPump)
+    heat_pump.name = "Main Heat Pump"
+    heat_pump.dynamic_group_name = None
+    heat_pump.clients = []
+    heat_pump.father_device = None
+
+    radiator = QSRadiator.__new__(QSRadiator)
     radiator.name = "Bedroom Radiator"
     radiator.piloted_device_name = "Main Heat Pump"
+    radiator.dynamic_group_name = None
     radiator.devices_to_pilot = []
+    radiator.father_device = None
 
-    heat_pump = MagicMock()
-    heat_pump.name = "Main Heat Pump"
-    heat_pump.clients = []
+    home._all_piloted_devices = [heat_pump]
+    home._all_loads = [radiator]
 
-    # Run the same loop as `home._set_topology()` (home.py:1876-1882).
-    name_to_piloted = {heat_pump.name: heat_pump}
-    for load in [radiator]:
-        load.devices_to_pilot = []
-        if load.piloted_device_name is not None:
-            piloted = name_to_piloted.get(load.piloted_device_name)
-            if piloted is not None:
-                load.devices_to_pilot.append(piloted)
-                piloted.clients.append(load)
+    home._set_topology()
 
     assert radiator.devices_to_pilot == [heat_pump]
     assert heat_pump.clients == [radiator]
+
+
+@pytest.mark.asyncio
+async def test_radiator_pilot_end_to_end_service_call_sequence(
+    hass: HomeAssistant, radiator_config_entry, radiator_home, recorded_service_calls
+):
+    """N9 — AC-10 third bullet: toggling a piloted radiator emits the expected service call.
+
+    Verifies the pilot wiring is observable on the load: the radiator's
+    `devices_to_pilot` list contains the heat-pump instance after the
+    topology pass, and a subsequent `execute_command_system` call emits
+    the underlying HA service call (the pilot chain itself is exercised
+    separately in `test_piloted_device.py`).
+    """
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Piloted End-to-End Radiator",
+            CONF_SWITCH: "switch.pilot_e2e",
+            CONF_DEVICE_TO_PILOT_NAME: "Main HP",
+        },
+    )
+
+    # Simulate the pilot topology hand-off without running the full
+    # `QSHome.add_device` / `_set_topology` (covered separately above).
+    fake_heat_pump = MagicMock()
+    fake_heat_pump.name = "Main HP"
+    device.devices_to_pilot = [fake_heat_pump]
+
+    time = datetime.datetime.now(pytz.UTC)
+    result = await device.execute_command_system(time, CMD_ON, state=None)
+
+    assert result is False
+    switch_calls = [c for c in recorded_service_calls if c[0] == Platform.SWITCH and c[1] == SERVICE_TURN_ON]
+    assert len(switch_calls) == 1
+    # The pilot relationship survives the command emission — the
+    # heat-pump instance is still in `devices_to_pilot`.
+    assert fake_heat_pump in device.devices_to_pilot
 
 
 # =============================================================================

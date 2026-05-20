@@ -144,7 +144,7 @@ to grep the entire tree to figure out what an `ack` is.
   `ui/*.yaml.j2`; rendered against the live `QSHome` to produce
   Lovelace YAML on first install.
 - **"Quiet Solar" dashboard** — the custom-cards variant
-  (`quiet-solar` URL), uses the four bundled JS cards.
+  (`quiet-solar` URL), uses the five bundled JS cards.
 - **"Quiet Std" dashboard** — the standard-cards variant
   (`quiet-solar-standard` URL), uses only built-in HA cards.
 - **JS Lovelace card** — a custom HA frontend card. Quiet-solar

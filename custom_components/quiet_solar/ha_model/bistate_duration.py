@@ -3,6 +3,7 @@ from abc import abstractmethod
 from collections import namedtuple
 from datetime import datetime, timedelta
 from datetime import time as dt_time
+from typing import TYPE_CHECKING
 
 import pytz
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
@@ -17,6 +18,9 @@ from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import CMD_IDLE, LoadCommand
 from ..home_model.constraints import DATETIME_MAX_UTC, TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
+
+if TYPE_CHECKING:
+    from .bistate_transport import BistateTransport
 
 bistate_modes = [
     "bistate_mode_auto",
@@ -37,6 +41,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class QSBiStateDuration(HADeviceMixin, AbstractLoad):
+    # Subclasses populate `_transport` with a `BistateTransport` strategy
+    # — either in `__init__` (canonical) or by inheriting the default
+    # set below in `_init_default_transport`. The class-level
+    # declaration is here so the base `execute_command_system` can
+    # delegate without each subclass redeclaring the attribute.
+    _transport: BistateTransport | None
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.bistate_mode = "bistate_mode_auto"
@@ -277,9 +288,20 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         return await self.execute_command_system(time, command, override_state)
 
-    @abstractmethod
     async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
-        """execute the command on the system"""
+        """Delegate the service-call to `self._transport`.
+
+        N2 review-fix — `QSOnOffDuration`, `QSClimateDuration`, and
+        `QSRadiator` all forwarded to `self._transport.execute(...)`.
+        Hoisting the delegation here removes three near-identical
+        overrides and keeps the per-backing logic encapsulated in the
+        transport strategy. Subclasses may still override if they need
+        bespoke pre/post hooks (none do today).
+        """
+        del time  # not yet used by the transport, kept for the public contract
+        if self._transport is None:  # pragma: no cover — defensive
+            raise RuntimeError(f"{type(self).__name__}: _transport not initialised")
+        return await self._transport.execute(self.hass, command, state, self._state_on, self._state_off)
 
     async def _build_mode_constraint_items(
         self, time: datetime, bistate_mode: str, do_push_constraint_after: datetime | None

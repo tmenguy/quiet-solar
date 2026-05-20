@@ -201,9 +201,10 @@ class TestDashboardTemplateRendering:
         tpl = Template(template_content, hass)
         rendered = tpl.async_render(variables={"home": home})
 
-        # The radiators section must be present (AC-8) and must use the
-        # dedicated card type for the two radiator devices.
-        assert "custom:qs-radiator-card" in rendered
+        # N14 — the fixture installs TWO radiators (switch + climate);
+        # both must dispatch to the dedicated card. `>= 2` rather than
+        # `>= 1` so a regression that drops one of them is caught.
+        assert rendered.count("custom:qs-radiator-card") >= 2
         # Sanity: the section name surfaces in the rendered YAML.
         assert "radiators" in rendered
 
@@ -219,6 +220,10 @@ class TestDashboardTemplateRendering:
         # Class identifier must be renamed (no stale `QsOnOffDurationCard`).
         assert "QsRadiatorCard" in content
         assert "QsOnOffDurationCard" not in content
+        # N10 — `customCards` registration uses the user-facing card name.
+        assert "'QS Radiator Card'" in content
+        # Stub config also reads the renamed display name.
+        assert "QS Radiator" in content
 
     @pytest.mark.asyncio
     async def test_solar_entities_appear_in_rendered_output(self, hass, full_dashboard_home):
@@ -431,6 +436,21 @@ class TestDashboardSectionMapping:
         assert section in section_names, (
             f"Section '{section}' for device type '{device_type}' not in DASHBOARD_DEFAULT_SECTIONS"
         )
+
+    def test_dashboard_default_sections_preserve_existing_ordering(self):
+        """M2 regression — `DASHBOARD_DEFAULT_SECTIONS` must keep the legacy 1..5 positions.
+
+        Any user who stored a section assignment via the old labels
+        (e.g. `"#3 - pools"`, `"#5 - settings"`) keeps pointing at the
+        right section after upgrade. New sections must always be
+        appended after the legacy ones.
+        """
+        names = [s[0] for s in DASHBOARD_DEFAULT_SECTIONS]
+        # The first five positions are FROZEN — do not reorder/insert.
+        assert names[:5] == ["cars", "climates", "pools", "others", "settings"]
+        # New `radiators` section MUST be appended (not inserted).
+        assert "radiators" in names
+        assert names.index("radiators") >= 5
 
     def test_dashboard_default_section_uses_device_type_not_builtin_type(self):
         """Regression: load.py must use device_type variable, not Python builtin type."""

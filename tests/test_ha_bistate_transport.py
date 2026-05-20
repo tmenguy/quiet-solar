@@ -129,6 +129,52 @@ async def test_switch_transport_execute_uses_override_state():
 
 
 @pytest.mark.asyncio
+async def test_switch_transport_execute_override_only_off_when_state_matches_off():
+    """M1 regression — legacy semantics: only TURN_OFF when override matches state_off.
+
+    Pre-refactor `execute_command_system` (legacy) did:
+        if state == expected_state_from_command(CMD_IDLE):  # i.e. state_off
+            action = SERVICE_TURN_OFF
+        else:
+            action = SERVICE_TURN_ON
+
+    The transport must mirror this. An override state that is **neither**
+    exactly `state_on` nor `state_off` (e.g. a custom HA helper state)
+    must default to TURN_ON, not silently flip to TURN_OFF.
+    """
+    transport = SwitchTransport("switch.kitchen")
+    hass = MagicMock()
+    hass.services.async_call = AsyncMock()
+
+    # Override state is neither "on" nor "off" — legacy says TURN_ON.
+    result = await transport.execute(hass, CMD_IDLE, "custom_state", "on", "off")
+
+    assert result is False
+    hass.services.async_call.assert_awaited_once_with(
+        domain=Platform.SWITCH,
+        service=SERVICE_TURN_ON,
+        target={"entity_id": "switch.kitchen"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_switch_transport_execute_override_off_calls_turn_off():
+    """M1 regression — override_state matching state_off triggers TURN_OFF."""
+    transport = SwitchTransport("switch.kitchen")
+    hass = MagicMock()
+    hass.services.async_call = AsyncMock()
+
+    result = await transport.execute(hass, CMD_ON, "off", "on", "off")
+
+    assert result is False
+    hass.services.async_call.assert_awaited_once_with(
+        domain=Platform.SWITCH,
+        service=SERVICE_TURN_OFF,
+        target={"entity_id": "switch.kitchen"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_switch_transport_execute_invalid_command_raises():
     """An unrecognised command (neither on, off, nor idle) raises `ValueError`."""
     transport = SwitchTransport("switch.kitchen")
@@ -268,7 +314,7 @@ def test_get_hvac_modes_uses_entity_registry():
 
 
 def test_get_hvac_modes_defaults_when_capabilities_missing():
-    """When the entity has no `hvac_modes` capability, defaults to `auto`/`off`."""
+    """N11 — when the entity has no `hvac_modes` capability, defaults to BOTH `auto` AND `off`."""
     hass = MagicMock()
     entry = MagicMock()
     entry.capabilities = {}
@@ -281,7 +327,62 @@ def test_get_hvac_modes_defaults_when_capabilities_missing():
     ):
         modes = get_hvac_modes(hass, "climate.living_room")
 
-    assert "auto" in modes or "off" in modes
+    # N11 — pin the full fallback set rather than the loose "either" check.
+    assert {"auto", "off"}.issubset(set(modes))
+
+
+def test_get_hvac_modes_returns_defaults_when_entry_is_none():
+    """M6 — `registry.async_get` returning `None` (stale entity) falls back cleanly."""
+    hass = MagicMock()
+    registry = MagicMock()
+    registry.async_get.return_value = None
+
+    with patch(
+        "custom_components.quiet_solar.ha_model.bistate_transport.er.async_get",
+        return_value=registry,
+    ):
+        modes = get_hvac_modes(hass, "climate.missing")
+
+    assert {"auto", "off"}.issubset(set(modes))
+
+
+def test_get_hvac_modes_returns_defaults_when_capabilities_is_none():
+    """M6 — `entry.capabilities` being `None` (some climates) falls back cleanly."""
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.capabilities = None
+    registry = MagicMock()
+    registry.async_get.return_value = entry
+
+    with patch(
+        "custom_components.quiet_solar.ha_model.bistate_transport.er.async_get",
+        return_value=registry,
+    ):
+        modes = get_hvac_modes(hass, "climate.no_capabilities")
+
+    assert {"auto", "off"}.issubset(set(modes))
+
+
+@pytest.mark.asyncio
+async def test_switch_transport_execute_none_command_raises_value_error():
+    """N5 — `command=None` raises `ValueError`, not `AttributeError`."""
+    transport = SwitchTransport("switch.kitchen")
+    hass = MagicMock()
+    hass.services.async_call = AsyncMock()
+
+    with pytest.raises(ValueError, match="Invalid command"):
+        await transport.execute(hass, None, None, "on", "off")
+
+
+@pytest.mark.asyncio
+async def test_climate_transport_execute_none_command_raises_value_error():
+    """N5 — same for `ClimateTransport.execute(None, None, …)`."""
+    transport = ClimateTransport("climate.living_room", "heat", "off")
+    hass = MagicMock()
+    hass.services.async_call = AsyncMock()
+
+    with pytest.raises(ValueError, match="Invalid command"):
+        await transport.execute(hass, None, None, "heat", "off")
 
 
 # =============================================================================

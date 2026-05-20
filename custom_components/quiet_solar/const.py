@@ -44,10 +44,14 @@ DASHBOARD_NUM_SECTION_MAX = 8
 DASHBOARD_DEFAULT_SECTIONS = [
     ("cars", "mdi:car"),
     ("climates", "mdi:home-thermometer"),
-    ("radiators", "mdi:radiator"),
     ("pools", "mdi:pool"),
     ("others", "mdi:home"),
     ("settings", "mdi:cog-outline"),
+    # `radiators` is appended LAST to preserve the existing 1..5 section
+    # positions for upgrades — any user who stored "#3 - pools" or
+    # "#5 - settings" keeps pointing at the same section after upgrade.
+    # Adding new sections must always go at the end of this list.
+    ("radiators", "mdi:radiator"),
 ]
 DASHBOARD_DEFAULT_SECTIONS_DICT = {v[0]: v[1] for v in DASHBOARD_DEFAULT_SECTIONS}
 DASHBOARD_NO_SECTION = "Not in dashboard"
