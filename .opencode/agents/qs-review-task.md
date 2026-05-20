@@ -118,25 +118,62 @@ justification." Fetch the PR's changed paths via
 If there are no must-fix or should-fix findings, build the launcher
 payload for `finish-task`:
 
+**Before running** — substitute `{{worktree}}`, `{{issue}}`, and
+`{{title}}` with the values you captured earlier; the `--next-cmd`
+value is fixed (`finish-task`):
+
 ```bash
 python scripts/qs/next_step.py \
     --next-cmd "finish-task" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --harness opencode
 ```
 
-Parse the JSON; capture `new_context`. Then present:
+Parse the JSON output of ``next_step.py``.
 
-```text
-✅ Adversarial review complete. No blocking findings.
+**If the `next_step.py` JSON contains an `error` key**, STOP and print
+the raw JSON to the user. Do not proceed to run `new_context`.
 
-Next phase: finish-task.
+Otherwise capture the ``new_context`` string.
 
-Preferred (activate `qs-finish-task` from the OpenCode agent picker,
-or paste the spawn-session one-liner below into a fresh terminal):
-  {{new_context}}
-```
+**Run `new_context` via the Bash tool**. The string is a
+``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
+<wd> --title ... --prompt ...`` invocation — already inside the
+allow-listed ``python scripts/qs/*`` pattern. Do NOT extract only the
+prompt and send it to the current session. Do NOT strip
+``--agent qs-<phase>``. The ``--agent`` flag is what binds the
+next-phase orchestrator to the new session via OpenCode's HTTP API
+``POST /session/<id>/prompt_async`` body — strip it and the prompt
+lands on the default agent, breaking the pipeline silently.
+
+**If the Bash tool returns an error before producing any JSON output**
+(e.g., permission denied, missing interpreter), STOP and print the
+Bash tool's error message verbatim. Do not attempt to parse JSON.
+
+Parse the stdout of that command as JSON. The success contract is
+**binary**:
+
+- ``status == "session_created"`` AND ``agent`` equals `qs-` followed
+  by the phase name passed to `--next-cmd` (here: `qs-finish-task`
+  since `--next-cmd "finish-task"` was passed) → success; report to
+  the user:
+
+  ```text
+  [OK] Adversarial review complete. No blocking findings.
+  [OK] Next phase session created: qs-finish-task
+       (visible in the OpenCode session list on the left)
+  ```
+
+- **Anything else** (any other ``status`` value, missing or mismatched
+  ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
+  the raw JSON output verbatim to the user. Do NOT claim the next
+  phase started. The user inspects the JSON and acts on the specific
+  failure mode (``agent_file_missing``, ``agent_file_unreadable``,
+  ``agent_file_empty``, ``worktree_invalid``, ``fallback_cli``,
+  ``fallback_unavailable``, ``session_orphaned`` — each documented in
+  ``scripts/qs/spawn_session.py``).
 
 Stop here.
 
@@ -224,6 +261,11 @@ implementation session (review-task → `{{next_implement}}` is the
 most common loop; pasting a prompt into the existing terminal is
 faster than opening a new one):
 
+**Before running** — substitute `{{next_implement}}` with the chosen
+implement variant (one of: `implement-task`, `implement-setup-task`),
+and `{{worktree}}` / `{{issue}}` / `{{title}}` / `{{fix_plan_path}}` /
+`{{pr_number}}` with their captured values:
+
 ```bash
 python scripts/qs/next_step.py \
     --next-cmd "{{next_implement}}" \
@@ -231,31 +273,72 @@ python scripts/qs/next_step.py \
     --issue {{issue}} \
     --title "{{title}}" \
     --fix-plan-path "{{fix_plan_path}}" \
-    --pr-number {{pr_number}}
+    --pr-number {{pr_number}} \
+    --harness opencode
 ```
 
-Parse the JSON; capture `new_context` and `existing_session_prompt`.
-Then present two blocks (substitute `{{next_implement}}`
-consistently — same value the launcher payload was built with):
+Parse the JSON output of ``next_step.py``.
 
-```text
-✅ Fix plan written: {{fix_plan_path}}
-✅ Committed and pushed.
+**If the `next_step.py` JSON contains an `error` key**, STOP and print
+the raw JSON to the user. Do not proceed to run `new_context`.
 
-Next phase: {{next_implement}}.
+Otherwise capture the ``new_context`` string and the
+``existing_session_prompt`` value. The ``existing_session_prompt`` is
+a paste-into-already-running-session prompt — it is NOT a
+session-spawn command. Do NOT execute it. **If
+`existing_session_prompt` is missing or null, omit the "Already
+running an implementation session?" block from the user report;
+only emit it when the field is a non-empty string** (review-fix #01
+S9).
 
-Preferred (activate `qs-{{next_implement}}` from the OpenCode agent
-picker, or paste the spawn-session one-liner below into a fresh
-terminal):
-  {{new_context}}
+**Run `new_context` via the Bash tool**. The string is a
+``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
+<wd> --title ... --prompt ...`` invocation — already inside the
+allow-listed ``python scripts/qs/*`` pattern. Do NOT extract only the
+prompt and send it to the current session. Do NOT strip
+``--agent qs-<phase>``. The ``--agent`` flag is what binds the
+next-phase orchestrator to the new session via OpenCode's HTTP API
+``POST /session/<id>/prompt_async`` body — strip it and the prompt
+lands on the default agent, breaking the pipeline silently.
 
-Already running an implementation session?
-Paste this prompt into it:
-  {{existing_session_prompt}}
+**If the Bash tool returns an error before producing any JSON output**
+(e.g., permission denied, missing interpreter), STOP and print the
+Bash tool's error message verbatim. Do not attempt to parse JSON.
 
-Then re-activate `qs-review-task` (or open a fresh session bound to
-it) to verify.
-```
+Parse the stdout of that command as JSON. The success contract is
+**binary**:
+
+- ``status == "session_created"`` AND ``agent`` equals `qs-` followed
+  by the phase name passed to `--next-cmd` (here: `qs-{{next_implement}}`
+  after you substituted the chosen variant) → success; report to the
+  user (substitute `{{next_implement}}` consistently — same value
+  the launcher payload was built with):
+
+  ```text
+  [OK] Fix plan written: {{fix_plan_path}}
+  [OK] Committed and pushed.
+  [OK] Next phase session created: qs-{{next_implement}}
+       (visible in the OpenCode session list on the left)
+
+  Already running an implementation session?
+  Paste this prompt into it:
+    {{existing_session_prompt}}
+
+  Then re-activate `qs-review-task` (or open a fresh session bound to
+  it) to verify.
+  ```
+
+  (Omit the "Already running an implementation session?" block when
+  `existing_session_prompt` is missing or null.)
+
+- **Anything else** (any other ``status`` value, missing or mismatched
+  ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
+  the raw JSON output verbatim to the user. Do NOT claim the next
+  phase started. The user inspects the JSON and acts on the specific
+  failure mode (``agent_file_missing``, ``agent_file_unreadable``,
+  ``agent_file_empty``, ``worktree_invalid``, ``fallback_cli``,
+  ``fallback_unavailable``, ``session_orphaned`` — each documented in
+  ``scripts/qs/spawn_session.py``).
 
 ### 7. Re-review loop
 

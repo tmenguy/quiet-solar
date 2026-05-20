@@ -154,26 +154,61 @@ Inspect the file paths your task breakdown will touch:
 Build the launcher payload for the next phase so the user has a copy/paste
 command to open a fresh session bound to the next agent:
 
+**Before running** — substitute `{{NEXT_PHASE}}` with the next phase
+name you determined above (one of: `implement-task`,
+`implement-setup-task`). Run the bash block with the resolved value:
+
 ```bash
 python scripts/qs/next_step.py \
     --next-cmd "{{NEXT_PHASE}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --harness opencode
 ```
 
-Parse the JSON; capture `new_context`. Then print:
+Parse the JSON output of ``next_step.py``.
 
-```text
-✅ Story written: docs/stories/QS-{{issue}}.story.md
-✅ Committed and pushed to {{branch}}.
+**If the `next_step.py` JSON contains an `error` key**, STOP and print
+the raw JSON to the user. Do not proceed to run `new_context`.
 
-Next phase: {{NEXT_PHASE}}.
+Otherwise capture the ``new_context`` string.
 
-Preferred (activate `qs-{{NEXT_PHASE}}` from the OpenCode agent picker,
-or paste the spawn-session one-liner below into a fresh terminal):
-  {{new_context}}
-```
+**Run `new_context` via the Bash tool**. The string is a
+``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
+<wd> --title ... --prompt ...`` invocation — already inside the
+allow-listed ``python scripts/qs/*`` pattern. Do NOT extract only the
+prompt and send it to the current session. Do NOT strip
+``--agent qs-<phase>``. The ``--agent`` flag is what binds the
+next-phase orchestrator to the new session via OpenCode's HTTP API
+``POST /session/<id>/prompt_async`` body — strip it and the prompt
+lands on the default agent, breaking the pipeline silently.
+
+**If the Bash tool returns an error before producing any JSON output**
+(e.g., permission denied, missing interpreter), STOP and print the
+Bash tool's error message verbatim. Do not attempt to parse JSON.
+
+Parse the stdout of that command as JSON. The success contract is
+**binary**:
+
+- ``status == "session_created"`` AND ``agent`` equals `qs-` followed
+  by the phase name passed to `--next-cmd` (e.g., `qs-implement-task`
+  when `--next-cmd "implement-task"` was passed) → success; report
+  to the user:
+
+  ```text
+  [OK] Next phase session created: qs-<phase>
+       (visible in the OpenCode session list on the left)
+  ```
+
+- **Anything else** (any other ``status`` value, missing or mismatched
+  ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
+  the raw JSON output verbatim to the user. Do NOT claim the next
+  phase started. The user inspects the JSON and acts on the specific
+  failure mode (``agent_file_missing``, ``agent_file_unreadable``,
+  ``agent_file_empty``, ``worktree_invalid``, ``fallback_cli``,
+  ``fallback_unavailable``, ``session_orphaned`` — each documented in
+  ``scripts/qs/spawn_session.py``).
 
 ## Hard rules
 

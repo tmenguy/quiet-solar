@@ -91,7 +91,8 @@ python scripts/qs/next_step.py \
     --next-cmd "finish-task" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --harness claude-code
 ```
 
 Parse the JSON; capture `new_context`. Then present both blocks:
@@ -202,7 +203,8 @@ python scripts/qs/next_step.py \
     --issue {{issue}} \
     --title "{{title}}" \
     --fix-plan-path "{{fix_plan_path}}" \
-    --pr-number {{pr_number}}
+    --pr-number {{pr_number}} \
+    --harness claude-code
 ```
 
 Parse the JSON; capture `new_context` and `existing_session_prompt`.

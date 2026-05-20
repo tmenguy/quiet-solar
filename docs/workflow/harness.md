@@ -61,11 +61,16 @@ no filesystem scan, so this works from any CWD.
   `opencode <worktree> --agent <name>` invocation instead, because
   the new worktree is a different OpenCode workspace. Falls back to
   the CLI form when the OpenCode server is unreachable
-  (`shutil.which('opencode')` probe required). **Known limitation**:
-  requires static `.opencode/agents/qs-<phase>.md` files (mirror of
-  `.claude/agents/`); without them, the API call succeeds but the
-  session lands on the default OpenCode agent. Mirroring these files
-  is a follow-up task; this PR only ships the launcher.
+  (`shutil.which('opencode')` probe required). **Closed limitation**
+  (QS-177 AC #12, closed by QS-190 — best-effort):
+  spawn_session.py performs a pre-flight check on
+  `<work_dir>/.opencode/agents/<agent>.md` (existence + readability +
+  non-empty) AND on the worktree directory itself before the HTTP API
+  call; missing / unreadable / empty agent files and an invalid
+  worktree produce clean `agent_file_missing` / `agent_file_unreadable` /
+  `agent_file_empty` / `worktree_invalid` exit shapes instead of
+  silently landing on the default agent. A TOCTOU window remains
+  between the pre-flight and the HTTP request.
 - **`launchers/codex.py`** — stub.
 
 All launchers return a dict with at minimum:

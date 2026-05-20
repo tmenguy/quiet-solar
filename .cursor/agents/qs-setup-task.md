@@ -51,7 +51,7 @@ python scripts/qs/create_issue.py --title "{{title}}" --body "{{body}}"
 ### 2. Create branch and worktree + emit launcher
 
 ```bash
-python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/qs-create-plan"
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/qs-create-plan" --harness cursor
 ```
 
 This auto-detects the Cursor harness (`CURSOR_TRACE_ID` env var) and

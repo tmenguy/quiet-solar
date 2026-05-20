@@ -284,8 +284,14 @@ def test_existing_session_prompt_emitted_when_fix_plan_and_pr_provided(tmp_path:
     assert "#179" in prompt
 
 
-def test_existing_session_prompt_omitted_when_flags_missing(tmp_path: Path) -> None:
-    """Neither flag provided → payload has NO ``existing_session_prompt`` key."""
+def test_existing_session_prompt_null_when_flags_missing(tmp_path: Path) -> None:
+    """Neither flag provided → payload carries ``existing_session_prompt: null``.
+
+    Review fix #01 S9: the key is always present so the consuming
+    agent prose has a single shape to check (``null`` vs.
+    non-empty string) instead of having to disambiguate ``key
+    missing`` from ``key present but null``.
+    """
     result = _run(
         [
             "--next-cmd", "implement-task",
@@ -298,11 +304,12 @@ def test_existing_session_prompt_omitted_when_flags_missing(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert "existing_session_prompt" not in payload
+    assert "existing_session_prompt" in payload
+    assert payload["existing_session_prompt"] is None
 
 
-def test_existing_session_prompt_omitted_when_only_fix_plan_provided(tmp_path: Path) -> None:
-    """``--fix-plan-path`` alone (no PR) → key omitted (back-compat preservation)."""
+def test_existing_session_prompt_null_when_only_fix_plan_provided(tmp_path: Path) -> None:
+    """``--fix-plan-path`` alone (no PR) → key present with null value (review fix #01 S9)."""
     result = _run(
         [
             "--next-cmd", "implement-task",
@@ -316,11 +323,12 @@ def test_existing_session_prompt_omitted_when_only_fix_plan_provided(tmp_path: P
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert "existing_session_prompt" not in payload
+    assert "existing_session_prompt" in payload
+    assert payload["existing_session_prompt"] is None
 
 
-def test_existing_session_prompt_omitted_when_only_pr_provided(tmp_path: Path) -> None:
-    """``--pr-number`` alone (no fix-plan path) → key omitted (back-compat preservation)."""
+def test_existing_session_prompt_null_when_only_pr_provided(tmp_path: Path) -> None:
+    """``--pr-number`` alone (no fix-plan path) → key present with null value (review fix #01 S9)."""
     result = _run(
         [
             "--next-cmd", "implement-task",
@@ -334,7 +342,8 @@ def test_existing_session_prompt_omitted_when_only_pr_provided(tmp_path: Path) -
     )
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert "existing_session_prompt" not in payload
+    assert "existing_session_prompt" in payload
+    assert payload["existing_session_prompt"] is None
 
 
 # --------------------------------------------------------------------------- #

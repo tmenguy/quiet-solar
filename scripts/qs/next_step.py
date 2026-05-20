@@ -75,7 +75,9 @@ from __future__ import annotations
 import argparse
 import sys
 
+from harness import canonicalize as canonicalize_harness  # type: ignore[import-not-found]
 from harness import detect as detect_harness
+from harness import harness_choices
 from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
 from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
@@ -121,15 +123,13 @@ def main() -> None:
     parser.add_argument(
         "--harness",
         default=None,
-        # Use ``LAUNCHERS`` (this module's dispatch table) rather than
-        # ``VALID_HARNESSES`` (harness.py's enum) as the choices source.
-        # The two sets are identical today but ``LAUNCHERS`` is the
-        # actual source of truth for what this script can dispatch — if
-        # someone ever adds a harness to ``VALID_HARNESSES`` without a
-        # corresponding launcher, argparse rejects the bad value cleanly
-        # instead of letting it KeyError inside main(). Review-fix #04
-        # NTH7.
-        choices=list(LAUNCHERS),
+        # ``harness_choices()`` returns the canonical names PLUS the
+        # legacy aliases (review fix #01 N7 + N8): the canonical names
+        # match ``LAUNCHERS`` (this module's dispatch table), and the
+        # aliases let a user typing ``--harness claude`` pass argparse
+        # before ``canonicalize`` collapses it to ``claude-code`` for
+        # dispatch.
+        choices=harness_choices(),
         help="Override the detected harness.",
     )
     # Optional flags for the review-task → implement-task common loop.
@@ -193,7 +193,11 @@ def main() -> None:
     if args.pr_number is not None and args.pr_number <= 0:
         parser.error("--pr-number must be a positive integer")
 
-    harness = args.harness or detect_harness()
+    # Canonicalize legacy aliases (review fix #01 N8) before dispatch
+    # so the ``LAUNCHERS[harness]`` lookup is keyed on the canonical
+    # name — even if the user typed an alias accepted by
+    # ``harness_choices()``.
+    harness = canonicalize_harness(args.harness) if args.harness else detect_harness()
     launcher = LAUNCHERS[harness]
     # Delegate validation to the launcher: claude/cursor enforce the
     # phase mapping inside ``build_payload``; codex/opencode accept any
@@ -225,6 +229,14 @@ def main() -> None:
         })
         sys.exit(1)
     payload["harness"] = harness
+    # Review fix #01 S9: always emit ``existing_session_prompt`` so the
+    # consuming agent prose has a single shape to check
+    # (``null`` vs. non-empty string) instead of distinguishing
+    # ``key missing`` from ``key present but null``. The launchers
+    # only add the key when both ``--fix-plan-path`` and ``--pr-number``
+    # are provided; ``setdefault`` fills the gap without overriding a
+    # legitimate launcher-emitted value.
+    payload.setdefault("existing_session_prompt", None)
     output_json(payload)
     sys.exit(0)
 

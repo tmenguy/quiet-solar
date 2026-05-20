@@ -151,27 +151,64 @@ workflow — no user confirmation needed for any of these three.
 Build the launcher payload for the review phase so the user has a copy/paste
 command to open a fresh session bound to `qs-review-task`:
 
+**Before running** — substitute `{{worktree}}`, `{{issue}}`, and
+`{{title}}` with the values you captured earlier; the `--next-cmd`
+value is fixed (`review-task`):
+
 ```bash
 python scripts/qs/next_step.py \
     --next-cmd "review-task" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --harness opencode
 ```
 
-Parse the JSON; capture `new_context`. Then print:
+Parse the JSON output of ``next_step.py``.
 
-```text
-✅ Implementation complete — quality gate passed.
-✅ Committed and pushed to {{branch}}.
-✅ PR #{{pr_number}} opened: {{pr_url}}
+**If the `next_step.py` JSON contains an `error` key**, STOP and print
+the raw JSON to the user. Do not proceed to run `new_context`.
 
-Next phase: review-task.
+Otherwise capture the ``new_context`` string.
 
-Preferred (activate `qs-review-task` from the OpenCode agent picker,
-or paste the spawn-session one-liner below into a fresh terminal):
-  {{new_context}}
-```
+**Run `new_context` via the Bash tool**. The string is a
+``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
+<wd> --title ... --prompt ...`` invocation — already inside the
+allow-listed ``python scripts/qs/*`` pattern. Do NOT extract only the
+prompt and send it to the current session. Do NOT strip
+``--agent qs-<phase>``. The ``--agent`` flag is what binds the
+next-phase orchestrator to the new session via OpenCode's HTTP API
+``POST /session/<id>/prompt_async`` body — strip it and the prompt
+lands on the default agent, breaking the pipeline silently.
+
+**If the Bash tool returns an error before producing any JSON output**
+(e.g., permission denied, missing interpreter), STOP and print the
+Bash tool's error message verbatim. Do not attempt to parse JSON.
+
+Parse the stdout of that command as JSON. The success contract is
+**binary**:
+
+- ``status == "session_created"`` AND ``agent`` equals `qs-` followed
+  by the phase name passed to `--next-cmd` (here: `qs-review-task`
+  since `--next-cmd "review-task"` was passed) → success; report to
+  the user:
+
+  ```text
+  [OK] Implementation complete — quality gate passed.
+  [OK] Committed and pushed to {{branch}}.
+  [OK] PR #{{pr_number}} opened: {{pr_url}}
+  [OK] Next phase session created: qs-review-task
+       (visible in the OpenCode session list on the left)
+  ```
+
+- **Anything else** (any other ``status`` value, missing or mismatched
+  ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
+  the raw JSON output verbatim to the user. Do NOT claim the next
+  phase started. The user inspects the JSON and acts on the specific
+  failure mode (``agent_file_missing``, ``agent_file_unreadable``,
+  ``agent_file_empty``, ``worktree_invalid``, ``fallback_cli``,
+  ``fallback_unavailable``, ``session_orphaned`` — each documented in
+  ``scripts/qs/spawn_session.py``).
 
 ## Hard rules
 
