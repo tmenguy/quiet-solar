@@ -1063,3 +1063,143 @@ def test_nonexistent_repo_root_exits_nonzero(
     assert exit_code != 0
     err = capsys.readouterr().err
     assert "repo-root" in err.lower() or str(missing) in err
+
+
+# ---------------------------------------------------------------------------
+# Cross-harness agent sync tests (QS-193 AC-3 / T6)
+
+
+def _write_agent(
+    repo: Path,
+    harness: str,
+    name: str,
+    *,
+    frontmatter: str = "",
+    body: str = "# Agent body\n\nShared content.\n",
+) -> Path:
+    """Write an agent file under ``.<harness>/agents/<name>.md``.
+
+    ``frontmatter`` is the YAML content between the ``---`` delimiters
+    (without the delimiters themselves). ``body`` is everything after
+    the closing ``---``.
+    """
+    agent_dir = repo / f".{harness}" / "agents"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    path = agent_dir / f"{name}.md"
+    fm = frontmatter or f"name: {name}\ndescription: test agent"
+    path.write_text(f"---\n{fm}\n---\n\n{body}", encoding="utf-8")
+    return path
+
+
+def test_harness_sync_detects_missing_counterpart(tmp_path: Path) -> None:
+    """Agent file in .claude/agents/ modified, .cursor/agents/ counterpart not in modified set → drift."""
+    repo = _setup_repo(tmp_path)
+    _write_agent(repo, "claude", "qs-test-agent")
+    _write_agent(repo, "cursor", "qs-test-agent")
+    _write_agent(repo, "opencode", "qs-test-agent")
+
+    mod = _import_module()
+    exit_code = mod.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--paths",
+            ".claude/agents/qs-test-agent.md",
+        ]
+    )
+    assert exit_code == 1
+
+
+def test_harness_sync_allows_body_divergence(
+    tmp_path: Path,
+) -> None:
+    """Bodies may differ — co-modification is sufficient.
+
+    Co-modification check only cares that all three were modified, not
+    that their bodies are identical. Bodies legitimately differ across
+    harnesses (harness-specific session spawn, handoff instructions).
+    """
+    repo = _setup_repo(tmp_path)
+    _write_agent(repo, "claude", "qs-test-agent", body="# Body A\n")
+    _write_agent(repo, "cursor", "qs-test-agent", body="# Body B\n")
+    _write_agent(repo, "opencode", "qs-test-agent", body="# Body A\n")
+
+    mod = _import_module()
+    exit_code = mod.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--paths",
+            ".claude/agents/qs-test-agent.md",
+            ".cursor/agents/qs-test-agent.md",
+            ".opencode/agents/qs-test-agent.md",
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_harness_sync_passes_when_bodies_match(tmp_path: Path) -> None:
+    """All three modified and bodies match (frontmatter differs) → no drift."""
+    repo = _setup_repo(tmp_path)
+    body = "# Shared body\n\nIdentical content.\n"
+    _write_agent(repo, "claude", "qs-test-agent", frontmatter="name: qs-test-agent\ntools: Bash", body=body)
+    _write_agent(repo, "cursor", "qs-test-agent", frontmatter="name: qs-test-agent\nmodel: inherit", body=body)
+    _write_agent(repo, "opencode", "qs-test-agent", frontmatter="description: test\nmode: primary", body=body)
+
+    mod = _import_module()
+    exit_code = mod.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--paths",
+            ".claude/agents/qs-test-agent.md",
+            ".cursor/agents/qs-test-agent.md",
+            ".opencode/agents/qs-test-agent.md",
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_harness_sync_ignores_non_agent_files(tmp_path: Path) -> None:
+    """Modified file in .claude/ but not under agents/ → no harness sync check."""
+    repo = _setup_repo(tmp_path)
+    # Create a non-agent file in .claude/
+    claude_dir = repo / ".claude"
+    claude_dir.mkdir(parents=True, exist_ok=True)
+    (claude_dir / "settings.json").write_text("{}", encoding="utf-8")
+
+    mod = _import_module()
+    exit_code = mod.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--paths",
+            ".claude/settings.json",
+        ]
+    )
+    assert exit_code == 0
+
+
+def test_harness_sync_handles_missing_harness_dir(tmp_path: Path) -> None:
+    """Agents dir exists in other harnesses but file is absent → no drift.
+
+    Harness-specific agents (present in only one harness) are exempt
+    from the co-modification check. Only counterpart files that
+    actually exist on disk trigger drift.
+    """
+    repo = _setup_repo(tmp_path)
+    _write_agent(repo, "claude", "qs-test-agent")
+    # Create the agents dirs (harness is set up) but don't create the files
+    (repo / ".cursor" / "agents").mkdir(parents=True, exist_ok=True)
+    (repo / ".opencode" / "agents").mkdir(parents=True, exist_ok=True)
+
+    mod = _import_module()
+    exit_code = mod.main(
+        [
+            "--repo-root",
+            str(repo),
+            "--paths",
+            ".claude/agents/qs-test-agent.md",
+        ]
+    )
+    assert exit_code == 0

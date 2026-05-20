@@ -58,8 +58,8 @@ You implement the story under `custom_components/quiet_solar/` and
 python scripts/qs/context.py
 ```
 
-Capture `issue`, `title`, `branch`, `story_file`, `worktree`. The story
-file is your spec.
+Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
+`latest_review_fix`. The story file is your spec (unless a review fix plan is active — see step 1b).
 
 Read [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 and [docs/workflow/project-context.md](../../docs/workflow/project-context.md)
@@ -73,6 +73,25 @@ if you haven't this session.
 - Confirm branch state: `git status`, `git diff origin/main...HEAD`. You
   should be on `{{branch}}` with the story file committed and no other
   local edits.
+
+### 1b. Check for review fix plan
+
+If `latest_review_fix` from `context.py` is non-empty:
+
+1. Read the fix-plan file at that path.
+2. The fix plan is your **primary work list** — each finding marked
+   "fix" is a task. The story file (`{{story_file}}`) provides
+   background context only.
+3. After implementing all findings, proceed to step 3 (implementation
+   summary) as usual.
+
+If `latest_review_fix` is empty, skip this step and implement the
+story from scratch as normal.
+
+**Mid-session re-entry.** If the user says "review done, implement
+it" (or similar) during an existing session, re-run
+`python scripts/qs/context.py`, pick up the new `latest_review_fix`,
+read it, and begin implementing its findings.
 
 ### 2. TDD implementation
 

@@ -12,22 +12,22 @@ is_background: false
 # qs-setup-task — entry point (runs on main)
 
 You are Phase 1 of the Quiet Solar pipeline. Your job is to create the
-GitHub issue + branch + worktree and hand off to a fresh Cursor
-workspace where the user will invoke `/qs-create-plan`.
+GitHub issue + branch + worktree and hand off to a fresh session on the
+worktree where the user will invoke `/create-plan`.
 
 **Be fast and automatic. Do NOT analyze the input.** Don't read log
 files, don't research the codebase, don't propose designs. Pass the
 text through to the GitHub issue verbatim. Deep analysis is
-`/qs-create-plan`'s job.
+`/create-plan`'s job.
 
 ## Input
 
 The user provides ONE of:
-- A feature description (free text)
+- A feature description (free text — may include logs / error traces)
 - A path to an external plan via `--plan /path/to/plan.md`
 - An existing GitHub issue via `--issue N`
 
-Optional: `--no-worktree`.
+Optional: `--no-worktree` (create branch only, skip worktree).
 
 ## Steps
 
@@ -39,40 +39,59 @@ Optional: `--no-worktree`.
 python scripts/qs/fetch_issue.py --issue {{N}}
 ```
 
-**Otherwise**:
-- **Plan file** — read it; use its title as issue title; body is the
+Capture `issue_number`, `title`, `body`, `labels` from the JSON.
+
+**Otherwise** (new issue):
+- **Plan file** — read it; use its title as issue title; body is the full
   plan text.
-- **Free text** — extract a short title; body is the text verbatim.
+- **Free text** — extract a short title (first sentence or ~80 chars);
+  body is the full text verbatim.
 
 ```bash
 python scripts/qs/create_issue.py --title "{{title}}" --body "{{body}}"
 ```
 
-### 2. Create branch and worktree + emit launcher
+Capture `issue_number` from the JSON output.
+
+### 2. Set up branch and worktree + emit launcher
+
+One command does it all:
 
 ```bash
-python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/qs-create-plan" --harness cursor
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/create-plan" --harness cursor
 ```
 
-This auto-detects the Cursor harness (`CURSOR_TRACE_ID` env var) and
-emits Cursor-specific launcher instructions.
+For `--no-worktree`, pass `--no-worktree`. The script:
+- creates branch `QS_{{issue_number}}` from `origin/main`
+- creates the worktree at `../<repo>-worktrees/QS_{{issue_number}}/`
+- detects the harness and emits the appropriate launcher
+
+Capture `worktree_path`, `branch`, and the launcher payload
+(`new_context`, `same_context`, plus optional `pycharm_context`).
 
 ### 3. Tell the user what to do next
 
-Surface the `new_context` instructions:
+The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
+`scripts/worktree-setup.sh`). Surface the launcher for the next phase.
 
 ```text
 Task #{{issue_number}} set up.
   Worktree:  {{worktree_path}}
-  Branch:    QS_{{issue_number}}
+  Branch:    QS_{{issue_number}}  (HEAD already checked out)
 
-Open the worktree as a new Cursor workspace, then in chat type:
-  /qs-create-plan
+Next phase: create-plan.
+Open the worktree as a new Cursor workspace, select qs-create-plan
+from the agent picker, then paste:
+  {{new_context}}
 ```
+
+Do NOT attempt to spawn the next agent in this session — the ergonomic
+flow is one session per phase.
 
 ## Hard rules
 
-- Do NOT analyze the input. Launcher must come within seconds.
-- Do NOT commit or push.
+- Do NOT analyze the input. The launcher must come within a few seconds.
+- Do NOT commit or push — setup-task only creates branches/worktrees.
 - Do NOT touch `legacy/**` — that's the retired per-task-rendering
   OpenCode pipeline (frozen historical code).
+- If any step fails, abort and report; do not auto-heal.
