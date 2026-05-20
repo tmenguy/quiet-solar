@@ -27,18 +27,47 @@ import http.client
 import json
 import shlex
 import shutil
-import socket
 import subprocess
 import urllib.error
 import urllib.request
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # --------------------------------------------------------------------------- #
 # Test helpers
 # --------------------------------------------------------------------------- #
+
+
+@pytest.fixture(autouse=True)
+def _stub_agent_file_preflight(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Auto-stub the QS-190 agent-file pre-flight for post-pre-flight tests.
+
+    Most tests in this module exercise behaviour AFTER the pre-flight
+    (the urlopen mocks, the fallback branches, the strip / validation
+    guards). They pass hardcoded ``--directory`` paths like ``/tmp/x``
+    that don't exist on disk, so the pre-flight ``is_file()`` check
+    would abort them with ``status: "agent_file_missing"`` before any
+    urlopen is reached.
+
+    This autouse fixture monkeypatches ``spawn_session._agent_file_path``
+    to point to a stub file under ``tmp_path``, satisfying the
+    pre-flight. Tests marked with ``@pytest.mark.real_preflight`` opt
+    out and exercise the real path computation against the actual
+    filesystem (using the explicit ``--directory`` they pass).
+    """
+    if "real_preflight" in request.keywords:
+        return
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    stub = tmp_path / "stub_agent.md"
+    stub.touch()
+    monkeypatch.setattr(spawn_session, "_agent_file_path", lambda _d, _a: stub)
 
 
 def _mock_response(data: bytes = b"", status: int = 200) -> MagicMock:
@@ -332,7 +361,7 @@ def test_timeout_falls_back(
 
     monkeypatch.setattr(
         spawn_session.urllib.request, "urlopen",
-        MagicMock(side_effect=socket.timeout("timed out")),
+        MagicMock(side_effect=TimeoutError("timed out")),
     )
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
 
@@ -827,7 +856,7 @@ def test_prompt_async_timeout_attempts_delete(
         if method == "POST" and url.endswith("/session"):
             return _mock_response(json.dumps({"id": "sess-X"}).encode())
         if method == "POST" and "prompt_async" in url:
-            raise socket.timeout("timed out")
+            raise TimeoutError("timed out")
         if method == "DELETE":
             return _mock_response(b"true")
         raise AssertionError(f"unexpected: {method} {url}")
@@ -1351,3 +1380,134 @@ def test_spawn_session_normalizes_whitespace_title(
         agent="qs-create-plan", directory="/tmp/x", title=bad_title,
     )
     assert result["title"] == "qs-create-plan"
+
+
+# --------------------------------------------------------------------------- #
+# QS-190 — Task 2: agent-file pre-flight guard
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.real_preflight
+def test_preflight_aborts_when_agent_file_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Missing ``<worktree>/.opencode/agents/<agent>.md`` aborts before urlopen.
+
+    Closes the QS-177 AC #12 known limitation: without the pre-flight,
+    the HTTP API silently lands the session on the default OpenCode
+    agent. With the pre-flight, the script emits
+    ``status: "agent_file_missing"`` on stdout, a clear stderr line,
+    and exits 2 — and never makes the HTTP call.
+    """
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    # tmp_path has NO .opencode/agents/ subdir → pre-flight must abort.
+    mock_urlopen = MagicMock()
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", str(tmp_path),
+    )
+    assert exit_code == 2
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert payload["status"] == "agent_file_missing"
+    assert payload["agent"] == "qs-create-plan"
+    assert payload["directory"] == str(tmp_path)
+    assert payload["expected_path"].endswith(
+        "/.opencode/agents/qs-create-plan.md",
+    )
+    assert payload["detail"].startswith(
+        "ERROR: OpenCode agent file not found at ",
+    )
+
+    # Stderr carries the human-readable line.
+    assert "OpenCode agent file not found at " in captured.err
+
+    # The HTTP API was never called.
+    mock_urlopen.assert_not_called()
+
+
+@pytest.mark.real_preflight
+def test_preflight_passes_when_agent_file_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When ``<worktree>/.opencode/agents/<agent>.md`` exists, the pre-flight passes silently.
+
+    The script proceeds to ``POST /session`` (verified by the mock being
+    invoked) and emits the standard ``status: "session_created"``
+    payload.
+    """
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    # Create the expected agent file under tmp_path.
+    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "qs-create-plan.md").touch()
+
+    def _capture(req: urllib.request.Request, timeout: int = 10) -> MagicMock:
+        del timeout
+        if req.full_url.endswith("/session"):
+            return _mock_response(json.dumps({"id": "sess-X"}).encode())
+        return _mock_response(b"")
+
+    mock_urlopen = MagicMock(side_effect=_capture)
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", str(tmp_path),
+    )
+    assert exit_code == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "session_created"
+    # The HTTP API WAS called (pre-flight passed).
+    assert mock_urlopen.called
+
+
+@pytest.mark.real_preflight
+def test_preflight_checks_correct_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pre-flight pins the agent→path mapping, not just "any file under .opencode/agents/".
+
+    Creates ``qs-implement-task.md`` but the CLI requests
+    ``qs-create-plan`` — the pre-flight must still reject because the
+    SPECIFIC agent file is absent.
+    """
+    import spawn_session  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    # Wrong agent file present.
+    agent_dir = tmp_path / ".opencode" / "agents"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "qs-implement-task.md").touch()
+
+    mock_urlopen = MagicMock()
+    monkeypatch.setattr(spawn_session.urllib.request, "urlopen", mock_urlopen)
+
+    exit_code = _run_main(
+        monkeypatch,
+        "--agent", "qs-create-plan",
+        "--directory", str(tmp_path),
+    )
+    assert exit_code == 2
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "agent_file_missing"
+    assert payload["agent"] == "qs-create-plan"
+    # The expected_path is the SPECIFIC qs-create-plan.md, not a
+    # generic "any .md under .opencode/agents/".
+    assert payload["expected_path"].endswith("/qs-create-plan.md")
+    # And the HTTP API was never reached.
+    mock_urlopen.assert_not_called()

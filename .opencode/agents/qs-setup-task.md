@@ -93,8 +93,19 @@ Capture `issue_number` from the JSON output.
 One command does it all:
 
 ```bash
-python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "create-plan"
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "create-plan" --harness opencode
 ```
+
+**Why setup-task stays print-for-user**: the new worktree is a
+different OpenCode workspace than the main checkout, so the launcher
+emits the CLI-form ``sh /tmp/qs_oc_launch_<N>.sh`` one-liner whose
+generated script runs ``opencode <worktree> --agent <name>`` against
+the new workspace's OpenCode instance. We cannot ``spawn_session.py``
+across workspaces — the HTTP API only knows about the current
+workspace. Sibling OpenCode agents (``qs-create-plan``,
+``qs-implement-task``, ``qs-implement-setup-task``,
+``qs-review-task``) execute ``new_context`` in-band because they stay
+in the same worktree.
 
 For `--no-worktree`, pass `--no-worktree`. The script:
 - creates branch `QS_{{issue_number}}` from `origin/main`

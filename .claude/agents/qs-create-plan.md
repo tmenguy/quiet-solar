@@ -108,7 +108,8 @@ python scripts/qs/next_step.py \
     --next-cmd "{{NEXT_PHASE}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --harness claude-code
 ```
 
 Parse the JSON; capture `new_context`. Then print both blocks:

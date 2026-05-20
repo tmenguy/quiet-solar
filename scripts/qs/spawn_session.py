@@ -31,13 +31,19 @@ up). On DELETE failure the orphan session id is surfaced via
 ``status: "session_orphaned"`` (exit 2) so the user can clean it up
 manually in the OpenCode UI.
 
-Known limitation (per AC #12 of QS-177): the kickoff API succeeds
-even when ``.opencode/agents/qs-<phase>.md`` does not yet exist, but
-the session lands on the default OpenCode agent instead of the
-intended phase orchestrator. Mirror ``.claude/agents/*.md`` into
-``.opencode/agents/`` (with frontmatter conversion: ``tools:`` →
-``permission:``, ``mode: primary`` / ``mode: subagent``) to enable
-agent activation. This is a documented follow-up, not a silent bug.
+- **Agent-file pre-flight** (QS-190): before any HTTP call, ``main()``
+  verifies that ``<directory>/.opencode/agents/<agent>.md`` exists. If
+  not, the script emits ``{"status": "agent_file_missing", ...}`` on
+  stdout, a clear error on stderr, and exits 2 (parallel to the
+  ``fallback_unavailable`` branch shape). This closes the QS-177 AC #12
+  known limitation where a missing agent file silently lands the
+  session on the default OpenCode agent.
+
+Closed limitation (per QS-177 AC #12, closed by QS-190):
+spawn_session.py performs a pre-flight check that aborts with
+``status: "agent_file_missing"`` before the HTTP API can silently
+land a session on the default agent. The pre-flight is documented
+in the CLI fallback semantics section above.
 
 Usage::
 
@@ -69,6 +75,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 from utils import output_json  # type: ignore[import-not-found]
 
@@ -474,6 +481,16 @@ def _emit_fallback(
     )
 
 
+def _agent_file_path(directory: str, agent: str) -> Path:
+    """Return the expected ``.opencode/agents/<agent>.md`` path under ``directory``.
+
+    Centralises the convention so the pre-flight guard in ``main()``
+    and any future caller (e.g. the OpenCode launcher's CLI-form
+    branch in ``launchers/opencode.py``) compute the same path.
+    """
+    return Path(directory) / ".opencode" / "agents" / f"{agent}.md"
+
+
 def _reject_control_chars(
     parser: argparse.ArgumentParser, name: str, value: str,
 ) -> None:
@@ -589,6 +606,30 @@ def main() -> None:
     args.prompt = args.prompt.strip()
     if args.title is not None:
         args.title = args.title.strip()
+
+    # Pre-flight: verify the target agent file exists in the worktree.
+    # Without this, the OpenCode HTTP API silently lands the session on the
+    # default agent if .opencode/agents/<agent>.md is missing — the
+    # QS-177 AC #12 known limitation. Closes that gap (QS-190 AC-2).
+    expected = _agent_file_path(args.directory, args.agent)
+    if not expected.is_file():
+        detail = (
+            f"ERROR: OpenCode agent file not found at {expected}; "
+            f"the HTTP API would silently fall back to the default agent. "
+            f"Mirror .claude/agents/{args.agent}.md into .opencode/agents/ "
+            f"or create the file before retrying."
+        )
+        sys.exit(_emit(
+            {
+                "status": "agent_file_missing",
+                "agent": args.agent,
+                "directory": args.directory,
+                "expected_path": str(expected),
+                "detail": detail,
+            },
+            stderr_msg=detail,
+            exit_code=2,
+        ))
 
     try:
         result = spawn_session(

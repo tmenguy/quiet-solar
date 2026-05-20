@@ -19,7 +19,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # --------------------------------------------------------------------------- #
 # Task 6.2 — next_step branch (HTTP API form, default)
 # --------------------------------------------------------------------------- #
@@ -170,20 +169,29 @@ def test_build_payload_shell_escapes_path_with_spaces(
 
 
 # --------------------------------------------------------------------------- #
-# Task 6.8 — docstring documents the AC #12 limitation
+# QS-190 Task 8.1 — docstring records the closed-limitation note
 # --------------------------------------------------------------------------- #
 
 
-def test_build_payload_emits_known_limitation_note() -> None:
-    """The module docstring documents the missing ``.opencode/agents/qs-<phase>.md`` limitation."""
+def test_build_payload_documents_closed_limitation() -> None:
+    """The module docstring records that QS-190 closed the QS-177 AC #12 limitation.
+
+    Renamed from ``test_build_payload_emits_known_limitation_note`` —
+    the QS-177 AC #12 known limitation (HTTP API silently lands the
+    session on the default agent when ``.opencode/agents/<agent>.md``
+    is missing) is now closed by QS-190's pre-flight guard in
+    ``spawn_session.py``. The docstring text is rephrased to a
+    closed-historical note and the pinning substring is updated to a
+    phrase unique to the new wording.
+    """
     from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 
     assert opencode_launcher.__doc__ is not None
     doc = opencode_launcher.__doc__
-    assert ".opencode/agents/qs-" in doc, (
-        "Module docstring must document the AC #12 limitation that "
-        "static `.opencode/agents/qs-<phase>.md` files are required "
-        "for agent activation to take effect."
+    assert "spawn_session.py performs a pre-flight check" in doc, (
+        "Module docstring must record the closed-limitation note "
+        "introduced by QS-190 — the pre-flight in spawn_session.py "
+        "now guards against the missing-agent-file failure mode."
     )
 
 
@@ -591,22 +599,27 @@ def test_harness_md_contains_new_opencode_row() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Review fix plan #01 — should-fix #14: harness.md known-limitation note pinned
+# QS-190 Task 8.2 — harness.md records the closed-limitation note
 # --------------------------------------------------------------------------- #
 
 
-def test_harness_md_contains_known_limitation_note() -> None:
-    """``docs/workflow/harness.md`` carries the AC #12 ``.opencode/agents/`` limitation note.
+def test_harness_md_documents_closed_limitation() -> None:
+    """``docs/workflow/harness.md`` records the QS-190 closed-limitation note.
 
-    Parallel to the launcher docstring pin in
-    ``test_build_payload_emits_known_limitation_note``.
+    Renamed from ``test_harness_md_contains_known_limitation_note`` —
+    parallel to the launcher docstring pin in
+    ``test_build_payload_documents_closed_limitation``. The QS-177
+    AC #12 known limitation is now closed; the harness.md paragraph
+    points to QS-190's pre-flight guard.
     """
     harness_md = (
         Path(__file__).resolve().parents[3]
         / "docs" / "workflow" / "harness.md"
     ).read_text()
-    assert ".opencode/agents/qs-<phase>.md" in harness_md, (
-        "harness.md is missing the AC #12 known-limitation note"
+    assert "spawn_session.py performs a pre-flight check" in harness_md, (
+        "harness.md must record the closed-limitation note introduced "
+        "by QS-190 — a missing OpenCode agent file now produces a "
+        "clean `agent_file_missing` exit shape via the pre-flight."
     )
 
 
@@ -623,7 +636,6 @@ def test_default_kickoff_constants_match() -> None:
     silent drift.
     """
     import spawn_session  # type: ignore[import-not-found]
-
     from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 
     assert opencode_launcher.DEFAULT_KICKOFF == spawn_session.DEFAULT_KICKOFF

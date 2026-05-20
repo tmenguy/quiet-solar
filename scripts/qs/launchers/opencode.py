@@ -24,13 +24,12 @@ is unreachable; ``spawn_session.py`` decides the fallback at runtime
 and surfaces the result via stdout JSON. See the script's docstring
 for the full fallback decision tree.
 
-Known limitation (per QS-177 AC #12): the activation API call succeeds
-even when ``.opencode/agents/qs-<phase>.md`` does not yet exist, but
-the session lands on the default OpenCode agent instead of the
-intended phase orchestrator. Mirror ``.claude/agents/*.md`` into
-``.opencode/agents/`` (with frontmatter conversion: ``tools:`` →
-``permission:``, ``mode: primary`` / ``mode: subagent``) to enable
-agent activation. This is a documented follow-up, not a silent bug.
+Closed limitation (per QS-177 AC #12, closed by QS-190):
+spawn_session.py performs a pre-flight check that verifies
+``<work_dir>/.opencode/agents/<agent>.md`` exists before calling the
+HTTP API. If the agent file is missing, the script emits
+``status: "agent_file_missing"`` and exits 2 — the API can no longer
+silently land the session on the default agent.
 """
 
 from __future__ import annotations

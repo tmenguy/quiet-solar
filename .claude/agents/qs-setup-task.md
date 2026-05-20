@@ -58,7 +58,7 @@ Capture `issue_number` from the JSON output.
 One command does it all:
 
 ```bash
-python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/create-plan"
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/create-plan" --harness claude-code
 ```
 
 For `--no-worktree`, pass `--no-worktree`. The script:

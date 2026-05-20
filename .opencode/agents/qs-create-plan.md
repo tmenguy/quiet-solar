@@ -146,21 +146,41 @@ python scripts/qs/next_step.py \
     --next-cmd "{{NEXT_PHASE}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
-    --title "{{title}}"
+    --title "{{title}}" \
+    --harness opencode
 ```
 
-Parse the JSON; capture `new_context`. Then print:
+Parse the JSON output of ``next_step.py``; capture the
+``new_context`` string.
 
-```text
-✅ Story written: docs/stories/QS-{{issue}}.story.md
-✅ Committed and pushed to {{branch}}.
+**Run `new_context` via the Bash tool**. The string is a
+``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
+<wd> --title ... --prompt ...`` invocation — already inside the
+allow-listed ``python scripts/qs/*`` pattern. Do NOT extract only the
+prompt and send it to the current session. Do NOT strip
+``--agent qs-<phase>``. The ``--agent`` flag is what binds the
+next-phase orchestrator to the new session via OpenCode's HTTP API
+``POST /session/<id>/prompt_async`` body — strip it and the prompt
+lands on the default agent, breaking the pipeline silently.
 
-Next phase: {{NEXT_PHASE}}.
+Parse the stdout of that command as JSON. The success contract is
+**binary**:
 
-Preferred (activate `qs-{{NEXT_PHASE}}` from the OpenCode agent picker,
-or paste the spawn-session one-liner below into a fresh terminal):
-  {{new_context}}
-```
+- ``status == "session_created"`` AND ``agent == "qs-{{NEXT_PHASE}}"``
+  → success; report to the user:
+
+  ```text
+  ✅ Next phase session created: qs-{{NEXT_PHASE}}
+     (visible in the OpenCode session list on the left)
+  ```
+
+- **Anything else** (any other ``status`` value, missing or mismatched
+  ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
+  the raw JSON output verbatim to the user. Do NOT claim the next
+  phase started. The user inspects the JSON and acts on the specific
+  failure mode (``agent_file_missing``, ``fallback_cli``,
+  ``fallback_unavailable``, ``session_orphaned`` — each documented in
+  ``scripts/qs/spawn_session.py``).
 
 ## Hard rules
 
