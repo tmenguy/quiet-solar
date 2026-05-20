@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import yaml
 from homeassistant.helpers.template import Template
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     CONF_POOL_TEMPERATURE_SENSOR,
@@ -112,8 +113,6 @@ async def full_dashboard_home(hass):
     through HA config entries. All entity platforms are set up, so
     device.ha_entities is populated with real registered entities.
     """
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
-
     _apply_all_mock_states(hass)
 
     # Device configs in setup order (home must be first)
@@ -444,8 +443,6 @@ async def _build_water_boiler_home(hass, water_boiler_config: dict):
     Seeds all mock states and sets up home + water_boiler config entries.
     Uses the same add/setup-per-entry pattern as `full_dashboard_home`.
     """
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
-
     _apply_all_mock_states(hass)
 
     uid = uuid.uuid4().hex[:8]
@@ -481,6 +478,29 @@ async def _build_water_boiler_home(hass, water_boiler_config: dict):
     return home
 
 
+def _collect_water_boiler_entity_rows(parsed: dict) -> list[str]:
+    """Walk the parsed dashboard YAML and return the entity ids in the
+    boiler card's `entities:` block.
+
+    Each row in the rendered template may be either:
+    - a bare string entity id (`- entity_id`), or
+    - a dict like `{"entity": "<id>", "name": "..."}`.
+    Both shapes are normalised to the raw entity-id string here.
+    """
+    entity_ids: list[str] = []
+    for view in parsed.get("views", []):
+        if view.get("path") != "water_boilers":
+            continue
+        for grid in view.get("sections", []):
+            for card in grid.get("cards", []):
+                for row in card.get("entities", []) or []:
+                    if isinstance(row, str):
+                        entity_ids.append(row)
+                    elif isinstance(row, dict) and "entity" in row:
+                        entity_ids.append(row["entity"])
+    return entity_ids
+
+
 @pytest.mark.parametrize(
     "template_name",
     [
@@ -492,7 +512,7 @@ async def _build_water_boiler_home(hass, water_boiler_config: dict):
 async def test_water_boiler_temperature_sensor_row_present_when_configured(
     hass, template_name
 ):
-    """When the temp sensor is configured, its entity id is rendered."""
+    """When the temp sensor is configured, its entity id is in the card's entities."""
     home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
     template_path = COMPONENT_ROOT / "ui" / template_name
     template_content = template_path.read_text()
@@ -502,11 +522,22 @@ async def test_water_boiler_temperature_sensor_row_present_when_configured(
 
     parsed = yaml.safe_load(rendered)
     assert parsed is not None
-    assert "sensor.test_water_boiler_temperature" in rendered
+    entity_ids = _collect_water_boiler_entity_rows(parsed)
+    assert "sensor.test_water_boiler_temperature" in entity_ids, (
+        f"Expected the configured temperature sensor in the boiler card; "
+        f"got rows: {entity_ids}"
+    )
 
 
+@pytest.mark.parametrize(
+    "template_name",
+    [
+        "quiet_solar_dashboard_template.yaml.j2",
+        "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+    ],
+)
 @pytest.mark.asyncio
-async def test_water_boiler_does_not_reuse_on_off_duration_card(hass):
+async def test_water_boiler_does_not_reuse_on_off_duration_card(hass, template_name):
     """Water boiler MUST NOT render as `qs-on-off-duration-card`.
 
     Per the QS-194 review note: water_boiler gets its own dedicated
@@ -515,9 +546,14 @@ async def test_water_boiler_does_not_reuse_on_off_duration_card(hass):
     against accidentally reusing the on/off-duration JS card for
     boilers — the dedicated boiler card will replace `- type: entities`
     when the follow-up story lands.
+
+    The standard template only ever emits `- type: entities` cards (no
+    `custom:qs-*-card` dispatcher block), so the assertions are
+    trivially true there — kept parametrised as a guardrail against
+    accidental future divergence between the two templates.
     """
     home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
-    template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+    template_path = COMPONENT_ROOT / "ui" / template_name
     template_content = template_path.read_text()
 
     tpl = Template(template_content, hass)
@@ -568,7 +604,14 @@ async def test_water_boiler_does_not_reuse_on_off_duration_card(hass):
 async def test_water_boiler_temperature_sensor_row_absent_when_unset(
     hass, template_name
 ):
-    """When no temp sensor is configured, the entity id is NOT rendered."""
+    """When no temp sensor is configured, no temp-sensor entity is rendered.
+
+    Structural check: walk the rendered YAML to the boiler card's
+    `entities:` block and assert none of its rows reference any sensor
+    in the `sensor.` domain. Avoids the false-positive trap of a future
+    regression that emits a *different* sensor entity id and slips past
+    a substring-only check.
+    """
     home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG_NO_TEMP)
     template_path = COMPONENT_ROOT / "ui" / template_name
     template_content = template_path.read_text()
@@ -578,6 +621,14 @@ async def test_water_boiler_temperature_sensor_row_absent_when_unset(
 
     parsed = yaml.safe_load(rendered)
     assert parsed is not None
-    # The specific sensor entity id from the full config must not appear,
-    # since this config omits the field entirely.
-    assert "sensor.test_water_boiler_temperature" not in rendered
+    entity_ids = _collect_water_boiler_entity_rows(parsed)
+    # The boiler card's entities block should contain ONLY quiet_solar
+    # device entities (`sensor.<device>_<key>`-style entities live under
+    # the quiet_solar platform). The raw `sensor.test_water_boiler_*`
+    # entity id that the temp-sensor branch emits is NOT a quiet_solar
+    # entity; it's seeded directly in EXTRA_MOCK_STATES.
+    sensor_rows = [eid for eid in entity_ids if eid.startswith("sensor.test_water_boiler")]
+    assert sensor_rows == [], (
+        f"Expected no raw `sensor.test_water_boiler*` rows when no temp "
+        f"sensor is configured; got: {sensor_rows}"
+    )

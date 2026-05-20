@@ -200,6 +200,11 @@ The auto-registration loop in `dashboard.py:342` (`aiofiles.os.listdir`
 over `ui/resources/`) will pick up the new JS file automatically
 once it lands.
 
+New Jinja branches added by QS-194 use the idiomatic `is not none`
+test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`
+documentation comments (rather than `{# TODO: ... #}`); follow these
+conventions for any future template additions.
+
 The cards are **outside the quality pipeline**: no JS tests, no JS
 linter, no build step. The product brief explicitly says "don't
 modify JS without explicit instruction" — this is a known gap

@@ -8,21 +8,49 @@ sensor (plumbing only — no constraint/solver logic acts on it).
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import DOMAIN
+from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.ha_model.on_off_duration import QSOnOffDuration
 from custom_components.quiet_solar.ha_model.water_boiler import QSWaterBoiler
 
 from .const import (
     MOCK_WATER_BOILER_CONFIG,
     MOCK_WATER_BOILER_CONFIG_NO_TEMP,
+    MOCK_WATER_BOILER_ENTRY_ID,
+    MOCK_WATER_BOILER_NO_TEMP_ENTRY_ID,
 )
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
+
+_TEMP_SENSOR_ID = "sensor.test_water_boiler_temperature"
+
+
+def _matching_probe_calls(mock_probe, entity_id: str) -> list:
+    """Filter the recorded probe calls down to those for a given entity id.
+
+    `attach_ha_state_to_probe` is called many times during device init
+    (power sensor, amps sensors, etc.). This helper isolates the call(s)
+    for a specific entity id so the test can make precise assertions
+    without coupling to the unrelated calls.
+    """
+    matches = []
+    for call in mock_probe.call_args_list:
+        # autospec=True puts `self` as the first positional arg; the
+        # entity_id may then be positional or keyword.
+        if len(call.args) >= 2:
+            arg = call.args[1]
+        else:
+            arg = call.kwargs.get("entity_id")
+        if arg == entity_id:
+            matches.append(call)
+    return matches
 
 
 async def test_water_boiler_device_type_registered(
@@ -36,9 +64,9 @@ async def test_water_boiler_device_type_registered(
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_WATER_BOILER_CONFIG,
-        entry_id="water_boiler_registered_test",
+        entry_id=MOCK_WATER_BOILER_ENTRY_ID,
         title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
-        unique_id="quiet_solar_water_boiler_registered_test",
+        unique_id=f"quiet_solar_{MOCK_WATER_BOILER_ENTRY_ID}",
     )
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
@@ -66,28 +94,49 @@ async def test_water_boiler_with_temperature_sensor_attaches_probe(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """When configured with a temp sensor, the entity id is stored and probed."""
+    """When configured with a temp sensor, the entity id is stored and probed.
+
+    Spies on `HADeviceMixin.attach_ha_state_to_probe` via `wraps=` so the
+    real probe-attachment side-effects still happen (state machine,
+    history bootstrap, etc.) while the call list is captured for
+    assertion. Filtering by `_TEMP_SENSOR_ID` isolates the boiler's
+    temperature-sensor call from the many unrelated calls made during
+    parent-class init (power sensor, amps sensors, etc.).
+    """
     await hass.config_entries.async_setup(home_config_entry.entry_id)
     await hass.async_block_till_done()
 
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_WATER_BOILER_CONFIG,
-        entry_id="water_boiler_probe_test",
+        entry_id=MOCK_WATER_BOILER_ENTRY_ID,
         title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
-        unique_id="quiet_solar_water_boiler_probe_test",
+        unique_id=f"quiet_solar_{MOCK_WATER_BOILER_ENTRY_ID}",
     )
     entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+
+    real_attach = HADeviceMixin.attach_ha_state_to_probe
+    with patch.object(
+        HADeviceMixin,
+        "attach_ha_state_to_probe",
+        autospec=True,
+        wraps=real_attach,
+    ) as mock_probe:
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
 
     device = hass.data[DOMAIN].get(entry.entry_id)
     assert device is not None
 
-    assert device.water_boiler_temperature_sensor == "sensor.test_water_boiler_temperature"
-    # attach_ha_state_to_probe populated the probe registry for the sensor
-    assert "sensor.test_water_boiler_temperature" in device._entity_probed_state
-    assert device._entity_probed_state_is_numerical["sensor.test_water_boiler_temperature"] is True
+    assert device.water_boiler_temperature_sensor == _TEMP_SENSOR_ID
+    # attach_ha_state_to_probe was invoked once with the temperature sensor
+    # entity id and is_numerical=True, mirroring the pool.py pattern.
+    matches = _matching_probe_calls(mock_probe, _TEMP_SENSOR_ID)
+    assert len(matches) == 1, (
+        f"Expected exactly one attach_ha_state_to_probe call for "
+        f"{_TEMP_SENSOR_ID}, got {len(matches)}: {matches}"
+    )
+    assert matches[0].kwargs.get("is_numerical") is True
 
 
 async def test_water_boiler_without_temperature_sensor(
@@ -101,19 +150,30 @@ async def test_water_boiler_without_temperature_sensor(
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_WATER_BOILER_CONFIG_NO_TEMP,
-        entry_id="water_boiler_no_temp_test",
+        entry_id=MOCK_WATER_BOILER_NO_TEMP_ENTRY_ID,
         title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG_NO_TEMP['name']}",
-        unique_id="quiet_solar_water_boiler_no_temp_test",
+        unique_id=f"quiet_solar_{MOCK_WATER_BOILER_NO_TEMP_ENTRY_ID}",
     )
     entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+
+    real_attach = HADeviceMixin.attach_ha_state_to_probe
+    with patch.object(
+        HADeviceMixin,
+        "attach_ha_state_to_probe",
+        autospec=True,
+        wraps=real_attach,
+    ) as mock_probe:
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
 
     device = hass.data[DOMAIN].get(entry.entry_id)
     assert device is not None
     assert device.water_boiler_temperature_sensor is None
-    # No probe entry should exist for the (missing) sensor entity id
-    assert "sensor.test_water_boiler_temperature" not in device._entity_probed_state
+    # No call to attach_ha_state_to_probe was made with the (absent) temp
+    # sensor entity id. Note: the implementation does call
+    # attach_ha_state_to_probe(None, ...) which short-circuits; that
+    # call doesn't match _TEMP_SENSOR_ID so the filter returns empty.
+    assert _matching_probe_calls(mock_probe, _TEMP_SENSOR_ID) == []
 
 
 async def test_water_boiler_select_translation_key(
@@ -127,9 +187,9 @@ async def test_water_boiler_select_translation_key(
     entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_WATER_BOILER_CONFIG,
-        entry_id="water_boiler_select_key_test",
+        entry_id=MOCK_WATER_BOILER_ENTRY_ID,
         title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
-        unique_id="quiet_solar_water_boiler_select_key_test",
+        unique_id=f"quiet_solar_{MOCK_WATER_BOILER_ENTRY_ID}",
     )
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)

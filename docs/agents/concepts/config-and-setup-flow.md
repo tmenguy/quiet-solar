@@ -112,3 +112,5 @@ device.attach_ha_state_to_probe(...) for each tracked entity
 - `async_step_water_boiler` (in `config_flow.py`) — the latest
   per-type step, added in QS-194. Mirrors `async_step_on_off_duration`
   with an extra optional `water_boiler_temperature_sensor` field.
+  Uses the canonical `return await self.async_entry_next(...)`
+  direct-return pattern (no intermediate variable).

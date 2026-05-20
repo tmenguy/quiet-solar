@@ -1490,8 +1490,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         """
         TYPE = QSWaterBoiler.conf_type_name
         if user_input is not None:
-            r = await self.async_entry_next(user_input, TYPE)
-            return r
+            return await self.async_entry_next(user_input, TYPE)
 
         sc_dict, placeholders = self.get_common_schema(
             type=TYPE,
