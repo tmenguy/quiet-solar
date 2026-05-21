@@ -23,6 +23,7 @@
 */
 
 // --- Geometry (must match the SVG <clipPath> circle attributes below) ---
+const CENTER_CX = 160;              // SVG x-center of the ring / clip circle
 const CENTER_CY = 160;              // SVG y-center of the ring / clip circle
 const CLIP_R = 120;                 // water clip circle radius (10px inside ringCirc=130 — same as pool, intentional)
 const WAVE_WIDTH = 480;             // single wave period (2× clip diameter)
@@ -66,6 +67,7 @@ const BUBBLE_RADIUS_MAX = 4;
 const BUBBLE_SPEED_PX_PER_S_MIN = 40;
 const BUBBLE_SPEED_PX_PER_S_MAX = 80;
 const BUBBLE_MAX_LIFE_S = 2.5;
+const BUBBLE_FILL_COLOR = 'rgba(255,255,255,0.85)';
 
 // --- Surface glow ---
 const SURFACE_GLOW_COLOR = '#FF3D00';
@@ -95,13 +97,12 @@ class QsWaterBoilerCard extends HTMLElement {
 
   // Clear the wave-path memoization keys and cached DOM refs. Called on
   // every (re-)connect and after each _render() innerHTML rewrite.
-  // QS-200 additions vs. pool: `_lastColorMix` (per-frame opacity
-  // throttle would be possible, but we update unconditionally — cheap),
-  // `_bubbleLayerEl`, `_surfaceGlowEl` (new DOM refs).
+  // QS-200 additions vs. pool: `_bubbleLayerEl`, `_surfaceGlowEl` (new
+  // DOM refs). Wave opacity is updated unconditionally per frame so it
+  // doesn't need a memo key.
   _invalidateWaveCache() {
     this._lastWaterBaseY = null;
     this._lastAmplitude = null;
-    this._lastColorMix = null;
     this._waveEls = null;
     this._bubbleLayerEl = null;
     this._surfaceGlowEl = null;
@@ -136,7 +137,14 @@ class QsWaterBoilerCard extends HTMLElement {
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
-      const dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      // S6: cap `dt` against hidden-tab return. Without this, the first
+      // frame after a multi-second tab-hidden window produces a huge
+      // `dt`, snapping wave phase by hundreds of pixels in one frame
+      // and aging every bubble past `BUBBLE_MAX_LIFE_S` simultaneously.
+      // The cap matches `LERP_DT_CEIL` so all step-loop subsystems are
+      // bounded by the same envelope.
+      let dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      dt = Math.min(dt, LERP_DT_CEIL);
       this._lastAnimTs = ts;
 
       // --- Existing dashed-arc animation (preserved verbatim).
@@ -153,22 +161,26 @@ class QsWaterBoilerCard extends HTMLElement {
       }
 
       // --- Lerp amplitude / speed / colorMix toward boiling targets.
-      // Clamp the lerp dt so a hidden-tab return doesn't snap the
-      // envelope to target (story requires the ~1–2 s smooth
-      // transition). Raw `dt` is used for phase advance, bubble cy
-      // advance, and bubble life so scroll catches up.
+      // `dt` is already clamped at LERP_DT_CEIL above (S6), so the
+      // lerpFactor envelope, phase advance, and bubble life all share
+      // the same upper bound — no per-system local clamp needed.
+      // N7: `_currentColorMix` is initialised to 0 in the lazy-init
+      // block at the top of _startAnimation, so the lerp can read it
+      // directly without an `?? 0` fallback (matches amp/speed style).
       const boiling = this._running === true;
       const targetAmplitude = boiling ? BOIL_AMP : CALM_AMP;
       const targetSpeed = boiling ? BOIL_SPEED : CALM_SPEED;
       const targetColorMix = boiling ? 1 : 0;
-      const lerpDt = Math.min(dt, LERP_DT_CEIL);
-      const lerpFactor = 1 - Math.exp(-LERP_RATE * lerpDt);
+      const lerpFactor = 1 - Math.exp(-LERP_RATE * dt);
       this._currentAmplitude += (targetAmplitude - this._currentAmplitude) * lerpFactor;
       this._currentSpeed += (targetSpeed - this._currentSpeed) * lerpFactor;
-      this._currentColorMix += (targetColorMix - (this._currentColorMix ?? 0)) * lerpFactor;
+      this._currentColorMix += (targetColorMix - this._currentColorMix) * lerpFactor;
       this._wavePhase += this._currentSpeed * dt;
-      // Modulo wrap is robust to any sign / magnitude of accumulated phase.
-      this._wavePhase = this._wavePhase % PHASE_WRAP;
+      // N6: sign-safe modulo for consistency with the `scrollOffset`
+      // wrap below. Phase is monotonically non-decreasing today (speed
+      // is always positive), so the prior `%` worked — the new form is
+      // robust to any sign / magnitude of accumulated phase.
+      this._wavePhase = ((this._wavePhase % PHASE_WRAP) + PHASE_WRAP) % PHASE_WRAP;
 
       // Lazy-resolve wave / bubble layer / surface glow DOM refs once per
       // innerHTML rewrite. Six wave nodes (3 cool + 3 boil pairs) — the
@@ -271,7 +283,7 @@ class QsWaterBoilerCard extends HTMLElement {
         if (this._running === true) {
           this._nextBubbleAt = (this._nextBubbleAt ?? 0) - dt;
           while (this._nextBubbleAt <= 0 && this._bubbles.length < MAX_CONCURRENT_BUBBLES) {
-            const cx = 160 - CLIP_R + 8 + Math.random() * (2 * (CLIP_R - 8));
+            const cx = CENTER_CX - CLIP_R + 8 + Math.random() * (2 * (CLIP_R - 8));
             const cy = CENTER_CY + CLIP_R - 8;
             const r = BUBBLE_RADIUS_MIN + Math.random() * (BUBBLE_RADIUS_MAX - BUBBLE_RADIUS_MIN);
             const vy = BUBBLE_SPEED_PX_PER_S_MIN + Math.random() * (BUBBLE_SPEED_PX_PER_S_MAX - BUBBLE_SPEED_PX_PER_S_MIN);
@@ -282,7 +294,7 @@ class QsWaterBoilerCard extends HTMLElement {
             el.setAttribute('cx', cx.toFixed(2));
             el.setAttribute('cy', cy.toFixed(2));
             el.setAttribute('r', r.toFixed(2));
-            el.setAttribute('fill', 'rgba(255,255,255,0.85)');
+            el.setAttribute('fill', BUBBLE_FILL_COLOR);
             el.setAttribute('pointer-events', 'none');
             el.setAttribute('opacity', '0.9');
             bubbleLayer.appendChild(el);
@@ -882,7 +894,7 @@ class QsWaterBoilerCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${waterClipId}">
-                  <circle cx="160" cy="${CENTER_CY}" r="${CLIP_R}" />
+                  <circle cx="${CENTER_CX}" cy="${CENTER_CY}" r="${CLIP_R}" />
                 </clipPath>
                 <filter id="${surfaceGlowFilterId}" x="-50%" y="-50%" width="200%" height="200%">
                   <feGaussianBlur stdDeviation="${SURFACE_GLOW_BLUR_STDDEV}" result="blur" />
@@ -989,7 +1001,6 @@ class QsWaterBoilerCard extends HTMLElement {
       // perceptible blip on a hass push, accepted per pool precedent).
       this._lastWaterBaseY = this._waterBaseY;
       this._lastAmplitude = initialAmp;
-      this._lastColorMix = initialColorMix;
       this._waveEls = null;
       this._bubbleLayerEl = null;
       this._surfaceGlowEl = null;

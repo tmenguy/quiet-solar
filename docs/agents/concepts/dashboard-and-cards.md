@@ -271,6 +271,17 @@ order (= lowest z), so the controls sit on top. The QS-194 optional
 bubble rate, and surface-glow opacity are all independent of the
 temperature sensor (boiling is binary, driven by `running === true`).
 
+Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
+in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
+cap, the first frame after a multi-second hidden-tab window
+produced a huge `dt` that advanced wave phase by hundreds of pixels
+in one frame (visible "snap") and aged every bubble past
+`BUBBLE_MAX_LIFE_S` simultaneously. After the cap, all step-loop
+subsystems — phase advance, lerp envelope, bubble life — share the
+same upper-bound envelope and the visual smoothly resumes from where
+it left off. Pinned via the parametrized
+`test_card_caps_raf_dt_against_hidden_tab`.
+
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
 Every JS card in `ui/resources/` follows the same defensive

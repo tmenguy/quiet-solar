@@ -53,6 +53,40 @@ from tests.ha_tests.const import (
 
 COMPONENT_ROOT = Path(__file__).parent.parent / "custom_components" / "quiet_solar"
 
+
+def _extract_js_function_body(source: str, signature_regex: str) -> str | None:
+    """Return the body between matching braces for a JS function whose
+    signature matches `signature_regex`. Walks balanced braces so nested
+    template literals, object literals, and arrow function bodies are
+    all handled cleanly. Returns ``None`` if the signature isn't found
+    or the braces don't balance.
+
+    This avoids the brittle ``[^{}]*?`` pattern used by earlier
+    per-card body checks — that pattern silently mis-matches the moment
+    any nested brace lands in the body, producing misleading "X must
+    do Y" failures even when the code is correct.
+    """
+    import re
+
+    m = re.search(signature_regex, source)
+    if m is None:
+        return None
+    brace_idx = source.find("{", m.end() - 1)
+    if brace_idx == -1:
+        return None
+    depth = 1
+    i = brace_idx + 1
+    while i < len(source) and depth > 0:
+        c = source[i]
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+        i += 1
+    if depth != 0:
+        return None
+    return source[brace_idx + 1 : i - 1]
+
 # Pool config (not in ha_tests/const.py)
 MOCK_POOL_CONFIG = {
     "name": "Test Pool",
@@ -1448,6 +1482,51 @@ def test_water_boiler_card_uses_safe_number_helper():
     )
 
 
+@pytest.mark.parametrize(
+    "card_filename",
+    [
+        "qs-water-boiler-card.js",
+        "qs-pool-card.js",
+    ],
+)
+def test_card_caps_raf_dt_against_hidden_tab(card_filename):
+    """QS-200 review-fix S6: cap RAF `dt` against hidden-tab return.
+
+    Without a cap, the first frame after a tab returns from a hidden
+    state can produce a `dt` of many seconds (or more). Effects on
+    the pool-pattern step loop:
+
+    - `_wavePhase += _currentSpeed * dt` advances by a huge amount in
+      one frame → visible wave jump (modulo wrap saves correctness,
+      but the visual snaps).
+    - Bubble `b.life += dt` can exceed `BUBBLE_MAX_LIFE_S` in a single
+      frame → entire bubble layer retires at once on tab return.
+
+    The lerp factor already has its own `lerpDt = Math.min(dt,
+    LERP_DT_CEIL)` clamp; this test pins a TOP-level `dt` clamp so the
+    phase advance and bubble life increment are also bounded.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / card_filename
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    # Accept either the literal `0.1` or the named `LERP_DT_CEIL` form
+    # (both cards expose the same constant; pool's value is the same).
+    pattern = re.compile(
+        r"dt\s*=\s*Math\.min\s*\(\s*dt\s*,\s*(?:0\.1|LERP_DT_CEIL)\s*\)"
+    )
+    assert pattern.search(executable), (
+        f"S6: {card_filename} must clamp the RAF step `dt` with "
+        f"`dt = Math.min(dt, LERP_DT_CEIL)` (or `Math.min(dt, 0.1)`) "
+        f"after the initial computation, so a hidden-tab return "
+        f"doesn't trigger a one-frame wave-scroll burst or mass "
+        f"bubble-life expiry."
+    )
+
+
 def test_water_boiler_card_has_start_stop_helpers():
     """QS-200: water-boiler card mirrors the pool card — continuous RAF
     while connected, no `showAnimation` gate.
@@ -1455,9 +1534,19 @@ def test_water_boiler_card_has_start_stop_helpers():
     Asserts:
     - both `_startAnimation()` and `_stopAnimation()` helpers are defined.
     - `connectedCallback()` calls `this._startAnimation()` DIRECTLY, with
-      no `if` between the brace and the call (continuous-RAF
+      no `if` statement between the brace and the call (continuous-RAF
       architecture; the calm-vs-boiling distinction is amplitude / speed
       / color-mix lerp, not RAF on/off).
+
+    Review-fix #01 S2: the `connectedCallback` body is extracted via a
+    balanced-brace walk instead of a `[^{}]*?` regex, so a future
+    template literal or arrow function inside the body doesn't trip
+    a misleading false negative.
+
+    Review-fix #01 N1: the `if`-gate guard is a tokenized
+    ``\\bif\\s*\\(`` regex, not a substring search — identifiers like
+    ``verify`` / ``modifier`` / ``lifecycle`` can't trigger a false
+    positive.
     """
     import re
 
@@ -1473,22 +1562,20 @@ def test_water_boiler_card_has_start_stop_helpers():
     assert re.search(r"_stopAnimation\s*\(\s*\)\s*\{", executable), (
         "qs-water-boiler-card.js: missing _stopAnimation method"
     )
-    # `connectedCallback() { ... this._startAnimation() ... }` with NO
-    # `if` between the opening brace and the call — enforces the
-    # "no gate" architecture (mirror pool card).
-    cb_pat = re.compile(
-        r"connectedCallback\s*\(\s*\)\s*\{(?P<body>[^{}]*?this\._startAnimation\s*\(\s*\))",
-        re.DOTALL,
+    cb_body = _extract_js_function_body(
+        executable, r"connectedCallback\s*\(\s*\)\s*"
     )
-    m = cb_pat.search(executable)
-    assert m is not None, (
+    assert cb_body is not None, (
+        "qs-water-boiler-card.js: connectedCallback() not found"
+    )
+    assert re.search(r"this\._startAnimation\s*\(\s*\)", cb_body), (
         "qs-water-boiler-card.js: connectedCallback must call "
         "_startAnimation directly (continuous-RAF model, mirror pool)"
     )
-    assert "if" not in m.group("body"), (
+    assert re.search(r"\bif\s*\(", cb_body) is None, (
         "qs-water-boiler-card.js: connectedCallback must call "
-        "_startAnimation() unconditionally — no `if` gate (continuous-RAF "
-        "model, mirror pool)"
+        "_startAnimation() unconditionally — no `if (...)` gate "
+        "(continuous-RAF model, mirror pool)"
     )
 
 
@@ -1531,6 +1618,11 @@ def test_water_boiler_card_uses_heat_palette():
 def test_water_boiler_card_renders_water_layer():
     """QS-200: boiler card renders a circular clipPath wrapping the
     six wave paths (3 cool + 3 boil cross-fade layers).
+
+    Review-fix #01 N9: also pins the DOM z-order of the clipped water
+    group — it MUST appear before ``<path d="${bgPath}">`` in source
+    order so the ring, progress arc, and handle render ON TOP of the
+    water (not under it).
     """
     import re
 
@@ -1555,6 +1647,26 @@ def test_water_boiler_card_renders_water_layer():
         )
     assert re.search(r"_generateWavePath\s*\(", executable), (
         "qs-water-boiler-card.js: missing _generateWavePath method"
+    )
+    # N9: z-order — the clipped water <g> must precede the bgPath <path>
+    # in source order. Pin via index comparison on stable anchor strings
+    # that appear exactly once in `_render()`'s SVG template literal.
+    g_anchor = '<g clip-path="url(#${waterClipId})">'
+    bg_anchor = '<path d="${bgPath}"'
+    g_idx = executable.find(g_anchor)
+    bg_idx = executable.find(bg_anchor)
+    assert g_idx != -1, (
+        f"qs-water-boiler-card.js: missing clipped water group anchor "
+        f"{g_anchor!r}"
+    )
+    assert bg_idx != -1, (
+        f"qs-water-boiler-card.js: missing bgPath anchor {bg_anchor!r}"
+    )
+    assert g_idx < bg_idx, (
+        "qs-water-boiler-card.js: the clipped water <g> must appear "
+        "BEFORE the bgPath <path> in DOM order so the dashed ring, "
+        "progress arc, and target handle render on top of the water. "
+        f"Got g_idx={g_idx}, bg_idx={bg_idx}."
     )
 
 
@@ -1582,6 +1694,12 @@ def test_water_boiler_card_has_bubble_system():
 def test_water_boiler_card_has_surface_glow():
     """QS-200: boiler card renders a red Gaussian-blurred surface glow
     with mix-blend-mode: screen, locked to wave 0.
+
+    Review-fix #01 N2: pins the exact ``SURFACE_GLOW_COLOR`` literal
+    (``'#FF3D00'`` — the canonical Material "Deep Orange A400"). The
+    prior ``#FF[0-9A-Fa-f]{4}`` regex was inconsistently restrictive
+    (rejected 3-digit / 8-digit forms, accepted unrelated reds).
+    Pinning the literal makes any drift instantly visible.
     """
     import re
 
@@ -1603,9 +1721,152 @@ def test_water_boiler_card_has_surface_glow():
         "`mix-blend-mode: screen`"
     )
     assert re.search(
-        r"SURFACE_GLOW_COLOR\s*=\s*['\"]#FF[0-9A-Fa-f]{4}['\"]", executable
+        r"SURFACE_GLOW_COLOR\s*=\s*['\"]#FF3D00['\"]", executable
     ), (
-        "qs-water-boiler-card.js: missing SURFACE_GLOW_COLOR red constant"
+        "qs-water-boiler-card.js: SURFACE_GLOW_COLOR must be the "
+        "canonical `'#FF3D00'` (Material Deep Orange A400). Any drift "
+        "should be deliberate — update this assertion in lock-step."
+    )
+
+
+def test_water_boiler_card_pins_geometry_constants():
+    """Review-fix #01 S5: pin the module-level geometry constants
+    (AC-2). The SVG layout depends on `CLIP_R`, `CENTER_CX`, `CENTER_CY`,
+    and `WAVE_WIDTH` matching specific values that the clipPath
+    ``<circle cx cy r>`` markup interpolates. A future tweak that
+    changes any of them without re-checking the SVG would silently
+    misalign the water animation, so we pin each here.
+
+    `CENTER_CX` is review-fix #01 N4's new constant (was inlined as
+    `160` in two places). `CENTER_CY` and `CLIP_R` and `WAVE_WIDTH`
+    pre-date this fix but the original test suite never pinned them.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    expected = {
+        "CENTER_CX": "160",
+        "CENTER_CY": "160",
+        "CLIP_R": "120",
+        "WAVE_WIDTH": "480",
+    }
+    for name, value in expected.items():
+        pat = re.compile(rf"const\s+{name}\s*=\s*{re.escape(value)}\b")
+        assert pat.search(content), (
+            f"qs-water-boiler-card.js: expected module-level "
+            f"`const {name} = {value};` declaration"
+        )
+    # N5: pin BUBBLE_FILL_COLOR as a named constant too (was inlined
+    # as `'rgba(255,255,255,0.85)'` in the bubble createElementNS call).
+    assert re.search(
+        r"const\s+BUBBLE_FILL_COLOR\s*=\s*['\"]rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*0\.85\s*\)['\"]",
+        content,
+    ), (
+        "qs-water-boiler-card.js: expected module-level "
+        "`const BUBBLE_FILL_COLOR = 'rgba(255,255,255,0.85)';`"
+    )
+
+
+def test_water_boiler_card_pins_water_level_formula():
+    """Review-fix #01 S3: pin the AC-4 water-level mapping literals so
+    a refactor can't silently change ``progressRatio`` clamping or the
+    1/5..4/5 fill window.
+
+    AC-4 requires:
+    - guarded predicate ``Number.isFinite(displayTargetHours) && displayTargetHours > 0``
+    - fill window literal ``0.2 + progressRatio * 0.6`` (= 1/5..4/5 of clip)
+    - geometry literal ``* 2 * CLIP_R`` in the ``rawWaterBaseY`` expression
+
+    Each is asserted independently so a failure message tells you
+    which knob was touched.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    assert re.search(
+        r"Number\.isFinite\s*\(\s*displayTargetHours\s*\)\s*&&\s*displayTargetHours\s*>\s*0",
+        executable,
+    ), (
+        "qs-water-boiler-card.js (AC-4): the progress-ratio guard must "
+        "be `Number.isFinite(displayTargetHours) && displayTargetHours "
+        "> 0` so a null / NaN / negative / zero target falls cleanly "
+        "to a 0 ratio."
+    )
+    assert re.search(r"0\.2\s*\+\s*progressRatio\s*\*\s*0\.6", executable), (
+        "qs-water-boiler-card.js (AC-4): the fill-window literal "
+        "`0.2 + progressRatio * 0.6` (= 1/5..4/5 of clip diameter) "
+        "must appear in the rawWaterBaseY expression."
+    )
+    # Scope the `* 2 * CLIP_R` literal to the rawWaterBaseY expression
+    # so we don't match unrelated `2 * CLIP_R` arithmetic elsewhere.
+    assert re.search(
+        r"rawWaterBaseY\s*=\s*CENTER_CY\s*\+\s*CLIP_R\s*-\s*\([^)]*\)\s*\*\s*2\s*\*\s*CLIP_R",
+        executable,
+    ), (
+        "qs-water-boiler-card.js (AC-4): the rawWaterBaseY expression "
+        "must match `CENTER_CY + CLIP_R - (...) * 2 * CLIP_R` — any "
+        "deviation breaks the 1/5..4/5 fill mapping."
+    )
+
+
+def test_water_boiler_card_pins_opacity_cross_fade():
+    """Review-fix #01 S4: pin the AC-5/AC-6 dual-layer opacity cross-fade
+    formulae so a refactor can't accidentally introduce an HSL hue lerp
+    (which would pass through yellow-green at the midpoint) or a
+    staircase regen threshold.
+
+    AC-5/AC-6 require:
+    - cool-layer opacity = ``1 - this._currentColorMix`` (with
+      ``.toFixed(3)`` rounding before ``setAttribute``)
+    - boil-layer opacity = ``this._currentColorMix`` (same rounding)
+    - lerp target form ``running ? 1 : 0`` (or equivalent ternary on
+      ``boiling`` / ``this._running``)
+
+    These are scoped to ``executable`` (comments stripped) so a
+    comment quoting the formula doesn't accidentally pass.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    # Cool-layer opacity literal — allow either `(1 - this._currentColorMix).toFixed(N)`
+    # or `1 - this._currentColorMix` direct.
+    assert re.search(
+        r"\(\s*1\s*-\s*this\._currentColorMix\s*\)\s*\.toFixed\s*\(",
+        executable,
+    ), (
+        "qs-water-boiler-card.js (AC-5): expected the cool-layer "
+        "opacity literal `(1 - this._currentColorMix).toFixed(N)` in "
+        "the RAF step body."
+    )
+    # Boil-layer opacity literal.
+    assert re.search(
+        r"this\._currentColorMix\s*\.toFixed\s*\(",
+        executable,
+    ), (
+        "qs-water-boiler-card.js (AC-6): expected the boil-layer "
+        "opacity literal `this._currentColorMix.toFixed(N)`."
+    )
+    # Lerp target: `targetColorMix = ... ? 1 : 0` — accept any condition
+    # token (e.g. `boiling`, `this._running === true`, etc.) so future
+    # readability tweaks don't break the test, but pin the `: 0` tail
+    # AND the `1` numerator.
+    assert re.search(
+        r"targetColorMix\s*=\s*[^;]*\?\s*1\s*:\s*0",
+        executable,
+    ), (
+        "qs-water-boiler-card.js (AC-6): expected the colorMix lerp "
+        "target to be `targetColorMix = <cond> ? 1 : 0`, mirroring "
+        "amplitude/speed."
     )
 
 
