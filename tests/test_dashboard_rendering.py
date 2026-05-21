@@ -1959,33 +1959,55 @@ def test_water_boiler_card_factors_reset_dom_refs_helper():
     )
 
 
-def test_water_boiler_card_running_at_stop_clear_inside_if():
-    """Review-fix #03 S1: the `_runningAtStop = undefined;` clear must
-    live INSIDE the `if (...)` block that detected a state flip, not
-    unconditionally after. Otherwise a hass push during the detached
-    window (which fires `set hass → _render()` regardless of
-    connection state) consumes the stash WITHOUT the comparison ever
-    firing — and a subsequent push that does flip `running` sees
-    `_runningAtStop === undefined` and misses the prime, reintroducing
-    the exact "visibly calming down on reattach" regression that fix
-    plan #02 N12 was meant to prevent.
+def test_water_boiler_card_running_at_stop_consume_is_flag_gated():
+    """Review-fix #04 M1: the `_runningAtStop` stash must be consumed
+    EXACTLY ONCE on the first post-reattach `_render`, regardless of
+    whether the running-state guard fires.
 
-    Reproduction (without this guard):
+    This is the third revision of the N12 (fix-plan #02) reconnect
+    re-prime logic. The history:
 
-    1. Card mounted, boiler running, `_running = true`.
-    2. Detach → `_stopAnimation()` sets `_runningAtStop = true`.
-    3. Hass push while detached, `running` unchanged → `_render()`
-       runs, guard is false, BUT unconditional clear wipes
-       `_runningAtStop`.
-    4. Hass push while detached, `running` flipped to false →
-       `_render()` runs, but `_runningAtStop === undefined` so the
-       guard fails — no prime queued.
-    5. Reattach → wave lerps from `_currentColorMix ≈ 1` toward `0`
-       over ~1.5s. User sees "calming down" despite the boiler
-       having been off for the whole detach.
+    - Plan #02 N12 introduced `_runningAtStop` set in
+      `_stopAnimation` and consumed in `_render` (cleared
+      unconditionally after the guard).
+    - Plan #03 S1 moved the clear INSIDE the guard's if-body to fix
+      a "mid-detach hass-pushes consume the stash too early" hole.
+    - Plan #04 M1 (this) gates the entire consume on a
+      `_pendingReattachCheck` flag set in `connectedCallback`,
+      because the pass-3 fix introduced a complementary hole: a
+      stash that's only cleared when the inner guard fires LEAKS
+      across renders when reattach happens with `running` unchanged,
+      and the next in-place state flip (hours later, no detach
+      involved) then falsely triggers the prime → wave snaps to
+      target in one frame instead of lerping.
 
-    The fix is to keep the stash alive until the comparison actually
-    fires, by moving the clear inside the if-body.
+    5-step regression scenario this test pins against (the pass-3
+    inside-if structure alone misses it):
+
+    1. Boiler running, card attached: `_running = true`,
+       `_runningAtStop = undefined`.
+    2. Detach (HA dashboard rearrange) → `_stopAnimation()` sets
+       `_runningAtStop = true`.
+    3. Reattach with `running` still `true` → guard
+       `_runningAtStop(true) !== running(true)` is false → with
+       pass-3 inside-if, stash NOT cleared → `_runningAtStop = true`
+       indefinitely.
+    4. Card stays attached for hours. Boiler finishes naturally;
+       hass-push delivers `running = false`.
+    5. Next `_render`: guard `_runningAtStop(true) !== running(false)`
+       is true → prime fires → wave snaps. ← BUG.
+
+    The fix shape that handles all three patterns:
+
+    - Mid-detach hass-pushes: flag is false (only set in
+      `connectedCallback`), consume block is skipped, stash
+      preserved.
+    - Reattach with `running` unchanged: flag is true → consume
+      runs → guard fails → no prime → stash cleared → flag cleared
+      → subsequent in-place flips lerp normally.
+    - Reattach with `running` flipped: flag is true → consume runs
+      → guard fires → prime → stash cleared → flag cleared → wave
+      snaps to new target on reattach (the original N12 intent).
     """
     import re
 
@@ -1993,41 +2015,64 @@ def test_water_boiler_card_running_at_stop_clear_inside_if():
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
     executable = _strip_js_comments(content)
-    # The clear must appear inside the if block. Match
-    # `if (this._runningAtStop !== undefined ...) { ... this._runningAtStop = undefined ... }`
-    # in a single-block regex so a stray unconditional clear outside
-    # the block still trips the test (we'd see the inside-if clear AND
-    # the unconditional one — but the assert is on PRESENCE of the
-    # inside-if form, so a refactor that introduces the inside-if
-    # without removing the outside-if would pass; the negative case
-    # below catches that drift).
-    inside_if = re.compile(
-        r"if\s*\(\s*this\._runningAtStop\s*!==\s*undefined[^{}]*?\{[^{}]*?this\._runningAtStop\s*=\s*undefined",
-        re.DOTALL,
+    # The flag must be set somewhere — typically in connectedCallback
+    # after `_startAnimation()`.
+    assert re.search(
+        r"this\._pendingReattachCheck\s*=\s*true",
+        executable,
+    ), (
+        "qs-water-boiler-card.js (review-fix #04 M1): expected "
+        "`this._pendingReattachCheck = true` (set in "
+        "`connectedCallback` after `_startAnimation()`) so the next "
+        "`_render` knows to consume the `_runningAtStop` stash "
+        "exactly once per reattach."
     )
-    assert inside_if.search(executable), (
-        "qs-water-boiler-card.js (review-fix #03 S1): the "
-        "`this._runningAtStop = undefined;` clear must live INSIDE "
-        "the `if (this._runningAtStop !== undefined && ...) { ... }` "
-        "block. An unconditional clear after the if lets a hass-push "
-        "during disconnect consume the stash, leaving the next "
-        "state-flip push undetected and reintroducing the N12 "
-        "regression."
+    # The flag-gated consume block must exist in `_render` and contain
+    # the inner guard, the stash clear, AND the flag's own clear.
+    # Use a balanced-brace walk (not a regex) so the inner `if (...)`
+    # nested block doesn't truncate the captured body at the inner `}`.
+    body = _extract_js_function_body(
+        executable, r"if\s*\(\s*this\._pendingReattachCheck\s*\)\s*"
     )
-    # Negative form: there must NOT be a `this._runningAtStop = undefined;`
-    # immediately after the if-block's closing brace (= unconditional clear).
-    # Allow whitespace and a comment between `}` and the next statement.
-    outside_if = re.compile(
-        r"if\s*\(\s*this\._runningAtStop\s*!==\s*undefined[^{}]*?\{[^{}]*?\}\s*this\._runningAtStop\s*=\s*undefined",
-        re.DOTALL,
+    assert body is not None, (
+        "qs-water-boiler-card.js (review-fix #04 M1): missing "
+        "`if (this._pendingReattachCheck) { ... }` block in "
+        "`_render()`. The stash must be consumed inside this flag-"
+        "gated block so the consume fires exactly once per reattach "
+        "— independent of the inner running-state guard outcome."
     )
-    assert outside_if.search(executable) is None, (
-        "qs-water-boiler-card.js (review-fix #03 S1): a "
-        "`this._runningAtStop = undefined;` statement appears "
-        "immediately after the if-block's closing brace — that is "
-        "the unconditional-clear pattern that the inside-if move "
-        "must eliminate. Move the clear ENTIRELY inside the "
-        "if-body."
+    assert "this._runningAtStop !== undefined" in body, (
+        "qs-water-boiler-card.js (review-fix #04 M1): the flag-"
+        "gated block must contain the inner guard "
+        "`if (this._runningAtStop !== undefined && ...)` that "
+        "decides whether to set `_needsAnimationPrime`."
+    )
+    assert re.search(r"this\._runningAtStop\s*=\s*undefined", body), (
+        "qs-water-boiler-card.js (review-fix #04 M1): the flag-"
+        "gated block must clear `this._runningAtStop = undefined` "
+        "UNCONDITIONALLY (i.e. outside the inner guard's if-body, "
+        "but inside the outer flag-gated block) — runs regardless "
+        "of inner-guard outcome."
+    )
+    assert re.search(r"this\._pendingReattachCheck\s*=\s*false", body), (
+        "qs-water-boiler-card.js (review-fix #04 M1): the flag-"
+        "gated block must clear `this._pendingReattachCheck = "
+        "false` so the consume fires only on the first post-"
+        "reattach `_render`, not on every subsequent render."
+    )
+    # Negative: `_runningAtStop = undefined` must NOT appear outside
+    # the flag-gated block — exactly ONE total occurrence in the file.
+    clear_count = len(
+        re.findall(r"this\._runningAtStop\s*=\s*undefined", executable)
+    )
+    assert clear_count == 1, (
+        f"qs-water-boiler-card.js (review-fix #04 M1): expected "
+        f"exactly ONE `this._runningAtStop = undefined` clear "
+        f"(inside the flag-gated block); found {clear_count}. Any "
+        f"clear outside the flag gate would reintroduce either the "
+        f"pass-3 'mid-detach hass push consumes stash too early' "
+        f"hole OR the pass-4 'leaked stash → false prime on later "
+        f"in-place flip' hole."
     )
 
 

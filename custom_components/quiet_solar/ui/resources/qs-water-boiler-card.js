@@ -400,6 +400,14 @@ class QsWaterBoilerCard extends HTMLElement {
     // is no longer gated on `showAnimation`. See also
     // docs/agents/concepts/dashboard-and-cards.md.
     this._startAnimation();
+    // Review-fix #04 M1: arm the one-shot `_pendingReattachCheck`
+    // flag so the next `_render()` consumes the `_runningAtStop`
+    // stash exactly once. Setting it here (NOT in `_stopAnimation`)
+    // is what distinguishes "first post-reattach render" from "any
+    // mid-detach hass-push render" — `set hass` doesn't gate on
+    // `this.isConnected`, so renders DO fire during the detached
+    // window, and those must NOT consume the stash.
+    this._pendingReattachCheck = true;
   }
 
   disconnectedCallback() {
@@ -427,6 +435,12 @@ class QsWaterBoilerCard extends HTMLElement {
     if (!config || !config.entities) throw new Error("entities is required");
     this._config = config;
     this._root = this.attachShadow({ mode: "open" });
+    // Review-fix #04 M1: explicitly initialise the reconnect-consume
+    // flag to false so the very first `_render` after mount doesn't
+    // trigger a phantom consume. `connectedCallback` flips it to true
+    // before the next render, and `_render` clears it after the
+    // one-shot consume.
+    this._pendingReattachCheck = false;
     this._render();
   }
 
@@ -764,22 +778,39 @@ class QsWaterBoilerCard extends HTMLElement {
 
       // QS-200: stash the running state for the RAF loop (drives the
       // calm ↔ boiling lerp and the bubble spawn cadence).
-      // Review-fix #02 N12: if the running state flipped while the
-      // card was disconnected, force a re-prime so the wave snaps to
-      // the new target on first paint instead of lerping from the
-      // pre-disconnect state. `_runningAtStop` is set in
-      // `_stopAnimation`, consumed here.
-      // Review-fix #03 S1: the clear MUST live inside the if-body so
-      // the stash survives intervening hass-pushes during the
-      // detached window where `running` happens to match the stashed
-      // value. Without that — i.e. with an unconditional clear after
-      // the if — a 4-step sequence (detach, mid-detach hass push
-      // with running unchanged, mid-detach hass push with running
-      // flipped, reattach) would silently lose the prime signal and
-      // the wave would visibly "calm down" on reattach.
-      if (this._runningAtStop !== undefined && this._runningAtStop !== running) {
-        this._needsAnimationPrime = true;
+      //
+      // Reconnect re-prime — third revision (review-fix #04 M1).
+      // The N12 / S1 / M1 chain threads the needle on a subtle
+      // lifecycle invariant: `_runningAtStop` must be consumed
+      // EXACTLY ONCE on the first post-reattach `_render`,
+      // regardless of inner-guard outcome.
+      //
+      // - Plan #02 N12 introduced `_runningAtStop` (stashed in
+      //   `_stopAnimation`, consumed here, cleared unconditionally
+      //   after the guard).
+      // - Plan #03 S1 moved the clear INSIDE the guard's if-body
+      //   to fix "mid-detach hass-push consumes stash too early".
+      // - Plan #04 M1 gates the entire consume on
+      //   `_pendingReattachCheck` (set in `connectedCallback`),
+      //   because the pass-3 form leaked the stash across renders
+      //   when reattach happened with `running` unchanged — and
+      //   the next in-place state flip (hours later, no detach
+      //   involved) would falsely fire the prime → snap instead
+      //   of lerp.
+      //
+      // The flag-gated block below handles all three paths:
+      // * mid-detach hass-pushes → flag is false (only set in
+      //   `connectedCallback`) → consume skipped → stash preserved.
+      // * reattach with `running` unchanged → flag true → consume →
+      //   inner guard fails → no prime → stash + flag cleared.
+      // * reattach with `running` flipped → flag true → consume →
+      //   inner guard fires → prime queued → stash + flag cleared.
+      if (this._pendingReattachCheck) {
+        if (this._runningAtStop !== undefined && this._runningAtStop !== running) {
+          this._needsAnimationPrime = true;
+        }
         this._runningAtStop = undefined;
+        this._pendingReattachCheck = false;
       }
       this._running = running;
 

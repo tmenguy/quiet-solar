@@ -292,13 +292,28 @@ several internal refactors:
   from the pre-disconnect state (otherwise a card detached while
   boiling, with the boiler turning off mid-detach, would visibly
   "calm down" on reattach despite the boiler having been off the
-  whole detach window). Review-fix #03 S1 tightened the consumption
-  rule: the `_runningAtStop = undefined` clear MUST live inside the
-  matching `if` body, not after it. `set hass` fires during the
-  detached window too, so an unconditional clear after the if would
-  consume the stash on the first mid-detach push (where `running`
-  is unchanged), letting a SUBSEQUENT push that flips `running`
-  miss the re-prime signal entirely.
+  whole detach window). The consume rule has gone through three
+  revisions (see code comments in `_render()` for the full
+  history):
+  - Plan #02 N12: stash cleared unconditionally after the inner
+    guard. Hole: mid-detach hass-pushes (which fire `set hass →
+    _render` even while disconnected, since `set hass` doesn't gate
+    on `this.isConnected`) consume the stash on a stable-running
+    push, defeating the prime on the eventual reattach.
+  - Plan #03 S1: clear moved INSIDE the inner guard's if-body.
+    Closes the mid-detach-pushes hole, but opens a new one — on a
+    reattach where `running` is unchanged at reattach, the stash
+    leaks across renders and the next normal in-place state flip
+    (hours later, no detach involved) falsely fires the prime.
+  - Plan #04 M1: the entire consume is now gated by
+    `_pendingReattachCheck`, a one-shot flag set in
+    `connectedCallback` after `_startAnimation()`, cleared after
+    the one-shot consume in `_render`. The stash is consumed
+    EXACTLY ONCE on the first post-reattach render, regardless of
+    inner-guard outcome. Mid-detach pushes see the flag false and
+    skip the entire block, preserving the stash for the eventual
+    reattach. Subsequent renders after the consume see the flag
+    false and don't re-fire.
 - **S3 — `_resetDomRefs()` helper.** Both `_invalidateWaveCache()`
   and the post-`innerHTML` cleanup block now share a single helper
   that nulls DOM-ref memo keys and resets `_bubbles = []`. A future
