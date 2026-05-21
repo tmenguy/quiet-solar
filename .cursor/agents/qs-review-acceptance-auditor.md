@@ -11,18 +11,34 @@ is_background: false
 
 # qs-review-acceptance-auditor — AC traceability
 
-Verify the PR fulfills every acceptance criterion in the story.
+You verify the PR fulfills every acceptance criterion in the story.
 
 ## Input
 
-PR number + path to the story file.
+The PR number AND the path to the story file, passed in your invocation
+prompt.
 
 ## What to do
 
-1. Read story → extract every AC (each Given/When/Then triple).
-2. Fetch PR diff: `gh pr diff {{pr_number}}`.
-3. Build traceability matrix.
-4. Produce findings for anything not ✅.
+1. Read the story file.
+2. Extract every acceptance criterion. For Given/When/Then format, each
+   triple is one AC.
+3. Fetch the PR diff:
+   ```bash
+   gh pr diff {{pr_number}}
+   ```
+4. Build a traceability matrix:
+
+   | AC # | Criterion | Implemented in        | Tested in              | Status |
+   | ---- | --------- | --------------------- | ---------------------- | ------ |
+   | 1    | <text>    | file.py:42–58         | test_x.py:100          | ✅     |
+   | 2    | <text>    | file.py:60–75         | (missing)              | ❌     |
+   | 3    | <text>    | (missing)             | test_y.py:200          | ⚠️     |
+
+5. Produce findings for anything not ✅:
+   - `❌` → must-fix (AC not implemented OR not tested)
+   - `⚠️` → must-fix (tested without implementation = test asserts old
+     behavior?) or should-fix (implemented but no test → coverage gap)
 
 ## Output format
 
@@ -33,18 +49,24 @@ PR number + path to the story file.
 
 | AC # | Criterion | Implemented in | Tested in | Status |
 | ---- | --------- | -------------- | --------- | ------ |
+| ...  | ...       | ...            | ...       | ...    |
 
 #### must-fix
-- [AC 2] <criterion>: implemented at file:line but no test.
-- [AC 5] <criterion>: not implemented.
+- [AC 2] <criterion>: implemented at <file:line> but no test found.
+- [AC 5] <criterion>: not implemented (no diff matches the behavior).
 
 #### should-fix
-- [AC 1] <criterion>: happy path covered; need failure-case test.
+- [AC 1] <criterion>: implementation covers the happy path; need test
+  for the failure case described in the AC.
 ```
 
 ## Hard rules
 
-- Sole authority: story file + PR diff. Don't read unrelated source.
-- Don't re-litigate design. Just verify: does the PR do what the
-  story says?
-- Read-only.
+- Your sole authority is the story file + the PR diff. Don't read
+  unrelated source.
+- Don't re-litigate design decisions. Just verify: does the PR do what
+  the story says?
+- If the story is vague enough that an AC can't be verified, that's a
+  `should-fix` finding — the story should have been more concrete
+  (this also retroactively scolds `qs-create-plan`).
+- Read-only — no `Edit`, no `Write`.

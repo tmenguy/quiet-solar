@@ -8,77 +8,168 @@ readonly: false
 is_background: false
 ---
 
-# qs-finish-task — merge and cleanup
+# qs-finish-task — merge (when applicable) and cleanup
 
-You verify CI green, get explicit merge authorization, merge the PR,
-delete the remote branch, and remove the worktree.
+You can be invoked at any point in the pipeline — even right after
+`/setup-task` with no commits. Your job is to leave the workspace clean:
+no orphaned worktree, no orphaned remote branch, and (if a PR exists and
+the user authorizes) merge it.
 
-## Discover the task context
+**Never run the quality gate.** That's `/implement-task`'s job. If
+there's nothing to merge, just clean up.
+
+## Discover the task context first
 
 ```bash
 python scripts/qs/context.py
 ```
 
-If `pr_number` is null, STOP.
+Capture `issue`, `branch`, `pr_number`, `pr_url`, `worktree`.
 
-## Phase protocol
+## Branch on PR state
 
-### 1. Show PR summary
-```bash
-gh pr view {{pr_number}}
-```
+### Case A — `pr_number` is null (no PR was ever opened)
 
-### 2. Verify CI
-```bash
-gh pr checks {{pr_number}}
-```
-- **Failed** → STOP, report.
-- **Pending** → advise wait.
-- **Green** → proceed.
+The user is abandoning the task or cleaning up after `/setup-task` /
+`/create-plan` without an implementation. Skip merge logic entirely.
 
-### 3. Authorize merge
+1. Inspect the worktree for unsaved work:
+   ```bash
+   python scripts/qs/cleanup_worktree.py \
+       --work-dir "{{worktree}}" \
+       --issue {{issue}} \
+       --dry-run
+   ```
+   Then check status without removing:
+   ```bash
+   git -C "{{worktree}}" status --porcelain
+   git -C "{{worktree}}" log @{u}..HEAD --oneline 2>/dev/null || echo "(no upstream)"
+   ```
 
-Ask **explicitly**: "Ready to merge PR #{{pr_number}}?". Wait for
-"yes" / "merge".
+2. Decide the cleanup mode:
+   - **Clean tree, no unpushed commits** → safe to remove. Skip to step 4
+     using `--force` (force is fine here because there's nothing to
+     lose; `--force` also handles the case where there's no upstream).
+   - **Uncommitted edits OR unpushed commits exist** → tell the user
+     exactly what would be lost (file list + commit count) and ask:
+     `"Force-delete and lose this work? (yes / no)"`.
+     - On `yes` → step 4 with `--force`.
+     - On `no` → STOP. Report what they need to do (commit + push, or
+       move work elsewhere). Do not delete.
 
-### 4. Merge the PR
-```bash
-gh pr merge {{pr_number}} --merge
-```
+3. Skip — no PR to merge, no remote branch to delete (the branch may
+   still exist on origin from `/create-plan`; handle it in step 5).
 
-### 5. Delete the remote branch
+4. Remove the worktree:
+   ```bash
+   python scripts/qs/cleanup_worktree.py \
+       --work-dir "{{worktree}}" \
+       --issue {{issue}} \
+       --force
+   ```
 
-The guard refuses `main` / `master` at the shell level — never rely
-on the agent alone.
+5. Delete the remote branch if it exists. The guard refuses
+   `main` / `master` at the shell level — never rely on the agent
+   alone:
+   ```bash
+   if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
+       echo "refusing to delete protected branch: {{branch}}" >&2
+       exit 1
+   fi
+   if git ls-remote --exit-code --heads origin "{{branch}}" >/dev/null 2>&1; then
+       git push origin --delete "{{branch}}"
+   fi
+   ```
 
-```bash
-if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
-    echo "refusing to delete protected branch: {{branch}}" >&2
-    exit 1
-fi
-git push origin --delete "{{branch}}"
-```
+6. Report:
+   ```text
+   ✅ No PR existed — task abandoned.
+   ✅ Worktree removed: {{worktree}}
+   ✅ Remote branch {{branch}} deleted (if it existed).
+   ```
 
-### 6. Clean up the worktree
-```bash
-python scripts/qs/cleanup_worktree.py \
-    --work-dir "{{worktree}}" \
-    --issue {{issue}} \
-    --force
-```
+### Case B — `pr_number` exists
 
-### 7. Report
+The standard merge flow.
 
-```text
-✅ PR #{{pr_number}} merged.
-✅ Branch deleted.
-✅ Worktree removed.
+1. Show PR summary:
+   ```bash
+   gh pr view {{pr_number}}
+   ```
 
-(If production code was touched) Run /qs-release from main when ready.
-```
+2. Inspect PR state from the JSON:
+   ```bash
+   gh pr view {{pr_number}} --json state,mergeable,mergedAt
+   ```
+
+   - **`state: MERGED`** → skip to step 6 (cleanup only).
+   - **`state: CLOSED`** (not merged) → ask the user: `"PR is closed
+     unmerged. Clean up worktree + branch anyway? (yes / no)"`. On
+     `yes` → step 6. On `no` → STOP.
+   - **`state: OPEN`** → continue to step 3.
+
+3. Verify CI:
+   ```bash
+   gh pr checks {{pr_number}}
+   ```
+   - Failed → STOP. Report failures.
+   - Pending → advise the user to wait, or proceed if they explicitly
+     authorize (`--admin`).
+   - Green / no checks → continue.
+
+4. Authorize merge — ask explicitly: `"Ready to merge PR
+   #{{pr_number}}?"`. Wait for `yes` / `merge`. Silence ≠ authorization.
+
+5. Merge:
+   ```bash
+   gh pr merge {{pr_number}} --merge
+   ```
+   If the PR was already merged externally between steps 2 and 5, treat
+   as success.
+
+6. Delete the remote branch. The guard refuses `main` / `master` at
+   the shell level — never rely on the agent alone:
+   ```bash
+   if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
+       echo "refusing to delete protected branch: {{branch}}" >&2
+       exit 1
+   fi
+   git push origin --delete "{{branch}}"
+   ```
+
+7. Remove the worktree (`--force` is safe — code is merged):
+   ```bash
+   python scripts/qs/cleanup_worktree.py \
+       --work-dir "{{worktree}}" \
+       --issue {{issue}} \
+       --force
+   ```
+
+8. Report:
+    ```text
+    ✅ PR #{{pr_number}} merged into main.
+    ✅ Remote branch {{branch}} deleted.
+    ✅ Worktree removed.
+
+    Production code was touched → from the main checkout, select
+    qs-release from the Cursor agent picker when you're ready to
+    ship a release.
+    ```
+    (Skip the release suggestion when no `custom_components/quiet_solar/`
+    files were in the diff — check `gh pr diff {{pr_number}} --name-only`
+    or just inspect the file list.)
+
+    **Why no launcher payload here**: `/release` runs on the main
+    checkout, not the worktree (which is now gone). We intentionally
+    don't build a launcher with `--next-cmd release` — see QS-175 OUT OF
+    SCOPE. The user invokes release manually after switching workspaces.
 
 ## Hard rules
 
-- No merge without explicit user authorization.
-- Never auto-chain to release.
-- Refuse to delete `main`/`master`.
+- **Never run the quality gate.** Cleanup must succeed even if tests
+  would fail.
+- No merge without explicit user authorization in this turn.
+- Never auto-chain to `/release` — it's a separate decision.
+- Refuse to delete `main` / `master` even if asked.
+- In Case A, if the user has unsaved work, ALWAYS show what would be
+  lost before asking for force-delete authorization.

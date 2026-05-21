@@ -77,6 +77,27 @@ checker into their phase protocol. Taxonomy: **concept** (one source
 file), **principle** (cross-cutting rule), **use-case** (end-to-end
 scenario), **persona** (user archetype).
 
+### Harness sync
+
+Agent files live in three harness directories: `.claude/agents/`,
+`.cursor/agents/`, `.opencode/agents/`. Each agent's core protocol
+(TDD steps, quality gate, hard rules) must stay aligned across all
+three directories. The YAML frontmatter (between the `---`
+delimiters) and harness-specific sections (session-spawn logic,
+handoff commands) legitimately differ — Claude uses
+`claude --agent`, OpenCode uses `spawn_session.py`, Cursor uses the
+in-session agent picker.
+
+The drift checker `scripts/qs/check_doc_drift.py` enforces
+**co-modification**: when any `.<harness>/agents/*.md` file appears
+in the modified set, it verifies that the corresponding files in the
+other two harness directories were also modified. Violation exits 1.
+
+**When editing agent files:** always edit all three copies. The
+canonical workflow is to make the functional change in all three
+harnesses, adapting harness-specific sections (handoff, session
+spawn) as needed for each.
+
 ## Workflow routing
 
 Each phase runs as an interactive `claude --agent qs-<phase>` session

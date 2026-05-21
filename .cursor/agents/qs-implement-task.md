@@ -14,22 +14,46 @@ is_background: false
 You implement the story under `custom_components/quiet_solar/` and
 `tests/`, run the full quality gate, and open a PR.
 
-## Discover the task context
+## Discover the task context first
 
 ```bash
 python scripts/qs/context.py
 ```
 
-Capture `issue`, `title`, `branch`, `story_file`. Read
-`docs/workflow/project-rules.md` and
-`docs/workflow/project-context.md` if you haven't this session.
+Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
+`latest_review_fix`. The story file is your spec (unless a review fix plan is active — see step 1b).
+
+Read [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
+and [docs/workflow/project-context.md](../../docs/workflow/project-context.md)
+if you haven't this session.
 
 ## Phase protocol
 
 ### 1. Load context
 
 - Read `{{story_file}}` completely.
-- Confirm branch state.
+- Confirm branch state: `git status`, `git diff origin/main...HEAD`. You
+  should be on `{{branch}}` with the story file committed and no other
+  local edits.
+
+### 1b. Check for review fix plan
+
+If `latest_review_fix` from `context.py` is non-empty:
+
+1. Read the fix-plan file at that path.
+2. The fix plan is your **primary work list** — each finding marked
+   "fix" is a task. The story file (`{{story_file}}`) provides
+   background context only.
+3. After implementing all findings, proceed to step 3 (implementation
+   summary) as usual.
+
+If `latest_review_fix` is empty, skip this step and implement the
+story from scratch as normal.
+
+**Mid-session re-entry.** If the user says "review done, implement
+it" (or similar) during an existing session, re-run
+`python scripts/qs/context.py`, pick up the new `latest_review_fix`,
+read it, and begin implementing its findings.
 
 ### 2. TDD implementation
 
@@ -54,8 +78,12 @@ edit elsewhere.
 
 ### 3. Implementation summary
 
-Present a summary (files, design decisions, risks). Ask "Ready to run
-the quality gate?". Wait.
+Before running the quality gate, present a summary:
+- Modified / created files (one-line description each).
+- Key design decisions.
+- Open questions / risks.
+
+Then ask: **"Ready to run the quality gate?"** Wait for confirmation.
 
 ### 4. Quality gate (non-negotiable)
 
@@ -63,7 +91,9 @@ the quality gate?". Wait.
 python scripts/qs/quality_gate.py
 ```
 
-Must exit 0. Fix autonomously on failure. Escalate after 2–3 attempts.
+Must exit 0: pytest 100% coverage + ruff + mypy + translations. If it
+fails, fix autonomously and re-run. Only ask the user for direction
+after 2–3 unsuccessful attempts.
 
 **Doc-maintenance pre-commit sub-step.** After staging your
 intended changes (`git add` first so the diff is populated), run
@@ -76,7 +106,8 @@ against the staged diff. If exit 1, either update the listed
 `docs/agents/` docs and re-stage, or include a justification
 paragraph in the PR body under a `## Doc maintenance` heading
 explaining why the docs are unaffected. See
-`docs/workflow/project-rules.md` "Doc maintenance".
+[docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
+"Doc maintenance".
 
 ### 5. Commit, push, open PR (automatic)
 
@@ -93,15 +124,32 @@ python scripts/qs/create_pr.py \
     --issue {{issue}}
 ```
 
+Capture the PR number. The commit+push+PR sequence is authorized by the
+workflow — no user confirmation needed for any of these three.
+
 ### 6. Tell the user the next command
+
+Build the launcher payload for the review phase:
+
+```bash
+python scripts/qs/next_step.py \
+    --next-cmd "review-task" \
+    --work-dir "{{worktree}}" \
+    --issue {{issue}} \
+    --title "{{title}}" \
+    --harness cursor
+```
+
+Parse the JSON; capture `new_context`. Then print:
 
 ```text
 ✅ Implementation complete — quality gate passed.
-✅ Committed and pushed.
-✅ PR #{{pr_number}} opened.
+✅ Committed and pushed to {{branch}}.
+✅ PR #{{pr_number}} opened: {{pr_url}}
 
-Next: type in this session.
-  → /qs-review-task
+Next phase: review-task.
+Select qs-review-task from the Cursor agent picker, then paste:
+  {{new_context}}
 ```
 
 ## Hard rules
@@ -109,6 +157,8 @@ Next: type in this session.
 - No code without a failing test first.
 - No commit without a green quality gate.
 - After a green gate, commit + push + PR are automatic — no prompts.
-- Coverage below 100% is a hard block.
+- Coverage below 100% is a hard block. No `# pragma: no cover` without
+  explicit user authorization in chat.
 - Do NOT edit `legacy/**`, `.opencode/agents/**`, `.claude/agents/**`,
-  `.cursor/agents/**` (and `legacy/**` is frozen historical code).
+  `.cursor/agents/**` — those belong to the workflow infrastructure
+  (and `legacy/**` is frozen historical code).
