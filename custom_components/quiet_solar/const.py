@@ -74,6 +74,12 @@ LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
 
 CONF_DASHBOARD_SECTION_NAME = "dashboard_section_name"
 CONF_DASHBOARD_SECTION_ICON = "dashboard_section_icon"
+# N7: list of bundled default sections the user has explicitly opted
+# out of (removed from their customised list). The QS-194
+# `_maybe_migrate_missing_default_section` helper honours this set so
+# a user-deliberate removal isn't silently re-added every time a
+# device of that type is added.
+CONF_DASHBOARD_SECTIONS_USER_REMOVED = "dashboard_sections_user_removed"
 
 
 CONF_POWER = "power"

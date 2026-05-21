@@ -4,8 +4,10 @@
 */
 
 class QsOnOffDurationCard extends HTMLElement {
-  connectedCallback() {
+  // M4: gate the requestAnimationFrame loop on `showAnimation`.
+  _startAnimation() {
     if (this._animRaf != null) return;
+    this._lastAnimTs = null;
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
@@ -23,10 +25,25 @@ class QsOnOffDurationCard extends HTMLElement {
     this._animRaf = requestAnimationFrame(step);
   }
 
-  disconnectedCallback() {
+  _stopAnimation() {
     if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
     this._animRaf = null;
     this._lastAnimTs = null;
+  }
+
+  connectedCallback() {
+    // RAF intentionally NOT started here — _render() calls
+    // _startAnimation() when `showAnimation` is true.
+  }
+
+  disconnectedCallback() {
+    this._stopAnimation();
+    // S7: reset interaction flags so a re-attach after mid-interaction
+    // doesn't silently short-circuit `set hass` on stale flags.
+    this._isInteractingMode = false;
+    this._isInteractingTarget = false;
+    this._isProcessingModeChange = false;
+    this._modalOpen = false;
   }
 
   static getStubConfig() {
@@ -38,6 +55,18 @@ class QsOnOffDurationCard extends HTMLElement {
     this._config = config;
     this._root = this.attachShadow({ mode: "open" });
     this._render();
+  }
+
+  // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
+  // strings interpolated into innerHTML.
+  _escapeHtml(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   set hass(hass) {
@@ -302,6 +331,14 @@ class QsOnOffDurationCard extends HTMLElement {
       const activeGradId = running ? gradRunningId : gradGreenId;
       const showAnimation = (running && segLen > 6);
 
+      // M4: start/stop the RAF loop based on whether the dash animation
+      // is actually needed. Idle cards consume zero per-frame work.
+      if (showAnimation) {
+        this._startAnimation();
+      } else {
+        this._stopAnimation();
+      }
+
       // Bistate mode selector options with translations
       const modeOptions = selBistateMode?.attributes?.options || [];
       const modeState = (selBistateMode?.state || '').trim();
@@ -378,7 +415,7 @@ class QsOnOffDurationCard extends HTMLElement {
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
-        <div class="card-title">${title}</div>
+        <div class="card-title">${this._escapeHtml(title)}</div>
         <div class="top"></div>
 
         <div class="hero">
@@ -483,8 +520,9 @@ class QsOnOffDurationCard extends HTMLElement {
           const {title, message, buttons, customContent} = opts;
           const wrap = document.createElement('div');
           wrap.className = 'modal';
-          const contentHtml = customContent || `<p>${message}</p>`;
-          wrap.innerHTML = `<div class="dialog"><h3>${title}</h3>${contentHtml}<div class="actions"></div></div>`;
+          // S6: escape user-controlled `title` and `message`.
+          const contentHtml = customContent || `<p>${this._escapeHtml(message)}</p>`;
+          wrap.innerHTML = `<div class="dialog"><h3>${this._escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
           const actions = wrap.querySelector('.actions');
           this._modalOpen = true;
           buttons.forEach(b => {
@@ -529,18 +567,23 @@ class QsOnOffDurationCard extends HTMLElement {
           modeSel?.addEventListener('change', async (ev) => {
               const option = ev.target.value;
               if (!option) return;
-              
+
               this._isProcessingModeChange = true;
-              
-              // Call the service and wait for it to complete
-              await this._select(e.bistate_mode, option);
-              
-              // Wait a bit for HA state to propagate, then allow re-render
-              setTimeout(() => {
-                  this._isProcessingModeChange = false;
-                  this._isInteractingMode = false;
-                  this._render();
-              }, 300);
+              // M2: wrap in try/finally so the cleanup setTimeout ALWAYS
+              // runs — otherwise a rejected `_select` (HA service failure,
+              // network drop) would leave `_isProcessingModeChange = true`
+              // forever and silently lock out subsequent re-renders.
+              try {
+                  // Call the service and wait for it to complete
+                  await this._select(e.bistate_mode, option);
+              } finally {
+                  // Wait a bit for HA state to propagate, then allow re-render
+                  setTimeout(() => {
+                      this._isProcessingModeChange = false;
+                      this._isInteractingMode = false;
+                      this._render();
+                  }, 300);
+              }
           });
           const modePill = modeSel?.closest('.pill');
           if (modePill && modeSel) {
@@ -667,6 +710,16 @@ class QsOnOffDurationCard extends HTMLElement {
                               const hm = formatHm(mins);
                               const val = hm + ':00';
                               this._localFinishTimeMins = mins;
+                              // S9: clear the local override after a
+                              // grace period so out-of-band backend
+                              // updates aren't masked indefinitely.
+                              if (this._localFinishTimeClearTimer) {
+                                  clearTimeout(this._localFinishTimeClearTimer);
+                              }
+                              this._localFinishTimeClearTimer = setTimeout(() => {
+                                  this._localFinishTimeMins = null;
+                                  this._render();
+                              }, 5000);
                               await this._setTime(e.default_on_finish_time, val);
                           }
                       },

@@ -1489,7 +1489,28 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         set, plus an optional water-tank temperature sensor.
         """
         TYPE = QSWaterBoiler.conf_type_name
+
+        # S1: `self.config_entry` may not yet exist during the INITIAL
+        # creation flow. The `hasattr` guard restores the safety net.
+        stored_temp_sensor = (
+            self.config_entry.data.get(CONF_WATER_BOILER_TEMPERATURE_SENSOR)
+            if hasattr(self, "config_entry") and self.config_entry is not None
+            else None
+        )
+
         if user_input is not None:
+            # M3: even with the WF-4 fix that re-surfaces a stranded id in
+            # the form, `vol.Optional` lets the user omit the key — the
+            # OptionsFlow's `merged.update(user_input)` then silently
+            # re-persists the stranded value. Force the key to be present
+            # ONLY when the field was actually rendered in the form, so
+            # the merge can overwrite. Use empty-string as the sentinel
+            # rather than None because `clean_data` strips None values
+            # before the merge; `QSWaterBoiler.__init__`'s WF-3 normalises
+            # the empty string back to `None` at device-construction time.
+            field_was_rendered = bool(selectable_temperature_entities(self.hass)) or stored_temp_sensor is not None
+            if field_was_rendered:
+                user_input.setdefault(CONF_WATER_BOILER_TEMPERATURE_SENSOR, "")
             return await self.async_entry_next(user_input, TYPE)
 
         sc_dict, placeholders = self.get_common_schema(
@@ -1510,7 +1531,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         # because the OptionsFlow merges user_input onto the prior data
         # and an absent key never clears the old value.
         temperature_entities = selectable_temperature_entities(self.hass)
-        stored_temp_sensor = self.config_entry.data.get(CONF_WATER_BOILER_TEMPERATURE_SENSOR)
         entity_list = list(temperature_entities)
         if stored_temp_sensor and stored_temp_sensor not in entity_list:
             entity_list.append(stored_temp_sensor)

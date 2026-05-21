@@ -14,6 +14,10 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    CONF_DASHBOARD_SECTION_ICON,
+    CONF_DASHBOARD_SECTION_NAME,
+    CONF_DASHBOARD_SECTIONS_USER_REMOVED,
+    CONF_DEVICE_DASHBOARD_SECTION,
     CONF_GRID_POWER_SENSOR,
     CONF_HOME_VOLTAGE,
     DATA_HANDLER,
@@ -545,13 +549,14 @@ async def test_home_auto_migrates_missing_default_section_for_new_device_type(
     from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
 
     # Customised home config that pre-dates QS-194 — no water_boilers
-    # section in the dashboard_section_name_<i> slots.
+    # section in the CONF_DASHBOARD_SECTION_NAME_<i> slots. Matches the
+    # f-string pattern used in home.py: `{CONF_DASHBOARD_SECTION_NAME}_{i}`.
     custom_home_config = {
         **MOCK_HOME_CONFIG,
-        "dashboard_section_name_0": "#1 - cars",
-        "dashboard_section_icon_0": "mdi:car",
-        "dashboard_section_name_1": "#2 - settings",
-        "dashboard_section_icon_1": "mdi:cog-outline",
+        f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
+        f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+        f"{CONF_DASHBOARD_SECTION_NAME}_1": "#2 - settings",
+        f"{CONF_DASHBOARD_SECTION_ICON}_1": "mdi:cog-outline",
     }
     home_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -601,6 +606,142 @@ async def test_home_auto_migrates_missing_default_section_for_new_device_type(
     assert boiler_device in devices_in_section
 
 
+async def test_home_migration_invalidates_sibling_device_caches(
+    hass: HomeAssistant,
+) -> None:
+    """S5: when the migration appends a default section, sibling devices
+    whose `_computed_dashboard_section` already cached
+    `DASHBOARD_NO_SECTION` get invalidated so they pick up the newly-
+    available section on the next access.
+
+    Scenario:
+    1. Build a home with a customised section list missing `water_boilers`.
+    2. Add boiler #1 — migration kicks in, `water_boilers` is appended,
+       boiler #1 resolves correctly.
+    3. Simulate the original failure mode: a user re-edits the home
+       sections, removing `water_boilers` from the in-memory list
+       again, AND boiler #1's cache stale-fires to NO_SECTION.
+    4. Add boiler #2 — migration re-appends `water_boilers` AND must
+       invalidate boiler #1's stale cache so it re-resolves correctly.
+    """
+    from homeassistant.const import CONF_NAME
+
+    from custom_components.quiet_solar.home_model.load import DASHBOARD_NO_SECTION
+
+    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
+
+    custom_home_config = {
+        **MOCK_HOME_CONFIG,
+        f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
+        f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+    }
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=custom_home_config,
+        entry_id="s5_home_entry",
+        title="home: S5 Home",
+        unique_id="s5_home_entry",
+    )
+    home_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(home_entry.entry_id)
+    await hass.async_block_till_done()
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Add boiler #1 — this triggers the migration which appends water_boilers.
+    boiler1_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**MOCK_WATER_BOILER_CONFIG, CONF_NAME: "Boiler One"},
+        entry_id="s5_boiler1_entry",
+        title="water_boiler: Boiler One",
+        unique_id="s5_boiler1_entry",
+    )
+    boiler1_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(boiler1_entry.entry_id)
+    await hass.async_block_till_done()
+    boiler1 = hass.data[DOMAIN].get(boiler1_entry.entry_id)
+    assert boiler1.dashboard_section == "water_boilers"
+
+    # Simulate the pre-S5 failure mode: water_boilers gets removed from
+    # the in-memory list AND boiler #1's cache stale-fires to NO_SECTION.
+    # (Without S5's cross-device invalidation loop, this is the state
+    # that would have stuck around forever.)
+    home.dashboard_sections = [s for s in home.dashboard_sections if s[0] != "water_boilers"]
+    boiler1._computed_dashboard_section = DASHBOARD_NO_SECTION
+
+    # Add boiler #2 — migration appends water_boilers AGAIN, and the S5
+    # invalidation loop must reset boiler #1's stale NO_SECTION cache.
+    boiler2_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={**MOCK_WATER_BOILER_CONFIG, CONF_NAME: "Boiler Two"},
+        entry_id="s5_boiler2_entry",
+        title="water_boiler: Boiler Two",
+        unique_id="s5_boiler2_entry",
+    )
+    boiler2_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(boiler2_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # Boiler #1's stale cache was invalidated — re-resolves to `water_boilers`.
+    assert boiler1.dashboard_section == "water_boilers", (
+        "S5: sibling device's stale NO_SECTION cache was not invalidated "
+        "when the migration re-appended `water_boilers`."
+    )
+    devices_in_section = home.get_devices_for_dashboard_section("water_boilers")
+    assert boiler1 in devices_in_section
+    boiler2 = hass.data[DOMAIN].get(boiler2_entry.entry_id)
+    assert boiler2 in devices_in_section
+
+
+async def test_home_migration_honours_user_removed_section_optout(
+    hass: HomeAssistant,
+) -> None:
+    """N7: a user-deliberate opt-out (via CONF_DASHBOARD_SECTIONS_USER_REMOVED)
+    is honoured — the migration does NOT silently re-append a section the
+    user explicitly removed.
+    """
+    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
+
+    # Home with customised list — cars only — plus an explicit opt-out of
+    # the `water_boilers` section.
+    custom_home_config = {
+        **MOCK_HOME_CONFIG,
+        f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
+        f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+        CONF_DASHBOARD_SECTIONS_USER_REMOVED: ["water_boilers"],
+    }
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=custom_home_config,
+        entry_id="n7_home_entry",
+        title="home: N7 Home",
+        unique_id="n7_home_entry",
+    )
+    home_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(home_entry.entry_id)
+    await hass.async_block_till_done()
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Add a water_boiler — migration MUST NOT re-append water_boilers.
+    boiler_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_WATER_BOILER_CONFIG,
+        entry_id="n7_boiler_entry",
+        title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
+        unique_id="n7_boiler_entry",
+    )
+    boiler_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(boiler_entry.entry_id)
+    await hass.async_block_till_done()
+
+    section_names = {s[0] for s in home.dashboard_sections}
+    assert "water_boilers" not in section_names, (
+        "User explicitly opted out of water_boilers; migration must "
+        "honour that opt-out instead of silently re-appending it."
+    )
+
+
 async def test_home_logs_warning_when_device_section_is_unknown(
     hass: HomeAssistant,
     caplog,
@@ -616,8 +757,8 @@ async def test_home_logs_warning_when_device_section_is_unknown(
     # Customised home WITHOUT water_boilers
     custom_home_config = {
         **MOCK_HOME_CONFIG,
-        "dashboard_section_name_0": "#1 - cars",
-        "dashboard_section_icon_0": "mdi:car",
+        f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
+        f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
     }
     home_entry = MockConfigEntry(
         domain=DOMAIN,
@@ -635,7 +776,7 @@ async def test_home_logs_warning_when_device_section_is_unknown(
     # tier-1 warning must surface in logs.
     bogus_section_config = {
         **MOCK_WATER_BOILER_CONFIG,
-        "device_dashboard_section": "#9 - my_custom_section_that_doesnt_exist",
+        CONF_DEVICE_DASHBOARD_SECTION: "#9 - my_custom_section_that_doesnt_exist",
     }
     boiler_entry = MockConfigEntry(
         domain=DOMAIN,

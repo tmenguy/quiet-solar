@@ -372,9 +372,10 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
             {% elif device.device_type == "water_boiler" -%}
-              {# NOTE: water_boiler intentionally falls through to the generic
-                 `- type: entities` layout; a dedicated `custom:qs-water-boiler-card`
-                 is deferred to a follow-up story. #}
+              {# NOTE: the standard template is the no-JS fallback variant.
+                 The dedicated qs-water-boiler-card lives in the custom
+                 template; here we emit plain `- entity:` rows so the
+                 dashboard works without any bundled JS resources. #}
               {%- set ha = device.ha_entities %}
               {%- set ha_entity = ha.get("qs_enable_device") %}
               {%- if ha_entity is not none %}

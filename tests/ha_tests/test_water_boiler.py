@@ -15,7 +15,7 @@ from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.const import DOMAIN
+from custom_components.quiet_solar.const import CONF_WATER_BOILER_TEMPERATURE_SENSOR, DOMAIN
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.ha_model.on_off_duration import QSOnOffDuration
 from custom_components.quiet_solar.ha_model.water_boiler import QSWaterBoiler
@@ -45,6 +45,18 @@ def _matching_probe_calls(mock_probe, entity_id: str | None) -> list:
     would be dead code, so only positional matching is supported.
     With ``autospec=True`` the first positional arg is ``self``; the
     entity id is therefore at index 1.
+
+    N5 note on ``entity_id=None``: this is a coarse match. It returns
+    every call with a ``None`` first-positional arg — including both:
+      (a) the QSWaterBoiler.__init__ short-circuit call when no temp
+          sensor is configured, AND
+      (b) any unrelated callers in the parent-class init that happen
+          to pass ``None`` (e.g. `attach_power_to_probe(None)` when
+          `accurate_power_sensor` is unset).
+    The no-temp test therefore asserts ``len(none_calls) >= 1`` rather
+    than ``== 1`` — we only care that the boiler short-circuit
+    pathway was *exercised*, not that nothing else happened to land
+    on ``None`` too.
     """
     return [
         call
@@ -200,7 +212,7 @@ async def test_water_boiler_empty_string_temperature_sensor_normalised_to_none(
     config = {
         **MOCK_WATER_BOILER_CONFIG_NO_TEMP,
         # Inject the empty-string degenerate case
-        "water_boiler_temperature_sensor": "",
+        CONF_WATER_BOILER_TEMPERATURE_SENSOR: "",
     }
     entry = MockConfigEntry(
         domain=DOMAIN,

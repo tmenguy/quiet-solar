@@ -118,4 +118,9 @@ device.attach_ha_state_to_probe(...) for each tracked entity
   temperature entities OR a previously-configured id is stored** — the
   latter rule prevents a stranded entity id from becoming invisible
   after HA loses the sensor (the form's selector then includes the
-  stored id so the user can replace or keep it).
+  stored id so the user can replace or keep it). When the field was
+  rendered, the per-step also `setdefault`s the key in `user_input`
+  to an empty string before submission so the OptionsFlow merge can
+  actually overwrite a stranded id with a cleared value
+  (`QSWaterBoiler.__init__` normalises the empty string back to
+  `None`).

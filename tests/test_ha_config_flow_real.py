@@ -571,6 +571,84 @@ async def test_options_flow_water_boiler_surfaces_stranded_temperature_sensor(
     )
 
 
+async def test_options_flow_water_boiler_clears_stranded_temperature_sensor(
+    hass: HomeAssistant,
+) -> None:
+    """Submitting the form without the temp-sensor key clears the stranded id.
+
+    M3: vol.Optional means the user CAN omit the key from user_input. The
+    OptionsFlow merge then preserves the stranded id forever — unless we
+    `setdefault(..., None)` server-side when the field was rendered. This
+    test exercises that exact path: open the options flow with no live
+    temperature entities, submit without the temp-sensor key, and assert
+    the stored value is no longer the stranded id.
+    """
+    await _create_home_entry(hass)
+
+    boiler_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Cumulus",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSWaterBoiler,
+            CONF_SWITCH: "switch.cumulus",
+            CONF_POWER: 1500,
+            CONF_WATER_BOILER_TEMPERATURE_SENSOR: "sensor.removed_probe",
+        },
+        title="water_boiler: Cumulus",
+    )
+    boiler_entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await hass.config_entries.options.async_init(boiler_entry.entry_id)
+        assert result["type"] == FlowResultType.FORM
+
+        # Submit without the temp-sensor key — `vol.Optional` accepts that.
+        # The server-side `setdefault(..., None)` must then overwrite the
+        # stranded id with None so the merge sees the clear intent.
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Cumulus",
+                CONF_POWER: 1500,
+                CONF_SWITCH: "switch.cumulus",
+                # NOTE: CONF_WATER_BOILER_TEMPERATURE_SENSOR intentionally
+                # absent
+            },
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # The stranded id was cleared (None or absent — either is acceptable).
+    stored = boiler_entry.data.get(CONF_WATER_BOILER_TEMPERATURE_SENSOR)
+    assert stored in (None, ""), (
+        f"Stranded temp sensor id was not cleared; stored value: {stored!r}"
+    )
+
+
+async def test_config_flow_water_boiler_no_temperature_entities_does_not_crash(
+    hass: HomeAssistant,
+) -> None:
+    """S1: opening async_step_water_boiler with zero temp entities must not crash.
+
+    During the INITIAL config flow, `self.config_entry` typically does not
+    exist yet — `self.config_entry.data.get(...)` would raise
+    AttributeError. The hasattr guard prevents the crash; this test pins
+    the contract.
+    """
+    await _create_home_entry(hass)
+
+    # No temperature sensors in HA — the conditional `add_entity_selector`
+    # block previously short-circuited; now it must still also skip the
+    # config_entry lookup gracefully on a brand-new flow.
+    boiler_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSWaterBoiler)
+    assert boiler_flow["type"] == FlowResultType.FORM, (
+        "Initial config flow for water_boiler with no temp entities must "
+        "render the form (not crash with AttributeError)"
+    )
+
+
 async def test_options_flow_with_missing_device_type(
     hass: HomeAssistant,
 ) -> None:

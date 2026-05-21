@@ -22,6 +22,7 @@ from homeassistant.helpers.event import EventStateChangedData, async_track_state
 from ..const import (
     CONF_DASHBOARD_SECTION_ICON,
     CONF_DASHBOARD_SECTION_NAME,
+    CONF_DASHBOARD_SECTIONS_USER_REMOVED,
     CONF_GRID_POWER_SENSOR,
     CONF_GRID_POWER_SENSOR_INVERTED,
     CONF_HOME_END_OFF_PEAK_RANGE_1,
@@ -1902,10 +1903,10 @@ class QSHome(QSDynamicGroup):
         requested = getattr(device, "_conf_dashboard_section_option", None)
         if requested is None or requested == DASHBOARD_NO_SECTION:
             return
-        # Strip any "#N - " prefix that may be present on stored values.
-        section_name = requested
-        if " - " in section_name and section_name.startswith("#"):
-            section_name = section_name.split(" - ", 1)[1]
+        # S4: use the rigorous prefix parser already defined in
+        # home_model/load.py rather than a string-substring heuristic
+        # (which would mis-strip e.g. "#hot - water" → "water").
+        section_name, _ = extract_name_and_index_from_dashboard_section_option(requested)
         # Already present (by name)? Nothing to do.
         existing_names = {s[0] for s in self.dashboard_sections}
         if section_name in existing_names:
@@ -1913,6 +1914,23 @@ class QSHome(QSDynamicGroup):
         # Only auto-add for bundled default sections — never invent a
         # section name out of thin air.
         if section_name not in DASHBOARD_DEFAULT_SECTIONS_DICT:
+            return
+        # N7: honour explicit user opt-out. If the user removed this
+        # section from their dashboard and recorded it in
+        # `CONF_DASHBOARD_SECTIONS_USER_REMOVED`, the migration must
+        # NOT silently re-append it whenever a device of that type
+        # is added.
+        user_removed = []
+        if self.config_entry is not None:
+            user_removed = self.config_entry.data.get(CONF_DASHBOARD_SECTIONS_USER_REMOVED, []) or []
+        if section_name in user_removed:
+            _LOGGER.info(
+                "Skipping auto-append of dashboard section %r for device "
+                "%r — user explicitly opted out via "
+                "CONF_DASHBOARD_SECTIONS_USER_REMOVED",
+                section_name,
+                device.name,
+            )
             return
         icon = DASHBOARD_DEFAULT_SECTIONS_DICT[section_name]
         _LOGGER.info(
@@ -1923,8 +1941,16 @@ class QSHome(QSDynamicGroup):
             device.name,
         )
         self.dashboard_sections.append((section_name, icon))
-        # Invalidate any previously-cached resolution so the next access
-        # picks up the newly-appended section.
+        # S5: invalidate ALL devices whose cached resolution was
+        # warmed before the migration. Without this, sibling devices
+        # already resolved to DASHBOARD_NO_SECTION stay invisible even
+        # though their section now exists.
+        for d in self._all_devices + getattr(self, "_disabled_devices", []):
+            cached = getattr(d, "_computed_dashboard_section", None)
+            if cached == DASHBOARD_NO_SECTION:
+                d._computed_dashboard_section = None
+        # And the newly-added device (not yet in _all_devices at the
+        # call site — add_device appends after this method returns).
         if hasattr(device, "_computed_dashboard_section"):
             device._computed_dashboard_section = None
 

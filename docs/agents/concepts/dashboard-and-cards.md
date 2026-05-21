@@ -208,6 +208,49 @@ test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`
 documentation comments (rather than `{# TODO: ... #}`); follow these
 conventions for any future template additions.
 
+## Hardened JS-card patterns (QS-194 review-fix #03)
+
+Every JS card in `ui/resources/` follows the same defensive
+patterns after the cross-card audit:
+
+- **RAF idle-gating (M4).** Each card defines `_startAnimation()` and
+  `_stopAnimation()` helpers. The render path starts/stops the
+  animation conditionally — on `showAnimation` for the
+  duration-based cards, on `_charging` for the car card, and
+  continuously while connected for the pool wave (intrinsically
+  visible). `connectedCallback` no longer kicks off RAF
+  unconditionally; `disconnectedCallback` always stops it.
+- **try/finally around service calls (M2).** Every
+  `_isProcessing*` flag setter is wrapped in `try { await
+  this._select(...) } finally { setTimeout(() => _isProcessing... =
+  false, ...) }` so a rejected HA service call can't wedge the
+  card.
+- **Interaction-flag reset on disconnect (S7).** Every card resets
+  every `_isInteracting*` / `_isProcessing*` / `_modalOpen` flag in
+  `disconnectedCallback` so a re-attach mid-interaction doesn't
+  silently short-circuit `set hass` on stale state.
+- **HTML escaping (S6).** Each card carries an `_escapeHtml(s)`
+  helper applied to user-/third-party-controlled strings
+  interpolated into `innerHTML` (card title, dialog title, dialog
+  message, sensor unit).
+- **Safe numeric coercion (S8, water-boiler).** The water-boiler
+  card uses `_safeNumber(sensor, default)` instead of
+  `Number(s?.state || N)` so degenerate states
+  (`""` / `unknown` / `unavailable`) can't propagate `NaN` into SVG
+  path attributes.
+- **Local-state cleanup symmetry (S9).** Every Apply handler that
+  sets a `_localFinishTimeMins` / `_localNextTimeMins` schedules a
+  matching 5-second clear timer so out-of-band backend updates
+  aren't masked indefinitely (mirrors the existing
+  `_localTargetPct` pattern).
+- **Modal dismiss path (N12) + activate try/finally (N13).** The
+  shared `showDialog` helper falls back to a "Close" button when
+  `buttons` is empty, and the per-button `activate` closure wraps
+  `b.onClick?.()` in `try/finally` so a synchronous throw can't
+  leave the modal locked open.
+
+Follow these patterns when adding new JS cards.
+
 The cards are **outside the quality pipeline**: no JS tests, no JS
 linter, no build step. The product brief explicitly says "don't
 modify JS without explicit instruction" — this is a known gap

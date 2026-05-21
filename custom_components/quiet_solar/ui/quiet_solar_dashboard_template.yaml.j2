@@ -35,7 +35,7 @@ views:
           - type: custom:qs-climate-card
           {%- elif  device.device_type == "on_off_duration" %}
           - type: custom:qs-on-off-duration-card
-          {%- elif  device.device_type == "water_boiler" %}
+          {%- elif device.device_type == "water_boiler" %}
           - type: custom:qs-water-boiler-card
           {%- else %}
           - type: entities
