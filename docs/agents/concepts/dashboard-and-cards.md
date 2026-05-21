@@ -292,7 +292,13 @@ several internal refactors:
   from the pre-disconnect state (otherwise a card detached while
   boiling, with the boiler turning off mid-detach, would visibly
   "calm down" on reattach despite the boiler having been off the
-  whole detach window).
+  whole detach window). Review-fix #03 S1 tightened the consumption
+  rule: the `_runningAtStop = undefined` clear MUST live inside the
+  matching `if` body, not after it. `set hass` fires during the
+  detached window too, so an unconditional clear after the if would
+  consume the stash on the first mid-detach push (where `running`
+  is unchanged), letting a SUBSEQUENT push that flips `running`
+  miss the re-prime signal entirely.
 - **S3 — `_resetDomRefs()` helper.** Both `_invalidateWaveCache()`
   and the post-`innerHTML` cleanup block now share a single helper
   that nulls DOM-ref memo keys and resets `_bubbles = []`. A future

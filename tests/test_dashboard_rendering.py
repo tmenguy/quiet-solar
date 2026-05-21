@@ -330,12 +330,11 @@ class TestDashboardTemplateRendering:
 
         # Strip `//` line comments AND `/* ... */` block comments before
         # the regex scan so we only match executable code.
-        no_block_comments = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-        no_line_comments = re.sub(r"//[^\n]*", "", no_block_comments)
+        executable = _strip_js_comments(content)
 
         # Raw `Number(state || fallback)` is the anti-pattern.
         raw_pattern = re.compile(r"Number\(\s*[^()]+\|\|[^()]+\)")
-        assert raw_pattern.search(no_line_comments) is None, (
+        assert raw_pattern.search(executable) is None, (
             "Found a raw `Number(... || ...)` pattern in executable code "
             "— should use `_safeNumber(...)`"
         )
@@ -946,8 +945,7 @@ class TestDashboardSectionMapping:
         for card_filename in ("qs-radiator-card.js", "qs-water-boiler-card.js"):
             content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
             # Strip comments so the regex only matches executable code.
-            no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-            executable = re.sub(r"//[^\n]*", "", no_block)
+            executable = _strip_js_comments(content)
 
             # The non-default branch MUST guard against zero (or NaN)
             # `targetHours` before assigning to `maxHours`. Acceptable
@@ -1030,8 +1028,7 @@ class TestDashboardSectionMapping:
         import re
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
-        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-        executable = re.sub(r"//[^\n]*", "", no_block)
+        executable = _strip_js_comments(content)
 
         # Every reference to `e.climate_hvac_mode_on` that feeds into a
         # chained `.toLowerCase()` MUST be wrapped in `String(...)`
@@ -1070,8 +1067,7 @@ class TestDashboardSectionMapping:
 
         for card_filename in ("qs-radiator-card.js", "qs-water-boiler-card.js"):
             content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
-            no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-            executable = re.sub(r"//[^\n]*", "", no_block)
+            executable = _strip_js_comments(content)
 
             # The arcPath helper definition must include a finiteness
             # check on its angle inputs. Accept either `Number.isFinite`
@@ -1548,8 +1544,7 @@ def test_card_caps_raf_dt_against_hidden_tab(card_filename):
     content = (
         COMPONENT_ROOT / "ui" / "resources" / card_filename
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     # Accept either the literal `0.1` or the named `LERP_DT_CEIL` form
     # (both cards expose the same constant; pool's value is the same).
     pattern = re.compile(
@@ -1591,8 +1586,7 @@ def test_water_boiler_card_has_start_stop_helpers():
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
     # Strip comments first so the regex only matches executable code.
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     assert re.search(r"_startAnimation\s*\(\s*\)\s*\{", executable), (
         "qs-water-boiler-card.js: missing _startAnimation method"
     )
@@ -1666,8 +1660,7 @@ def test_water_boiler_card_renders_water_layer():
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     assert re.search(r"<clipPath\s+id=", executable), (
         "qs-water-boiler-card.js: missing <clipPath> definition"
     )
@@ -1714,8 +1707,7 @@ def test_water_boiler_card_has_bubble_system():
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     assert re.search(r"MAX_CONCURRENT_BUBBLES\s*=\s*12", executable), (
         "qs-water-boiler-card.js: missing `MAX_CONCURRENT_BUBBLES = 12` "
         "constant"
@@ -1743,8 +1735,7 @@ def test_water_boiler_card_has_surface_glow():
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     assert re.search(r"<filter\s+id=", executable) and (
         "feGaussianBlur" in executable
     ), (
@@ -1824,8 +1815,7 @@ def test_water_boiler_card_pins_water_level_formula():
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     assert re.search(
         r"Number\.isFinite\s*\(\s*displayTargetHours\s*\)\s*&&\s*displayTargetHours\s*>\s*0",
         executable,
@@ -1873,8 +1863,7 @@ def test_water_boiler_card_pins_opacity_cross_fade():
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     # Cool-layer opacity literal — allow either `(1 - this._currentColorMix).toFixed(N)`
     # or `1 - this._currentColorMix` direct.
     assert re.search(
@@ -1920,8 +1909,7 @@ def test_water_boiler_card_center_uses_named_constants():
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     positive = re.compile(
         r"const\s+center\s*=\s*\{\s*cx\s*:\s*CENTER_CX\s*,\s*cy\s*:\s*CENTER_CY\s*\}"
     )
@@ -1955,8 +1943,7 @@ def test_water_boiler_card_factors_reset_dom_refs_helper():
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
-    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-    executable = re.sub(r"//[^\n]*", "", no_block)
+    executable = _strip_js_comments(content)
     helper_def = re.search(r"_resetDomRefs\s*\(\s*\)\s*\{", executable)
     assert helper_def, (
         "qs-water-boiler-card.js: missing `_resetDomRefs()` helper "
@@ -1969,6 +1956,78 @@ def test_water_boiler_card_factors_reset_dom_refs_helper():
         "qs-water-boiler-card.js: `_resetDomRefs()` must be called "
         "from BOTH `_invalidateWaveCache()` AND the post-innerHTML "
         f"cleanup block; found {len(calls)} call site(s)."
+    )
+
+
+def test_water_boiler_card_running_at_stop_clear_inside_if():
+    """Review-fix #03 S1: the `_runningAtStop = undefined;` clear must
+    live INSIDE the `if (...)` block that detected a state flip, not
+    unconditionally after. Otherwise a hass push during the detached
+    window (which fires `set hass → _render()` regardless of
+    connection state) consumes the stash WITHOUT the comparison ever
+    firing — and a subsequent push that does flip `running` sees
+    `_runningAtStop === undefined` and misses the prime, reintroducing
+    the exact "visibly calming down on reattach" regression that fix
+    plan #02 N12 was meant to prevent.
+
+    Reproduction (without this guard):
+
+    1. Card mounted, boiler running, `_running = true`.
+    2. Detach → `_stopAnimation()` sets `_runningAtStop = true`.
+    3. Hass push while detached, `running` unchanged → `_render()`
+       runs, guard is false, BUT unconditional clear wipes
+       `_runningAtStop`.
+    4. Hass push while detached, `running` flipped to false →
+       `_render()` runs, but `_runningAtStop === undefined` so the
+       guard fails — no prime queued.
+    5. Reattach → wave lerps from `_currentColorMix ≈ 1` toward `0`
+       over ~1.5s. User sees "calming down" despite the boiler
+       having been off for the whole detach.
+
+    The fix is to keep the stash alive until the comparison actually
+    fires, by moving the clear inside the if-body.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+    # The clear must appear inside the if block. Match
+    # `if (this._runningAtStop !== undefined ...) { ... this._runningAtStop = undefined ... }`
+    # in a single-block regex so a stray unconditional clear outside
+    # the block still trips the test (we'd see the inside-if clear AND
+    # the unconditional one — but the assert is on PRESENCE of the
+    # inside-if form, so a refactor that introduces the inside-if
+    # without removing the outside-if would pass; the negative case
+    # below catches that drift).
+    inside_if = re.compile(
+        r"if\s*\(\s*this\._runningAtStop\s*!==\s*undefined[^{}]*?\{[^{}]*?this\._runningAtStop\s*=\s*undefined",
+        re.DOTALL,
+    )
+    assert inside_if.search(executable), (
+        "qs-water-boiler-card.js (review-fix #03 S1): the "
+        "`this._runningAtStop = undefined;` clear must live INSIDE "
+        "the `if (this._runningAtStop !== undefined && ...) { ... }` "
+        "block. An unconditional clear after the if lets a hass-push "
+        "during disconnect consume the stash, leaving the next "
+        "state-flip push undetected and reintroducing the N12 "
+        "regression."
+    )
+    # Negative form: there must NOT be a `this._runningAtStop = undefined;`
+    # immediately after the if-block's closing brace (= unconditional clear).
+    # Allow whitespace and a comment between `}` and the next statement.
+    outside_if = re.compile(
+        r"if\s*\(\s*this\._runningAtStop\s*!==\s*undefined[^{}]*?\{[^{}]*?\}\s*this\._runningAtStop\s*=\s*undefined",
+        re.DOTALL,
+    )
+    assert outside_if.search(executable) is None, (
+        "qs-water-boiler-card.js (review-fix #03 S1): a "
+        "`this._runningAtStop = undefined;` statement appears "
+        "immediately after the if-block's closing brace — that is "
+        "the unconditional-clear pattern that the inside-if move "
+        "must eliminate. Move the clear ENTIRELY inside the "
+        "if-body."
     )
 
 

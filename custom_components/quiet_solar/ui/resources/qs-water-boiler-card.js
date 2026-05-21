@@ -102,6 +102,14 @@ class QsWaterBoilerCard extends HTMLElement {
   // sites — without the helper, the two paths would silently drift
   // and the post-render block would carry stale refs into the next
   // RAF frame.
+  // Review-fix #03 N1: this helper ALSO resets `this._bubbles = []`.
+  // That's a no-op at today's two call sites (both happen after the
+  // shadow root was rewritten / bubbles already drained on disconnect)
+  // but the bubble wipe is intentional: any caller using this helper
+  // to force a "fresh wave canvas" wants the bubble layer reset too.
+  // If a future caller needs DOM-only reset WITHOUT touching bubbles,
+  // split this into `_resetWaveDomRefs()` + explicit
+  // `this._bubbles = []` at the call sites.
   _resetDomRefs() {
     this._waveEls = null;
     this._bubbleLayerEl = null;
@@ -760,12 +768,19 @@ class QsWaterBoilerCard extends HTMLElement {
       // card was disconnected, force a re-prime so the wave snaps to
       // the new target on first paint instead of lerping from the
       // pre-disconnect state. `_runningAtStop` is set in
-      // `_stopAnimation`, consumed here, and cleared so a subsequent
-      // hass-push doesn't accidentally re-trigger the prime.
+      // `_stopAnimation`, consumed here.
+      // Review-fix #03 S1: the clear MUST live inside the if-body so
+      // the stash survives intervening hass-pushes during the
+      // detached window where `running` happens to match the stashed
+      // value. Without that — i.e. with an unconditional clear after
+      // the if — a 4-step sequence (detach, mid-detach hass push
+      // with running unchanged, mid-detach hass push with running
+      // flipped, reattach) would silently lose the prime signal and
+      // the wave would visibly "calm down" on reattach.
       if (this._runningAtStop !== undefined && this._runningAtStop !== running) {
         this._needsAnimationPrime = true;
+        this._runningAtStop = undefined;
       }
-      this._runningAtStop = undefined;
       this._running = running;
 
       // QS-200: per-instance unique SVG ids so two boiler cards on the
