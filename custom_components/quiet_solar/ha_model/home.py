@@ -1,4 +1,3 @@
-import copy
 import logging
 import pickle
 from collections.abc import Mapping
@@ -37,7 +36,6 @@ from ..const import (
     CONF_OFF_GRID_STATE_VALUE,
     DASHBOARD_DEFAULT_SECTIONS,
     DASHBOARD_DEFAULT_SECTIONS_DICT,
-    DASHBOARD_NO_SECTION,
     DASHBOARD_NUM_SECTION_MAX,
     DOMAIN,
     FAR_FUTURE_FORECAST_THRESHOLD_S,
@@ -106,6 +104,46 @@ _LOGGER = logging.getLogger(__name__)
 MAX_SENSOR_HISTORY_S = 60 * 60 * 24 * 7
 
 POWER_ALIGNMENT_TOLERANCE_S = 120
+
+
+def _normalize_dashboard_sections_order(
+    sections: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Reorder dashboard sections so bundled defaults match const.py.
+
+    Bundled default sections (names in
+    ``DASHBOARD_DEFAULT_SECTIONS_DICT``) are emitted in the order of
+    ``DASHBOARD_DEFAULT_SECTIONS``. User-defined custom sections
+    (names NOT in the bundled dict) are preserved AFTER the bundled
+    ones, in their original relative order.
+
+    Called by ``QSHome.__init__`` and after every migration insertion
+    so the in-memory ``dashboard_sections`` list always reflects the
+    canonical bundled-section order, regardless of how the persisted
+    ``CONF_DASHBOARD_SECTION_NAME_*`` keys ended up ordered (e.g.
+    after an older append-only migration from QS-194 or QS-195).
+
+    Duplicate names (defensive, shouldn't happen in practice) are
+    deduplicated keeping the first occurrence.
+    """
+    seen: set[str] = set()
+    bundled_present: dict[str, str] = {}
+    custom_in_order: list[tuple[str, str]] = []
+    for name, icon in sections:
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in DASHBOARD_DEFAULT_SECTIONS_DICT:
+            bundled_present[name] = icon
+        else:
+            custom_in_order.append((name, icon))
+    ordered: list[tuple[str, str]] = []
+    for default_name, _default_icon in DASHBOARD_DEFAULT_SECTIONS:
+        if default_name in bundled_present:
+            ordered.append((default_name, bundled_present[default_name]))
+    ordered.extend(custom_in_order)
+    return ordered
+
 
 HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS = 4
 HOME_PERSON_CAR_MIN_SEGMENT_S = 30
@@ -369,8 +407,35 @@ class QSHome(QSDynamicGroup):
 
             self.dashboard_sections.append((s_name, s_icon))
 
-        if num_found_sections == 0:
-            self.dashboard_sections = copy.deepcopy(DASHBOARD_DEFAULT_SECTIONS)
+        # Init-time bundled-default inclusion. Replaces the per-device
+        # ``_maybe_migrate_missing_default_section`` mechanism with a
+        # single deterministic pass: every entry in
+        # ``DASHBOARD_DEFAULT_SECTIONS`` is added if missing (unless
+        # the user explicitly opted out via
+        # ``CONF_DASHBOARD_SECTIONS_USER_REMOVED``). Custom user
+        # sections from the persisted slot keys are preserved.
+        # Runtime-only — the user's ``config_entry.data`` is NOT
+        # modified, so their customisation stays user-owned. The
+        # dashboard YAML, the home options form, and every device's
+        # section dropdown all read from this in-memory list, so all
+        # three surfaces stay consistent without any per-device
+        # migration timing concerns.
+        user_removed_raw = kwargs.pop(CONF_DASHBOARD_SECTIONS_USER_REMOVED, None) or []
+        user_removed: set[str] = set(user_removed_raw)
+        existing_names = {name for name, _icon in self.dashboard_sections}
+        for default_name, default_icon in DASHBOARD_DEFAULT_SECTIONS:
+            if default_name in existing_names:
+                continue
+            if default_name in user_removed:
+                continue
+            self.dashboard_sections.append((default_name, default_icon))
+
+        # Normalize so bundled defaults always render in canonical
+        # ``DASHBOARD_DEFAULT_SECTIONS`` order regardless of the
+        # persisted slot ordering. Custom user sections (names not in
+        # ``DASHBOARD_DEFAULT_SECTIONS_DICT``) are preserved at the
+        # tail in their original relative order.
+        self.dashboard_sections = _normalize_dashboard_sections_order(self.dashboard_sections)
 
         self.home_non_controlled_consumption_sensor = HOME_NON_CONTROLLED_CONSUMPTION_SENSOR
         self.home_available_power_sensor = HOME_AVAILABLE_POWER_SENSOR
@@ -1458,6 +1523,23 @@ class QSHome(QSDynamicGroup):
                 return car
         return None
 
+    def get_heat_pumps(self) -> list[QSHeatPump]:
+        """Public accessor for registered heat pumps.
+
+        Returns a **snapshot copy** of the internal list so external
+        callers can iterate it safely without accidentally mutating the
+        home's registry. Mutations must go through `add_device` /
+        `remove_device` (CR2 review-fix).
+
+        Callers outside this class (notably the config-flow's radiator
+        and climate steps) should prefer this over reaching into
+        `home._heat_pumps` directly — the private list may move or be
+        renamed and `getattr` lookups silently return an empty list,
+        making the heat-pump piloting dropdown vanish without warning
+        (M3 review-fix).
+        """
+        return list(self._heat_pumps)
+
     def get_person_by_name(self, name: str | None) -> QSPerson | None:
         if name is None:
             return None
@@ -1884,84 +1966,17 @@ class QSHome(QSDynamicGroup):
                     load.devices_to_pilot.append(piloted_device)
                     piloted_device.clients.append(load)
 
-    def _maybe_migrate_missing_default_section(self, device) -> None:
-        """WF-5 tier 2: in-memory auto-migration for missing default sections.
-
-        When a user customised `dashboard_sections` BEFORE QS-194 added
-        the `water_boilers` section (or any future default section),
-        their stored list won't contain it. A device whose default
-        section is missing would silently land in `DASHBOARD_NO_SECTION`
-        and never appear on the dashboard.
-
-        Mitigation: if a device's requested section is one of the
-        `DASHBOARD_DEFAULT_SECTIONS` and isn't already in
-        `self.dashboard_sections`, append it (with its bundled icon) at
-        runtime only. The user's `config_entry.data` is NOT modified —
-        their customisation stays user-owned, this is just a safety net
-        so new device types remain visible after an upgrade.
-        """
-        requested = getattr(device, "_conf_dashboard_section_option", None)
-        if requested is None or requested == DASHBOARD_NO_SECTION:
-            return
-        # S4: use the rigorous prefix parser already defined in
-        # home_model/load.py rather than a string-substring heuristic
-        # (which would mis-strip e.g. "#hot - water" → "water").
-        section_name, _ = extract_name_and_index_from_dashboard_section_option(requested)
-        # Already present (by name)? Nothing to do.
-        existing_names = {s[0] for s in self.dashboard_sections}
-        if section_name in existing_names:
-            return
-        # Only auto-add for bundled default sections — never invent a
-        # section name out of thin air.
-        if section_name not in DASHBOARD_DEFAULT_SECTIONS_DICT:
-            return
-        # N7: honour explicit user opt-out. If the user removed this
-        # section from their dashboard and recorded it in
-        # `CONF_DASHBOARD_SECTIONS_USER_REMOVED`, the migration must
-        # NOT silently re-append it whenever a device of that type
-        # is added.
-        user_removed = []
-        if self.config_entry is not None:
-            user_removed = self.config_entry.data.get(CONF_DASHBOARD_SECTIONS_USER_REMOVED, []) or []
-        if section_name in user_removed:
-            _LOGGER.info(
-                "Skipping auto-append of dashboard section %r for device "
-                "%r — user explicitly opted out via "
-                "CONF_DASHBOARD_SECTIONS_USER_REMOVED",
-                section_name,
-                device.name,
-            )
-            return
-        icon = DASHBOARD_DEFAULT_SECTIONS_DICT[section_name]
-        _LOGGER.info(
-            "Auto-appending missing default dashboard section %r (icon %r) "
-            "for device %r; runtime-only — config_entry not modified",
-            section_name,
-            icon,
-            device.name,
-        )
-        self.dashboard_sections.append((section_name, icon))
-        # S5: invalidate ALL devices whose cached resolution was
-        # warmed before the migration. Without this, sibling devices
-        # already resolved to DASHBOARD_NO_SECTION stay invisible even
-        # though their section now exists.
-        for d in self._all_devices + getattr(self, "_disabled_devices", []):
-            cached = getattr(d, "_computed_dashboard_section", None)
-            if cached == DASHBOARD_NO_SECTION:
-                d._computed_dashboard_section = None
-        # And the newly-added device (not yet in _all_devices at the
-        # call site — add_device appends after this method returns).
-        if hasattr(device, "_computed_dashboard_section"):
-            device._computed_dashboard_section = None
-
     def add_device(self, device):
 
         device.home = self
 
-        # WF-5: in-memory auto-migration for missing default sections.
-        # Run before the topology rebuild below so the device is
-        # immediately reachable via `get_devices_for_dashboard_section`.
-        self._maybe_migrate_missing_default_section(device)
+        # NOTE: there is no per-device dashboard-section migration here.
+        # `QSHome.__init__` ensures every bundled `DASHBOARD_DEFAULT_SECTIONS`
+        # entry is present in `self.dashboard_sections` (minus
+        # `CONF_DASHBOARD_SECTIONS_USER_REMOVED`), so a device's
+        # requested section is guaranteed to resolve as long as it's a
+        # bundled default. Custom section names are the user's
+        # responsibility (configure them via the home options form).
 
         if isinstance(device, QSBattery):
             self.physical_battery = device

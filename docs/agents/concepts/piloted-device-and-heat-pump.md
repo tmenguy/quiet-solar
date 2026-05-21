@@ -47,6 +47,38 @@ climate setpoint is still missed, the pilot engages the aux heater.
 This is the structural pattern for "main device with optional
 booster".
 
+### Piloting is data-driven, not class-specific
+
+The pilot/client relationship is wired in `QSHome._set_topology()`
+(`ha_model/home.py:1876-1882`) by walking `self._all_loads` and
+checking `load.piloted_device_name` — that field comes straight
+from `AbstractLoad.__init__` (`home_model/load.py:114`). Any
+`AbstractLoad` subclass can opt into piloting just by reading
+`CONF_DEVICE_TO_PILOT_NAME` from its config. **No edit to
+`home.add_device` is required** when a new device type wants to be
+piloted.
+
+This is why `QSRadiator` can attach to a heat pump regardless of
+its backing (switch OR climate) — both backings go through the
+same `AbstractLoad.__init__` path, and `_set_topology` finds the
+heat pump by name. The climate-controller class isn't the only
+piloting client anymore.
+
+Climate-backed loads (`QSClimateDuration`, climate-backed
+`QSRadiator`) treat an empty-string HVAC mode as "use the default"
+(`heat` or `auto` / `off`). Without this fallback a persisted `""`
+(from a migration / buggy import) would slip past `kwargs.pop(...,
+default)` and crash the first `set_hvac_mode("")` service call at
+runtime.
+
+`QSClimateDuration` and `SwitchTransport` both fail fast on a
+missing / empty / whitespace-only backing entity_id, raising
+`ServiceValidationError` (for the climate parent) or `ValueError`
+(for the lower-level switch transport) at construction. This
+parallels the EH6 guard on `QSRadiator` and surfaces persistence
+corruption visibly instead of crashing later inside HA's service
+dispatch with an opaque error.
+
 ## Key types / structures
 
 - `PilotedDevice(AbstractDevice)` — the base for pilot-capable

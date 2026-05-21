@@ -2,7 +2,7 @@
 title: Glossary
 slug: glossary
 kind: principle
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # Glossary
@@ -61,6 +61,19 @@ to grep the entire tree to figure out what an `ack` is.
   (`ha_model/dynamic_group.py`).
 - **PilotedDevice** — a device that pilots another device
   (e.g. a heat pump piloting an auxiliary heater).
+- **Radiator** — a heating-only bistate-duration load (`QSRadiator`)
+  that can sit on either a switch entity or a climate entity. The
+  constructor picks a `BistateTransport` strategy based on which
+  `CONF_*` is set. See
+  [concepts/bistate-duration-devices.md](concepts/bistate-duration-devices.md).
+- **BistateTransport** — strategy object in `ha_model/bistate_transport.py`
+  that holds the per-backing details for a bistate-duration load
+  (which HA entity is observed, which HA service is called). Two
+  concrete subclasses: `SwitchTransport` (switch entity →
+  `switch.turn_on/off`) and `ClimateTransport` (climate entity →
+  `climate.set_hvac_mode`). The host (`QSBiStateDuration` subclass)
+  keeps owning the bistate-mode signals and override state machine;
+  the transport receives primitives.
 - **External control detection** — the system noticed a state change
   it did not initiate, so a human or another integration is driving
   the device. Quiet-solar steps back.
@@ -131,16 +144,16 @@ to grep the entire tree to figure out what an `ack` is.
   `ui/*.yaml.j2`; rendered against the live `QSHome` to produce
   Lovelace YAML on first install.
 - **"Quiet Solar" dashboard** — the custom-cards variant
-  (`quiet-solar` URL), uses the four bundled JS cards.
+  (`quiet-solar` URL), uses the five bundled JS cards.
 - **"Quiet Std" dashboard** — the standard-cards variant
   (`quiet-solar-standard` URL), uses only built-in HA cards.
 - **JS Lovelace card** — a custom HA frontend card. Quiet-solar
-  ships four: `qs-car-card`, `qs-climate-card`,
-  `qs-on-off-duration-card`, `qs-pool-card`. Outside the quality
-  pipeline (no JS tests / linter / build).
-- **Dashboard section** — one of `cars`, `climates`, `pools`,
-  `others`, `settings` (`DASHBOARD_DEFAULT_SECTIONS` in `const.py`).
-  Each device type maps to a default section via
+  ships five: `qs-car-card`, `qs-climate-card`,
+  `qs-on-off-duration-card`, `qs-pool-card`, `qs-radiator-card`.
+  Outside the quality pipeline (no JS tests / linter / build).
+- **Dashboard section** — one of `cars`, `climates`, `radiators`,
+  `pools`, `others`, `settings` (`DASHBOARD_DEFAULT_SECTIONS` in
+  `const.py`). Each device type maps to a default section via
   `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION`; TheAdmin can override
   per-device.
 - **`ha_entities` dict** — every `HADeviceMixin` instance exposes

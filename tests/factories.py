@@ -38,11 +38,16 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_MONO_PHASE,
+    CONF_TYPE_NAME_QSRadiator,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
+)
+from custom_components.quiet_solar.ha_model.bistate_transport import (
+    ClimateTransport,
+    SwitchTransport,
 )
 from custom_components.quiet_solar.home_model.commands import (
     CMD_ON,
@@ -336,6 +341,7 @@ def create_minimal_home_model(
     home._cars = []
     home._chargers = []
     home._loads = []
+    home._heat_pumps = []
     home._last_persons_car_allocation = {}
     home.available_amps_for_group = [[max_phase_amps] * 3]
     home.compute_and_set_best_persons_cars_allocations = AsyncMock(return_value={})
@@ -348,6 +354,14 @@ def create_minimal_home_model(
         return None
 
     home.get_car_by_name = get_car_by_name
+
+    # M3 — mirror the canonical `QSHome.get_heat_pumps()` accessor so tests
+    # can keep setting `home._heat_pumps = [...]` and observe the change
+    # through the public method the config flow now uses.
+    def get_heat_pumps():
+        return home._heat_pumps
+
+    home.get_heat_pumps = get_heat_pumps
     home._consumption_forecast = None
     return home
 
@@ -909,6 +923,65 @@ def create_test_car_double(**kwargs) -> TestCarDouble:
         car = create_test_car_double(name="My Car", car_battery_capacity=75000)
     """
     return TestCarDouble(**kwargs)
+
+
+class TestRadiatorDouble:
+    """Lightweight test double for QSRadiator-like behaviour.
+
+    Use this in unit tests that need a radiator-shaped object (with the
+    `_transport`, `_state_on/off`, `bistate_entity`, `piloted_device_name`
+    surface) but don't need to instantiate a full HA-backed device.
+    """
+
+    # pytest opt-out: this is a test helper, not a test class, despite the
+    # `Test` prefix.
+    __test__ = False
+
+    def __init__(
+        self,
+        name: str = "Test Radiator",
+        backing: str = "switch",
+        switch_entity: str = "switch.radiator",
+        climate_entity: str = "climate.radiator",
+        hvac_on: str = "heat",
+        hvac_off: str = "off",
+        piloted_device_name: str | None = None,
+        power: float = 1000.0,
+        **kwargs,
+    ):
+        if backing not in ("switch", "climate"):
+            raise ValueError("backing must be 'switch' or 'climate'")
+
+        self.name = name
+        self.power_use = power
+        self.piloted_device_name = piloted_device_name
+
+        if backing == "switch":
+            self._transport = SwitchTransport(switch_entity)
+        else:
+            self._transport = ClimateTransport(climate_entity, hvac_on, hvac_off)
+
+        self._state_on = self._transport.default_state_on()
+        self._state_off = self._transport.default_state_off()
+        self._bistate_mode_on = self._state_on
+        self._bistate_mode_off = self._state_off
+        self.bistate_entity = self._transport.entity
+        # N12 — use the canonical constant rather than the literal `"radiator"`.
+        self.conf_type_name = CONF_TYPE_NAME_QSRadiator
+        self.device_type = CONF_TYPE_NAME_QSRadiator
+
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+def create_test_radiator_double(**kwargs) -> TestRadiatorDouble:
+    """Create a TestRadiatorDouble for unit testing.
+
+    Example:
+        radiator = create_test_radiator_double(name="Bathroom", backing="switch")
+        radiator = create_test_radiator_double(name="Living Room", backing="climate")
+    """
+    return TestRadiatorDouble(**kwargs)
 
 
 def create_test_charger_double(car: Any = None, **kwargs) -> TestChargerDouble:

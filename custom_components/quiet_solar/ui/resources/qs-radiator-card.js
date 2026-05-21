@@ -1,22 +1,31 @@
 /*
-  QS Water Boiler Card - custom:qs-water-boiler-card
+  QS Radiator Card - custom:qs-radiator-card
   Zero-build single-file Lit-style web component compatible with Home Assistant.
 
-  Dedicated card for QSWaterBoiler (cumulus / thermodynamic boiler) loads.
-  Initial release intentionally mirrors the on/off-duration card's
-  layout — the dedicated card exists so future boiler-specific UI
-  (temperature display, water usage, anti-legionella indicators, etc.)
-  has a place to land without churning every on/off-duration user.
+  Provenance and divergence (S4 review-fix note):
+  This file started as a clone of qs-on-off-duration-card.js with the
+  custom-element renamed. Per QS-195 review-fix #01 it has since picked up:
+    - S14 — `_safeNumber` coercion (NaN-safe state reads)
+    - S15 — `_escapeHtml` for innerHTML-bound strings (title + mode labels)
+    - S16 — keyboard-accessible action buttons (role="button" + tabindex
+            + Enter/Space activation)
+    - S17 — try/finally around async service calls so interaction
+            guards never leak on transient failures
+    - N7  — cold-start `running` derivation OR-s in the underlying
+            backing entity state when published
+  The two cards are intentionally not yet collapsed into a shared base
+  module — the on/off card is older and broadly deployed; a clean
+  shared-base extraction is a larger refactor scheduled as a follow-up.
+  When that lands, the on/off card SHOULD adopt the same S14-S17/N7
+  safety improvements that this card already has.
 
-  Already lit up vs. the on/off-duration card:
-  - Optional `temperature_sensor` entity row, rendered at the top of
-    the card when configured (the only QS-194 customisation).
-  All other entity keys match the on/off-duration card's input shape.
+  TODO: shared base, tracked at https://github.com/tmenguy/quiet-solar/issues/199
+  (A1 review-fix #02).
 */
 
-class QsWaterBoilerCard extends HTMLElement {
-  // M4: gate the requestAnimationFrame loop on the animation-needed
-  // condition (`showAnimation`). The loop is started lazily by
+class QsRadiatorCard extends HTMLElement {
+  // M4: gate the requestAnimationFrame loop on `showAnimation`.
+    // condition (`showAnimation`). The loop is started lazily by
   // `_render()` only when the running-progress dash needs to advance,
   // and stopped in `disconnectedCallback` AND whenever `showAnimation`
   // becomes false. Avoids constant per-card repaint overhead when no
@@ -65,7 +74,7 @@ class QsWaterBoilerCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    return { name: "QS Water Boiler", entities: {} };
+    return { name: "QS Radiator", entities: {} };
   }
 
   setConfig(config) {
@@ -146,10 +155,6 @@ class QsWaterBoilerCard extends HTMLElement {
       const sStartTime = this._entity(e.start_time);
       const sEndTime = this._entity(e.end_time);
       const sIsOffGrid = this._entity(e.is_off_grid);
-      // QS-194: optional water tank temperature sensor (plumbing-only —
-      // the underlying QSWaterBoiler doesn't yet act on this value, but
-      // the card surfaces it so users can see it at a glance).
-      const sTemperatureSensor = this._entity(e.temperature_sensor);
 
       const title = (cfg.title || cfg.name) || "Device";
       
@@ -158,7 +163,7 @@ class QsWaterBoilerCard extends HTMLElement {
       
       // Check if system is off-grid
       const isOffGrid = sIsOffGrid?.state === 'on';
-      
+
       // Get target hours and current run hours directly (in hours)
       // S8: use safeNumber so an `unknown`/`unavailable` sensor doesn't
       // propagate `NaN` into the SVG path attributes downstream.
@@ -175,9 +180,27 @@ class QsWaterBoilerCard extends HTMLElement {
       const isOverridden = overrideState !== 'NO OVERRIDE';
       const isResettingOverride = overrideState === 'ASKED FOR RESET OVERRIDE';
       
-      // Determine if device is running (command state must be "on")
+      // Determine if device is running (command state must be "on").
+      // N7 + BH10 cold-start fallback: when the QS command sensor hasn't
+      // been published yet, also recognise the backing entity's state if
+      // the dashboard template passes it through `entities.backing_entity`.
+      // The configured HVAC ON mode (`entities.climate_hvac_mode_on`,
+      // typically "heat" or "auto") is also recognised as "on-like" so
+      // users who configured a non-default HVAC mode aren't shown an
+      // incorrect "off" state during the cold-start grace window.
       const commandState = sCommand?.state || '';
-      const running = commandState.toLowerCase() === 'on';
+      const commandReportsOn = commandState.toLowerCase() === 'on';
+      const backingEntityId = e.backing_entity;
+      const liveBackingState = backingEntityId
+          ? (this._hass?.states?.[backingEntityId]?.state || '').toLowerCase()
+          : '';
+      // BH defense-in-depth: wrap in `String(...)` so a YAML-coerced
+      // boolean (HA parses bare `on` as `true` if the template ever
+      // regresses and emits an unquoted value) doesn't crash the card
+      // on `true.toLowerCase is not a function`.
+      const configuredHvacOn = String(e.climate_hvac_mode_on || 'heat').toLowerCase();
+      const liveBackingOn = liveBackingState === 'on' || liveBackingState === configuredHvacOn;
+      const running = commandReportsOn || liveBackingOn;
       
       // Determine max hours and what to display
       let maxHours, displayTargetHours;
@@ -189,11 +212,12 @@ class QsWaterBoilerCard extends HTMLElement {
         maxHours = Number(cfg.max_default_hours) || 12;
         displayTargetHours = defaultDuration;
       } else {
-        // BH (user-reported NaN bug): a brand-new water boiler with no
-        // live constraint sensor reports targetHours == 0, which made
-        // `hoursToPct` divide by zero and propagate NaN into the SVG
-        // arc path (`A 130 130 0 0 1 NaN NaN`). Clamp to a sensible
-        // positive fallback so the ring always renders.
+        // BH (user-reported NaN bug): a brand-new switch-backed
+        // radiator with no live constraint sensor reports
+        // targetHours == 0, which made `hoursToPct` divide by zero
+        // and propagate NaN into the SVG arc path
+        // (`A 130 130 0 0 1 NaN NaN`). Clamp to a sensible positive
+        // fallback so the ring always renders.
         maxHours = targetHours > 0 ? targetHours : (Number(cfg.max_default_hours) || 12);
         displayTargetHours = targetHours;
       }
@@ -226,11 +250,6 @@ class QsWaterBoilerCard extends HTMLElement {
       .card { padding: var(--pad); position: relative; }
       .card.off-grid { background: rgba(244, 67, 54, 0.08); }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
-      /* QS-194: optional water-tank temperature row — only shown when
-         the user configured a temperature sensor on the boiler. */
-      .tank-temp { display:flex; align-items:center; justify-content:center; gap:8px;
-                   margin: 4px auto 0; color: var(--secondary-text-color); font-size: 0.95rem; }
-      .tank-temp .temp-value { font-weight: 700; color: var(--primary-text-color); }
       .top { display:flex; gap:12px; flex-wrap:wrap; }
       .below { display:flex; align-items:center; justify-content:center; margin-top: 8px; width:260px; margin-left:auto; margin-right:auto; }
       .below .pill { width:100%; }
@@ -404,19 +423,16 @@ class QsWaterBoilerCard extends HTMLElement {
       // Bistate mode selector options with translations
       const modeOptions = selBistateMode?.attributes?.options || [];
       const modeState = (selBistateMode?.state || '').trim();
-      
-      // Helper to translate bistate mode options.
-      // S10: use the water_boiler_mode namespace so future boiler-specific
-      // labels (Anti-Legionella, etc.) can diverge from on_off_mode without
-      // touching this card.
+
+      // Helper to translate bistate mode options
       const translateBistateMode = (value) => {
-          const key = `component.quiet_solar.entity.select.water_boiler_mode.state.${value}`;
+          const key = `component.quiet_solar.entity.select.radiator_mode.state.${value}`;
           const translated = this._hass?.localize?.(key);
           // If translation not found or returns the key itself, fall back to the raw value
           return (translated && translated !== key) ? translated : value;
       };
-      
-      const modeOptionsHtml = modeOptions.map(o => 
+
+      const modeOptionsHtml = modeOptions.map(o =>
           `<option value="${this._escapeHtml(o)}" ${o === modeState ? 'selected' : ''}>${this._escapeHtml(translateBistateMode(o))}</option>`
       ).join('');
 
@@ -477,43 +493,20 @@ class QsWaterBoilerCard extends HTMLElement {
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
-      // QS-194: precompute temperature row when sensor is configured
-      // and currently reporting a valid numeric value. Falsy / `unknown` /
-      // `unavailable` states are filtered out so we don't render `--°C`
-      // for sensors that are temporarily offline.
-      let tempRowHtml = '';
-      if (sTemperatureSensor) {
-        const rawTempState = sTemperatureSensor.state;
-        const rawTempNum = Number(rawTempState);
-        const tempUnit = sTemperatureSensor.attributes?.unit_of_measurement || '°C';
-        // S3: exclude empty string — Number("") === 0 would otherwise
-        // render an empty-state sensor as `0.0 °C`.
-        if (
-          rawTempState != null
-          && rawTempState !== ''
-          && rawTempState !== 'unknown'
-          && rawTempState !== 'unavailable'
-          && !Number.isNaN(rawTempNum)
-        ) {
-          tempRowHtml = `
-        <div class="tank-temp">
-          <ha-icon icon="mdi:thermometer-water"></ha-icon>
-          <span>Water:</span>
-          <span class="temp-value">${rawTempNum.toFixed(1)} ${this._escapeHtml(tempUnit)}</span>
-        </div>`;
-        }
-      }
-
+      // S15 — sanitise the title (a user-supplied entity / device name)
+      // before it lands in innerHTML.
+      // S16 — primary action `<div>`s get `role="button"` + `tabindex="0"`
+      // so keyboard-only users can tab to and activate them. The Enter/
+      // Space handlers are wired in the event-binding loops below.
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
         <div class="card-title">${this._escapeHtml(title)}</div>
-        ${tempRowHtml}
         <div class="top"></div>
 
         <div class="hero">
           <div class="ring">
-            ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
+            ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle device"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
             <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -577,13 +570,13 @@ class QsWaterBoilerCard extends HTMLElement {
                 ${isDefaultMode && !isOverridden && sDefaultOnFinishTime ? `
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div style="color: var(--secondary-text-color); font-weight:700; font-size: .75rem;">Change Finish Time</div>
-                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}">${formatTime(finishTimeStr)}</div>
+                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}" role="button" tabindex="0" aria-label="Change finish time">${formatTime(finishTimeStr)}</div>
                 </div>
                 ` : ''}
               </div>
             </div>
-            ${e.override_reset ? `<div id="override_btn" class="${overrideBtnClass}"><ha-icon icon="${overrideBtnIcon}"></ha-icon></div>` : ''}
-            ${swGreenOnly ? `<div id="green_btn" class="green-btn ${swGreenOnly.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:leaf"></ha-icon></div>` : ''}
+            ${e.override_reset ? `<div id="override_btn" class="${overrideBtnClass}" role="button" tabindex="0" aria-label="Reset override"><ha-icon icon="${overrideBtnIcon}"></ha-icon></div>` : ''}
+            ${swGreenOnly ? `<div id="green_btn" class="green-btn ${swGreenOnly.state === 'on' ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle solar-only mode"><ha-icon icon="mdi:leaf"></ha-icon></div>` : ''}
           </div>
         </div>
 
@@ -1023,15 +1016,15 @@ class QsWaterBoilerCard extends HTMLElement {
   }
 }
 
-if (!customElements.get('qs-water-boiler-card')) {
-    customElements.define('qs-water-boiler-card', QsWaterBoilerCard);
+if (!customElements.get('qs-radiator-card')) {
+    customElements.define('qs-radiator-card', QsRadiatorCard);
 }
 
 window.customCards = window.customCards || [];
-if (!window.customCards.find((c) => c.type === 'qs-water-boiler-card')) {
+if (!window.customCards.find((c) => c.type === 'qs-radiator-card')) {
     window.customCards.push({
-        type: 'qs-water-boiler-card',
-        name: 'QS Water Boiler Card',
-        description: 'Quiet Solar water boiler (cumulus / thermodynamic) control card',
+        type: 'qs-radiator-card',
+        name: 'QS Radiator Card',
+        description: 'Quiet Solar radiator control card',
     });
 }

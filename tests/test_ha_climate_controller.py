@@ -9,7 +9,7 @@ from custom_components.quiet_solar.const import (
     CONF_CLIMATE_HVAC_MODE_OFF,
     CONF_CLIMATE_HVAC_MODE_ON,
 )
-from custom_components.quiet_solar.ha_model.climate_controller import get_hvac_modes
+from custom_components.quiet_solar.ha_model.bistate_transport import get_hvac_modes
 
 
 def test_get_hvac_modes():
@@ -21,7 +21,7 @@ def test_get_hvac_modes():
     mock_registry = MagicMock()
     mock_registry.async_get.return_value = mock_entry
 
-    with patch("custom_components.quiet_solar.ha_model.climate_controller.er.async_get", return_value=mock_registry):
+    with patch("custom_components.quiet_solar.ha_model.bistate_transport.er.async_get", return_value=mock_registry):
         modes = get_hvac_modes(mock_hass, "climate.living_room")
 
     assert modes == ["off", "heat", "cool", "auto"]
@@ -36,7 +36,7 @@ def test_get_hvac_modes_default():
     mock_registry = MagicMock()
     mock_registry.async_get.return_value = mock_entry
 
-    with patch("custom_components.quiet_solar.ha_model.climate_controller.er.async_get", return_value=mock_registry):
+    with patch("custom_components.quiet_solar.ha_model.bistate_transport.er.async_get", return_value=mock_registry):
         modes = get_hvac_modes(mock_hass, "climate.living_room")
 
     assert "auto" in modes or "off" in modes

@@ -52,6 +52,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSHome,
     CONF_TYPE_NAME_QSOnOffDuration,
     CONF_TYPE_NAME_QSPerson,
+    CONF_TYPE_NAME_QSRadiator,
     CONF_TYPE_NAME_QSSolar,
     CONF_TYPE_NAME_QSWaterBoiler,
 )
@@ -186,6 +187,23 @@ MOCK_CLIMATE_DURATION_CONFIG = {
     CONF_POWER: 2000,  # 2kW power usage
 }
 
+# Mock Radiator configuration backed by a switch (QSRadiator)
+MOCK_RADIATOR_SWITCH_CONFIG = {
+    CONF_NAME: "Test Radiator Switch",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+    CONF_SWITCH: "switch.test_radiator_switch",
+    CONF_POWER: 1000,  # 1kW heating-only radiator
+}
+
+# Mock Radiator configuration backed by a climate entity (QSRadiator)
+MOCK_RADIATOR_CLIMATE_CONFIG = {
+    CONF_NAME: "Test Radiator Climate",
+    DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+    CONF_CLIMATE: "climate.test_radiator_climate",
+    CONF_CLIMATE_HVAC_MODE_ON: "heat",
+    CONF_CLIMATE_HVAC_MODE_OFF: "off",
+    CONF_POWER: 1500,
+}
 # Mock WaterBoiler configuration (QSWaterBoiler — subclass of QSOnOffDuration)
 MOCK_WATER_BOILER_CONFIG = {
     CONF_NAME: "Test Water Boiler",
@@ -216,6 +234,8 @@ MOCK_BATTERY_WITH_NUMBERS_ENTRY_ID = "battery_numbers_entry_123"
 MOCK_SOLAR_WITH_INPUT_ENTRY_ID = "solar_input_entry_123"
 MOCK_ON_OFF_DURATION_ENTRY_ID = "on_off_duration_entry_123"
 MOCK_CLIMATE_DURATION_ENTRY_ID = "climate_duration_entry_123"
+MOCK_RADIATOR_SWITCH_ENTRY_ID = "radiator_switch_entry_123"
+MOCK_RADIATOR_CLIMATE_ENTRY_ID = "radiator_climate_entry_123"
 MOCK_WATER_BOILER_ENTRY_ID = "water_boiler_entry_123"
 MOCK_WATER_BOILER_NO_TEMP_ENTRY_ID = "water_boiler_no_temp_entry_123"
 
@@ -248,6 +268,12 @@ MOCK_SENSOR_STATES = {
     "switch.test_on_off_device": {"state": "off", "attributes": {}},
     # ClimateDuration entities
     "climate.test_climate_device": {"state": "off", "attributes": {"hvac_modes": ["off", "heat", "cool", "auto"]}},
+    # Radiator entities (switch backing + climate backing)
+    "switch.test_radiator_switch": {"state": "off", "attributes": {}},
+    "climate.test_radiator_climate": {
+        "state": "off",
+        "attributes": {"hvac_modes": ["off", "heat", "auto"]},
+    },
     # WaterBoiler entities
     "switch.test_water_boiler": {"state": "off", "attributes": {}},
     "sensor.test_water_boiler_temperature": {"state": "55", "attributes": {"unit_of_measurement": "°C"}},

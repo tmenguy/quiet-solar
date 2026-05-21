@@ -1,11 +1,7 @@
 import logging
-from datetime import datetime
-from typing import Any
 
-from homeassistant.components import climate
 from homeassistant.components.climate import HVACMode
-from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.helpers import entity_registry as er
+from homeassistant.exceptions import ServiceValidationError
 
 from ..const import (
     CONF_CLIMATE,
@@ -14,15 +10,8 @@ from ..const import (
     SENSOR_CONSTRAINT_SENSOR_CLIMATE,
     CONF_TYPE_NAME_QSClimateDuration,
 )
-from ..home_model.commands import CMD_ON, LoadCommand
 from .bistate_duration import QSBiStateDuration
-
-
-def get_hvac_modes(hass, entity_id):
-    registry = er.async_get(hass)
-    entry = registry.async_get(entity_id)
-    return entry.capabilities.get("hvac_modes", [HVACMode.AUTO.value, HVACMode.OFF.value])
-
+from .bistate_transport import ClimateTransport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,17 +21,67 @@ class QSClimateDuration(QSBiStateDuration):
 
     def __init__(self, **kwargs):
 
+        # S2/S5/B3 — build the transport BEFORE `super().__init__` so
+        # the inherited `_state_on/_state_off` property shadow (in
+        # `QSBiStateDuration`) can delegate to it during the base
+        # ctor's seed assignments. The transport is the single source
+        # of truth for the HVAC modes; the base ctor's
+        # `self._state_on = "on"` lands as
+        # `self._transport.state_on = "on"` and gets overwritten with
+        # the actual HVAC mode below.
+        climate_entity = kwargs.pop(CONF_CLIMATE, None)
+        if isinstance(climate_entity, str):
+            stripped = climate_entity.strip()
+            climate_entity = stripped if stripped else None
+        # EH-C — surface a missing/empty climate entity rather than
+        # silently constructing `ClimateTransport(None, ...)` and
+        # later crashing at `services.async_call(...entity_id=None)`.
+        # Mirrors the EH6 guard on `QSRadiator`. Pre-existing climate
+        # entries cannot reach this branch (the config flow requires
+        # a non-empty climate entity), so this only fires on
+        # programmatic misuse / corrupted persistence.
+        if not climate_entity:
+            raise ServiceValidationError("Climate-duration load requires a non-empty climate entity")
+        # EH3 — `kwargs.pop(key, default)` only returns `default` when
+        # the key is MISSING; a persisted `""` (from a migration or a
+        # buggy import) would otherwise slip through and crash
+        # `set_hvac_mode("")` at runtime. Mirror the S9 fallback from
+        # `QSRadiator` so both classes treat empty as absent.
+        state_off = kwargs.pop(CONF_CLIMATE_HVAC_MODE_OFF, None) or str(HVACMode.OFF.value)
+        state_on = kwargs.pop(CONF_CLIMATE_HVAC_MODE_ON, None) or str(HVACMode.AUTO.value)
+        self.climate_entity = climate_entity
+        self._transport: ClimateTransport = ClimateTransport(climate_entity, state_on, state_off)
+
         super().__init__(**kwargs)
 
-        self.climate_entity = kwargs.pop(CONF_CLIMATE, None)
-        self._state_off = kwargs.pop(CONF_CLIMATE_HVAC_MODE_OFF, str(HVACMode.OFF.value))
-        self._state_on = kwargs.pop(CONF_CLIMATE_HVAC_MODE_ON, str(HVACMode.AUTO.value))
-
-        # get the HVAC mode for on / off for the climate entity
-        self._bistate_mode_on = self._state_on
-        self._bistate_mode_off = self._state_off
-        self.bistate_entity = self.climate_entity
+        # B7 — route the post-super HVAC-mode re-pin through the
+        # inherited property shadow (`self._state_on = …` updates the
+        # transport). The base ctor seeded the transport with `"on"`/
+        # `"off"` via the same path; we now restore the actual HVAC
+        # modes the user picked.
+        self._state_on = state_on
+        self._state_off = state_off
+        # BH-B — `QSClimateDuration` pins `_bistate_mode_on/off` to the
+        # raw HVAC mode strings (e.g. "heat" / "off"). The sibling
+        # `QSRadiator` uses literal "on" / "off" instead (E3 review-fix).
+        # The divergence is intentional: the `climate_mode` translation
+        # registers raw HVAC mode keys (`"heat"`, `"cool"`, `"fan_only"`,
+        # …) as states for the force-mode dropdown, so changing climate
+        # to "on"/"off" would break translations for every existing
+        # climate user. The `radiator_mode` translation, by contrast,
+        # only registers `"on" / "off"` (plus the calendar modes), so
+        # the radiator can safely use literals. Future cross-subclass
+        # logic in `QSBiStateDuration` that compares `_state_on` ↔
+        # `_bistate_mode_on` should treat the two as decoupled.
+        self._bistate_mode_on = state_on
+        self._bistate_mode_off = state_off
+        self.bistate_entity = climate_entity
         self.is_load_time_sensitive = True
+
+    # `_state_on` / `_state_off` properties are inherited from
+    # `QSBiStateDuration` (B3 review-fix moved them up so both
+    # `QSClimateDuration` AND `QSRadiator` route writes through the
+    # transport from a single definition).
 
     @property
     def climate_state_on(self):
@@ -50,7 +89,7 @@ class QSClimateDuration(QSBiStateDuration):
 
     @climate_state_on.setter
     def climate_state_on(self, value):
-        self._state_on = value
+        self._state_on = value  # routes through the inherited shadow
         self._bistate_mode_on = value
 
     @property
@@ -59,12 +98,12 @@ class QSClimateDuration(QSBiStateDuration):
 
     @climate_state_off.setter
     def climate_state_off(self, value):
-        self._state_off = value
+        self._state_off = value  # routes through the inherited shadow
         self._bistate_mode_off = value
 
     def get_possibles_modes(self):
         """return the possible modes for the climate entity"""
-        return get_hvac_modes(self.hass, self.climate_entity)
+        return self._transport.mode_options(self.hass)
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:
         return SENSOR_CONSTRAINT_SENSOR_CLIMATE
@@ -73,26 +112,8 @@ class QSClimateDuration(QSBiStateDuration):
         """return the translation key for the select"""
         return "climate_mode"
 
-    # exception catched above execute_command
-    async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
-
-        if state is not None:
-            hvac_mode = state
-        else:
-            if command.is_like(CMD_ON):
-                hvac_mode = self.climate_state_on
-            elif command.is_off_or_idle():
-                hvac_mode = self.climate_state_off
-            else:
-                raise ValueError("Invalid command")
-
-        data: dict[str, Any] = {ATTR_ENTITY_ID: self.bistate_entity}
-        service = climate.SERVICE_SET_HVAC_MODE
-
-        data[climate.ATTR_HVAC_MODE] = hvac_mode
-        domain = climate.DOMAIN
-
-        # exception catched above execute_command
-        await self.hass.services.async_call(domain, service, data)
-
-        return False
+    # `execute_command_system` is inherited from `QSBiStateDuration` and
+    # delegates to `self._transport.execute(...)` (N2 review-fix). The
+    # base passes `self._state_on/_state_off`, which thanks to the S5
+    # property shadows defined above resolve to the transport's modes —
+    # so this stays in sync with `climate_state_on/off` mutations.

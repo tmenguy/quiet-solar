@@ -448,6 +448,11 @@ class QsPoolCard extends HTMLElement {
       };
       const polar = (cx, cy, r, deg) => ({x: cx + r * Math.cos(deg2rad(deg)), y: cy - r * Math.sin(deg2rad(deg))});
       const arcPath = (cx, cy, r, a0, a1) => {
+          // BH defense-in-depth: a non-finite angle (NaN / Infinity)
+          // would render as `A 130 130 0 0 1 NaN NaN` in the SVG `d`
+          // attribute and trigger a browser "Configuration error".
+          // Return empty string so the consumer omits the <path> tag.
+          if (!Number.isFinite(a0) || !Number.isFinite(a1)) return '';
           const p0 = polar(cx, cy, r, a0);
           const p1 = polar(cx, cy, r, a1);
           let delta = a1 - a0;

@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-05-21
+last_verified: 2026-05-23
 ---
 
 # QSHome — the orchestrator
@@ -60,6 +60,13 @@ than the cycle completes.
 - `update_all_states()` — the 4s cycle.
 - `update_loads()` — the 7s cycle.
 - `_state_lock`, `_loads_lock` — `asyncio.Lock` guards.
+- Public registry accessors — `get_car_by_name(name)`,
+  `get_person_by_name(name)`, `get_heat_pumps()`. Callers outside
+  `QSHome` should prefer these over reaching into the private
+  `_cars` / `_persons` / `_heat_pumps` lists. Accessors return
+  snapshot copies so external code cannot mutate the home's
+  registry; the canonical mutation surface stays `add_device` /
+  `remove_device`.
 
 ## Lifecycle
 
@@ -84,38 +91,54 @@ per cycle:
   be async or routed through `hass.async_add_executor_job()`.
 - Hard-coding the cycle intervals — they live in `const.py`.
 
-## Dashboard sections auto-migration
+## Dashboard sections — init-time auto-include
 
-When a new device type adds a new bundled `DASHBOARD_DEFAULT_SECTIONS`
-entry (e.g. `water_boilers` added by QS-194), users who **previously
-customised** their dashboard sections will not have the new section
-in their stored list. `QSHome.add_device` runs
-`_maybe_migrate_missing_default_section(device)` for every device it
-accepts: if the device's requested section is one of
-`DASHBOARD_DEFAULT_SECTIONS` and is missing from `self.dashboard_sections`,
-it is appended **at runtime only** (the config entry is never modified —
-the user's customisation stays user-owned). The complementary tier-1
-diagnostic lives in `home_model/load.py:dashboard_section`: if section
-resolution still fails (i.e. it's not a default-section name), a
-single `_LOGGER.warning` surfaces the device and the unresolved
-section so the issue can be diagnosed from HA logs.
+`QSHome.__init__` deterministically builds `self.dashboard_sections`
+on every load:
 
-When the migration appends a section, it also invalidates the
-`_computed_dashboard_section` cache on every sibling device that
-had previously resolved to `DASHBOARD_NO_SECTION`, so a device added
-before the migration trigger re-resolves correctly on the next
-access (review-fix #03 S5).
+1. Read every `CONF_DASHBOARD_SECTION_NAME_<i>` /
+   `CONF_DASHBOARD_SECTION_ICON_<i>` slot from `config_entry.data`
+   into an in-memory list. Slot names go through
+   `extract_name_and_index_from_dashboard_section_option` so the
+   `"#N - <name>"` prefix is stripped consistently (no substring
+   heuristic, no mis-strip on section names containing `" - "`).
+2. **Auto-include**: walk `DASHBOARD_DEFAULT_SECTIONS` (the bundled
+   defaults — `cars`, `climates`, `pools`, `water_boilers`,
+   `radiators`, `others`, `settings`); for each entry missing from
+   the list AND not listed in `CONF_DASHBOARD_SECTIONS_USER_REMOVED`,
+   append it. Runtime-only — `config_entry.data` is NOT modified, so
+   the user's persisted slot layout stays user-owned.
+3. Run `_normalize_dashboard_sections_order` so bundled defaults
+   appear in canonical const order regardless of the persisted slot
+   ordering. Custom user sections (names not in
+   `DASHBOARD_DEFAULT_SECTIONS_DICT`) are preserved at the tail in
+   their original relative order.
 
-Users can opt out of the auto-migration for specific sections by
-listing them in `CONF_DASHBOARD_SECTIONS_USER_REMOVED` on the home
-config entry; the migration honours this list and skips re-appending
-those sections (review-fix #03 N7).
+This replaces the pre-QS-195 `_maybe_migrate_missing_default_section`
+per-device mechanism. Why the swap:
 
-The prefix-parsing step uses
-`extract_name_and_index_from_dashboard_section_option` (from
-`home_model/load.py`) rather than a string-substring heuristic, so
-section names containing `" - "` are parsed correctly (review-fix
-#03 S4).
+- The previous approach mutated `dashboard_sections` lazily as each
+  device was added, which created in-memory-vs-persisted divergence
+  AND a per-device timing dependency on the home being constructed
+  first. Silent early-returns (5+ different guards) could prevent
+  the migration from firing under conditions that were hard to
+  diagnose.
+- The init-time approach runs once, deterministically, before any
+  device is added. The dashboard YAML, the home options form, and
+  every device's section dropdown read the same `home.dashboard_sections`
+  list, so all three surfaces are always consistent.
+
+Users still have an opt-out: list a section name in
+`CONF_DASHBOARD_SECTIONS_USER_REMOVED` on the home config entry and
+the init-time auto-include skips it (no UI for this — it's a
+power-user knob for the rare case of deliberately removing a bundled
+default).
+
+The complementary tier-1 diagnostic lives in
+`home_model/load.py:dashboard_section`: if a device's requested
+section can't be resolved (e.g. a typo, a now-removed custom
+section), a single `_LOGGER.warning` surfaces the device and the
+unresolved section so the issue can be diagnosed from HA logs.
 
 ## See also
 

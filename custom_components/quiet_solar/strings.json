@@ -9,7 +9,12 @@
     "error": {
       "already_configured_device": "Device is already configured",
       "cannot_connect": "Unable to connect",
-      "cloud_profile_mismatch": "Cloud profile does not match configuration"
+      "cloud_profile_mismatch": "Cloud profile does not match configuration",
+      "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator",
+      "climate_capabilities_unavailable": "Climate entity advertises no HVAC modes; pick a different climate entity or check the device",
+      "climate_modes_insufficient": "Climate entity exposes fewer than two HVAC modes; pick a different climate entity or configure the device to expose at least two modes",
+      "hvac_modes_must_differ": "HVAC mode ON and OFF must be different",
+      "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
     },
     "step": {
       "user": {
@@ -25,6 +30,7 @@
           "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
           "water_boiler": "Add a water boiler (cumulus or thermodynamic boiler)",
           "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
+          "radiator": "Add a heating-only radiator (switch-backed or climate-backed)",
           "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
           "heat_pump": "Add a centralized Heat Pump, to be used in conjunction with climate splits"
         }
@@ -33,6 +39,7 @@
         "title": "Edit a Home",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "home_voltage": "voltage of your home (V)",
           "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
           "grid_active_power_sensor_inverted": "Is your grid power sensor needs inversion?, ie does it shows positive values when you consume power from the grid?",
@@ -74,6 +81,7 @@
         "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "battery_capacity": "Capacity (Wh)",
           "battery_is_dc_coupled" : "Is the battery DC coupled with an hybrid solar inverter?",
           "battery_charge_percent_sensor": "Charge percentage (%)",
@@ -92,6 +100,7 @@
         "description": "setup only one of the two inverters sensor if you have only one",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
           "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
           "solar_forecast_provider": "Preferred solar forecast provider",
@@ -175,6 +184,7 @@
         "description": "Add some car information to define when and how it is connected to your charger",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "car_is_invited": "Is this car a placeholder one for a guest?",
           "car_plugged": "Binary sensor to detect if the car is plugged or not",
           "car_tracker": "car device tracker to know if the car is at home or not",
@@ -280,6 +290,7 @@
         "description": "This device will compute automatically the needed pump use time to keep the pool clean",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name" : "Add pool to a load group to limit the amps",
           "pool_temperature_sensor": "Water temperature sensor",
           "switch": "On/Off switch of the pump filter",
@@ -303,6 +314,7 @@
         "description": "Usefull for boilers, simple heaters, etc. or pool pumps if the automatic one does not fit your needs",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name" : "Add to a load group to limit the amps",
           "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
           "switch": "On/Off of the load",
@@ -320,6 +332,7 @@
         "description": "Configure a cumulus (electric resistive water heater) or a thermodynamic water boiler.",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name": "Add water boiler to a load group to limit the amps",
           "load_is_boost_only": "Is this boiler automatically regulated (QS will only boost on solar surplus)?",
           "switch": "On/Off switch of the boiler",
@@ -338,6 +351,7 @@
         "description": "Use any climate (HVAC, Radiator, etc.) to be set on for a specific duration",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name" : "Add to a load group to limit the amps",
           "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
           "climate": "Climate entity",
@@ -351,6 +365,29 @@
         },
         "data_description": {
           "power": "Measured: {measured_power}"
+        }
+      },
+      "radiator": {
+        "title": "A heating-only radiator",
+        "description": "Heating-only radiator backed by either a switch entity or a climate entity (pick exactly one).",
+        "data": {
+          "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
+          "dynamic_group_name": "Add to a load group to limit the amps",
+          "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
+          "switch": "Switch entity controlling the radiator (leave empty if using a climate entity)",
+          "climate": "Climate entity controlling the radiator (leave empty if using a switch)",
+          "climate_hvac_on": "HVAC mode to be used when the radiator is on",
+          "climate_hvac_off": "HVAC mode to be used when the radiator is off",
+          "device_to_pilot_name": "Optionally attach a heat pump piloted by this radiator",
+          "power": "Power of the radiator (W)",
+          "accurate_power_sensor": "Power sensor of the radiator (W, kW)",
+          "num_max_on_off": "Maximum Number of allowed turn on or turn off of the radiator per day",
+          "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the radiator being on"
+        },
+        "data_description": {
+          "power": "Measured: {measured_power}",
+          "climate_hvac_on": "We suggest `heat` for heating-only radiators."
         }
       },
       "dynamic_group": {
@@ -373,6 +410,7 @@
         "description": "Configure a centralized heat pump used by several climates splits",
         "data": {
           "name": "Name",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name": "Add heat pump to a load group to limit the amps",
           "power": "Power consumption of the heat pump (W)",
           "accurate_power_sensor": "Power sensor of the heat pump (W, kW)",
@@ -398,13 +436,19 @@
     "error": {
       "already_configured_device": "[%key:component::quiet_solar::config::error::already_configured_device%]",
       "cannot_connect": "[%key:component::quiet_solar::config::error::cannot_connect%]",
-      "cloud_profile_mismatch": "[%key:component::quiet_solar::config::error::cloud_profile_mismatch%]"
+      "cloud_profile_mismatch": "[%key:component::quiet_solar::config::error::cloud_profile_mismatch%]",
+      "exactly_one_backing_required": "[%key:component::quiet_solar::config::error::exactly_one_backing_required%]",
+      "climate_capabilities_unavailable": "[%key:component::quiet_solar::config::error::climate_capabilities_unavailable%]",
+      "climate_modes_insufficient": "[%key:component::quiet_solar::config::error::climate_modes_insufficient%]",
+      "hvac_modes_must_differ": "[%key:component::quiet_solar::config::error::hvac_modes_must_differ%]",
+      "piloted_heat_pump_unknown": "[%key:component::quiet_solar::config::error::piloted_heat_pump_unknown%]"
     },
     "step": {
       "home": {
         "title": "[%key:component::quiet_solar::config::step::home::title%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::home::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "home_voltage": "[%key:component::quiet_solar::config::step::home::data::home_voltage%]",
           "grid_active_power_sensor": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor%]",
           "grid_active_power_sensor_inverted": "[%key:component::quiet_solar::config::step::home::data::grid_active_power_sensor_inverted%]",
@@ -446,6 +490,7 @@
         "description": "[%key:component::quiet_solar::config::step::battery::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::battery::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "battery_capacity": "[%key:component::quiet_solar::config::step::battery::data::battery_capacity%]",
           "battery_is_dc_coupled" : "[%key:component::quiet_solar::config::step::battery::data::battery_is_dc_coupled%]",
           "battery_charge_percent_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_percent_sensor%]",
@@ -464,6 +509,7 @@
         "description": "[%key:component::quiet_solar::config::step::solar::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::solar::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "inverter_active_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_active_power_sensor%]",
           "inverter_input_power_sensor": "[%key:component::quiet_solar::config::step::solar::data::inverter_input_power_sensor%]",
           "solar_forecast_provider": "[%key:component::quiet_solar::config::step::solar::data::solar_forecast_provider%]",
@@ -538,6 +584,7 @@
         "description": "[%key:component::quiet_solar::config::step::car::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::car::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "car_is_invited": "[%key:component::quiet_solar::config::step::car::data::car_is_invited%]",
           "car_plugged": "[%key:component::quiet_solar::config::step::car::data::car_plugged%]",
           "car_tracker": "[%key:component::quiet_solar::config::step::car::data::car_tracker%]",
@@ -643,6 +690,7 @@
         "description": "[%key:component::quiet_solar::config::step::pool::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::pool::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::pool::data::dynamic_group_name%]",
           "pool_temperature_sensor": "[%key:component::quiet_solar::config::step::pool::data::pool_temperature_sensor%]",
           "switch": "[%key:component::quiet_solar::config::step::pool::data::switch%]",
@@ -666,6 +714,7 @@
         "description": "[%key:component::quiet_solar::config::step::on_off_duration::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::on_off_duration::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::on_off_duration::data::dynamic_group_name%]",
           "load_is_boost_only": "[%key:component::quiet_solar::config::step::on_off_duration::data::load_is_boost_only%]",
           "switch": "[%key:component::quiet_solar::config::step::on_off_duration::data::switch%]",
@@ -683,6 +732,7 @@
         "description": "[%key:component::quiet_solar::config::step::water_boiler::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::water_boiler::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name": "[%key:component::quiet_solar::config::step::water_boiler::data::dynamic_group_name%]",
           "load_is_boost_only": "[%key:component::quiet_solar::config::step::water_boiler::data::load_is_boost_only%]",
           "switch": "[%key:component::quiet_solar::config::step::water_boiler::data::switch%]",
@@ -701,6 +751,7 @@
         "description": "[%key:component::quiet_solar::config::step::climate::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::climate::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name" :  "[%key:component::quiet_solar::config::step::climate::data::dynamic_group_name%]",
           "load_is_boost_only": "[%key:component::quiet_solar::config::step::climate::data::load_is_boost_only%]",
           "climate": "[%key:component::quiet_solar::config::step::climate::data::climate%]",
@@ -714,6 +765,29 @@
         },
         "data_description": {
           "power": "[%key:component::quiet_solar::config::step::climate::data_description::power%]"
+        }
+      },
+      "radiator": {
+        "title": "[%key:component::quiet_solar::config::step::radiator::title%]",
+        "description": "[%key:component::quiet_solar::config::step::radiator::description%]",
+        "data": {
+          "name": "[%key:component::quiet_solar::config::step::radiator::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
+          "dynamic_group_name": "[%key:component::quiet_solar::config::step::radiator::data::dynamic_group_name%]",
+          "load_is_boost_only": "[%key:component::quiet_solar::config::step::radiator::data::load_is_boost_only%]",
+          "switch": "[%key:component::quiet_solar::config::step::radiator::data::switch%]",
+          "climate": "[%key:component::quiet_solar::config::step::radiator::data::climate%]",
+          "climate_hvac_on": "[%key:component::quiet_solar::config::step::radiator::data::climate_hvac_on%]",
+          "climate_hvac_off": "[%key:component::quiet_solar::config::step::radiator::data::climate_hvac_off%]",
+          "device_to_pilot_name": "[%key:component::quiet_solar::config::step::radiator::data::device_to_pilot_name%]",
+          "power": "[%key:component::quiet_solar::config::step::radiator::data::power%]",
+          "num_max_on_off": "[%key:component::quiet_solar::config::step::radiator::data::num_max_on_off%]",
+          "accurate_power_sensor": "[%key:component::quiet_solar::config::step::radiator::data::accurate_power_sensor%]",
+          "calendar": "[%key:component::quiet_solar::config::step::radiator::data::calendar%]"
+        },
+        "data_description": {
+          "power": "[%key:component::quiet_solar::config::step::radiator::data_description::power%]",
+          "climate_hvac_on": "[%key:component::quiet_solar::config::step::radiator::data_description::climate_hvac_on%]"
         }
       },
       "dynamic_group": {
@@ -735,6 +809,7 @@
         "description": "[%key:component::quiet_solar::config::step::heat_pump::description%]",
         "data": {
           "name": "[%key:component::quiet_solar::config::step::heat_pump::data::name%]",
+          "device_dashboard_section": "[%key:component::quiet_solar::config::step::person::data::device_dashboard_section%]",
           "dynamic_group_name": "[%key:component::quiet_solar::config::step::heat_pump::data::dynamic_group_name%]",
           "power": "[%key:component::quiet_solar::config::step::heat_pump::data::power%]",
           "accurate_power_sensor": "[%key:component::quiet_solar::config::step::heat_pump::data::accurate_power_sensor%]",
@@ -824,6 +899,9 @@
       },
       "qs_constraint_sensor_climate": {
         "name": "Next climate Change"
+      },
+      "qs_constraint_sensor_radiator": {
+        "name": "Next Radiator Change"
       },
       "qs_constraint_sensor_pool": {
         "name": "Next Pool filter"
@@ -1004,6 +1082,17 @@
           "fan_only": "Force HVAC Mode FAN ONLY"
         }
       },
+      "radiator_mode": {
+        "name": "Radiator Mode",
+        "state": {
+          "bistate_mode_auto": "Calendar: End+Duration",
+          "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+          "bistate_mode_default": "Default: End+Duration",
+          "off": "Force OFF",
+          "on": "Force ON",
+          "heat": "Force HEAT"
+        }
+      },
       "climate_state_on": {
         "name": "Climate Control Mode ON",
         "state": {
@@ -1062,13 +1151,14 @@
   "selector": {
     "dashboard_device_section": {
       "options": {
-        "Not in dashboard": "Not in dashboard",
         "#1 - cars": "#1 - cars",
         "#2 - climates": "#2 - climates",
         "#3 - pools": "#3 - pools",
         "#4 - water_boilers": "#4 - water_boilers",
-        "#5 - others": "#5 - others",
-        "#6 - settings": "#6 - settings"
+        "#5 - radiators": "#5 - radiators",
+        "#6 - others": "#6 - others",
+        "#7 - settings": "#7 - settings",
+        "Not in dashboard": "Not in dashboard"
       }
     }
   }

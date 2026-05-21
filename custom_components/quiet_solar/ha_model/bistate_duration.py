@@ -3,6 +3,7 @@ from abc import abstractmethod
 from collections import namedtuple
 from datetime import datetime, timedelta
 from datetime import time as dt_time
+from typing import TYPE_CHECKING
 
 import pytz
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, Platform
@@ -17,6 +18,9 @@ from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import CMD_IDLE, LoadCommand
 from ..home_model.constraints import DATETIME_MAX_UTC, TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
+
+if TYPE_CHECKING:
+    from .bistate_transport import BistateTransport
 
 bistate_modes = [
     "bistate_mode_auto",
@@ -37,6 +41,55 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class QSBiStateDuration(HADeviceMixin, AbstractLoad):
+    """Shared base for bistate-duration loads (on/off, climate, radiator, pool).
+
+    Subclasses carry ONE pair of state attributes with overlapping but
+    NOT identical semantics:
+
+    - ``_state_on`` / ``_state_off`` — the underlying HA-state strings
+      the transport dispatches to the device (e.g. ``"on"`` / ``"off"``
+      for a switch, ``"heat"`` / ``"off"`` for a climate). The B3
+      property shadow below routes reads/writes through
+      ``self._transport.state_on / state_off``; these are the SERVICE-CALL
+      values.
+    - ``_bistate_mode_on`` / ``_bistate_mode_off`` — the **bistate-mode
+      select** state strings (Force ON / Force OFF entries in the UI).
+      These map to translation keys in ``strings.json``.
+
+    Subclasses follow ONE OF TWO conventions for `_bistate_mode_*`:
+
+    1. **`QSOnOffDuration` / `QSPool`**: hard-coded literals like
+       ``"on_off_mode_on"`` (namespaced for the on/off / pool
+       translations). The select shows "Force ON" / "Force OFF" via
+       those keys; the `_state_on/off` HA-state value is "on"/"off".
+    2. **`QSClimateDuration`**: `_bistate_mode_*` mirrors the raw HVAC
+       mode (`"heat"`, `"cool"`, `"fan_only"`, …). The `climate_mode`
+       translation registers each HVAC mode as a force-mode state key
+       so the dropdown renders "Force HVAC Mode HEAT" etc.
+    3. **`QSRadiator`**: `_bistate_mode_*` is hard-coded to `"on"` /
+       `"off"` regardless of the HVAC mode, mirroring convention 1.
+       The `radiator_mode` translation registers `"on"` / `"off"` (NOT
+       arbitrary HVAC modes) so a user who configures HVAC ON =
+       `"auto"` still sees a localised "Force ON" label.
+
+    Both conventions are valid; the divergence is intentional. Any
+    base-class logic that compares `_state_on` ↔ `_bistate_mode_on`
+    must treat the two as decoupled.
+    """
+
+    # B6 review-fix — class-level default of `None` so
+    # `hasattr` / `is None` checks behave consistently before the
+    # subclass `__init__` has had a chance to assign the transport.
+    _transport: BistateTransport | None = None
+
+    # B3 review-fix — fallback storage for `_state_on/_state_off` when
+    # `_transport` is `None`. The property shadows below route reads
+    # and writes through the transport when set, otherwise through
+    # these private fields. Subclasses inherit the property and never
+    # need to re-declare it.
+    _state_on_host: str = "on"
+    _state_off_host: str = "off"
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.bistate_mode = "bistate_mode_auto"
@@ -46,7 +99,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.override_duration: float | None = DEFAULT_USER_OVERRIDE_DURATION_S // 3600
 
-        # to be overcharged by the child class
+        # to be overcharged by the child class. The `_state_on`/`_state_off`
+        # writes flow through the property shadow defined below: when
+        # `_transport` is set, the transport observes the change; when
+        # not, the writes land in `_state_on_host`/`_state_off_host`.
         self._state_on = "on"
         self._state_off = "off"
         self._bistate_mode_on = "bistate_mode_on"
@@ -58,6 +114,52 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.qs_bistate_current_duration_h: float = 0.0
         self.qs_bistate_current_on_h: float = 0.0
         self._previous_bistate_mode: str | None = None
+
+    # B3 review-fix — `_state_on` / `_state_off` are thin views over
+    # the transport. Direct writes (`device._state_on = "auto"`) always
+    # update the transport so the host and the service-call layer never
+    # diverge. When `_transport` is None (e.g. during super().__init__
+    # before the subclass has built the transport), the value lands in
+    # the per-instance fallback fields.
+    @property
+    def _state_on(self) -> str:
+        if self._transport is not None:
+            return self._transport.state_on
+        return self._state_on_host
+
+    @_state_on.setter
+    def _state_on(self, value: str) -> None:
+        if self._transport is not None:
+            self._transport.state_on = value
+        else:
+            self._state_on_host = value
+
+    @property
+    def _state_off(self) -> str:
+        if self._transport is not None:
+            return self._transport.state_off
+        return self._state_off_host
+
+    @_state_off.setter
+    def _state_off(self, value: str) -> None:
+        if self._transport is not None:
+            self._transport.state_off = value
+        else:
+            self._state_off_host = value
+
+    @property
+    def hvac_state_on(self) -> str:
+        """Public accessor for the transport's ON-state string.
+
+        Exposes the underlying HA state value that maps to "running" —
+        for a switch-backed load this is `"on"`, for a climate-backed
+        load it's the configured HVAC ON mode (e.g. `"heat"`,
+        `"auto"`). Read by the dashboard template so the JS card can
+        compare against the live backing-entity state during the
+        cold-start grace window (BH10 review-fix). Public because
+        HA's Jinja sandbox restricts leading-underscore access.
+        """
+        return self._state_on
 
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
@@ -277,9 +379,26 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         return await self.execute_command_system(time, command, override_state)
 
-    @abstractmethod
     async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
-        """execute the command on the system"""
+        """Delegate the service-call to `self._transport`.
+
+        N2 review-fix — `QSOnOffDuration`, `QSClimateDuration`, and
+        `QSRadiator` all forwarded to `self._transport.execute(...)`.
+        Hoisting the delegation here removes three near-identical
+        overrides and keeps the per-backing logic encapsulated in the
+        transport strategy. Subclasses may still override if they need
+        bespoke pre/post hooks (none do today).
+
+        BH-G — `time` is part of the public method contract (subclasses
+        may override and legitimately use it). The base implementation
+        doesn't consume it today; we keep the parameter name unchanged
+        rather than rename to `_time` so subclasses can call
+        `super().execute_command_system(time, ...)` without surprise.
+        """
+        _ = time  # part of the public contract; not used by the base delegation
+        if self._transport is None:  # pragma: no cover — defensive
+            raise RuntimeError(f"{type(self).__name__}: _transport not initialised")
+        return await self._transport.execute(self.hass, command, state, self._state_on, self._state_off)
 
     async def _build_mode_constraint_items(
         self, time: datetime, bistate_mode: str, do_push_constraint_after: datetime | None

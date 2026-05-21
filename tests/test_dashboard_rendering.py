@@ -43,6 +43,8 @@ from tests.ha_tests.const import (
     MOCK_HOME_CONFIG,
     MOCK_ON_OFF_DURATION_CONFIG,
     MOCK_PERSON_CONFIG,
+    MOCK_RADIATOR_CLIMATE_CONFIG,
+    MOCK_RADIATOR_SWITCH_CONFIG,
     MOCK_SENSOR_STATES,
     MOCK_SOLAR_CONFIG,
     MOCK_WATER_BOILER_CONFIG,
@@ -128,6 +130,8 @@ async def full_dashboard_home(hass):
         ("climate", MOCK_CLIMATE_DURATION_CONFIG),
         ("heat_pump", MOCK_HEAT_PUMP_CONFIG),
         ("pool", MOCK_POOL_CONFIG),
+        ("radiator_switch", MOCK_RADIATOR_SWITCH_CONFIG),
+        ("radiator_climate", MOCK_RADIATOR_CLIMATE_CONFIG),
         ("water_boiler", MOCK_WATER_BOILER_CONFIG),
     ]
 
@@ -191,6 +195,292 @@ class TestDashboardTemplateRendering:
         parsed = yaml.safe_load(rendered)
         assert parsed is not None
         assert "views" in parsed
+
+    @pytest.mark.asyncio
+    async def test_radiator_devices_use_dedicated_card(self, hass, full_dashboard_home):
+        """AC-14 — radiator devices dispatch to `custom:qs-radiator-card`.
+
+        Both switch-backed and climate-backed radiators must render with
+        the dedicated card type, never the on/off or climate card.
+        """
+        home = full_dashboard_home
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        # CR2 — offload file I/O so the event loop doesn't block.
+        template_content = await hass.async_add_executor_job(template_path.read_text)
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        # N14 — the fixture installs TWO radiators (switch + climate);
+        # both must dispatch to the dedicated card. `>= 2` rather than
+        # `>= 1` so a regression that drops one of them is caught.
+        assert rendered.count("custom:qs-radiator-card") >= 2
+        # Sanity: the section name surfaces in the rendered YAML.
+        assert "radiators" in rendered
+
+    def test_radiator_card_resource_file_present(self):
+        """AC-11 — `qs-radiator-card.js` ships in the resources directory.
+
+        CR2 — plain `def` (no `async`) because this test does pure
+        file I/O + string analysis. Sync tests avoid blocking the
+        event loop on `Path.read_text()`.
+        """
+        card_path = COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js"
+        assert card_path.is_file(), f"Missing radiator card resource: {card_path}"
+
+        content = card_path.read_text()
+        # Custom-element registration must reference the renamed element.
+        assert "customElements.define('qs-radiator-card'" in content
+        # Class identifier must be renamed (no stale `QsOnOffDurationCard`).
+        assert "QsRadiatorCard" in content
+        assert "QsOnOffDurationCard" not in content
+        # N10 — `customCards` registration uses the user-facing card name.
+        assert "'QS Radiator Card'" in content
+        # Stub config also reads the renamed display name.
+        assert "QS Radiator" in content
+
+    def test_radiator_card_s14_safe_number_guards_against_nan(self):  # CR2 — sync (no hass)
+        """A2 — pin S14 via regex, not a bare substring.
+
+        We assert that:
+          1. A `_safeNumber` helper is present (the wrapper around
+             `Number()` that returns the fallback on degenerate input).
+          2. The helper gates against NaN (`Number.isNaN` OR
+             `Number.isFinite` — both are acceptable defensive styles).
+          3. NO raw `Number(<expr> || <fallback>)` pattern lurks in the
+             card's executable code — that's exactly the NaN footgun
+             S14 fixed. (Inline `//` comments are stripped before the
+             regex scan so the test prose isn't false-positive.)
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # `_safeNumber` is the canonical helper (either as a closure
+        # local or a class method via `this._safeNumber(...)`).
+        assert "_safeNumber" in content
+        # The helper gates against NaN. Accept either positive
+        # (`Number.isFinite`) or negative (`Number.isNaN`) form.
+        assert "Number.isFinite" in content or "Number.isNaN" in content
+
+        # Strip `//` line comments AND `/* ... */` block comments before
+        # the regex scan so we only match executable code.
+        no_block_comments = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        no_line_comments = re.sub(r"//[^\n]*", "", no_block_comments)
+
+        # Raw `Number(state || fallback)` is the anti-pattern.
+        raw_pattern = re.compile(r"Number\(\s*[^()]+\|\|[^()]+\)")
+        assert raw_pattern.search(no_line_comments) is None, (
+            "Found a raw `Number(... || ...)` pattern in executable code "
+            "— should use `_safeNumber(...)`"
+        )
+
+    def test_radiator_card_s15_escape_html_before_innerHTML(self):  # CR2 — sync (no hass)
+        """A2 — pin S15 via regex: every `_safeNumber` is fine; every
+        `innerHTML = ` write must reference an escaped value or constant
+        template. Helper may be invoked as a closure-local `_escapeHtml`
+        or as a class method `this._escapeHtml`.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # The escape helper is defined.
+        assert "_escapeHtml" in content
+        # The card-title interpolation (a primary injection vector) is
+        # routed through `_escapeHtml` (closure-local or method form).
+        assert re.search(
+            r'class="card-title">\s*\$\{(?:this\.)?_escapeHtml\(title\)\}', content
+        ) is not None, "Card title is not escaped before innerHTML"
+        # Mode labels in the bistate-mode select go through `_escapeHtml`.
+        assert re.search(
+            r"\$\{(?:this\.)?_escapeHtml\(translateBistateMode\(o\)\)\}", content
+        ) is not None, "Bistate mode labels are not escaped before innerHTML"
+
+    def test_radiator_card_s16_keyboard_accessibility(self):  # CR2 — sync (no hass)
+        """A2 — pin S16 via regex: each primary action div has
+        `role="button"`, `tabindex="0"`, AND a keyboard activation hook.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # Every action `<div>` carries the role/tabindex attribute pair.
+        for button_id in ("power_btn", "green_btn", "override_btn", "time_btn"):
+            pattern = re.compile(
+                rf'id="{button_id}"[^>]*role="button"[^>]*tabindex="0"', re.DOTALL
+            )
+            assert pattern.search(content) is not None, (
+                f"Missing role/tabindex on `{button_id}`"
+            )
+
+        # The keyboard helper exists and is wired into every action.
+        assert "_registerKeyActivation(" in content
+        # At least four calls (one per action div).
+        assert content.count("_registerKeyActivation(") >= 4
+
+    def test_radiator_card_s17_async_calls_wrapped_in_try_finally(self):  # CR2 — sync (no hass)
+        """A2 — pin S17: each `_select` / `_setNumber` await is wrapped.
+
+        Verifies that for both `await this._select(...)` and
+        `await this._setNumber(...)`:
+          - A `try {` opens within the preceding ~30 lines (i.e. the
+            await is inside a try block, not bare).
+          - A `finally {` clause appears within the next ~30 lines
+            after the await (the cleanup-on-failure path).
+
+        Without this, a transient service-call failure would leak
+        interaction guards and the card would get stuck.
+        """
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        def _try_finally_brackets(call_signature: str) -> bool:
+            lines = content.splitlines()
+            for idx, line in enumerate(lines):
+                if call_signature in line:
+                    # Look backwards up to 30 lines for `try {`.
+                    has_try_before = any(
+                        "try {" in lines[j] or "try{" in lines[j]
+                        for j in range(max(0, idx - 30), idx)
+                    )
+                    # Look forwards up to 30 lines for `} finally {`.
+                    has_finally_after = any(
+                        "finally" in lines[j]
+                        for j in range(idx, min(len(lines), idx + 30))
+                    )
+                    if has_try_before and has_finally_after:
+                        return True
+            return False
+
+        assert _try_finally_brackets("await this._select("), (
+            "`await this._select(...)` is not wrapped in try / finally — interaction guards may leak"
+        )
+        assert _try_finally_brackets("await this._setNumber("), (
+            "`await this._setNumber(...)` is not wrapped in try / finally — interaction guards may leak"
+        )
+
+    def test_radiator_card_b5_show_dialog_escapes_interpolations(self):  # CR2 — sync (no hass)
+        """AA1 — pin B5: every interpolation inside `showDialog` is escaped.
+
+        Verifies that the `showDialog` function body does NOT contain
+        raw `${title}` / `${message}` interpolations against innerHTML
+        — they must all route through `_escapeHtml(...)`. Without this
+        a future entity-derived title/message would silently
+        reintroduce the S15 injection vector.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # Extract `showDialog` body via brace-counting.
+        start = content.find("const showDialog")
+        assert start != -1, "Missing `showDialog` declaration"
+        # Find the `=>` then the opening `{`.
+        arrow = content.find("=>", start)
+        assert arrow != -1
+        body_start = content.find("{", arrow)
+        assert body_start != -1
+        # Brace-count to the matching `}`.
+        depth = 0
+        body_end = -1
+        for i in range(body_start, len(content)):
+            if content[i] == "{":
+                depth += 1
+            elif content[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = i
+                    break
+        assert body_end != -1, "Could not find closing brace of `showDialog`"
+
+        body = content[body_start : body_end + 1]
+
+        # Both `${title}` and `${message}` interpolations must go through
+        # `_escapeHtml`. Accept either the closure-local form
+        # `${_escapeHtml(...)}` or the class-method form
+        # `${this._escapeHtml(...)}` — both styles exist across the
+        # bundled cards.
+        raw_title = re.search(r"\$\{title\}", body)
+        raw_message = re.search(r"\$\{message\}", body)
+        escaped_title = re.search(r"\$\{(?:this\.)?_escapeHtml\(title\)\}", body)
+        escaped_message = re.search(r"\$\{(?:this\.)?_escapeHtml\(message\)\}", body)
+
+        assert raw_title is None, "`${title}` is not escaped in showDialog"
+        assert raw_message is None, "`${message}` is not escaped in showDialog"
+        assert escaped_title is not None, "`_escapeHtml(title)` missing in showDialog"
+        assert escaped_message is not None, "`_escapeHtml(message)` missing in showDialog"
+
+    def test_radiator_card_n7_running_includes_live_backing_state(self):  # CR2 — sync (no hass)
+        """A2 — pin N7: the `running` derivation OR-s in the backing state.
+
+        Cold-start fallback so a freshly-restarted integration doesn't
+        show an actively-heating radiator as off.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # The card reads the backing entity id from `e.backing_entity`.
+        assert "e.backing_entity" in content
+        # The `running` constant must be an OR over command state + live backing.
+        # We allow surrounding whitespace and `liveBackingOn`/similar locals.
+        pattern = re.compile(
+            r"const\s+running\s*=\s*commandReportsOn\s*\|\|\s*liveBackingOn"
+        )
+        assert pattern.search(content) is not None, (
+            "Cold-start `running` fallback is missing — radiator may show as off "
+            "during the cold-start grace window"
+        )
+
+    def test_radiator_card_bh10_configured_hvac_on_compared(self):  # CR2 — sync (no hass)
+        """BH10 — `liveBackingOn` compares against the configured HVAC mode
+        (e.g. `auto`), not just the hard-coded `"heat"`.
+
+        Without this, a user who set `CONF_CLIMATE_HVAC_MODE_ON = "auto"`
+        sees `running=false` during the cold-start grace window even
+        though the climate entity reports `state="auto"`.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # The card reads the configured HVAC mode from
+        # `e.climate_hvac_mode_on` with a `"heat"` default for backward
+        # compatibility.
+        assert "e.climate_hvac_mode_on" in content
+        # The comparison against `configuredHvacOn` MUST be present.
+        pattern = re.compile(
+            r"liveBackingState\s*===\s*configuredHvacOn"
+        )
+        assert pattern.search(content) is not None, (
+            "Cold-start `running` derivation no longer compares against the "
+            "configured HVAC ON mode — non-default HVAC modes won't be recognised"
+        )
+
+    @pytest.mark.asyncio
+    async def test_radiator_dashboard_passes_climate_hvac_mode_on(
+        self, hass, full_dashboard_home
+    ):
+        """BH10 — the dashboard template plumbs `climate_hvac_mode_on` through.
+
+        The card reads it from `entities.climate_hvac_mode_on`. The
+        radiator section must therefore emit a `climate_hvac_mode_on:`
+        key whose value matches the transport's `state_on`.
+        """
+        home = full_dashboard_home
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        # CR2 — offload file I/O so the event loop doesn't block.
+        template_content = await hass.async_add_executor_job(template_path.read_text)
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        # The MOCK_RADIATOR_CLIMATE_CONFIG fixture installs a
+        # climate-backed radiator with `CONF_CLIMATE_HVAC_MODE_ON="heat"`,
+        # so the rendered YAML must include the entry. Post-bugfix the
+        # value is quoted so YAML 1.1 doesn't coerce bare `on` / `off`
+        # to booleans (switch-backed radiators emit `on` literal).
+        assert "climate_hvac_mode_on: 'heat'" in rendered
 
     @pytest.mark.asyncio
     async def test_solar_entities_appear_in_rendered_output(self, hass, full_dashboard_home):
@@ -390,6 +680,7 @@ class TestDashboardSectionMapping:
             ("on_off_duration", "others"),
             ("climate", "climates"),
             ("heat_pump", "climates"),
+            ("radiator", "radiators"),
         ],
     )
     def test_device_type_maps_to_section(self, device_type, expected_section):
@@ -404,6 +695,57 @@ class TestDashboardSectionMapping:
             f"Section '{section}' for device type '{device_type}' not in DASHBOARD_DEFAULT_SECTIONS"
         )
 
+    def test_dashboard_device_section_translations_match_const_order(self):
+        """The `dashboard_device_section` selector translation keys
+        MUST match the `#N - <name>` positions computed by
+        `map_section_selected_name_in_section_list` from
+        `DASHBOARD_DEFAULT_SECTIONS`. A drift between the two surfaces
+        as untranslated dropdown labels in the user's config flow
+        (option present but rendered as raw `"#N - foo"`).
+        """
+        import json
+
+        strings_path = COMPONENT_ROOT / "strings.json"
+        strings = json.loads(strings_path.read_text())
+        translation_options = strings["selector"]["dashboard_device_section"]["options"]
+
+        # Build the expected `#N - <name>` keys from the const ordering.
+        expected_keys = {"Not in dashboard"}
+        for i, (name, _icon) in enumerate(DASHBOARD_DEFAULT_SECTIONS):
+            expected_keys.add(f"#{i + 1} - {name}")
+
+        translation_keys = set(translation_options.keys())
+
+        missing = expected_keys - translation_keys
+        extra = translation_keys - expected_keys
+        assert not missing, (
+            f"`dashboard_device_section` translation is MISSING keys: "
+            f"{sorted(missing)}. Add them to strings.json with the "
+            f"matching index from `DASHBOARD_DEFAULT_SECTIONS`."
+        )
+        assert not extra, (
+            f"`dashboard_device_section` translation has STALE keys: "
+            f"{sorted(extra)}. Remove them — the index probably shifted "
+            f"after a section was inserted / removed."
+        )
+
+    def test_dashboard_default_sections_translation_alignment(self):
+        """M2 (rev. 2) — `DASHBOARD_DEFAULT_SECTIONS` ordering must
+        agree with the `dashboard_device_section` translation block.
+
+        The earlier "radiators MUST be appended last" invariant was
+        relaxed in favour of co-locating heating-related sections
+        (`water_boilers` and `radiators` next to each other). The new
+        invariant is just "translation positions match const order"
+        — that's what `test_dashboard_device_section_translations_match_const_order`
+        enforces; this one pins the contents independently.
+        """
+        names = [s[0] for s in DASHBOARD_DEFAULT_SECTIONS]
+        # Every bundled section that user-visible code references must
+        # exist somewhere in the list.
+        for expected in ("cars", "climates", "pools", "water_boilers", "radiators", "others", "settings"):
+            assert expected in names, f"Missing default section: {expected}"
+
     def test_dashboard_default_section_uses_device_type_not_builtin_type(self):
         """Regression: load.py must use device_type variable, not Python builtin type."""
         assert type not in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION, (
@@ -412,6 +754,355 @@ class TestDashboardSectionMapping:
 
         for key in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION:
             assert isinstance(key, str), f"Key {key!r} in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION is not a string"
+
+    def test_normalize_dashboard_sections_order_reorders_bundled_to_const(self):
+        """BH (post-QS-195 user bug): the `_normalize_dashboard_sections_order`
+        helper must rewrite a list of bundled defaults that arrived in the
+        wrong order (e.g. because an older append-only migration tacked
+        sections onto the end) so the result follows
+        `DASHBOARD_DEFAULT_SECTIONS` order. Without this, a user who
+        upgraded across QS-194/QS-195 sees their radiator section
+        rendered AFTER `settings` on the dashboard.
+        """
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        # Simulate the broken append-only migration state: bundled
+        # defaults present but out of const order.
+        input_sections = [
+            ("cars", "mdi:car"),
+            ("climates", "mdi:home-thermometer"),
+            ("pools", "mdi:pool"),
+            ("others", "mdi:home"),
+            ("settings", "mdi:cog-outline"),
+            ("water_boilers", "mdi:water-boiler"),
+            ("radiators", "mdi:radiator"),
+        ]
+
+        result = _normalize_dashboard_sections_order(input_sections)
+
+        expected = [
+            ("cars", "mdi:car"),
+            ("climates", "mdi:home-thermometer"),
+            ("pools", "mdi:pool"),
+            ("water_boilers", "mdi:water-boiler"),
+            ("radiators", "mdi:radiator"),
+            ("others", "mdi:home"),
+            ("settings", "mdi:cog-outline"),
+        ]
+        assert result == expected, (
+            f"_normalize_dashboard_sections_order must reorder bundled "
+            f"defaults to match DASHBOARD_DEFAULT_SECTIONS. Expected "
+            f"{expected}, got {result}"
+        )
+
+    def test_normalize_dashboard_sections_order_preserves_custom_sections(self):
+        """BH companion: user-defined custom sections (names NOT in
+        `DASHBOARD_DEFAULT_SECTIONS_DICT`) must be preserved at the end
+        of the list in their original relative order. Reordering bundled
+        defaults must NOT delete or shuffle the user's custom entries.
+        """
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        input_sections = [
+            ("cars", "mdi:car"),
+            ("my_workshop", "mdi:hammer"),   # custom
+            ("pools", "mdi:pool"),
+            ("garden_lights", "mdi:lamp"),    # custom
+            ("settings", "mdi:cog-outline"),
+        ]
+
+        result = _normalize_dashboard_sections_order(input_sections)
+
+        # Bundled defaults sorted by const order, then customs in their
+        # original relative order.
+        expected = [
+            ("cars", "mdi:car"),
+            ("pools", "mdi:pool"),
+            ("settings", "mdi:cog-outline"),
+            ("my_workshop", "mdi:hammer"),
+            ("garden_lights", "mdi:lamp"),
+        ]
+        assert result == expected, (
+            f"_normalize_dashboard_sections_order must preserve custom "
+            f"sections in original order at the end. Expected {expected}, "
+            f"got {result}"
+        )
+
+    def test_normalize_dashboard_sections_order_dedups_repeats(self):
+        """Defensive: if a section name is repeated (shouldn't happen in
+        practice, but the migration code path could theoretically add a
+        duplicate), the helper keeps only the FIRST occurrence so the
+        bundled-default ordering stays deterministic.
+        """
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        input_sections = [
+            ("cars", "mdi:car"),
+            ("cars", "mdi:car-electric"),  # duplicate, different icon
+            ("pools", "mdi:pool"),
+        ]
+
+        result = _normalize_dashboard_sections_order(input_sections)
+
+        assert result == [("cars", "mdi:car"), ("pools", "mdi:pool")], (
+            f"Duplicate section names must be deduped (first wins). "
+            f"Got {result}"
+        )
+
+    def test_normalize_dashboard_sections_order_empty_input(self):
+        """Edge case: an empty input returns an empty list without error."""
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        assert _normalize_dashboard_sections_order([]) == []
+
+    def test_radiator_and_water_boiler_cards_guard_against_zero_max_hours(self):
+        """User-reported bug: a brand-new switch-backed radiator with no
+        active constraint sensor (or one that reports 0) produces
+        ``maxHours = targetHours = 0`` in the non-default-mode branch,
+        causing every arc-path calc to divide by zero. The SVG paths
+        end up as ``M ... A 130 130 0 0 1 NaN NaN`` and the dashboard
+        shows a "Configuration error".
+
+        Fix invariant: in the non-default branch, both cards must
+        clamp ``maxHours`` to a positive finite value before using
+        it in arc-path math. We pin this via regex so a future edit
+        that drops the clamp regresses the test.
+        """
+        import re
+
+        for card_filename in ("qs-radiator-card.js", "qs-water-boiler-card.js"):
+            content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
+            # Strip comments so the regex only matches executable code.
+            no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+            executable = re.sub(r"//[^\n]*", "", no_block)
+
+            # The non-default branch MUST guard against zero (or NaN)
+            # `targetHours` before assigning to `maxHours`. Acceptable
+            # patterns include:
+            #   maxHours = targetHours > 0 ? targetHours : <fallback>;
+            #   maxHours = Math.max(<fallback>, targetHours);
+            # Detect ANY clamp-style guard around `targetHours` near the
+            # `maxHours = targetHours` assignment.
+            unguarded_pat = re.compile(
+                r"maxHours\s*=\s*targetHours\s*;", re.MULTILINE
+            )
+            assert unguarded_pat.search(executable) is None, (
+                f"{card_filename}: a bare `maxHours = targetHours;` assignment "
+                f"would divide by zero when the constraint sensor reports 0 "
+                f"(brand-new device, no live constraint). Use a clamp like "
+                f"`maxHours = targetHours > 0 ? targetHours : 12;` instead."
+            )
+
+    def test_radiator_template_quotes_climate_hvac_mode_on(self):
+        """User-reported bug: a switch-backed radiator emits
+        ``climate_hvac_mode_on: on`` in the dashboard YAML. YAML 1.1
+        parses bare ``on`` / ``off`` as booleans, so HA hands the JS
+        card ``true`` instead of the string ``"on"``. The card then
+        crashes inside ``_render()`` with
+        ``TypeError: true.toLowerCase is not a function`` and Lovelace
+        renders a "Configuration error" card.
+
+        Fix invariant: the radiator's `climate_hvac_mode_on` value MUST
+        be quoted in BOTH dashboard templates so YAML never coerces it.
+        We pin the quoted form via a regex on the template source.
+        """
+        import re
+
+        for template_filename in (
+            "quiet_solar_dashboard_template.yaml.j2",
+            "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+        ):
+            template_path = COMPONENT_ROOT / "ui" / template_filename
+            if not template_path.exists():
+                continue
+            content = template_path.read_text()
+            # The Jinja line we care about lives only in the custom
+            # template (the standard one doesn't pass `climate_hvac_mode_on`
+            # to the card — it uses entity rows). Skip if absent.
+            if "climate_hvac_mode_on" not in content:
+                continue
+            # The value must be wrapped in quotes — single or double.
+            # Anything else (bare interpolation) lets YAML 1.1 coerce
+            # `on` → True / `off` → False / `yes` → True / etc.
+            unquoted_pat = re.compile(
+                r"climate_hvac_mode_on:\s*\{\{\s*device\.hvac_state_on\s*\}\}",
+                re.MULTILINE,
+            )
+            assert unquoted_pat.search(content) is None, (
+                f"{template_filename}: `climate_hvac_mode_on: "
+                f"{{{{ device.hvac_state_on }}}}` is unquoted — YAML 1.1 "
+                f"will parse bare `on`/`off` as booleans and the JS card "
+                f"will crash with `true.toLowerCase is not a function`. "
+                f"Quote the interpolation: "
+                f"`climate_hvac_mode_on: '{{{{ device.hvac_state_on }}}}'`."
+            )
+            # And positively assert a quoted form is present.
+            quoted_pat = re.compile(
+                r"climate_hvac_mode_on:\s*['\"]\{\{\s*device\.hvac_state_on\s*\}\}['\"]",
+                re.MULTILINE,
+            )
+            assert quoted_pat.search(content) is not None, (
+                f"{template_filename}: expected a quoted "
+                f"`climate_hvac_mode_on: '{{{{ device.hvac_state_on }}}}'` "
+                f"emit. The unquoted variant trips YAML's bool coercion."
+            )
+
+    def test_radiator_card_tolerates_non_string_hvac_mode_on(self):
+        """Defense-in-depth for the same user-reported bug: even if a
+        future template regression emits an unquoted ``on`` (parsed as
+        Python ``True``) into ``climate_hvac_mode_on``, the JS card
+        must NOT crash on ``true.toLowerCase()`` — wrap the value in
+        ``String(...)`` before the call.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        executable = re.sub(r"//[^\n]*", "", no_block)
+
+        # Every reference to `e.climate_hvac_mode_on` that feeds into a
+        # chained `.toLowerCase()` MUST be wrapped in `String(...)`
+        # first. Walk every `e.climate_hvac_mode_on` occurrence and
+        # check the preceding token is `String(`.
+        ref_pat = re.compile(r"e\.climate_hvac_mode_on")
+        unsafe_uses: list[str] = []
+        for m in ref_pat.finditer(executable):
+            # Search backwards from `m.start()` for the nearest
+            # non-whitespace token. Accept `String(`, `String  (`,
+            # or any usage that doesn't lead to `.toLowerCase()`.
+            tail = executable[m.end():m.end() + 200]
+            if ".toLowerCase" not in tail:
+                continue  # not a stringy use, irrelevant
+            preceding = executable[max(0, m.start() - 60) : m.start()]
+            if not re.search(r"String\s*\(\s*$", preceding):
+                unsafe_uses.append(
+                    f"...{preceding[-50:]}<HERE>{executable[m.start() : m.end() + 40]}..."
+                )
+        assert not unsafe_uses, (
+            "qs-radiator-card.js: every `e.climate_hvac_mode_on` use that "
+            "leads to `.toLowerCase()` must be wrapped in `String(...)`. "
+            "Without the wrap, a YAML-coerced boolean (`on` → True) "
+            "crashes the card. Offending uses:\n  " + "\n  ".join(unsafe_uses)
+        )
+
+    def test_radiator_and_water_boiler_cards_arc_path_guards_nan(self):
+        """Defense-in-depth for the same user-reported bug: the
+        ``arcPath`` helper must reject non-finite inputs so a stray
+        NaN from upstream math (e.g. a 0-divisor in hoursToPct) never
+        reaches the rendered SVG attribute. Without this guard, the
+        browser shows ``Error: <path> attribute d: Expected number,
+        "...A 130 130 0 0 1 NaN NaN"``.
+        """
+        import re
+
+        for card_filename in ("qs-radiator-card.js", "qs-water-boiler-card.js"):
+            content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
+            no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+            executable = re.sub(r"//[^\n]*", "", no_block)
+
+            # The arcPath helper definition must include a finiteness
+            # check on its angle inputs. Accept either `Number.isFinite`
+            # OR `Number.isNaN` (negative form).
+            arc_pat = re.compile(
+                r"arcPath\s*=\s*\([^)]*\)\s*=>\s*\{(?P<body>[^}]*(?:\}[^}]*)*?)\};",
+                re.DOTALL,
+            )
+            m = arc_pat.search(executable)
+            assert m is not None, (
+                f"{card_filename}: could not find an `arcPath = (...) => "
+                f"{{...}};` arrow definition — check the helper layout."
+            )
+            body = m.group("body")
+            has_finite = "Number.isFinite" in body or "Number.isNaN" in body
+            assert has_finite, (
+                f"{card_filename}: `arcPath` must guard against non-finite "
+                f"angle inputs (use Number.isFinite / Number.isNaN). "
+                f"Body was: {body[:300]}..."
+            )
+
+    def test_device_dashboard_section_translation_present_for_each_step(self):
+        """User-reported bug: the `device_dashboard_section` form field
+        renders as the raw key in the UI for every step except `person`
+        because no translation was defined elsewhere.
+
+        Every config-step (and its corresponding options-step) whose
+        `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION` mapping is non-None
+        includes the `CONF_DEVICE_DASHBOARD_SECTION` field in its
+        schema via `get_common_schema`, so each MUST have a
+        translation entry in `strings.json` under `data` (either a
+        literal or a `[%key:...%]` reference).
+        """
+        import json
+        from custom_components.quiet_solar.const import LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
+
+        strings_path = COMPONENT_ROOT / "strings.json"
+        strings = json.loads(strings_path.read_text())
+
+        # Map device-type constants to their config-flow step name.
+        # Step name = the value of `conf_type_name` on the device
+        # class, which matches the device-type constant for everything
+        # except chargers (we skip those — their LOAD_TYPE_... is
+        # None so they don't get the dashboard-section field).
+        type_to_step = {
+            "home": "home",
+            "battery": "battery",
+            "solar": "solar",
+            "person": "person",
+            "car": "car",
+            "pool": "pool",
+            "water_boiler": "water_boiler",
+            "on_off_duration": "on_off_duration",
+            "climate": "climate",
+            "heat_pump": "heat_pump",
+            "radiator": "radiator",
+        }
+
+        # All step names that should have the translation.
+        required_steps = [
+            type_to_step[type_name]
+            for type_name, section in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION.items()
+            if section is not None and type_name in type_to_step
+        ]
+        # Sanity: must cover at least the post-QS-195 set.
+        for must_have in (
+            "home", "battery", "solar", "person", "car", "pool",
+            "water_boiler", "on_off_duration", "climate", "heat_pump",
+            "radiator",
+        ):
+            assert must_have in required_steps, (
+                f"Step {must_have!r} expected to be required but isn't "
+                f"derived from LOAD_TYPE_DASHBOARD_DEFAULT_SECTION; "
+                f"got {required_steps}"
+            )
+
+        # Verify both config.step.<X>.data.device_dashboard_section
+        # and options.step.<X>.data.device_dashboard_section exist.
+        missing: list[str] = []
+        for namespace in ("config", "options"):
+            for step in required_steps:
+                try:
+                    data_block = strings[namespace]["step"][step]["data"]
+                except KeyError:
+                    missing.append(f"{namespace}.step.{step}.data (missing)")
+                    continue
+                if "device_dashboard_section" not in data_block:
+                    missing.append(
+                        f"{namespace}.step.{step}.data.device_dashboard_section"
+                    )
+
+        assert not missing, (
+            f"Every step that includes the CONF_DEVICE_DASHBOARD_SECTION "
+            f"field MUST have a translation in strings.json. Missing: "
+            f"{missing}"
+        )
 
     @pytest.mark.asyncio
     async def test_all_devices_assigned_to_sections(self, full_dashboard_home):
@@ -650,15 +1341,25 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
     """M2: every card with a `_isProcessing*` flag wraps the awaited
     `_select` call in `try { ... } finally { ... }` so a rejected
     service call can't wedge the flag forever.
+
+    Accepts both `try {} finally {}` and `try {} catch {} finally {}`
+    structures (the radiator card uses the latter — a defensive
+    `catch` swallows the error before falling through to the
+    `finally` cleanup, which the other cards now share).
     """
     import re
 
     js_path = COMPONENT_ROOT / "ui" / "resources" / card_filename
     content = js_path.read_text(encoding="utf-8")
     # Must find at least one `_isProcessing... = true` set followed by
-    # a `try { ... await this._select(... } finally { ... }` block.
+    # a `try { ... await this._select(... } [catch (...) { ... }] finally { ... }`
+    # block. The `(?:catch\b[^{}]*\{[^{}]*\}\s*)?` group permits the
+    # defensive catch block introduced when QS-195's radiator card
+    # style was ported across all cards.
     pattern = re.compile(
-        r"_isProcessing\w+\s*=\s*true\s*;[^;]*?try\s*\{[^}]*?await\s+this\._select\([^)]*\)[^}]*?\}\s*finally",
+        r"_isProcessing\w+\s*=\s*true\s*;[^;]*?"
+        r"try\s*\{[^}]*?await\s+this\._select\([^)]*\)[^}]*?\}"
+        r"\s*(?:catch\s*\([^)]*\)\s*\{[^}]*\}\s*)?finally",
         re.DOTALL,
     )
     assert pattern.search(content), (

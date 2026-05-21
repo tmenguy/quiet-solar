@@ -10,7 +10,9 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-pool-card.js
   - custom_components/quiet_solar/ui/resources/qs-climate-card.js
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
-last_verified: 2026-05-21
+  - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
+  - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
+last_verified: 2026-05-23
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -22,9 +24,9 @@ Lovelace dashboards** by rendering two Jinja2 templates against the
 live `QSHome`:
 
 - **"Quiet Solar"** (`quiet-solar` URL, custom cards) — renders the
-  four bundled JS Lovelace cards (`qs-car-card`, `qs-pool-card`,
-  `qs-climate-card`, `qs-on-off-duration-card`), one per device type
-  that has a dedicated card.
+  five bundled JS Lovelace cards (`qs-car-card`, `qs-pool-card`,
+  `qs-climate-card`, `qs-on-off-duration-card`, `qs-radiator-card`),
+  one per device type that has a dedicated card.
 - **"Quiet Std"** (`quiet-solar-standard` URL, standard cards) —
   renders the same data using only built-in HA cards (no JS cards
   required). This is the fallback for households who want a
@@ -79,8 +81,8 @@ without losing any functionality (just visual polish).
 ### Section mapping in `const.py`
 
 The dashboard is organized into **sections** (`cars`, `climates`,
-`pools`, `others`, `settings`). Each device type has a default
-section in `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION`; TheAdmin can
+`radiators`, `pools`, `others`, `settings`). Each device type has a
+default section in `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION`; TheAdmin can
 override per-device via the `CONF_DASHBOARD_SECTION_NAME` config
 field. `QSHome.dashboard_sections` is the in-memory list of active
 sections (deduplicated, ordered as configured); the templates
@@ -100,6 +102,8 @@ switch:
 - type: custom:qs-pool-card
 {%- elif  device.device_type == "climate" %}
 - type: custom:qs-climate-card
+{%- elif  device.device_type == "radiator" %}
+- type: custom:qs-radiator-card
 {%- elif  device.device_type == "on_off_duration" %}
 - type: custom:qs-on-off-duration-card
 {%- else %}
@@ -107,7 +111,7 @@ switch:
 {%- endif %}
 ```
 
-The four JS cards have card-specific YAML input shapes (e.g.,
+The five JS cards have card-specific YAML input shapes (e.g.,
 `qs-car-card` expects `soc:`, `range_now:`, `charge_type:`, etc.).
 Every key resolves to an entity ID via `device.ha_entities.get(...)`
 — so the template translates "the device knows about a certain
@@ -188,7 +192,14 @@ Subsequent HA starts:
 | Pool | `custom:qs-pool-card` | `QSPool` | `ui/resources/qs-pool-card.js` |
 | Climate | `custom:qs-climate-card` | `QSClimateDuration`, `QSHeatPump` | `ui/resources/qs-climate-card.js` |
 | On-off duration | `custom:qs-on-off-duration-card` | `QSOnOffDuration` | `ui/resources/qs-on-off-duration-card.js` |
+| Radiator | `custom:qs-radiator-card` | `QSRadiator` | `ui/resources/qs-radiator-card.js` (cloned from `qs-on-off-duration-card.js`; UX redesign deferred via [#199](https://github.com/tmenguy/quiet-solar/issues/199); has S14-S17/N7 safety hardening the on/off card has not yet adopted) |
 | Water boiler | `custom:qs-water-boiler-card` | `QSWaterBoiler` | `ui/resources/qs-water-boiler-card.js` |
+
+The radiator template wires `backing_entity` (the underlying
+switch/climate entity id) and `climate_hvac_mode_on` (the configured
+HVAC ON mode — e.g. `"heat"`, `"auto"`) through the entities block.
+The card uses those values to derive `running` during the cold-start
+grace window when the QS command sensor hasn't published yet.
 
 **`qs-water-boiler-card` initial release (QS-194).** The water-boiler
 card was forked from `qs-on-off-duration-card` as its starting point
@@ -238,6 +249,18 @@ patterns after the cross-card audit:
   `Number(s?.state || N)` so degenerate states
   (`""` / `unknown` / `unavailable`) can't propagate `NaN` into SVG
   path attributes.
+- **Zero-`maxHours` clamp (post-QS-195 user bug).** Both the
+  radiator and water-boiler cards clamp `maxHours = targetHours > 0 ?
+  targetHours : <fallback>` in the non-default-mode branch. A
+  brand-new device whose constraint sensor reports `0` would
+  otherwise divide by zero in `hoursToPct`, propagate `NaN` into the
+  arc-path math, and emit `M ... A 130 130 0 0 1 NaN NaN` in the
+  rendered SVG `d` attribute — the browser shows a "Configuration
+  error" and the card refuses to render.
+- **Arc-path NaN guard (defense-in-depth).** Both cards' `arcPath`
+  helper short-circuits with `if (!Number.isFinite(a0) ||
+  !Number.isFinite(a1)) return '';` so even if upstream math escapes
+  the clamp, the SVG `d` attribute stays well-formed.
 - **Local-state cleanup symmetry (S9).** Every Apply handler that
   sets a `_localFinishTimeMins` / `_localNextTimeMins` schedules a
   matching 5-second clear timer so out-of-band backend updates
@@ -249,7 +272,7 @@ patterns after the cross-card audit:
   `b.onClick?.()` in `try/finally` so a synchronous throw can't
   leave the modal locked open.
 
-Follow these patterns when adding new JS cards.
+Follow these patterns when adding new JS cards. 
 
 The cards are **outside the quality pipeline**: no JS tests, no JS
 linter, no build step. The product brief explicitly says "don't

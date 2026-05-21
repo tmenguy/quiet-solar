@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-21
+last_verified: 2026-05-23
 ---
 
 # Config flow and setup
@@ -50,6 +50,89 @@ async_step_user (top-level menu)
   uniform.
 - Entity selectors filter by unit of measurement and **exclude
   quiet-solar's own entities** (no self-referential setups).
+
+**Cross-field XOR validation pattern** (`async_step_radiator`):
+
+The radiator step shows BOTH a switch selector AND a climate
+selector and validates exactly-one-set via an explicit if/else
+inside the step. On misconfig it re-renders the form with
+`errors={"base": "exactly_one_backing_required"}`. The same
+constraint is enforced in `QSRadiator.__init__` via
+`ServiceValidationError` for any non-UI code path (e.g. tests,
+direct construction). This is the canonical pattern for "pick
+exactly one of these N options" — voluptuous's `vol.Exclusive`
+group only enforces "at most one", not "exactly one".
+
+**Two-pass form pattern** (`async_step_climate`,
+`async_step_radiator`, `async_step_car`):
+
+When a step needs to render dropdowns derived from another field
+(e.g. HVAC modes that depend on which climate entity the user
+picked), Pass 1 writes the user's input into `config_entry.data`
+via `async_update_entry` (for real options-flow entries) or by
+direct assignment (for the `FakeConfigEntry` used during creation),
+then renders the form directly. Pass 2 reads the available HVAC
+modes from the registry and shows the mode selectors with a
+suggested default. Because the Pass 1 values are now in
+`config_entry.data`, every Pass 2 field (`CONF_NAME`,
+`CONF_DEVICE_DASHBOARD_SECTION`, `CONF_POWER`, …) picks up the
+correct default through the standard `get_common_schema`
+machinery — no per-field plumbing. On any validation failure
+(XOR misconfig, empty HVAC modes, identical ON/OFF modes) the
+just-submitted payload is passed back into the form via a
+`pending` kwarg so the user sees their own selections on the
+re-render.
+
+Single-mode and identical-mode HVAC validations live alongside the
+XOR check: when fewer than two HVAC modes are advertised the step
+surfaces `climate_modes_insufficient`; when both selectors carry
+the same mode the step surfaces `hvac_modes_must_differ` — both
+errors keep the user's selections through the re-render. The
+heat-pump dropdown is also re-validated at submit time against
+the LIVE `home.get_heat_pumps()` so a parallel admin action that
+removed a heat-pump between Pass 1 and the final submit can't
+silently persist a stale name.
+
+User-explicit pilot clear: the form's heat-pump dropdown is
+rendered only when at least one heat pump exists. When that
+dropdown was rendered AND the submit carries an empty value (or
+omits the key entirely — both shapes funnel through a sentinel
+check), the persisted `CONF_DEVICE_TO_PILOT_NAME` is removed.
+Without this distinction the merge in `_async_save_radiator_entry`
+would re-inject the stale name on the next edit.
+
+**Home options-flow section editor** (`async_step_home`): the 8
+dashboard-section slot suggestions (`CONF_DASHBOARD_SECTION_NAME_<i>`
++ `CONF_DASHBOARD_SECTION_ICON_<i>`) come from the **live**
+`home.dashboard_sections` list — not from the stored
+`config_entry.data` slot-by-slot and not from
+`DASHBOARD_DEFAULT_SECTIONS[i]` indexed against `i`.
+`QSHome.__init__` builds that live list with init-time auto-include
+of every bundled default (minus
+`CONF_DASHBOARD_SECTIONS_USER_REMOVED`) plus
+`_normalize_dashboard_sections_order`, so the form reflects exactly
+what's rendered on the main dashboard. Reading by index against the
+persisted slots was the source of the QS-195 "multiple times others"
+bug: a pre-QS-194 user whose stored slot 3 was `"others"` and slot
+5's index default also resolved to `"others"` (current const) saw
+`"others"` twice and no `"radiators"`. Slots beyond
+`len(home.dashboard_sections)` default to `None`, so the user has at
+least one empty slot for adding a custom section.
+
+**Device-side `CONF_DEVICE_DASHBOARD_SECTION` dropdown**: the
+`get_common_schema` builder reads its option list from
+`home.dashboard_sections` directly with no per-step augmentation.
+The pre-QS-195 augmentation that appended a missing bundled default
+to the dropdown options (so the user could still pick e.g.
+`water_boilers` after a QS-194 upgrade) is no longer needed —
+`QSHome.__init__`'s auto-include guarantees the live home already
+contains every bundled section. Every config-flow step that
+includes this field (`home`, `battery`, `solar`, `person`, `car`,
+`pool`, `water_boiler`, `on_off_duration`, `climate`, `heat_pump`,
+`radiator`) must have a `device_dashboard_section` translation in
+`strings.json` (literal in `person.data`, `[%key:...%]` references
+in the others); without it the form renders the raw `device_dashboard_section`
+key instead of the localised "Dashboard section" label.
 
 **Data handler lifecycle** (`data_handler.py`):
 

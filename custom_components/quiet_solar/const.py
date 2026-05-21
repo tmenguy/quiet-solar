@@ -29,6 +29,7 @@ CONF_TYPE_NAME_QSOnOffDuration = "on_off_duration"
 CONF_TYPE_NAME_QSClimateDuration = "climate"
 CONF_TYPE_NAME_QSDynamicGroup = "dynamic_group"
 CONF_TYPE_NAME_QSHeatPump = "heat_pump"
+CONF_TYPE_NAME_QSRadiator = "radiator"
 CONF_TYPE_NAME_QSWaterBoiler = "water_boiler"
 CONF_TYPE_NAME_HADeviceMixin = "ha_device_mixin"
 
@@ -46,6 +47,7 @@ DASHBOARD_DEFAULT_SECTIONS = [
     ("climates", "mdi:home-thermometer"),
     ("pools", "mdi:pool"),
     ("water_boilers", "mdi:water-boiler"),
+    ("radiators", "mdi:radiator"),
     ("others", "mdi:home"),
     ("settings", "mdi:cog-outline"),
 ]
@@ -69,6 +71,7 @@ LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
     CONF_TYPE_NAME_QSClimateDuration: "climates",
     CONF_TYPE_NAME_QSDynamicGroup: None,
     CONF_TYPE_NAME_QSHeatPump: "climates",
+    CONF_TYPE_NAME_QSRadiator: "radiators",
 }
 
 
@@ -223,6 +226,7 @@ SENSOR_CONSTRAINT_SENSOR_COMPLETION = "qs_constraint_sensor_completion"
 SENSOR_CONSTRAINT_SENSOR_CHARGE = "qs_constraint_sensor_charge"
 SENSOR_CONSTRAINT_SENSOR_ON_OFF = "qs_constraint_sensor_on_off"
 SENSOR_CONSTRAINT_SENSOR_CLIMATE = "qs_constraint_sensor_climate"
+SENSOR_CONSTRAINT_SENSOR_RADIATOR = "qs_constraint_sensor_radiator"
 SENSOR_CONSTRAINT_SENSOR_POOL = "qs_constraint_sensor_pool"
 SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START = "qs_next_or_current_constraint_start_time"
 SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END = "qs_next_or_current_constraint_end_time"

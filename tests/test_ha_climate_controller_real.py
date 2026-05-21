@@ -92,6 +92,81 @@ def test_init_with_custom_hvac_modes(hass: HomeAssistant, climate_config_entry, 
     assert device._bistate_mode_off == "fan_only"
 
 
+def test_init_with_missing_climate_entity_raises(
+    hass: HomeAssistant, climate_config_entry, climate_home
+):
+    """EH-C — `QSClimateDuration(CONF_CLIMATE=None)` raises ServiceValidationError.
+
+    Previously the constructor silently built `ClimateTransport(None,
+    ...)` and the first `services.async_call(...entity_id=None)` would
+    crash at the HA layer. Raising at construction keeps the
+    misconfiguration visible. Mirrors the EH6 guard on `QSRadiator`.
+    """
+    from homeassistant.exceptions import ServiceValidationError
+
+    with pytest.raises(ServiceValidationError, match="climate entity"):
+        QSClimateDuration(
+            hass=hass,
+            config_entry=climate_config_entry,
+            home=climate_home,
+            **{
+                CONF_NAME: "Missing Climate",
+                CONF_SWITCH: "switch.climate_helper",
+                # CONF_CLIMATE intentionally omitted.
+            },
+        )
+
+
+def test_init_with_empty_climate_entity_raises(
+    hass: HomeAssistant, climate_config_entry, climate_home
+):
+    """EH-C — empty / whitespace-only climate entity is also rejected."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    with pytest.raises(ServiceValidationError, match="climate entity"):
+        QSClimateDuration(
+            hass=hass,
+            config_entry=climate_config_entry,
+            home=climate_home,
+            **{
+                CONF_NAME: "Empty Climate",
+                CONF_SWITCH: "switch.climate_helper",
+                CONF_CLIMATE: "   ",
+            },
+        )
+
+
+def test_init_with_empty_hvac_modes_falls_back_to_defaults(
+    hass: HomeAssistant, climate_config_entry, climate_home
+):
+    """EH3 — `CONF_CLIMATE_HVAC_MODE_*=""` falls back to the AUTO/OFF defaults.
+
+    `kwargs.pop(key, default)` only returns `default` when the key is
+    MISSING. A corrupted/migrated entry persisting `""` would otherwise
+    construct `ClimateTransport(state_on="")` and `set_hvac_mode("")`
+    fails at runtime. Mirrors the S9 fallback already applied to
+    `QSRadiator` in fix plan #01.
+    """
+    device = QSClimateDuration(
+        hass=hass,
+        config_entry=climate_config_entry,
+        home=climate_home,
+        **{
+            CONF_NAME: "Empty HVAC Climate",
+            CONF_SWITCH: "switch.climate_helper",
+            CONF_CLIMATE: "climate.empty_hvac",
+            CONF_CLIMATE_HVAC_MODE_ON: "",
+            CONF_CLIMATE_HVAC_MODE_OFF: "",
+        },
+    )
+
+    assert device._state_on == str(HVACMode.AUTO.value)
+    assert device._state_off == str(HVACMode.OFF.value)
+    # Transport sees the same defaults via the inherited property shadow.
+    assert device._transport.state_on == str(HVACMode.AUTO.value)
+    assert device._transport.state_off == str(HVACMode.OFF.value)
+
+
 def test_init_bistate_entity_equals_climate_entity(hass: HomeAssistant, climate_config_entry, climate_home):
     """Test that bistate_entity is set to climate_entity."""
     device = QSClimateDuration(
@@ -133,6 +208,26 @@ def test_climate_state_on_setter(climate_device):
     climate_device.climate_state_on = "heat"
     assert climate_device.climate_state_on == "heat"
     assert climate_device._state_on == "heat"
+
+
+def test_direct_state_on_write_flows_through_to_transport(climate_device):
+    """S5 regression — `device._state_on = …` keeps the transport in sync.
+
+    Direct writes to the shadow field MUST update the underlying
+    transport, otherwise `execute_command_system` would still emit the
+    old HVAC mode and behaviour silently diverges from the host's
+    advertised state.
+    """
+    climate_device._state_on = "cool"
+    assert climate_device._transport.state_on == "cool"
+    assert climate_device.climate_state_on == "cool"
+
+
+def test_direct_state_off_write_flows_through_to_transport(climate_device):
+    """S5 regression — same for `_state_off`."""
+    climate_device._state_off = "fan_only"
+    assert climate_device._transport.state_off == "fan_only"
+    assert climate_device.climate_state_off == "fan_only"
 
 
 def test_climate_state_off_getter(climate_device):
@@ -275,7 +370,7 @@ def test_get_possibles_modes(hass: HomeAssistant, climate_config_entry, climate_
     mock_registry.async_get.return_value = mock_entry
 
     with patch(
-        "custom_components.quiet_solar.ha_model.climate_controller.er.async_get",
+        "custom_components.quiet_solar.ha_model.bistate_transport.er.async_get",
         return_value=mock_registry,
     ):
         modes = device.get_possibles_modes()

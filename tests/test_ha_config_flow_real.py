@@ -58,6 +58,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSHome,
     CONF_TYPE_NAME_QSOnOffDuration,
     CONF_TYPE_NAME_QSPool,
+    CONF_TYPE_NAME_QSRadiator,
     CONF_TYPE_NAME_QSSolar,
     CONF_TYPE_NAME_QSWaterBoiler,
     CONF_WATER_BOILER_TEMPERATURE_SENSOR,
@@ -445,6 +446,185 @@ async def test_config_flow_climate_forces_hvac_modes(
             },
         )
     assert result["type"] == FlowResultType.CREATE_ENTRY
+
+
+async def test_config_flow_radiator_switch_creates_entry(
+    hass: HomeAssistant,
+) -> None:
+    """AC-6 — switch-backed radiator happy path."""
+    await _create_home_entry(hass)
+
+    radiator_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSRadiator)
+    assert radiator_flow["type"] == FlowResultType.FORM
+
+    result = await hass.config_entries.flow.async_configure(
+        radiator_flow["flow_id"],
+        {
+            CONF_NAME: "Bathroom Radiator",
+            CONF_POWER: 800,
+            CONF_SWITCH: "switch.bathroom_radiator",
+        },
+    )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_SWITCH] == "switch.bathroom_radiator"
+
+
+async def test_config_flow_radiator_climate_creates_entry(
+    hass: HomeAssistant,
+) -> None:
+    """AC-6 — climate-backed radiator happy path (two-pass HVAC selection)."""
+    await _create_home_entry(hass)
+
+    radiator_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSRadiator)
+    assert radiator_flow["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=[HVACMode.OFF, HVACMode.HEAT, HVACMode.AUTO],
+    ):
+        # Pass 1 — just the climate entity (HVAC dropdowns not yet shown)
+        radiator_flow = await hass.config_entries.flow.async_configure(
+            radiator_flow["flow_id"],
+            {
+                CONF_NAME: "Living Room Radiator",
+                CONF_POWER: 1500,
+                CONF_CLIMATE: "climate.living_room",
+            },
+        )
+        assert radiator_flow["type"] == FlowResultType.FORM
+
+        # Pass 2 — HVAC dropdowns now present, pick `heat` / `off`
+        result = await hass.config_entries.flow.async_configure(
+            radiator_flow["flow_id"],
+            {
+                CONF_NAME: "Living Room Radiator",
+                CONF_POWER: 1500,
+                CONF_CLIMATE: "climate.living_room",
+                CONF_CLIMATE_HVAC_MODE_OFF: HVACMode.OFF,
+                CONF_CLIMATE_HVAC_MODE_ON: HVACMode.HEAT,
+            },
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CLIMATE] == "climate.living_room"
+    assert result["data"][CONF_CLIMATE_HVAC_MODE_ON] == HVACMode.HEAT
+
+
+async def test_config_flow_radiator_both_backings_rejected(
+    hass: HomeAssistant,
+) -> None:
+    """AC-6 — submitting BOTH switch and climate triggers the XOR error."""
+    await _create_home_entry(hass)
+
+    radiator_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSRadiator)
+    assert radiator_flow["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=[HVACMode.OFF, HVACMode.HEAT],
+    ):
+        result = await hass.config_entries.flow.async_configure(
+            radiator_flow["flow_id"],
+            {
+                CONF_NAME: "Misconfigured Radiator",
+                CONF_POWER: 1000,
+                CONF_SWITCH: "switch.r",
+                CONF_CLIMATE: "climate.r",
+            },
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "exactly_one_backing_required"}
+
+
+async def test_config_flow_radiator_neither_backing_rejected(
+    hass: HomeAssistant,
+) -> None:
+    """AC-6 — submitting NEITHER switch nor climate triggers the XOR error."""
+    await _create_home_entry(hass)
+
+    radiator_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSRadiator)
+    assert radiator_flow["type"] == FlowResultType.FORM
+
+    result = await hass.config_entries.flow.async_configure(
+        radiator_flow["flow_id"],
+        {
+            CONF_NAME: "Backingless Radiator",
+            CONF_POWER: 1000,
+        },
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "exactly_one_backing_required"}
+
+
+async def test_config_flow_radiator_options_swap_to_climate(
+    hass: HomeAssistant,
+) -> None:
+    """AC-13 — start with switch backing, then swap to climate via options flow.
+
+    The reload-on-options-update path re-instantiates the QSRadiator with
+    the new transport — `device_id` is stable thanks to the slug-based
+    identity, so persisted constraint history survives the swap.
+    """
+    await _create_home_entry(hass)
+
+    radiator_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSRadiator)
+    initial = await hass.config_entries.flow.async_configure(
+        radiator_flow["flow_id"],
+        {
+            CONF_NAME: "Swap Radiator",
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.swap",
+        },
+    )
+    assert initial["type"] == FlowResultType.CREATE_ENTRY
+    entry = initial["result"]
+    assert entry.data[CONF_SWITCH] == "switch.swap"
+    assert CONF_CLIMATE not in entry.data or entry.data.get(CONF_CLIMATE) is None
+
+    # Now swap to climate via options flow.
+    with (
+        patch(
+            "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+            new_callable=AsyncMock,
+        ) as mock_reload,
+        patch(
+            "custom_components.quiet_solar.config_flow.get_hvac_modes",
+            return_value=[HVACMode.OFF, HVACMode.HEAT],
+        ),
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        # Pass 1 — clear the switch, set the climate
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Swap Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.swap",
+            },
+        )
+        assert result["type"] == FlowResultType.FORM
+        # Pass 2 — provide HVAC modes
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Swap Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.swap",
+                CONF_CLIMATE_HVAC_MODE_OFF: HVACMode.OFF,
+                CONF_CLIMATE_HVAC_MODE_ON: HVACMode.HEAT,
+            },
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert entry.data.get(CONF_CLIMATE) == "climate.swap"
+    # N13 + CR1 — after the swap, the old `switch` backing must be
+    # cleared. `not in` is stricter than `is None` (the latter passes
+    # whether the key is absent OR present with value `None`; the
+    # latter is exactly the stale-key shape we want to rule out).
+    assert CONF_SWITCH not in entry.data
+    mock_reload.assert_called_once()
 
 
 async def test_config_flow_dynamic_group_creates_entry(

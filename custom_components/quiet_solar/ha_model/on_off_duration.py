@@ -1,11 +1,8 @@
 import logging
-from datetime import datetime
 
-from homeassistant.const import SERVICE_TURN_OFF, SERVICE_TURN_ON, Platform
-
-from ..const import SENSOR_CONSTRAINT_SENSOR_ON_OFF, CONF_TYPE_NAME_QSOnOffDuration
-from ..home_model.commands import CMD_IDLE, CMD_ON, LoadCommand
+from ..const import CONF_SWITCH, SENSOR_CONSTRAINT_SENSOR_ON_OFF, CONF_TYPE_NAME_QSOnOffDuration
 from .bistate_duration import QSBiStateDuration
+from .bistate_transport import SwitchTransport
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -14,6 +11,19 @@ class QSOnOffDuration(QSBiStateDuration):
     conf_type_name = CONF_TYPE_NAME_QSOnOffDuration
 
     def __init__(self, **kwargs):
+        # Build the transport BEFORE `super().__init__` so the inherited
+        # `_state_on/_state_off` property shadow can delegate to it
+        # during the base ctor's seed assignments — symmetric with
+        # `QSClimateDuration` and `QSRadiator`.
+        # NOTE: we `kwargs.get` (NOT `.pop`) because `AbstractLoad.__init__`
+        # itself pops `CONF_SWITCH` to populate `self.switch_entity`. If
+        # we popped here, `AbstractLoad`'s pop would default to `None`
+        # and clobber the attribute downstream code (e.g. `bistate_entity`)
+        # relies on. Climate's `kwargs.pop(CONF_CLIMATE)` is safe because
+        # `AbstractLoad` doesn't know about that key.
+        switch_entity = kwargs.get(CONF_SWITCH)
+        self._transport: SwitchTransport = SwitchTransport(switch_entity)
+
         super().__init__(**kwargs)
 
         self._state_on = "on"
@@ -29,26 +39,5 @@ class QSOnOffDuration(QSBiStateDuration):
         """return the translation key for the select"""
         return "on_off_mode"
 
-    # exception catched above execute_command
-    async def execute_command_system(self, time: datetime, command: LoadCommand, state: str | None) -> bool | None:
-
-        if state is not None:
-            if state == self.expected_state_from_command(CMD_IDLE):
-                action = SERVICE_TURN_OFF
-            else:
-                action = SERVICE_TURN_ON
-        else:
-            if command.is_like(CMD_ON):
-                action = SERVICE_TURN_ON
-            elif command.is_off_or_idle():
-                action = SERVICE_TURN_OFF
-            else:
-                raise ValueError("Invalid command")
-
-        _LOGGER.info("Executing on/off command %s on %s", action, self.bistate_entity)
-
-        # exception catched above execute_command
-        await self.hass.services.async_call(
-            domain=Platform.SWITCH, service=action, target={"entity_id": self.bistate_entity}
-        )
-        return False
+    # `execute_command_system` is inherited from `QSBiStateDuration` and
+    # delegates to `self._transport.execute(...)` (N2 review-fix).
