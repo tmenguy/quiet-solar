@@ -119,7 +119,20 @@ class QsPoolCard extends HTMLElement {
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
-      const dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      // QS-200 S6: cap `dt` against hidden-tab return. Without this,
+      // the first frame after a multi-second tab-hidden window
+      // produces a huge `dt`, snapping wave phase by hundreds of pixels
+      // in one frame. The cap matches `LERP_DT_CEIL` so all step-loop
+      // subsystems are bounded by the same envelope.
+      // Review-fix #02 N3 trade-off note: the prior pool-card behavior
+      // intentionally let phase accumulate raw `dt` so scroll "caught
+      // up" after a hidden-tab return. Capping at 100ms trades that
+      // catch-up for a single-frame visual freeze on return — defensible
+      // either way; we picked the cap for cross-card consistency with
+      // qs-water-boiler-card.js (which also drives bubble life off `dt`,
+      // making the cap necessary there).
+      let dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      dt = Math.min(dt, LERP_DT_CEIL);
       this._lastAnimTs = ts;
       const patternLen = Math.max(8, this._animPatternLen || 64);
       const speed = 80; // dash units per second
@@ -130,15 +143,14 @@ class QsPoolCard extends HTMLElement {
       }
 
       // --- Wave animation update ---
+      // `dt` is already clamped at LERP_DT_CEIL above (QS-200 S6), so
+      // the lerpFactor envelope and phase advance share the same upper
+      // bound. The lerp itself reads from the clamped `dt` directly —
+      // no local `lerpDt` variable needed.
       const pumpOn = this._pumpRunning === true;
       const targetAmplitude = pumpOn ? PUMP_AMP : CALM_AMP;
       const targetSpeed = pumpOn ? PUMP_SPEED : CALM_SPEED;
-      // Clamp the lerp dt: after a tab is hidden for several seconds, the
-      // first frame back has huge dt and lerpFactor ≈ 1, which would snap
-      // the amplitude/speed to target. The story requires a ~1–2 s smooth
-      // interpolation. Wave phase keeps using raw dt so scroll catches up.
-      const lerpDt = Math.min(dt, LERP_DT_CEIL);
-      const lerpFactor = 1 - Math.exp(-LERP_RATE * lerpDt);
+      const lerpFactor = 1 - Math.exp(-LERP_RATE * dt);
       this._currentAmplitude += (targetAmplitude - this._currentAmplitude) * lerpFactor;
       this._currentSpeed += (targetSpeed - this._currentSpeed) * lerpFactor;
       this._wavePhase += this._currentSpeed * dt;
