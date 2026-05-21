@@ -125,7 +125,6 @@ from .const import (
     CONF_SWITCH,
     CONF_WATER_BOILER_TEMPERATURE_SENSOR,
     DASHBOARD_DEFAULT_SECTIONS,
-    DASHBOARD_DEFAULT_SECTIONS_DICT,
     DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY,
     DASHBOARD_NO_SECTION,
     DASHBOARD_NUM_SECTION_MAX,
@@ -380,22 +379,17 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
             options_raw_list = None
             if home is not None and home.dashboard_sections is not None and len(home.dashboard_sections) > 0:
-                # we can have the list of sections
+                # The live home owns the authoritative section list:
+                # `QSHome.__init__` already ensures every bundled
+                # `DASHBOARD_DEFAULT_SECTIONS` entry (minus
+                # `CONF_DASHBOARD_SECTIONS_USER_REMOVED`) is included
+                # in canonical order, so the device-side dropdown
+                # naturally has every bundled section available
+                # without any per-step augmentation.
                 options_raw_list = list(home.dashboard_sections)
 
             if options_raw_list is None:
                 options_raw_list = list(DASHBOARD_DEFAULT_SECTIONS)
-
-            # Safety net: if the device's default section is one of the
-            # bundled defaults but the home's customised list doesn't
-            # include it (e.g. a pre-QS-194 entry that doesn't yet have
-            # `water_boilers` or `radiators`), append it to the dropdown
-            # options so the user can pick it. The home's
-            # `_maybe_migrate_missing_default_section` will then add the
-            # section to `dashboard_sections` when the device is created.
-            existing_names = {s[0] for s in options_raw_list}
-            if default_section not in existing_names and default_section in DASHBOARD_DEFAULT_SECTIONS_DICT:
-                options_raw_list.append((default_section, DASHBOARD_DEFAULT_SECTIONS_DICT[default_section]))
 
             # ok we want a section for those ones
             good_value = self.config_entry.data.get(CONF_DEVICE_DASHBOARD_SECTION, default_section)
@@ -823,16 +817,18 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             }
         )
 
-        # BH (post-QS-195): the slot defaults MUST come from the live
-        # `home.dashboard_sections` (which has been normalized +
-        # migrated by `QSHome.__init__` and
-        # `_maybe_migrate_missing_default_section`) rather than from the
-        # stale persisted slots or `DASHBOARD_DEFAULT_SECTIONS[i]` by
-        # index. Without this, a user who upgraded across QS-194/QS-195
-        # saw slot 3 (persisted "others") AND slot 5 (index default
-        # "others") show "others" twice — and no "radiators" anywhere.
-        # Falling back to const defaults is only used when no home is
-        # available (e.g. very early flow state, brand-new install).
+        # BH (post-QS-195): slot defaults come from the LIVE
+        # `home.dashboard_sections`, which `QSHome.__init__` populates
+        # with every bundled default in `DASHBOARD_DEFAULT_SECTIONS`
+        # (minus `CONF_DASHBOARD_SECTIONS_USER_REMOVED`) plus any
+        # custom user sections, in canonical const order. Reading from
+        # the live list (instead of by-index against stale persisted
+        # slot keys) eliminates the QS-195 "multiple times others"
+        # bug AND surfaces newly-introduced bundled sections (e.g.
+        # `water_boilers`, `radiators`) for users whose persisted
+        # config pre-dates those releases. Falling back to const
+        # defaults only applies when no home is available (very early
+        # flow state, brand-new install).
         sections_source: list[tuple[str, str]] = list(DASHBOARD_DEFAULT_SECTIONS)
         data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
         if data_handler is not None and data_handler.home is not None and data_handler.home.dashboard_sections:

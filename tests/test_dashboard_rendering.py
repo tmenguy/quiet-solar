@@ -477,8 +477,10 @@ class TestDashboardTemplateRendering:
 
         # The MOCK_RADIATOR_CLIMATE_CONFIG fixture installs a
         # climate-backed radiator with `CONF_CLIMATE_HVAC_MODE_ON="heat"`,
-        # so the rendered YAML must include the entry.
-        assert "climate_hvac_mode_on: heat" in rendered
+        # so the rendered YAML must include the entry. Post-bugfix the
+        # value is quoted so YAML 1.1 doesn't coerce bare `on` / `off`
+        # to booleans (switch-backed radiators emit `on` literal).
+        assert "climate_hvac_mode_on: 'heat'" in rendered
 
     @pytest.mark.asyncio
     async def test_solar_entities_appear_in_rendered_output(self, hass, full_dashboard_home):
@@ -860,6 +862,247 @@ class TestDashboardSectionMapping:
         )
 
         assert _normalize_dashboard_sections_order([]) == []
+
+    def test_radiator_and_water_boiler_cards_guard_against_zero_max_hours(self):
+        """User-reported bug: a brand-new switch-backed radiator with no
+        active constraint sensor (or one that reports 0) produces
+        ``maxHours = targetHours = 0`` in the non-default-mode branch,
+        causing every arc-path calc to divide by zero. The SVG paths
+        end up as ``M ... A 130 130 0 0 1 NaN NaN`` and the dashboard
+        shows a "Configuration error".
+
+        Fix invariant: in the non-default branch, both cards must
+        clamp ``maxHours`` to a positive finite value before using
+        it in arc-path math. We pin this via regex so a future edit
+        that drops the clamp regresses the test.
+        """
+        import re
+
+        for card_filename in ("qs-radiator-card.js", "qs-water-boiler-card.js"):
+            content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
+            # Strip comments so the regex only matches executable code.
+            no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+            executable = re.sub(r"//[^\n]*", "", no_block)
+
+            # The non-default branch MUST guard against zero (or NaN)
+            # `targetHours` before assigning to `maxHours`. Acceptable
+            # patterns include:
+            #   maxHours = targetHours > 0 ? targetHours : <fallback>;
+            #   maxHours = Math.max(<fallback>, targetHours);
+            # Detect ANY clamp-style guard around `targetHours` near the
+            # `maxHours = targetHours` assignment.
+            unguarded_pat = re.compile(
+                r"maxHours\s*=\s*targetHours\s*;", re.MULTILINE
+            )
+            assert unguarded_pat.search(executable) is None, (
+                f"{card_filename}: a bare `maxHours = targetHours;` assignment "
+                f"would divide by zero when the constraint sensor reports 0 "
+                f"(brand-new device, no live constraint). Use a clamp like "
+                f"`maxHours = targetHours > 0 ? targetHours : 12;` instead."
+            )
+
+    def test_radiator_template_quotes_climate_hvac_mode_on(self):
+        """User-reported bug: a switch-backed radiator emits
+        ``climate_hvac_mode_on: on`` in the dashboard YAML. YAML 1.1
+        parses bare ``on`` / ``off`` as booleans, so HA hands the JS
+        card ``true`` instead of the string ``"on"``. The card then
+        crashes inside ``_render()`` with
+        ``TypeError: true.toLowerCase is not a function`` and Lovelace
+        renders a "Configuration error" card.
+
+        Fix invariant: the radiator's `climate_hvac_mode_on` value MUST
+        be quoted in BOTH dashboard templates so YAML never coerces it.
+        We pin the quoted form via a regex on the template source.
+        """
+        import re
+
+        for template_filename in (
+            "quiet_solar_dashboard_template.yaml.j2",
+            "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+        ):
+            template_path = COMPONENT_ROOT / "ui" / template_filename
+            if not template_path.exists():
+                continue
+            content = template_path.read_text()
+            # The Jinja line we care about lives only in the custom
+            # template (the standard one doesn't pass `climate_hvac_mode_on`
+            # to the card — it uses entity rows). Skip if absent.
+            if "climate_hvac_mode_on" not in content:
+                continue
+            # The value must be wrapped in quotes — single or double.
+            # Anything else (bare interpolation) lets YAML 1.1 coerce
+            # `on` → True / `off` → False / `yes` → True / etc.
+            unquoted_pat = re.compile(
+                r"climate_hvac_mode_on:\s*\{\{\s*device\.hvac_state_on\s*\}\}",
+                re.MULTILINE,
+            )
+            assert unquoted_pat.search(content) is None, (
+                f"{template_filename}: `climate_hvac_mode_on: "
+                f"{{{{ device.hvac_state_on }}}}` is unquoted — YAML 1.1 "
+                f"will parse bare `on`/`off` as booleans and the JS card "
+                f"will crash with `true.toLowerCase is not a function`. "
+                f"Quote the interpolation: "
+                f"`climate_hvac_mode_on: '{{{{ device.hvac_state_on }}}}'`."
+            )
+            # And positively assert a quoted form is present.
+            quoted_pat = re.compile(
+                r"climate_hvac_mode_on:\s*['\"]\{\{\s*device\.hvac_state_on\s*\}\}['\"]",
+                re.MULTILINE,
+            )
+            assert quoted_pat.search(content) is not None, (
+                f"{template_filename}: expected a quoted "
+                f"`climate_hvac_mode_on: '{{{{ device.hvac_state_on }}}}'` "
+                f"emit. The unquoted variant trips YAML's bool coercion."
+            )
+
+    def test_radiator_card_tolerates_non_string_hvac_mode_on(self):
+        """Defense-in-depth for the same user-reported bug: even if a
+        future template regression emits an unquoted ``on`` (parsed as
+        Python ``True``) into ``climate_hvac_mode_on``, the JS card
+        must NOT crash on ``true.toLowerCase()`` — wrap the value in
+        ``String(...)`` before the call.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        executable = re.sub(r"//[^\n]*", "", no_block)
+
+        # Every reference to `e.climate_hvac_mode_on` that feeds into a
+        # chained `.toLowerCase()` MUST be wrapped in `String(...)`
+        # first. Walk every `e.climate_hvac_mode_on` occurrence and
+        # check the preceding token is `String(`.
+        ref_pat = re.compile(r"e\.climate_hvac_mode_on")
+        unsafe_uses: list[str] = []
+        for m in ref_pat.finditer(executable):
+            # Search backwards from `m.start()` for the nearest
+            # non-whitespace token. Accept `String(`, `String  (`,
+            # or any usage that doesn't lead to `.toLowerCase()`.
+            tail = executable[m.end():m.end() + 200]
+            if ".toLowerCase" not in tail:
+                continue  # not a stringy use, irrelevant
+            preceding = executable[max(0, m.start() - 60) : m.start()]
+            if not re.search(r"String\s*\(\s*$", preceding):
+                unsafe_uses.append(
+                    f"...{preceding[-50:]}<HERE>{executable[m.start() : m.end() + 40]}..."
+                )
+        assert not unsafe_uses, (
+            "qs-radiator-card.js: every `e.climate_hvac_mode_on` use that "
+            "leads to `.toLowerCase()` must be wrapped in `String(...)`. "
+            "Without the wrap, a YAML-coerced boolean (`on` → True) "
+            "crashes the card. Offending uses:\n  " + "\n  ".join(unsafe_uses)
+        )
+
+    def test_radiator_and_water_boiler_cards_arc_path_guards_nan(self):
+        """Defense-in-depth for the same user-reported bug: the
+        ``arcPath`` helper must reject non-finite inputs so a stray
+        NaN from upstream math (e.g. a 0-divisor in hoursToPct) never
+        reaches the rendered SVG attribute. Without this guard, the
+        browser shows ``Error: <path> attribute d: Expected number,
+        "...A 130 130 0 0 1 NaN NaN"``.
+        """
+        import re
+
+        for card_filename in ("qs-radiator-card.js", "qs-water-boiler-card.js"):
+            content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
+            no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+            executable = re.sub(r"//[^\n]*", "", no_block)
+
+            # The arcPath helper definition must include a finiteness
+            # check on its angle inputs. Accept either `Number.isFinite`
+            # OR `Number.isNaN` (negative form).
+            arc_pat = re.compile(
+                r"arcPath\s*=\s*\([^)]*\)\s*=>\s*\{(?P<body>[^}]*(?:\}[^}]*)*?)\};",
+                re.DOTALL,
+            )
+            m = arc_pat.search(executable)
+            assert m is not None, (
+                f"{card_filename}: could not find an `arcPath = (...) => "
+                f"{{...}};` arrow definition — check the helper layout."
+            )
+            body = m.group("body")
+            has_finite = "Number.isFinite" in body or "Number.isNaN" in body
+            assert has_finite, (
+                f"{card_filename}: `arcPath` must guard against non-finite "
+                f"angle inputs (use Number.isFinite / Number.isNaN). "
+                f"Body was: {body[:300]}..."
+            )
+
+    def test_device_dashboard_section_translation_present_for_each_step(self):
+        """User-reported bug: the `device_dashboard_section` form field
+        renders as the raw key in the UI for every step except `person`
+        because no translation was defined elsewhere.
+
+        Every config-step (and its corresponding options-step) whose
+        `LOAD_TYPE_DASHBOARD_DEFAULT_SECTION` mapping is non-None
+        includes the `CONF_DEVICE_DASHBOARD_SECTION` field in its
+        schema via `get_common_schema`, so each MUST have a
+        translation entry in `strings.json` under `data` (either a
+        literal or a `[%key:...%]` reference).
+        """
+        import json
+        from custom_components.quiet_solar.const import LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
+
+        strings_path = COMPONENT_ROOT / "strings.json"
+        strings = json.loads(strings_path.read_text())
+
+        # Map device-type constants to their config-flow step name.
+        # Step name = the value of `conf_type_name` on the device
+        # class, which matches the device-type constant for everything
+        # except chargers (we skip those — their LOAD_TYPE_... is
+        # None so they don't get the dashboard-section field).
+        type_to_step = {
+            "home": "home",
+            "battery": "battery",
+            "solar": "solar",
+            "person": "person",
+            "car": "car",
+            "pool": "pool",
+            "water_boiler": "water_boiler",
+            "on_off_duration": "on_off_duration",
+            "climate": "climate",
+            "heat_pump": "heat_pump",
+            "radiator": "radiator",
+        }
+
+        # All step names that should have the translation.
+        required_steps = [
+            type_to_step[type_name]
+            for type_name, section in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION.items()
+            if section is not None and type_name in type_to_step
+        ]
+        # Sanity: must cover at least the post-QS-195 set.
+        for must_have in (
+            "home", "battery", "solar", "person", "car", "pool",
+            "water_boiler", "on_off_duration", "climate", "heat_pump",
+            "radiator",
+        ):
+            assert must_have in required_steps, (
+                f"Step {must_have!r} expected to be required but isn't "
+                f"derived from LOAD_TYPE_DASHBOARD_DEFAULT_SECTION; "
+                f"got {required_steps}"
+            )
+
+        # Verify both config.step.<X>.data.device_dashboard_section
+        # and options.step.<X>.data.device_dashboard_section exist.
+        missing: list[str] = []
+        for namespace in ("config", "options"):
+            for step in required_steps:
+                try:
+                    data_block = strings[namespace]["step"][step]["data"]
+                except KeyError:
+                    missing.append(f"{namespace}.step.{step}.data (missing)")
+                    continue
+                if "device_dashboard_section" not in data_block:
+                    missing.append(
+                        f"{namespace}.step.{step}.data.device_dashboard_section"
+                    )
+
+        assert not missing, (
+            f"Every step that includes the CONF_DEVICE_DASHBOARD_SECTION "
+            f"field MUST have a translation in strings.json. Missing: "
+            f"{missing}"
+        )
 
     @pytest.mark.asyncio
     async def test_all_devices_assigned_to_sections(self, full_dashboard_home):

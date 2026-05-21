@@ -178,7 +178,12 @@ class QsClimateCard extends HTMLElement {
         maxHours = Number(cfg.max_default_hours) || 12;
         displayTargetHours = defaultDuration;
       } else {
-        maxHours = targetHours;
+        // BH (user-reported NaN bug): a brand-new device with no live
+        // constraint sensor reports targetHours == 0, which made
+        // `hoursToPct` divide by zero and propagate NaN into the SVG
+        // arc path (`A 130 130 0 0 1 NaN NaN`). Clamp to a sensible
+        // positive fallback so the ring always renders.
+        maxHours = targetHours > 0 ? targetHours : (Number(cfg.max_default_hours) || 12);
         displayTargetHours = targetHours;
       }
       
@@ -355,6 +360,11 @@ class QsClimateCard extends HTMLElement {
       };
       const polar = (cx, cy, r, deg) => ({x: cx + r * Math.cos(deg2rad(deg)), y: cy - r * Math.sin(deg2rad(deg))});
       const arcPath = (cx, cy, r, a0, a1) => {
+          // BH defense-in-depth: a non-finite angle (NaN / Infinity)
+          // would render as `A 130 130 0 0 1 NaN NaN` in the SVG `d`
+          // attribute and trigger a browser "Configuration error".
+          // Return empty string so the consumer omits the <path> tag.
+          if (!Number.isFinite(a0) || !Number.isFinite(a1)) return '';
           // N8: a zero-length arc (a0 == a1, e.g. progress == 0) would
           // produce a single-point SVG path that renders as nothing or
           // a stray dot. Return empty string so the consumer can decide

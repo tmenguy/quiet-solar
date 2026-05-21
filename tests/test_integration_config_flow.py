@@ -1861,18 +1861,16 @@ async def test_radiator_step_explicit_pilot_clear_removes_persisted_key(
 
 
 @pytest.mark.asyncio
-async def test_get_common_schema_dashboard_dropdown_augments_missing_default(
+async def test_get_common_schema_dashboard_dropdown_reflects_home_sections(
     hass: HomeAssistant, mock_data_handler
 ):
-    """User-reported bug: when `home.dashboard_sections` doesn't include
-    the device type's default section (e.g. pre-QS-194 customised list
-    missing `water_boilers`, or pre-QS-195 list missing `radiators`),
-    the dashboard dropdown silently falls back to "Not in dashboard"
-    and the user cannot pick the appropriate section.
-
-    Fix: `get_common_schema` now appends the device's default section
-    to the dropdown options when it's a bundled default but missing
-    from `home.dashboard_sections`.
+    """Dropdown options for the device-side `CONF_DEVICE_DASHBOARD_SECTION`
+    field MUST mirror `home.dashboard_sections`. Init-time
+    auto-include in `QSHome.__init__` guarantees every bundled default
+    (`water_boilers`, `radiators`, ...) is present in the live home,
+    so the device dropdown automatically lists every bundled section
+    without any per-step augmentation — replaces the now-removed
+    `get_common_schema` augmentation logic.
     """
     from custom_components.quiet_solar.const import (
         CONF_DEVICE_DASHBOARD_SECTION,
@@ -1881,22 +1879,25 @@ async def test_get_common_schema_dashboard_dropdown_augments_missing_default(
 
     config_entry = MockConfigEntry(
         domain=DOMAIN,
-        entry_id="test_radiator_dropdown_aug_123",
+        entry_id="test_radiator_dropdown_reflects_123",
         data={
-            CONF_NAME: "Dropdown Augment Radiator",
+            CONF_NAME: "Dropdown Reflect Radiator",
             DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
             CONF_POWER: 1000,
         },
-        title="radiator: Dropdown Augment",
+        title="radiator: Dropdown Reflect",
     )
     config_entry.add_to_hass(hass)
 
     mock_home = create_minimal_home_model()
-    # Pre-QS-195 dashboard_sections — radiators NOT included.
+    # Live home with init-time auto-include applied: all bundled
+    # defaults present in canonical const order.
     mock_home.dashboard_sections = [
         ("cars", "mdi:car"),
         ("climates", "mdi:home-thermometer"),
         ("pools", "mdi:pool"),
+        ("water_boilers", "mdi:water-boiler"),
+        ("radiators", "mdi:radiator"),
         ("others", "mdi:home"),
         ("settings", "mdi:cog-outline"),
     ]
@@ -1914,21 +1915,25 @@ async def test_get_common_schema_dashboard_dropdown_augments_missing_default(
         add_max_on_off=False,
     )
 
-    # The dashboard-section dropdown must include "radiators" as an
-    # option even though `mock_home.dashboard_sections` doesn't list it.
+    # Dropdown options must include EVERY bundled section that's
+    # present in home.dashboard_sections, including the radiator
+    # device's own default `radiators`.
     options = None
     for item in sc_dict:
         if getattr(item, "schema", None) != CONF_DEVICE_DASHBOARD_SECTION:
             continue
         selector_config = sc_dict[item]
-        # `SelectSelector.config.options` (HA typed-dict)
         options = selector_config.config.get("options")
         break
 
     assert options is not None
     assert any("radiators" in opt for opt in options), (
-        f"`radiators` must be in the dashboard dropdown options even when "
-        f"`home.dashboard_sections` doesn't include it. Got: {options}"
+        f"`radiators` must be in the dropdown when home.dashboard_sections "
+        f"contains it. Got: {options}"
+    )
+    assert any("water_boilers" in opt for opt in options), (
+        f"`water_boilers` must be in the dropdown when "
+        f"home.dashboard_sections contains it. Got: {options}"
     )
 
 

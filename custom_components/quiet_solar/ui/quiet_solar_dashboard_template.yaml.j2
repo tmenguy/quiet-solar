@@ -211,7 +211,12 @@ views:
               {%- set e = ha.get("qs_device_clean_and_reset") %}
               {% if e %}reset: {{ e.entity_id }}{% endif %}
               {% if device.bistate_entity %}backing_entity: {{ device.bistate_entity }}{% endif %}
-              {% if device.hvac_state_on %}climate_hvac_mode_on: {{ device.hvac_state_on }}{% endif %}
+              {# BH (user-reported bug): quote the value so YAML 1.1
+                 doesn't coerce bare `on` (the value emitted by a
+                 switch-backed radiator) to the boolean `True`. Without
+                 the quotes the JS card receives `true` and crashes on
+                 `true.toLowerCase()` → "Configuration error". #}
+              {% if device.hvac_state_on %}climate_hvac_mode_on: '{{ device.hvac_state_on }}'{% endif %}
             {% elif device.device_type == "water_boiler" -%}
               {# Input contract for custom:qs-water-boiler-card — mirrors
                  qs-on-off-duration-card plus an optional `temperature_sensor`

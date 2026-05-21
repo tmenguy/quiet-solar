@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-22
+last_verified: 2026-05-23
 ---
 
 # Config flow and setup
@@ -106,16 +106,33 @@ dashboard-section slot suggestions (`CONF_DASHBOARD_SECTION_NAME_<i>`
 + `CONF_DASHBOARD_SECTION_ICON_<i>`) come from the **live**
 `home.dashboard_sections` list — not from the stored
 `config_entry.data` slot-by-slot and not from
-`DASHBOARD_DEFAULT_SECTIONS[i]` indexed against `i`. The live list
-has been normalised + migration-updated by `QSHome.__init__`, so the
-form reflects exactly what's rendered on the main dashboard.
-Reading by index against the persisted slots was the source of the
-QS-195 "multiple times others" bug: a pre-QS-194 user whose stored
-slot 3 was `"others"` and slot 5's index default also resolved to
-`"others"` (current const) saw `"others"` twice and no
-`"radiators"`. Slots beyond `len(home.dashboard_sections)` default
-to `None`, so the user has at least one empty slot for adding a
-custom section.
+`DASHBOARD_DEFAULT_SECTIONS[i]` indexed against `i`.
+`QSHome.__init__` builds that live list with init-time auto-include
+of every bundled default (minus
+`CONF_DASHBOARD_SECTIONS_USER_REMOVED`) plus
+`_normalize_dashboard_sections_order`, so the form reflects exactly
+what's rendered on the main dashboard. Reading by index against the
+persisted slots was the source of the QS-195 "multiple times others"
+bug: a pre-QS-194 user whose stored slot 3 was `"others"` and slot
+5's index default also resolved to `"others"` (current const) saw
+`"others"` twice and no `"radiators"`. Slots beyond
+`len(home.dashboard_sections)` default to `None`, so the user has at
+least one empty slot for adding a custom section.
+
+**Device-side `CONF_DEVICE_DASHBOARD_SECTION` dropdown**: the
+`get_common_schema` builder reads its option list from
+`home.dashboard_sections` directly with no per-step augmentation.
+The pre-QS-195 augmentation that appended a missing bundled default
+to the dropdown options (so the user could still pick e.g.
+`water_boilers` after a QS-194 upgrade) is no longer needed —
+`QSHome.__init__`'s auto-include guarantees the live home already
+contains every bundled section. Every config-flow step that
+includes this field (`home`, `battery`, `solar`, `person`, `car`,
+`pool`, `water_boiler`, `on_off_duration`, `climate`, `heat_pump`,
+`radiator`) must have a `device_dashboard_section` translation in
+`strings.json` (literal in `person.data`, `[%key:...%]` references
+in the others); without it the form renders the raw `device_dashboard_section`
+key instead of the localised "Dashboard section" label.
 
 **Data handler lifecycle** (`data_handler.py`):
 

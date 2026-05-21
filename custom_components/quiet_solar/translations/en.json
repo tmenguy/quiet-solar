@@ -30,6 +30,7 @@
                     "battery_max_discharge_power_number": "Maximum discharge power (W, kW) Number entity",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
                     "battery_min_charge_percent_value": "Minimum charge percentage (%)",
+                    "device_dashboard_section": "Dashboard section",
                     "name": "Name"
                 },
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
@@ -84,6 +85,7 @@
                     "charge_8": "Charge Power in W for a  8A charge (per phase), clear for default",
                     "charge_9": "Charge Power in W for a  9A charge (per phase), clear for default",
                     "default_car_charge": "Default car charge in %",
+                    "device_dashboard_section": "Dashboard section",
                     "device_efficiency": "Car charging power efficiency in %",
                     "minimum_ok_car_charge": "Minimum viable car charge in % (less solar priority once passed it)",
                     "name": "Name"
@@ -200,6 +202,7 @@
                     "climate": "Climate entity",
                     "climate_hvac_off": "HVAC mode to be used when the climate is off",
                     "climate_hvac_on": "HVAC mode to be used when the climate is on",
+                    "device_dashboard_section": "Dashboard section",
                     "device_to_pilot_name": "Optionally attach a heat pump to this climate",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
@@ -231,6 +234,7 @@
             "heat_pump": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the heat pump (W, kW)",
+                    "device_dashboard_section": "Dashboard section",
                     "device_is_3p": "Is the heat pump 3 phases?",
                     "device_mono_phase": "if mono phase, this is the phase index",
                     "dynamic_group_name": "Add heat pump to a load group to limit the amps",
@@ -266,6 +270,7 @@
                     "dashboard_section_name_5": "Name of Dashboard section #6 (empty to not use it)",
                     "dashboard_section_name_6": "Name of Dashboard section #7 (empty to not use it)",
                     "dashboard_section_name_7": "Name of Dashboard section #8 (empty to not use it)",
+                    "device_dashboard_section": "Dashboard section",
                     "device_is_3p": "Is the home 3 phases?",
                     "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
@@ -291,6 +296,7 @@
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
+                    "device_dashboard_section": "Dashboard section",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
                     "name": "Name",
@@ -322,6 +328,7 @@
             "pool": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
+                    "device_dashboard_section": "Dashboard section",
                     "dynamic_group_name": "Add pool to a load group to limit the amps",
                     "name": "Name",
                     "num_max_on_off": "Maximum Number of allowed turn on or turn off of the pump per day",
@@ -349,6 +356,7 @@
                     "climate": "Climate entity controlling the radiator (leave empty if using a switch)",
                     "climate_hvac_off": "HVAC mode to be used when the radiator is off",
                     "climate_hvac_on": "HVAC mode to be used when the radiator is on",
+                    "device_dashboard_section": "Dashboard section",
                     "device_to_pilot_name": "Optionally attach a heat pump piloted by this radiator",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
@@ -366,6 +374,7 @@
             },
             "solar": {
                 "data": {
+                    "device_dashboard_section": "Dashboard section",
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
                     "name": "Name",
@@ -401,6 +410,7 @@
                 "data": {
                     "accurate_power_sensor": "Power sensor of the boiler (W, kW)",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the boiler being on",
+                    "device_dashboard_section": "Dashboard section",
                     "dynamic_group_name": "Add water boiler to a load group to limit the amps",
                     "load_is_boost_only": "Is this boiler automatically regulated (QS will only boost on solar surplus)?",
                     "name": "Name",
@@ -767,6 +777,7 @@
                     "battery_max_discharge_power_number": "Maximum discharge power (W, kW) Number entity",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
                     "battery_min_charge_percent_value": "Minimum charge percentage (%)",
+                    "device_dashboard_section": "Dashboard section",
                     "name": "Name"
                 },
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
@@ -821,6 +832,7 @@
                     "charge_8": "Charge Power in W for a  8A charge (per phase), clear for default",
                     "charge_9": "Charge Power in W for a  9A charge (per phase), clear for default",
                     "default_car_charge": "Default car charge in %",
+                    "device_dashboard_section": "Dashboard section",
                     "device_efficiency": "Car charging power efficiency in %",
                     "minimum_ok_car_charge": "Minimum viable car charge in % (less solar priority once passed it)",
                     "name": "Name"
@@ -928,6 +940,7 @@
                     "climate": "Climate entity",
                     "climate_hvac_off": "HVAC mode to be used when the climate is off",
                     "climate_hvac_on": "HVAC mode to be used when the climate is on",
+                    "device_dashboard_section": "Dashboard section",
                     "device_to_pilot_name": "Optionally attach a heat pump to this climate",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
@@ -958,6 +971,7 @@
             "heat_pump": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the heat pump (W, kW)",
+                    "device_dashboard_section": "Dashboard section",
                     "device_is_3p": "Is the heat pump 3 phases?",
                     "device_mono_phase": "if mono phase, this is the phase index",
                     "dynamic_group_name": "Add heat pump to a load group to limit the amps",
@@ -993,6 +1007,7 @@
                     "dashboard_section_name_5": "Name of Dashboard section #6 (empty to not use it)",
                     "dashboard_section_name_6": "Name of Dashboard section #7 (empty to not use it)",
                     "dashboard_section_name_7": "Name of Dashboard section #8 (empty to not use it)",
+                    "device_dashboard_section": "Dashboard section",
                     "device_is_3p": "Is the home 3 phases?",
                     "dyn_group_max_phase_amps": "maximum current per phase (A) for the home",
                     "grid_active_power_sensor": "Active grid power: what your house get from the electrical grid (W, kW)",
@@ -1018,6 +1033,7 @@
                 "data": {
                     "accurate_power_sensor": "Power sensor of the load (W, kW)",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the load being on",
+                    "device_dashboard_section": "Dashboard section",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
                     "name": "Name",
@@ -1049,6 +1065,7 @@
             "pool": {
                 "data": {
                     "accurate_power_sensor": "Power sensor of the pump (W, kW)",
+                    "device_dashboard_section": "Dashboard section",
                     "dynamic_group_name": "Add pool to a load group to limit the amps",
                     "name": "Name",
                     "num_max_on_off": "Maximum Number of allowed turn on or turn off of the pump per day",
@@ -1076,6 +1093,7 @@
                     "climate": "Climate entity controlling the radiator (leave empty if using a switch)",
                     "climate_hvac_off": "HVAC mode to be used when the radiator is off",
                     "climate_hvac_on": "HVAC mode to be used when the radiator is on",
+                    "device_dashboard_section": "Dashboard section",
                     "device_to_pilot_name": "Optionally attach a heat pump piloted by this radiator",
                     "dynamic_group_name": "Add to a load group to limit the amps",
                     "load_is_boost_only": "Is this load an automatic one (thermodynamic boiler for ex) to only boost it",
@@ -1093,6 +1111,7 @@
             },
             "solar": {
                 "data": {
+                    "device_dashboard_section": "Dashboard section",
                     "inverter_active_power_sensor": "Inverter output power sensor (W, kW) (solar prod + battery)",
                     "inverter_input_power_sensor": "Inverter input power sensor (W, kW) (solar production)",
                     "name": "Name",
@@ -1110,6 +1129,7 @@
                 "data": {
                     "accurate_power_sensor": "Power sensor of the boiler (W, kW)",
                     "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the boiler being on",
+                    "device_dashboard_section": "Dashboard section",
                     "dynamic_group_name": "Add water boiler to a load group to limit the amps",
                     "load_is_boost_only": "Is this boiler automatically regulated (QS will only boost on solar surplus)?",
                     "name": "Name",

@@ -20,6 +20,7 @@ from custom_components.quiet_solar.const import (
     CONF_DEVICE_DASHBOARD_SECTION,
     CONF_GRID_POWER_SENSOR,
     CONF_HOME_VOLTAGE,
+    DASHBOARD_DEFAULT_SECTIONS,
     DATA_HANDLER,
     DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
@@ -539,18 +540,21 @@ async def test_home_devices_for_dashboard_section_includes_virtual_devices(
     assert charger_device._default_generic_car.name in device_names
 
 
-async def test_home_auto_migrates_missing_default_section_for_new_device_type(
+async def test_home_default_section_visible_after_device_add(
     hass: HomeAssistant,
 ) -> None:
-    """WF-5 tier 2: a pre-existing user's customised `dashboard_sections`
-    list that's missing `water_boilers` (because it pre-dates QS-194) gets
-    the section appended in-memory when a water_boiler device is added.
+    """BH replacement: a pre-existing user's customised
+    `dashboard_sections` list that's missing `water_boilers` (because
+    it pre-dates QS-194) STILL has the section available — the
+    init-time bundled-default inclusion in `QSHome.__init__` ensures
+    `water_boilers` is present regardless of what's persisted, so a
+    water_boiler device added afterwards resolves to the right bucket
+    on the dashboard. Replaces the old per-device auto-migration test.
     """
     from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
 
     # Customised home config that pre-dates QS-194 — no water_boilers
-    # section in the CONF_DASHBOARD_SECTION_NAME_<i> slots. Matches the
-    # f-string pattern used in home.py: `{CONF_DASHBOARD_SECTION_NAME}_{i}`.
+    # section in the CONF_DASHBOARD_SECTION_NAME_<i> slots.
     custom_home_config = {
         **MOCK_HOME_CONFIG,
         f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
@@ -572,14 +576,15 @@ async def test_home_auto_migrates_missing_default_section_for_new_device_type(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
-    # Sanity: water_boilers is NOT in the customised list yet
+    # Init-time auto-include ensures water_boilers is present even
+    # though the persisted slot keys don't mention it.
     initial_section_names = {s[0] for s in home.dashboard_sections}
-    assert "water_boilers" not in initial_section_names, (
-        f"Pre-condition: water_boilers must be absent from the customised "
-        f"home.dashboard_sections; got {initial_section_names}"
+    assert "water_boilers" in initial_section_names, (
+        f"Init-time auto-include must add the bundled water_boilers "
+        f"default; got {initial_section_names}"
     )
 
-    # Add a water_boiler device — it must trigger the migration
+    # Add a water_boiler device — resolves to the water_boilers bucket.
     boiler_entry = MockConfigEntry(
         domain=DOMAIN,
         data=MOCK_WATER_BOILER_CONFIG,
@@ -591,27 +596,18 @@ async def test_home_auto_migrates_missing_default_section_for_new_device_type(
     await hass.config_entries.async_setup(boiler_entry.entry_id)
     await hass.async_block_till_done()
 
-    # The section was appended at runtime
-    post_section_names = {s[0] for s in home.dashboard_sections}
-    assert "water_boilers" in post_section_names, (
-        f"Auto-migration should have appended `water_boilers` to "
-        f"home.dashboard_sections; got {post_section_names}"
-    )
-
-    # The device's dashboard_section resolves (not None) and reaches the
-    # right bucket
     boiler_device = hass.data[DOMAIN].get(boiler_entry.entry_id)
     assert boiler_device.dashboard_section == "water_boilers"
     devices_in_section = home.get_devices_for_dashboard_section("water_boilers")
     assert boiler_device in devices_in_section
 
 
-async def test_home_migration_inserts_at_const_position_not_at_end(
+async def test_home_init_places_bundled_defaults_in_const_order(
     hass: HomeAssistant,
 ) -> None:
-    """BH (post-QS-195 user bug): when the auto-migration adds a missing
-    default section, it must insert it at the position dictated by
-    `DASHBOARD_DEFAULT_SECTIONS` order — NOT at the end.
+    """BH (post-QS-195 user bug): the init-time auto-include MUST
+    place each bundled default at its canonical
+    `DASHBOARD_DEFAULT_SECTIONS` position — NOT at the end.
 
     Without this, the user's symptom was: "I put a radiator in the
     radiator dashboard section ... but it is now placed in the main
@@ -620,10 +616,10 @@ async def test_home_migration_inserts_at_const_position_not_at_end(
     heating sections below `settings`, breaking the visual grouping
     that `DASHBOARD_DEFAULT_SECTIONS` declares.
     """
-    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
+    from .const import MOCK_HOME_CONFIG
 
     # Pre-QS-194/QS-195 customised list — has `others` and `settings`
-    # but no `water_boilers` or `radiators`. The migration must insert
+    # but no `water_boilers` or `radiators`. Auto-include must place
     # `water_boilers` BEFORE `others`, not at the end.
     custom_home_config = {
         **MOCK_HOME_CONFIG,
@@ -648,34 +644,23 @@ async def test_home_migration_inserts_at_const_position_not_at_end(
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
-    # Add a water_boiler — migration runs and inserts `water_boilers`.
-    boiler_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=MOCK_WATER_BOILER_CONFIG,
-        entry_id="insert_at_const_boiler_entry",
-        title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
-        unique_id="insert_at_const_boiler_entry",
-    )
-    boiler_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(boiler_entry.entry_id)
-    await hass.async_block_till_done()
-
     section_names = [s[0] for s in home.dashboard_sections]
 
-    # `water_boilers` MUST appear BEFORE `others` (const order:
-    # ..., water_boilers, radiators, others, settings).
+    # After auto-include + normalize: water_boilers must appear BEFORE
+    # others and settings (const order: ..., water_boilers, radiators,
+    # others, settings).
     assert "water_boilers" in section_names, (
-        f"Migration should have added water_boilers; got {section_names}"
+        f"Auto-include should have added water_boilers; got {section_names}"
     )
     wb_idx = section_names.index("water_boilers")
     others_idx = section_names.index("others")
     settings_idx = section_names.index("settings")
     assert wb_idx < others_idx, (
-        f"water_boilers must be inserted BEFORE others (const order); "
+        f"water_boilers must appear BEFORE others (const order); "
         f"got order {section_names}"
     )
     assert wb_idx < settings_idx, (
-        f"water_boilers must be inserted BEFORE settings (const order); "
+        f"water_boilers must appear BEFORE settings (const order); "
         f"got order {section_names}"
     )
 
@@ -743,139 +728,150 @@ async def test_home_init_normalizes_existing_dashboard_sections(
     )
 
 
-async def test_home_migration_invalidates_sibling_device_caches(
+async def test_home_init_includes_all_bundled_default_sections(
     hass: HomeAssistant,
 ) -> None:
-    """S5: when the migration appends a default section, sibling devices
-    whose `_computed_dashboard_section` already cached
-    `DASHBOARD_NO_SECTION` get invalidated so they pick up the newly-
-    available section on the next access.
+    """BH replacement for the per-device migration: at home init, every
+    bundled section in `DASHBOARD_DEFAULT_SECTIONS` must be present in
+    `self.dashboard_sections` — even when the persisted slot keys
+    pre-date the section's introduction (pre-QS-194 layouts don't have
+    `water_boilers`, pre-QS-195 don't have `radiators`).
 
-    Scenario:
-    1. Build a home with a customised section list missing `water_boilers`.
-    2. Add boiler #1 — migration kicks in, `water_boilers` is appended,
-       boiler #1 resolves correctly.
-    3. Simulate the original failure mode: a user re-edits the home
-       sections, removing `water_boilers` from the in-memory list
-       again, AND boiler #1's cache stale-fires to NO_SECTION.
-    4. Add boiler #2 — migration re-appends `water_boilers` AND must
-       invalidate boiler #1's stale cache so it re-resolves correctly.
+    Replaces the per-device `_maybe_migrate_missing_default_section`
+    mechanism with a single deterministic init-time pass: simpler,
+    no per-device timing, no in-memory-vs-persisted divergence.
     """
-    from homeassistant.const import CONF_NAME
+    from .const import MOCK_HOME_CONFIG
 
-    from custom_components.quiet_solar.home_model.load import DASHBOARD_NO_SECTION
-
-    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
-
-    custom_home_config = {
+    # Pre-QS-194 layout: only the original 5 bundled defaults persisted.
+    legacy_config = {
         **MOCK_HOME_CONFIG,
         f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
         f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+        f"{CONF_DASHBOARD_SECTION_NAME}_1": "#2 - climates",
+        f"{CONF_DASHBOARD_SECTION_ICON}_1": "mdi:home-thermometer",
+        f"{CONF_DASHBOARD_SECTION_NAME}_2": "#3 - pools",
+        f"{CONF_DASHBOARD_SECTION_ICON}_2": "mdi:pool",
+        f"{CONF_DASHBOARD_SECTION_NAME}_3": "#4 - others",
+        f"{CONF_DASHBOARD_SECTION_ICON}_3": "mdi:home",
+        f"{CONF_DASHBOARD_SECTION_NAME}_4": "#5 - settings",
+        f"{CONF_DASHBOARD_SECTION_ICON}_4": "mdi:cog-outline",
     }
     home_entry = MockConfigEntry(
         domain=DOMAIN,
-        data=custom_home_config,
-        entry_id="s5_home_entry",
-        title="home: S5 Home",
-        unique_id="s5_home_entry",
+        data=legacy_config,
+        entry_id="init_includes_all_home_entry",
+        title="home: Init Includes All",
+        unique_id="init_includes_all_home_entry",
     )
     home_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(home_entry.entry_id)
     await hass.async_block_till_done()
+
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
-    # Add boiler #1 — this triggers the migration which appends water_boilers.
-    boiler1_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={**MOCK_WATER_BOILER_CONFIG, CONF_NAME: "Boiler One"},
-        entry_id="s5_boiler1_entry",
-        title="water_boiler: Boiler One",
-        unique_id="s5_boiler1_entry",
+    section_names = [s[0] for s in home.dashboard_sections]
+    expected = [name for name, _icon in DASHBOARD_DEFAULT_SECTIONS]
+    assert section_names == expected, (
+        f"After init, every bundled default in const order must be present "
+        f"in home.dashboard_sections. Expected {expected}, got "
+        f"{section_names}"
     )
-    boiler1_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(boiler1_entry.entry_id)
-    await hass.async_block_till_done()
-    boiler1 = hass.data[DOMAIN].get(boiler1_entry.entry_id)
-    assert boiler1.dashboard_section == "water_boilers"
-
-    # Simulate the pre-S5 failure mode: water_boilers gets removed from
-    # the in-memory list AND boiler #1's cache stale-fires to NO_SECTION.
-    # (Without S5's cross-device invalidation loop, this is the state
-    # that would have stuck around forever.)
-    home.dashboard_sections = [s for s in home.dashboard_sections if s[0] != "water_boilers"]
-    boiler1._computed_dashboard_section = DASHBOARD_NO_SECTION
-
-    # Add boiler #2 — migration appends water_boilers AGAIN, and the S5
-    # invalidation loop must reset boiler #1's stale NO_SECTION cache.
-    boiler2_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={**MOCK_WATER_BOILER_CONFIG, CONF_NAME: "Boiler Two"},
-        entry_id="s5_boiler2_entry",
-        title="water_boiler: Boiler Two",
-        unique_id="s5_boiler2_entry",
-    )
-    boiler2_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(boiler2_entry.entry_id)
-    await hass.async_block_till_done()
-
-    # Boiler #1's stale cache was invalidated — re-resolves to `water_boilers`.
-    assert boiler1.dashboard_section == "water_boilers", (
-        "S5: sibling device's stale NO_SECTION cache was not invalidated "
-        "when the migration re-appended `water_boilers`."
-    )
-    devices_in_section = home.get_devices_for_dashboard_section("water_boilers")
-    assert boiler1 in devices_in_section
-    boiler2 = hass.data[DOMAIN].get(boiler2_entry.entry_id)
-    assert boiler2 in devices_in_section
 
 
-async def test_home_migration_honours_user_removed_section_optout(
+async def test_home_init_preserves_custom_user_sections(
     hass: HomeAssistant,
 ) -> None:
-    """N7: a user-deliberate opt-out (via CONF_DASHBOARD_SECTIONS_USER_REMOVED)
-    is honoured — the migration does NOT silently re-append a section the
-    user explicitly removed.
+    """The init-time bundled-default inclusion must NOT discard user-
+    defined custom sections (names not in `DASHBOARD_DEFAULT_SECTIONS_DICT`).
+    Custom sections are preserved at the tail in their original order.
     """
-    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
+    from .const import MOCK_HOME_CONFIG
 
-    # Home with customised list — cars only — plus an explicit opt-out of
-    # the `water_boilers` section.
-    custom_home_config = {
+    custom_layout = {
         **MOCK_HOME_CONFIG,
         f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
         f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
-        CONF_DASHBOARD_SECTIONS_USER_REMOVED: ["water_boilers"],
+        f"{CONF_DASHBOARD_SECTION_NAME}_1": "my_workshop",  # custom
+        f"{CONF_DASHBOARD_SECTION_ICON}_1": "mdi:hammer",
+        f"{CONF_DASHBOARD_SECTION_NAME}_2": "#3 - pools",
+        f"{CONF_DASHBOARD_SECTION_ICON}_2": "mdi:pool",
     }
     home_entry = MockConfigEntry(
         domain=DOMAIN,
-        data=custom_home_config,
-        entry_id="n7_home_entry",
-        title="home: N7 Home",
-        unique_id="n7_home_entry",
+        data=custom_layout,
+        entry_id="init_preserve_custom_entry",
+        title="home: Init Preserves Custom",
+        unique_id="init_preserve_custom_entry",
     )
     home_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(home_entry.entry_id)
     await hass.async_block_till_done()
+
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
     home = data_handler.home
 
-    # Add a water_boiler — migration MUST NOT re-append water_boilers.
-    boiler_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=MOCK_WATER_BOILER_CONFIG,
-        entry_id="n7_boiler_entry",
-        title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
-        unique_id="n7_boiler_entry",
+    names = [s[0] for s in home.dashboard_sections]
+    assert "my_workshop" in names, (
+        f"Custom user section 'my_workshop' must be preserved; got {names}"
     )
-    boiler_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(boiler_entry.entry_id)
+    # All bundled defaults must also be present.
+    for default_name, _ in DASHBOARD_DEFAULT_SECTIONS:
+        assert default_name in names, (
+            f"Bundled default {default_name!r} missing after init; got {names}"
+        )
+    # Custom sections appear AFTER all bundled defaults.
+    workshop_idx = names.index("my_workshop")
+    for default_name, _ in DASHBOARD_DEFAULT_SECTIONS:
+        assert names.index(default_name) < workshop_idx, (
+            f"Custom section 'my_workshop' must appear after all bundled "
+            f"defaults; bundled {default_name!r} came after it in {names}"
+        )
+
+
+async def test_home_init_honours_user_removed_section_optout(
+    hass: HomeAssistant,
+) -> None:
+    """Init-time bundled-default inclusion must honour the
+    `CONF_DASHBOARD_SECTIONS_USER_REMOVED` opt-out: a power user who
+    listed e.g. `settings` in that list does NOT get it auto-added on
+    every restart.
+    """
+    from .const import MOCK_HOME_CONFIG
+
+    custom_with_optout = {
+        **MOCK_HOME_CONFIG,
+        f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
+        f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+        CONF_DASHBOARD_SECTIONS_USER_REMOVED: ["water_boilers", "settings"],
+    }
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=custom_with_optout,
+        entry_id="init_opt_out_entry",
+        title="home: Init Opt Out",
+        unique_id="init_opt_out_entry",
+    )
+    home_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(home_entry.entry_id)
     await hass.async_block_till_done()
 
-    section_names = {s[0] for s in home.dashboard_sections}
-    assert "water_boilers" not in section_names, (
-        "User explicitly opted out of water_boilers; migration must "
-        "honour that opt-out instead of silently re-appending it."
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    names = {s[0] for s in home.dashboard_sections}
+    assert "water_boilers" not in names, (
+        f"User opted out of water_boilers; init MUST NOT re-add it. "
+        f"Got {names}"
+    )
+    assert "settings" not in names, (
+        f"User opted out of settings; init MUST NOT re-add it. Got {names}"
+    )
+    # Sections NOT in the opt-out list are still auto-added.
+    assert "radiators" in names, (
+        f"Bundled default radiators (not in opt-out) must still be "
+        f"auto-added; got {names}"
     )
 
 

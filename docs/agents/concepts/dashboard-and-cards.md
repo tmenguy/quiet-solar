@@ -12,7 +12,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-21
+last_verified: 2026-05-23
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -249,6 +249,18 @@ patterns after the cross-card audit:
   `Number(s?.state || N)` so degenerate states
   (`""` / `unknown` / `unavailable`) can't propagate `NaN` into SVG
   path attributes.
+- **Zero-`maxHours` clamp (post-QS-195 user bug).** Both the
+  radiator and water-boiler cards clamp `maxHours = targetHours > 0 ?
+  targetHours : <fallback>` in the non-default-mode branch. A
+  brand-new device whose constraint sensor reports `0` would
+  otherwise divide by zero in `hoursToPct`, propagate `NaN` into the
+  arc-path math, and emit `M ... A 130 130 0 0 1 NaN NaN` in the
+  rendered SVG `d` attribute — the browser shows a "Configuration
+  error" and the card refuses to render.
+- **Arc-path NaN guard (defense-in-depth).** Both cards' `arcPath`
+  helper short-circuits with `if (!Number.isFinite(a0) ||
+  !Number.isFinite(a1)) return '';` so even if upstream math escapes
+  the clamp, the SVG `d` attribute stays well-formed.
 - **Local-state cleanup symmetry (S9).** Every Apply handler that
   sets a `_localFinishTimeMins` / `_localNextTimeMins` schedules a
   matching 5-second clear timer so out-of-band backend updates
