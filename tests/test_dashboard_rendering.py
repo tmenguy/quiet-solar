@@ -637,35 +637,54 @@ class TestDashboardTemplateRendering:
             )
 
     def test_radiator_card_flame_dancing_dynamic_proxy(self):  # CR2 — sync (no hass)
-        """QS-201 AC-4 — structural proxy for "dancing when running".
+        """QS-204 AC-4 — structural proxy for "flames flicker when running".
 
-        No JS runtime tests exist; AC-4 is verified manually plus via these
-        three structural patterns: a `_flamePhase` accumulator that advances
-        per frame, a per-layer `translateX(${tx.toFixed(1)}px)` template, and
-        the use of `LAYER_SCROLL_OFFSET` inside the step closure for the
-        parallax-tongue effect.
+        QS-201 implemented "dancing flames" via a sine-wave path plus a
+        global `translateX` scroll driven by `_flamePhase`. The QS-201
+        proxy test asserted that pattern. QS-204 redesigned the
+        backdrop into peaked teeth with per-tooth tip flicker (no
+        scroll), so the structural markers change. Updated assertions:
+
+        * `_generateFlameTeethPath` — the new path generator;
+        * `_tipPhases` — per-layer, per-tooth phase array driving the
+          flicker (replaces the global `_flamePhase` accumulator);
+        * `LAYER_TIP_FLICKER_HZ` — per-layer flicker frequency table;
+        * the obsolete `LAYER_SCROLL_OFFSET` / `_flamePhase` markers
+          should be ABSENT so the redesign cannot regress silently.
         """
         import re
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
 
-        # Phase accumulator inside the RAF step closure.
-        assert re.search(
-            r"this\._flamePhase\s*\+=\s*this\._currentFlameSpeed\s*\*\s*dt",
-            content,
-        ) is not None, "AC-4: _flamePhase += _currentFlameSpeed * dt must be present"
+        # New path generator must be present.
+        assert "_generateFlameTeethPath" in content, (
+            "QS-204 AC-4: `_generateFlameTeethPath` (the peaked-teeth "
+            "path generator) must be declared"
+        )
 
-        # Per-frame translateX template — tx is toFixed(1) for sub-pixel snap.
-        assert re.search(
-            r"translateX\(\$\{tx\.toFixed\(1\)\}px\)",
-            content,
-        ) is not None, "AC-4: per-layer translateX(${tx.toFixed(1)}px) template required"
+        # Per-tooth tip phase array must drive the flicker.
+        assert "_tipPhases" in content, (
+            "QS-204 AC-4: `_tipPhases` (per-layer, per-tooth phase array) "
+            "must drive the per-frame flicker"
+        )
 
-        # LAYER_SCROLL_OFFSET drives per-layer scroll phase for parallax.
-        assert re.search(
-            r"i\s*\*\s*LAYER_SCROLL_OFFSET",
-            content,
-        ) is not None, "AC-4: LAYER_SCROLL_OFFSET must drive per-layer scroll phase"
+        # Per-layer flicker frequencies in Hz.
+        assert "LAYER_TIP_FLICKER_HZ" in content, (
+            "QS-204 AC-4: `LAYER_TIP_FLICKER_HZ` (per-layer flicker rate) "
+            "must declare the per-layer turbulence rates"
+        )
+
+        # Obsolete QS-201 markers must be gone — they reintroduce the
+        # wave-scroll behaviour the user reported as visually wrong.
+        assert "LAYER_SCROLL_OFFSET" not in content, (
+            "QS-204 AC-4 regression: `LAYER_SCROLL_OFFSET` (parallax-tongue "
+            "scroll constant from QS-201) re-appeared — the redesign drops "
+            "the global scroll in favour of per-tooth tip-flicker"
+        )
+        assert not re.search(r"this\._flamePhase\b", content), (
+            "QS-204 AC-4 regression: `this._flamePhase` accumulator "
+            "re-appeared — replaced by per-tooth `_tipPhases` arrays"
+        )
 
     @pytest.mark.asyncio
     async def test_radiator_dashboard_passes_climate_hvac_mode_on(

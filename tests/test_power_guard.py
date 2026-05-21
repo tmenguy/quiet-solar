@@ -342,7 +342,8 @@ def test_mandatory_subject_to_power_guard():
     )
 
     # max_possible_production = min(3000, 3000) = 3000, headroom = 3000 - 500 = 2500
-    # Mandatory 4000W > 2500W headroom — should be capped to fit within headroom
+    # The 4000W step exceeds headroom; the headroom guard caps to the
+    # 2000W step (the largest that fits).
     result = solver.solve()
 
     # The mandatory load should still be allocated but capped by headroom

@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-05-21
+last_verified: 2026-05-22
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -54,17 +54,26 @@ restricts leading-underscore attribute access.
 
 The `_bistate_mode_on` / `_bistate_mode_off` strings drive the
 **bistate-mode select** UI (Force ON / Force OFF entries) and follow
-DIFFERENT conventions across subclasses:
-`QSOnOffDuration` / `QSPool` use namespaced literals
-(`"on_off_mode_on"` / `"on_off_mode_off"`);
-`QSClimateDuration` mirrors the raw HVAC mode (`"heat"` / `"off"` …)
-so the `climate_mode` translation can label each force-mode entry
-with the HVAC mode name; `QSRadiator` uses the literal `"on"` /
-`"off"` regardless of the HVAC mode so the `radiator_mode`
-translation always has matching state keys. The divergence is
-documented in `QSBiStateDuration`'s class docstring. Cross-subclass
-logic that compares `_state_on` ↔ `_bistate_mode_on` must treat
-the two as decoupled.
+ONE OF TWO conventions across subclasses:
+
+1. **Namespaced-literal convention** — `QSOnOffDuration`, `QSPool`,
+   and `QSRadiator` use a per-class namespaced key (e.g.
+   `"on_off_mode_on"`, `"radiator_mode_on"`). The select translates
+   those keys to "Force ON" / "Force OFF" labels independently of
+   the underlying HA state. The `_state_on/off` HA-state value
+   remains the raw service-call value (e.g. `"on"`/`"off"` for
+   switches, `"heat"`/`"off"` for climate-backed radiators). QS-204
+   moved `QSRadiator` from the bare `"on"`/`"off"` literals to the
+   namespaced form so the radiator-mode keys no longer collide with
+   the underlying HA switch states.
+2. **Raw HVAC convention** — `QSClimateDuration` mirrors the raw
+   HVAC mode (`"heat"`, `"cool"`, `"fan_only"`, …) so the
+   `climate_mode` translation can label each force-mode entry with
+   the HVAC mode name.
+
+Cross-subclass logic that compares `_state_on` ↔ `_bistate_mode_on`
+must treat the two as decoupled. The divergence is documented in
+`QSBiStateDuration`'s class docstring.
 
 ## When you need this concept
 

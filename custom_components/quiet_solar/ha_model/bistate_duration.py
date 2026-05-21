@@ -58,23 +58,20 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
     Subclasses follow ONE OF TWO conventions for `_bistate_mode_*`:
 
-    1. **`QSOnOffDuration` / `QSPool`**: hard-coded literals like
-       ``"on_off_mode_on"`` (namespaced for the on/off / pool
-       translations). The select shows "Force ON" / "Force OFF" via
-       those keys; the `_state_on/off` HA-state value is "on"/"off".
+    1. **`QSOnOffDuration` / `QSPool` / `QSRadiator`**: hard-coded
+       namespaced literals like ``"on_off_mode_on"`` /
+       ``"radiator_mode_on"`` (one namespace per host class). The
+       select shows "Force ON" / "Force OFF" via those keys; the
+       `_state_on/off` HA-state value remains the raw service-call
+       value ("on"/"off" for switches, "heat"/"off" etc. for
+       climate-backed radiators).
     2. **`QSClimateDuration`**: `_bistate_mode_*` mirrors the raw HVAC
        mode (`"heat"`, `"cool"`, `"fan_only"`, …). The `climate_mode`
        translation registers each HVAC mode as a force-mode state key
        so the dropdown renders "Force HVAC Mode HEAT" etc.
-    3. **`QSRadiator`**: `_bistate_mode_*` is hard-coded to `"on"` /
-       `"off"` regardless of the HVAC mode, mirroring convention 1.
-       The `radiator_mode` translation registers `"on"` / `"off"` (NOT
-       arbitrary HVAC modes) so a user who configures HVAC ON =
-       `"auto"` still sees a localised "Force ON" label.
 
-    Both conventions are valid; the divergence is intentional. Any
-    base-class logic that compares `_state_on` ↔ `_bistate_mode_on`
-    must treat the two as decoupled.
+    Subclasses follow ONE OF TWO conventions — QSClimateDuration uses
+    raw HVAC modes; everything else uses namespaced literals.
     """
 
     # B6 review-fix — class-level default of `None` so

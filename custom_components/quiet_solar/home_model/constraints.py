@@ -2254,13 +2254,30 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     )
                     quantity_to_be_added = local_quantity_to_be_added
 
-            if has_a_cmd is False:
-                _LOGGER.warning(
-                    "compute_best_period_repartition: no power sorted commands for green energy %s", self.name
-                )
-                final_ret = False
-            elif quantity_to_be_added <= 0.0 or do_use_available_power_only:
+            if quantity_to_be_added <= 0.0 or do_use_available_power_only:
                 final_ret = quantity_to_be_added <= 0.0
+            elif has_a_cmd is False and power_headroom is not None:
+                # QS-204 safety guard. The user-applied fix removed the
+                # unconditional `has_a_cmd is False → final_ret = False`
+                # short-circuit so a freshly-set radiator on Force ON can
+                # dispatch even when the green-energy pass finds no
+                # candidate (its `current_command` / `running_command`
+                # are both None on first activation). But when the green
+                # pass returned nothing AND a non-None `power_headroom`
+                # was supplied (typical solver-driven invocation), the
+                # caller is enforcing a hard production cap — falling
+                # through to the price-optimizer fallback would bypass
+                # that cap and risk grid overdraw / battery-floor
+                # breaches (regression tests in test_power_guard.py and
+                # test_solver_pre_discharge*.py pin this).
+                #
+                # The fallback path remains reachable when the load was
+                # invoked WITHOUT `power_headroom` — that is the
+                # radiator force-on lifecycle, which has no production
+                # cap from the solver. So this guard preserves the
+                # QS-204 user intent while restoring the safety property
+                # of the headroom guard.
+                final_ret = False
             else:
                 # pure solar (or pure solar plus allowed battery depletion)  was not enough, we will try to see if we can get more solar energy directly if price is better
                 # but actually we should have depleted the battery on the "non controlled" part first, to see what is really possible,

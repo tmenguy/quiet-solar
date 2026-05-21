@@ -114,15 +114,13 @@ class QSRadiator(QSBiStateDuration):
         # to bring back the real HVAC modes).
         self._state_on = intended_state_on
         self._state_off = intended_state_off
-        # E3 — `_bistate_mode_on/off` drive the `radiator_mode` select
-        # UI. Hard-code them to `"on"`/`"off"` regardless of the HVAC
-        # mode so the translation always has matching state keys (the
-        # `radiator_mode` translation defines `on` and `off` but not
-        # arbitrary HVAC modes like `auto`, `fan_only`, `dry`). The
-        # transport's `state_on/state_off` continue to carry the
-        # actual HVAC mode strings for service-call dispatch.
-        self._bistate_mode_on = "on"
-        self._bistate_mode_off = "off"
+        # QS-204 — radiator follows the namespaced-literal convention
+        # (same shape as `QSOnOffDuration` and `QSPool`): the bistate
+        # mode strings are dedicated translation keys, decoupled from
+        # the underlying HA state. The transport's `state_on/state_off`
+        # continue to carry the actual service-call values.
+        self._bistate_mode_on = "radiator_mode_on"
+        self._bistate_mode_off = "radiator_mode_off"
         self.bistate_entity = self._transport.entity
 
     def get_virtual_current_constraint_translation_key(self) -> str | None:

@@ -23,35 +23,49 @@
   (A1 review-fix #02).
 */
 
-// QS-201: 3-layer animated flame backdrop. Geometry, layer offsets,
-// and animation tuning mirror qs-pool-card.js's water-wave pattern.
-// Constants are duplicated (not imported) so a future pool-card refactor
-// cannot silently break this card.
+// QS-204: 3-layer peaked-teeth flame backdrop.
+// The QS-201 sine-wave path was indistinguishable from qs-pool-card.js's
+// water waves (both at running orange and idle grey). QS-204 swaps the
+// path generator for a piecewise-quadratic tooth shape (sharper tips,
+// taller peaks) and drops the global translateX scroll in favour of
+// per-tooth tip-flicker — the silhouette reads as flames in both states.
+// Constants stay duplicated in-file rather than imported from the pool
+// card so a future pool-card refactor cannot silently break this card.
 
 // --- Geometry (must match the <clipPath> circle attributes below) ---
 const CENTER_CY = 160;              // SVG y-centre of the ring / clip circle
 const CLIP_R = 120;                 // flame clip circle radius
-const FLAME_WIDTH = 480;            // single flame period in SVG px (2× clip diameter)
+const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)
 const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closing rect is clipped
-
-// --- Per-layer offsets (parallax-tongue effect; different magic numbers, different purposes) ---
-const LAYER_SCROLL_OFFSET = 1.2;    // per-layer extra scroll phase (visual depth)
-const LAYER_PHASE_OFFSET = 2.1;     // per-layer static sine phase (shape variety)
-const LAYER_TIP_FREQS = [2, 3, 4];  // tongues per width — integer freqs so paths wrap seamlessly
 
 // --- Animation tuning ---
 const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
 const LERP_DT_CEIL = 0.1;           // s; clamp lerp dt to avoid snap-to after tab hidden
 const AMP_REGEN_THRESHOLD = 0.25;   // amplitude delta threshold for path regen (throttle)
 const LEVEL_REGEN_THRESHOLD = 0.01; // px; threshold for base-Y path regen (jitter-proof)
-const PHASE_WRAP = 1e6;             // wrap _flamePhase to preserve float precision
-const PHASE_TO_PX = 60;             // scroll px per phase-unit
 
 // --- Flame dynamics targets (still vs dancing) ---
-const STILL_AMP = 1;                // tip wobble when off — minimal, near-frozen
-const DANCE_AMP = 5;                // tip wobble when on — visibly dancing
-const STILL_SPEED = 0;              // phase-units/s when off — no scroll
-const DANCE_SPEED = 1.0;            // phase-units/s when on
+// STILL_AMP = 0 — idle silhouette is fully frozen (per-tooth tip phases
+// never advance), pinning AC4's "no horizontal scroll, no tip wobble"
+// constraint. STATIC_PEAK_HEIGHT keeps the silhouette visibly peaked
+// while STILL_AMP === 0 so the idle frame still reads as a flame.
+const STILL_AMP = 0;                // tip-flicker amplitude when off — frozen
+const DANCE_AMP = 8;                // tip-flicker amplitude when on — visibly dancing
+const STILL_SPEED = 0;              // tip-phase advance when off (unused; legacy compat)
+const DANCE_SPEED = 0;              // tip-phase advance when on — flicker is per-tooth (see HZ table)
+const STATIC_PEAK_HEIGHT = 30;      // extra peak height when STILL_AMP=0 so idle has visible peaks
+
+// --- Per-layer tuning ---
+// LAYER_BASE_HEIGHTS — back layer reaches ≈ half clip radius (~100 px)
+// so the back-flame tip approaches the top of the clip circle, which
+// is what makes the silhouette read as flames rather than ripples.
+const LAYER_BASE_HEIGHTS = [150, 120, 90];
+const LAYER_TIP_AMP_MULTS = [1.2, 1.0, 0.8];  // multiplies _currentFlameAmp per layer
+const LAYER_TEETH_COUNTS = [3, 4, 5];          // fewer wider teeth read more like flames
+// LAYER_TIP_FLICKER_HZ — independent per-layer flicker frequencies so
+// the three layers desynchronise and read as turbulent fire rather than
+// a single global scroll. Frequencies are in Hz (tooth-phase cycles/sec).
+const LAYER_TIP_FLICKER_HZ = [8, 7, 9];
 
 // --- Flame height envelope (1/5..4/5 of clip diameter; mirrors pool) ---
 const FLAME_BASE_MIN_PCT = 0.2;     // hoursRun=0 → flame base low
@@ -69,10 +83,6 @@ const FLAME_GREY_FILLS = [
     'rgba(120, 120, 120, 0.22)',    // front layer
 ];
 
-// --- Per-layer base heights (px) — back is tallest, front is shortest ---
-const LAYER_BASE_HEIGHTS = [80, 65, 55];
-const LAYER_TIP_AMP_MULTS = [1.2, 1.0, 0.8];  // multiplies _currentFlameAmp per layer
-
 class QsRadiatorCard extends HTMLElement {
   // M4: gate the requestAnimationFrame loop on `showAnimation`.
     // condition (`showAnimation`). The loop is started lazily by
@@ -81,16 +91,18 @@ class QsRadiatorCard extends HTMLElement {
   // becomes false. Avoids constant per-card repaint overhead when no
   // visible animation is in progress.
   _startAnimation() {
-    // QS-201: first-connect prime — initialize flame anim state if null so
-    // the next _render() can read sane defaults. Set _needsFlamePrime so
-    // _render() skips the 1.5s lerp from defaults at boot. The prime block
-    // must run BEFORE the early-return so the very first _render() after
-    // construction sees primed amp/speed values; it's idempotent on every
-    // subsequent call (guarded by the null check).
+    // QS-201 / QS-204: first-connect prime — initialize flame anim state
+    // if null so the next _render() can read sane defaults. Set
+    // _needsFlamePrime so _render() skips the 1.5s lerp from defaults at
+    // boot. The prime block must run BEFORE the early-return so the very
+    // first _render() after construction sees primed amp values; it's
+    // idempotent on every subsequent call (guarded by the null check).
     if (this._currentFlameAmp == null) {
       this._currentFlameAmp = STILL_AMP;
       this._currentFlameSpeed = STILL_SPEED;
-      this._flamePhase = 0;
+      // QS-204 — per-layer, per-tooth tip phases. Independent flicker
+      // across layers reads as fire turbulence rather than scroll.
+      this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
       this._needsFlamePrime = true;
     }
 
@@ -118,20 +130,32 @@ class QsRadiatorCard extends HTMLElement {
         p.setAttribute('stroke-dashoffset', String(-this._animOffset));
       }
 
-      // --- QS-201: flame animation update ---
+      // --- QS-204: flame animation update ---
       const fireOn = this._fireRunning === true;
       const targetAmp = fireOn ? DANCE_AMP : STILL_AMP;
-      const targetSpeed = fireOn ? DANCE_SPEED : STILL_SPEED;
       // Clamp the lerp dt: after a tab is hidden for several seconds, the
       // first frame back has huge dt and lerpFactor ≈ 1, which would snap
-      // amp/speed to target. Wave phase keeps using raw dt so scroll catches up.
+      // amp to target.
       const lerpDt = Math.min(dt, LERP_DT_CEIL);
       const lerpFactor = 1 - Math.exp(-LERP_RATE * lerpDt);
       this._currentFlameAmp += (targetAmp - this._currentFlameAmp) * lerpFactor;
-      this._currentFlameSpeed += (targetSpeed - this._currentFlameSpeed) * lerpFactor;
-      this._flamePhase += this._currentFlameSpeed * dt;
-      // Modulo wrap is robust to any sign / magnitude of accumulated phase.
-      this._flamePhase = this._flamePhase % PHASE_WRAP;
+      this._currentFlameSpeed = targetAmp;  // legacy compat — surface as fireOn signal
+
+      // Advance per-layer, per-tooth tip phases ONLY when running. Idle
+      // keeps the phases frozen at their last value, which combined with
+      // STILL_AMP === 0 produces a fully motionless silhouette (AC4).
+      if (fireOn && this._tipPhases) {
+        for (let i = 0; i < LAYER_TEETH_COUNTS.length; i++) {
+          const phasesForLayer = this._tipPhases[i];
+          const phaseStep = 2 * Math.PI * LAYER_TIP_FLICKER_HZ[i] * dt;
+          for (let j = 0; j < phasesForLayer.length; j++) {
+            // Stagger initial-phase across teeth so they don't flicker
+            // in lockstep — add `j` to the phase step so the j-th tooth
+            // sees a slightly different rate.
+            phasesForLayer[j] = (phasesForLayer[j] + phaseStep * (1 + 0.07 * j)) % (2 * Math.PI);
+          }
+        }
+      }
 
       // Lazy-resolve flame DOM refs once per innerHTML rewrite.
       if (!this._flameEls) {
@@ -142,20 +166,10 @@ class QsRadiatorCard extends HTMLElement {
         ];
       }
 
-      // Per-layer translateX scroll (cheap GPU compositing).
-      // Path extent is [0, 2*FLAME_WIDTH] so the translated path always
-      // covers the clip region. We offset by -CLIP_R to align the path
-      // start with the clip's left edge, then scroll within one period.
-      for (let i = 0; i < 3; i++) {
-        const fEl = this._flameEls[i];
-        if (fEl) {
-          const phaseOffset = i * LAYER_SCROLL_OFFSET;
-          const raw = (this._flamePhase + phaseOffset) * PHASE_TO_PX;
-          const scrollOffset = ((raw % FLAME_WIDTH) + FLAME_WIDTH) % FLAME_WIDTH;
-          const tx = -CLIP_R - scrollOffset;
-          fEl.style.transform = `translateX(${tx.toFixed(1)}px)`;
-        }
-      }
+      // QS-204 — no more translateX scroll. The horizontal-scroll
+      // transform is what made the QS-201 layer look like a wave rolling
+      // past; removed so each flame stays anchored in place while only
+      // its tips flicker.
 
       // Regenerate paths only when base-Y or amp changes appreciably (throttle).
       // Guard against undefined/NaN base — the RAF loop can fire before
@@ -168,20 +182,24 @@ class QsRadiatorCard extends HTMLElement {
       // Threshold compare for float-jitter robustness vs strict !==.
       const levelChanged = hasValidBase &&
           Math.abs(flameBaseY - (this._lastFlameBaseY ?? Number.NEGATIVE_INFINITY)) > LEVEL_REGEN_THRESHOLD;
-      if (hasValidBase && (levelChanged || ampDelta > AMP_REGEN_THRESHOLD)) {
+      // When fire is on we need to regenerate every frame so the per-
+      // tooth flicker is visible; the amp/level throttle still applies
+      // for idle (which freezes anyway).
+      const shouldRegen = hasValidBase && (fireOn || levelChanged || ampDelta > AMP_REGEN_THRESHOLD);
+      if (shouldRegen) {
         this._lastFlameBaseY = flameBaseY;
         this._lastFlameAmp = this._currentFlameAmp;
         const flameColors = this._flameColors || FLAME_GREY_FILLS;
         for (let i = 0; i < 3; i++) {
           const fEl = this._flameEls[i];
           if (fEl) {
-            const d = this._generateFlamePath(
+            const d = this._generateFlameTeethPath(
               FLAME_WIDTH,
               flameBaseY,
               LAYER_BASE_HEIGHTS[i],
               this._currentFlameAmp * LAYER_TIP_AMP_MULTS[i],
-              LAYER_TIP_FREQS[i],
-              i * LAYER_PHASE_OFFSET,
+              LAYER_TEETH_COUNTS[i],
+              this._tipPhases ? this._tipPhases[i] : null,
             );
             fEl.setAttribute('d', d);
             fEl.setAttribute('fill', flameColors[i]);
@@ -207,9 +225,9 @@ class QsRadiatorCard extends HTMLElement {
 
   disconnectedCallback() {
     this._stopAnimation();
-    // QS-201: clear flame DOM cache and memoization keys. _currentFlameAmp /
-    // _currentFlameSpeed / _flamePhase deliberately survive so re-attach
-    // resumes the dance without a visible jump.
+    // QS-204: clear flame DOM cache and memoization keys. _currentFlameAmp
+    // and _tipPhases deliberately survive so re-attach resumes the dance
+    // without a visible jump.
     this._invalidateFlameCache();
     // S7: reset interaction flags so a re-attach after mid-interaction
     // (e.g. dragging the ring or processing a mode change when the
@@ -258,36 +276,51 @@ class QsRadiatorCard extends HTMLElement {
     return Number.isNaN(n) ? defaultValue : n;
   }
 
-  // QS-201: SVG path for a single flame layer. Two periods of a sine-wave
-  // top edge bounded by a vertical baseline at FLAME_BOTTOM_Y. The path
-  // is drawn wider than the clip circle so translateX scrolling can
-  // reveal new tongues without seam.
-  //   width      — single period in SVG px (FLAME_WIDTH)
-  //   baseY      — y-coord of the flame base (lower = taller flame)
-  //   baseHeight — average flame height above baseY (positive number)
-  //   tipAmp     — sine amplitude for tip wobble
-  //   tipFreq    — sine frequency (tongues per width); integer for seamless wrap
-  //   phase      — radians; static per-layer phase offset
-  _generateFlamePath(width, baseY, baseHeight, tipAmp, tipFreq, phase) {
-    const points = [];
-    const stepsPerPeriod = 60;
-    const totalSteps = stepsPerPeriod * 2;
-    const totalWidth = 2 * width;
-    for (let i = 0; i <= totalSteps; i++) {
-      const x = (i / stepsPerPeriod) * width;  // 0 .. 2*width
-      // y goes UP from baseY (smaller y in SVG). tipAmp wobbles tip.
-      const y = baseY - baseHeight - tipAmp * Math.sin((x / width) * tipFreq * 2 * Math.PI + phase);
-      points.push(`${x.toFixed(2)} ${y.toFixed(2)}`);
+  // QS-204: SVG path for a single flame layer rendered as peaked teeth.
+  // Each tooth is a piecewise-quadratic ascend → peak → descend, drawn
+  // sharper than a sine bump (tip angle ≲ 60°) so the silhouette reads
+  // as a flame. Adjacent teeth share their base point. Per-tooth tip
+  // phases let layers flicker independently of one another.
+  //
+  //   width      — total layer width in SVG px (FLAME_WIDTH)
+  //   baseY      — y-coord of the flame base (lower y = higher up the canvas)
+  //   peakHeight — base peak height above baseY (positive number)
+  //   tipAmp     — extra tip oscillation magnitude (px)
+  //   numTeeth   — number of teeth across `width`
+  //   tipPhases  — array of per-tooth phases (radians); length == numTeeth.
+  //                When STILL_AMP === 0 + frozen tipPhases, the silhouette
+  //                is static (idle).
+  _generateFlameTeethPath(width, baseY, peakHeight, tipAmp, numTeeth, tipPhases) {
+    const teethCount = Math.max(1, numTeeth | 0);
+    const toothWidth = width / teethCount;
+    // Idle (STILL_AMP === 0) keeps a visible peak via STATIC_PEAK_HEIGHT
+    // so the silhouette doesn't collapse onto the baseline.
+    const idlePeakBoost = tipAmp === 0 ? STATIC_PEAK_HEIGHT : 0;
+    let d = `M 0 ${baseY.toFixed(2)}`;
+    for (let i = 0; i < teethCount; i++) {
+      const phase = tipPhases && tipPhases[i] != null ? tipPhases[i] : 0;
+      const tipWobble = tipAmp * Math.sin(phase);
+      const peakY = baseY - peakHeight - idlePeakBoost - tipWobble;
+      const startX = i * toothWidth;
+      const midX = startX + toothWidth / 2;
+      const endX = startX + toothWidth;
+      // Quadratic-Bezier ascend and descend; the control point sits
+      // slightly below the peak (`peakY - 8`) so the tip pinches into
+      // a sharp angle rather than a rounded curve.
+      const ctrlUpX = startX + toothWidth / 3;
+      const ctrlDownX = startX + (2 * toothWidth) / 3;
+      const ctrlY = peakY - 8;
+      d += ` Q ${ctrlUpX.toFixed(2)} ${ctrlY.toFixed(2)} ${midX.toFixed(2)} ${peakY.toFixed(2)}`;
+      d += ` Q ${ctrlDownX.toFixed(2)} ${ctrlY.toFixed(2)} ${endX.toFixed(2)} ${baseY.toFixed(2)}`;
     }
-    return `M ${points[0]} ` +
-           points.slice(1).map(p => `L ${p}`).join(' ') +
-           ` L ${totalWidth.toFixed(2)} ${FLAME_BOTTOM_Y} L 0 ${FLAME_BOTTOM_Y} Z`;
+    d += ` L ${width.toFixed(2)} ${FLAME_BOTTOM_Y} L 0 ${FLAME_BOTTOM_Y} Z`;
+    return d;
   }
 
-  // QS-201: clear the memoization keys and cached DOM refs after each
-  // _render() innerHTML rewrite. Does NOT touch _currentFlameAmp /
-  // _currentFlameSpeed / _flamePhase — those survive disconnect so
-  // re-attach resumes the dance without a visible jump.
+  // QS-204: clear the memoization keys and cached DOM refs after each
+  // _render() innerHTML rewrite. Does NOT touch _currentFlameAmp or
+  // _tipPhases — those survive disconnect so re-attach resumes the
+  // dance without a visible jump.
   _invalidateFlameCache() {
     this._flameEls = null;
     this._lastFlameBaseY = null;
@@ -418,6 +451,9 @@ class QsRadiatorCard extends HTMLElement {
       // Honor first-connect prime: skip the 1.5s boot lerp.
       if (this._needsFlamePrime) {
         this._currentFlameAmp = running ? DANCE_AMP : STILL_AMP;
+        // _currentFlameSpeed is legacy-only after QS-204 (the per-tooth
+        // phase advance replaced the global scroll). Keep priming it so
+        // any external introspection still sees a sane value.
         this._currentFlameSpeed = running ? DANCE_SPEED : STILL_SPEED;
         this._needsFlamePrime = false;
       }
@@ -456,20 +492,27 @@ class QsRadiatorCard extends HTMLElement {
       }
       const flameClipId = this._flameClipId;
 
-      // QS-201: pre-generate paths so the SVG renders with flames immediately,
+      // QS-204: pre-generate paths so the SVG renders with flames immediately,
       // avoiding the empty-d="" flash between innerHTML rewrite and the first
       // RAF tick. The RAF loop continues animating from these initial shapes
       // seamlessly (memo keys synced after the innerHTML write).
       const initialAmp = this._currentFlameAmp ?? STILL_AMP;
       const initialBaseY = this._flameBaseY ?? CENTER_CY;
       const initialFlameColors = this._flameColors ?? FLAME_GREY_FILLS;
-      const initialFlamePaths = [0, 1, 2].map(i => this._generateFlamePath(
+      // Initial tip phases — zero-filled if first paint, otherwise the
+      // surviving per-tooth phases (re-attach after disconnect keeps the
+      // flicker positions so the very first frame matches the last frame
+      // before detach).
+      if (!this._tipPhases) {
+        this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
+      }
+      const initialFlamePaths = [0, 1, 2].map(i => this._generateFlameTeethPath(
         FLAME_WIDTH,
         initialBaseY,
         LAYER_BASE_HEIGHTS[i],
         initialAmp * LAYER_TIP_AMP_MULTS[i],
-        LAYER_TIP_FREQS[i],
-        i * LAYER_PHASE_OFFSET,
+        LAYER_TEETH_COUNTS[i],
+        this._tipPhases[i],
       ));
 
       const css = `
