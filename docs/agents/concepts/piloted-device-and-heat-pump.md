@@ -6,7 +6,7 @@ covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/heat_pump.py
   - custom_components/quiet_solar/ha_model/climate_controller.py
-last_verified: 2026-05-20
+last_verified: 2026-05-21
 ---
 
 # PilotedDevice and heat pump

@@ -18,6 +18,9 @@
   shared-base extraction is a larger refactor scheduled as a follow-up.
   When that lands, the on/off card SHOULD adopt the same S14-S17/N7
   safety improvements that this card already has.
+
+  TODO: shared base, tracked at https://github.com/tmenguy/quiet-solar/issues/199
+  (A1 review-fix #02).
 */
 
 class QsRadiatorCard extends HTMLElement {
@@ -535,8 +538,13 @@ class QsRadiatorCard extends HTMLElement {
           const {title, message, buttons, customContent} = opts;
           const wrap = document.createElement('div');
           wrap.className = 'modal';
-          const contentHtml = customContent || `<p>${message}</p>`;
-          wrap.innerHTML = `<div class="dialog"><h3>${title}</h3>${contentHtml}<div class="actions"></div></div>`;
+          // B5 — defensively escape `title` and `message` so a future
+          // caller passing entity-derived text doesn't silently
+          // reintroduce the S15 injection vector. `customContent` is
+          // an explicit opt-in for trusted markup (callers must
+          // escape inside the template themselves).
+          const contentHtml = customContent || `<p>${_escapeHtml(message)}</p>`;
+          wrap.innerHTML = `<div class="dialog"><h3>${_escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
           const actions = wrap.querySelector('.actions');
           this._modalOpen = true;
           buttons.forEach(b => {

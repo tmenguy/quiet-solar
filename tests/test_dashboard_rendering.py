@@ -226,6 +226,145 @@ class TestDashboardTemplateRendering:
         assert "QS Radiator" in content
 
     @pytest.mark.asyncio
+    async def test_radiator_card_s14_safe_number_guards_against_nan(self):
+        """A2 — pin S14 via regex, not a bare substring.
+
+        We assert that:
+          1. A `_safeNumber(` helper is present (the wrapper around
+             `Number()` that returns the fallback on non-finite values).
+          2. NO raw `Number(<expr> || <fallback>)` pattern lurks in the
+             card's executable code — that's exactly the NaN footgun
+             S14 fixed. (Inline `//` comments are stripped before the
+             regex scan so the test prose isn't false-positive.)
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # `_safeNumber(` is the canonical helper.
+        assert "_safeNumber(" in content
+        # `Number.isFinite` is the gate inside that helper — its presence
+        # is the structural marker that we coerce safely.
+        assert "Number.isFinite" in content
+
+        # Strip `//` line comments AND `/* ... */` block comments before
+        # the regex scan so we only match executable code.
+        no_block_comments = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        no_line_comments = re.sub(r"//[^\n]*", "", no_block_comments)
+
+        # Raw `Number(state || fallback)` is the anti-pattern.
+        raw_pattern = re.compile(r"Number\(\s*[^()]+\|\|[^()]+\)")
+        assert raw_pattern.search(no_line_comments) is None, (
+            "Found a raw `Number(... || ...)` pattern in executable code "
+            "— should use `_safeNumber(...)`"
+        )
+
+    @pytest.mark.asyncio
+    async def test_radiator_card_s15_escape_html_before_innerHTML(self):
+        """A2 — pin S15 via regex: every `_safeNumber` is fine; every
+        `innerHTML = ` write must reference an escaped value or constant
+        template.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # The escape helper is defined.
+        assert "_escapeHtml" in content
+        # The card-title interpolation (a primary injection vector) is
+        # routed through `_escapeHtml`.
+        assert re.search(r'class="card-title">\s*\$\{_escapeHtml\(title\)\}', content) is not None
+        # Mode labels in the bistate-mode select go through `_escapeHtml`.
+        assert re.search(r"\$\{_escapeHtml\(translateBistateMode\(o\)\)\}", content) is not None
+
+    @pytest.mark.asyncio
+    async def test_radiator_card_s16_keyboard_accessibility(self):
+        """A2 — pin S16 via regex: each primary action div has
+        `role="button"`, `tabindex="0"`, AND a keyboard activation hook.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # Every action `<div>` carries the role/tabindex attribute pair.
+        for button_id in ("power_btn", "green_btn", "override_btn", "time_btn"):
+            pattern = re.compile(
+                rf'id="{button_id}"[^>]*role="button"[^>]*tabindex="0"', re.DOTALL
+            )
+            assert pattern.search(content) is not None, (
+                f"Missing role/tabindex on `{button_id}`"
+            )
+
+        # The keyboard helper exists and is wired into every action.
+        assert "_registerKeyActivation(" in content
+        # At least four calls (one per action div).
+        assert content.count("_registerKeyActivation(") >= 4
+
+    @pytest.mark.asyncio
+    async def test_radiator_card_s17_async_calls_wrapped_in_try_finally(self):
+        """A2 — pin S17: each `_select` / `_setNumber` await is wrapped.
+
+        Verifies that for both `await this._select(...)` and
+        `await this._setNumber(...)`:
+          - A `try {` opens within the preceding ~30 lines (i.e. the
+            await is inside a try block, not bare).
+          - A `finally {` clause appears within the next ~30 lines
+            after the await (the cleanup-on-failure path).
+
+        Without this, a transient service-call failure would leak
+        interaction guards and the card would get stuck.
+        """
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        def _try_finally_brackets(call_signature: str) -> bool:
+            lines = content.splitlines()
+            for idx, line in enumerate(lines):
+                if call_signature in line:
+                    # Look backwards up to 30 lines for `try {`.
+                    has_try_before = any(
+                        "try {" in lines[j] or "try{" in lines[j]
+                        for j in range(max(0, idx - 30), idx)
+                    )
+                    # Look forwards up to 30 lines for `} finally {`.
+                    has_finally_after = any(
+                        "finally" in lines[j]
+                        for j in range(idx, min(len(lines), idx + 30))
+                    )
+                    if has_try_before and has_finally_after:
+                        return True
+            return False
+
+        assert _try_finally_brackets("await this._select("), (
+            "`await this._select(...)` is not wrapped in try / finally — interaction guards may leak"
+        )
+        assert _try_finally_brackets("await this._setNumber("), (
+            "`await this._setNumber(...)` is not wrapped in try / finally — interaction guards may leak"
+        )
+
+    @pytest.mark.asyncio
+    async def test_radiator_card_n7_running_includes_live_backing_state(self):
+        """A2 — pin N7: the `running` derivation OR-s in the backing state.
+
+        Cold-start fallback so a freshly-restarted integration doesn't
+        show an actively-heating radiator as off.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # The card reads the backing entity id from `e.backing_entity`.
+        assert "e.backing_entity" in content
+        # The `running` constant must be an OR over command state + live backing.
+        # We allow surrounding whitespace and `liveBackingOn`/similar locals.
+        pattern = re.compile(
+            r"const\s+running\s*=\s*commandReportsOn\s*\|\|\s*liveBackingOn"
+        )
+        assert pattern.search(content) is not None, (
+            "Cold-start `running` fallback is missing — radiator may show as off "
+            "during the cold-start grace window"
+        )
+
+    @pytest.mark.asyncio
     async def test_solar_entities_appear_in_rendered_output(self, hass, full_dashboard_home):
         """Solar device entities including dynamic ones are present in the rendered YAML."""
         home = full_dashboard_home

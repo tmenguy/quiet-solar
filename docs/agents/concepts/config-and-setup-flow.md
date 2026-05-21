@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-20
+last_verified: 2026-05-21
 ---
 
 # Config flow and setup

@@ -4,7 +4,7 @@ slug: off-grid-mode
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # Off-grid mode

@@ -563,11 +563,11 @@ async def test_config_flow_radiator_options_swap_to_climate(
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert entry.data.get(CONF_CLIMATE) == "climate.swap"
-    # N13 — after the swap, the old `switch` backing must be cleared.
-    # The S1 fix drops empty/None values from the merged payload, so
-    # `CONF_SWITCH` is removed entirely from `entry.data` rather than
-    # left as a stale `"switch.swap"` reference.
-    assert entry.data.get(CONF_SWITCH) is None
+    # N13 + CR1 — after the swap, the old `switch` backing must be
+    # cleared. `not in` is stricter than `is None` (the latter passes
+    # whether the key is absent OR present with value `None`; the
+    # latter is exactly the stale-key shape we want to rule out).
+    assert CONF_SWITCH not in entry.data
     mock_reload.assert_called_once()
 
 

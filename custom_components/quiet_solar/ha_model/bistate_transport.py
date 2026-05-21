@@ -59,16 +59,21 @@ def get_hvac_modes(hass: HomeAssistant, entity_id: str) -> list[str]:
     """Return the HVAC modes advertised by a climate entity.
 
     Falls back to `[AUTO, OFF]` when the entity is missing from the
-    registry, has no advertised capabilities, or has no `hvac_modes`
-    capability. The fallback list is the same in all three branches so
-    the config-flow and runtime selectors never render an empty
-    dropdown (M6).
+    registry, has no advertised capabilities, has no `hvac_modes`
+    capability, or advertises an empty `hvac_modes` list (E4
+    review-fix: some buggy climate integrations transiently expose
+    `{"hvac_modes": []}` during startup). The fallback list is the same
+    in all four branches so the config-flow and runtime selectors
+    never render an empty dropdown (M6 + E4).
     """
     registry = er.async_get(hass)
     entry = registry.async_get(entity_id)
     if entry is None or entry.capabilities is None:
         return list(_HVAC_MODE_DEFAULTS)
-    return entry.capabilities.get("hvac_modes", list(_HVAC_MODE_DEFAULTS))
+    modes = entry.capabilities.get("hvac_modes")
+    if not modes:  # missing key OR empty list
+        return list(_HVAC_MODE_DEFAULTS)
+    return modes
 
 
 class BistateTransport(ABC):
@@ -103,6 +108,16 @@ class BistateTransport(ABC):
         caller can decide whether to fall back to defaults. Returns
         `power_use` when the state matches the on-state, `0.0` for
         anything else (including the explicit off-state).
+
+        E5 review-fix note — transitional HVAC states (e.g. `"heating"`,
+        `"idle"`, vendor-specific intermediates) currently attribute
+        `0.0` because they do not equal `default_state_on()`. The
+        pre-refactor `get_power_from_switch_state` had the same blind
+        spot; widening the contract to treat any non-`state_off` as
+        "on" needs solver-side validation first and is deliberately
+        deferred. Callers that need power attribution during a
+        transition should rely on the accurate power sensor rather
+        than this helper.
         """
         if state is None or state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
             return None
@@ -140,14 +155,23 @@ class SwitchTransport(BistateTransport):
     """Transport for switch-backed bistate loads (`switch.turn_on/off`)."""
 
     def __init__(self, switch_entity: str) -> None:
-        """Hold the underlying `switch.*` entity_id."""
+        """Hold the underlying `switch.*` entity_id.
+
+        `state_on` / `state_off` are stored as mutable attributes for
+        symmetry with `ClimateTransport`. B3 review-fix moves the
+        `_state_on/_state_off` property shadow up to `QSBiStateDuration`,
+        which routes writes through `_transport.state_on/state_off` — so
+        every transport must expose those attributes consistently.
+        """
         self.entity = switch_entity
+        self.state_on = "on"
+        self.state_off = "off"
 
     def default_state_on(self) -> str:
-        return "on"
+        return self.state_on
 
     def default_state_off(self) -> str:
-        return "off"
+        return self.state_off
 
     def mode_options(self, hass: HomeAssistant) -> list[str]:
         # `hass` unused but kept for parity with `ClimateTransport`.

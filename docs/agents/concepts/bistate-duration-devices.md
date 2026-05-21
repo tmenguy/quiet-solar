@@ -9,7 +9,7 @@ covers:
   - custom_components/quiet_solar/ha_model/climate_controller.py
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
-last_verified: 2026-05-20
+last_verified: 2026-05-21
 ---
 
 # Bistate-duration devices (pool, on/off duration, climate, radiator)

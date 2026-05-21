@@ -139,9 +139,10 @@ from .const import (
 )
 from .entity import LOAD_NAMES
 from .ha_model.battery import QSBattery
+from .ha_model.bistate_transport import get_hvac_modes
 from .ha_model.car import QSCar
 from .ha_model.charger import QSChargerGeneric, QSChargerOCPP, QSChargerWallbox
-from .ha_model.climate_controller import QSClimateDuration, get_hvac_modes
+from .ha_model.climate_controller import QSClimateDuration
 from .ha_model.dynamic_group import QSDynamicGroup
 from .ha_model.heat_pump import QSHeatPump
 from .ha_model.home import QSHome
@@ -1625,36 +1626,77 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         """Reset the Pass 1 → Pass 2 carry-over once a final submission lands."""
         self._pending_radiator_data = {}
 
-    def _purge_stale_radiator_backing_keys(self, keep_climate: bool) -> None:
-        """Drop the stale-backing keys from the persisted config-entry data.
+    def _add_radiator_entity_selector(self, sc_dict: dict, key: str, domain: str, suggestion: str | None) -> None:
+        """B1 review-fix — entity selector with a Pass 1 → Pass 2 suggestion.
 
-        AC-13 / N13 review-fix — `_async_entry_next` merges submitted
-        data into `config_entry.data` (additive update); without this
-        purge a switch ↔ climate swap would leave both backings alive
-        after the reload, tripping `QSRadiator.__init__`'s XOR check.
+        `add_entity_selector` doesn't expose a `suggested_value` knob, so
+        the radiator step plumbs it through here. When `suggestion` is
+        empty, the field renders as the standard optional selector
+        (current behaviour preserved).
         """
-        stale_keys: tuple[str, ...]
-        if keep_climate:
-            stale_keys = (CONF_SWITCH,)
+        if suggestion:
+            sc_dict[vol.Optional(key, description={"suggested_value": suggestion})] = selector.EntitySelector(
+                selector.EntitySelectorConfig(domain=[domain])
+            )
         else:
-            stale_keys = (CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_ON, CONF_CLIMATE_HVAC_MODE_OFF)
+            sc_dict[vol.Optional(key)] = selector.EntitySelector(selector.EntitySelectorConfig(domain=[domain]))
+
+    def _stale_radiator_backing_keys(self, keep_climate: bool) -> tuple[str, ...]:
+        """Return the keys that must NOT survive a radiator save.
+
+        AC-13 / N13 + B2 review-fix — `_async_entry_next` merges
+        submitted data into `config_entry.data` additively, so a
+        switch ↔ climate swap would leave both backings alive after
+        the reload. Returning the stale-key list lets the radiator
+        save path bypass that merge in a SINGLE `async_update_entry`
+        call (rather than the previous double-write).
+        """
+        if keep_climate:
+            return (CONF_SWITCH,)
+        return (CONF_CLIMATE, CONF_CLIMATE_HVAC_MODE_ON, CONF_CLIMATE_HVAC_MODE_OFF)
+
+    async def _async_save_radiator_entry(
+        self, cleaned: dict, keep_climate: bool, extra_stale_keys: tuple[str, ...] = ()
+    ):
+        """Persist the radiator entry with stale-backing keys removed (single write).
+
+        B2 + E2 review-fix — bypasses `_async_entry_next` so the
+        switch ↔ climate swap (and the orphan-heat-pump cleanup) goes
+        through ONE `async_update_entry` instead of two. The single
+        write fires options-update listeners once and avoids races
+        with the reload hook.
+
+        `extra_stale_keys` carries fields the radiator-specific
+        validation decided to retire (e.g. `CONF_DEVICE_TO_PILOT_NAME`
+        when the persisted heat-pump name no longer exists, per E2).
+        """
+        TYPE = QSRadiator.conf_type_name
+        cleaned[DEVICE_TYPE] = TYPE
+        self.clean_data(cleaned)
 
         if isinstance(self.config_entry, FakeConfigEntry):
-            for key in stale_keys:
-                self.config_entry.data.pop(key, None)
-        else:
-            current = dict(self.config_entry.data)
-            mutated = False
-            for key in stale_keys:
-                if key in current:
-                    current.pop(key)
-                    mutated = True
-            if mutated:
-                self.hass.config_entries.async_update_entry(self.config_entry, data=current)
+            # Creation flow — `async_create_entry` is the single write.
+            u_id = f"Quiet Solar: {cleaned.get(CONF_NAME, 'device')} {cleaned.get(DEVICE_TYPE, 'unknown')}"
+            await self.async_set_unique_id(u_id)
+            return self.async_create_entry(title=self.get_entry_title(cleaned), data=cleaned)
+
+        # Options flow — compute the desired final data ourselves so we
+        # can EXCLUDE the stale-backing keys from the merge (which
+        # `_async_entry_next` would otherwise carry over additively).
+        stale_keys = self._stale_radiator_backing_keys(keep_climate) + tuple(extra_stale_keys)
+        merged = {k: v for k, v in self.config_entry.data.items() if k not in stale_keys}
+        merged.update(cleaned)
+
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            data=merged,
+            options=self.config_entry.options,
+            title=self.get_entry_title(merged),
+        )
+        await async_reload_quiet_solar(self.hass, except_for_entry_id=self.config_entry.entry_id)
+        return self.async_create_entry(title=None, data={})
 
     async def async_step_radiator(self, user_input=None):
-
-        TYPE = QSRadiator.conf_type_name
 
         if user_input is not None:
             # Pass 2 of the climate two-pass flow — fall through to render
@@ -1692,6 +1734,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     cleaned.pop(CONF_CLIMATE_HVAC_MODE_ON, None)
                     cleaned.pop(CONF_CLIMATE_HVAC_MODE_OFF, None)
 
+                # E2 — when the user submits without picking a new heat
+                # pump but the persisted name is stale, drop the orphan
+                # reference so it doesn't reappear on the next edit.
+                extra_stale_keys = self._radiator_orphan_pilot_keys(cleaned)
+
                 if climate_entity:
                     hvac_modes = get_hvac_modes(self.hass, climate_entity)
                     # S7 — empty hvac_modes means we cannot render a usable
@@ -1725,20 +1772,47 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                         self._get_pending_radiator_data().update(cleaned)
                         return await self.async_step_radiator({"force_radiator_climate": True})
 
-                    # AC-13 / N13 — final submission: clear stale backing
-                    # keys from the persisted entry BEFORE the options-flow
-                    # merge so a swap (switch ↔ climate) doesn't leave both
-                    # sides alive after the reload.
-                    self._purge_stale_radiator_backing_keys(keep_climate=True)
+                    # B2 + AC-13 / N13 — final submission via a single
+                    # `async_update_entry` write (no more double-write).
                     self._clear_pending_radiator_data()
-                    return await self.async_entry_next(cleaned, TYPE)
+                    return await self._async_save_radiator_entry(
+                        cleaned, keep_climate=True, extra_stale_keys=extra_stale_keys
+                    )
 
                 # Switch-backed final submission — no HVAC dropdowns needed.
-                self._purge_stale_radiator_backing_keys(keep_climate=False)
                 self._clear_pending_radiator_data()
-                return await self.async_entry_next(cleaned, TYPE)
+                return await self._async_save_radiator_entry(
+                    cleaned, keep_climate=False, extra_stale_keys=extra_stale_keys
+                )
 
         return await self._async_show_radiator_form()
+
+    def _radiator_orphan_pilot_keys(self, cleaned: dict) -> tuple[str, ...]:
+        """E2 review-fix — return `(CONF_DEVICE_TO_PILOT_NAME,)` when stale.
+
+        If the persisted `CONF_DEVICE_TO_PILOT_NAME` is no longer in the
+        home's heat-pump list AND the user's current submission does NOT
+        re-pick a heat pump, retire the orphan reference so it doesn't
+        reappear on the next edit. The radiator form already surfaces a
+        `piloted_heat_pump_unknown` warning via B4; this purge is the
+        complementary mutation that actually clears the persisted key
+        once the user moves past the warning.
+        """
+        if cleaned.get(CONF_DEVICE_TO_PILOT_NAME):
+            # User re-picked a heat pump — keep whatever they chose.
+            return ()
+        persisted = self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME)
+        if not persisted:
+            return ()
+        data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+        if not data_handler or data_handler.home is None:
+            return ()
+        getter = getattr(data_handler.home, "get_heat_pumps", None)
+        heat_pumps = getter() if callable(getter) else getattr(data_handler.home, "_heat_pumps", [])
+        names = {hp.name for hp in heat_pumps}
+        if persisted in names:
+            return ()
+        return (CONF_DEVICE_TO_PILOT_NAME,)
 
     async def _async_show_radiator_form(self, errors=None):
         """Render the radiator form (extracted so we can re-render on error)."""
@@ -1754,14 +1828,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             add_max_on_off=True,
         )
 
-        # Both selectors are optional — exactly-one validation runs on submit.
-        self.add_entity_selector(sc_dict, CONF_SWITCH, False, domain=[SWITCH_DOMAIN])
-        self.add_entity_selector(sc_dict, CONF_CLIMATE, False, domain=[CLIMATE_DOMAIN])
-
         # S1 — Pass 2 reads the in-memory pending dict first, falling
         # back to `config_entry.data` for re-edits via the options flow.
         pending = self._get_pending_radiator_data() if hasattr(self, "_pending_radiator_data") else {}
-        climate_entity = pending.get(CONF_CLIMATE) or self.config_entry.data.get(CONF_CLIMATE)
+
+        # B1 — Pass 2 form pre-fills the entity selectors with the
+        # values the user picked in Pass 1, so the field doesn't appear
+        # re-emptied (which would trip the XOR error if resubmitted).
+        switch_suggestion = pending.get(CONF_SWITCH) or self.config_entry.data.get(CONF_SWITCH)
+        climate_suggestion = pending.get(CONF_CLIMATE) or self.config_entry.data.get(CONF_CLIMATE)
+        self._add_radiator_entity_selector(sc_dict, CONF_SWITCH, domain=SWITCH_DOMAIN, suggestion=switch_suggestion)
+        self._add_radiator_entity_selector(sc_dict, CONF_CLIMATE, domain=CLIMATE_DOMAIN, suggestion=climate_suggestion)
+
+        climate_entity = climate_suggestion
 
         if climate_entity:
             hvac_modes = get_hvac_modes(self.hass, climate_entity)
@@ -1814,10 +1893,15 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         if heat_pump_options:
             default_heat_pump = self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME)
-            # S8 — if the persisted heat-pump name no longer exists, drop
-            # the suggested value and surface an error to the user.
+            # S8 + B4 — if the persisted heat-pump name no longer
+            # exists, drop the suggested value and surface a
+            # field-specific error to the user. Using
+            # `errors["device_to_pilot_name"]` instead of
+            # `errors["base"]` so a co-occurring XOR error (under
+            # `"base"`) doesn't mask the heat-pump warning via the
+            # previous `setdefault` no-op.
             if default_heat_pump and default_heat_pump not in heat_pump_options:
-                merged_errors.setdefault("base", "piloted_heat_pump_unknown")
+                merged_errors[CONF_DEVICE_TO_PILOT_NAME] = "piloted_heat_pump_unknown"
                 default_heat_pump = None
 
             if default_heat_pump:

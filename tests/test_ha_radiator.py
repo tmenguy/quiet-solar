@@ -238,9 +238,14 @@ async def test_radiator_execute_command_calls_transport_switch(
         home=radiator_home,
         **{CONF_NAME: "Test Radiator", CONF_SWITCH: "switch.r"},
     )
-    device._transport = MagicMock(spec=SwitchTransport)
-    device._transport.execute = AsyncMock(return_value=False)
-    device._transport.entity = "switch.r"
+    # B3 — the inherited `_state_on/_state_off` property reads through
+    # the transport, so the mock must expose `state_on`/`state_off`.
+    mock_transport = MagicMock(spec=SwitchTransport)
+    mock_transport.execute = AsyncMock(return_value=False)
+    mock_transport.entity = "switch.r"
+    mock_transport.state_on = "on"
+    mock_transport.state_off = "off"
+    device._transport = mock_transport
 
     time = datetime.datetime.now(pytz.UTC)
     result = await device.execute_command_system(time, CMD_ON, state=None)
@@ -251,7 +256,7 @@ async def test_radiator_execute_command_calls_transport_switch(
     assert args[0] is hass
     assert args[1] is CMD_ON
     assert args[2] is None
-    # state_on / state_off are the host's values
+    # state_on / state_off are the host's values (now routed via property → transport)
     assert args[3] == "on"
     assert args[4] == "off"
 
@@ -272,9 +277,14 @@ async def test_radiator_execute_command_calls_transport_climate(
             CONF_CLIMATE_HVAC_MODE_OFF: "off",
         },
     )
-    device._transport = MagicMock(spec=ClimateTransport)
-    device._transport.execute = AsyncMock(return_value=False)
-    device._transport.entity = "climate.r"
+    # B3 — the inherited `_state_on/_state_off` property reads through
+    # the transport, so the mock must expose `state_on`/`state_off`.
+    mock_transport = MagicMock(spec=ClimateTransport)
+    mock_transport.execute = AsyncMock(return_value=False)
+    mock_transport.entity = "climate.r"
+    mock_transport.state_on = "heat"
+    mock_transport.state_off = "off"
+    device._transport = mock_transport
 
     time = datetime.datetime.now(pytz.UTC)
     result = await device.execute_command_system(time, CMD_OFF, state=None)
@@ -433,11 +443,11 @@ def test_radiator_transport_built_before_super_init(
 def test_radiator_bistate_modes_set_is_pinned(
     hass: HomeAssistant, radiator_config_entry, radiator_home
 ):
-    """S12 — pin the exact set of `radiator_mode` select states.
+    """S12 + CR4 — pin the EXACT set of `radiator_mode` select states.
 
     AC-7 enumerated which states the `radiator_mode` select must
-    expose. Future translation/code drift would silently break the UX
-    without this assertion.
+    expose. Set-equality (rather than `issubset`) catches both
+    missing and unexpected modes.
     """
     device = QSRadiator(
         hass=hass,
@@ -448,23 +458,26 @@ def test_radiator_bistate_modes_set_is_pinned(
 
     modes = device.get_bistate_modes()
 
-    # The canonical user-visible state set:
-    #   - `bistate_mode_auto`         — calendar end + duration
-    #   - `bistate_mode_exact_calendar` — calendar exact schedule
-    #   - `bistate_mode_default`      — fixed end + duration
-    #   - the host's `_bistate_mode_on/off` values (radiator: "on"/"off"
-    #     for switch backing, hvac modes for climate backing)
-    assert "bistate_mode_auto" in modes
-    assert "bistate_mode_exact_calendar" in modes
-    assert "bistate_mode_default" in modes
-    assert device._bistate_mode_on in modes
-    assert device._bistate_mode_off in modes
+    assert set(modes) == {
+        "bistate_mode_auto",
+        "bistate_mode_exact_calendar",
+        "bistate_mode_default",
+        "on",
+        "off",
+    }
 
 
-def test_radiator_climate_bistate_modes_set_includes_heat_off(
+def test_radiator_climate_bistate_modes_set_includes_on_off(
     hass: HomeAssistant, radiator_config_entry, radiator_home
 ):
-    """S12 — climate-backed radiator exposes `heat`/`off` as the override states."""
+    """E3 + CR4 — climate-backed radiator also exposes `on`/`off` (not raw HVAC modes).
+
+    E3 hardcoded the bistate-mode labels to `on`/`off` regardless of
+    the HVAC mode configured for the underlying climate entity. The
+    `radiator_mode` translation only carries `on` / `off` / calendar
+    keys; raw HVAC mode strings like `auto` would render unlocalised
+    otherwise.
+    """
     device = QSRadiator(
         hass=hass,
         config_entry=radiator_config_entry,
@@ -479,9 +492,113 @@ def test_radiator_climate_bistate_modes_set_includes_heat_off(
 
     modes = device.get_bistate_modes()
 
-    assert {"bistate_mode_auto", "bistate_mode_exact_calendar", "bistate_mode_default", "heat", "off"}.issubset(
-        set(modes)
+    assert set(modes) == {
+        "bistate_mode_auto",
+        "bistate_mode_exact_calendar",
+        "bistate_mode_default",
+        "on",
+        "off",
+    }
+
+
+def test_radiator_state_on_routes_through_transport(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """B3 regression — radiator inherits the `_state_on` property shadow.
+
+    Writing through `self._state_on` MUST update the transport so the
+    host and the underlying service-call layer never diverge. Mirrors
+    the climate-controller round-trip test for parity.
+    """
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Property Shadow Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
     )
+
+    device._state_on = "cool"
+    assert device._transport.state_on == "cool"
+    assert device._state_on == "cool"
+
+
+def test_radiator_state_off_routes_through_transport(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """B3 regression — same for `_state_off`."""
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Property Shadow Off Radiator",
+            CONF_SWITCH: "switch.r",
+        },
+    )
+
+    device._state_off = "stopped"
+    assert device._transport.state_off == "stopped"
+    assert device._state_off == "stopped"
+
+
+def test_radiator_kwargs_normalised_in_place(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """E1 regression — whitespace switch entity must NOT leak into base ctor.
+
+    Constructing with `switch="   "` plus a real climate must leave
+    `device.switch_entity` empty/None (the base ctor reads `CONF_SWITCH`
+    from kwargs, which must be normalised before super runs).
+    """
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Whitespace Switch Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_SWITCH: "   ",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+
+    # `switch_entity` is the attribute that downstream code (home.py
+    # device registry, dashboard template) sees. It must NOT be "   ".
+    assert not device.switch_entity or device.switch_entity.strip() == ""
+
+
+def test_radiator_bistate_mode_labels_independent_of_hvac_mode(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """E3 regression — radiator bistate-mode labels are always `on`/`off`.
+
+    Even when the climate-backed radiator's HVAC ON is `auto`, the
+    bistate-mode select must expose `on`/`off` so the `radiator_mode`
+    translation can label them ("Force ON" / "Force OFF") instead of
+    showing the raw HVAC mode string.
+    """
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Auto HVAC Radiator",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "auto",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+
+    assert device._bistate_mode_on == "on"
+    assert device._bistate_mode_off == "off"
+    # The transport still uses the raw HVAC mode for service calls.
+    assert device._transport.state_on == "auto"
 
 
 def test_radiator_options_flow_backing_swap_picks_new_transport(

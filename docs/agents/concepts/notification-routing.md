@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
   - custom_components/quiet_solar/ha_model/person.py
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # Notification routing

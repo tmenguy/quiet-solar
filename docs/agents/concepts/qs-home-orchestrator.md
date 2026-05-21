@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # QSHome — the orchestrator
@@ -60,6 +60,13 @@ than the cycle completes.
 - `update_all_states()` — the 4s cycle.
 - `update_loads()` — the 7s cycle.
 - `_state_lock`, `_loads_lock` — `asyncio.Lock` guards.
+- Public registry accessors — `get_car_by_name(name)`,
+  `get_person_by_name(name)`, `get_heat_pumps()`. Callers outside
+  `QSHome` should prefer these over reaching into the private
+  `_cars` / `_persons` / `_heat_pumps` lists. Accessors return
+  snapshot copies so external code cannot mutate the home's
+  registry; the canonical mutation surface stays `add_device` /
+  `remove_device`.
 
 ## Lifecycle
 

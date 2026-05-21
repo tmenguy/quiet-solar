@@ -41,12 +41,18 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class QSBiStateDuration(HADeviceMixin, AbstractLoad):
-    # Subclasses populate `_transport` with a `BistateTransport` strategy
-    # — either in `__init__` (canonical) or by inheriting the default
-    # set below in `_init_default_transport`. The class-level
-    # declaration is here so the base `execute_command_system` can
-    # delegate without each subclass redeclaring the attribute.
-    _transport: BistateTransport | None
+    # B6 review-fix — class-level default of `None` so
+    # `hasattr` / `is None` checks behave consistently before the
+    # subclass `__init__` has had a chance to assign the transport.
+    _transport: BistateTransport | None = None
+
+    # B3 review-fix — fallback storage for `_state_on/_state_off` when
+    # `_transport` is `None`. The property shadows below route reads
+    # and writes through the transport when set, otherwise through
+    # these private fields. Subclasses inherit the property and never
+    # need to re-declare it.
+    _state_on_host: str = "on"
+    _state_off_host: str = "off"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -57,7 +63,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
         self.override_duration: float | None = DEFAULT_USER_OVERRIDE_DURATION_S // 3600
 
-        # to be overcharged by the child class
+        # to be overcharged by the child class. The `_state_on`/`_state_off`
+        # writes flow through the property shadow defined below: when
+        # `_transport` is set, the transport observes the change; when
+        # not, the writes land in `_state_on_host`/`_state_off_host`.
         self._state_on = "on"
         self._state_off = "off"
         self._bistate_mode_on = "bistate_mode_on"
@@ -69,6 +78,38 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         self.qs_bistate_current_duration_h: float = 0.0
         self.qs_bistate_current_on_h: float = 0.0
         self._previous_bistate_mode: str | None = None
+
+    # B3 review-fix — `_state_on` / `_state_off` are thin views over
+    # the transport. Direct writes (`device._state_on = "auto"`) always
+    # update the transport so the host and the service-call layer never
+    # diverge. When `_transport` is None (e.g. during super().__init__
+    # before the subclass has built the transport), the value lands in
+    # the per-instance fallback fields.
+    @property
+    def _state_on(self) -> str:
+        if self._transport is not None:
+            return self._transport.state_on
+        return self._state_on_host
+
+    @_state_on.setter
+    def _state_on(self, value: str) -> None:
+        if self._transport is not None:
+            self._transport.state_on = value
+        else:
+            self._state_on_host = value
+
+    @property
+    def _state_off(self) -> str:
+        if self._transport is not None:
+            return self._transport.state_off
+        return self._state_off_host
+
+    @_state_off.setter
+    def _state_off(self, value: str) -> None:
+        if self._transport is not None:
+            self._transport.state_off = value
+        else:
+            self._state_off_host = value
 
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""

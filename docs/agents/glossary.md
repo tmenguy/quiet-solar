@@ -2,7 +2,7 @@
 title: Glossary
 slug: glossary
 kind: principle
-last_verified: 2026-05-20
+last_verified: 2026-05-21
 ---
 
 # Glossary

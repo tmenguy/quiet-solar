@@ -932,7 +932,12 @@ async def test_radiator_step_empty_hvac_modes_surfaces_error(hass: HomeAssistant
 async def test_radiator_step_stale_heat_pump_name_surfaces_error(
     hass: HomeAssistant, mock_data_handler
 ):
-    """S8 — orphan `CONF_DEVICE_TO_PILOT_NAME` surfaces an actionable error."""
+    """S8 + B4 — orphan `CONF_DEVICE_TO_PILOT_NAME` surfaces a field error.
+
+    The error key is `CONF_DEVICE_TO_PILOT_NAME` (a field-specific
+    error), not `"base"` (which collides with the XOR error and would
+    be silently dropped via `setdefault`).
+    """
     config_entry = MockConfigEntry(
         domain=DOMAIN,
         entry_id="test_radiator_orphan_hp_123",
@@ -958,7 +963,56 @@ async def test_radiator_step_stale_heat_pump_name_surfaces_error(
     result = await flow.async_step_radiator()
 
     assert result["type"] == FlowResultType.FORM
-    assert result["errors"] == {"base": "piloted_heat_pump_unknown"}
+    assert result["errors"] == {CONF_DEVICE_TO_PILOT_NAME: "piloted_heat_pump_unknown"}
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_xor_and_orphan_heat_pump_both_surface(
+    hass: HomeAssistant, mock_data_handler
+):
+    """B4 regression — XOR error AND orphan-HP error must coexist.
+
+    The old `errors["base"] = …` form let the second error vanish via
+    `setdefault`. The field-specific key prevents that.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_xor_orphan_hp_123",
+        data={
+            CONF_NAME: "Test XOR Orphan HP",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Renamed Heat Pump",
+        },
+        title="radiator: XOR Orphan HP",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp = MagicMock()
+    mock_hp.name = "Current Heat Pump"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    # Submit with BOTH backings to trigger XOR → re-render path
+    # exercises `_async_show_radiator_form(errors={"base": ...})` AND
+    # the orphan-HP check on the same render.
+    result = await flow.async_step_radiator(
+        {
+            CONF_NAME: "Test XOR Orphan HP",
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_CLIMATE: "climate.r",
+        }
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    # Both errors must surface on their respective keys.
+    assert result["errors"].get("base") == "exactly_one_backing_required"
+    assert result["errors"].get(CONF_DEVICE_TO_PILOT_NAME) == "piloted_heat_pump_unknown"
 
 
 @pytest.mark.asyncio
@@ -1031,9 +1085,14 @@ async def test_radiator_step_no_off_in_hvac_modes_picks_offlike_fallback(
 
     flow = _init_options_flow(hass, config_entry)
 
+    # CR3 — bind the mock modes once and assert the OFF fallback
+    # picks the LAST mode (the off-like → last-mode fallback chain
+    # in `_async_show_radiator_form`). Accepting `"heat"` (the first
+    # mode) would mask a regression where the chain falls through.
+    mock_modes = ["heat", "fan_only"]
     with patch(
         "custom_components.quiet_solar.config_flow.get_hvac_modes",
-        return_value=["heat", "fan_only"],  # No "off"
+        return_value=mock_modes,  # No "off", no "off"-like name
     ):
         result = await flow.async_step_radiator()
 
@@ -1043,9 +1102,289 @@ async def test_radiator_step_no_off_in_hvac_modes_picks_offlike_fallback(
         if getattr(item, "schema", None) == CONF_CLIMATE_HVAC_MODE_OFF:
             off_default = item.default()
             break
-    # `fan_only` contains "off"? No. So it falls back to the last mode.
-    # We accept either an off-like mode or the last one.
-    assert off_default in {"heat", "fan_only"}
+    # When neither `"off"` nor any off-like substring exists in the
+    # modes, the fallback picks the last mode.
+    assert off_default == mock_modes[-1]
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_pass2_pre_fills_climate_from_pending(
+    hass: HomeAssistant, mock_data_handler
+):
+    """B1 — Pass 2 entity selectors keep the Pass 1 climate selection as default.
+
+    Without the pre-fill the user would see the climate selector
+    re-emptied between Pass 1 and Pass 2, and a resubmission with the
+    HVAC modes (but without the climate) would trip the XOR error.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_pre_fill_123",
+        data={
+            CONF_NAME: "Pre-fill Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.before",
+        },
+        title="radiator: Pre-fill",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        # Pass 1 — submit a new climate entity, expect Pass 2 redirect.
+        await flow.async_step_radiator(
+            {
+                CONF_NAME: "Pre-fill Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.pre_fill",
+            }
+        )
+        # Pass 2 form render — must pre-fill the climate selector with
+        # `"climate.pre_fill"` and the switch selector with the
+        # persisted `"switch.before"` (so the user can see/clear it).
+        result = await flow._async_show_radiator_form()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+
+    climate_default = None
+    switch_default = None
+    for item in schema.schema:
+        if getattr(item, "schema", None) == CONF_CLIMATE:
+            climate_default = item.description.get("suggested_value") if item.description else None
+        elif getattr(item, "schema", None) == CONF_SWITCH:
+            switch_default = item.description.get("suggested_value") if item.description else None
+
+    assert climate_default == "climate.pre_fill"
+    # The persisted switch is still suggested so the user can clear it
+    # before final submission (Pass 2 XOR check will accept either).
+    assert switch_default == "switch.before"
+
+
+@pytest.mark.asyncio
+async def test_radiator_options_flow_single_async_update_entry(
+    hass: HomeAssistant, mock_data_handler
+):
+    """B2 — switch↔climate swap goes through ONE `async_update_entry` call.
+
+    The previous double-write (purge helper + `_async_entry_next`)
+    fired reload listeners twice. After B2 the radiator save path
+    consolidates into a single `async_update_entry`.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_single_write_123",
+        data={
+            CONF_NAME: "Single-Write Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.swap",
+        },
+        title="radiator: Single Write",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    update_calls = []
+    original_update = hass.config_entries.async_update_entry
+
+    def _spy_update(entry, **kwargs):
+        update_calls.append(kwargs)
+        return original_update(entry, **kwargs)
+
+    with (
+        patch(
+            "custom_components.quiet_solar.config_flow.get_hvac_modes",
+            return_value=["heat", "off"],
+        ),
+        patch(
+            "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+            new_callable=AsyncMock,
+        ),
+        patch.object(hass.config_entries, "async_update_entry", side_effect=_spy_update),
+    ):
+        # Pass 1 buffers the climate selection. Pass 2 commits.
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Single-Write Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.swap",
+                CONF_CLIMATE_HVAC_MODE_ON: "heat",
+                CONF_CLIMATE_HVAC_MODE_OFF: "off",
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # ONE write — not the previous double-write (purge helper +
+    # `_async_entry_next`).
+    assert len(update_calls) == 1
+    saved_data = update_calls[0]["data"]
+    assert saved_data.get(CONF_CLIMATE) == "climate.swap"
+    assert CONF_SWITCH not in saved_data
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_orphan_helper_keeps_user_picked_heat_pump(
+    hass: HomeAssistant, mock_data_handler
+):
+    """E2 branch — when the user re-picks a heat pump, no purge fires."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_repicked_hp_123",
+        data={
+            CONF_NAME: "Repicked HP Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Renamed HP",  # stale
+        },
+        title="radiator: Repicked HP",
+    )
+    config_entry.add_to_hass(hass)
+
+    new_hp = MagicMock()
+    new_hp.name = "Current HP"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [new_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    # User re-picks the new heat pump in the submission — helper returns
+    # `()` so the orphan purge is skipped (we keep the user's choice).
+    cleaned = {CONF_SWITCH: "switch.r", CONF_DEVICE_TO_PILOT_NAME: "Current HP"}
+    stale_keys = flow._radiator_orphan_pilot_keys(cleaned)
+
+    assert stale_keys == ()
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_orphan_helper_keeps_valid_persisted_heat_pump(
+    hass: HomeAssistant, mock_data_handler
+):
+    """E2 branch — when the persisted heat pump still exists, no purge fires."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_valid_hp_123",
+        data={
+            CONF_NAME: "Valid HP Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Existing HP",
+        },
+        title="radiator: Valid HP",
+    )
+    config_entry.add_to_hass(hass)
+
+    existing_hp = MagicMock()
+    existing_hp.name = "Existing HP"  # Matches persisted name
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [existing_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    # User submits without re-picking; the persisted heat-pump name is
+    # still valid → helper returns `()` so the orphan purge is skipped.
+    cleaned = {CONF_SWITCH: "switch.r"}
+    stale_keys = flow._radiator_orphan_pilot_keys(cleaned)
+
+    assert stale_keys == ()
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_orphan_helper_no_data_handler(hass: HomeAssistant):
+    """E2 branch — defensive: if `DATA_HANDLER` is missing the helper bails."""
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_no_dh_123",
+        data={
+            CONF_NAME: "No DH Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Some HP",
+        },
+        title="radiator: No DH",
+    )
+    config_entry.add_to_hass(hass)
+
+    # Note: we intentionally do NOT set up `mock_data_handler` → no
+    # DATA_HANDLER in hass.data.
+    hass.data.setdefault(DOMAIN, {}).pop(DATA_HANDLER, None)
+
+    flow = _init_options_flow(hass, config_entry)
+
+    cleaned = {CONF_SWITCH: "switch.r"}
+    stale_keys = flow._radiator_orphan_pilot_keys(cleaned)
+
+    assert stale_keys == ()
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_orphan_pilot_cleared_on_reedit(
+    hass: HomeAssistant, mock_data_handler
+):
+    """E2 — orphan `CONF_DEVICE_TO_PILOT_NAME` is removed on user re-edit.
+
+    Scenario: heat pump was renamed. User opens options, sees the
+    `piloted_heat_pump_unknown` warning, submits without picking a new
+    heat pump. The persisted orphan key must be GONE from `entry.data`
+    afterwards (it would otherwise reappear on every future edit).
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_orphan_cleared_123",
+        data={
+            CONF_NAME: "Orphan Cleared Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Renamed HP",
+        },
+        title="radiator: Orphan Cleared",
+    )
+    config_entry.add_to_hass(hass)
+
+    current_hp = MagicMock()
+    current_hp.name = "Current HP"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [current_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        # User re-submits the form WITHOUT picking a new heat pump.
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Orphan Cleared Radiator",
+                CONF_POWER: 1000,
+                CONF_SWITCH: "switch.r",
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # The orphan reference must NOT survive into the persisted entry.
+    assert CONF_DEVICE_TO_PILOT_NAME not in config_entry.data
 
 
 @pytest.mark.asyncio

@@ -129,7 +129,7 @@ async def test_switch_transport_execute_uses_override_state():
 
 
 @pytest.mark.asyncio
-async def test_switch_transport_execute_override_only_off_when_state_matches_off():
+async def test_switch_transport_execute_override_only_off_when_state_matches_off(caplog):
     """M1 regression — legacy semantics: only TURN_OFF when override matches state_off.
 
     Pre-refactor `execute_command_system` (legacy) did:
@@ -141,12 +141,18 @@ async def test_switch_transport_execute_override_only_off_when_state_matches_off
     The transport must mirror this. An override state that is **neither**
     exactly `state_on` nor `state_off` (e.g. a custom HA helper state)
     must default to TURN_ON, not silently flip to TURN_OFF.
+
+    A3 review-fix — also asserts the N1 warning is logged so a future
+    silent regression that drops the diagnostic gets caught.
     """
+    import logging as _logging
+
     transport = SwitchTransport("switch.kitchen")
     hass = MagicMock()
     hass.services.async_call = AsyncMock()
 
     # Override state is neither "on" nor "off" — legacy says TURN_ON.
+    caplog.set_level(_logging.WARNING, logger="custom_components.quiet_solar.ha_model.bistate_transport")
     result = await transport.execute(hass, CMD_IDLE, "custom_state", "on", "off")
 
     assert result is False
@@ -154,6 +160,11 @@ async def test_switch_transport_execute_override_only_off_when_state_matches_off
         domain=Platform.SWITCH,
         service=SERVICE_TURN_ON,
         target={"entity_id": "switch.kitchen"},
+    )
+    # A3 — the N1 warning fires for unexpected override states.
+    assert any(
+        "Unexpected override_state" in rec.message and "custom_state" in rec.message
+        for rec in caplog.records
     )
 
 
@@ -359,6 +370,29 @@ def test_get_hvac_modes_returns_defaults_when_capabilities_is_none():
         return_value=registry,
     ):
         modes = get_hvac_modes(hass, "climate.no_capabilities")
+
+    assert {"auto", "off"}.issubset(set(modes))
+
+
+def test_get_hvac_modes_returns_defaults_when_hvac_modes_is_empty_list():
+    """E4 — empty `hvac_modes=[]` (transient buggy integration) falls back too.
+
+    Some climate integrations transiently expose `{"hvac_modes": []}`
+    during startup. The helper must return the canonical fallback list
+    so the config-flow / runtime selectors never render an empty
+    dropdown.
+    """
+    hass = MagicMock()
+    entry = MagicMock()
+    entry.capabilities = {"hvac_modes": []}
+    registry = MagicMock()
+    registry.async_get.return_value = entry
+
+    with patch(
+        "custom_components.quiet_solar.ha_model.bistate_transport.er.async_get",
+        return_value=registry,
+    ):
+        modes = get_hvac_modes(hass, "climate.empty_modes")
 
     assert {"auto", "off"}.issubset(set(modes))
 

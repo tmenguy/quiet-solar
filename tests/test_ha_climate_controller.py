@@ -9,7 +9,7 @@ from custom_components.quiet_solar.const import (
     CONF_CLIMATE_HVAC_MODE_OFF,
     CONF_CLIMATE_HVAC_MODE_ON,
 )
-from custom_components.quiet_solar.ha_model.climate_controller import get_hvac_modes
+from custom_components.quiet_solar.ha_model.bistate_transport import get_hvac_modes
 
 
 def test_get_hvac_modes():

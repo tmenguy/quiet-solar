@@ -436,6 +436,28 @@ class TestQSHomeDeviceManagement:
 
         assert home.solar_plant == mock_solar
 
+    def test_get_heat_pumps_returns_snapshot_copy(self, home):
+        """CR2 — `get_heat_pumps()` returns a snapshot copy, not the internal list.
+
+        External callers must NOT be able to mutate the home's registry
+        by appending/removing on the returned list. The canonical
+        mutation surface is `add_device` / `remove_device`.
+        """
+        hp1 = MagicMock(name="hp1")
+        hp2 = MagicMock(name="hp2")
+        home._heat_pumps = [hp1, hp2]
+
+        snapshot = home.get_heat_pumps()
+
+        # Same contents …
+        assert snapshot == [hp1, hp2]
+        # … but a different list object (defensive copy).
+        assert snapshot is not home._heat_pumps
+
+        # Mutating the snapshot must NOT touch the home's registry.
+        snapshot.clear()
+        assert home._heat_pumps == [hp1, hp2]
+
 
 # ============================================================================
 # Tests for QSHome GPS path mapping
