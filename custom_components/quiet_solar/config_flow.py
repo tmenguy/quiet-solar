@@ -125,6 +125,7 @@ from .const import (
     CONF_SWITCH,
     CONF_WATER_BOILER_TEMPERATURE_SENSOR,
     DASHBOARD_DEFAULT_SECTIONS,
+    DASHBOARD_DEFAULT_SECTIONS_DICT,
     DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY,
     DASHBOARD_NO_SECTION,
     DASHBOARD_NUM_SECTION_MAX,
@@ -380,10 +381,21 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             options_raw_list = None
             if home is not None and home.dashboard_sections is not None and len(home.dashboard_sections) > 0:
                 # we can have the list of sections
-                options_raw_list = home.dashboard_sections
+                options_raw_list = list(home.dashboard_sections)
 
             if options_raw_list is None:
-                options_raw_list = DASHBOARD_DEFAULT_SECTIONS
+                options_raw_list = list(DASHBOARD_DEFAULT_SECTIONS)
+
+            # Safety net: if the device's default section is one of the
+            # bundled defaults but the home's customised list doesn't
+            # include it (e.g. a pre-QS-194 entry that doesn't yet have
+            # `water_boilers` or `radiators`), append it to the dropdown
+            # options so the user can pick it. The home's
+            # `_maybe_migrate_missing_default_section` will then add the
+            # section to `dashboard_sections` when the device is created.
+            existing_names = {s[0] for s in options_raw_list}
+            if default_section not in existing_names and default_section in DASHBOARD_DEFAULT_SECTIONS_DICT:
+                options_raw_list.append((default_section, DASHBOARD_DEFAULT_SECTIONS_DICT[default_section]))
 
             # ok we want a section for those ones
             good_value = self.config_entry.data.get(CONF_DEVICE_DASHBOARD_SECTION, default_section)
@@ -1680,21 +1692,26 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         return self.async_show_form(step_id=TYPE, data_schema=schema, description_placeholders=placeholders)
 
-    def _get_pending_radiator_data(self) -> dict:
-        """Return Pass 1 → Pass 2 carry-over dict (in-memory, never persisted).
+    def _persist_radiator_pass1(self, cleaned: dict) -> None:
+        """Merge Pass 1 input into `self.config_entry.data` so Pass 2
+        renders all fields with the user's choices.
 
-        S1 review-fix — Pass 1 stores the climate-entity selection here
-        instead of mutating `config_entry.data` mid-flow. If the user
-        abandons the flow between Pass 1 and Pass 2 nothing leaks into
-        the persisted config entry.
+        Same pattern as the car flow's `force_dampening` path: write
+        the merged dict via `async_update_entry` for real options-flow
+        entries, or directly into the FakeConfigEntry's `data` for the
+        creation flow. Pass 2's form-render then reads `config_entry.data`
+        as usual and every field (name, dashboard, power, …) gets the
+        right default — no per-field plumbing.
         """
-        if not hasattr(self, "_pending_radiator_data") or self._pending_radiator_data is None:
-            self._pending_radiator_data = {}
-        return self._pending_radiator_data
-
-    def _clear_pending_radiator_data(self) -> None:
-        """Reset the Pass 1 → Pass 2 carry-over once a final submission lands."""
-        self._pending_radiator_data = {}
+        merged = dict(self.config_entry.data)
+        merged.update(cleaned)
+        if isinstance(self.config_entry, FakeConfigEntry):
+            # Creation flow — direct assignment is safe; the entry
+            # is not persisted until `async_create_entry` runs.
+            self.config_entry.data = merged
+        else:
+            # Options flow — go through the canonical update path.
+            self.hass.config_entries.async_update_entry(self.config_entry, data=merged)
 
     def _add_radiator_entity_selector(self, sc_dict: dict, key: str, domain: str, suggestion: str | None) -> None:
         """B1 review-fix — entity selector with a Pass 1 → Pass 2 suggestion.
@@ -1898,8 +1915,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 # would emit the same value). Surface the error
                 # before we reach `need_reprompt` or save.
                 if persisted_on and persisted_off and persisted_on == persisted_off:
-                    self._get_pending_radiator_data().clear()
-                    self._get_pending_radiator_data().update(cleaned)
                     return await self._async_show_radiator_form(
                         errors={CONF_CLIMATE_HVAC_MODE_OFF: "hvac_modes_must_differ"},
                         pending=cleaned,
@@ -1919,25 +1934,25 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     or persisted_off not in hvac_modes
                 )
                 if need_reprompt:
-                    # S1 — buffer the Pass 1 payload in memory rather
-                    # than writing it to `config_entry.data` mid-flow.
-                    # The persisted entry data MUST NOT be touched
-                    # here — if the user aborts now, nothing leaks.
-                    self._get_pending_radiator_data().clear()
-                    self._get_pending_radiator_data().update(cleaned)
+                    # Persist the Pass 1 input so the Pass 2 form
+                    # picks up every field (name, dashboard, power,
+                    # calendar, …) via `config_entry.data` — same
+                    # pattern as the car / climate flows. Direct
+                    # assignment works for FakeConfigEntry (creation);
+                    # `async_update_entry` for real options-flow
+                    # entries.
+                    self._persist_radiator_pass1(cleaned)
                     # BH8 — render the form directly rather than
                     # re-entering the step with a sentinel kwarg.
                     return await self._async_show_radiator_form()
 
                 # B2 + AC-13 / N13 — final submission via a single
                 # `async_update_entry` write (no more double-write).
-                self._clear_pending_radiator_data()
                 return await self._async_save_radiator_entry(
                     cleaned, keep_climate=True, extra_stale_keys=extra_stale_keys
                 )
 
             # Switch-backed final submission — no HVAC dropdowns needed.
-            self._clear_pending_radiator_data()
             return await self._async_save_radiator_entry(cleaned, keep_climate=False, extra_stale_keys=extra_stale_keys)
 
         return await self._async_show_radiator_form()
@@ -1975,10 +1990,13 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         """Render the radiator form (extracted so we can re-render on error).
 
         `pending` lets the caller pre-fill the form with a just-rejected
-        user submission (EH4). It takes precedence over the buffered
-        Pass 1 dict and over `config_entry.data` — so the user doesn't
-        see their selections re-emptied between a validation failure
-        and the re-render.
+        user submission. The radiator step writes Pass 1 input into
+        `self.config_entry.data` (via `async_update_entry` for real
+        options-flow entries, or direct assignment for FakeConfigEntry
+        during creation) BEFORE redirecting to Pass 2 — same pattern
+        as the car / climate flows. That way `get_common_schema`'s
+        defaults pick up every Pass 1 field (name, dashboard, power,
+        calendar, …) without per-field plumbing.
         """
         TYPE = QSRadiator.conf_type_name
 
@@ -1992,20 +2010,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             add_max_on_off=True,
         )
 
-        # BH7 — the helper already handles missing-attribute init, no
-        # need for the redundant `hasattr` gate.
-        pending_buffer = self._get_pending_radiator_data()
-        # EH4 — the explicit `pending` kwarg (just-rejected submission)
-        # takes precedence over the buffered Pass 1 dict; both fall back
-        # to `config_entry.data` for options-flow re-edits.
+        # EH4 — when a validation error fires (XOR, hvac_modes_must_differ,
+        # …) we get the just-rejected `user_input` as `pending`. It
+        # takes precedence over the persisted entry data for that
+        # single re-render so the user sees their own selections.
         explicit_pending: dict = pending or {}
 
         def _suggest(key: str):
-            return explicit_pending.get(key) or pending_buffer.get(key) or self.config_entry.data.get(key)
+            return explicit_pending.get(key) or self.config_entry.data.get(key)
 
         # B1 — Pass 2 form pre-fills the entity selectors with the
-        # values the user picked in Pass 1, so the field doesn't appear
-        # re-emptied (which would trip the XOR error if resubmitted).
+        # values the user picked in Pass 1 (already written to
+        # `config_entry.data` by the submit handler before redirecting
+        # here).
         switch_suggestion = _suggest(CONF_SWITCH)
         climate_suggestion = _suggest(CONF_CLIMATE)
         self._add_radiator_entity_selector(sc_dict, CONF_SWITCH, domain=SWITCH_DOMAIN, suggestion=switch_suggestion)

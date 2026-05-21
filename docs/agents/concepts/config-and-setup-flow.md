@@ -64,21 +64,24 @@ exactly one of these N options" — voluptuous's `vol.Exclusive`
 group only enforces "at most one", not "exactly one".
 
 **Two-pass form pattern** (`async_step_climate`,
-`async_step_radiator`):
+`async_step_radiator`, `async_step_car`):
 
 When a step needs to render dropdowns derived from another field
 (e.g. HVAC modes that depend on which climate entity the user
-picked), Pass 1 buffers the user's selection in an in-memory
-`_pending_radiator_data` dict and renders the form directly
-(`_async_show_radiator_form()`). Pass 2 reads the available HVAC
+picked), Pass 1 writes the user's input into `config_entry.data`
+via `async_update_entry` (for real options-flow entries) or by
+direct assignment (for the `FakeConfigEntry` used during creation),
+then renders the form directly. Pass 2 reads the available HVAC
 modes from the registry and shows the mode selectors with a
-suggested default. The persisted entry data is NOT touched
-between the two passes — if the user aborts mid-flow nothing leaks
-into `config_entry.data`. The form pre-fills the entity selectors
-from the pending dict so the user doesn't see re-emptied fields
-between passes; on any validation failure (XOR misconfig, empty
-HVAC modes, identical ON/OFF modes) the just-submitted payload is
-passed back into the form via a `pending` kwarg.
+suggested default. Because the Pass 1 values are now in
+`config_entry.data`, every Pass 2 field (`CONF_NAME`,
+`CONF_DEVICE_DASHBOARD_SECTION`, `CONF_POWER`, …) picks up the
+correct default through the standard `get_common_schema`
+machinery — no per-field plumbing. On any validation failure
+(XOR misconfig, empty HVAC modes, identical ON/OFF modes) the
+just-submitted payload is passed back into the form via a
+`pending` kwarg so the user sees their own selections on the
+re-render.
 
 Single-mode and identical-mode HVAC validations live alongside the
 XOR check: when fewer than two HVAC modes are advertised the step

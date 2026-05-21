@@ -1858,25 +1858,101 @@ async def test_radiator_step_explicit_pilot_clear_removes_persisted_key(
 
 
 @pytest.mark.asyncio
-async def test_radiator_step_pending_data_not_persisted_until_final_submit(
+async def test_get_common_schema_dashboard_dropdown_augments_missing_default(
     hass: HomeAssistant, mock_data_handler
 ):
-    """S1 — Pass 1 → Pass 2 carry-over is in-memory, not persisted mid-flow.
+    """User-reported bug: when `home.dashboard_sections` doesn't include
+    the device type's default section (e.g. pre-QS-194 customised list
+    missing `water_boilers`, or pre-QS-195 list missing `radiators`),
+    the dashboard dropdown silently falls back to "Not in dashboard"
+    and the user cannot pick the appropriate section.
 
-    The Pass 1 call buffers the climate entity selection in
-    `_pending_radiator_data`. The persisted `config_entry.data` stays
-    unchanged until the final submission goes through `async_entry_next`.
+    Fix: `get_common_schema` now appends the device's default section
+    to the dropdown options when it's a bundled default but missing
+    from `home.dashboard_sections`.
+    """
+    from custom_components.quiet_solar.const import (
+        CONF_DEVICE_DASHBOARD_SECTION,
+        CONF_TYPE_NAME_QSRadiator,
+    )
+
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_dropdown_aug_123",
+        data={
+            CONF_NAME: "Dropdown Augment Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+        },
+        title="radiator: Dropdown Augment",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    # Pre-QS-195 dashboard_sections — radiators NOT included.
+    mock_home.dashboard_sections = [
+        ("cars", "mdi:car"),
+        ("climates", "mdi:home-thermometer"),
+        ("pools", "mdi:pool"),
+        ("others", "mdi:home"),
+        ("settings", "mdi:cog-outline"),
+    ]
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+    sc_dict, _ = flow.get_common_schema(
+        type=CONF_TYPE_NAME_QSRadiator,
+        add_power_value_selector=1000,
+        add_load_power_sensor=True,
+        add_calendar=True,
+        add_boost_only=True,
+        add_power_group_selector=False,
+        add_max_on_off=False,
+    )
+
+    # The dashboard-section dropdown must include "radiators" as an
+    # option even though `mock_home.dashboard_sections` doesn't list it.
+    options = None
+    for item in sc_dict:
+        if getattr(item, "schema", None) != CONF_DEVICE_DASHBOARD_SECTION:
+            continue
+        selector_config = sc_dict[item]
+        # `SelectSelector.config.options` (HA typed-dict)
+        options = selector_config.config.get("options")
+        break
+
+    assert options is not None
+    assert any("radiators" in opt for opt in options), (
+        f"`radiators` must be in the dashboard dropdown options even when "
+        f"`home.dashboard_sections` doesn't include it. Got: {options}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_pass1_persists_into_config_entry(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Pass 1 → Pass 2 carry-over goes through `config_entry.data`.
+
+    Mirrors the car / climate flow pattern: Pass 1 writes the user's
+    input into `config_entry.data` (via `async_update_entry` for real
+    entries, direct assignment for FakeConfigEntry) so Pass 2's form
+    renderer picks up every field (name, dashboard, power, calendar,
+    …) without per-field plumbing. The earlier in-memory-buffer
+    approach left the `get_common_schema`-built fields empty on the
+    Pass 2 form.
     """
     config_entry = MockConfigEntry(
         domain=DOMAIN,
-        entry_id="test_radiator_pending_data_123",
+        entry_id="test_radiator_pass1_persist_123",
         data={
-            CONF_NAME: "Test Pending Data Radiator",
+            CONF_NAME: "Pass1 Persist Radiator",
             DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
             CONF_POWER: 1000,
             CONF_SWITCH: "switch.original",
         },
-        title="radiator: Pending Data",
+        title="radiator: Pass1 Persist",
     )
     config_entry.add_to_hass(hass)
 
@@ -1890,24 +1966,91 @@ async def test_radiator_step_pending_data_not_persisted_until_final_submit(
         "custom_components.quiet_solar.config_flow.get_hvac_modes",
         return_value=["heat", "off"],
     ):
-        # Pass 1 — submit with only CONF_CLIMATE (no HVAC modes); flow
-        # should buffer the climate entity and re-prompt for HVAC modes.
+        # Pass 1 — submit a new name + climate (no HVAC modes yet);
+        # flow re-prompts for HVAC modes.
         result = await flow.async_step_radiator(
             {
-                CONF_NAME: "Test Pending Data Radiator",
-                CONF_POWER: 1000,
+                CONF_NAME: "Pass1 Renamed Radiator",
+                CONF_POWER: 1500,
                 CONF_CLIMATE: "climate.r",
             }
         )
 
     assert result["type"] == FlowResultType.FORM
+    # The Pass 1 input is now persisted so Pass 2's form-render reads
+    # it back via `config_entry.data` — fixing the empty-defaults bug.
+    assert config_entry.data.get(CONF_CLIMATE) == "climate.r"
+    assert config_entry.data.get(CONF_NAME) == "Pass1 Renamed Radiator"
+    assert config_entry.data.get(CONF_POWER) == 1500
 
-    # Original config-entry data must NOT carry the new climate entity
-    # — the Pass 1 selection is buffered in memory only.
-    assert config_entry.data.get(CONF_CLIMATE) is None
-    assert config_entry.data.get(CONF_SWITCH) == "switch.original"
-    # And the pending dict DID record the Pass 1 climate selection.
-    assert flow._pending_radiator_data.get(CONF_CLIMATE) == "climate.r"
+
+@pytest.mark.asyncio
+async def test_radiator_form_pass2_prefills_common_fields(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Form-bug regression — every Pass 2 form field is pre-filled.
+
+    The user's bug report: Pass 1 with name + dashboard + climate was
+    re-prompting Pass 2 with empty name + dashboard fields. After the
+    fix, the Pass 2 form renders with all of the user's Pass 1 inputs
+    as defaults.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_pass2_prefill_123",
+        data={
+            CONF_NAME: "Common Fields Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+        },
+        title="radiator: Common Fields",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        # Pass 1.
+        pass2_form = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Renamed In Pass1",
+                CONF_POWER: 1500,
+                CONF_CLIMATE: "climate.r",
+            }
+        )
+
+    assert pass2_form["type"] == FlowResultType.FORM
+    schema = pass2_form["data_schema"]
+
+    # Inspect each field's default. After the fix, `CONF_NAME` and
+    # `CONF_POWER` must reflect the Pass 1 values (not empty/zero).
+    def _field_default(field_key):
+        for item in schema.schema:
+            if getattr(item, "schema", None) != field_key:
+                continue
+            # voluptuous stores defaults as callables (returning the
+            # value) and `description` dicts with `suggested_value`.
+            default = getattr(item, "default", None)
+            if callable(default):
+                try:
+                    return default()
+                except TypeError:
+                    pass
+            desc = getattr(item, "description", None)
+            if isinstance(desc, dict):
+                return desc.get("suggested_value")
+            return None
+        return None
+
+    assert _field_default(CONF_NAME) == "Renamed In Pass1"
+    assert _field_default(CONF_POWER) == 1500
 
 
 @pytest.mark.asyncio

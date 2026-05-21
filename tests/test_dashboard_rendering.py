@@ -693,33 +693,56 @@ class TestDashboardSectionMapping:
             f"Section '{section}' for device type '{device_type}' not in DASHBOARD_DEFAULT_SECTIONS"
         )
 
-    def test_dashboard_default_sections_preserve_existing_ordering(self):
-        """M2 regression — QS-195 must NOT insert sections mid-list.
+    def test_dashboard_device_section_translations_match_const_order(self):
+        """The `dashboard_device_section` selector translation keys
+        MUST match the `#N - <name>` positions computed by
+        `map_section_selected_name_in_section_list` from
+        `DASHBOARD_DEFAULT_SECTIONS`. A drift between the two surfaces
+        as untranslated dropdown labels in the user's config flow
+        (option present but rendered as raw `"#N - foo"`).
+        """
+        import json
 
-        The QS-195 `radiators` section MUST be appended after every
-        section that existed before QS-195 landed (so users who stored
-        a `"#N - foo"` assignment before the merge keep pointing at the
-        right section after upgrade). The QS-194 `water_boilers` and
-        every other pre-existing section all appear before `radiators`.
+        strings_path = COMPONENT_ROOT / "strings.json"
+        strings = json.loads(strings_path.read_text())
+        translation_options = strings["selector"]["dashboard_device_section"]["options"]
 
-        Note: an earlier revision of this test pinned the first five
-        positions to `["cars", "climates", "pools", "others", "settings"]`,
-        but the QS-194 merge inserted `water_boilers` between `pools`
-        and `others` — that's a QS-194 concern, not a QS-195 one. We
-        only enforce the QS-195 invariant here.
+        # Build the expected `#N - <name>` keys from the const ordering.
+        expected_keys = {"Not in dashboard"}
+        for i, (name, _icon) in enumerate(DASHBOARD_DEFAULT_SECTIONS):
+            expected_keys.add(f"#{i + 1} - {name}")
+
+        translation_keys = set(translation_options.keys())
+
+        missing = expected_keys - translation_keys
+        extra = translation_keys - expected_keys
+        assert not missing, (
+            f"`dashboard_device_section` translation is MISSING keys: "
+            f"{sorted(missing)}. Add them to strings.json with the "
+            f"matching index from `DASHBOARD_DEFAULT_SECTIONS`."
+        )
+        assert not extra, (
+            f"`dashboard_device_section` translation has STALE keys: "
+            f"{sorted(extra)}. Remove them — the index probably shifted "
+            f"after a section was inserted / removed."
+        )
+
+    def test_dashboard_default_sections_translation_alignment(self):
+        """M2 (rev. 2) — `DASHBOARD_DEFAULT_SECTIONS` ordering must
+        agree with the `dashboard_device_section` translation block.
+
+        The earlier "radiators MUST be appended last" invariant was
+        relaxed in favour of co-locating heating-related sections
+        (`water_boilers` and `radiators` next to each other). The new
+        invariant is just "translation positions match const order"
+        — that's what `test_dashboard_device_section_translations_match_const_order`
+        enforces; this one pins the contents independently.
         """
         names = [s[0] for s in DASHBOARD_DEFAULT_SECTIONS]
-        # The QS-195 `radiators` addition MUST be appended (not inserted).
-        assert "radiators" in names
-        radiators_idx = names.index("radiators")
-        # Every other section appears BEFORE `radiators` — the QS-195
-        # change is a strict append, not an insert.
-        non_radiator_sections = [n for n in names if n != "radiators"]
-        for section in non_radiator_sections:
-            assert names.index(section) < radiators_idx, (
-                f"Section {section!r} appears AFTER `radiators` — "
-                "QS-195 must only append, never insert mid-list"
-            )
+        # Every bundled section that user-visible code references must
+        # exist somewhere in the list.
+        for expected in ("cars", "climates", "pools", "water_boilers", "radiators", "others", "settings"):
+            assert expected in names, f"Missing default section: {expected}"
 
     def test_dashboard_default_section_uses_device_type_not_builtin_type(self):
         """Regression: load.py must use device_type variable, not Python builtin type."""
