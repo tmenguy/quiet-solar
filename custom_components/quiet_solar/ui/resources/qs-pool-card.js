@@ -90,6 +90,15 @@ class QsPoolCard extends HTMLElement {
   }
 
   connectedCallback() {
+    this._startAnimation();
+  }
+
+  // M4: refactor to start/stop helpers for cross-card consistency.
+  // Unlike the other cards, the pool wave is intentionally continuous
+  // while connected — the visual is the wave; calm vs. pump is the
+  // amplitude. Idle-gating is therefore _stopAnimation in
+  // disconnectedCallback only; no in-render gating.
+  _startAnimation() {
     if (this._animRaf != null) return;
     // Initialize wave animation state ONLY on the first-ever connect, so
     // that detach/re-attach (HA dashboard rearrangement, tab navigation)
@@ -104,6 +113,7 @@ class QsPoolCard extends HTMLElement {
       // pump state, skipping the 1.5s lerp envelope at boot.
       this._needsAnimationPrime = true;
     }
+    this._lastAnimTs = null;
     this._invalidateWaveCache();
 
     const step = (ts) => {
@@ -193,11 +203,23 @@ class QsPoolCard extends HTMLElement {
     this._animRaf = requestAnimationFrame(step);
   }
 
-  disconnectedCallback() {
+  _stopAnimation() {
     if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
     this._animRaf = null;
     this._lastAnimTs = null;
   }
+
+  disconnectedCallback() {
+    this._stopAnimation();
+    // S7: reset interaction flags so a re-attach after mid-interaction
+    // (e.g. dragging the ring when the dashboard rearranges) doesn't
+    // silently short-circuit `set hass` on stale flags.
+    this._isInteractingMode = false;
+    this._isProcessingModeChange = false;
+    this._isInteractingTarget = false;
+    this._modalOpen = false;
+  }
+
   static getStubConfig() {
     return { name: "QS Pool", entities: {} };
   }
@@ -207,6 +229,18 @@ class QsPoolCard extends HTMLElement {
     this._config = config;
     this._root = this.attachShadow({ mode: "open" });
     this._render();
+  }
+
+  // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
+  // strings interpolated into innerHTML.
+  _escapeHtml(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   set hass(hass) {
@@ -483,7 +517,7 @@ class QsPoolCard extends HTMLElement {
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
-        <div class="card-title">${title}</div>
+        <div class="card-title">${this._escapeHtml(title)}</div>
         <div class="top"></div>
 
         <div class="hero">
@@ -599,18 +633,22 @@ class QsPoolCard extends HTMLElement {
           modeSel?.addEventListener('change', async (ev) => {
               const option = ev.target.value;
               if (!option) return;
-              
+
               this._isProcessingModeChange = true;
-              
-              // Call the service and wait for it to complete
-              await this._select(e.pool_mode, option);
-              
-              // Wait a bit for HA state to propagate, then allow re-render
-              setTimeout(() => {
-                  this._isProcessingModeChange = false;
-                  this._isInteractingMode = false;
-                  this._render();
-              }, 300);
+              // M2: wrap in try/finally so the cleanup setTimeout ALWAYS
+              // runs — otherwise a rejected `_select` (HA service failure,
+              // network drop) would leave the flag wedged forever.
+              try {
+                  // Call the service and wait for it to complete
+                  await this._select(e.pool_mode, option);
+              } finally {
+                  // Wait a bit for HA state to propagate, then allow re-render
+                  setTimeout(() => {
+                      this._isProcessingModeChange = false;
+                      this._isInteractingMode = false;
+                      this._render();
+                  }, 300);
+              }
           });
           const modePill = modeSel?.closest('.pill');
           if (modePill && modeSel) {
@@ -709,7 +747,8 @@ class QsPoolCard extends HTMLElement {
           const {title, message, buttons} = opts;
           const wrap = document.createElement('div');
           wrap.className = 'modal';
-          wrap.innerHTML = `<div class="dialog"><h3>${title}</h3><p>${message}</p><div class="actions"></div></div>`;
+          // S6: escape user-controlled `title` and `message`.
+          wrap.innerHTML = `<div class="dialog"><h3>${this._escapeHtml(title)}</h3><p>${this._escapeHtml(message)}</p><div class="actions"></div></div>`;
           const actions = wrap.querySelector('.actions');
           this._modalOpen = true;
           buttons.forEach(b => {

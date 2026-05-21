@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
   - custom_components/quiet_solar/ha_model/person.py
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # Notification routing
@@ -79,5 +79,9 @@ alarm at 3am is supposed to wake you).
   consumer.
 - [constraints.md](constraints.md) — the `load_info.originator`
   that powers the "why".
+- [qs-home-orchestrator.md](qs-home-orchestrator.md) "Dashboard
+  sections auto-migration" — QS-194 added migration logic to
+  `QSHome.add_device` but no notification-related behaviour was
+  touched (re-verified under review-fix #03).
 - [../personas/magali.md](../personas/magali.md) — the persona
   that judges trust by notification quality.

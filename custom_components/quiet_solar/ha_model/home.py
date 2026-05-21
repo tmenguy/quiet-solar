@@ -22,6 +22,7 @@ from homeassistant.helpers.event import EventStateChangedData, async_track_state
 from ..const import (
     CONF_DASHBOARD_SECTION_ICON,
     CONF_DASHBOARD_SECTION_NAME,
+    CONF_DASHBOARD_SECTIONS_USER_REMOVED,
     CONF_GRID_POWER_SENSOR,
     CONF_GRID_POWER_SENSOR_INVERTED,
     CONF_HOME_END_OFF_PEAK_RANGE_1,
@@ -35,6 +36,8 @@ from ..const import (
     CONF_OFF_GRID_INVERTED,
     CONF_OFF_GRID_STATE_VALUE,
     DASHBOARD_DEFAULT_SECTIONS,
+    DASHBOARD_DEFAULT_SECTIONS_DICT,
+    DASHBOARD_NO_SECTION,
     DASHBOARD_NUM_SECTION_MAX,
     DOMAIN,
     FAR_FUTURE_FORECAST_THRESHOLD_S,
@@ -1881,9 +1884,84 @@ class QSHome(QSDynamicGroup):
                     load.devices_to_pilot.append(piloted_device)
                     piloted_device.clients.append(load)
 
+    def _maybe_migrate_missing_default_section(self, device) -> None:
+        """WF-5 tier 2: in-memory auto-migration for missing default sections.
+
+        When a user customised `dashboard_sections` BEFORE QS-194 added
+        the `water_boilers` section (or any future default section),
+        their stored list won't contain it. A device whose default
+        section is missing would silently land in `DASHBOARD_NO_SECTION`
+        and never appear on the dashboard.
+
+        Mitigation: if a device's requested section is one of the
+        `DASHBOARD_DEFAULT_SECTIONS` and isn't already in
+        `self.dashboard_sections`, append it (with its bundled icon) at
+        runtime only. The user's `config_entry.data` is NOT modified —
+        their customisation stays user-owned, this is just a safety net
+        so new device types remain visible after an upgrade.
+        """
+        requested = getattr(device, "_conf_dashboard_section_option", None)
+        if requested is None or requested == DASHBOARD_NO_SECTION:
+            return
+        # S4: use the rigorous prefix parser already defined in
+        # home_model/load.py rather than a string-substring heuristic
+        # (which would mis-strip e.g. "#hot - water" → "water").
+        section_name, _ = extract_name_and_index_from_dashboard_section_option(requested)
+        # Already present (by name)? Nothing to do.
+        existing_names = {s[0] for s in self.dashboard_sections}
+        if section_name in existing_names:
+            return
+        # Only auto-add for bundled default sections — never invent a
+        # section name out of thin air.
+        if section_name not in DASHBOARD_DEFAULT_SECTIONS_DICT:
+            return
+        # N7: honour explicit user opt-out. If the user removed this
+        # section from their dashboard and recorded it in
+        # `CONF_DASHBOARD_SECTIONS_USER_REMOVED`, the migration must
+        # NOT silently re-append it whenever a device of that type
+        # is added.
+        user_removed = []
+        if self.config_entry is not None:
+            user_removed = self.config_entry.data.get(CONF_DASHBOARD_SECTIONS_USER_REMOVED, []) or []
+        if section_name in user_removed:
+            _LOGGER.info(
+                "Skipping auto-append of dashboard section %r for device "
+                "%r — user explicitly opted out via "
+                "CONF_DASHBOARD_SECTIONS_USER_REMOVED",
+                section_name,
+                device.name,
+            )
+            return
+        icon = DASHBOARD_DEFAULT_SECTIONS_DICT[section_name]
+        _LOGGER.info(
+            "Auto-appending missing default dashboard section %r (icon %r) "
+            "for device %r; runtime-only — config_entry not modified",
+            section_name,
+            icon,
+            device.name,
+        )
+        self.dashboard_sections.append((section_name, icon))
+        # S5: invalidate ALL devices whose cached resolution was
+        # warmed before the migration. Without this, sibling devices
+        # already resolved to DASHBOARD_NO_SECTION stay invisible even
+        # though their section now exists.
+        for d in self._all_devices + getattr(self, "_disabled_devices", []):
+            cached = getattr(d, "_computed_dashboard_section", None)
+            if cached == DASHBOARD_NO_SECTION:
+                d._computed_dashboard_section = None
+        # And the newly-added device (not yet in _all_devices at the
+        # call site — add_device appends after this method returns).
+        if hasattr(device, "_computed_dashboard_section"):
+            device._computed_dashboard_section = None
+
     def add_device(self, device):
 
         device.home = self
+
+        # WF-5: in-memory auto-migration for missing default sections.
+        # Run before the topology rebuild below so the device is
+        # immediately reachable via `get_devices_for_dashboard_section`.
+        self._maybe_migrate_missing_default_section(device)
 
         if isinstance(device, QSBattery):
             self.physical_battery = device

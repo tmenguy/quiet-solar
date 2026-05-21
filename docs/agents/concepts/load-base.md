@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-05-19
+last_verified: 2026-05-21
 ---
 
 # AbstractDevice & AbstractLoad

@@ -6,22 +6,27 @@ covers:
   - custom_components/quiet_solar/ha_model/bistate_duration.py
   - custom_components/quiet_solar/ha_model/on_off_duration.py
   - custom_components/quiet_solar/ha_model/pool.py
-last_verified: 2026-05-19
+  - custom_components/quiet_solar/ha_model/water_boiler.py
+last_verified: 2026-05-21
 ---
 
-# Bistate-duration devices (pool, on/off duration)
+# Bistate-duration devices (pool, on/off duration, water boiler)
 
 ## TL;DR
 
 Bistate-duration devices are loads with two states (on / off) that
 must run for a **specified duration** rather than be modulated. Pool
-pumps, fixed-power boilers, and miscellaneous on/off duration loads
-all use this pattern.
+pumps, fixed-power boilers, water-boilers (cumulus / thermodynamic),
+and miscellaneous on/off duration loads all use this pattern.
 `ha_model/bistate_duration.py` provides the shared base;
 `ha_model/on_off_duration.py` is the simplest concrete subclass;
 `ha_model/pool.py` extends `on_off_duration` with
-temperature-dependent filter-duration logic. All three inherit the
-switching-cost protection pattern.
+temperature-dependent filter-duration logic;
+`ha_model/water_boiler.py` is a thin subclass that adds an
+**optional** water-tank temperature sensor (plumbing only — no
+temperature-aware control logic yet) plus its own config step,
+dashboard section, and select-mode translation key. All four
+inherit the switching-cost protection pattern.
 
 ## When you need this concept
 
@@ -58,6 +63,14 @@ of the on/off behaviour unchanged.
 - `QSOnOffDuration(HADeviceMixin, AbstractLoad)` — simple switch
   loads.
 - `QSPool(QSOnOffDuration)` — temperature-aware filter duration.
+- `QSWaterBoiler(QSOnOffDuration)` — water boiler (cumulus or
+  thermodynamic). Optional `water_boiler_temperature_sensor` field
+  is plumbing-only in QS-194; a future story will introduce
+  temperature-aware constraint logic, off-peak preference, and
+  anti-legionella cycles. The constructor normalises an empty-string
+  config value to `None` (the options-flow form can store `""` when
+  the EntitySelector is cleared) so downstream consumers only ever
+  see a real entity id or `None`.
 - `TimeBasedSimplePowerLoadConstraint` (in
   `home_model/constraints.py`) — the constraint subclass these
   devices use.
