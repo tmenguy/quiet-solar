@@ -95,17 +95,32 @@ class QsWaterBoilerCard extends HTMLElement {
            ` L ${totalWidth.toFixed(2)} ${WAVE_BOTTOM_Y} L 0 ${WAVE_BOTTOM_Y} Z`;
   }
 
+  // Reset cached DOM refs and the logical bubble array. Shared between
+  // `_invalidateWaveCache()` (full memo reset on (re-)connect) and the
+  // post-`innerHTML` cleanup block in `_render()`. Factored out so a
+  // future memo-key addition (a new `_fooEl`) lands at BOTH call
+  // sites — without the helper, the two paths would silently drift
+  // and the post-render block would carry stale refs into the next
+  // RAF frame.
+  _resetDomRefs() {
+    this._waveEls = null;
+    this._bubbleLayerEl = null;
+    this._surfaceGlowEl = null;
+    this._bubbles = [];
+  }
+
   // Clear the wave-path memoization keys and cached DOM refs. Called on
   // every (re-)connect and after each _render() innerHTML rewrite.
   // QS-200 additions vs. pool: `_bubbleLayerEl`, `_surfaceGlowEl` (new
   // DOM refs). Wave opacity is updated unconditionally per frame so it
-  // doesn't need a memo key.
+  // doesn't need a memo key. `_lastWaterBaseY` / `_lastAmplitude` get
+  // nulled here (full invalidation) but are SYNCED to the current
+  // render state in the post-innerHTML block — that's why they stay
+  // outside `_resetDomRefs()`.
   _invalidateWaveCache() {
     this._lastWaterBaseY = null;
     this._lastAmplitude = null;
-    this._waveEls = null;
-    this._bubbleLayerEl = null;
-    this._surfaceGlowEl = null;
+    this._resetDomRefs();
   }
 
   // QS-200: continuous RAF while connected, mirroring `qs-pool-card.js`.
@@ -208,7 +223,11 @@ class QsWaterBoilerCard extends HTMLElement {
       // Same `tx` applied to both cool+boil siblings of each layer, and
       // to surface_glow (locked to wave 0's tx so the glow trace stays
       // with the visible crest).
-      let wave0Tx = '';
+      // N13: initialised to a safe `translateX(0px)` so a future early
+      // return / throw before the i===0 iteration can't leave
+      // `surfaceGlow.style.transform = ''` (which CSS resets to `none`
+      // — the glow would snap to SVG origin while waves stay translated).
+      let wave0Tx = 'translateX(0px)';
       for (let i = 0; i < 3; i++) {
         const phaseOffset = i * LAYER_SCROLL_OFFSET;
         const raw = (this._wavePhase + phaseOffset) * PHASE_TO_PX;
@@ -251,7 +270,15 @@ class QsWaterBoilerCard extends HTMLElement {
       // --- Surface glow sync (per AC-8).
       // d: only resynced when wave 0 was regenerated (geometry hasn't
       //    changed otherwise — opacity / transform updates handle the
-      //    visible motion).
+      //    visible motion). First-frame parity (review-fix #02 N4):
+      //    on the first RAF tick after `_render()`, neither `levelChanged`
+      //    nor `ampDelta > AMP_REGEN_THRESHOLD` is true (memo keys
+      //    were just synced post-innerHTML), so we DON'T enter the
+      //    regen branch — but the SVG markup anchors both wave 0 and
+      //    surface_glow to `initialWavePaths[0]`, so they're already
+      //    parity-aligned at paint time. Any future refactor that
+      //    diverges those two initial `d` strings must also force a
+      //    surface_glow.setAttribute('d', ...) on the first frame.
       // transform: synced EVERY frame so the glow trace stays locked to
       //            wave 0's translated crest.
       // opacity: bound to colorMix every frame (0 when calm, 1 when boiling).
@@ -279,9 +306,15 @@ class QsWaterBoilerCard extends HTMLElement {
 
       // === AC-7 bubble system: dynamic spawn, soft-capped at MAX_CONCURRENT_BUBBLES ===
       if (bubbleLayer) {
-        // Spawn cadence (only while running, capped at MAX_CONCURRENT_BUBBLES).
-        if (this._running === true) {
-          this._nextBubbleAt = (this._nextBubbleAt ?? 0) - dt;
+        // Spawn cadence (only while boiling, capped at MAX_CONCURRENT_BUBBLES).
+        // N7: reuse the `boiling` const computed above instead of
+        //     re-evaluating `this._running === true`.
+        // N6: drop the `?? 0` defence — the lazy-init in
+        //     _startAnimation guarantees `_nextBubbleAt = 0` before
+        //     the first step runs (matches the N7 simplification
+        //     applied to `_currentColorMix` in fix #01).
+        if (boiling) {
+          this._nextBubbleAt -= dt;
           while (this._nextBubbleAt <= 0 && this._bubbles.length < MAX_CONCURRENT_BUBBLES) {
             const cx = CENTER_CX - CLIP_R + 8 + Math.random() * (2 * (CLIP_R - 8));
             const cy = CENTER_CY + CLIP_R - 8;
@@ -309,7 +342,11 @@ class QsWaterBoilerCard extends HTMLElement {
         // Advance + retire active bubbles regardless of running state
         // (graceful exit: existing bubbles continue to rise until they
         // retire naturally; no abrupt vanish on running → false).
-        const surfaceY = (this._waterBaseY ?? 0) + 4;
+        // N5: drop the `?? 0` fallback — _render() always sets
+        // _waterBaseY to a finite number before any RAF frame runs,
+        // and the bubble-retire loop only fires when bubbles exist
+        // (= at least one spawn happened, = _render() ran).
+        const surfaceY = this._waterBaseY + 4;
         const alive = [];
         for (const b of this._bubbles) {
           b.life += dt;
@@ -338,6 +375,14 @@ class QsWaterBoilerCard extends HTMLElement {
     if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
     this._animRaf = null;
     this._lastAnimTs = null;
+    // Review-fix #02 N12: capture the running state at stop time so
+    // a re-attach after the boiler flipped state can detect the
+    // mismatch and force `_needsAnimationPrime = true` on the next
+    // `_render`. Without this, the wave would lerp from the
+    // pre-disconnect colorMix (~1 if boiling at detach) toward the
+    // new target over ~1.5s — visually wrong if the boiler was off
+    // for the entire detach window.
+    this._runningAtStop = this._running;
   }
 
   connectedCallback() {
@@ -677,7 +722,12 @@ class QsWaterBoilerCard extends HTMLElement {
                         (this._localTargetPct != null ? this._localTargetPct : hoursToPct(displayTargetHours));
       const handleDeg = pctToDeg(handlePct);
       
-      const center = {cx: 160, cy: 160};
+      // Review-fix #02 S1: align the arc / handle / progress-ring
+      // center with the water clip circle's CENTER_CX/CENTER_CY. A
+      // future tweak to either constant must move every part of the
+      // ring (waves AND ring/handle/arc) together — using the named
+      // constants here closes that gap.
+      const center = {cx: CENTER_CX, cy: CENTER_CY};
       const arcLen = 2 * Math.PI * ringCirc * (rangeDeg / 360);
       const segLen = arcLen * (Math.max(0, Math.min(100, progressPct)) / 100);
       let dashLen = Math.round(segLen * 0.22);
@@ -706,6 +756,16 @@ class QsWaterBoilerCard extends HTMLElement {
 
       // QS-200: stash the running state for the RAF loop (drives the
       // calm ↔ boiling lerp and the bubble spawn cadence).
+      // Review-fix #02 N12: if the running state flipped while the
+      // card was disconnected, force a re-prime so the wave snaps to
+      // the new target on first paint instead of lerping from the
+      // pre-disconnect state. `_runningAtStop` is set in
+      // `_stopAnimation`, consumed here, and cleared so a subsequent
+      // hass-push doesn't accidentally re-trigger the prime.
+      if (this._runningAtStop !== undefined && this._runningAtStop !== running) {
+        this._needsAnimationPrime = true;
+      }
+      this._runningAtStop = undefined;
       this._running = running;
 
       // QS-200: per-instance unique SVG ids so two boiler cards on the
@@ -914,6 +974,10 @@ class QsWaterBoilerCard extends HTMLElement {
                 <path id="wave2_cool" d="${initialWavePaths[2]}" fill="${COOL_WATER_COLORS[2]}" opacity="${initialCoolOpacity}" pointer-events="none" style="will-change: transform; mix-blend-mode: normal;" />
                 <path id="wave2_boil" d="${initialWavePaths[2]}" fill="${BOIL_WATER_COLORS[2]}" opacity="${initialBoilOpacity}" pointer-events="none" style="will-change: transform;" />
                 <g id="${bubbleLayerId}"></g>
+                <!-- review-fix #02 N4: surface_glow.d MUST equal wave 0's d on every frame.
+                     First-frame parity is anchored by the shared `initialWavePaths[0]`
+                     below and on wave0_cool/wave0_boil above; the RAF regen block then
+                     resyncs `d` only when wave 0's geometry changes. -->
                 <path id="surface_glow" d="${initialWavePaths[0]}" stroke="${SURFACE_GLOW_COLOR}" stroke-width="${SURFACE_GLOW_STROKE_WIDTH}" fill="none" filter="url(#${surfaceGlowFilterId})" opacity="${initialBoilOpacity}" pointer-events="none" style="mix-blend-mode: screen; will-change: transform, opacity, d;" />
               </g>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
@@ -999,12 +1063,13 @@ class QsWaterBoilerCard extends HTMLElement {
       // elements; reset it so subsequent spawns don't try to advance
       // dead nodes (the next spawn fires within ~167ms — a barely-
       // perceptible blip on a hass push, accepted per pool precedent).
+      // Sync the memo keys to the rendered state (prevents a redundant
+      // regen on the next frame). DOM refs + logical bubble array are
+      // reset via `_resetDomRefs()` so adding a new memo key in one
+      // place automatically lands in both.
       this._lastWaterBaseY = this._waterBaseY;
       this._lastAmplitude = initialAmp;
-      this._waveEls = null;
-      this._bubbleLayerEl = null;
-      this._surfaceGlowEl = null;
-      this._bubbles = [];
+      this._resetDomRefs();
 
       // Wire events
       const root = this._root;

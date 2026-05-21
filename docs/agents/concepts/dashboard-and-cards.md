@@ -282,6 +282,30 @@ same upper-bound envelope and the visual smoothly resumes from where
 it left off. Pinned via the parametrized
 `test_card_caps_raf_dt_against_hidden_tab`.
 
+Review-fix #02 added one behavioral change to the boiler card and
+several internal refactors:
+
+- **N12 — reconnect re-prime.** `_stopAnimation()` now stashes
+  `_runningAtStop`. On the first `_render()` after reconnect, if
+  `_runningAtStop !== running`, `_needsAnimationPrime` is forced
+  true so the wave snaps to the current target instead of lerping
+  from the pre-disconnect state (otherwise a card detached while
+  boiling, with the boiler turning off mid-detach, would visibly
+  "calm down" on reattach despite the boiler having been off the
+  whole detach window).
+- **S3 — `_resetDomRefs()` helper.** Both `_invalidateWaveCache()`
+  and the post-`innerHTML` cleanup block now share a single helper
+  that nulls DOM-ref memo keys and resets `_bubbles = []`. A future
+  memo-key addition lands at both call sites by construction.
+- **S1 — `CENTER_CX`/`CENTER_CY` for the ring center.** The arc /
+  handle / progress-ring center literal now uses the named
+  constants, completing the migration started by review-fix #01 N4
+  (water-clip cx/cy). The N4 finding had only migrated bubble
+  spawn and clipPath markup; the ring geometry was left inlined.
+- **N3 — pool-card dt-cap rationale note.** A code comment on
+  `qs-pool-card.js`'s `dt` cap documents the trade-off: cross-card
+  consistency over the prior "catch up after hidden tab" behavior.
+
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
 Every JS card in `ui/resources/` follows the same defensive

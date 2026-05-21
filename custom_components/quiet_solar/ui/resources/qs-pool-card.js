@@ -124,6 +124,13 @@ class QsPoolCard extends HTMLElement {
       // produces a huge `dt`, snapping wave phase by hundreds of pixels
       // in one frame. The cap matches `LERP_DT_CEIL` so all step-loop
       // subsystems are bounded by the same envelope.
+      // Review-fix #02 N3 trade-off note: the prior pool-card behavior
+      // intentionally let phase accumulate raw `dt` so scroll "caught
+      // up" after a hidden-tab return. Capping at 100ms trades that
+      // catch-up for a single-frame visual freeze on return — defensible
+      // either way; we picked the cap for cross-card consistency with
+      // qs-water-boiler-card.js (which also drives bubble life off `dt`,
+      // making the cap necessary there).
       let dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
       dt = Math.min(dt, LERP_DT_CEIL);
       this._lastAnimTs = ts;

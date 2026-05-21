@@ -54,17 +54,48 @@ from tests.ha_tests.const import (
 COMPONENT_ROOT = Path(__file__).parent.parent / "custom_components" / "quiet_solar"
 
 
+def _strip_js_comments(source: str) -> str:
+    """Strip ``/* ... */`` block comments and ``// ...`` line comments
+    from a JS source string.
+
+    **Review-fix #02 N2 — known limitation:** the ``//`` line-comment
+    pattern eats anything from ``//`` to end-of-line, INCLUDING ``//``
+    inside string literals — most notably URL literals like
+    ``"http://www.w3.org/2000/svg"`` become ``"http:`` after stripping.
+    No current test asserts an http URL literal, but any future regex
+    that does (e.g. pinning ``createElementNS('http://...')``) must
+    operate on the pre-stripped ``source`` directly, not the stripped
+    output of this helper.
+    """
+    import re
+
+    no_block = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    no_line = re.sub(r"//[^\n]*", "", no_block)
+    return no_line
+
+
 def _extract_js_function_body(source: str, signature_regex: str) -> str | None:
     """Return the body between matching braces for a JS function whose
     signature matches `signature_regex`. Walks balanced braces so nested
-    template literals, object literals, and arrow function bodies are
-    all handled cleanly. Returns ``None`` if the signature isn't found
-    or the braces don't balance.
+    object literals, arrow function bodies, and most template-literal
+    interpolations are handled cleanly. Returns ``None`` if the
+    signature isn't found or the braces don't balance.
 
     This avoids the brittle ``[^{}]*?`` pattern used by earlier
     per-card body checks — that pattern silently mis-matches the moment
     any nested brace lands in the body, producing misleading "X must
     do Y" failures even when the code is correct.
+
+    **Review-fix #02 N1 — known limitation:** the walker doesn't
+    understand string-literal quoting. A ``const s = "{ ... }"`` or
+    ```const s = `${...}` ``` containing a stray ``{`` / ``}`` inside
+    the quoted span will mis-count the balanced-brace depth. Today's
+    `connectedCallback` body is plain code with no string literals, so
+    the walker is safe — but a future addition of a template literal
+    with stray braces inside its quoted span could throw the walker
+    off. If that happens, harden the walker to skip braces inside
+    ``'…'`` / ``"…"`` / `` `…` `` spans (respecting escapes and
+    ``${…}`` nesting) or extract the body manually for that test.
     """
     import re
 
@@ -1404,28 +1435,34 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
     )
 
 
+# Cards covered by `test_card_raf_idle_gated` — the idle-gated set.
+#
+# QS-200 (review-fix #02 N9): `qs-water-boiler-card.js` was previously
+# in this list with gate ``showAnimation``. The boiler now mirrors the
+# pool's intrinsically-continuous RAF model (water always visible —
+# cool when off, boiling when on), so it's covered separately by
+# `test_water_boiler_card_has_start_stop_helpers` below. Keeping this
+# history above the decorator (instead of inline in the parametrize
+# list) means a future reviewer scanning the parametrize entries can
+# read them as a clean enumeration without losing the removed-card
+# rationale.
 @pytest.mark.parametrize(
     "card_filename,gate",
     [
-        # QS-200: `qs-water-boiler-card.js` removed — the boiler now mirrors
-        # the pool's intrinsically-continuous RAF model (water always
-        # visible: cool when off, boiling when on). The
-        # `_startAnimation`/`_stopAnimation` helpers and the
-        # `connectedCallback → _startAnimation` direct call are pinned via
-        # `test_water_boiler_card_has_start_stop_helpers` below.
         ("qs-on-off-duration-card.js", "showAnimation"),
         ("qs-climate-card.js", "showAnimation"),
         ("qs-car-card.js", "charging"),
     ],
 )
 def test_card_raf_idle_gated(card_filename, gate):
-    """M4: every card except pool gates `_startAnimation` on a
-    runtime condition (`showAnimation` for on-off-duration/climate,
-    `charging` for car). Pool's wave is intrinsically
+    """M4: every card except pool / water boiler gates `_startAnimation`
+    on a runtime condition (`showAnimation` for on-off-duration/
+    climate, `charging` for car). The pool card's wave is intrinsically
     continuous-while-connected and uses `_startAnimation` from
     `connectedCallback` directly — that file is covered by the
     presence-of-helper check below. QS-200 moved
-    `qs-water-boiler-card.js` to the same continuous-RAF model.
+    `qs-water-boiler-card.js` to the same continuous-RAF model, also
+    covered separately.
     """
     import re
 
@@ -1867,6 +1904,71 @@ def test_water_boiler_card_pins_opacity_cross_fade():
         "qs-water-boiler-card.js (AC-6): expected the colorMix lerp "
         "target to be `targetColorMix = <cond> ? 1 : 0`, mirroring "
         "amplitude/speed."
+    )
+
+
+def test_water_boiler_card_center_uses_named_constants():
+    """Review-fix #02 S1: the arc / handle / progress-ring `center`
+    object in `_render()` must use the named `CENTER_CX` / `CENTER_CY`
+    constants, not inlined `160` literals. The water clip circle
+    moved to `CENTER_CX` / `CENTER_CY` with fix #01 N4; the ring
+    geometry must follow so a future tweak to either constant keeps
+    the ring, handle, and progress arc aligned with the water layer.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    positive = re.compile(
+        r"const\s+center\s*=\s*\{\s*cx\s*:\s*CENTER_CX\s*,\s*cy\s*:\s*CENTER_CY\s*\}"
+    )
+    assert positive.search(executable), (
+        "qs-water-boiler-card.js: the `const center = {...}` literal "
+        "must use `CENTER_CX` / `CENTER_CY`, not inlined `160` values. "
+        "A future tweak to either constant must keep the ring, handle, "
+        "and progress arc aligned with the water clip circle."
+    )
+    forbidden = re.compile(r"center\s*=\s*\{\s*cx\s*:\s*160\b")
+    assert forbidden.search(executable) is None, (
+        "qs-water-boiler-card.js: inlined `center = {cx: 160, ...}` "
+        "literal found; replace the raw 160 values with "
+        "`CENTER_CX` / `CENTER_CY`."
+    )
+
+
+def test_water_boiler_card_factors_reset_dom_refs_helper():
+    """Review-fix #02 S3: a `_resetDomRefs()` helper is defined and
+    called from BOTH `_invalidateWaveCache()` AND the
+    post-`innerHTML` cleanup block — so a future memo-key addition
+    inside the helper is automatically picked up at both call sites.
+
+    Without the shared helper, the two cleanup paths drift: a new
+    `this._fooEl = null` line added to `_invalidateWaveCache()` is
+    silently missed by the post-innerHTML block, and the next frame
+    sees stale memo state until the field happens to mutate.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    helper_def = re.search(r"_resetDomRefs\s*\(\s*\)\s*\{", executable)
+    assert helper_def, (
+        "qs-water-boiler-card.js: missing `_resetDomRefs()` helper "
+        "method. Extract the shared DOM-ref / bubble-array reset from "
+        "`_invalidateWaveCache()` and the post-innerHTML cleanup block "
+        "so a future memo-key addition is picked up at both sites."
+    )
+    calls = re.findall(r"this\._resetDomRefs\s*\(\s*\)", executable)
+    assert len(calls) >= 2, (
+        "qs-water-boiler-card.js: `_resetDomRefs()` must be called "
+        "from BOTH `_invalidateWaveCache()` AND the post-innerHTML "
+        f"cleanup block; found {len(calls)} call site(s)."
     )
 
 
