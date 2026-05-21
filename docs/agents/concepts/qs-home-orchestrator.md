@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-05-21
+last_verified: 2026-05-22
 ---
 
 # QSHome — the orchestrator
@@ -94,18 +94,33 @@ per cycle:
 ## Dashboard sections auto-migration
 
 When a new device type adds a new bundled `DASHBOARD_DEFAULT_SECTIONS`
-entry (e.g. `water_boilers` added by QS-194), users who **previously
-customised** their dashboard sections will not have the new section
-in their stored list. `QSHome.add_device` runs
-`_maybe_migrate_missing_default_section(device)` for every device it
-accepts: if the device's requested section is one of
-`DASHBOARD_DEFAULT_SECTIONS` and is missing from `self.dashboard_sections`,
-it is appended **at runtime only** (the config entry is never modified —
-the user's customisation stays user-owned). The complementary tier-1
-diagnostic lives in `home_model/load.py:dashboard_section`: if section
-resolution still fails (i.e. it's not a default-section name), a
-single `_LOGGER.warning` surfaces the device and the unresolved
-section so the issue can be diagnosed from HA logs.
+entry (e.g. `water_boilers` added by QS-194, `radiators` added by
+QS-195), users who **previously customised** their dashboard sections
+will not have the new section in their stored list.
+`QSHome.add_device` runs `_maybe_migrate_missing_default_section(device)`
+for every device it accepts: if the device's requested section is one
+of `DASHBOARD_DEFAULT_SECTIONS` and is missing from
+`self.dashboard_sections`, it is added **at runtime only** (the config
+entry is never modified — the user's customisation stays user-owned)
+and the list is then re-normalised so the bundled section lands in its
+canonical const-order slot (between e.g. `water_boilers` and `others`)
+rather than at the end. Without the post-insert normalize, an
+upgraded user would see the migrated section rendered AFTER `settings`
+on the main dashboard — the QS-195 BH user bug. The complementary
+tier-1 diagnostic lives in `home_model/load.py:dashboard_section`: if
+section resolution still fails (i.e. it's not a default-section
+name), a single `_LOGGER.warning` surfaces the device and the
+unresolved section so the issue can be diagnosed from HA logs.
+
+The same `_normalize_dashboard_sections_order` helper runs once at
+`QSHome.__init__` time on the persisted-then-reconstructed
+`dashboard_sections` list, so a pre-existing user whose
+`CONF_DASHBOARD_SECTION_NAME_*` keys ended up in the wrong order
+(because an older append-only migration ran during a previous
+upgrade) gets the canonical ordering on the next HA restart without
+having to re-edit the home config. Custom user sections (names not
+in `DASHBOARD_DEFAULT_SECTIONS_DICT`) are preserved at the tail in
+their original relative order.
 
 When the migration appends a section, it also invalidates the
 `_computed_dashboard_section` cache on every sibling device that

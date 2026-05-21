@@ -51,6 +51,8 @@ from custom_components.quiet_solar.const import (
     CONF_CLIMATE,
     CONF_CLIMATE_HVAC_MODE_OFF,
     CONF_CLIMATE_HVAC_MODE_ON,
+    CONF_DASHBOARD_SECTION_ICON,
+    CONF_DASHBOARD_SECTION_NAME,
     CONF_DEVICE_DASHBOARD_SECTION,
     CONF_DEVICE_DYNAMIC_GROUP_NAME,
     CONF_DEVICE_TO_PILOT_NAME,
@@ -81,6 +83,7 @@ from custom_components.quiet_solar.const import (
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SWITCH,
     DASHBOARD_NO_SECTION,
+    DASHBOARD_NUM_SECTION_MAX,
     DATA_HANDLER,
     DEVICE_TYPE,
     DOMAIN,
@@ -2647,6 +2650,106 @@ async def test_options_home_step_with_power_entities(hass: HomeAssistant):
             break
     assert grid_key is not None
     assert grid_key.description == {"suggested_value": "sensor.grid"}
+
+
+@pytest.mark.asyncio
+async def test_options_home_section_editor_reads_from_live_dashboard_sections(
+    hass: HomeAssistant,
+    mock_data_handler,
+):
+    """BH (post-QS-195 user bug): the home edit form's dashboard-section
+    slot suggestions MUST come from the live `home.dashboard_sections`
+    list (which has been normalized + migrated), NOT from the stale
+    persisted `CONF_DASHBOARD_SECTION_NAME_*` keys nor from
+    `DASHBOARD_DEFAULT_SECTIONS[i]` by index.
+
+    Reading by index against the persisted slots caused the user-
+    reported "multiple times others" bug: slot 3 was persisted as
+    `"others"` (pre-QS-194), slot 5's index-based default also resolves
+    to `"others"` (current const), so the form showed `"others"` twice
+    and no `"radiators"`. The fix reads each slot from
+    `home.dashboard_sections[i]` so the form mirrors what's actually
+    rendered on the dashboard.
+    """
+    # Stored data has the OLD pre-QS-194/QS-195 slot layout.
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="home_section_editor_reads_live_123",
+        data={
+            CONF_NAME: "Test Home",
+            DEVICE_TYPE: QSHome.conf_type_name,
+            f"{CONF_DASHBOARD_SECTION_NAME}_0": "cars",
+            f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+            f"{CONF_DASHBOARD_SECTION_NAME}_1": "climates",
+            f"{CONF_DASHBOARD_SECTION_ICON}_1": "mdi:home-thermometer",
+            f"{CONF_DASHBOARD_SECTION_NAME}_2": "pools",
+            f"{CONF_DASHBOARD_SECTION_ICON}_2": "mdi:pool",
+            f"{CONF_DASHBOARD_SECTION_NAME}_3": "others",
+            f"{CONF_DASHBOARD_SECTION_ICON}_3": "mdi:home",
+            f"{CONF_DASHBOARD_SECTION_NAME}_4": "settings",
+            f"{CONF_DASHBOARD_SECTION_ICON}_4": "mdi:cog-outline",
+        },
+        title="home: Test Home",
+    )
+    config_entry.add_to_hass(hass)
+
+    # Live home with the normalized + migrated post-QS-195 layout.
+    mock_home = create_minimal_home_model()
+    mock_home.dashboard_sections = [
+        ("cars", "mdi:car"),
+        ("climates", "mdi:home-thermometer"),
+        ("pools", "mdi:pool"),
+        ("water_boilers", "mdi:water-boiler"),
+        ("radiators", "mdi:radiator"),
+        ("others", "mdi:home"),
+        ("settings", "mdi:cog-outline"),
+    ]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow._filter_quiet_solar_entities",
+        side_effect=lambda _h, entities: entities,
+    ):
+        result = await flow.async_step_home()
+
+    assert result["type"] == FlowResultType.FORM
+    schema = result["data_schema"]
+
+    # Pull the slot defaults out of the schema. We expect them to match
+    # `home.dashboard_sections` slot-by-slot, NOT the stale config_entry
+    # data.
+    def _slot_default(field_key):
+        for item in schema.schema:
+            if getattr(item, "schema", None) != field_key:
+                continue
+            desc = getattr(item, "description", None)
+            if isinstance(desc, dict):
+                return desc.get("suggested_value")
+            return None
+        return None
+
+    expected_names = [
+        "cars", "climates", "pools", "water_boilers",
+        "radiators", "others", "settings",
+    ]
+    for i, expected_name in enumerate(expected_names):
+        actual = _slot_default(f"{CONF_DASHBOARD_SECTION_NAME}_{i}")
+        assert actual == expected_name, (
+            f"Slot {i} must show '{expected_name}' (from live "
+            f"home.dashboard_sections), got '{actual}'. The form is "
+            f"still reading from stale persisted data or index-based "
+            f"const defaults."
+        )
+
+    # Slot 7 (beyond the 7 live sections) has no live source — should
+    # be None / empty so the user can add a custom section there.
+    slot7 = _slot_default(f"{CONF_DASHBOARD_SECTION_NAME}_{DASHBOARD_NUM_SECTION_MAX - 1}")
+    assert slot7 is None, (
+        f"Slot beyond live dashboard_sections must default to None "
+        f"(empty), got {slot7!r}"
+    )
 
 
 @pytest.mark.asyncio

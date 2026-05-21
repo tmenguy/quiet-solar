@@ -107,6 +107,46 @@ MAX_SENSOR_HISTORY_S = 60 * 60 * 24 * 7
 
 POWER_ALIGNMENT_TOLERANCE_S = 120
 
+
+def _normalize_dashboard_sections_order(
+    sections: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Reorder dashboard sections so bundled defaults match const.py.
+
+    Bundled default sections (names in
+    ``DASHBOARD_DEFAULT_SECTIONS_DICT``) are emitted in the order of
+    ``DASHBOARD_DEFAULT_SECTIONS``. User-defined custom sections
+    (names NOT in the bundled dict) are preserved AFTER the bundled
+    ones, in their original relative order.
+
+    Called by ``QSHome.__init__`` and after every migration insertion
+    so the in-memory ``dashboard_sections`` list always reflects the
+    canonical bundled-section order, regardless of how the persisted
+    ``CONF_DASHBOARD_SECTION_NAME_*`` keys ended up ordered (e.g.
+    after an older append-only migration from QS-194 or QS-195).
+
+    Duplicate names (defensive, shouldn't happen in practice) are
+    deduplicated keeping the first occurrence.
+    """
+    seen: set[str] = set()
+    bundled_present: dict[str, str] = {}
+    custom_in_order: list[tuple[str, str]] = []
+    for name, icon in sections:
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in DASHBOARD_DEFAULT_SECTIONS_DICT:
+            bundled_present[name] = icon
+        else:
+            custom_in_order.append((name, icon))
+    ordered: list[tuple[str, str]] = []
+    for default_name, _default_icon in DASHBOARD_DEFAULT_SECTIONS:
+        if default_name in bundled_present:
+            ordered.append((default_name, bundled_present[default_name]))
+    ordered.extend(custom_in_order)
+    return ordered
+
+
 HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS = 4
 HOME_PERSON_CAR_MIN_SEGMENT_S = 30
 HOME_PERSON_CAR_MIN_OVERLAP_S = 30
@@ -371,6 +411,15 @@ class QSHome(QSDynamicGroup):
 
         if num_found_sections == 0:
             self.dashboard_sections = copy.deepcopy(DASHBOARD_DEFAULT_SECTIONS)
+        else:
+            # Normalize bundled-default order so a persisted list
+            # written by an older append-only migration (e.g. QS-194
+            # adding water_boilers at the end, or QS-195 adding
+            # radiators at the end) renders in canonical
+            # ``DASHBOARD_DEFAULT_SECTIONS`` order without the user
+            # having to re-edit the home config. Custom user sections
+            # are preserved at the tail.
+            self.dashboard_sections = _normalize_dashboard_sections_order(self.dashboard_sections)
 
         self.home_non_controlled_consumption_sensor = HOME_NON_CONTROLLED_CONSUMPTION_SENSOR
         self.home_available_power_sensor = HOME_AVAILABLE_POWER_SENSOR
@@ -1951,13 +2000,20 @@ class QSHome(QSDynamicGroup):
             return
         icon = DASHBOARD_DEFAULT_SECTIONS_DICT[section_name]
         _LOGGER.info(
-            "Auto-appending missing default dashboard section %r (icon %r) "
+            "Auto-adding missing default dashboard section %r (icon %r) "
             "for device %r; runtime-only — config_entry not modified",
             section_name,
             icon,
             device.name,
         )
+        # Append + normalize keeps the bundled-default ordering aligned
+        # with ``DASHBOARD_DEFAULT_SECTIONS``. Without this the migration
+        # would place e.g. ``radiators`` AFTER ``settings`` instead of
+        # between ``water_boilers`` and ``others`` — visible to the user
+        # as a radiator section rendered below the settings block on the
+        # main dashboard.
         self.dashboard_sections.append((section_name, icon))
+        self.dashboard_sections = _normalize_dashboard_sections_order(self.dashboard_sections)
         # S5: invalidate ALL devices whose cached resolution was
         # warmed before the migration. Without this, sibling devices
         # already resolved to DASHBOARD_NO_SECTION stay invisible even

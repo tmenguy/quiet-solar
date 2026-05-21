@@ -823,29 +823,40 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             }
         )
 
+        # BH (post-QS-195): the slot defaults MUST come from the live
+        # `home.dashboard_sections` (which has been normalized +
+        # migrated by `QSHome.__init__` and
+        # `_maybe_migrate_missing_default_section`) rather than from the
+        # stale persisted slots or `DASHBOARD_DEFAULT_SECTIONS[i]` by
+        # index. Without this, a user who upgraded across QS-194/QS-195
+        # saw slot 3 (persisted "others") AND slot 5 (index default
+        # "others") show "others" twice — and no "radiators" anywhere.
+        # Falling back to const defaults is only used when no home is
+        # available (e.g. very early flow state, brand-new install).
+        sections_source: list[tuple[str, str]] = list(DASHBOARD_DEFAULT_SECTIONS)
+        data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+        if data_handler is not None and data_handler.home is not None and data_handler.home.dashboard_sections:
+            sections_source = list(data_handler.home.dashboard_sections)
+
         for i in range(0, DASHBOARD_NUM_SECTION_MAX):
             key_section_name = f"{CONF_DASHBOARD_SECTION_NAME}_{i}"
             key_section_icon = f"{CONF_DASHBOARD_SECTION_ICON}_{i}"
 
-            default_section_name = None
-            default_section_icon = None
-            if i < len(DASHBOARD_DEFAULT_SECTIONS):
-                default_section_name = DASHBOARD_DEFAULT_SECTIONS[i][0]
-                default_section_icon = DASHBOARD_DEFAULT_SECTIONS[i][1]
+            default_section_name: str | None = None
+            default_section_icon: str | None = None
+            if i < len(sections_source):
+                default_section_name = sections_source[i][0]
+                default_section_icon = sections_source[i][1]
 
             sc_dict.update(
                 {
                     vol.Optional(
                         key_section_name,
-                        description={
-                            "suggested_value": self.config_entry.data.get(key_section_name, default_section_name)
-                        },
+                        description={"suggested_value": default_section_name},
                     ): cv.string,
                     vol.Optional(
                         key_section_icon,
-                        description={
-                            "suggested_value": self.config_entry.data.get(key_section_icon, default_section_icon)
-                        },
+                        description={"suggested_value": default_section_icon},
                     ): cv.string,
                 }
             )

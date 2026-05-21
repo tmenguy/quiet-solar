@@ -1157,9 +1157,18 @@ class TestHomeDashboardAndInit:
         entry.add_to_hass(hass)
         home = await _get_home(hass, entry)
         assert len(home.dashboard_sections) >= 1
-        # First custom section gets auto-name
-        assert home.dashboard_sections[0][0] == "section_1"
-        assert home.dashboard_sections[0][1] == "mdi:car"
+        # Custom section with no explicit name gets auto-named
+        # `section_1`. After the post-QS-195 normalize, bundled defaults
+        # (e.g. `settings` added by the home device's own migration)
+        # appear FIRST and custom sections at the tail — so look up by
+        # entry rather than asserting on position.
+        section_names = [s[0] for s in home.dashboard_sections]
+        section_icons = {s[0]: s[1] for s in home.dashboard_sections}
+        assert "section_1" in section_names, (
+            f"Custom icon-only section must be auto-named 'section_1'; "
+            f"got {section_names}"
+        )
+        assert section_icons["section_1"] == "mdi:car"
 
 
 # ========================================================================

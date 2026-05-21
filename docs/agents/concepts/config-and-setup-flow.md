@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-21
+last_verified: 2026-05-22
 ---
 
 # Config flow and setup
@@ -100,6 +100,22 @@ omits the key entirely — both shapes funnel through a sentinel
 check), the persisted `CONF_DEVICE_TO_PILOT_NAME` is removed.
 Without this distinction the merge in `_async_save_radiator_entry`
 would re-inject the stale name on the next edit.
+
+**Home options-flow section editor** (`async_step_home`): the 8
+dashboard-section slot suggestions (`CONF_DASHBOARD_SECTION_NAME_<i>`
++ `CONF_DASHBOARD_SECTION_ICON_<i>`) come from the **live**
+`home.dashboard_sections` list — not from the stored
+`config_entry.data` slot-by-slot and not from
+`DASHBOARD_DEFAULT_SECTIONS[i]` indexed against `i`. The live list
+has been normalised + migration-updated by `QSHome.__init__`, so the
+form reflects exactly what's rendered on the main dashboard.
+Reading by index against the persisted slots was the source of the
+QS-195 "multiple times others" bug: a pre-QS-194 user whose stored
+slot 3 was `"others"` and slot 5's index default also resolved to
+`"others"` (current const) saw `"others"` twice and no
+`"radiators"`. Slots beyond `len(home.dashboard_sections)` default
+to `None`, so the user has at least one empty slot for adding a
+custom section.
 
 **Data handler lifecycle** (`data_handler.py`):
 

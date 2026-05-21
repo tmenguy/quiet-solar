@@ -606,6 +606,143 @@ async def test_home_auto_migrates_missing_default_section_for_new_device_type(
     assert boiler_device in devices_in_section
 
 
+async def test_home_migration_inserts_at_const_position_not_at_end(
+    hass: HomeAssistant,
+) -> None:
+    """BH (post-QS-195 user bug): when the auto-migration adds a missing
+    default section, it must insert it at the position dictated by
+    `DASHBOARD_DEFAULT_SECTIONS` order — NOT at the end.
+
+    Without this, the user's symptom was: "I put a radiator in the
+    radiator dashboard section ... but it is now placed in the main
+    dashboard AFTER the settings". The dashboard renders sections in
+    `home.dashboard_sections` order; appending at the end places the
+    heating sections below `settings`, breaking the visual grouping
+    that `DASHBOARD_DEFAULT_SECTIONS` declares.
+    """
+    from .const import MOCK_HOME_CONFIG, MOCK_WATER_BOILER_CONFIG
+
+    # Pre-QS-194/QS-195 customised list — has `others` and `settings`
+    # but no `water_boilers` or `radiators`. The migration must insert
+    # `water_boilers` BEFORE `others`, not at the end.
+    custom_home_config = {
+        **MOCK_HOME_CONFIG,
+        f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
+        f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+        f"{CONF_DASHBOARD_SECTION_NAME}_1": "#2 - others",
+        f"{CONF_DASHBOARD_SECTION_ICON}_1": "mdi:home",
+        f"{CONF_DASHBOARD_SECTION_NAME}_2": "#3 - settings",
+        f"{CONF_DASHBOARD_SECTION_ICON}_2": "mdi:cog-outline",
+    }
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=custom_home_config,
+        entry_id="insert_at_const_home_entry",
+        title="home: Insert Const Home",
+        unique_id="insert_at_const_home_entry",
+    )
+    home_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(home_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    # Add a water_boiler — migration runs and inserts `water_boilers`.
+    boiler_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_WATER_BOILER_CONFIG,
+        entry_id="insert_at_const_boiler_entry",
+        title=f"water_boiler: {MOCK_WATER_BOILER_CONFIG['name']}",
+        unique_id="insert_at_const_boiler_entry",
+    )
+    boiler_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(boiler_entry.entry_id)
+    await hass.async_block_till_done()
+
+    section_names = [s[0] for s in home.dashboard_sections]
+
+    # `water_boilers` MUST appear BEFORE `others` (const order:
+    # ..., water_boilers, radiators, others, settings).
+    assert "water_boilers" in section_names, (
+        f"Migration should have added water_boilers; got {section_names}"
+    )
+    wb_idx = section_names.index("water_boilers")
+    others_idx = section_names.index("others")
+    settings_idx = section_names.index("settings")
+    assert wb_idx < others_idx, (
+        f"water_boilers must be inserted BEFORE others (const order); "
+        f"got order {section_names}"
+    )
+    assert wb_idx < settings_idx, (
+        f"water_boilers must be inserted BEFORE settings (const order); "
+        f"got order {section_names}"
+    )
+
+
+async def test_home_init_normalizes_existing_dashboard_sections(
+    hass: HomeAssistant,
+) -> None:
+    """BH (post-QS-195 user bug): when the persisted
+    `CONF_DASHBOARD_SECTION_NAME_*` keys are in the wrong const order
+    (e.g. because an older append-only migration tacked sections onto
+    the end), `QSHome.__init__` MUST normalize them on load so the
+    dashboard renders in `DASHBOARD_DEFAULT_SECTIONS` order without
+    the user having to re-edit the home config.
+    """
+    from .const import MOCK_HOME_CONFIG
+
+    # Persisted in the BROKEN order (append-only migration result):
+    # ..., others, settings, water_boilers, radiators.
+    broken_order_config = {
+        **MOCK_HOME_CONFIG,
+        f"{CONF_DASHBOARD_SECTION_NAME}_0": "#1 - cars",
+        f"{CONF_DASHBOARD_SECTION_ICON}_0": "mdi:car",
+        f"{CONF_DASHBOARD_SECTION_NAME}_1": "#2 - others",
+        f"{CONF_DASHBOARD_SECTION_ICON}_1": "mdi:home",
+        f"{CONF_DASHBOARD_SECTION_NAME}_2": "#3 - settings",
+        f"{CONF_DASHBOARD_SECTION_ICON}_2": "mdi:cog-outline",
+        f"{CONF_DASHBOARD_SECTION_NAME}_3": "#4 - water_boilers",
+        f"{CONF_DASHBOARD_SECTION_ICON}_3": "mdi:water-boiler",
+        f"{CONF_DASHBOARD_SECTION_NAME}_4": "#5 - radiators",
+        f"{CONF_DASHBOARD_SECTION_ICON}_4": "mdi:radiator",
+    }
+    home_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=broken_order_config,
+        entry_id="normalize_home_entry",
+        title="home: Normalize Home",
+        unique_id="normalize_home_entry",
+    )
+    home_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(home_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    names = [s[0] for s in home.dashboard_sections]
+    wb_idx = names.index("water_boilers")
+    radiators_idx = names.index("radiators")
+    others_idx = names.index("others")
+    settings_idx = names.index("settings")
+
+    # After normalize: water_boilers, radiators must be BEFORE others
+    # and settings (per const order).
+    assert wb_idx < others_idx < settings_idx, (
+        f"After normalize, expected water_boilers < others < settings; "
+        f"got {names}"
+    )
+    assert radiators_idx < others_idx < settings_idx, (
+        f"After normalize, expected radiators < others < settings; "
+        f"got {names}"
+    )
+    # water_boilers also before radiators (const order: water_boilers, radiators)
+    assert wb_idx < radiators_idx, (
+        f"After normalize, expected water_boilers < radiators; got {names}"
+    )
+
+
 async def test_home_migration_invalidates_sibling_device_caches(
     hass: HomeAssistant,
 ) -> None:

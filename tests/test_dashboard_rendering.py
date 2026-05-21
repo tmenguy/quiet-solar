@@ -753,6 +753,114 @@ class TestDashboardSectionMapping:
         for key in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION:
             assert isinstance(key, str), f"Key {key!r} in LOAD_TYPE_DASHBOARD_DEFAULT_SECTION is not a string"
 
+    def test_normalize_dashboard_sections_order_reorders_bundled_to_const(self):
+        """BH (post-QS-195 user bug): the `_normalize_dashboard_sections_order`
+        helper must rewrite a list of bundled defaults that arrived in the
+        wrong order (e.g. because an older append-only migration tacked
+        sections onto the end) so the result follows
+        `DASHBOARD_DEFAULT_SECTIONS` order. Without this, a user who
+        upgraded across QS-194/QS-195 sees their radiator section
+        rendered AFTER `settings` on the dashboard.
+        """
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        # Simulate the broken append-only migration state: bundled
+        # defaults present but out of const order.
+        input_sections = [
+            ("cars", "mdi:car"),
+            ("climates", "mdi:home-thermometer"),
+            ("pools", "mdi:pool"),
+            ("others", "mdi:home"),
+            ("settings", "mdi:cog-outline"),
+            ("water_boilers", "mdi:water-boiler"),
+            ("radiators", "mdi:radiator"),
+        ]
+
+        result = _normalize_dashboard_sections_order(input_sections)
+
+        expected = [
+            ("cars", "mdi:car"),
+            ("climates", "mdi:home-thermometer"),
+            ("pools", "mdi:pool"),
+            ("water_boilers", "mdi:water-boiler"),
+            ("radiators", "mdi:radiator"),
+            ("others", "mdi:home"),
+            ("settings", "mdi:cog-outline"),
+        ]
+        assert result == expected, (
+            f"_normalize_dashboard_sections_order must reorder bundled "
+            f"defaults to match DASHBOARD_DEFAULT_SECTIONS. Expected "
+            f"{expected}, got {result}"
+        )
+
+    def test_normalize_dashboard_sections_order_preserves_custom_sections(self):
+        """BH companion: user-defined custom sections (names NOT in
+        `DASHBOARD_DEFAULT_SECTIONS_DICT`) must be preserved at the end
+        of the list in their original relative order. Reordering bundled
+        defaults must NOT delete or shuffle the user's custom entries.
+        """
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        input_sections = [
+            ("cars", "mdi:car"),
+            ("my_workshop", "mdi:hammer"),   # custom
+            ("pools", "mdi:pool"),
+            ("garden_lights", "mdi:lamp"),    # custom
+            ("settings", "mdi:cog-outline"),
+        ]
+
+        result = _normalize_dashboard_sections_order(input_sections)
+
+        # Bundled defaults sorted by const order, then customs in their
+        # original relative order.
+        expected = [
+            ("cars", "mdi:car"),
+            ("pools", "mdi:pool"),
+            ("settings", "mdi:cog-outline"),
+            ("my_workshop", "mdi:hammer"),
+            ("garden_lights", "mdi:lamp"),
+        ]
+        assert result == expected, (
+            f"_normalize_dashboard_sections_order must preserve custom "
+            f"sections in original order at the end. Expected {expected}, "
+            f"got {result}"
+        )
+
+    def test_normalize_dashboard_sections_order_dedups_repeats(self):
+        """Defensive: if a section name is repeated (shouldn't happen in
+        practice, but the migration code path could theoretically add a
+        duplicate), the helper keeps only the FIRST occurrence so the
+        bundled-default ordering stays deterministic.
+        """
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        input_sections = [
+            ("cars", "mdi:car"),
+            ("cars", "mdi:car-electric"),  # duplicate, different icon
+            ("pools", "mdi:pool"),
+        ]
+
+        result = _normalize_dashboard_sections_order(input_sections)
+
+        assert result == [("cars", "mdi:car"), ("pools", "mdi:pool")], (
+            f"Duplicate section names must be deduped (first wins). "
+            f"Got {result}"
+        )
+
+    def test_normalize_dashboard_sections_order_empty_input(self):
+        """Edge case: an empty input returns an empty list without error."""
+        from custom_components.quiet_solar.ha_model.home import (
+            _normalize_dashboard_sections_order,
+        )
+
+        assert _normalize_dashboard_sections_order([]) == []
+
     @pytest.mark.asyncio
     async def test_all_devices_assigned_to_sections(self, full_dashboard_home):
         """Regression: all devices must appear in at least one dashboard section."""
