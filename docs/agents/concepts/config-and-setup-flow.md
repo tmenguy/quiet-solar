@@ -84,7 +84,19 @@ Single-mode and identical-mode HVAC validations live alongside the
 XOR check: when fewer than two HVAC modes are advertised the step
 surfaces `climate_modes_insufficient`; when both selectors carry
 the same mode the step surfaces `hvac_modes_must_differ` — both
-errors keep the user's selections through the re-render.
+errors keep the user's selections through the re-render. The
+heat-pump dropdown is also re-validated at submit time against
+the LIVE `home.get_heat_pumps()` so a parallel admin action that
+removed a heat-pump between Pass 1 and the final submit can't
+silently persist a stale name.
+
+User-explicit pilot clear: the form's heat-pump dropdown is
+rendered only when at least one heat pump exists. When that
+dropdown was rendered AND the submit carries an empty value (or
+omits the key entirely — both shapes funnel through a sentinel
+check), the persisted `CONF_DEVICE_TO_PILOT_NAME` is removed.
+Without this distinction the merge in `_async_save_radiator_entry`
+would re-inject the stale name on the next edit.
 
 **Data handler lifecycle** (`data_handler.py`):
 

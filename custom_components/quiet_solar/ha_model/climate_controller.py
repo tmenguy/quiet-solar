@@ -1,6 +1,7 @@
 import logging
 
 from homeassistant.components.climate import HVACMode
+from homeassistant.exceptions import ServiceValidationError
 
 from ..const import (
     CONF_CLIMATE,
@@ -29,6 +30,18 @@ class QSClimateDuration(QSBiStateDuration):
         # `self._transport.state_on = "on"` and gets overwritten with
         # the actual HVAC mode below.
         climate_entity = kwargs.pop(CONF_CLIMATE, None)
+        if isinstance(climate_entity, str):
+            stripped = climate_entity.strip()
+            climate_entity = stripped if stripped else None
+        # EH-C — surface a missing/empty climate entity rather than
+        # silently constructing `ClimateTransport(None, ...)` and
+        # later crashing at `services.async_call(...entity_id=None)`.
+        # Mirrors the EH6 guard on `QSRadiator`. Pre-existing climate
+        # entries cannot reach this branch (the config flow requires
+        # a non-empty climate entity), so this only fires on
+        # programmatic misuse / corrupted persistence.
+        if not climate_entity:
+            raise ServiceValidationError("Climate-duration load requires a non-empty climate entity")
         # EH3 — `kwargs.pop(key, default)` only returns `default` when
         # the key is MISSING; a persisted `""` (from a migration or a
         # buggy import) would otherwise slip through and crash
@@ -48,6 +61,18 @@ class QSClimateDuration(QSBiStateDuration):
         # modes the user picked.
         self._state_on = state_on
         self._state_off = state_off
+        # BH-B — `QSClimateDuration` pins `_bistate_mode_on/off` to the
+        # raw HVAC mode strings (e.g. "heat" / "off"). The sibling
+        # `QSRadiator` uses literal "on" / "off" instead (E3 review-fix).
+        # The divergence is intentional: the `climate_mode` translation
+        # registers raw HVAC mode keys (`"heat"`, `"cool"`, `"fan_only"`,
+        # …) as states for the force-mode dropdown, so changing climate
+        # to "on"/"off" would break translations for every existing
+        # climate user. The `radiator_mode` translation, by contrast,
+        # only registers `"on" / "off"` (plus the calendar modes), so
+        # the radiator can safely use literals. Future cross-subclass
+        # logic in `QSBiStateDuration` that compares `_state_on` ↔
+        # `_bistate_mode_on` should treat the two as decoupled.
         self._bistate_mode_on = state_on
         self._bistate_mode_off = state_off
         self.bistate_entity = climate_entity

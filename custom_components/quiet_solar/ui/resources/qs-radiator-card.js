@@ -24,8 +24,15 @@
 */
 
 class QsRadiatorCard extends HTMLElement {
-  connectedCallback() {
+  // M4: gate the requestAnimationFrame loop on `showAnimation`.
+    // condition (`showAnimation`). The loop is started lazily by
+  // `_render()` only when the running-progress dash needs to advance,
+  // and stopped in `disconnectedCallback` AND whenever `showAnimation`
+  // becomes false. Avoids constant per-card repaint overhead when no
+  // visible animation is in progress.
+  _startAnimation() {
     if (this._animRaf != null) return;
+    this._lastAnimTs = null;
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
@@ -43,10 +50,27 @@ class QsRadiatorCard extends HTMLElement {
     this._animRaf = requestAnimationFrame(step);
   }
 
-  disconnectedCallback() {
+  _stopAnimation() {
     if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
     this._animRaf = null;
     this._lastAnimTs = null;
+  }
+
+  connectedCallback() {
+    // RAF intentionally NOT started here — _render() will call
+    // _startAnimation() when needed.
+  }
+
+  disconnectedCallback() {
+    this._stopAnimation();
+    // S7: reset interaction flags so a re-attach after mid-interaction
+    // (e.g. dragging the ring or processing a mode change when the
+    // dashboard rearranges) doesn't silently short-circuit `set hass`
+    // on stale flags.
+    this._isInteractingMode = false;
+    this._isInteractingTarget = false;
+    this._isProcessingModeChange = false;
+    this._modalOpen = false;
   }
 
   static getStubConfig() {
@@ -58,6 +82,32 @@ class QsRadiatorCard extends HTMLElement {
     this._config = config;
     this._root = this.attachShadow({ mode: "open" });
     this._render();
+  }
+
+  // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
+  // strings interpolated into innerHTML (card title, entity unit, etc.).
+  // HA entity-id validation makes most paths unreachable in practice,
+  // but treat as untrusted.
+  _escapeHtml(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  // S8: safe numeric coercion. `Number(s?.state || N)` short-circuits to
+  // the truthy string when `state === "unknown" | "unavailable"`, then
+  // `Number("unknown")` is `NaN` and propagates into SVG cx/cy/d
+  // attributes. Filter degenerate states BEFORE conversion.
+  _safeNumber(sensor, defaultValue) {
+    if (!sensor || sensor.state == null) return defaultValue;
+    const s = sensor.state;
+    if (s === '' || s === 'unknown' || s === 'unavailable') return defaultValue;
+    const n = Number(s);
+    return Number.isNaN(n) ? defaultValue : n;
   }
 
   set hass(hass) {
@@ -113,19 +163,13 @@ class QsRadiatorCard extends HTMLElement {
       
       // Check if system is off-grid
       const isOffGrid = sIsOffGrid?.state === 'on';
-      
-      // S14 — `Number(state || fallback)` yields NaN for truthy non-numeric
-      // states like "unknown" or "unavailable". Coerce explicitly and
-      // fall back when the result isn't finite.
-      const _safeNumber = (value, fallback) => {
-        const n = Number(value);
-        return Number.isFinite(n) ? n : fallback;
-      };
 
       // Get target hours and current run hours directly (in hours)
-      const targetHours = _safeNumber(sDurationLimit?.state, 12);
-      const hoursRun = _safeNumber(sCurrentDuration?.state, 0);
-      const defaultDuration = _safeNumber(sDefaultOnDuration?.state, 6);
+      // S8: use safeNumber so an `unknown`/`unavailable` sensor doesn't
+      // propagate `NaN` into the SVG path attributes downstream.
+      const targetHours = this._safeNumber(sDurationLimit, 12);
+      const hoursRun = this._safeNumber(sCurrentDuration, 0);
+      const defaultDuration = this._safeNumber(sDefaultOnDuration, 6);
       
       // Get bistate mode
       const bistateMode = selBistateMode?.state || 'bistate_mode_default';
@@ -157,7 +201,11 @@ class QsRadiatorCard extends HTMLElement {
       // Determine max hours and what to display
       let maxHours, displayTargetHours;
       if (isDefaultMode) {
-        maxHours = 12; // Fixed for default mode
+        // N3: configurable upper bound for the default-mode ring.
+        // Boilers with significant thermal storage may legitimately
+        // need >12h runs; set `max_default_hours: 24` (or similar)
+        // on the card config to expand the visual range.
+        maxHours = Number(cfg.max_default_hours) || 12;
         displayTargetHours = defaultDuration;
       } else {
         maxHours = targetHours;
@@ -297,6 +345,11 @@ class QsRadiatorCard extends HTMLElement {
       };
       const polar = (cx, cy, r, deg) => ({x: cx + r * Math.cos(deg2rad(deg)), y: cy - r * Math.sin(deg2rad(deg))});
       const arcPath = (cx, cy, r, a0, a1) => {
+          // N8: a zero-length arc (a0 == a1, e.g. progress == 0) would
+          // produce a single-point SVG path that renders as nothing or
+          // a stray dot. Return empty string so the consumer can decide
+          // to omit the <path> element entirely.
+          if (Math.abs(a1 - a0) < 0.01) return '';
           const p0 = polar(cx, cy, r, a0);
           const p1 = polar(cx, cy, r, a1);
           let delta = a1 - a0;
@@ -344,18 +397,13 @@ class QsRadiatorCard extends HTMLElement {
       const activeGradId = running ? gradRunningId : gradGreenId;
       const showAnimation = (running && segLen > 6);
 
-      // S15 — escape values before they reach `innerHTML`. Mode labels,
-      // entity names, and other HA-supplied strings could otherwise
-      // inject markup or scripts via translated values / entity names.
-      const _escapeHtml = (value) => {
-        if (value == null) return '';
-        return String(value)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#39;');
-      };
+      // M4: start/stop the RAF loop based on whether the dash animation
+      // is actually needed. Idle cards consume zero per-frame work.
+      if (showAnimation) {
+        this._startAnimation();
+      } else {
+        this._stopAnimation();
+      }
 
       // Bistate mode selector options with translations
       const modeOptions = selBistateMode?.attributes?.options || [];
@@ -370,7 +418,7 @@ class QsRadiatorCard extends HTMLElement {
       };
 
       const modeOptionsHtml = modeOptions.map(o =>
-          `<option value="${_escapeHtml(o)}" ${o === modeState ? 'selected' : ''}>${_escapeHtml(translateBistateMode(o))}</option>`
+          `<option value="${this._escapeHtml(o)}" ${o === modeState ? 'selected' : ''}>${this._escapeHtml(translateBistateMode(o))}</option>`
       ).join('');
 
       // Parse override command from override state
@@ -438,7 +486,7 @@ class QsRadiatorCard extends HTMLElement {
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
-        <div class="card-title">${_escapeHtml(title)}</div>
+        <div class="card-title">${this._escapeHtml(title)}</div>
         <div class="top"></div>
 
         <div class="hero">
@@ -541,18 +589,22 @@ class QsRadiatorCard extends HTMLElement {
 
       const showDialog = (opts) => {
           const {title, message, buttons, customContent} = opts;
+          // N12: an empty `buttons` array would render a modal with no
+          // dismiss path. Always append a "Close" fallback so the user
+          // can never get locked out (and `_modalOpen` doesn't wedge
+          // re-renders).
+          const safeButtons = (Array.isArray(buttons) && buttons.length > 0)
+              ? buttons
+              : [{ text: 'Close' }];
           const wrap = document.createElement('div');
           wrap.className = 'modal';
-          // B5 — defensively escape `title` and `message` so a future
-          // caller passing entity-derived text doesn't silently
-          // reintroduce the S15 injection vector. `customContent` is
-          // an explicit opt-in for trusted markup (callers must
-          // escape inside the template themselves).
-          const contentHtml = customContent || `<p>${_escapeHtml(message)}</p>`;
-          wrap.innerHTML = `<div class="dialog"><h3>${_escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
+          // S6: escape user-controlled `title` and `message`; customContent
+          // is provided by the caller as already-rendered HTML.
+          const contentHtml = customContent || `<p>${this._escapeHtml(message)}</p>`;
+          wrap.innerHTML = `<div class="dialog"><h3>${this._escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
           const actions = wrap.querySelector('.actions');
           this._modalOpen = true;
-          buttons.forEach(b => {
+          safeButtons.forEach(b => {
               const el = document.createElement('button');
               el.className = `btn ${b.variant || 'secondary'}`;
               el.textContent = b.text;
@@ -560,10 +612,16 @@ class QsRadiatorCard extends HTMLElement {
               const activate = () => {
                   if (activated) return;
                   activated = true;
-                  if (b.onClick) b.onClick();
-                  wrap.remove();
-                  this._modalOpen = false;
-                  this._render();
+                  // N13: wrap onClick in try/finally so a synchronous
+                  // throw doesn't leave the modal locked open with
+                  // `_modalOpen = true` blocking subsequent renders.
+                  try {
+                      if (b.onClick) b.onClick();
+                  } finally {
+                      wrap.remove();
+                      this._modalOpen = false;
+                      this._render();
+                  }
               };
               el.addEventListener('click', activate);
               el.addEventListener('touchend', (ev) => {
@@ -596,13 +654,12 @@ class QsRadiatorCard extends HTMLElement {
               if (!option) return;
 
               this._isProcessingModeChange = true;
-
-              // S17 — wrap the async service call so the interaction
-              // guards always clear, even if `_select` rejects. Without
-              // this the card would get stuck (no further rerender, no
-              // further mode-change accepted) on a single transient
-              // service-call failure.
+              // M2: wrap in try/finally so the cleanup setTimeout ALWAYS
+              // runs — otherwise a rejected `_select` (HA service failure,
+              // network drop) would leave `_isProcessingModeChange = true`
+              // forever and silently lock out subsequent re-renders.
               try {
+                  // Call the service and wait for it to complete
                   await this._select(e.bistate_mode, option);
               } catch (_) {
                   // swallow — HA state will resync on the next push
@@ -758,6 +815,17 @@ class QsRadiatorCard extends HTMLElement {
                               const hm = formatHm(mins);
                               const val = hm + ':00';
                               this._localFinishTimeMins = mins;
+                              // S9: clear the local override after a
+                              // grace period so out-of-band backend
+                              // updates aren't masked indefinitely.
+                              // Mirrors the _localTargetPct timeout.
+                              if (this._localFinishTimeClearTimer) {
+                                  clearTimeout(this._localFinishTimeClearTimer);
+                              }
+                              this._localFinishTimeClearTimer = setTimeout(() => {
+                                  this._localFinishTimeMins = null;
+                                  this._render();
+                              }, 5000);
                               await this._setTime(e.default_on_finish_time, val);
                           }
                       },

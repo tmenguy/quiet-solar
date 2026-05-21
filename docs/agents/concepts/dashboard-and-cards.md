@@ -11,7 +11,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-climate-card.js
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
-    - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
+  - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
 last_verified: 2026-05-21
 ---
 

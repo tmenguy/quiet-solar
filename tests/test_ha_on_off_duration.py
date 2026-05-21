@@ -114,6 +114,38 @@ class TestQSOnOffDurationInit:
         assert device.bistate_entity == "switch.my_switch"
         assert device.switch_entity == "switch.my_switch"
 
+    def test_b3_property_shadow_allows_post_init_override(
+        self, hass, on_off_config_entry, on_off_home, on_off_data_handler, on_off_hass_data
+    ):
+        """BH-A regression — the B3 property shadow allows future
+        subclasses (or runtime mutations) to install custom state
+        labels and have them survive subsequent reads through
+        `self._state_on` / `self._state_off`.
+
+        `QSOnOffDuration.__init__` re-pins the transport's labels to
+        `"on"` / `"off"` explicitly (matches the SwitchTransport
+        defaults), so the in-init phase is unambiguous. Any future
+        on/off variant with custom labels must apply them AFTER
+        `super().__init__()`; this test pins that the B3 property
+        shadow exposes the transport's mutated values correctly.
+        """
+        device = QSOnOffDuration(
+            hass=hass,
+            config_entry=on_off_config_entry,
+            home=on_off_home,
+            **{CONF_NAME: "BH-A Test Device", CONF_SWITCH: "switch.bha"},
+        )
+
+        # Simulate a future on/off variant that injects custom labels
+        # post-super (or any runtime mutation).
+        device._transport.state_on = "custom_on"
+        device._transport.state_off = "custom_off"
+
+        # The B3 shadow makes `_state_on` / `_state_off` reflect the
+        # transport directly.
+        assert device._state_on == "custom_on"
+        assert device._state_off == "custom_off"
+
 
 class TestQSOnOffDurationTranslationKeys:
     """Test translation key methods."""

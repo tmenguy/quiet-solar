@@ -71,6 +71,14 @@ Climate-backed loads (`QSClimateDuration`, climate-backed
 default)` and crash the first `set_hvac_mode("")` service call at
 runtime.
 
+`QSClimateDuration` and `SwitchTransport` both fail fast on a
+missing / empty / whitespace-only backing entity_id, raising
+`ServiceValidationError` (for the climate parent) or `ValueError`
+(for the lower-level switch transport) at construction. This
+parallels the EH6 guard on `QSRadiator` and surfaces persistence
+corruption visibly instead of crashing later inside HA's service
+dispatch with an opaque error.
+
 ## Key types / structures
 
 - `PilotedDevice(AbstractDevice)` — the base for pilot-capable

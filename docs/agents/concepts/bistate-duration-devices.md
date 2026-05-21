@@ -9,7 +9,7 @@ covers:
   - custom_components/quiet_solar/ha_model/climate_controller.py
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
-    - custom_components/quiet_solar/ha_model/water_boiler.py
+  - custom_components/quiet_solar/ha_model/water_boiler.py
 last_verified: 2026-05-21
 ---
 
@@ -51,6 +51,20 @@ instance host field while `_transport is None`, during the base
 ctor's seed assignments). A public `hvac_state_on` accessor exposes
 the on-state string to the dashboard template — HA's Jinja sandbox
 restricts leading-underscore attribute access.
+
+The `_bistate_mode_on` / `_bistate_mode_off` strings drive the
+**bistate-mode select** UI (Force ON / Force OFF entries) and follow
+DIFFERENT conventions across subclasses:
+`QSOnOffDuration` / `QSPool` use namespaced literals
+(`"on_off_mode_on"` / `"on_off_mode_off"`);
+`QSClimateDuration` mirrors the raw HVAC mode (`"heat"` / `"off"` …)
+so the `climate_mode` translation can label each force-mode entry
+with the HVAC mode name; `QSRadiator` uses the literal `"on"` /
+`"off"` regardless of the HVAC mode so the `radiator_mode`
+translation always has matching state keys. The divergence is
+documented in `QSBiStateDuration`'s class docstring. Cross-subclass
+logic that compares `_state_on` ↔ `_bistate_mode_on` must treat
+the two as decoupled.
 
 ## When you need this concept
 

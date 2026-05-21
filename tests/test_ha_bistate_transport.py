@@ -43,6 +43,34 @@ from custom_components.quiet_solar.home_model.commands import (
 # =============================================================================
 
 
+def test_switch_transport_rejects_none_entity():
+    """EH-E — `SwitchTransport(None)` raises rather than silently constructing.
+
+    A legacy entry missing `CONF_SWITCH` would otherwise pass `None` to
+    `services.async_call(target={"entity_id": None})`, which fails at
+    the HA layer with an opaque error. Raising at construction keeps
+    the misconfiguration visible.
+    """
+    with pytest.raises(ValueError, match="non-empty switch entity"):
+        SwitchTransport(None)  # type: ignore[arg-type]
+
+
+def test_switch_transport_rejects_empty_entity():
+    """EH-E — `SwitchTransport("")` raises (parallel to None case)."""
+    with pytest.raises(ValueError, match="non-empty switch entity"):
+        SwitchTransport("")
+
+
+def test_switch_transport_rejects_whitespace_entity():
+    """EH-E — `SwitchTransport("   ")` raises (whitespace-only is empty).
+
+    Mirrors the `QSRadiator` normalisation logic where whitespace-only
+    entity ids are treated as absent.
+    """
+    with pytest.raises(ValueError, match="non-empty switch entity"):
+        SwitchTransport("   ")
+
+
 def test_switch_transport_default_states():
     """SwitchTransport defaults are always `on` / `off`."""
     transport = SwitchTransport("switch.kitchen")
@@ -287,6 +315,39 @@ async def test_climate_transport_execute_override_state_wins():
     assert result is False
     call_args = hass.services.async_call.await_args.args
     assert call_args[2][climate.ATTR_HVAC_MODE] == "cool"
+
+
+@pytest.mark.asyncio
+async def test_climate_transport_execute_unexpected_override_logs_warning(caplog):
+    """BH-F — `ClimateTransport.execute` warns on unexpected `override_state`.
+
+    Parallel to N1 on `SwitchTransport`. An override state that isn't in
+    the entity's advertised `hvac_modes` is still dispatched (we don't
+    know better than the user), but a warning is logged so a typo or
+    a vendor-firmware-mode-drop case is debuggable.
+    """
+    import logging as _logging
+
+    transport = ClimateTransport("climate.living_room", "heat", "off")
+    hass = MagicMock()
+    hass.services.async_call = AsyncMock()
+
+    caplog.set_level(_logging.WARNING, logger="custom_components.quiet_solar.ha_model.bistate_transport")
+    with patch(
+        "custom_components.quiet_solar.ha_model.bistate_transport.get_hvac_modes",
+        return_value=["heat", "off"],  # `"unknown_mode"` is NOT in the list
+    ):
+        result = await transport.execute(hass, CMD_ON, "unknown_mode", "heat", "off")
+
+    assert result is False
+    # The unexpected override was dispatched anyway (we don't second-guess the user).
+    call_args = hass.services.async_call.await_args.args
+    assert call_args[2][climate.ATTR_HVAC_MODE] == "unknown_mode"
+    # ...and the warning was logged.
+    assert any(
+        "unexpected override_state" in rec.message.lower() and "unknown_mode" in rec.message
+        for rec in caplog.records
+    )
 
 
 @pytest.mark.asyncio

@@ -92,6 +92,50 @@ def test_init_with_custom_hvac_modes(hass: HomeAssistant, climate_config_entry, 
     assert device._bistate_mode_off == "fan_only"
 
 
+def test_init_with_missing_climate_entity_raises(
+    hass: HomeAssistant, climate_config_entry, climate_home
+):
+    """EH-C — `QSClimateDuration(CONF_CLIMATE=None)` raises ServiceValidationError.
+
+    Previously the constructor silently built `ClimateTransport(None,
+    ...)` and the first `services.async_call(...entity_id=None)` would
+    crash at the HA layer. Raising at construction keeps the
+    misconfiguration visible. Mirrors the EH6 guard on `QSRadiator`.
+    """
+    from homeassistant.exceptions import ServiceValidationError
+
+    with pytest.raises(ServiceValidationError, match="climate entity"):
+        QSClimateDuration(
+            hass=hass,
+            config_entry=climate_config_entry,
+            home=climate_home,
+            **{
+                CONF_NAME: "Missing Climate",
+                CONF_SWITCH: "switch.climate_helper",
+                # CONF_CLIMATE intentionally omitted.
+            },
+        )
+
+
+def test_init_with_empty_climate_entity_raises(
+    hass: HomeAssistant, climate_config_entry, climate_home
+):
+    """EH-C — empty / whitespace-only climate entity is also rejected."""
+    from homeassistant.exceptions import ServiceValidationError
+
+    with pytest.raises(ServiceValidationError, match="climate entity"):
+        QSClimateDuration(
+            hass=hass,
+            config_entry=climate_config_entry,
+            home=climate_home,
+            **{
+                CONF_NAME: "Empty Climate",
+                CONF_SWITCH: "switch.climate_helper",
+                CONF_CLIMATE: "   ",
+            },
+        )
+
+
 def test_init_with_empty_hvac_modes_falls_back_to_defaults(
     hass: HomeAssistant, climate_config_entry, climate_home
 ):

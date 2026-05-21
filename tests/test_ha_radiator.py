@@ -595,8 +595,11 @@ def test_radiator_kwargs_normalised_in_place(
     )
 
     # `switch_entity` is the attribute that downstream code (home.py
-    # device registry, dashboard template) sees. It must NOT be "   ".
-    assert not device.switch_entity or device.switch_entity.strip() == ""
+    # device registry, dashboard template) sees. It must NOT be a
+    # whitespace-only string. CR3 review-fix — the previous form
+    # `not x or x.strip() == ""` was vacuously true for `"   "` (both
+    # halves of the `or` held), so the test couldn't catch the leak.
+    assert device.switch_entity is None
 
 
 def test_radiator_bistate_mode_labels_independent_of_hvac_mode(
@@ -625,6 +628,65 @@ def test_radiator_bistate_mode_labels_independent_of_hvac_mode(
     assert device._bistate_mode_off == "off"
     # The transport still uses the raw HVAC mode for service calls.
     assert device._transport.state_on == "auto"
+
+
+def test_bh_b_climate_vs_radiator_bistate_mode_convention_divergence(
+    hass: HomeAssistant, radiator_config_entry, radiator_home
+):
+    """BH-B regression — `QSClimateDuration` and `QSRadiator` use DIFFERENT
+    `_bistate_mode_*` conventions, and that's intentional.
+
+    - `QSClimateDuration` carries the raw HVAC mode (the `climate_mode`
+      translation registers each HVAC mode as a force-mode state key,
+      so `"heat"` → "Force HVAC Mode HEAT").
+    - `QSRadiator` carries the literal `"on"` / `"off"` (the
+      `radiator_mode` translation only registers `"on"` / `"off"`, so
+      raw HVAC modes like `"auto"` would render unlocalised).
+
+    The divergence is documented in `QSBiStateDuration`'s docstring.
+    This test pins the contract so the divergence is observable in CI.
+    """
+    from custom_components.quiet_solar.const import (
+        CONF_CLIMATE_HVAC_MODE_OFF as _OFF,
+        CONF_CLIMATE_HVAC_MODE_ON as _ON,
+    )
+    from custom_components.quiet_solar.ha_model.climate_controller import QSClimateDuration
+
+    climate = QSClimateDuration(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "BH-B Climate",
+            CONF_CLIMATE: "climate.bh_b",
+            CONF_SWITCH: "switch.bh_b_climate_helper",
+            _ON: "heat",
+            _OFF: "off",
+        },
+    )
+    radiator = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "BH-B Radiator",
+            CONF_CLIMATE: "climate.bh_b_radiator",
+            _ON: "heat",
+            _OFF: "off",
+        },
+    )
+
+    # Climate carries the raw HVAC mode.
+    assert climate._bistate_mode_on == "heat"
+    assert climate._bistate_mode_off == "off"
+    # Radiator carries the literal `"on"`/`"off"`, regardless of HVAC mode.
+    assert radiator._bistate_mode_on == "on"
+    assert radiator._bistate_mode_off == "off"
+
+    # Both classes still emit the actual HVAC mode through the
+    # transport for service calls.
+    assert climate._transport.state_on == "heat"
+    assert radiator._transport.state_on == "heat"
 
 
 def test_radiator_options_flow_backing_swap_picks_new_transport(

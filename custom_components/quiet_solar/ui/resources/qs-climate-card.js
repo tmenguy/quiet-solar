@@ -5,6 +5,11 @@
 
 class QsClimateCard extends HTMLElement {
   // M4: gate the requestAnimationFrame loop on `showAnimation`.
+    // condition (`showAnimation`). The loop is started lazily by
+  // `_render()` only when the running-progress dash needs to advance,
+  // and stopped in `disconnectedCallback` AND whenever `showAnimation`
+  // becomes false. Avoids constant per-card repaint overhead when no
+  // visible animation is in progress.
   _startAnimation() {
     if (this._animRaf != null) return;
     this._lastAnimTs = null;
@@ -32,14 +37,16 @@ class QsClimateCard extends HTMLElement {
   }
 
   connectedCallback() {
-    // RAF intentionally NOT started here — _render() calls
-    // _startAnimation() when `showAnimation` is true.
+    // RAF intentionally NOT started here — _render() will call
+    // _startAnimation() when needed.
   }
 
   disconnectedCallback() {
     this._stopAnimation();
     // S7: reset interaction flags so a re-attach after mid-interaction
-    // doesn't silently short-circuit `set hass` on stale flags.
+    // (e.g. dragging the ring or processing a mode change when the
+    // dashboard rearranges) doesn't silently short-circuit `set hass`
+    // on stale flags.
     this._isInteractingMode = false;
     this._isInteractingStateOn = false;
     this._isInteractingTarget = false;
@@ -60,7 +67,9 @@ class QsClimateCard extends HTMLElement {
   }
 
   // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
-  // strings interpolated into innerHTML.
+  // strings interpolated into innerHTML (card title, entity unit, etc.).
+  // HA entity-id validation makes most paths unreachable in practice,
+  // but treat as untrusted.
   _escapeHtml(s) {
     if (s == null) return '';
     return String(s)
@@ -69,6 +78,18 @@ class QsClimateCard extends HTMLElement {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  // S8: safe numeric coercion. `Number(s?.state || N)` short-circuits to
+  // the truthy string when `state === "unknown" | "unavailable"`, then
+  // `Number("unknown")` is `NaN` and propagates into SVG cx/cy/d
+  // attributes. Filter degenerate states BEFORE conversion.
+  _safeNumber(sensor, defaultValue) {
+    if (!sensor || sensor.state == null) return defaultValue;
+    const s = sensor.state;
+    if (s === '' || s === 'unknown' || s === 'unavailable') return defaultValue;
+    const n = Number(s);
+    return Number.isNaN(n) ? defaultValue : n;
   }
 
   set hass(hass) {
@@ -128,9 +149,11 @@ class QsClimateCard extends HTMLElement {
       const isOffGrid = sIsOffGrid?.state === 'on';
       
       // Get target hours and current run hours directly (in hours)
-      const targetHours = Number(sDurationLimit?.state || 12);
-      const hoursRun = Number(sCurrentDuration?.state || 0);
-      const defaultDuration = Number(sDefaultOnDuration?.state || 6);
+      // S8: use safeNumber so an `unknown`/`unavailable` sensor doesn't
+      // propagate `NaN` into the SVG path attributes downstream.
+      const targetHours = this._safeNumber(sDurationLimit, 12);
+      const hoursRun = this._safeNumber(sCurrentDuration, 0);
+      const defaultDuration = this._safeNumber(sDefaultOnDuration, 6);
       
       // Get climate mode
       const climateMode = selClimateMode?.state || 'bistate_mode_default';
@@ -148,7 +171,11 @@ class QsClimateCard extends HTMLElement {
       // Determine max hours and what to display
       let maxHours, displayTargetHours;
       if (isDefaultMode) {
-        maxHours = 12; // Fixed for default mode
+        // N3: configurable upper bound for the default-mode ring.
+        // Boilers with significant thermal storage may legitimately
+        // need >12h runs; set `max_default_hours: 24` (or similar)
+        // on the card config to expand the visual range.
+        maxHours = Number(cfg.max_default_hours) || 12;
         displayTargetHours = defaultDuration;
       } else {
         maxHours = targetHours;
@@ -328,6 +355,11 @@ class QsClimateCard extends HTMLElement {
       };
       const polar = (cx, cy, r, deg) => ({x: cx + r * Math.cos(deg2rad(deg)), y: cy - r * Math.sin(deg2rad(deg))});
       const arcPath = (cx, cy, r, a0, a1) => {
+          // N8: a zero-length arc (a0 == a1, e.g. progress == 0) would
+          // produce a single-point SVG path that renders as nothing or
+          // a stray dot. Return empty string so the consumer can decide
+          // to omit the <path> element entirely.
+          if (Math.abs(a1 - a0) < 0.01) return '';
           const p0 = polar(cx, cy, r, a0);
           const p1 = polar(cx, cy, r, a1);
           let delta = a1 - a0;
@@ -596,14 +628,22 @@ class QsClimateCard extends HTMLElement {
 
       const showDialog = (opts) => {
           const {title, message, buttons, customContent} = opts;
+          // N12: an empty `buttons` array would render a modal with no
+          // dismiss path. Always append a "Close" fallback so the user
+          // can never get locked out (and `_modalOpen` doesn't wedge
+          // re-renders).
+          const safeButtons = (Array.isArray(buttons) && buttons.length > 0)
+              ? buttons
+              : [{ text: 'Close' }];
           const wrap = document.createElement('div');
           wrap.className = 'modal';
-          // S6: escape user-controlled `title` and `message`.
+          // S6: escape user-controlled `title` and `message`; customContent
+          // is provided by the caller as already-rendered HTML.
           const contentHtml = customContent || `<p>${this._escapeHtml(message)}</p>`;
           wrap.innerHTML = `<div class="dialog"><h3>${this._escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
           const actions = wrap.querySelector('.actions');
           this._modalOpen = true;
-          buttons.forEach(b => {
+          safeButtons.forEach(b => {
               const el = document.createElement('button');
               el.className = `btn ${b.variant || 'secondary'}`;
               el.textContent = b.text;
@@ -611,10 +651,16 @@ class QsClimateCard extends HTMLElement {
               const activate = () => {
                   if (activated) return;
                   activated = true;
-                  if (b.onClick) b.onClick();
-                  wrap.remove();
-                  this._modalOpen = false;
-                  this._render();
+                  // N13: wrap onClick in try/finally so a synchronous
+                  // throw doesn't leave the modal locked open with
+                  // `_modalOpen = true` blocking subsequent renders.
+                  try {
+                      if (b.onClick) b.onClick();
+                  } finally {
+                      wrap.remove();
+                      this._modalOpen = false;
+                      this._render();
+                  }
               };
               el.addEventListener('click', activate);
               el.addEventListener('touchend', (ev) => {
@@ -649,10 +695,13 @@ class QsClimateCard extends HTMLElement {
               this._isProcessingModeChange = true;
               // M2: wrap in try/finally so the cleanup setTimeout ALWAYS
               // runs — otherwise a rejected `_select` (HA service failure,
-              // network drop) would leave the flag wedged forever.
+              // network drop) would leave `_isProcessingModeChange = true`
+              // forever and silently lock out subsequent re-renders.
               try {
                   // Call the service and wait for it to complete
                   await this._select(e.climate_mode, option);
+              } catch (_) {
+                  // swallow — HA state will resync on the next push
               } finally {
                   // Wait a bit for HA state to propagate, then allow re-render
                   setTimeout(() => {
@@ -720,6 +769,21 @@ class QsClimateCard extends HTMLElement {
       // touchend handler fires immediately, calls preventDefault() to suppress the delayed
       // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
 
+      // S16 — keyboard activation helper: registers Enter/Space handlers
+      // on a `role="button" tabindex="0"` div so keyboard-only users can
+      // trigger the same action as click/touchend. Stops the default
+      // Space-scroll behaviour and the synthetic click that would
+      // double-fire otherwise.
+      const _registerKeyActivation = (el, action) => {
+          if (!el) return;
+          el.addEventListener('keydown', (ev) => {
+              if (ev.key === 'Enter' || ev.key === ' ') {
+                  ev.preventDefault();
+                  action();
+              }
+          });
+      };
+
       // Green-only toggle button
       if (swGreenOnly) {
           const toggleGreen = async () => {
@@ -741,6 +805,7 @@ class QsClimateCard extends HTMLElement {
               gbtn.style.pointerEvents = 'auto';
               gbtn.addEventListener('click', toggleGreen);
               gbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
+              _registerKeyActivation(gbtn, toggleGreen);
           }
       }
 
@@ -765,6 +830,7 @@ class QsClimateCard extends HTMLElement {
               pbtn.style.pointerEvents = 'auto';
               pbtn.addEventListener('click', togglePower);
               pbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
+              _registerKeyActivation(pbtn, togglePower);
           }
       }
 
@@ -789,6 +855,7 @@ class QsClimateCard extends HTMLElement {
               };
               obtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); obtnAction(); });
               obtn.addEventListener('touchend', (ev) => { ev.preventDefault(); obtnAction(); });
+              _registerKeyActivation(obtn, obtnAction);
           }
       }
 
@@ -851,6 +918,7 @@ class QsClimateCard extends HTMLElement {
               tbtn.style.pointerEvents = 'auto';
               tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); timeAction(); });
               tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); timeAction(); });
+              _registerKeyActivation(tbtn, timeAction);
           }
       }
 
@@ -943,21 +1011,28 @@ class QsClimateCard extends HTMLElement {
                   const dragPct = this._targetDragPct;
                   const dragValue = this._targetDragValue;
 
-                  if (dragValue != null && e.default_on_duration) {
-                      await this._setNumber(e.default_on_duration, dragValue);
-                      this._localTargetPct = dragPct;
-                      this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
-                      this._pendingClearLocalTarget = setTimeout(() => {
-                          this._localTargetPct = null;
-                          this._pendingClearLocalTarget = null;
-                          this._render();
-                      }, 5000);
+                  // S17 — wrap the service call so the drag-release
+                  // guards always clear, even if `_setNumber` throws.
+                  try {
+                      if (dragValue != null && e.default_on_duration) {
+                          await this._setNumber(e.default_on_duration, dragValue);
+                          this._localTargetPct = dragPct;
+                          this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
+                          this._pendingClearLocalTarget = setTimeout(() => {
+                              this._localTargetPct = null;
+                              this._pendingClearLocalTarget = null;
+                              this._render();
+                          }, 5000);
+                      }
+                  } catch (_) {
+                      // swallow — HA state will resync on the next push
+                  } finally {
+                      this._targetDragPct = null;
+                      this._targetDragValue = null;
+                      this._isInteractingTarget = false;
+                      this._upInProgress = false;
+                      handle.style.cursor = 'grab';
                   }
-                  this._targetDragPct = null;
-                  this._targetDragValue = null;
-                  this._isInteractingTarget = false;
-                  this._upInProgress = false;
-                  handle.style.cursor = 'grab';
               };
 
               if (window.PointerEvent) {

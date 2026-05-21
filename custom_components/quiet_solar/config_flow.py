@@ -1640,12 +1640,14 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 }
             )
 
-        # Get list of available heat pumps from the data handler
+        # Get list of available heat pumps from the data handler.
+        # BH-C — use the canonical `QSHome.get_heat_pumps()` accessor
+        # (added by M3) rather than the legacy `_heat_pumps` private
+        # attribute lookup.
         data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
         heat_pump_options = []
         if data_handler and data_handler.home:
-            heat_pumps = getattr(data_handler.home, "_heat_pumps", [])
-            heat_pump_options = [hp.name for hp in heat_pumps]
+            heat_pump_options = [hp.name for hp in data_handler.home.get_heat_pumps()]
 
         if heat_pump_options:
             default_heat_pump = self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME)
@@ -1788,20 +1790,48 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     pending=user_input,
                 )
 
-            # EH5 — detect "user explicitly cleared the pilot dropdown"
-            # BEFORE we strip empty values from `cleaned`. The form
-            # renders `CONF_DEVICE_TO_PILOT_NAME` only when at least one
-            # heat pump exists, so finding the key in `user_input` with
-            # a falsy value means the user actively cleared it. Without
-            # this, `_async_save_radiator_entry`'s merge would re-inject
-            # the old persisted value from `config_entry.data`.
-            explicit_pilot_clear = CONF_DEVICE_TO_PILOT_NAME in user_input and not user_input.get(
-                CONF_DEVICE_TO_PILOT_NAME
+            # EH5 + BH-D — detect "user explicitly cleared the pilot
+            # dropdown" BEFORE we strip empty values from `cleaned`. The
+            # form renders `CONF_DEVICE_TO_PILOT_NAME` only when at
+            # least one heat pump exists, so finding the key in
+            # `user_input` with a falsy value means the user actively
+            # cleared it. Without this, `_async_save_radiator_entry`'s
+            # merge would re-inject the old persisted value from
+            # `config_entry.data`.
+            #
+            # BH-D: HA's `vol.Optional` could deliver "user cleared"
+            # as either `{"key": None}` or `{}` (key absent). The
+            # current pattern only handles the former. Use a sentinel
+            # so both shapes funnel into the same branch — if the
+            # form rendered the field AND the user submitted nothing
+            # for it, treat it as an explicit clear regardless of
+            # which selector variant HA picked.
+            _UNSET = object()
+            pilot_value = user_input.get(CONF_DEVICE_TO_PILOT_NAME, _UNSET)
+            # The pilot dropdown is only rendered when heat pumps
+            # exist, so the previous form-render decision is the
+            # `explicit_pilot_clear` precondition.
+            data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+            had_pilot_dropdown = bool(
+                data_handler and data_handler.home is not None and data_handler.home.get_heat_pumps()
+            )
+            had_persisted_pilot = bool(self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME))
+            explicit_pilot_clear = (
+                had_pilot_dropdown and had_persisted_pilot and (pilot_value is _UNSET or not pilot_value)
             )
 
-            # N8 — drop empty/None values from the merged dict so
-            # downstream `key in dict` checks see the canonical shape.
-            cleaned = {k: v for k, v in user_input.items() if v not in (None, "")}
+            # N8 + EH-D — drop empty/None values from the merged dict
+            # so downstream `key in dict` checks see the canonical
+            # shape. For string-valued fields, normalise
+            # whitespace-only entries to "empty" (a user pasting "  "
+            # into `CONF_NAME` shouldn't persist as a meaningful value
+            # — same policy already applied to entity-id fields).
+            def _strip_or_keep(v):
+                if isinstance(v, str):
+                    return v.strip()
+                return v
+
+            cleaned = {k: _strip_or_keep(v) for k, v in user_input.items() if _strip_or_keep(v) not in (None, "")}
             if climate_entity:
                 cleaned[CONF_CLIMATE] = climate_entity
                 cleaned.pop(CONF_SWITCH, None)
@@ -1823,6 +1853,24 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             # the old persisted value.
             if explicit_pilot_clear and CONF_DEVICE_TO_PILOT_NAME not in extra_stale_keys:
                 extra_stale_keys = extra_stale_keys + (CONF_DEVICE_TO_PILOT_NAME,)
+
+            # EH-B — re-validate the SUBMITTED heat-pump name against the
+            # LIVE heat-pumps list. `_radiator_orphan_pilot_keys` only
+            # catches the PERSISTED-name case; if the heat pump was
+            # deleted between Pass 1 and the final submit (slow user,
+            # parallel admin action, Pass 2 re-prompt with cached pick),
+            # the submitted name itself could be stale.
+            submitted_pilot = cleaned.get(CONF_DEVICE_TO_PILOT_NAME)
+            if submitted_pilot:
+                data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
+                live_names: set[str] = set()
+                if data_handler and data_handler.home is not None:
+                    live_names = {hp.name for hp in data_handler.home.get_heat_pumps()}
+                if submitted_pilot not in live_names:
+                    return await self._async_show_radiator_form(
+                        errors={CONF_DEVICE_TO_PILOT_NAME: "piloted_heat_pump_unknown"},
+                        pending=cleaned,
+                    )
 
             if climate_entity:
                 hvac_modes = get_hvac_modes(self.hass, climate_entity)
@@ -1914,9 +1962,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
         if not data_handler or data_handler.home is None:
             return ()
-        getter = getattr(data_handler.home, "get_heat_pumps", None)
-        heat_pumps = getter() if callable(getter) else getattr(data_handler.home, "_heat_pumps", [])
-        names = {hp.name for hp in heat_pumps}
+        # BH-C — `get_heat_pumps()` is part of the public `QSHome` API
+        # (added by M3). The previous `getattr(..., "_heat_pumps", [])`
+        # fallback was dead defensive code that contradicted the in-diff
+        # comment "use the canonical accessor instead of `_heat_pumps`".
+        names = {hp.name for hp in data_handler.home.get_heat_pumps()}
         if persisted in names:
             return ()
         return (CONF_DEVICE_TO_PILOT_NAME,)
@@ -2011,19 +2061,25 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 )
 
         # Heat-pump piloting dropdown — shown when at least one heat pump exists.
-        # M3 — use the canonical `QSHome.get_heat_pumps()` accessor instead
-        # of a raw `getattr` against the private `_heat_pumps` attribute.
+        # M3 + BH-C — use the canonical `QSHome.get_heat_pumps()` accessor.
+        # The previous `getattr(home, "_heat_pumps", [])` fallback was dead
+        # defensive code: `get_heat_pumps()` is part of the public `QSHome`
+        # API and `data_handler.home`'s presence is the only branch worth
+        # guarding.
         data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
         heat_pump_options: list[str] = []
         if data_handler and data_handler.home is not None:
-            getter = getattr(data_handler.home, "get_heat_pumps", None)
-            heat_pumps = getter() if callable(getter) else getattr(data_handler.home, "_heat_pumps", [])
-            heat_pump_options = [hp.name for hp in heat_pumps]
+            heat_pump_options = [hp.name for hp in data_handler.home.get_heat_pumps()]
 
         merged_errors: dict[str, str] = dict(errors) if errors else {}
 
         if heat_pump_options:
-            default_heat_pump = self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME)
+            # EH-A — heat-pump default flows through the same
+            # `explicit_pending` → `pending_buffer` → `config_entry.data`
+            # priority chain as the entity selectors (B1 + EH4). Without
+            # this, a heat-pump pick from Pass 1 vanishes from the form
+            # on any Pass 2 re-render or validation-error re-render.
+            default_heat_pump = _suggest(CONF_DEVICE_TO_PILOT_NAME)
             # S8 + B4 — if the persisted heat-pump name no longer
             # exists, drop the suggested value and surface a
             # field-specific error to the user. Using

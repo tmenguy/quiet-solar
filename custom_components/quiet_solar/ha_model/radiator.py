@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 
+from homeassistant.const import CONF_NAME
 from homeassistant.exceptions import ServiceValidationError
 
 from ..const import (
@@ -72,7 +73,7 @@ class QSRadiator(QSBiStateDuration):
             _LOGGER.warning(
                 "Radiator %s persisted with both climate and switch backings; "
                 "preferring climate (%s) and ignoring switch (%s)",
-                kwargs.get("name", "<unnamed>"),
+                kwargs.get(CONF_NAME, "<unnamed>"),
                 climate_entity,
                 switch_entity,
             )

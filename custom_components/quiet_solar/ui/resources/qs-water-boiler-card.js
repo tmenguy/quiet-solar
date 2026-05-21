@@ -407,7 +407,7 @@ class QsWaterBoilerCard extends HTMLElement {
       };
       
       const modeOptionsHtml = modeOptions.map(o => 
-          `<option value="${o}" ${o === modeState ? 'selected' : ''}>${translateBistateMode(o)}</option>`
+          `<option value="${this._escapeHtml(o)}" ${o === modeState ? 'selected' : ''}>${this._escapeHtml(translateBistateMode(o))}</option>`
       ).join('');
 
       // Parse override command from override state
@@ -673,6 +673,8 @@ class QsWaterBoilerCard extends HTMLElement {
               try {
                   // Call the service and wait for it to complete
                   await this._select(e.bistate_mode, option);
+              } catch (_) {
+                  // swallow — HA state will resync on the next push
               } finally {
                   // Wait a bit for HA state to propagate, then allow re-render
                   setTimeout(() => {
@@ -698,6 +700,21 @@ class QsWaterBoilerCard extends HTMLElement {
       // touchend handler fires immediately, calls preventDefault() to suppress the delayed
       // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
 
+      // S16 — keyboard activation helper: registers Enter/Space handlers
+      // on a `role="button" tabindex="0"` div so keyboard-only users can
+      // trigger the same action as click/touchend. Stops the default
+      // Space-scroll behaviour and the synthetic click that would
+      // double-fire otherwise.
+      const _registerKeyActivation = (el, action) => {
+          if (!el) return;
+          el.addEventListener('keydown', (ev) => {
+              if (ev.key === 'Enter' || ev.key === ' ') {
+                  ev.preventDefault();
+                  action();
+              }
+          });
+      };
+
       // Green-only toggle button
       if (swGreenOnly) {
           const toggleGreen = async () => {
@@ -719,6 +736,7 @@ class QsWaterBoilerCard extends HTMLElement {
               gbtn.style.pointerEvents = 'auto';
               gbtn.addEventListener('click', toggleGreen);
               gbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
+              _registerKeyActivation(gbtn, toggleGreen);
           }
       }
 
@@ -743,6 +761,7 @@ class QsWaterBoilerCard extends HTMLElement {
               pbtn.style.pointerEvents = 'auto';
               pbtn.addEventListener('click', togglePower);
               pbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
+              _registerKeyActivation(pbtn, togglePower);
           }
       }
 
@@ -767,6 +786,7 @@ class QsWaterBoilerCard extends HTMLElement {
               };
               obtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); obtnAction(); });
               obtn.addEventListener('touchend', (ev) => { ev.preventDefault(); obtnAction(); });
+              _registerKeyActivation(obtn, obtnAction);
           }
       }
 
@@ -830,6 +850,7 @@ class QsWaterBoilerCard extends HTMLElement {
               tbtn.style.pointerEvents = 'auto';
               tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); timeAction(); });
               tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); timeAction(); });
+              _registerKeyActivation(tbtn, timeAction);
           }
       }
 
@@ -922,21 +943,28 @@ class QsWaterBoilerCard extends HTMLElement {
                   const dragPct = this._targetDragPct;
                   const dragValue = this._targetDragValue;
 
-                  if (dragValue != null && e.default_on_duration) {
-                      await this._setNumber(e.default_on_duration, dragValue);
-                      this._localTargetPct = dragPct;
-                      this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
-                      this._pendingClearLocalTarget = setTimeout(() => {
-                          this._localTargetPct = null;
-                          this._pendingClearLocalTarget = null;
-                          this._render();
-                      }, 5000);
+                  // S17 — wrap the service call so the drag-release
+                  // guards always clear, even if `_setNumber` throws.
+                  try {
+                      if (dragValue != null && e.default_on_duration) {
+                          await this._setNumber(e.default_on_duration, dragValue);
+                          this._localTargetPct = dragPct;
+                          this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
+                          this._pendingClearLocalTarget = setTimeout(() => {
+                              this._localTargetPct = null;
+                              this._pendingClearLocalTarget = null;
+                              this._render();
+                          }, 5000);
+                      }
+                  } catch (_) {
+                      // swallow — HA state will resync on the next push
+                  } finally {
+                      this._targetDragPct = null;
+                      this._targetDragValue = null;
+                      this._isInteractingTarget = false;
+                      this._upInProgress = false;
+                      handle.style.cursor = 'grab';
                   }
-                  this._targetDragPct = null;
-                  this._targetDragValue = null;
-                  this._isInteractingTarget = false;
-                  this._upInProgress = false;
-                  handle.style.cursor = 'grab';
               };
 
               if (window.PointerEvent) {

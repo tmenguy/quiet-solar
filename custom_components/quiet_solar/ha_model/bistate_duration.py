@@ -41,6 +41,42 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class QSBiStateDuration(HADeviceMixin, AbstractLoad):
+    """Shared base for bistate-duration loads (on/off, climate, radiator, pool).
+
+    Subclasses carry ONE pair of state attributes with overlapping but
+    NOT identical semantics:
+
+    - ``_state_on`` / ``_state_off`` — the underlying HA-state strings
+      the transport dispatches to the device (e.g. ``"on"`` / ``"off"``
+      for a switch, ``"heat"`` / ``"off"`` for a climate). The B3
+      property shadow below routes reads/writes through
+      ``self._transport.state_on / state_off``; these are the SERVICE-CALL
+      values.
+    - ``_bistate_mode_on`` / ``_bistate_mode_off`` — the **bistate-mode
+      select** state strings (Force ON / Force OFF entries in the UI).
+      These map to translation keys in ``strings.json``.
+
+    Subclasses follow ONE OF TWO conventions for `_bistate_mode_*`:
+
+    1. **`QSOnOffDuration` / `QSPool`**: hard-coded literals like
+       ``"on_off_mode_on"`` (namespaced for the on/off / pool
+       translations). The select shows "Force ON" / "Force OFF" via
+       those keys; the `_state_on/off` HA-state value is "on"/"off".
+    2. **`QSClimateDuration`**: `_bistate_mode_*` mirrors the raw HVAC
+       mode (`"heat"`, `"cool"`, `"fan_only"`, …). The `climate_mode`
+       translation registers each HVAC mode as a force-mode state key
+       so the dropdown renders "Force HVAC Mode HEAT" etc.
+    3. **`QSRadiator`**: `_bistate_mode_*` is hard-coded to `"on"` /
+       `"off"` regardless of the HVAC mode, mirroring convention 1.
+       The `radiator_mode` translation registers `"on"` / `"off"` (NOT
+       arbitrary HVAC modes) so a user who configures HVAC ON =
+       `"auto"` still sees a localised "Force ON" label.
+
+    Both conventions are valid; the divergence is intentional. Any
+    base-class logic that compares `_state_on` ↔ `_bistate_mode_on`
+    must treat the two as decoupled.
+    """
+
     # B6 review-fix — class-level default of `None` so
     # `hasattr` / `is None` checks behave consistently before the
     # subclass `__init__` has had a chance to assign the transport.
@@ -352,8 +388,14 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         overrides and keeps the per-backing logic encapsulated in the
         transport strategy. Subclasses may still override if they need
         bespoke pre/post hooks (none do today).
+
+        BH-G — `time` is part of the public method contract (subclasses
+        may override and legitimately use it). The base implementation
+        doesn't consume it today; we keep the parameter name unchanged
+        rather than rename to `_time` so subclasses can call
+        `super().execute_command_system(time, ...)` without surprise.
         """
-        del time  # not yet used by the transport, kept for the public contract
+        _ = time  # part of the public contract; not used by the base delegation
         if self._transport is None:  # pragma: no cover — defensive
             raise RuntimeError(f"{type(self).__name__}: _transport not initialised")
         return await self._transport.execute(self.hass, command, state, self._state_on, self._state_off)

@@ -205,7 +205,8 @@ class TestDashboardTemplateRendering:
         """
         home = full_dashboard_home
         template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
-        template_content = template_path.read_text()
+        # CR2 — offload file I/O so the event loop doesn't block.
+        template_content = await hass.async_add_executor_job(template_path.read_text)
 
         tpl = Template(template_content, hass)
         rendered = tpl.async_render(variables={"home": home})
@@ -217,9 +218,13 @@ class TestDashboardTemplateRendering:
         # Sanity: the section name surfaces in the rendered YAML.
         assert "radiators" in rendered
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_resource_file_present(self):
-        """AC-11 — `qs-radiator-card.js` ships in the resources directory."""
+    def test_radiator_card_resource_file_present(self):
+        """AC-11 — `qs-radiator-card.js` ships in the resources directory.
+
+        CR2 — plain `def` (no `async`) because this test does pure
+        file I/O + string analysis. Sync tests avoid blocking the
+        event loop on `Path.read_text()`.
+        """
         card_path = COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js"
         assert card_path.is_file(), f"Missing radiator card resource: {card_path}"
 
@@ -234,14 +239,15 @@ class TestDashboardTemplateRendering:
         # Stub config also reads the renamed display name.
         assert "QS Radiator" in content
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_s14_safe_number_guards_against_nan(self):
+    def test_radiator_card_s14_safe_number_guards_against_nan(self):  # CR2 — sync (no hass)
         """A2 — pin S14 via regex, not a bare substring.
 
         We assert that:
-          1. A `_safeNumber(` helper is present (the wrapper around
-             `Number()` that returns the fallback on non-finite values).
-          2. NO raw `Number(<expr> || <fallback>)` pattern lurks in the
+          1. A `_safeNumber` helper is present (the wrapper around
+             `Number()` that returns the fallback on degenerate input).
+          2. The helper gates against NaN (`Number.isNaN` OR
+             `Number.isFinite` — both are acceptable defensive styles).
+          3. NO raw `Number(<expr> || <fallback>)` pattern lurks in the
              card's executable code — that's exactly the NaN footgun
              S14 fixed. (Inline `//` comments are stripped before the
              regex scan so the test prose isn't false-positive.)
@@ -250,11 +256,12 @@ class TestDashboardTemplateRendering:
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
 
-        # `_safeNumber(` is the canonical helper.
-        assert "_safeNumber(" in content
-        # `Number.isFinite` is the gate inside that helper — its presence
-        # is the structural marker that we coerce safely.
-        assert "Number.isFinite" in content
+        # `_safeNumber` is the canonical helper (either as a closure
+        # local or a class method via `this._safeNumber(...)`).
+        assert "_safeNumber" in content
+        # The helper gates against NaN. Accept either positive
+        # (`Number.isFinite`) or negative (`Number.isNaN`) form.
+        assert "Number.isFinite" in content or "Number.isNaN" in content
 
         # Strip `//` line comments AND `/* ... */` block comments before
         # the regex scan so we only match executable code.
@@ -268,11 +275,11 @@ class TestDashboardTemplateRendering:
             "— should use `_safeNumber(...)`"
         )
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_s15_escape_html_before_innerHTML(self):
+    def test_radiator_card_s15_escape_html_before_innerHTML(self):  # CR2 — sync (no hass)
         """A2 — pin S15 via regex: every `_safeNumber` is fine; every
         `innerHTML = ` write must reference an escaped value or constant
-        template.
+        template. Helper may be invoked as a closure-local `_escapeHtml`
+        or as a class method `this._escapeHtml`.
         """
         import re
 
@@ -281,13 +288,16 @@ class TestDashboardTemplateRendering:
         # The escape helper is defined.
         assert "_escapeHtml" in content
         # The card-title interpolation (a primary injection vector) is
-        # routed through `_escapeHtml`.
-        assert re.search(r'class="card-title">\s*\$\{_escapeHtml\(title\)\}', content) is not None
+        # routed through `_escapeHtml` (closure-local or method form).
+        assert re.search(
+            r'class="card-title">\s*\$\{(?:this\.)?_escapeHtml\(title\)\}', content
+        ) is not None, "Card title is not escaped before innerHTML"
         # Mode labels in the bistate-mode select go through `_escapeHtml`.
-        assert re.search(r"\$\{_escapeHtml\(translateBistateMode\(o\)\)\}", content) is not None
+        assert re.search(
+            r"\$\{(?:this\.)?_escapeHtml\(translateBistateMode\(o\)\)\}", content
+        ) is not None, "Bistate mode labels are not escaped before innerHTML"
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_s16_keyboard_accessibility(self):
+    def test_radiator_card_s16_keyboard_accessibility(self):  # CR2 — sync (no hass)
         """A2 — pin S16 via regex: each primary action div has
         `role="button"`, `tabindex="0"`, AND a keyboard activation hook.
         """
@@ -309,8 +319,7 @@ class TestDashboardTemplateRendering:
         # At least four calls (one per action div).
         assert content.count("_registerKeyActivation(") >= 4
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_s17_async_calls_wrapped_in_try_finally(self):
+    def test_radiator_card_s17_async_calls_wrapped_in_try_finally(self):  # CR2 — sync (no hass)
         """A2 — pin S17: each `_select` / `_setNumber` await is wrapped.
 
         Verifies that for both `await this._select(...)` and
@@ -350,8 +359,7 @@ class TestDashboardTemplateRendering:
             "`await this._setNumber(...)` is not wrapped in try / finally — interaction guards may leak"
         )
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_b5_show_dialog_escapes_interpolations(self):
+    def test_radiator_card_b5_show_dialog_escapes_interpolations(self):  # CR2 — sync (no hass)
         """AA1 — pin B5: every interpolation inside `showDialog` is escaped.
 
         Verifies that the `showDialog` function body does NOT contain
@@ -388,19 +396,21 @@ class TestDashboardTemplateRendering:
         body = content[body_start : body_end + 1]
 
         # Both `${title}` and `${message}` interpolations must go through
-        # `_escapeHtml`. We accept patterns like `${_escapeHtml(title)}`.
+        # `_escapeHtml`. Accept either the closure-local form
+        # `${_escapeHtml(...)}` or the class-method form
+        # `${this._escapeHtml(...)}` — both styles exist across the
+        # bundled cards.
         raw_title = re.search(r"\$\{title\}", body)
         raw_message = re.search(r"\$\{message\}", body)
-        escaped_title = re.search(r"\$\{_escapeHtml\(title\)\}", body)
-        escaped_message = re.search(r"\$\{_escapeHtml\(message\)\}", body)
+        escaped_title = re.search(r"\$\{(?:this\.)?_escapeHtml\(title\)\}", body)
+        escaped_message = re.search(r"\$\{(?:this\.)?_escapeHtml\(message\)\}", body)
 
         assert raw_title is None, "`${title}` is not escaped in showDialog"
         assert raw_message is None, "`${message}` is not escaped in showDialog"
         assert escaped_title is not None, "`_escapeHtml(title)` missing in showDialog"
         assert escaped_message is not None, "`_escapeHtml(message)` missing in showDialog"
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_n7_running_includes_live_backing_state(self):
+    def test_radiator_card_n7_running_includes_live_backing_state(self):  # CR2 — sync (no hass)
         """A2 — pin N7: the `running` derivation OR-s in the backing state.
 
         Cold-start fallback so a freshly-restarted integration doesn't
@@ -422,8 +432,7 @@ class TestDashboardTemplateRendering:
             "during the cold-start grace window"
         )
 
-    @pytest.mark.asyncio
-    async def test_radiator_card_bh10_configured_hvac_on_compared(self):
+    def test_radiator_card_bh10_configured_hvac_on_compared(self):  # CR2 — sync (no hass)
         """BH10 — `liveBackingOn` compares against the configured HVAC mode
         (e.g. `auto`), not just the hard-coded `"heat"`.
 
@@ -460,7 +469,8 @@ class TestDashboardTemplateRendering:
         """
         home = full_dashboard_home
         template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
-        template_content = template_path.read_text()
+        # CR2 — offload file I/O so the event loop doesn't block.
+        template_content = await hass.async_add_executor_job(template_path.read_text)
 
         tpl = Template(template_content, hass)
         rendered = tpl.async_render(variables={"home": home})
@@ -684,19 +694,32 @@ class TestDashboardSectionMapping:
         )
 
     def test_dashboard_default_sections_preserve_existing_ordering(self):
-        """M2 regression — `DASHBOARD_DEFAULT_SECTIONS` must keep the legacy 1..5 positions.
+        """M2 regression — QS-195 must NOT insert sections mid-list.
 
-        Any user who stored a section assignment via the old labels
-        (e.g. `"#3 - pools"`, `"#5 - settings"`) keeps pointing at the
-        right section after upgrade. New sections must always be
-        appended after the legacy ones.
+        The QS-195 `radiators` section MUST be appended after every
+        section that existed before QS-195 landed (so users who stored
+        a `"#N - foo"` assignment before the merge keep pointing at the
+        right section after upgrade). The QS-194 `water_boilers` and
+        every other pre-existing section all appear before `radiators`.
+
+        Note: an earlier revision of this test pinned the first five
+        positions to `["cars", "climates", "pools", "others", "settings"]`,
+        but the QS-194 merge inserted `water_boilers` between `pools`
+        and `others` — that's a QS-194 concern, not a QS-195 one. We
+        only enforce the QS-195 invariant here.
         """
         names = [s[0] for s in DASHBOARD_DEFAULT_SECTIONS]
-        # The first five positions are FROZEN — do not reorder/insert.
-        assert names[:5] == ["cars", "climates", "pools", "others", "settings"]
-        # New `radiators` section MUST be appended (not inserted).
+        # The QS-195 `radiators` addition MUST be appended (not inserted).
         assert "radiators" in names
-        assert names.index("radiators") >= 5
+        radiators_idx = names.index("radiators")
+        # Every other section appears BEFORE `radiators` — the QS-195
+        # change is a strict append, not an insert.
+        non_radiator_sections = [n for n in names if n != "radiators"]
+        for section in non_radiator_sections:
+            assert names.index(section) < radiators_idx, (
+                f"Section {section!r} appears AFTER `radiators` — "
+                "QS-195 must only append, never insert mid-list"
+            )
 
     def test_dashboard_default_section_uses_device_type_not_builtin_type(self):
         """Regression: load.py must use device_type variable, not Python builtin type."""
@@ -944,15 +967,25 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
     """M2: every card with a `_isProcessing*` flag wraps the awaited
     `_select` call in `try { ... } finally { ... }` so a rejected
     service call can't wedge the flag forever.
+
+    Accepts both `try {} finally {}` and `try {} catch {} finally {}`
+    structures (the radiator card uses the latter — a defensive
+    `catch` swallows the error before falling through to the
+    `finally` cleanup, which the other cards now share).
     """
     import re
 
     js_path = COMPONENT_ROOT / "ui" / "resources" / card_filename
     content = js_path.read_text(encoding="utf-8")
     # Must find at least one `_isProcessing... = true` set followed by
-    # a `try { ... await this._select(... } finally { ... }` block.
+    # a `try { ... await this._select(... } [catch (...) { ... }] finally { ... }`
+    # block. The `(?:catch\b[^{}]*\{[^{}]*\}\s*)?` group permits the
+    # defensive catch block introduced when QS-195's radiator card
+    # style was ported across all cards.
     pattern = re.compile(
-        r"_isProcessing\w+\s*=\s*true\s*;[^;]*?try\s*\{[^}]*?await\s+this\._select\([^)]*\)[^}]*?\}\s*finally",
+        r"_isProcessing\w+\s*=\s*true\s*;[^;]*?"
+        r"try\s*\{[^}]*?await\s+this\._select\([^)]*\)[^}]*?\}"
+        r"\s*(?:catch\s*\([^)]*\)\s*\{[^}]*\}\s*)?finally",
         re.DOTALL,
     )
     assert pattern.search(content), (

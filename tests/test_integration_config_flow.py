@@ -1640,6 +1640,171 @@ async def test_radiator_step_orphan_pilot_cleared_on_reedit(
 
 
 @pytest.mark.asyncio
+async def test_radiator_step_explicit_pilot_clear_with_absent_key(
+    hass: HomeAssistant, mock_data_handler
+):
+    """BH-D — explicit-clear detection works whether the form omits the key
+    or submits it with `None`.
+
+    HA's `vol.Optional` could deliver either shape (key absent vs key
+    present with `None`). The fix uses a sentinel so both variants
+    funnel into the same `explicit_pilot_clear` branch.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_pilot_absent_123",
+        data={
+            CONF_NAME: "Pilot Absent Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Existing HP",
+        },
+        title="radiator: Pilot Absent",
+    )
+    config_entry.add_to_hass(hass)
+
+    existing_hp = MagicMock()
+    existing_hp.name = "Existing HP"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [existing_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        # User submits WITHOUT the pilot key at all (HA omits absent
+        # `vol.Optional` fields). The persisted pilot must still be
+        # cleared because we detect "form rendered the dropdown AND
+        # user submitted nothing for it AND a value was persisted".
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Pilot Absent Radiator",
+                CONF_POWER: 1000,
+                CONF_SWITCH: "switch.r",
+                # CONF_DEVICE_TO_PILOT_NAME intentionally OMITTED
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # Even though the user's submission omitted the key entirely, the
+    # persisted pilot must be GONE (BH-D sentinel detection).
+    assert CONF_DEVICE_TO_PILOT_NAME not in config_entry.data
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_pass2_preserves_heat_pump_pick(
+    hass: HomeAssistant, mock_data_handler
+):
+    """EH-A — heat-pump selection survives a Pass 2 re-render.
+
+    Pass 1 captures the heat-pump pick via `_pending_radiator_data`;
+    the form's heat-pump dropdown must source its `default_heat_pump`
+    suggestion from the same pending chain (B1 / EH4 priority order),
+    not only from `config_entry.data`.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_hp_persist_123",
+        data={
+            CONF_NAME: "HP Persist Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+        },
+        title="radiator: HP Persist",
+    )
+    config_entry.add_to_hass(hass)
+
+    mock_hp = MagicMock()
+    mock_hp.name = "Main HP"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [mock_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        # Pass 1 — submit climate + heat-pump pick (no HVAC modes yet).
+        # The flow re-prompts for HVAC modes; the heat-pump pick is
+        # buffered into `_pending_radiator_data`.
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "HP Persist Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.r",
+                CONF_DEVICE_TO_PILOT_NAME: "Main HP",
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    # The Pass 2 form must surface the same heat-pump pick as the
+    # default — the user must NOT have to re-pick from scratch.
+    schema = result["data_schema"]
+    hp_default = None
+    for item in schema.schema:
+        if getattr(item, "schema", None) == CONF_DEVICE_TO_PILOT_NAME:
+            hp_default = item.description.get("suggested_value") if item.description else None
+            break
+
+    assert hp_default == "Main HP"
+
+
+@pytest.mark.asyncio
+async def test_radiator_step_submitted_pilot_revalidated_against_live_heatpumps(
+    hass: HomeAssistant, mock_data_handler
+):
+    """EH-B — submit re-validates the heat-pump name against the LIVE list.
+
+    Scenario: user picks heat pump "main" in Pass 1, then "main" gets
+    removed (parallel admin action / slow user). The final submit
+    still carries `CONF_DEVICE_TO_PILOT_NAME="main"` in `user_input`;
+    `_radiator_orphan_pilot_keys` only checks the persisted name, so
+    the submitted-but-stale name would otherwise silently persist.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_submit_stale_hp_123",
+        data={
+            CONF_NAME: "Submit Stale HP Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+        },
+        title="radiator: Submit Stale HP",
+    )
+    config_entry.add_to_hass(hass)
+
+    # The home reports zero heat pumps — the submitted "Main HP" name is
+    # stale at submit time.
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = []
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Submit Stale HP Radiator",
+                CONF_POWER: 1000,
+                CONF_SWITCH: "switch.r",
+                CONF_DEVICE_TO_PILOT_NAME: "Main HP",  # No longer exists
+            }
+        )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"].get(CONF_DEVICE_TO_PILOT_NAME) == "piloted_heat_pump_unknown"
+
+
+@pytest.mark.asyncio
 async def test_radiator_step_explicit_pilot_clear_removes_persisted_key(
     hass: HomeAssistant, mock_data_handler
 ):

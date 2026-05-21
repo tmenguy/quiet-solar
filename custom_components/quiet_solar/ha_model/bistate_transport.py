@@ -162,7 +162,15 @@ class SwitchTransport(BistateTransport):
         `_state_on/_state_off` property shadow up to `QSBiStateDuration`,
         which routes writes through `_transport.state_on/state_off` — so
         every transport must expose those attributes consistently.
+
+        EH-E — fail fast on `None` / empty `switch_entity`. The first
+        `services.async_call(target={"entity_id": None})` would crash
+        at the HA layer with an opaque error otherwise; raising here
+        keeps the misconfiguration visible at construction time.
+        Mirrors the EH-C guard on `QSClimateDuration`.
         """
+        if not switch_entity or (isinstance(switch_entity, str) and not switch_entity.strip()):
+            raise ValueError("SwitchTransport requires a non-empty switch entity id")
         self.entity = switch_entity
         self.state_on = "on"
         self.state_off = "off"
@@ -268,6 +276,21 @@ class ClimateTransport(BistateTransport):
     ) -> bool | None:
         if override_state is not None:
             hvac_mode = override_state
+            # BH-F — parallel to N1 on `SwitchTransport`. Surface an
+            # unexpected override_state with a warning so a typo or a
+            # vendor-firmware-mode-drop case is debuggable rather than
+            # a silent `set_hvac_mode(<garbage>)`.
+            try:
+                available_modes = self.mode_options(hass)
+            except Exception:  # pragma: no cover — defensive
+                available_modes = None
+            if available_modes is not None and override_state not in available_modes:
+                _LOGGER.warning(
+                    "Unexpected override_state %s for %s (not in advertised hvac_modes %s); dispatching anyway",
+                    override_state,
+                    self.entity,
+                    available_modes,
+                )
         else:
             # N5 — surface a None command BEFORE attempting attribute access.
             if command is None:
