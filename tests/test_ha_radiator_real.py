@@ -9,7 +9,7 @@ relationship (AC-10).
 from __future__ import annotations
 
 import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import pytz
@@ -407,13 +407,3 @@ async def test_radiator_climate_executes_with_override_state(
         and c[2].get(climate.ATTR_HVAC_MODE) == "auto"
     ]
     assert len(climate_calls) == 1
-
-
-# =============================================================================
-# `AsyncMock` smoke check (silence lint warning on unused import)
-# =============================================================================
-
-
-def test_async_mock_imported() -> None:
-    """Ensure `AsyncMock` import stays used (other tests rely on it indirectly)."""
-    assert AsyncMock is not None

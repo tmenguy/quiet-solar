@@ -114,27 +114,53 @@ def test_radiator_init_with_climate_picks_climate_transport(
     assert device._state_off == "off"
 
 
-def test_radiator_init_both_raises_service_validation_error(
-    hass: HomeAssistant, radiator_config_entry, radiator_home
+def test_radiator_init_both_truthy_picks_climate_and_logs(
+    hass: HomeAssistant, radiator_config_entry, radiator_home, caplog
 ):
-    """Configuring both `CONF_SWITCH` and `CONF_CLIMATE` raises `ServiceValidationError`."""
-    with pytest.raises(ServiceValidationError, match="exactly one of climate or switch"):
-        QSRadiator(
-            hass=hass,
-            config_entry=radiator_config_entry,
-            home=radiator_home,
-            **{
-                CONF_NAME: "Misconfigured Radiator",
-                CONF_SWITCH: "switch.r",
-                CONF_CLIMATE: "climate.r",
-            },
-        )
+    """EH6 — a stale entry with BOTH backings deterministically prefers climate.
+
+    A buggy migration or a manual `.storage/` edit could end up with
+    both `CONF_CLIMATE` and `CONF_SWITCH` set. Rather than crashing the
+    entry's reload (the old `ServiceValidationError` path), we log a
+    warning and pick `CONF_CLIMATE` as the canonical winner — it's the
+    richer backing and matches what the config-flow defaults steer to.
+    The other key is dropped from `kwargs` in place so the base
+    `AbstractLoad` doesn't pick up the loser.
+    """
+    import logging as _logging
+
+    caplog.set_level(_logging.WARNING, logger="custom_components.quiet_solar.ha_model.radiator")
+
+    device = QSRadiator(
+        hass=hass,
+        config_entry=radiator_config_entry,
+        home=radiator_home,
+        **{
+            CONF_NAME: "Stale Both Backings Radiator",
+            CONF_SWITCH: "switch.r",
+            CONF_CLIMATE: "climate.r",
+            CONF_CLIMATE_HVAC_MODE_ON: "heat",
+            CONF_CLIMATE_HVAC_MODE_OFF: "off",
+        },
+    )
+
+    assert isinstance(device._transport, ClimateTransport)
+    assert device._transport.entity == "climate.r"
+    # `AbstractLoad.__init__` populated `switch_entity` from kwargs — we
+    # popped `CONF_SWITCH` before super so it lands as `None`.
+    assert device.switch_entity is None
+    assert any("both" in rec.message.lower() and "backing" in rec.message.lower() for rec in caplog.records)
 
 
 def test_radiator_init_neither_raises_service_validation_error(
     hass: HomeAssistant, radiator_config_entry, radiator_home
 ):
-    """Configuring neither `CONF_SWITCH` nor `CONF_CLIMATE` raises `ServiceValidationError`."""
+    """Configuring neither `CONF_SWITCH` nor `CONF_CLIMATE` raises `ServiceValidationError`.
+
+    EH6 turns the both-set case into a warn-and-pick, but the
+    neither-set case remains a hard error — there's no sensible
+    default to pick from.
+    """
     with pytest.raises(ServiceValidationError, match="exactly one of climate or switch"):
         QSRadiator(
             hass=hass,

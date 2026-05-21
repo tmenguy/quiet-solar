@@ -191,7 +191,13 @@ Subsequent HA starts:
 | Pool | `custom:qs-pool-card` | `QSPool` | `ui/resources/qs-pool-card.js` |
 | Climate | `custom:qs-climate-card` | `QSClimateDuration`, `QSHeatPump` | `ui/resources/qs-climate-card.js` |
 | On-off duration | `custom:qs-on-off-duration-card` | `QSOnOffDuration` | `ui/resources/qs-on-off-duration-card.js` |
-| Radiator | `custom:qs-radiator-card` | `QSRadiator` | `ui/resources/qs-radiator-card.js` (verbatim clone of `qs-on-off-duration-card.js`; UX redesign deferred) |
+| Radiator | `custom:qs-radiator-card` | `QSRadiator` | `ui/resources/qs-radiator-card.js` (cloned from `qs-on-off-duration-card.js`; UX redesign deferred via [#199](https://github.com/tmenguy/quiet-solar/issues/199); has S14-S17/N7 safety hardening the on/off card has not yet adopted) |
+
+The radiator template wires `backing_entity` (the underlying
+switch/climate entity id) and `climate_hvac_mode_on` (the configured
+HVAC ON mode — e.g. `"heat"`, `"auto"`) through the entities block.
+The card uses those values to derive `running` during the cold-start
+grace window when the QS command sensor hasn't published yet.
 
 The cards are **outside the quality pipeline**: no JS tests, no JS
 linter, no build step. The product brief explicitly says "don't

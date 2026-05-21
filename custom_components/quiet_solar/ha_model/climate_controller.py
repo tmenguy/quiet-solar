@@ -29,8 +29,13 @@ class QSClimateDuration(QSBiStateDuration):
         # `self._transport.state_on = "on"` and gets overwritten with
         # the actual HVAC mode below.
         climate_entity = kwargs.pop(CONF_CLIMATE, None)
-        state_off = kwargs.pop(CONF_CLIMATE_HVAC_MODE_OFF, str(HVACMode.OFF.value))
-        state_on = kwargs.pop(CONF_CLIMATE_HVAC_MODE_ON, str(HVACMode.AUTO.value))
+        # EH3 — `kwargs.pop(key, default)` only returns `default` when
+        # the key is MISSING; a persisted `""` (from a migration or a
+        # buggy import) would otherwise slip through and crash
+        # `set_hvac_mode("")` at runtime. Mirror the S9 fallback from
+        # `QSRadiator` so both classes treat empty as absent.
+        state_off = kwargs.pop(CONF_CLIMATE_HVAC_MODE_OFF, None) or str(HVACMode.OFF.value)
+        state_on = kwargs.pop(CONF_CLIMATE_HVAC_MODE_ON, None) or str(HVACMode.AUTO.value)
         self.climate_entity = climate_entity
         self._transport: ClimateTransport = ClimateTransport(climate_entity, state_on, state_off)
 

@@ -37,6 +37,14 @@ in `__init__` and delegates `execute_command_system` to it. The host
 keeps owning `_state_on` / `_state_off` / `_bistate_mode_*` and the
 override state machine; the transport receives primitives.
 
+The `_state_on` / `_state_off` shadow lives on `QSBiStateDuration`
+as a property pair that delegates to `self._transport.state_on /
+state_off` when the transport is set (and falls back to a per-
+instance host field while `_transport is None`, during the base
+ctor's seed assignments). A public `hvac_state_on` accessor exposes
+the on-state string to the dashboard template — HA's Jinja sandbox
+restricts leading-underscore attribute access.
+
 ## When you need this concept
 
 - Adding a new simple on/off device (irrigation, ventilation, fixed-

@@ -342,6 +342,55 @@ class TestDashboardTemplateRendering:
         )
 
     @pytest.mark.asyncio
+    async def test_radiator_card_b5_show_dialog_escapes_interpolations(self):
+        """AA1 — pin B5: every interpolation inside `showDialog` is escaped.
+
+        Verifies that the `showDialog` function body does NOT contain
+        raw `${title}` / `${message}` interpolations against innerHTML
+        — they must all route through `_escapeHtml(...)`. Without this
+        a future entity-derived title/message would silently
+        reintroduce the S15 injection vector.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # Extract `showDialog` body via brace-counting.
+        start = content.find("const showDialog")
+        assert start != -1, "Missing `showDialog` declaration"
+        # Find the `=>` then the opening `{`.
+        arrow = content.find("=>", start)
+        assert arrow != -1
+        body_start = content.find("{", arrow)
+        assert body_start != -1
+        # Brace-count to the matching `}`.
+        depth = 0
+        body_end = -1
+        for i in range(body_start, len(content)):
+            if content[i] == "{":
+                depth += 1
+            elif content[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    body_end = i
+                    break
+        assert body_end != -1, "Could not find closing brace of `showDialog`"
+
+        body = content[body_start : body_end + 1]
+
+        # Both `${title}` and `${message}` interpolations must go through
+        # `_escapeHtml`. We accept patterns like `${_escapeHtml(title)}`.
+        raw_title = re.search(r"\$\{title\}", body)
+        raw_message = re.search(r"\$\{message\}", body)
+        escaped_title = re.search(r"\$\{_escapeHtml\(title\)\}", body)
+        escaped_message = re.search(r"\$\{_escapeHtml\(message\)\}", body)
+
+        assert raw_title is None, "`${title}` is not escaped in showDialog"
+        assert raw_message is None, "`${message}` is not escaped in showDialog"
+        assert escaped_title is not None, "`_escapeHtml(title)` missing in showDialog"
+        assert escaped_message is not None, "`_escapeHtml(message)` missing in showDialog"
+
+    @pytest.mark.asyncio
     async def test_radiator_card_n7_running_includes_live_backing_state(self):
         """A2 — pin N7: the `running` derivation OR-s in the backing state.
 
@@ -363,6 +412,54 @@ class TestDashboardTemplateRendering:
             "Cold-start `running` fallback is missing — radiator may show as off "
             "during the cold-start grace window"
         )
+
+    @pytest.mark.asyncio
+    async def test_radiator_card_bh10_configured_hvac_on_compared(self):
+        """BH10 — `liveBackingOn` compares against the configured HVAC mode
+        (e.g. `auto`), not just the hard-coded `"heat"`.
+
+        Without this, a user who set `CONF_CLIMATE_HVAC_MODE_ON = "auto"`
+        sees `running=false` during the cold-start grace window even
+        though the climate entity reports `state="auto"`.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # The card reads the configured HVAC mode from
+        # `e.climate_hvac_mode_on` with a `"heat"` default for backward
+        # compatibility.
+        assert "e.climate_hvac_mode_on" in content
+        # The comparison against `configuredHvacOn` MUST be present.
+        pattern = re.compile(
+            r"liveBackingState\s*===\s*configuredHvacOn"
+        )
+        assert pattern.search(content) is not None, (
+            "Cold-start `running` derivation no longer compares against the "
+            "configured HVAC ON mode — non-default HVAC modes won't be recognised"
+        )
+
+    @pytest.mark.asyncio
+    async def test_radiator_dashboard_passes_climate_hvac_mode_on(
+        self, hass, full_dashboard_home
+    ):
+        """BH10 — the dashboard template plumbs `climate_hvac_mode_on` through.
+
+        The card reads it from `entities.climate_hvac_mode_on`. The
+        radiator section must therefore emit a `climate_hvac_mode_on:`
+        key whose value matches the transport's `state_on`.
+        """
+        home = full_dashboard_home
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        template_content = template_path.read_text()
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        # The MOCK_RADIATOR_CLIMATE_CONFIG fixture installs a
+        # climate-backed radiator with `CONF_CLIMATE_HVAC_MODE_ON="heat"`,
+        # so the rendered YAML must include the entry.
+        assert "climate_hvac_mode_on: heat" in rendered
 
     @pytest.mark.asyncio
     async def test_solar_entities_appear_in_rendered_output(self, hass, full_dashboard_home):

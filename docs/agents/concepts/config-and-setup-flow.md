@@ -68,13 +68,23 @@ group only enforces "at most one", not "exactly one".
 
 When a step needs to render dropdowns derived from another field
 (e.g. HVAC modes that depend on which climate entity the user
-picked), the step issues a self-call with a sentinel token in
-`user_input` (`"force_climate"`, `"force_radiator_climate"`). Pass 1
-captures the climate entity into `self.config_entry.data`
-(creation flow — `FakeConfigEntry`) or via `async_update_entry`
-(options flow — real `ConfigEntry`). Pass 2 reads the available
-HVAC modes from the registry and shows the mode selectors with a
-suggested default.
+picked), Pass 1 buffers the user's selection in an in-memory
+`_pending_radiator_data` dict and renders the form directly
+(`_async_show_radiator_form()`). Pass 2 reads the available HVAC
+modes from the registry and shows the mode selectors with a
+suggested default. The persisted entry data is NOT touched
+between the two passes — if the user aborts mid-flow nothing leaks
+into `config_entry.data`. The form pre-fills the entity selectors
+from the pending dict so the user doesn't see re-emptied fields
+between passes; on any validation failure (XOR misconfig, empty
+HVAC modes, identical ON/OFF modes) the just-submitted payload is
+passed back into the form via a `pending` kwarg.
+
+Single-mode and identical-mode HVAC validations live alongside the
+XOR check: when fewer than two HVAC modes are advertised the step
+surfaces `climate_modes_insufficient`; when both selectors carry
+the same mode the step surfaces `hvac_modes_must_differ` — both
+errors keep the user's selections through the re-render.
 
 **Data handler lifecycle** (`data_handler.py`):
 

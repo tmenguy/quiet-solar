@@ -137,16 +137,21 @@ class QsRadiatorCard extends HTMLElement {
       const isResettingOverride = overrideState === 'ASKED FOR RESET OVERRIDE';
       
       // Determine if device is running (command state must be "on").
-      // N7 cold-start fallback: when the QS command sensor hasn't been
-      // published yet, also recognise the backing entity's state if the
-      // dashboard template passes it through `entities.backing_entity`.
+      // N7 + BH10 cold-start fallback: when the QS command sensor hasn't
+      // been published yet, also recognise the backing entity's state if
+      // the dashboard template passes it through `entities.backing_entity`.
+      // The configured HVAC ON mode (`entities.climate_hvac_mode_on`,
+      // typically "heat" or "auto") is also recognised as "on-like" so
+      // users who configured a non-default HVAC mode aren't shown an
+      // incorrect "off" state during the cold-start grace window.
       const commandState = sCommand?.state || '';
       const commandReportsOn = commandState.toLowerCase() === 'on';
       const backingEntityId = e.backing_entity;
       const liveBackingState = backingEntityId
           ? (this._hass?.states?.[backingEntityId]?.state || '').toLowerCase()
           : '';
-      const liveBackingOn = liveBackingState === 'on' || liveBackingState === 'heat';
+      const configuredHvacOn = (e.climate_hvac_mode_on || 'heat').toLowerCase();
+      const liveBackingOn = liveBackingState === 'on' || liveBackingState === configuredHvacOn;
       const running = commandReportsOn || liveBackingOn;
       
       // Determine max hours and what to display

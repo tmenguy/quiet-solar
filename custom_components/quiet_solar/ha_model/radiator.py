@@ -61,13 +61,28 @@ class QSRadiator(QSBiStateDuration):
         climate_entity = kwargs.get(CONF_CLIMATE)
         switch_entity = kwargs.get(CONF_SWITCH)
 
-        # M4 + B8 — explicit XOR for readability: exactly one of the
-        # two backings must be set. `bool("") is False` so an empty
-        # entity id is treated as "not set", keeping XOR and the
-        # transport-selection branch below in agreement.
-        both_set = bool(climate_entity) and bool(switch_entity)
-        neither_set = not climate_entity and not switch_entity
-        if both_set or neither_set:
+        # EH6 — when BOTH backings somehow ended up persisted (buggy
+        # migration / manual `.storage` edit / future regression), don't
+        # blow up the entry reload. Log a warning and pick `CONF_CLIMATE`
+        # as the deterministic winner — it's the richer backing and
+        # matches what the config flow defaults steer toward. Drop the
+        # loser from `kwargs` in place so `AbstractLoad.__init__` sees
+        # only the chosen backing.
+        if climate_entity and switch_entity:
+            _LOGGER.warning(
+                "Radiator %s persisted with both climate and switch backings; "
+                "preferring climate (%s) and ignoring switch (%s)",
+                kwargs.get("name", "<unnamed>"),
+                climate_entity,
+                switch_entity,
+            )
+            kwargs[CONF_SWITCH] = None
+            switch_entity = None
+
+        # M4 + B8 — explicit XOR for readability. After EH6 resolves the
+        # both-set case above, only the neither-set case remains as a
+        # hard error (there's no sensible default to pick).
+        if not climate_entity and not switch_entity:
             raise ServiceValidationError("Radiator requires exactly one of climate or switch backing")
 
         # S2 — Build the transport BEFORE calling `super().__init__` so

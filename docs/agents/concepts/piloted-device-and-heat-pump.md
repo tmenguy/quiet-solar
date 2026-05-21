@@ -64,6 +64,13 @@ same `AbstractLoad.__init__` path, and `_set_topology` finds the
 heat pump by name. The climate-controller class isn't the only
 piloting client anymore.
 
+Climate-backed loads (`QSClimateDuration`, climate-backed
+`QSRadiator`) treat an empty-string HVAC mode as "use the default"
+(`heat` or `auto` / `off`). Without this fallback a persisted `""`
+(from a migration / buggy import) would slip past `kwargs.pop(...,
+default)` and crash the first `set_hvac_mode("")` service call at
+runtime.
+
 ## Key types / structures
 
 - `PilotedDevice(AbstractDevice)` — the base for pilot-capable

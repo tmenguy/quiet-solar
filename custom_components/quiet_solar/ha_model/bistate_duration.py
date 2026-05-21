@@ -111,6 +111,20 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         else:
             self._state_off_host = value
 
+    @property
+    def hvac_state_on(self) -> str:
+        """Public accessor for the transport's ON-state string.
+
+        Exposes the underlying HA state value that maps to "running" —
+        for a switch-backed load this is `"on"`, for a climate-backed
+        load it's the configured HVAC ON mode (e.g. `"heat"`,
+        `"auto"`). Read by the dashboard template so the JS card can
+        compare against the live backing-entity state during the
+        cold-start grace window (BH10 review-fix). Public because
+        HA's Jinja sandbox restricts leading-underscore access.
+        """
+        return self._state_on
+
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
         tomorrow_utc = self.get_proper_local_adapted_tomorrow(time)

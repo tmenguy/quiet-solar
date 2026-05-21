@@ -1699,91 +1699,130 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
     async def async_step_radiator(self, user_input=None):
 
         if user_input is not None:
-            # Pass 2 of the climate two-pass flow — fall through to render
-            # the form with the HVAC mode dropdowns. The XOR check below
-            # is skipped because the internal payload (just
-            # `{"force_radiator_climate": True}`) does not echo the entity
-            # selectors.
-            if "force_radiator_climate" not in user_input:
-                # M4/M5 + N6 — normalise entities through truthy/strip so XOR
-                # and transport-selection paths agree (empty / whitespace
-                # entity ids are treated as absent).
-                climate_raw = user_input.get(CONF_CLIMATE)
-                switch_raw = user_input.get(CONF_SWITCH)
-                climate_entity = climate_raw.strip() if isinstance(climate_raw, str) else climate_raw
-                switch_entity = switch_raw.strip() if isinstance(switch_raw, str) else switch_raw
+            # BH8 — the previous `force_radiator_climate` sentinel was
+            # eliminated; Pass 2 now renders via `_async_show_radiator_form`
+            # directly from the re-prompt branch below.
+            # M4/M5 + N6 — normalise entities through truthy/strip so XOR
+            # and transport-selection paths agree (empty / whitespace
+            # entity ids are treated as absent).
+            climate_raw = user_input.get(CONF_CLIMATE)
+            switch_raw = user_input.get(CONF_SWITCH)
+            climate_entity = climate_raw.strip() if isinstance(climate_raw, str) else climate_raw
+            switch_entity = switch_raw.strip() if isinstance(switch_raw, str) else switch_raw
 
-                # AC-6 exactly-one-backing validation (cross-field XOR)
-                if bool(climate_entity) == bool(switch_entity):
+            # AC-6 exactly-one-backing validation (cross-field XOR)
+            if bool(climate_entity) == bool(switch_entity):
+                # EH4 — pass the just-rejected payload so the re-render
+                # pre-fills the user's selections; they don't have to
+                # re-pick everything from scratch.
+                return await self._async_show_radiator_form(
+                    errors={"base": "exactly_one_backing_required"},
+                    pending=user_input,
+                )
+
+            # EH5 — detect "user explicitly cleared the pilot dropdown"
+            # BEFORE we strip empty values from `cleaned`. The form
+            # renders `CONF_DEVICE_TO_PILOT_NAME` only when at least one
+            # heat pump exists, so finding the key in `user_input` with
+            # a falsy value means the user actively cleared it. Without
+            # this, `_async_save_radiator_entry`'s merge would re-inject
+            # the old persisted value from `config_entry.data`.
+            explicit_pilot_clear = CONF_DEVICE_TO_PILOT_NAME in user_input and not user_input.get(
+                CONF_DEVICE_TO_PILOT_NAME
+            )
+
+            # N8 — drop empty/None values from the merged dict so
+            # downstream `key in dict` checks see the canonical shape.
+            cleaned = {k: v for k, v in user_input.items() if v not in (None, "")}
+            if climate_entity:
+                cleaned[CONF_CLIMATE] = climate_entity
+                cleaned.pop(CONF_SWITCH, None)
+            else:
+                cleaned[CONF_SWITCH] = switch_entity
+                cleaned.pop(CONF_CLIMATE, None)
+                # Climate-only fields must not survive into a
+                # switch-backed entry — they belong to a backing
+                # that is no longer in effect.
+                cleaned.pop(CONF_CLIMATE_HVAC_MODE_ON, None)
+                cleaned.pop(CONF_CLIMATE_HVAC_MODE_OFF, None)
+
+            # E2 — when the user submits without picking a new heat
+            # pump but the persisted name is stale, drop the orphan
+            # reference so it doesn't reappear on the next edit.
+            extra_stale_keys = self._radiator_orphan_pilot_keys(cleaned)
+            # EH5 — when the user EXPLICITLY cleared a still-valid pilot,
+            # add the key to the stale list so the merge doesn't re-inject
+            # the old persisted value.
+            if explicit_pilot_clear and CONF_DEVICE_TO_PILOT_NAME not in extra_stale_keys:
+                extra_stale_keys = extra_stale_keys + (CONF_DEVICE_TO_PILOT_NAME,)
+
+            if climate_entity:
+                hvac_modes = get_hvac_modes(self.hass, climate_entity)
+                # S7 — empty hvac_modes means we cannot render a usable
+                # form; surface the error rather than block the user.
+                if not hvac_modes:
                     return await self._async_show_radiator_form(
-                        errors={"base": "exactly_one_backing_required"},
+                        errors={"base": "climate_capabilities_unavailable"},
+                        pending=cleaned,
+                    )
+                # EH2 — a single-mode `hvac_modes` (e.g. `["heat"]`)
+                # cannot represent a meaningful ON/OFF pair; surface
+                # the error rather than save an unsatisfiable config.
+                if len(hvac_modes) < 2:
+                    return await self._async_show_radiator_form(
+                        errors={"base": "climate_modes_insufficient"},
+                        pending=cleaned,
                     )
 
-                # N8 — drop empty/None values from the merged dict so
-                # downstream `key in dict` checks see the canonical shape.
-                cleaned = {k: v for k, v in user_input.items() if v not in (None, "")}
-                if climate_entity:
-                    cleaned[CONF_CLIMATE] = climate_entity
-                    cleaned.pop(CONF_SWITCH, None)
-                else:
-                    cleaned[CONF_SWITCH] = switch_entity
-                    cleaned.pop(CONF_CLIMATE, None)
-                    # Climate-only fields must not survive into a
-                    # switch-backed entry — they belong to a backing
-                    # that is no longer in effect.
-                    cleaned.pop(CONF_CLIMATE_HVAC_MODE_ON, None)
-                    cleaned.pop(CONF_CLIMATE_HVAC_MODE_OFF, None)
+                persisted_on = user_input.get(CONF_CLIMATE_HVAC_MODE_ON)
+                persisted_off = user_input.get(CONF_CLIMATE_HVAC_MODE_OFF)
 
-                # E2 — when the user submits without picking a new heat
-                # pump but the persisted name is stale, drop the orphan
-                # reference so it doesn't reappear on the next edit.
-                extra_stale_keys = self._radiator_orphan_pilot_keys(cleaned)
-
-                if climate_entity:
-                    hvac_modes = get_hvac_modes(self.hass, climate_entity)
-                    # S7 — empty hvac_modes means we cannot render a usable
-                    # form; surface the error rather than block the user.
-                    if not hvac_modes:
-                        return await self._async_show_radiator_form(
-                            errors={"base": "climate_capabilities_unavailable"},
-                        )
-
-                    persisted_on = user_input.get(CONF_CLIMATE_HVAC_MODE_ON)
-                    persisted_off = user_input.get(CONF_CLIMATE_HVAC_MODE_OFF)
-                    # S6 — re-prompt whenever the persisted HVAC mode
-                    # value is missing or no longer in the entity's
-                    # current `hvac_modes` list (vendor firmware update
-                    # dropped it). The mode-membership check subsumes
-                    # the older "climate entity changed" branch — a new
-                    # climate entity with the same HVAC modes legitimately
-                    # keeps the persisted selection.
-                    need_reprompt = (
-                        not persisted_on
-                        or not persisted_off
-                        or persisted_on not in hvac_modes
-                        or persisted_off not in hvac_modes
-                    )
-                    if need_reprompt:
-                        # S1 — buffer the Pass 1 payload in memory rather
-                        # than writing it to `config_entry.data` mid-flow.
-                        # The persisted entry data MUST NOT be touched
-                        # here — if the user aborts now, nothing leaks.
-                        self._get_pending_radiator_data().clear()
-                        self._get_pending_radiator_data().update(cleaned)
-                        return await self.async_step_radiator({"force_radiator_climate": True})
-
-                    # B2 + AC-13 / N13 — final submission via a single
-                    # `async_update_entry` write (no more double-write).
-                    self._clear_pending_radiator_data()
-                    return await self._async_save_radiator_entry(
-                        cleaned, keep_climate=True, extra_stale_keys=extra_stale_keys
+                # EH1 — both HVAC modes provided AND equal means the
+                # device would never toggle (every `set_hvac_mode`
+                # would emit the same value). Surface the error
+                # before we reach `need_reprompt` or save.
+                if persisted_on and persisted_off and persisted_on == persisted_off:
+                    self._get_pending_radiator_data().clear()
+                    self._get_pending_radiator_data().update(cleaned)
+                    return await self._async_show_radiator_form(
+                        errors={CONF_CLIMATE_HVAC_MODE_OFF: "hvac_modes_must_differ"},
+                        pending=cleaned,
                     )
 
-                # Switch-backed final submission — no HVAC dropdowns needed.
+                # S6 — re-prompt whenever the persisted HVAC mode
+                # value is missing or no longer in the entity's
+                # current `hvac_modes` list (vendor firmware update
+                # dropped it). The mode-membership check subsumes
+                # the older "climate entity changed" branch — a new
+                # climate entity with the same HVAC modes legitimately
+                # keeps the persisted selection.
+                need_reprompt = (
+                    not persisted_on
+                    or not persisted_off
+                    or persisted_on not in hvac_modes
+                    or persisted_off not in hvac_modes
+                )
+                if need_reprompt:
+                    # S1 — buffer the Pass 1 payload in memory rather
+                    # than writing it to `config_entry.data` mid-flow.
+                    # The persisted entry data MUST NOT be touched
+                    # here — if the user aborts now, nothing leaks.
+                    self._get_pending_radiator_data().clear()
+                    self._get_pending_radiator_data().update(cleaned)
+                    # BH8 — render the form directly rather than
+                    # re-entering the step with a sentinel kwarg.
+                    return await self._async_show_radiator_form()
+
+                # B2 + AC-13 / N13 — final submission via a single
+                # `async_update_entry` write (no more double-write).
                 self._clear_pending_radiator_data()
                 return await self._async_save_radiator_entry(
-                    cleaned, keep_climate=False, extra_stale_keys=extra_stale_keys
+                    cleaned, keep_climate=True, extra_stale_keys=extra_stale_keys
                 )
+
+            # Switch-backed final submission — no HVAC dropdowns needed.
+            self._clear_pending_radiator_data()
+            return await self._async_save_radiator_entry(cleaned, keep_climate=False, extra_stale_keys=extra_stale_keys)
 
         return await self._async_show_radiator_form()
 
@@ -1814,8 +1853,15 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             return ()
         return (CONF_DEVICE_TO_PILOT_NAME,)
 
-    async def _async_show_radiator_form(self, errors=None):
-        """Render the radiator form (extracted so we can re-render on error)."""
+    async def _async_show_radiator_form(self, errors=None, pending=None):
+        """Render the radiator form (extracted so we can re-render on error).
+
+        `pending` lets the caller pre-fill the form with a just-rejected
+        user submission (EH4). It takes precedence over the buffered
+        Pass 1 dict and over `config_entry.data` — so the user doesn't
+        see their selections re-emptied between a validation failure
+        and the re-render.
+        """
         TYPE = QSRadiator.conf_type_name
 
         sc_dict, placeholders = self.get_common_schema(
@@ -1828,15 +1874,22 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             add_max_on_off=True,
         )
 
-        # S1 — Pass 2 reads the in-memory pending dict first, falling
-        # back to `config_entry.data` for re-edits via the options flow.
-        pending = self._get_pending_radiator_data() if hasattr(self, "_pending_radiator_data") else {}
+        # BH7 — the helper already handles missing-attribute init, no
+        # need for the redundant `hasattr` gate.
+        pending_buffer = self._get_pending_radiator_data()
+        # EH4 — the explicit `pending` kwarg (just-rejected submission)
+        # takes precedence over the buffered Pass 1 dict; both fall back
+        # to `config_entry.data` for options-flow re-edits.
+        explicit_pending: dict = pending or {}
+
+        def _suggest(key: str):
+            return explicit_pending.get(key) or pending_buffer.get(key) or self.config_entry.data.get(key)
 
         # B1 — Pass 2 form pre-fills the entity selectors with the
         # values the user picked in Pass 1, so the field doesn't appear
         # re-emptied (which would trip the XOR error if resubmitted).
-        switch_suggestion = pending.get(CONF_SWITCH) or self.config_entry.data.get(CONF_SWITCH)
-        climate_suggestion = pending.get(CONF_CLIMATE) or self.config_entry.data.get(CONF_CLIMATE)
+        switch_suggestion = _suggest(CONF_SWITCH)
+        climate_suggestion = _suggest(CONF_CLIMATE)
         self._add_radiator_entity_selector(sc_dict, CONF_SWITCH, domain=SWITCH_DOMAIN, suggestion=switch_suggestion)
         self._add_radiator_entity_selector(sc_dict, CONF_CLIMATE, domain=CLIMATE_DOMAIN, suggestion=climate_suggestion)
 
@@ -1845,11 +1898,13 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         if climate_entity:
             hvac_modes = get_hvac_modes(self.hass, climate_entity)
 
-            if hvac_modes:
+            # EH2 — render the HVAC dropdowns ONLY when at least two
+            # modes are available; a single-mode entity (or empty list)
+            # cannot represent a meaningful ON/OFF pair. The form-level
+            # error in the submit handler steers the user to back out.
+            if hvac_modes and len(hvac_modes) >= 2:
                 # Suggested default for ON: "heat" if available, else first non-"off" mode.
-                existing_on = pending.get(CONF_CLIMATE_HVAC_MODE_ON) or self.config_entry.data.get(
-                    CONF_CLIMATE_HVAC_MODE_ON
-                )
+                existing_on = _suggest(CONF_CLIMATE_HVAC_MODE_ON)
                 if existing_on and existing_on in hvac_modes:
                     suggested_on = existing_on
                 elif "heat" in hvac_modes:
@@ -1861,9 +1916,7 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 # S13 — `suggested_off` must be in `hvac_modes` or
                 # voluptuous will reject the schema. Prefer "off", fall
                 # back to any mode containing "off", finally the last mode.
-                existing_off = pending.get(CONF_CLIMATE_HVAC_MODE_OFF) or self.config_entry.data.get(
-                    CONF_CLIMATE_HVAC_MODE_OFF
-                )
+                existing_off = _suggest(CONF_CLIMATE_HVAC_MODE_OFF)
                 if existing_off and existing_off in hvac_modes:
                     suggested_off = existing_off
                 elif "off" in hvac_modes:
@@ -1871,6 +1924,16 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 else:
                     off_like = [m for m in hvac_modes if "off" in m.lower()]
                     suggested_off = off_like[0] if off_like else hvac_modes[-1]
+
+                # EH2 — if both suggestions coincide (e.g. a two-mode
+                # `["heat", "fan_only"]` whose off-like fallback happens
+                # to land on the same value), nudge `suggested_off` to
+                # ANY other mode so the rendered form doesn't ship two
+                # identical defaults the user has to manually correct.
+                if suggested_on == suggested_off:
+                    alt = next((m for m in hvac_modes if m != suggested_on), None)
+                    if alt is not None:
+                        suggested_off = alt
 
                 sc_dict[vol.Required(CONF_CLIMATE_HVAC_MODE_OFF, default=suggested_off)] = SelectSelector(
                     SelectSelectorConfig(options=hvac_modes, mode=SelectSelectorMode.DROPDOWN)

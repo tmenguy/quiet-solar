@@ -92,6 +92,37 @@ def test_init_with_custom_hvac_modes(hass: HomeAssistant, climate_config_entry, 
     assert device._bistate_mode_off == "fan_only"
 
 
+def test_init_with_empty_hvac_modes_falls_back_to_defaults(
+    hass: HomeAssistant, climate_config_entry, climate_home
+):
+    """EH3 — `CONF_CLIMATE_HVAC_MODE_*=""` falls back to the AUTO/OFF defaults.
+
+    `kwargs.pop(key, default)` only returns `default` when the key is
+    MISSING. A corrupted/migrated entry persisting `""` would otherwise
+    construct `ClimateTransport(state_on="")` and `set_hvac_mode("")`
+    fails at runtime. Mirrors the S9 fallback already applied to
+    `QSRadiator` in fix plan #01.
+    """
+    device = QSClimateDuration(
+        hass=hass,
+        config_entry=climate_config_entry,
+        home=climate_home,
+        **{
+            CONF_NAME: "Empty HVAC Climate",
+            CONF_SWITCH: "switch.climate_helper",
+            CONF_CLIMATE: "climate.empty_hvac",
+            CONF_CLIMATE_HVAC_MODE_ON: "",
+            CONF_CLIMATE_HVAC_MODE_OFF: "",
+        },
+    )
+
+    assert device._state_on == str(HVACMode.AUTO.value)
+    assert device._state_off == str(HVACMode.OFF.value)
+    # Transport sees the same defaults via the inherited property shadow.
+    assert device._transport.state_on == str(HVACMode.AUTO.value)
+    assert device._transport.state_off == str(HVACMode.OFF.value)
+
+
 def test_init_bistate_entity_equals_climate_entity(hass: HomeAssistant, climate_config_entry, climate_home):
     """Test that bistate_entity is set to climate_entity."""
     device = QSClimateDuration(

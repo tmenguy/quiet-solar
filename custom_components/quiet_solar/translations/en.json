@@ -10,8 +10,10 @@
             "already_configured_device": "Device is already configured",
             "cannot_connect": "Unable to connect",
             "climate_capabilities_unavailable": "Climate entity advertises no HVAC modes; pick a different climate entity or check the device",
+            "climate_modes_insufficient": "Climate entity exposes fewer than two HVAC modes; pick a different climate entity or configure the device to expose at least two modes",
             "cloud_profile_mismatch": "Cloud profile does not match configuration",
             "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator",
+            "hvac_modes_must_differ": "HVAC mode ON and OFF must be different",
             "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
         },
         "step": {
@@ -716,8 +718,10 @@
             "already_configured_device": "Device is already configured",
             "cannot_connect": "Unable to connect",
             "climate_capabilities_unavailable": "Climate entity advertises no HVAC modes; pick a different climate entity or check the device",
+            "climate_modes_insufficient": "Climate entity exposes fewer than two HVAC modes; pick a different climate entity or configure the device to expose at least two modes",
             "cloud_profile_mismatch": "Cloud profile does not match configuration",
             "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator",
+            "hvac_modes_must_differ": "HVAC mode ON and OFF must be different",
             "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
         },
         "step": {
