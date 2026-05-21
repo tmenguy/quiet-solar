@@ -12,7 +12,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-23
+last_verified: 2026-05-21
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -218,6 +218,58 @@ New Jinja branches added by QS-194 use the idiomatic `is not none`
 test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`
 documentation comments (rather than `{# TODO: ... #}`); follow these
 conventions for any future template additions.
+
+**QS-200 — boiler card visual upgrade.** The water-boiler card
+adopted three layered visual changes on top of the QS-194 baseline,
+overriding the project-context "don't modify JS cards without explicit
+instruction" rule via direct issue-#200 authorisation:
+
+- **Heat palette.** The `const colors = { ... }` block was swapped
+  from the cool-blue scheme (`#2196F3` / `#00bcd4` / `#8bc34a` /
+  `#00e1ff` / `#0066ff`) to the climate card's `heat` scheme
+  (`#FF5722` / `#D32F2F` / `#FF6E40` / `#E64A19`). The cool-blue
+  hexes may still appear elsewhere in the file — e.g. `.power-btn.on`
+  uses `#2196F3` as a semantic "power" anchor — and that's preserved.
+- **Continuous RAF, mirroring the pool card.** `connectedCallback()`
+  calls `_startAnimation()` directly with no `showAnimation` gate;
+  `disconnectedCallback()` stops it. The wave is intrinsically
+  visible at all times (cool blue when not running, near-white
+  translucent when boiling) so the RAF loop itself is no longer
+  conditional. `showAnimation` survives only as a render-time switch
+  for the existing dashed-arc `<path id="running_anim">`. The
+  boiler is therefore removed from `test_card_raf_idle_gated`'s
+  parametrize list — that test pins the idle-gated model that the
+  other duration cards still follow.
+- **Dual-layer water cross-fade + bubbles + surface glow.** Inside
+  a circular `clipPath` (radius `CLIP_R = 120`), the card renders
+  six wave paths in pairs: `wave{0,1,2}_cool` (cool-blue HSLA) and
+  `wave{0,1,2}_boil` (near-white HSLA). Each pair shares geometry;
+  only `fill` and `opacity` differ. The RAF loop lerps
+  `_currentColorMix` toward `running ? 1 : 0` with the standard
+  `LERP_RATE` envelope and updates per-frame opacity: cool layer
+  gets `1 - colorMix`, boil layer gets `colorMix`. This avoids the
+  yellow-green midpoint that an HSL hue lerp from cyan to orange
+  would pass through, and eliminates the staircase a
+  `COLOR_MIX_REGEN_THRESHOLD` would have introduced. A dynamic
+  bubble system spawns `<circle>` nodes inside a bubble `<g>` layer
+  (capped at `MAX_CONCURRENT_BUBBLES = 12`, spawn rate
+  `BUBBLE_SPAWN_RATE_HZ = 6` Hz, paused when not running) — bubbles
+  rise from the bottom, expand slightly, fade with life, and retire
+  on surface contact or life expiry. A red surface glow
+  (`SURFACE_GLOW_COLOR = '#FF3D00'`) traces wave 0 via a Gaussian
+  blur + `mix-blend-mode: screen` filter; its `d` resyncs on
+  amplitude/level regen, `transform` resyncs every frame to follow
+  wave 0's `translateX`, and `opacity` is bound to `_currentColorMix`
+  so it cross-fades in/out with the boiling state.
+
+Per-instance SVG ids (`waterClipId`, `surfaceGlowFilterId`,
+`bubbleLayerId`) are derived from `QsWaterBoilerCard._nextClipId` so
+two boiler cards on the same dashboard never collide. The water
+layer renders BEFORE the dashed ring / progress arc / handle in DOM
+order (= lowest z), so the controls sit on top. The QS-194 optional
+`temperature_sensor` row is untouched: water level, wave amplitude,
+bubble rate, and surface-glow opacity are all independent of the
+temperature sensor (boiling is binary, driven by `running === true`).
 
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 

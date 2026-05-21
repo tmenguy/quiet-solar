@@ -1373,7 +1373,12 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
 @pytest.mark.parametrize(
     "card_filename,gate",
     [
-        ("qs-water-boiler-card.js", "showAnimation"),
+        # QS-200: `qs-water-boiler-card.js` removed — the boiler now mirrors
+        # the pool's intrinsically-continuous RAF model (water always
+        # visible: cool when off, boiling when on). The
+        # `_startAnimation`/`_stopAnimation` helpers and the
+        # `connectedCallback → _startAnimation` direct call are pinned via
+        # `test_water_boiler_card_has_start_stop_helpers` below.
         ("qs-on-off-duration-card.js", "showAnimation"),
         ("qs-climate-card.js", "showAnimation"),
         ("qs-car-card.js", "charging"),
@@ -1381,11 +1386,12 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
 )
 def test_card_raf_idle_gated(card_filename, gate):
     """M4: every card except pool gates `_startAnimation` on a
-    runtime condition (`showAnimation` for boiler/on-off-duration/
-    climate, `charging` for car). Pool's wave is intrinsically
+    runtime condition (`showAnimation` for on-off-duration/climate,
+    `charging` for car). Pool's wave is intrinsically
     continuous-while-connected and uses `_startAnimation` from
     `connectedCallback` directly — that file is covered by the
-    presence-of-helper check below.
+    presence-of-helper check below. QS-200 moved
+    `qs-water-boiler-card.js` to the same continuous-RAF model.
     """
     import re
 
@@ -1439,6 +1445,167 @@ def test_water_boiler_card_uses_safe_number_helper():
     assert not forbidden.search(content), (
         "S8: replace `Number(s*?.state || N)` for duration sensors with "
         "`this._safeNumber(s*, N)` to avoid NaN propagation."
+    )
+
+
+def test_water_boiler_card_has_start_stop_helpers():
+    """QS-200: water-boiler card mirrors the pool card — continuous RAF
+    while connected, no `showAnimation` gate.
+
+    Asserts:
+    - both `_startAnimation()` and `_stopAnimation()` helpers are defined.
+    - `connectedCallback()` calls `this._startAnimation()` DIRECTLY, with
+      no `if` between the brace and the call (continuous-RAF
+      architecture; the calm-vs-boiling distinction is amplitude / speed
+      / color-mix lerp, not RAF on/off).
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    # Strip comments first so the regex only matches executable code.
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    assert re.search(r"_startAnimation\s*\(\s*\)\s*\{", executable), (
+        "qs-water-boiler-card.js: missing _startAnimation method"
+    )
+    assert re.search(r"_stopAnimation\s*\(\s*\)\s*\{", executable), (
+        "qs-water-boiler-card.js: missing _stopAnimation method"
+    )
+    # `connectedCallback() { ... this._startAnimation() ... }` with NO
+    # `if` between the opening brace and the call — enforces the
+    # "no gate" architecture (mirror pool card).
+    cb_pat = re.compile(
+        r"connectedCallback\s*\(\s*\)\s*\{(?P<body>[^{}]*?this\._startAnimation\s*\(\s*\))",
+        re.DOTALL,
+    )
+    m = cb_pat.search(executable)
+    assert m is not None, (
+        "qs-water-boiler-card.js: connectedCallback must call "
+        "_startAnimation directly (continuous-RAF model, mirror pool)"
+    )
+    assert "if" not in m.group("body"), (
+        "qs-water-boiler-card.js: connectedCallback must call "
+        "_startAnimation() unconditionally — no `if` gate (continuous-RAF "
+        "model, mirror pool)"
+    )
+
+
+def test_water_boiler_card_uses_heat_palette():
+    """QS-200: boiler card adopts the climate-card heat palette.
+
+    The `const colors = { ... };` block at the top of `_render()`
+    MUST contain the heat hex codes and MUST NOT contain any of the
+    legacy cool-blue values. Cool-blue may still appear ELSEWHERE in
+    the file (e.g. `.power-btn.on` legitimately uses HA-blue
+    `#2196F3` as a semantic anchor) — the assertion is scoped to the
+    `colors` const only.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    block_match = re.search(
+        r"const\s+colors\s*=\s*\{(?P<body>.*?)\};",
+        content,
+        flags=re.DOTALL,
+    )
+    assert block_match is not None, (
+        "qs-water-boiler-card.js: expected `const colors = { ... };` block"
+    )
+    body = block_match.group("body")
+    for heat_hex in ("#FF5722", "#D32F2F", "#FF6E40", "#E64A19"):
+        assert heat_hex in body, (
+            f"qs-water-boiler-card.js: heat-palette color {heat_hex} "
+            f"missing from `const colors`"
+        )
+    for cool_hex in ("#2196F3", "#00bcd4", "#8bc34a", "#00e1ff", "#0066ff"):
+        assert cool_hex not in body, (
+            f"qs-water-boiler-card.js: legacy cool-blue color {cool_hex} "
+            f"still present in `const colors`"
+        )
+
+
+def test_water_boiler_card_renders_water_layer():
+    """QS-200: boiler card renders a circular clipPath wrapping the
+    six wave paths (3 cool + 3 boil cross-fade layers).
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    assert re.search(r"<clipPath\s+id=", executable), (
+        "qs-water-boiler-card.js: missing <clipPath> definition"
+    )
+    for layer in (
+        "wave0_cool",
+        "wave0_boil",
+        "wave1_cool",
+        "wave1_boil",
+        "wave2_cool",
+        "wave2_boil",
+    ):
+        assert re.search(rf'id="{layer}"', executable), (
+            f'qs-water-boiler-card.js: missing <path id="{layer}">'
+        )
+    assert re.search(r"_generateWavePath\s*\(", executable), (
+        "qs-water-boiler-card.js: missing _generateWavePath method"
+    )
+
+
+def test_water_boiler_card_has_bubble_system():
+    """QS-200: boiler card has a dynamic bubble system with a soft cap."""
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    assert re.search(r"MAX_CONCURRENT_BUBBLES\s*=\s*12", executable), (
+        "qs-water-boiler-card.js: missing `MAX_CONCURRENT_BUBBLES = 12` "
+        "constant"
+    )
+    assert re.search(r"BUBBLE_SPAWN_RATE_HZ\s*=", executable), (
+        "qs-water-boiler-card.js: missing BUBBLE_SPAWN_RATE_HZ constant"
+    )
+    assert re.search(r"this\._bubbles\s*=", executable), (
+        "qs-water-boiler-card.js: missing `this._bubbles` instance array"
+    )
+
+
+def test_water_boiler_card_has_surface_glow():
+    """QS-200: boiler card renders a red Gaussian-blurred surface glow
+    with mix-blend-mode: screen, locked to wave 0.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+    executable = re.sub(r"//[^\n]*", "", no_block)
+    assert re.search(r"<filter\s+id=", executable) and (
+        "feGaussianBlur" in executable
+    ), (
+        "qs-water-boiler-card.js: missing <filter>/<feGaussianBlur> in defs"
+    )
+    assert re.search(r'id="surface_glow"', executable), (
+        'qs-water-boiler-card.js: missing <path id="surface_glow">'
+    )
+    assert re.search(r"mix-blend-mode\s*:\s*screen", executable), (
+        "qs-water-boiler-card.js: surface_glow must use "
+        "`mix-blend-mode: screen`"
+    )
+    assert re.search(
+        r"SURFACE_GLOW_COLOR\s*=\s*['\"]#FF[0-9A-Fa-f]{4}['\"]", executable
+    ), (
+        "qs-water-boiler-card.js: missing SURFACE_GLOW_COLOR red constant"
     )
 
 
