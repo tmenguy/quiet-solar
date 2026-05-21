@@ -1021,9 +1021,9 @@ class QsWaterBoilerCard extends HTMLElement {
                 <path id="wave2_boil" d="${initialWavePaths[2]}" fill="${BOIL_WATER_COLORS[2]}" opacity="${initialBoilOpacity}" pointer-events="none" style="will-change: transform;" />
                 <g id="${bubbleLayerId}"></g>
                 <!-- review-fix #02 N4: surface_glow.d MUST equal wave 0's d on every frame.
-                     First-frame parity is anchored by the shared `initialWavePaths[0]`
+                     First-frame parity is anchored by the shared initialWavePaths[0]
                      below and on wave0_cool/wave0_boil above; the RAF regen block then
-                     resyncs `d` only when wave 0's geometry changes. -->
+                     resyncs d only when wave 0's geometry changes. -->
                 <path id="surface_glow" d="${initialWavePaths[0]}" stroke="${SURFACE_GLOW_COLOR}" stroke-width="${SURFACE_GLOW_STROKE_WIDTH}" fill="none" filter="url(#${surfaceGlowFilterId})" opacity="${initialBoilOpacity}" pointer-events="none" style="mix-blend-mode: screen; will-change: transform, opacity, d;" />
               </g>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
