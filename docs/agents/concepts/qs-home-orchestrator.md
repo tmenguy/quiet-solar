@@ -91,6 +91,39 @@ per cycle:
   be async or routed through `hass.async_add_executor_job()`.
 - Hard-coding the cycle intervals — they live in `const.py`.
 
+## Dashboard sections auto-migration
+
+When a new device type adds a new bundled `DASHBOARD_DEFAULT_SECTIONS`
+entry (e.g. `water_boilers` added by QS-194), users who **previously
+customised** their dashboard sections will not have the new section
+in their stored list. `QSHome.add_device` runs
+`_maybe_migrate_missing_default_section(device)` for every device it
+accepts: if the device's requested section is one of
+`DASHBOARD_DEFAULT_SECTIONS` and is missing from `self.dashboard_sections`,
+it is appended **at runtime only** (the config entry is never modified —
+the user's customisation stays user-owned). The complementary tier-1
+diagnostic lives in `home_model/load.py:dashboard_section`: if section
+resolution still fails (i.e. it's not a default-section name), a
+single `_LOGGER.warning` surfaces the device and the unresolved
+section so the issue can be diagnosed from HA logs.
+
+When the migration appends a section, it also invalidates the
+`_computed_dashboard_section` cache on every sibling device that
+had previously resolved to `DASHBOARD_NO_SECTION`, so a device added
+before the migration trigger re-resolves correctly on the next
+access (review-fix #03 S5).
+
+Users can opt out of the auto-migration for specific sections by
+listing them in `CONF_DASHBOARD_SECTIONS_USER_REMOVED` on the home
+config entry; the migration honours this list and skips re-appending
+those sections (review-fix #03 N7).
+
+The prefix-parsing step uses
+`extract_name_and_index_from_dashboard_section_option` (from
+`home_model/load.py`) rather than a string-substring heuristic, so
+section names containing `" - "` are parsed correctly (review-fix
+#03 S4).
+
 ## See also
 
 - [dynamic-group-tree.md](dynamic-group-tree.md) — the topology

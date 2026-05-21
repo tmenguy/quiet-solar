@@ -89,3 +89,7 @@ mode = NORMAL → resume FILLER → broadcast recovery
   per-person broadcast path.
 - [../use-cases/off-grid-kicks-in.md](../use-cases/off-grid-kicks-in.md)
   — end-to-end outage scenario.
+- [qs-home-orchestrator.md](qs-home-orchestrator.md) "Dashboard
+  sections auto-migration" — QS-194 added migration logic to
+  `QSHome.add_device` but no off-grid-mode-related behaviour was
+  touched (re-verified under review-fix #03).

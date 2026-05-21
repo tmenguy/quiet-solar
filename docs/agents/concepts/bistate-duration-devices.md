@@ -9,23 +9,30 @@ covers:
   - custom_components/quiet_solar/ha_model/climate_controller.py
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
+    - custom_components/quiet_solar/ha_model/water_boiler.py
 last_verified: 2026-05-21
 ---
 
-# Bistate-duration devices (pool, on/off duration, climate, radiator)
+# Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
 
 ## TL;DR
 
 Bistate-duration devices are loads with two states (on / off) that
 must run for a **specified duration** rather than be modulated. Pool
-pumps, fixed-power boilers, climate splits, heating-only radiators,
-and miscellaneous on/off duration loads all use this pattern.
+pumps, fixed-power boilers, water-boilers (cumulus / thermodynamic), climate splits, heating-only radiators, 
+and miscellaneous on/off duration loads
+all use this pattern.
 `ha_model/bistate_duration.py` provides the shared base;
 `ha_model/on_off_duration.py` and `ha_model/climate_controller.py` are
 the original subclasses; `ha_model/pool.py` extends `on_off_duration`
 with temperature-dependent filter-duration logic;
+`ha_model/water_boiler.py` is a thin subclass that adds an
+**optional** water-tank temperature sensor (plumbing only — no
+temperature-aware control logic yet) plus its own config step,
+dashboard section, and select-mode translation key.
 `ha_model/radiator.py` adds a heating-only variant that can sit on
-**either** a switch OR a climate entity. All inherit the
+**either** a switch OR a climate entity. 
+All inherit the
 switching-cost protection pattern.
 
 The per-backing difference (which HA entity is observed, which HA
@@ -92,6 +99,14 @@ of the on/off behaviour unchanged.
   backing to `heat`/`off`; does NOT expose runtime HVAC selects
   (config-time only — heating-only).
 - `QSPool(QSOnOffDuration)` — temperature-aware filter duration.
+- `QSWaterBoiler(QSOnOffDuration)` — water boiler (cumulus or
+  thermodynamic). Optional `water_boiler_temperature_sensor` field
+  is plumbing-only in QS-194; a future story will introduce
+  temperature-aware constraint logic, off-peak preference, and
+  anti-legionella cycles. The constructor normalises an empty-string
+  config value to `None` (the options-flow form can store `""` when
+  the EntitySelector is cleared) so downstream consumers only ever
+  see a real entity id or `None`.
 - `TimeBasedSimplePowerLoadConstraint` (in
   `home_model/constraints.py`) — the constraint subclass these
   devices use.

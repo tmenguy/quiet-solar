@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import yaml
 from homeassistant.helpers.template import Template
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     CONF_POOL_TEMPERATURE_SENSOR,
@@ -25,6 +26,7 @@ from custom_components.quiet_solar.const import (
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
     CONF_SWITCH,
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR,
     DASHBOARD_DEFAULT_SECTIONS,
     DEVICE_TYPE,
     DOMAIN,
@@ -45,6 +47,8 @@ from tests.ha_tests.const import (
     MOCK_RADIATOR_SWITCH_CONFIG,
     MOCK_SENSOR_STATES,
     MOCK_SOLAR_CONFIG,
+    MOCK_WATER_BOILER_CONFIG,
+    MOCK_WATER_BOILER_CONFIG_NO_TEMP,
 )
 
 COMPONENT_ROOT = Path(__file__).parent.parent / "custom_components" / "quiet_solar"
@@ -69,13 +73,19 @@ MOCK_SOLAR_WITH_PROVIDERS_CONFIG = {
     ],
 }
 
-# Extra mock states needed for pool
+# Extra mock states needed for pool + water boiler
 EXTRA_MOCK_STATES = {
     "switch.test_pool_pump": {"state": "off", "attributes": {}},
     "sensor.pool_temperature": {
         "state": "22",
         "attributes": {"unit_of_measurement": "°C"},
     },
+    "switch.test_water_boiler": {"state": "off", "attributes": {}},
+    "sensor.test_water_boiler_temperature": {
+        "state": "55",
+        "attributes": {"unit_of_measurement": "°C"},
+    },
+    "switch.test_water_boiler_no_temp": {"state": "off", "attributes": {}},
 }
 
 
@@ -106,8 +116,6 @@ async def full_dashboard_home(hass):
     through HA config entries. All entity platforms are set up, so
     device.ha_entities is populated with real registered entities.
     """
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
-
     _apply_all_mock_states(hass)
 
     # Device configs in setup order (home must be first)
@@ -124,6 +132,7 @@ async def full_dashboard_home(hass):
         ("pool", MOCK_POOL_CONFIG),
         ("radiator_switch", MOCK_RADIATOR_SWITCH_CONFIG),
         ("radiator_climate", MOCK_RADIATOR_CLIMATE_CONFIG),
+        ("water_boiler", MOCK_WATER_BOILER_CONFIG),
     ]
 
     entries = {}
@@ -655,6 +664,7 @@ class TestDashboardSectionMapping:
             ("person", "settings"),
             ("car", "cars"),
             ("pool", "pools"),
+            ("water_boiler", "water_boilers"),
             ("on_off_duration", "others"),
             ("climate", "climates"),
             ("heat_pump", "climates"),
@@ -709,7 +719,456 @@ class TestDashboardSectionMapping:
 
         # Home itself plus all devices that were set up
         assert len(all_section_devices) > 0, "No devices found in any dashboard section"
-        # At minimum: home, solar, charger, car, person, battery, on_off, climate, heat_pump, pool
-        assert len(all_section_devices) >= 10, (
-            f"Expected at least 10 devices in dashboard sections, found {len(all_section_devices)}"
+        # At minimum: home, solar, charger, car, person, battery, on_off,
+        # climate, heat_pump, pool, water_boiler
+        assert len(all_section_devices) >= 11, (
+            f"Expected at least 11 devices in dashboard sections, found {len(all_section_devices)}"
         )
+
+
+# ============================================================================
+# Water-boiler-specific dashboard rendering
+# ============================================================================
+
+
+async def _build_water_boiler_home(hass, water_boiler_config: dict):
+    """Build a minimal home with a single water_boiler device.
+
+    Helper for the two parametrised water-boiler dashboard tests below.
+    Seeds all mock states and sets up home + water_boiler config entries.
+    Uses the same add/setup-per-entry pattern as `full_dashboard_home`.
+    """
+    _apply_all_mock_states(hass)
+
+    uid = uuid.uuid4().hex[:8]
+
+    with patch(
+        "custom_components.quiet_solar.ha_model.home.QSHome.update_forecast_probers",
+        new_callable=AsyncMock,
+    ):
+        home_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=MOCK_HOME_CONFIG,
+            entry_id=f"wb_home_{uid}",
+            title="home: Test Home",
+            unique_id=f"wb_home_{uid}",
+        )
+        home_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(home_entry.entry_id) is True
+        await hass.async_block_till_done()
+
+        boiler_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data=water_boiler_config,
+            entry_id=f"wb_boiler_{uid}",
+            title="water_boiler: Test Water Boiler",
+            unique_id=f"wb_boiler_{uid}",
+        )
+        boiler_entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(boiler_entry.entry_id) is True
+        await hass.async_block_till_done()
+
+    home = hass.data[DOMAIN].get(home_entry.entry_id)
+    assert home is not None
+    return home
+
+
+def _collect_water_boiler_entity_rows(parsed: dict) -> list[str]:
+    """Walk the parsed dashboard YAML and return the entity ids in the
+    boiler card's `entities:` block.
+
+    The custom template emits a `key: value` mapping (JS-card input
+    contract) while the standard template emits a list of `- entity:`
+    rows. Both shapes are normalised to a flat list of entity-id
+    strings here.
+    """
+    entity_ids: list[str] = []
+    for view in parsed.get("views", []):
+        if view.get("path") != "water_boilers":
+            continue
+        for grid in view.get("sections", []):
+            for card in grid.get("cards", []):
+                entities = card.get("entities")
+                if isinstance(entities, dict):
+                    # Custom template: { key: entity_id, ... }
+                    entity_ids.extend(v for v in entities.values() if isinstance(v, str))
+                elif isinstance(entities, list):
+                    # Standard template: [ {entity: id, name: ...}, ... ]
+                    for row in entities:
+                        if isinstance(row, str):
+                            entity_ids.append(row)
+                        elif isinstance(row, dict) and "entity" in row:
+                            entity_ids.append(row["entity"])
+    return entity_ids
+
+
+@pytest.mark.parametrize(
+    "template_name",
+    [
+        "quiet_solar_dashboard_template.yaml.j2",
+        "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_water_boiler_temperature_sensor_row_present_when_configured(
+    hass, template_name
+):
+    """When the temp sensor is configured, its entity id is in the card's entities."""
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
+    template_path = COMPONENT_ROOT / "ui" / template_name
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+    entity_ids = _collect_water_boiler_entity_rows(parsed)
+    assert "sensor.test_water_boiler_temperature" in entity_ids, (
+        f"Expected the configured temperature sensor in the boiler card; "
+        f"got rows: {entity_ids}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_renders_dedicated_js_card_in_custom_template(hass):
+    """Water boiler renders as `custom:qs-water-boiler-card` in the custom template.
+
+    Per the QS-194 contract: water_boiler MUST NOT reuse
+    `qs-on-off-duration-card`; it gets its own dedicated card so future
+    boiler-specific UI (temperature, water usage, anti-legionella) has
+    a place to land without churning every on/off-duration user. The
+    JS file lives at `ui/resources/qs-water-boiler-card.js` and is
+    auto-registered through the listdir loop in `dashboard.py:342`.
+    """
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
+    template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+
+    water_boiler_section = None
+    for view in parsed.get("views", []):
+        if view.get("path") == "water_boilers":
+            water_boiler_section = view
+            break
+    assert water_boiler_section is not None, "water_boilers view not rendered"
+
+    sections = water_boiler_section.get("sections", [])
+    assert len(sections) > 0, "water_boilers section has no device grids"
+    card_types: list[str] = []
+    for grid in sections:
+        for card in grid.get("cards", []):
+            card_types.append(card.get("type", ""))
+
+    assert "custom:qs-water-boiler-card" in card_types, (
+        f"water_boiler must render as custom:qs-water-boiler-card; got {card_types}"
+    )
+    assert "custom:qs-on-off-duration-card" not in card_types, (
+        f"water_boiler must NOT reuse qs-on-off-duration-card; got {card_types}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_card_js_resource_present(hass):
+    """`qs-water-boiler-card.js` is present in `ui/resources/`.
+
+    The auto-registration loop in `dashboard.py:342` walks every file
+    under `ui/resources/` and registers each as a Lovelace resource at
+    `/local/quiet_solar/<filename>`. If the JS file is missing the
+    `custom:qs-water-boiler-card` dispatcher entry above silently
+    breaks for any user. This test guards against the JS file being
+    deleted or renamed.
+    """
+    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    assert js_path.is_file(), (
+        f"Expected the dedicated JS card at {js_path} — the dispatcher "
+        "in quiet_solar_dashboard_template.yaml.j2 references "
+        "`custom:qs-water-boiler-card`, which requires this file to "
+        "exist and be auto-registered via dashboard.py:342."
+    )
+    content = js_path.read_text(encoding="utf-8")
+    # N17: regex tolerates either quote style + optional whitespace.
+    import re
+
+    assert re.search(
+        r"customElements\.define\(\s*['\"]qs-water-boiler-card['\"]",
+        content,
+    ), (
+        "qs-water-boiler-card.js must register the `qs-water-boiler-card` "
+        "custom element so HA Lovelace can instantiate the card."
+    )
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_card_filters_empty_temperature_state(hass):
+    """S3 regression: empty-string temperature state must not render as `0.0`.
+
+    `Number("") === 0`, so without an explicit empty-string filter the
+    temperature row would render `0.0 °C` for a sensor whose state is
+    transiently empty. Source-level guard since the card runs in a
+    browser, not in Python tests.
+    """
+    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    content = js_path.read_text(encoding="utf-8")
+    # The filter chain must include `!== ''` for the temperature state.
+    # We require it to appear in the same block as the existing
+    # `unknown`/`unavailable` filters so a future edit can't silently
+    # drop it.
+    import re
+
+    pattern = re.compile(
+        r"rawTempState[^;]*?!==\s*['\"]\s*['\"][^;]*?unknown[^;]*?unavailable",
+        re.DOTALL,
+    )
+    assert pattern.search(content), (
+        "S3: qs-water-boiler-card.js must filter empty-string temperature "
+        "state alongside `unknown`/`unavailable` to avoid rendering `0.0 °C`."
+    )
+
+
+@pytest.mark.parametrize(
+    "card_filename",
+    [
+        "qs-water-boiler-card.js",
+        "qs-on-off-duration-card.js",
+        "qs-climate-card.js",
+        "qs-pool-card.js",
+    ],
+)
+def test_card_mode_change_wrapped_in_try_finally(card_filename):
+    """M2: every card with a `_isProcessing*` flag wraps the awaited
+    `_select` call in `try { ... } finally { ... }` so a rejected
+    service call can't wedge the flag forever.
+    """
+    import re
+
+    js_path = COMPONENT_ROOT / "ui" / "resources" / card_filename
+    content = js_path.read_text(encoding="utf-8")
+    # Must find at least one `_isProcessing... = true` set followed by
+    # a `try { ... await this._select(... } finally { ... }` block.
+    pattern = re.compile(
+        r"_isProcessing\w+\s*=\s*true\s*;[^;]*?try\s*\{[^}]*?await\s+this\._select\([^)]*\)[^}]*?\}\s*finally",
+        re.DOTALL,
+    )
+    assert pattern.search(content), (
+        f"M2: {card_filename} must wrap the `_isProcessing... = true; "
+        f"await this._select(...)` block in `try { '{' }...{ '}' } finally "
+        f"{ '{' }...{ '}' }` so a rejected service call doesn't leave "
+        f"the flag wedged."
+    )
+
+
+@pytest.mark.parametrize(
+    "card_filename,gate",
+    [
+        ("qs-water-boiler-card.js", "showAnimation"),
+        ("qs-on-off-duration-card.js", "showAnimation"),
+        ("qs-climate-card.js", "showAnimation"),
+        ("qs-car-card.js", "charging"),
+    ],
+)
+def test_card_raf_idle_gated(card_filename, gate):
+    """M4: every card except pool gates `_startAnimation` on a
+    runtime condition (`showAnimation` for boiler/on-off-duration/
+    climate, `charging` for car). Pool's wave is intrinsically
+    continuous-while-connected and uses `_startAnimation` from
+    `connectedCallback` directly — that file is covered by the
+    presence-of-helper check below.
+    """
+    import re
+
+    js_path = COMPONENT_ROOT / "ui" / "resources" / card_filename
+    content = js_path.read_text(encoding="utf-8")
+    assert "_startAnimation" in content and "_stopAnimation" in content, (
+        f"M4: {card_filename} must define both _startAnimation and "
+        f"_stopAnimation helpers."
+    )
+    # The render path must call _startAnimation conditionally on `gate`.
+    gate_call_pattern = re.compile(
+        rf"if\s*\(\s*{re.escape(gate)}\s*\)\s*\{{[^}}]*?_startAnimation",
+        re.DOTALL,
+    )
+    assert gate_call_pattern.search(content), (
+        f"M4: {card_filename} must call `_startAnimation()` conditionally "
+        f"on `{gate}` from within `_render()`."
+    )
+
+
+def test_pool_card_has_start_stop_helpers():
+    """M4 pool-variant: pool's RAF is intrinsically continuous, but the
+    `_startAnimation` / `_stopAnimation` helper-naming is still present
+    for cross-card consistency.
+    """
+    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
+    content = js_path.read_text(encoding="utf-8")
+    assert "_startAnimation" in content and "_stopAnimation" in content, (
+        "M4: qs-pool-card.js must define _startAnimation/_stopAnimation "
+        "helpers for cross-card consistency."
+    )
+
+
+def test_water_boiler_card_uses_safe_number_helper():
+    """S8: water-boiler card uses `_safeNumber` instead of
+    `Number(s?.state || N)` so `unknown`/`unavailable`/`""` don't
+    propagate NaN into SVG path attributes.
+    """
+    import re
+
+    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    content = js_path.read_text(encoding="utf-8")
+    assert "_safeNumber" in content, (
+        "S8: qs-water-boiler-card.js must define `_safeNumber(...)` helper."
+    )
+    # The duration-related reads must use _safeNumber, not raw `Number(.state || N)`.
+    # Forbidden pattern: `Number(s<X>?.state || N)` where <X> is one of the duration sensors.
+    forbidden = re.compile(
+        r"Number\(s(DurationLimit|CurrentDuration|DefaultOnDuration)\?\.state\s*\|\|",
+    )
+    assert not forbidden.search(content), (
+        "S8: replace `Number(s*?.state || N)` for duration sensors with "
+        "`this._safeNumber(s*, N)` to avoid NaN propagation."
+    )
+
+
+def test_water_boiler_card_translates_via_water_boiler_mode_namespace():
+    """S10: the card resolves bistate mode labels under the
+    `water_boiler_mode` translation namespace, not `on_off_mode`, so
+    future boiler-specific labels can diverge without touching this card.
+    """
+    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    content = js_path.read_text(encoding="utf-8")
+    assert "entity.select.water_boiler_mode.state" in content, (
+        "S10: qs-water-boiler-card.js must resolve bistate labels under "
+        "`component.quiet_solar.entity.select.water_boiler_mode.state`."
+    )
+    # Defensive: the on_off_mode key must NOT appear here — we want a
+    # clean namespace separation so a future label change for boilers
+    # can't accidentally bleed into the on_off card or vice versa.
+    assert "entity.select.on_off_mode.state" not in content, (
+        "S10: qs-water-boiler-card.js must not reference the on_off_mode "
+        "translation namespace; use water_boiler_mode instead."
+    )
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_card_input_contract_keys(hass):
+    """N4: the JS card's input keys match what the template emits.
+
+    Extract the destructured key set from the JS card source (via the
+    `this._entity(e.<key>)` accesses) and assert it's a SUPERSET of the
+    keys the dashboard template emits in the `entities:` mapping. The
+    JS card may read additional keys that are emitted only conditionally
+    (e.g. `temperature_sensor`); the rule is "every emitted key is
+    consumed by the card" plus "no spurious keys in the template".
+    """
+    import re
+
+    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    js_content = js_path.read_text(encoding="utf-8")
+    js_keys = set(re.findall(r"this\._entity\(\s*e\.([A-Za-z_][A-Za-z_0-9]*)", js_content))
+
+    tpl_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+    tpl_content = tpl_path.read_text(encoding="utf-8")
+    # Find the water_boiler branch and extract `key: ...` lines.
+    branch_match = re.search(
+        r'elif\s+device\.device_type\s*==\s*"water_boiler"\s*-?%}(.*?)(?=\{%\s*elif|\{%\s*endif)',
+        tpl_content,
+        re.DOTALL,
+    )
+    assert branch_match, "Could not locate the water_boiler branch in the custom template"
+    branch = branch_match.group(1)
+    tpl_keys = set(re.findall(r"(?:^|\n)\s*\{%[^%]*%\}\s*([a-z_][a-z_0-9]*)\s*:", branch))
+    # The temperature_sensor key is emitted via a literal `{{ "temperature_sensor: " + ... }}`
+    if '"temperature_sensor: "' in branch:
+        tpl_keys.add("temperature_sensor")
+    # Card-level keys (siblings of `entities:`) are not part of the
+    # `entities` contract — drop them from the comparison.
+    tpl_keys.discard("title")
+
+    # Every template-emitted key must be a key the JS card reads.
+    unconsumed = tpl_keys - js_keys
+    assert not unconsumed, (
+        f"Template emits keys not consumed by qs-water-boiler-card.js: "
+        f"{sorted(unconsumed)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_water_boiler_card_input_contract_emits_temperature_sensor_key(hass):
+    """Custom template emits `temperature_sensor: <id>` for the JS card.
+
+    The dedicated `qs-water-boiler-card` reads `entities.temperature_sensor`
+    to render the optional water-tank temperature row. The template
+    must wire the configured `water_boiler_temperature_sensor` to that
+    key so the JS card can display the value.
+    """
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
+    template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+
+    # Find the boiler card and inspect its `entities` mapping
+    water_boiler_section = None
+    for view in parsed.get("views", []):
+        if view.get("path") == "water_boilers":
+            water_boiler_section = view
+            break
+    assert water_boiler_section is not None
+    expected_id = MOCK_WATER_BOILER_CONFIG[CONF_WATER_BOILER_TEMPERATURE_SENSOR]
+    found = False
+    for grid in water_boiler_section.get("sections", []):
+        for card in grid.get("cards", []):
+            entities = card.get("entities")
+            if isinstance(entities, dict) and entities.get("temperature_sensor") == expected_id:
+                found = True
+                break
+    assert found, (
+        f"Expected `temperature_sensor: {expected_id}` in the boiler card's "
+        f"entities mapping; got: {water_boiler_section}"
+    )
+
+
+@pytest.mark.parametrize(
+    "template_name",
+    [
+        "quiet_solar_dashboard_template.yaml.j2",
+        "quiet_solar_dashboard_template_standard_ha.yaml.j2",
+    ],
+)
+@pytest.mark.asyncio
+async def test_water_boiler_temperature_sensor_row_absent_when_unset(
+    hass, template_name
+):
+    """When no temp sensor is configured, the configured entity id is NOT rendered.
+
+    Structural check using the configured entity id (not a prefix
+    heuristic) so a future regression that emitted a *different* sensor
+    id couldn't sneak past this assertion.
+    """
+    expected_temp_id = MOCK_WATER_BOILER_CONFIG[CONF_WATER_BOILER_TEMPERATURE_SENSOR]
+    home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG_NO_TEMP)
+    template_path = COMPONENT_ROOT / "ui" / template_name
+    template_content = template_path.read_text()
+
+    tpl = Template(template_content, hass)
+    rendered = tpl.async_render(variables={"home": home})
+
+    parsed = yaml.safe_load(rendered)
+    assert parsed is not None
+    entity_ids = _collect_water_boiler_entity_rows(parsed)
+    assert expected_temp_id not in entity_ids, (
+        f"Configured temp sensor {expected_temp_id!r} leaked into the "
+        f"no-temp boiler card; got rows: {entity_ids}"
+    )
+
+

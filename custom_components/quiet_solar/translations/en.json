@@ -392,9 +392,28 @@
                     "person": "Add a Person",
                     "pool": "Add a pool",
                     "radiator": "Add a heating-only radiator (switch-backed or climate-backed)",
-                    "solar": "Add a Solar Panel Plant"
+                    "solar": "Add a Solar Panel Plant",
+                    "water_boiler": "Add a water boiler (cumulus or thermodynamic boiler)"
                 },
                 "title": "Choose a load or device to add"
+            },
+            "water_boiler": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the boiler (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the boiler being on",
+                    "dynamic_group_name": "Add water boiler to a load group to limit the amps",
+                    "load_is_boost_only": "Is this boiler automatically regulated (QS will only boost on solar surplus)?",
+                    "name": "Name",
+                    "num_max_on_off": "Maximum number of allowed turn on or turn off of the boiler per day",
+                    "power": "Power consumption of the boiler (W)",
+                    "switch": "On/Off switch of the boiler",
+                    "water_boiler_temperature_sensor": "Water tank temperature sensor (optional, reserved for future logic)"
+                },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
+                },
+                "description": "Configure a cumulus (electric resistive water heater) or a thermodynamic water boiler.",
+                "title": "Edit your water boiler"
             }
         }
     },
@@ -594,6 +613,16 @@
             },
             "selected_person_for_car": {
                 "name": "Attached Person:"
+            },
+            "water_boiler_mode": {
+                "name": "Water Boiler Mode",
+                "state": {
+                    "bistate_mode_auto": "Calendar: End+Duration",
+                    "bistate_mode_default": "Default: End+Duration",
+                    "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
+                    "on_off_mode_off": "Force OFF",
+                    "on_off_mode_on": "Force ON"
+                }
             }
         },
         "sensor": {
@@ -1076,6 +1105,24 @@
                 },
                 "description": "setup only one of the two inverters sensor if you have only one",
                 "title": "Edit your solar panel plant"
+            },
+            "water_boiler": {
+                "data": {
+                    "accurate_power_sensor": "Power sensor of the boiler (W, kW)",
+                    "calendar": "Add a calendar: end of events is the target, length of the event is the desired duration of the boiler being on",
+                    "dynamic_group_name": "Add water boiler to a load group to limit the amps",
+                    "load_is_boost_only": "Is this boiler automatically regulated (QS will only boost on solar surplus)?",
+                    "name": "Name",
+                    "num_max_on_off": "Maximum number of allowed turn on or turn off of the boiler per day",
+                    "power": "Power consumption of the boiler (W)",
+                    "switch": "On/Off switch of the boiler",
+                    "water_boiler_temperature_sensor": "Water tank temperature sensor (optional, reserved for future logic)"
+                },
+                "data_description": {
+                    "power": "Measured: {measured_power}"
+                },
+                "description": "Configure a cumulus (electric resistive water heater) or a thermodynamic water boiler.",
+                "title": "Edit your water boiler"
             }
         }
     },
@@ -1085,9 +1132,10 @@
                 "#1 - cars": "#1 - cars",
                 "#2 - climates": "#2 - climates",
                 "#3 - pools": "#3 - pools",
-                "#4 - others": "#4 - others",
-                "#5 - settings": "#5 - settings",
-                "#6 - radiators": "#6 - radiators",
+                "#4 - water_boilers": "#4 - water_boilers",
+                "#5 - radiators": "#5 - radiators",
+                "#6 - others": "#6 - others",
+                "#7 - settings": "#7 - settings",
                 "Not in dashboard": "Not in dashboard"
             }
         }

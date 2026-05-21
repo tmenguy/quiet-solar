@@ -144,3 +144,18 @@ device.attach_ha_state_to_probe(...) for each tracked entity
   mapping) decides whether the new device appears on the dashboard.
 - [../../workflow/project-rules.md](../../workflow/project-rules.md)
   — the `const.py` and translations rules.
+- `async_step_water_boiler` (in `config_flow.py`) — the latest
+  per-type step, added in QS-194. Mirrors `async_step_on_off_duration`
+  with an extra optional `water_boiler_temperature_sensor` field.
+  Uses the canonical `return await self.async_entry_next(...)`
+  direct-return pattern (no intermediate variable). The optional
+  temperature-sensor selector is surfaced **whenever there are live
+  temperature entities OR a previously-configured id is stored** — the
+  latter rule prevents a stranded entity id from becoming invisible
+  after HA loses the sensor (the form's selector then includes the
+  stored id so the user can replace or keep it). When the field was
+  rendered, the per-step also `setdefault`s the key in `user_input`
+  to an empty string before submission so the OptionsFlow merge can
+  actually overwrite a stranded id with a cleared value
+  (`QSWaterBoiler.__init__` normalises the empty string back to
+  `None`).

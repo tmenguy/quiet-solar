@@ -19,14 +19,22 @@ class QsCarCard extends HTMLElement {
     this._charging = false;
   }
 
-  connectedCallback() {
+  // M4: gate the requestAnimationFrame loop on `_charging`. The loop
+  // is started lazily by `_render()` only when the car is actually
+  // charging, and stopped in `disconnectedCallback` AND whenever
+  // `_charging` becomes false. Avoids constant per-card repaint
+  // overhead when the car isn't drawing any current.
+  _startAnimation() {
     if (this._animRaf != null) return;
+    this._lastAnimTs = null;
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
       if (!this._charging) {
+        // _charging went false between renders — stop the loop entirely
+        // rather than spin idle.
         this._animOffset = 0;
         this._lastAnimTs = null;
-        this._animRaf = requestAnimationFrame(step);
+        this._animRaf = null;
         return;
       }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
@@ -45,10 +53,26 @@ class QsCarCard extends HTMLElement {
     this._animRaf = requestAnimationFrame(step);
   }
 
-  disconnectedCallback() {
+  _stopAnimation() {
     if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
     this._animRaf = null;
     this._lastAnimTs = null;
+  }
+
+  connectedCallback() {
+    // RAF intentionally NOT started here — _render() calls
+    // _startAnimation() when `_charging` is true.
+  }
+
+  disconnectedCallback() {
+    this._stopAnimation();
+    // S7: reset interaction flags so a re-attach after mid-interaction
+    // doesn't silently short-circuit `set hass` on stale flags.
+    this._isInteracting = false;
+    this._isInteractingCharger = false;
+    this._isInteractingPerson = false;
+    this._isInteractingTarget = false;
+    this._modalOpen = false;
   }
   static getStubConfig() {
     return { name: "QS Car", entities: {} };
@@ -59,6 +83,18 @@ class QsCarCard extends HTMLElement {
     this._config = config;
     this._root = this.attachShadow({ mode: "open" });
     this._render();
+  }
+
+  // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
+  // strings interpolated into innerHTML.
+  _escapeHtml(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   set hass(hass) {
@@ -130,6 +166,13 @@ class QsCarCard extends HTMLElement {
       const target = selLimit?.state || "";
       const charging = (Number(power) > 50);
       this._charging = charging;
+      // M4: start/stop the RAF loop based on whether the car is actually
+      // charging. Idle cards consume zero per-frame work.
+      if (charging) {
+        this._startAnimation();
+      } else {
+        this._stopAnimation();
+      }
       const carChargeTypeIcons = {
           "Unknown": "mdi:help-circle-outline",
           "Not Plugged": "mdi:power-plug-off",
@@ -502,7 +545,7 @@ class QsCarCard extends HTMLElement {
       this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''} ${isStale ? 'stale' : ''}">
         <style>${css}</style>
-        <div class="card-title">${displayTitle}</div>
+        <div class="card-title">${this._escapeHtml(displayTitle)}</div>
         <div class="top"></div>
 
         <div class="hero">
@@ -707,6 +750,14 @@ class QsCarCard extends HTMLElement {
               const hm = formatHm(mins);
               const val = hm + ':00';
               this._localNextTimeMins = mins; // keep local until HA push comes back to avoid select jumping
+              // S9: clear the local override after a grace period.
+              if (this._localNextTimeClearTimer) {
+                  clearTimeout(this._localNextTimeClearTimer);
+              }
+              this._localNextTimeClearTimer = setTimeout(() => {
+                  this._localNextTimeMins = null;
+                  this._render();
+              }, 5000);
               this._setTime(e.next_time, val);
           };
           const startInteract = () => {
@@ -864,6 +915,16 @@ class QsCarCard extends HTMLElement {
                                   const hm = formatHm(mins);
                                   const val = hm + ':00';
                                   this._localNextTimeMins = mins;
+                                  // S9: clear the local override after a
+                                  // grace period so out-of-band backend
+                                  // updates aren't masked indefinitely.
+                                  if (this._localNextTimeClearTimer) {
+                                      clearTimeout(this._localNextTimeClearTimer);
+                                  }
+                                  this._localNextTimeClearTimer = setTimeout(() => {
+                                      this._localNextTimeMins = null;
+                                      this._render();
+                                  }, 5000);
                                   await this._setTime(e.next_time, val);
                                   await this._press(e.schedule);
                               }
@@ -879,8 +940,9 @@ class QsCarCard extends HTMLElement {
           const {title, message, buttons, customContent} = opts;
           const wrap = document.createElement('div');
           wrap.className = 'modal';
-          const contentHtml = customContent || `<p>${message}</p>`;
-          wrap.innerHTML = `<div class="dialog"><h3>${title}</h3>${contentHtml}<div class="actions"></div></div>`;
+          // S6: escape user-controlled `title` and `message`.
+          const contentHtml = customContent || `<p>${this._escapeHtml(message)}</p>`;
+          wrap.innerHTML = `<div class="dialog"><h3>${this._escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
           const actions = wrap.querySelector('.actions');
           this._modalOpen = true;
           buttons.forEach(b => {

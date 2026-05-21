@@ -123,6 +123,7 @@ from .const import (
     CONF_SOLAR_MAX_OUTPUT_POWER_VALUE,
     CONF_SOLAR_MAX_PHASE_AMPS,
     CONF_SWITCH,
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR,
     DASHBOARD_DEFAULT_SECTIONS,
     DASHBOARD_DEVICE_SECTION_TRANSLATION_KEY,
     DASHBOARD_NO_SECTION,
@@ -151,6 +152,7 @@ from .ha_model.person import QSPerson
 from .ha_model.pool import QSPool
 from .ha_model.radiator import QSRadiator
 from .ha_model.solar import QSSolar
+from .ha_model.water_boiler import QSWaterBoiler
 from .home_model.load import map_section_selected_name_in_section_list
 
 _LOGGER = logging.getLogger(__name__)
@@ -167,6 +169,7 @@ LOAD_TYPES_MENU = {
     QSCar.conf_type_name: None,
     QSPerson.conf_type_name: None,
     QSPool.conf_type_name: None,
+    QSWaterBoiler.conf_type_name: None,
     QSOnOffDuration.conf_type_name: None,
     QSClimateDuration.conf_type_name: None,
     QSRadiator.conf_type_name: None,
@@ -1475,6 +1478,71 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     mode=selector.NumberSelectorMode.BOX,
                     unit_of_measurement=UnitOfTime.HOURS,
                 )
+            )
+
+        schema = vol.Schema(sc_dict)
+
+        return self.async_show_form(step_id=TYPE, data_schema=schema, description_placeholders=placeholders)
+
+    async def async_step_water_boiler(self, user_input=None):
+        """Configure a QSWaterBoiler instance.
+
+        Mirror of async_step_on_off_duration — keep both schemas in
+        lock-step. Water boiler intentionally inherits the same field
+        set, plus an optional water-tank temperature sensor.
+        """
+        TYPE = QSWaterBoiler.conf_type_name
+
+        # S1: `self.config_entry` may not yet exist during the INITIAL
+        # creation flow. The `hasattr` guard restores the safety net.
+        stored_temp_sensor = (
+            self.config_entry.data.get(CONF_WATER_BOILER_TEMPERATURE_SENSOR)
+            if hasattr(self, "config_entry") and self.config_entry is not None
+            else None
+        )
+
+        if user_input is not None:
+            # M3: even with the WF-4 fix that re-surfaces a stranded id in
+            # the form, `vol.Optional` lets the user omit the key — the
+            # OptionsFlow's `merged.update(user_input)` then silently
+            # re-persists the stranded value. Force the key to be present
+            # ONLY when the field was actually rendered in the form, so
+            # the merge can overwrite. Use empty-string as the sentinel
+            # rather than None because `clean_data` strips None values
+            # before the merge; `QSWaterBoiler.__init__`'s WF-3 normalises
+            # the empty string back to `None` at device-construction time.
+            field_was_rendered = bool(selectable_temperature_entities(self.hass)) or stored_temp_sensor is not None
+            if field_was_rendered:
+                user_input.setdefault(CONF_WATER_BOILER_TEMPERATURE_SENSOR, "")
+            return await self.async_entry_next(user_input, TYPE)
+
+        sc_dict, placeholders = self.get_common_schema(
+            type=TYPE,
+            add_power_value_selector=1500,
+            add_load_power_sensor=True,
+            add_calendar=True,
+            add_boost_only=True,
+            add_power_group_selector=True,
+            add_max_on_off=True,
+        )
+
+        self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
+
+        # WF-4: surface the field even when no live temperature entities
+        # remain — otherwise a previously-configured sensor that's since
+        # been removed from HA stays silently stranded in config_entry.data,
+        # because the OptionsFlow merges user_input onto the prior data
+        # and an absent key never clears the old value.
+        temperature_entities = selectable_temperature_entities(self.hass)
+        entity_list = list(temperature_entities)
+        if stored_temp_sensor and stored_temp_sensor not in entity_list:
+            entity_list.append(stored_temp_sensor)
+        if entity_list:
+            self.add_entity_selector(
+                sc_dict,
+                CONF_WATER_BOILER_TEMPERATURE_SENSOR,
+                False,
+                entity_list=entity_list,
             )
 
         schema = vol.Schema(sc_dict)

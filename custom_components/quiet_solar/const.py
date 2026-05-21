@@ -30,6 +30,7 @@ CONF_TYPE_NAME_QSClimateDuration = "climate"
 CONF_TYPE_NAME_QSDynamicGroup = "dynamic_group"
 CONF_TYPE_NAME_QSHeatPump = "heat_pump"
 CONF_TYPE_NAME_QSRadiator = "radiator"
+CONF_TYPE_NAME_QSWaterBoiler = "water_boiler"
 CONF_TYPE_NAME_HADeviceMixin = "ha_device_mixin"
 
 
@@ -45,6 +46,7 @@ DASHBOARD_DEFAULT_SECTIONS = [
     ("cars", "mdi:car"),
     ("climates", "mdi:home-thermometer"),
     ("pools", "mdi:pool"),
+    ("water_boilers", "mdi:water-boiler"),
     ("others", "mdi:home"),
     ("settings", "mdi:cog-outline"),
     # `radiators` is appended LAST to preserve the existing 1..5 section
@@ -68,6 +70,7 @@ LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
     CONF_TYPE_NAME_QSPerson: "settings",
     CONF_TYPE_NAME_QSCar: "cars",
     CONF_TYPE_NAME_QSPool: "pools",
+    CONF_TYPE_NAME_QSWaterBoiler: "water_boilers",
     CONF_TYPE_NAME_QSOnOffDuration: "others",
     CONF_TYPE_NAME_QSClimateDuration: "climates",
     CONF_TYPE_NAME_QSDynamicGroup: None,
@@ -78,6 +81,12 @@ LOAD_TYPE_DASHBOARD_DEFAULT_SECTION = {
 
 CONF_DASHBOARD_SECTION_NAME = "dashboard_section_name"
 CONF_DASHBOARD_SECTION_ICON = "dashboard_section_icon"
+# N7: list of bundled default sections the user has explicitly opted
+# out of (removed from their customised list). The QS-194
+# `_maybe_migrate_missing_default_section` helper honours this set so
+# a user-deliberate removal isn't silently re-added every time a
+# device of that type is added.
+CONF_DASHBOARD_SECTIONS_USER_REMOVED = "dashboard_sections_user_removed"
 
 
 CONF_POWER = "power"
@@ -190,6 +199,7 @@ CONF_PERSON_NOTIFICATION_TIME = "person_notification_time"
 
 CONF_POOL_TEMPERATURE_SENSOR = "pool_temperature_sensor"
 CONF_POOL_IS_PUMP_VARIABLE_SPEED = "pool_is_pump_variable_speed"
+CONF_WATER_BOILER_TEMPERATURE_SENSOR = "water_boiler_temperature_sensor"
 
 CONF_POOL_WINTER_IDX = 0
 CONF_POOL_DEFAULT_IDX = 4

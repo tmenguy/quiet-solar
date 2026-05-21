@@ -11,6 +11,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-climate-card.js
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
+    - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
 last_verified: 2026-05-21
 ---
 
@@ -192,12 +193,74 @@ Subsequent HA starts:
 | Climate | `custom:qs-climate-card` | `QSClimateDuration`, `QSHeatPump` | `ui/resources/qs-climate-card.js` |
 | On-off duration | `custom:qs-on-off-duration-card` | `QSOnOffDuration` | `ui/resources/qs-on-off-duration-card.js` |
 | Radiator | `custom:qs-radiator-card` | `QSRadiator` | `ui/resources/qs-radiator-card.js` (cloned from `qs-on-off-duration-card.js`; UX redesign deferred via [#199](https://github.com/tmenguy/quiet-solar/issues/199); has S14-S17/N7 safety hardening the on/off card has not yet adopted) |
+| Water boiler | `custom:qs-water-boiler-card` | `QSWaterBoiler` | `ui/resources/qs-water-boiler-card.js` |
 
 The radiator template wires `backing_entity` (the underlying
 switch/climate entity id) and `climate_hvac_mode_on` (the configured
 HVAC ON mode — e.g. `"heat"`, `"auto"`) through the entities block.
 The card uses those values to derive `running` during the cold-start
 grace window when the QS command sensor hasn't published yet.
+
+**`qs-water-boiler-card` initial release (QS-194).** The water-boiler
+card was forked from `qs-on-off-duration-card` as its starting point
+(water boilers are on/off-duration loads at heart) with one
+boiler-specific extension: an optional `temperature_sensor` entity
+that renders a water-tank temperature row at the top of the card.
+Future iterations will add boiler-specific UI (anti-legionella
+indicators, off-peak preference, water-usage tracking) without
+churning every on/off-duration user. The custom template emits the
+JS card's input contract via `key: value` pairs (e.g.
+`temperature_sensor: {{ device.water_boiler_temperature_sensor }}`)
+just like the other dedicated cards. The standard template still
+falls back to plain `- entity:` rows — that's the no-JS variant.
+
+New Jinja branches added by QS-194 use the idiomatic `is not none`
+test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`
+documentation comments (rather than `{# TODO: ... #}`); follow these
+conventions for any future template additions.
+
+## Hardened JS-card patterns (QS-194 review-fix #03)
+
+Every JS card in `ui/resources/` follows the same defensive
+patterns after the cross-card audit:
+
+- **RAF idle-gating (M4).** Each card defines `_startAnimation()` and
+  `_stopAnimation()` helpers. The render path starts/stops the
+  animation conditionally — on `showAnimation` for the
+  duration-based cards, on `_charging` for the car card, and
+  continuously while connected for the pool wave (intrinsically
+  visible). `connectedCallback` no longer kicks off RAF
+  unconditionally; `disconnectedCallback` always stops it.
+- **try/finally around service calls (M2).** Every
+  `_isProcessing*` flag setter is wrapped in `try { await
+  this._select(...) } finally { setTimeout(() => _isProcessing... =
+  false, ...) }` so a rejected HA service call can't wedge the
+  card.
+- **Interaction-flag reset on disconnect (S7).** Every card resets
+  every `_isInteracting*` / `_isProcessing*` / `_modalOpen` flag in
+  `disconnectedCallback` so a re-attach mid-interaction doesn't
+  silently short-circuit `set hass` on stale state.
+- **HTML escaping (S6).** Each card carries an `_escapeHtml(s)`
+  helper applied to user-/third-party-controlled strings
+  interpolated into `innerHTML` (card title, dialog title, dialog
+  message, sensor unit).
+- **Safe numeric coercion (S8, water-boiler).** The water-boiler
+  card uses `_safeNumber(sensor, default)` instead of
+  `Number(s?.state || N)` so degenerate states
+  (`""` / `unknown` / `unavailable`) can't propagate `NaN` into SVG
+  path attributes.
+- **Local-state cleanup symmetry (S9).** Every Apply handler that
+  sets a `_localFinishTimeMins` / `_localNextTimeMins` schedules a
+  matching 5-second clear timer so out-of-band backend updates
+  aren't masked indefinitely (mirrors the existing
+  `_localTargetPct` pattern).
+- **Modal dismiss path (N12) + activate try/finally (N13).** The
+  shared `showDialog` helper falls back to a "Close" button when
+  `buttons` is empty, and the per-button `activate` closure wraps
+  `b.onClick?.()` in `try/finally` so a synchronous throw can't
+  leave the modal locked open.
+
+Follow these patterns when adding new JS cards. 
 
 The cards are **outside the quality pipeline**: no JS tests, no JS
 linter, no build step. The product brief explicitly says "don't
