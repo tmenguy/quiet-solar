@@ -493,12 +493,21 @@ class TestDashboardTemplateRendering:
                 f"Missing <path id=\"{fid}\">"
             )
 
-        # AC-2: clipPath circle at the ring centre.
+        # AC-2: clipPath circle at the ring centre. Geometry must be wired
+        # through the module-top `CENTER_CY` / `CLIP_R` constants so the
+        # SVG cannot silently drift if those constants are tweaked
+        # (review fix S2).
         assert re.search(
-            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<circle\s+cx=\"160\"\s+cy=\"160\"\s+r=\"120\"",
+            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<circle\s+cx=\"\$\{CENTER_CY\}\"\s+cy=\"\$\{CENTER_CY\}\"\s+r=\"\$\{CLIP_R\}\"",
             content,
             re.DOTALL,
-        ) is not None, "Missing clipPath circle (cx=160 cy=160 r=120)"
+        ) is not None, (
+            "Missing clipPath circle interpolating CENTER_CY / CLIP_R "
+            "(must use ${CENTER_CY} / ${CLIP_R}, not hard-coded 160 / 120)"
+        )
+        # The constants themselves carry the correct geometric values.
+        assert re.search(r"const\s+CENTER_CY\s*=\s*160\b", content) is not None
+        assert re.search(r"const\s+CLIP_R\s*=\s*120\b", content) is not None
 
         # AC-2: <g clip-path="url(#${flameClipId})"> wraps the three paths.
         assert 'clip-path="url(#${flameClipId})"' in content
@@ -600,6 +609,63 @@ class TestDashboardTemplateRendering:
         ) is not None, (
             "Fill-selection must branch on `running` — `running ? FLAME_FILLS : FLAME_GREY_FILLS`"
         )
+
+    def test_radiator_card_text_shadow_for_flame_readability(self):  # CR2 — sync (no hass)
+        """QS-201 AC-9 — --ring-text-shadow on :host + applied to 4 ring text classes.
+
+        Without the text-shadow, the centre text collapses in contrast over the
+        warm orange flame backdrop. AC-9 is required-for-correctness — pin it
+        so a CSS-only regression that drops the shadow can't slip past review.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # CSS variable declaration on :host (whitespace-tolerant).
+        assert re.search(
+            r"--ring-text-shadow:\s*0 0 12px rgba\(0,0,0,0\.8\),\s*0 2px 4px rgba\(0,0,0,0\.5\)",
+            content,
+        ) is not None, "AC-9: --ring-text-shadow variable must be declared on :host"
+
+        # Each of the four ring text classes applies the variable.
+        for cls in ("target-label", "target-value", "from-to-label", "from-to-value"):
+            assert re.search(
+                rf"\.ring\s+\.{cls}\s*\{{[^}}]*text-shadow:\s*var\(--ring-text-shadow\)",
+                content,
+            ) is not None, (
+                f"AC-9: .ring .{cls} must apply text-shadow: var(--ring-text-shadow)"
+            )
+
+    def test_radiator_card_flame_dancing_dynamic_proxy(self):  # CR2 — sync (no hass)
+        """QS-201 AC-4 — structural proxy for "dancing when running".
+
+        No JS runtime tests exist; AC-4 is verified manually plus via these
+        three structural patterns: a `_flamePhase` accumulator that advances
+        per frame, a per-layer `translateX(${tx.toFixed(1)}px)` template, and
+        the use of `LAYER_SCROLL_OFFSET` inside the step closure for the
+        parallax-tongue effect.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # Phase accumulator inside the RAF step closure.
+        assert re.search(
+            r"this\._flamePhase\s*\+=\s*this\._currentFlameSpeed\s*\*\s*dt",
+            content,
+        ) is not None, "AC-4: _flamePhase += _currentFlameSpeed * dt must be present"
+
+        # Per-frame translateX template — tx is toFixed(1) for sub-pixel snap.
+        assert re.search(
+            r"translateX\(\$\{tx\.toFixed\(1\)\}px\)",
+            content,
+        ) is not None, "AC-4: per-layer translateX(${tx.toFixed(1)}px) template required"
+
+        # LAYER_SCROLL_OFFSET drives per-layer scroll phase for parallax.
+        assert re.search(
+            r"i\s*\*\s*LAYER_SCROLL_OFFSET",
+            content,
+        ) is not None, "AC-4: LAYER_SCROLL_OFFSET must drive per-layer scroll phase"
 
     @pytest.mark.asyncio
     async def test_radiator_dashboard_passes_climate_hvac_mode_on(

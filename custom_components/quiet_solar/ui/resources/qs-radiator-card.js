@@ -83,16 +83,27 @@ class QsRadiatorCard extends HTMLElement {
   _startAnimation() {
     // QS-201: first-connect prime — initialize flame anim state if null so
     // the next _render() can read sane defaults. Set _needsFlamePrime so
-    // _render() skips the 1.5s lerp from defaults at boot.
+    // _render() skips the 1.5s lerp from defaults at boot. The prime block
+    // must run BEFORE the early-return so the very first _render() after
+    // construction sees primed amp/speed values; it's idempotent on every
+    // subsequent call (guarded by the null check).
     if (this._currentFlameAmp == null) {
       this._currentFlameAmp = STILL_AMP;
       this._currentFlameSpeed = STILL_SPEED;
       this._flamePhase = 0;
       this._needsFlamePrime = true;
     }
-    this._invalidateFlameCache();
 
+    // QS-201 review fix S1: the cache-invalidate MUST live behind the
+    // early-return guard. `_startAnimation()` is called on every _render()
+    // via the umbrella RAF gate, but nulling `_lastFlameAmp` /
+    // `_lastFlameBaseY` on every render would defeat the path-regen
+    // throttle (ampDelta becomes Infinity, forcing unconditional path
+    // regeneration on the next RAF tick). The cache only needs clearing
+    // when RAF is actually being (re)started; the post-innerHTML reset in
+    // `_render()` already handles the rewrite case.
     if (this._animRaf != null) return;
+    this._invalidateFlameCache();
     this._lastAnimTs = null;
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
@@ -751,7 +762,7 @@ class QsRadiatorCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${flameClipId}">
-                  <circle cx="160" cy="160" r="120" />
+                  <circle cx="${CENTER_CY}" cy="${CENTER_CY}" r="${CLIP_R}" />
                 </clipPath>
               </defs>
               <g clip-path="url(#${flameClipId})">
