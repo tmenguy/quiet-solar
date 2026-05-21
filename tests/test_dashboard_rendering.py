@@ -457,6 +457,216 @@ class TestDashboardTemplateRendering:
             "configured HVAC ON mode — non-default HVAC modes won't be recognised"
         )
 
+    def test_radiator_card_heat_palette(self):  # CR2 — sync (no hass)
+        """QS-201 AC-1 — heat palette is applied verbatim, cool palette gone."""
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        # Strip comments first.
+        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        no_comments = re.sub(r"//[^\n]*", "", no_block)
+
+        # Required heat-palette literals (all five keys).
+        for literal in ("'#FF5722'", "'#D32F2F'", "'#FF6E40'", "'#E64A19'"):
+            assert literal in no_comments, f"Missing heat-palette literal {literal}"
+
+        # The `colors` const must use these literals (not just appear somewhere).
+        assert re.search(
+            r"const\s+colors\s*=\s*\{[^}]*primary:\s*'#FF5722'", no_comments
+        ) is not None
+
+        # Cool-palette literals must NOT appear in executable code.
+        for forbidden in ("'#2196F3'", "'#00bcd4'", "'#8bc34a'", "'#00e1ff'", "'#0066ff'"):
+            assert forbidden not in no_comments, (
+                f"Stale cool-palette literal {forbidden} still present"
+            )
+
+    def test_radiator_card_flame_layers_present(self):  # CR2 — sync (no hass)
+        """QS-201 AC-2 + AC-7 — three flame paths, circular clip, cache-clear whitelist."""
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # AC-2: three flame paths with ids flame0/1/2.
+        for fid in ("flame0", "flame1", "flame2"):
+            assert re.search(rf'id="{fid}"', content) is not None, (
+                f"Missing <path id=\"{fid}\">"
+            )
+
+        # AC-2: clipPath circle at the ring centre. Geometry must be wired
+        # through the module-top `CENTER_CY` / `CLIP_R` constants so the
+        # SVG cannot silently drift if those constants are tweaked
+        # (review fix S2).
+        assert re.search(
+            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<circle\s+cx=\"\$\{CENTER_CY\}\"\s+cy=\"\$\{CENTER_CY\}\"\s+r=\"\$\{CLIP_R\}\"",
+            content,
+            re.DOTALL,
+        ) is not None, (
+            "Missing clipPath circle interpolating CENTER_CY / CLIP_R "
+            "(must use ${CENTER_CY} / ${CLIP_R}, not hard-coded 160 / 120)"
+        )
+        # The constants themselves carry the correct geometric values.
+        assert re.search(r"const\s+CENTER_CY\s*=\s*160\b", content) is not None
+        assert re.search(r"const\s+CLIP_R\s*=\s*120\b", content) is not None
+
+        # AC-2: <g clip-path="url(#${flameClipId})"> wraps the three paths.
+        assert 'clip-path="url(#${flameClipId})"' in content
+
+        # AC-7: _invalidateFlameCache body whitelist — EXACTLY three fields cleared.
+        inv_match = re.search(
+            r"_invalidateFlameCache\s*\(\s*\)\s*\{([^}]+)\}",
+            content,
+            re.DOTALL,
+        )
+        assert inv_match is not None, "Missing _invalidateFlameCache method"
+        body = inv_match.group(1)
+        # Required positive whitelist.
+        for required in ("_flameEls", "_lastFlameBaseY", "_lastFlameAmp"):
+            assert required in body, (
+                f"_invalidateFlameCache must clear `this.{required}`"
+            )
+        # Forbidden: fields that must SURVIVE disconnect.
+        for forbidden in ("_currentFlameAmp", "_currentFlameSpeed", "_flamePhase"):
+            assert forbidden not in body, (
+                f"_invalidateFlameCache must NOT touch `this.{forbidden}` "
+                f"(animation state survives disconnect — mirror pool)"
+            )
+
+        # AC-7: disconnectedCallback calls _invalidateFlameCache.
+        disc_match = re.search(
+            r"disconnectedCallback\s*\(\s*\)\s*\{([^}]+)\}",
+            content,
+            re.DOTALL,
+        )
+        assert disc_match is not None
+        assert "_invalidateFlameCache" in disc_match.group(1)
+
+    def test_radiator_card_flame_height_envelope_uses_progress(self):  # CR2 — sync (no hass)
+        """QS-201 AC-3 + AC-8 — flame base tracks progress; gate split into named sub-conditions."""
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        no_comments = re.sub(r"//[^\n]*", "", no_block)
+
+        # AC-3: progressRatio is clamped against maxHours.
+        assert re.search(
+            r"progressRatio\s*=\s*maxHours\s*>\s*0\s*\?\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,\s*hoursRun\s*/\s*maxHours",
+            no_comments,
+        ) is not None, "Missing progressRatio clamp"
+
+        # AC-3: flameBaseY formula uses the 1/5..4/5 envelope.
+        assert "FLAME_BASE_MIN_PCT" in no_comments
+        assert "FLAME_BASE_MAX_PCT" in no_comments
+        assert re.search(
+            r"flameBaseY\s*=\s*CENTER_CY\s*\+\s*CLIP_R\s*-\s*\(\s*FLAME_BASE_MIN_PCT\s*\+\s*progressRatio\s*\*\s*\(\s*FLAME_BASE_MAX_PCT\s*-\s*FLAME_BASE_MIN_PCT\s*\)\s*\)\s*\*\s*2\s*\*\s*CLIP_R",
+            no_comments,
+        ) is not None, "flameBaseY formula does not mirror pool's water-level envelope"
+
+        # AC-8: gate split.
+        assert re.search(
+            r"const\s+ringDashActive\s*=\s*running\s*&&\s*segLen\s*>\s*6", no_comments
+        ) is not None
+        assert re.search(
+            r"const\s+fireActive\s*=\s*running", no_comments
+        ) is not None
+        assert re.search(
+            r"const\s+showAnimation\s*=\s*ringDashActive\s*\|\|\s*fireActive", no_comments
+        ) is not None
+
+        # AC-8: <path id="running_anim"> emission is gated on ringDashActive,
+        # not the umbrella showAnimation.
+        assert re.search(
+            r"\$\{\s*ringDashActive\s*\?\s*`[^`]*?id=\"running_anim\"",
+            content,
+            re.DOTALL,
+        ) is not None, (
+            "<path id=\"running_anim\"> must be gated on ringDashActive, not showAnimation"
+        )
+
+    def test_radiator_card_flame_off_grey(self):  # CR2 — sync (no hass)
+        """QS-201 AC-5 — grey fills when !running; FLAME_GREY_FILLS constant exists."""
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        no_comments = re.sub(r"//[^\n]*", "", no_block)
+
+        # FLAME_GREY_FILLS constant present.
+        assert "FLAME_GREY_FILLS" in no_comments
+        # Constant is an array of at least three grey values (rgba with all
+        # three channels equal or near-equal — accept the simple form).
+        grey_array = re.search(
+            r"FLAME_GREY_FILLS\s*=\s*\[([^\]]+)\]", no_comments
+        )
+        assert grey_array is not None
+        # FLAME_FILLS (warm) also present — both constants required.
+        assert "FLAME_FILLS" in no_comments
+
+        # Selection between the two constants is gated on `running`.
+        assert re.search(
+            r"running\s*\?\s*FLAME_FILLS\s*:\s*FLAME_GREY_FILLS", no_comments
+        ) is not None, (
+            "Fill-selection must branch on `running` — `running ? FLAME_FILLS : FLAME_GREY_FILLS`"
+        )
+
+    def test_radiator_card_text_shadow_for_flame_readability(self):  # CR2 — sync (no hass)
+        """QS-201 AC-9 — --ring-text-shadow on :host + applied to 4 ring text classes.
+
+        Without the text-shadow, the centre text collapses in contrast over the
+        warm orange flame backdrop. AC-9 is required-for-correctness — pin it
+        so a CSS-only regression that drops the shadow can't slip past review.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # CSS variable declaration on :host (whitespace-tolerant).
+        assert re.search(
+            r"--ring-text-shadow:\s*0 0 12px rgba\(0,0,0,0\.8\),\s*0 2px 4px rgba\(0,0,0,0\.5\)",
+            content,
+        ) is not None, "AC-9: --ring-text-shadow variable must be declared on :host"
+
+        # Each of the four ring text classes applies the variable.
+        for cls in ("target-label", "target-value", "from-to-label", "from-to-value"):
+            assert re.search(
+                rf"\.ring\s+\.{cls}\s*\{{[^}}]*text-shadow:\s*var\(--ring-text-shadow\)",
+                content,
+            ) is not None, (
+                f"AC-9: .ring .{cls} must apply text-shadow: var(--ring-text-shadow)"
+            )
+
+    def test_radiator_card_flame_dancing_dynamic_proxy(self):  # CR2 — sync (no hass)
+        """QS-201 AC-4 — structural proxy for "dancing when running".
+
+        No JS runtime tests exist; AC-4 is verified manually plus via these
+        three structural patterns: a `_flamePhase` accumulator that advances
+        per frame, a per-layer `translateX(${tx.toFixed(1)}px)` template, and
+        the use of `LAYER_SCROLL_OFFSET` inside the step closure for the
+        parallax-tongue effect.
+        """
+        import re
+
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+
+        # Phase accumulator inside the RAF step closure.
+        assert re.search(
+            r"this\._flamePhase\s*\+=\s*this\._currentFlameSpeed\s*\*\s*dt",
+            content,
+        ) is not None, "AC-4: _flamePhase += _currentFlameSpeed * dt must be present"
+
+        # Per-frame translateX template — tx is toFixed(1) for sub-pixel snap.
+        assert re.search(
+            r"translateX\(\$\{tx\.toFixed\(1\)\}px\)",
+            content,
+        ) is not None, "AC-4: per-layer translateX(${tx.toFixed(1)}px) template required"
+
+        # LAYER_SCROLL_OFFSET drives per-layer scroll phase for parallax.
+        assert re.search(
+            r"i\s*\*\s*LAYER_SCROLL_OFFSET",
+            content,
+        ) is not None, "AC-4: LAYER_SCROLL_OFFSET must drive per-layer scroll phase"
+
     @pytest.mark.asyncio
     async def test_radiator_dashboard_passes_climate_hvac_mode_on(
         self, hass, full_dashboard_home
@@ -1377,6 +1587,7 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
         ("qs-on-off-duration-card.js", "showAnimation"),
         ("qs-climate-card.js", "showAnimation"),
         ("qs-car-card.js", "charging"),
+        ("qs-radiator-card.js", "showAnimation"),
     ],
 )
 def test_card_raf_idle_gated(card_filename, gate):

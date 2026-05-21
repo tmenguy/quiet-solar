@@ -23,6 +23,56 @@
   (A1 review-fix #02).
 */
 
+// QS-201: 3-layer animated flame backdrop. Geometry, layer offsets,
+// and animation tuning mirror qs-pool-card.js's water-wave pattern.
+// Constants are duplicated (not imported) so a future pool-card refactor
+// cannot silently break this card.
+
+// --- Geometry (must match the <clipPath> circle attributes below) ---
+const CENTER_CY = 160;              // SVG y-centre of the ring / clip circle
+const CLIP_R = 120;                 // flame clip circle radius
+const FLAME_WIDTH = 480;            // single flame period in SVG px (2× clip diameter)
+const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closing rect is clipped
+
+// --- Per-layer offsets (parallax-tongue effect; different magic numbers, different purposes) ---
+const LAYER_SCROLL_OFFSET = 1.2;    // per-layer extra scroll phase (visual depth)
+const LAYER_PHASE_OFFSET = 2.1;     // per-layer static sine phase (shape variety)
+const LAYER_TIP_FREQS = [2, 3, 4];  // tongues per width — integer freqs so paths wrap seamlessly
+
+// --- Animation tuning ---
+const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
+const LERP_DT_CEIL = 0.1;           // s; clamp lerp dt to avoid snap-to after tab hidden
+const AMP_REGEN_THRESHOLD = 0.25;   // amplitude delta threshold for path regen (throttle)
+const LEVEL_REGEN_THRESHOLD = 0.01; // px; threshold for base-Y path regen (jitter-proof)
+const PHASE_WRAP = 1e6;             // wrap _flamePhase to preserve float precision
+const PHASE_TO_PX = 60;             // scroll px per phase-unit
+
+// --- Flame dynamics targets (still vs dancing) ---
+const STILL_AMP = 1;                // tip wobble when off — minimal, near-frozen
+const DANCE_AMP = 5;                // tip wobble when on — visibly dancing
+const STILL_SPEED = 0;              // phase-units/s when off — no scroll
+const DANCE_SPEED = 1.0;            // phase-units/s when on
+
+// --- Flame height envelope (1/5..4/5 of clip diameter; mirrors pool) ---
+const FLAME_BASE_MIN_PCT = 0.2;     // hoursRun=0 → flame base low
+const FLAME_BASE_MAX_PCT = 0.8;     // hoursRun=maxHours → flame base high
+
+// --- Fills (warm when running, greys when off) ---
+const FLAME_FILLS = [
+    'rgba(255, 87, 34, 0.55)',      // back layer (tallest tongues) — primary
+    'rgba(255, 110, 64, 0.45)',     // mid layer — animStart
+    'rgba(255, 193,  7, 0.35)',     // front layer (shortest tips) — amber
+];
+const FLAME_GREY_FILLS = [
+    'rgba(160, 160, 160, 0.40)',    // back layer
+    'rgba(140, 140, 140, 0.30)',    // mid layer
+    'rgba(120, 120, 120, 0.22)',    // front layer
+];
+
+// --- Per-layer base heights (px) — back is tallest, front is shortest ---
+const LAYER_BASE_HEIGHTS = [80, 65, 55];
+const LAYER_TIP_AMP_MULTS = [1.2, 1.0, 0.8];  // multiplies _currentFlameAmp per layer
+
 class QsRadiatorCard extends HTMLElement {
   // M4: gate the requestAnimationFrame loop on `showAnimation`.
     // condition (`showAnimation`). The loop is started lazily by
@@ -31,7 +81,29 @@ class QsRadiatorCard extends HTMLElement {
   // becomes false. Avoids constant per-card repaint overhead when no
   // visible animation is in progress.
   _startAnimation() {
+    // QS-201: first-connect prime — initialize flame anim state if null so
+    // the next _render() can read sane defaults. Set _needsFlamePrime so
+    // _render() skips the 1.5s lerp from defaults at boot. The prime block
+    // must run BEFORE the early-return so the very first _render() after
+    // construction sees primed amp/speed values; it's idempotent on every
+    // subsequent call (guarded by the null check).
+    if (this._currentFlameAmp == null) {
+      this._currentFlameAmp = STILL_AMP;
+      this._currentFlameSpeed = STILL_SPEED;
+      this._flamePhase = 0;
+      this._needsFlamePrime = true;
+    }
+
+    // QS-201 review fix S1: the cache-invalidate MUST live behind the
+    // early-return guard. `_startAnimation()` is called on every _render()
+    // via the umbrella RAF gate, but nulling `_lastFlameAmp` /
+    // `_lastFlameBaseY` on every render would defeat the path-regen
+    // throttle (ampDelta becomes Infinity, forcing unconditional path
+    // regeneration on the next RAF tick). The cache only needs clearing
+    // when RAF is actually being (re)started; the post-innerHTML reset in
+    // `_render()` already handles the rewrite case.
     if (this._animRaf != null) return;
+    this._invalidateFlameCache();
     this._lastAnimTs = null;
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
@@ -45,6 +117,78 @@ class QsRadiatorCard extends HTMLElement {
       if (p) {
         p.setAttribute('stroke-dashoffset', String(-this._animOffset));
       }
+
+      // --- QS-201: flame animation update ---
+      const fireOn = this._fireRunning === true;
+      const targetAmp = fireOn ? DANCE_AMP : STILL_AMP;
+      const targetSpeed = fireOn ? DANCE_SPEED : STILL_SPEED;
+      // Clamp the lerp dt: after a tab is hidden for several seconds, the
+      // first frame back has huge dt and lerpFactor ≈ 1, which would snap
+      // amp/speed to target. Wave phase keeps using raw dt so scroll catches up.
+      const lerpDt = Math.min(dt, LERP_DT_CEIL);
+      const lerpFactor = 1 - Math.exp(-LERP_RATE * lerpDt);
+      this._currentFlameAmp += (targetAmp - this._currentFlameAmp) * lerpFactor;
+      this._currentFlameSpeed += (targetSpeed - this._currentFlameSpeed) * lerpFactor;
+      this._flamePhase += this._currentFlameSpeed * dt;
+      // Modulo wrap is robust to any sign / magnitude of accumulated phase.
+      this._flamePhase = this._flamePhase % PHASE_WRAP;
+
+      // Lazy-resolve flame DOM refs once per innerHTML rewrite.
+      if (!this._flameEls) {
+        this._flameEls = [
+          this._root?.getElementById('flame0') ?? null,
+          this._root?.getElementById('flame1') ?? null,
+          this._root?.getElementById('flame2') ?? null,
+        ];
+      }
+
+      // Per-layer translateX scroll (cheap GPU compositing).
+      // Path extent is [0, 2*FLAME_WIDTH] so the translated path always
+      // covers the clip region. We offset by -CLIP_R to align the path
+      // start with the clip's left edge, then scroll within one period.
+      for (let i = 0; i < 3; i++) {
+        const fEl = this._flameEls[i];
+        if (fEl) {
+          const phaseOffset = i * LAYER_SCROLL_OFFSET;
+          const raw = (this._flamePhase + phaseOffset) * PHASE_TO_PX;
+          const scrollOffset = ((raw % FLAME_WIDTH) + FLAME_WIDTH) % FLAME_WIDTH;
+          const tx = -CLIP_R - scrollOffset;
+          fEl.style.transform = `translateX(${tx.toFixed(1)}px)`;
+        }
+      }
+
+      // Regenerate paths only when base-Y or amp changes appreciably (throttle).
+      // Guard against undefined/NaN base — the RAF loop can fire before
+      // _render() populates _flameBaseY on cold start.
+      const flameBaseY = this._flameBaseY;
+      const hasValidBase = flameBaseY != null && !Number.isNaN(flameBaseY);
+      const ampDelta = this._lastFlameAmp == null
+          ? Infinity
+          : Math.abs(this._currentFlameAmp - this._lastFlameAmp);
+      // Threshold compare for float-jitter robustness vs strict !==.
+      const levelChanged = hasValidBase &&
+          Math.abs(flameBaseY - (this._lastFlameBaseY ?? Number.NEGATIVE_INFINITY)) > LEVEL_REGEN_THRESHOLD;
+      if (hasValidBase && (levelChanged || ampDelta > AMP_REGEN_THRESHOLD)) {
+        this._lastFlameBaseY = flameBaseY;
+        this._lastFlameAmp = this._currentFlameAmp;
+        const flameColors = this._flameColors || FLAME_GREY_FILLS;
+        for (let i = 0; i < 3; i++) {
+          const fEl = this._flameEls[i];
+          if (fEl) {
+            const d = this._generateFlamePath(
+              FLAME_WIDTH,
+              flameBaseY,
+              LAYER_BASE_HEIGHTS[i],
+              this._currentFlameAmp * LAYER_TIP_AMP_MULTS[i],
+              LAYER_TIP_FREQS[i],
+              i * LAYER_PHASE_OFFSET,
+            );
+            fEl.setAttribute('d', d);
+            fEl.setAttribute('fill', flameColors[i]);
+          }
+        }
+      }
+
       this._animRaf = requestAnimationFrame(step);
     };
     this._animRaf = requestAnimationFrame(step);
@@ -63,6 +207,10 @@ class QsRadiatorCard extends HTMLElement {
 
   disconnectedCallback() {
     this._stopAnimation();
+    // QS-201: clear flame DOM cache and memoization keys. _currentFlameAmp /
+    // _currentFlameSpeed / _flamePhase deliberately survive so re-attach
+    // resumes the dance without a visible jump.
+    this._invalidateFlameCache();
     // S7: reset interaction flags so a re-attach after mid-interaction
     // (e.g. dragging the ring or processing a mode change when the
     // dashboard rearranges) doesn't silently short-circuit `set hass`
@@ -108,6 +256,42 @@ class QsRadiatorCard extends HTMLElement {
     if (s === '' || s === 'unknown' || s === 'unavailable') return defaultValue;
     const n = Number(s);
     return Number.isNaN(n) ? defaultValue : n;
+  }
+
+  // QS-201: SVG path for a single flame layer. Two periods of a sine-wave
+  // top edge bounded by a vertical baseline at FLAME_BOTTOM_Y. The path
+  // is drawn wider than the clip circle so translateX scrolling can
+  // reveal new tongues without seam.
+  //   width      — single period in SVG px (FLAME_WIDTH)
+  //   baseY      — y-coord of the flame base (lower = taller flame)
+  //   baseHeight — average flame height above baseY (positive number)
+  //   tipAmp     — sine amplitude for tip wobble
+  //   tipFreq    — sine frequency (tongues per width); integer for seamless wrap
+  //   phase      — radians; static per-layer phase offset
+  _generateFlamePath(width, baseY, baseHeight, tipAmp, tipFreq, phase) {
+    const points = [];
+    const stepsPerPeriod = 60;
+    const totalSteps = stepsPerPeriod * 2;
+    const totalWidth = 2 * width;
+    for (let i = 0; i <= totalSteps; i++) {
+      const x = (i / stepsPerPeriod) * width;  // 0 .. 2*width
+      // y goes UP from baseY (smaller y in SVG). tipAmp wobbles tip.
+      const y = baseY - baseHeight - tipAmp * Math.sin((x / width) * tipFreq * 2 * Math.PI + phase);
+      points.push(`${x.toFixed(2)} ${y.toFixed(2)}`);
+    }
+    return `M ${points[0]} ` +
+           points.slice(1).map(p => `L ${p}`).join(' ') +
+           ` L ${totalWidth.toFixed(2)} ${FLAME_BOTTOM_Y} L 0 ${FLAME_BOTTOM_Y} Z`;
+  }
+
+  // QS-201: clear the memoization keys and cached DOM refs after each
+  // _render() innerHTML rewrite. Does NOT touch _currentFlameAmp /
+  // _currentFlameSpeed / _flamePhase — those survive disconnect so
+  // re-attach resumes the dance without a visible jump.
+  _invalidateFlameCache() {
+    this._flameEls = null;
+    this._lastFlameBaseY = null;
+    this._lastFlameAmp = null;
   }
 
   set hass(hass) {
@@ -222,6 +406,22 @@ class QsRadiatorCard extends HTMLElement {
         displayTargetHours = targetHours;
       }
       
+      // QS-201: flame backdrop — height tracks hoursRun/maxHours (mirrors pool).
+      const progressRatio = maxHours > 0
+          ? Math.max(0, Math.min(1, hoursRun / maxHours))
+          : 0;
+      const flameBaseY = CENTER_CY + CLIP_R - (FLAME_BASE_MIN_PCT + progressRatio * (FLAME_BASE_MAX_PCT - FLAME_BASE_MIN_PCT)) * 2 * CLIP_R;
+      this._fireRunning = running;          // consumed by _startAnimation's step() closure
+      this._flameBaseY = Number.isNaN(flameBaseY) ? null : flameBaseY;
+      this._flameColors = running ? FLAME_FILLS : FLAME_GREY_FILLS;
+
+      // Honor first-connect prime: skip the 1.5s boot lerp.
+      if (this._needsFlamePrime) {
+        this._currentFlameAmp = running ? DANCE_AMP : STILL_AMP;
+        this._currentFlameSpeed = running ? DANCE_SPEED : STILL_SPEED;
+        this._needsFlamePrime = false;
+      }
+
       // Determine if we should show from/to times
       const showFromTo = !isDefaultMode || isOverridden;
       
@@ -236,17 +436,48 @@ class QsRadiatorCard extends HTMLElement {
       const startTime = (sStartTime && isValidState(sStartTime.state)) ? sStartTime.state : '--:--';
       const endTime = (sEndTime && isValidState(sEndTime.state)) ? sEndTime.state : '--:--';
       
-      // Color schemes - MUST BE DEFINED BEFORE CSS
+      // QS-201: heat-mode palette — borrowed verbatim from qs-climate-card.js's
+      // `heat` colorScheme block. The radiator is heating-only so a fixed warm
+      // palette is appropriate (no per-state branching like the climate card).
       const colors = {
-        primary: '#2196F3',
-        gradStart: '#00bcd4',
-        gradEnd: '#8bc34a',
-        animStart: '#00e1ff',
-        animEnd: '#0066ff'
+        primary: '#FF5722',
+        gradStart: '#FF5722',
+        gradEnd: '#D32F2F',
+        animStart: '#FF6E40',
+        animEnd: '#E64A19'
       };
-      
+
+      // QS-201: per-instance clip id so multiple radiator cards on one
+      // dashboard don't collide. Shadow DOM scopes the id anyway, but a
+      // stable per-instance id makes diff/inspection easier.
+      if (!this._flameClipId) {
+        QsRadiatorCard._nextClipId = (QsRadiatorCard._nextClipId || 0) + 1;
+        this._flameClipId = 'fClip-' + QsRadiatorCard._nextClipId;
+      }
+      const flameClipId = this._flameClipId;
+
+      // QS-201: pre-generate paths so the SVG renders with flames immediately,
+      // avoiding the empty-d="" flash between innerHTML rewrite and the first
+      // RAF tick. The RAF loop continues animating from these initial shapes
+      // seamlessly (memo keys synced after the innerHTML write).
+      const initialAmp = this._currentFlameAmp ?? STILL_AMP;
+      const initialBaseY = this._flameBaseY ?? CENTER_CY;
+      const initialFlameColors = this._flameColors ?? FLAME_GREY_FILLS;
+      const initialFlamePaths = [0, 1, 2].map(i => this._generateFlamePath(
+        FLAME_WIDTH,
+        initialBaseY,
+        LAYER_BASE_HEIGHTS[i],
+        initialAmp * LAYER_TIP_AMP_MULTS[i],
+        LAYER_TIP_FREQS[i],
+        i * LAYER_PHASE_OFFSET,
+      ));
+
       const css = `
-      :host { --pad: 18px; display:block; }
+      :host {
+        --pad: 18px;
+        --ring-text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5);
+        display: block;
+      }
       .card { padding: var(--pad); position: relative; }
       .card.off-grid { background: rgba(244, 67, 54, 0.08); }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
@@ -284,14 +515,14 @@ class QsRadiatorCard extends HTMLElement {
       .card.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
       .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(-5px); }
-      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
-      .ring .target-value { font-weight:800; font-size: 2.5rem; line-height: 1.1; }
+      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
+      .ring .target-value { font-weight:800; font-size: 2.5rem; line-height: 1.1; text-shadow: var(--ring-text-shadow); }
       .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; width: 220px; margin: 0 auto; }
       .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:6px; }
       .ring .from-to-row { display:flex; justify-content:space-between; width:140px; margin-top: 8px; gap:20px; }
       .ring .from-to-item { display:flex; flex-direction:column; align-items:center; gap:2px; }
-      .ring .from-to-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
-      .ring .from-to-value { color: var(--primary-text-color); font-weight:800; font-size: 1.4rem; }
+      .ring .from-to-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
+      .ring .from-to-value { color: var(--primary-text-color); font-weight:800; font-size: 1.4rem; text-shadow: var(--ring-text-shadow); }
       .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
       .ring .override-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .override-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; }
@@ -410,7 +641,13 @@ class QsRadiatorCard extends HTMLElement {
       const gradGreenId = `gradG-${Math.floor(Math.random() * 1e6)}`;
       const gradRunningId = `gradR-${Math.floor(Math.random() * 1e6)}`;
       const activeGradId = running ? gradRunningId : gradGreenId;
-      const showAnimation = (running && segLen > 6);
+      // QS-201: gate split. The ring-dash animation only needs RAF when
+      // there is enough progress to dash through (segLen > 6). The flame
+      // backdrop wants RAF as soon as the radiator is running, even with
+      // zero progress yet. The umbrella `showAnimation` is the OR.
+      const ringDashActive = running && segLen > 6;
+      const fireActive = running;
+      const showAnimation = ringDashActive || fireActive;
 
       // M4: start/stop the RAF loop based on whether the dash animation
       // is actually needed. Idle cards consume zero per-frame work.
@@ -524,10 +761,18 @@ class QsRadiatorCard extends HTMLElement {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
+                <clipPath id="${flameClipId}">
+                  <circle cx="${CENTER_CY}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                </clipPath>
               </defs>
+              <g clip-path="url(#${flameClipId})">
+                <path id="flame0" d="${initialFlamePaths[0]}" fill="${initialFlameColors[0]}" opacity="1" pointer-events="none" style="will-change: transform;" />
+                <path id="flame1" d="${initialFlamePaths[1]}" fill="${initialFlameColors[1]}" opacity="1" pointer-events="none" style="will-change: transform;" />
+                <path id="flame2" d="${initialFlamePaths[2]}" fill="${initialFlameColors[2]}" opacity="1" pointer-events="none" style="will-change: transform;" />
+              </g>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
-              <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
-              ${showAnimation ? `
+              <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${ringDashActive ? 'stroke-opacity="0.35"' : ''} />
+              ${ringDashActive ? `
               <path id="running_anim"
                     d="${progressPath}"
                     stroke="url(#${gradRunningId})"
@@ -597,6 +842,10 @@ class QsRadiatorCard extends HTMLElement {
         ` : ''}
       </ha-card>
     `;
+
+      // QS-201: invalidate cached flame DOM refs after innerHTML rewrite so
+      // the next RAF tick re-queries fresh elements.
+      this._invalidateFlameCache();
 
       // Wire events
       const root = this._root;

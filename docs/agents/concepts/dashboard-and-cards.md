@@ -192,7 +192,7 @@ Subsequent HA starts:
 | Pool | `custom:qs-pool-card` | `QSPool` | `ui/resources/qs-pool-card.js` |
 | Climate | `custom:qs-climate-card` | `QSClimateDuration`, `QSHeatPump` | `ui/resources/qs-climate-card.js` |
 | On-off duration | `custom:qs-on-off-duration-card` | `QSOnOffDuration` | `ui/resources/qs-on-off-duration-card.js` |
-| Radiator | `custom:qs-radiator-card` | `QSRadiator` | `ui/resources/qs-radiator-card.js` (cloned from `qs-on-off-duration-card.js`; UX redesign deferred via [#199](https://github.com/tmenguy/quiet-solar/issues/199); has S14-S17/N7 safety hardening the on/off card has not yet adopted) |
+| Radiator | `custom:qs-radiator-card` | `QSRadiator` | `ui/resources/qs-radiator-card.js` (cloned from `qs-on-off-duration-card.js`; has S14-S17/N7 safety hardening the on/off card has not yet adopted; QS-201 added the heat-mode warm palette and a stylized 3-layer flame backdrop that grows with `hoursRun/maxHours` and goes grey-still when off, mirroring pool's water-wave pattern. Animation constants are duplicated in-file rather than shared, so a future pool-card refactor cannot silently break this card.) |
 | Water boiler | `custom:qs-water-boiler-card` | `QSWaterBoiler` | `ui/resources/qs-water-boiler-card.js` |
 
 The radiator template wires `backing_entity` (the underlying
