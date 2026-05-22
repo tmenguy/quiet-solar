@@ -355,6 +355,86 @@ several internal refactors:
   `qs-pool-card.js`'s `dt` cap documents the trade-off: cross-card
   consistency over the prior "catch up after hidden tab" behavior.
 
+### QS-210 — Climate card backdrops
+
+The climate card (`qs-climate-card.js`) renders one of four backdrop
+visuals inside the central ring's clip circle, selected from the
+configured HVAC ON mode plus, for AUTO / HEAT_COOL, the backing
+climate entity's current vs. resolved-target temperature:
+
+- **HEAT** → flame (3-layer peaked-teeth engine, copied verbatim from
+  `qs-radiator-card.js`'s QS-204 engine — same `LAYER_TEETH_COUNTS`,
+  `LAYER_TIP_FLICKER_HZ`, `FLAME_FILLS`/`FLAME_GREY_FILLS`, base-Y
+  envelope `FLAME_BASE_MIN_PCT..FLAME_BASE_MAX_PCT` tracked off
+  `progressRatio`).
+- **COOL** → snow pile + falling snowflakes (waves adapted from
+  `qs-pool-card.js`, particle system three-way-inverted from
+  `qs-water-boiler-card.js` bubbles — top-of-clip spawn at
+  `CENTER_CY - CLIP_R + 8`, positive `vy`, retire on
+  `cy >= surfaceY` or `life >= SNOW_MAX_LIFE_S`). Spawn `cx` is
+  chord-bounded via `halfChord = Math.sqrt(CLIP_R² - dy²)` so flakes
+  don't waste their lifetime spawning outside the visible clip.
+  Off-state pile keeps scrolling at `CALM_SNOW_AMP` /
+  `CALM_SNOW_SPEED` (matches the pool card's calm-water idiom).
+- **AUTO / HEAT_COOL** → flame or snow based on
+  `target > currentTemp`, with a `BACKDROP_DEADBAND_C = 0.2°C`
+  hysteresis band. Inside the deadband the algorithm holds the
+  previous resolved flame/snow; if there's no previous (cold start
+  or transitioning from wind/none) the fallback uses the sign-based
+  ternary `target > current ? 'flame' : 'snow'` so the very first
+  paint still respects the user's intent. When no setpoint resolves
+  at all, the algorithm falls through to `running ? 'wind' :
+  'none'`. Dual setpoints (`target_temp_low` + `target_temp_high`)
+  resolve via midpoint.
+- **WIND** → 3 stroked sinusoidal wisps with a linear `translateX`
+  scroll (no lerp envelope, no path regen — just modulo wrap to
+  prevent float drift). Open SVG path (no closing `L … Z`) so it
+  renders as stroked lines, not filled polygons.
+- **fan_only / dry / off / unrecognised / null** → none (no
+  backdrop). The four climate-entity attribute reads are gated on
+  `needsTemps = climateStateOn === 'auto' || climateStateOn === 'heat_cool'` so
+  the off-path skips them entirely.
+
+The dashboard template emits the backing climate entity id via
+`climate_entity: <entity_id>` in the `entities:` block, mirroring
+the radiator card's `backing_entity` plumbing. `device.climate_entity`
+is a plain string attribute on `QSClimateDuration` (set at
+`ha_model/climate_controller.py`), so Jinja accesses it directly
+without a helper. When the attribute is falsy the `{% if %}` guard
+omits the line, and the JS card's defensive
+`e.climate_entity ? this._hass?.states?.[…] : null` falls through
+to `climateEntity = null` → all 4 attribute reads return `null` →
+the AUTO branch lands on the `running ? 'wind' : 'none'` fallback.
+
+Per-instance SVG ids (`climateClipId`, `snowLayerId`, `windLayerId`)
+derive from `QsClimateCard._nextClipId` so multiple climate cards
+on one dashboard never collide.
+
+**Cache invalidation contract.** The three backdrop DOM-ref caches
+(`_flameEls`, `_snowWaveEls`/`_snowLayerEl`, `_windWispEls`) are
+invalidated UNCONDITIONALLY after every `_render()` innerHTML
+rewrite (mirror of `qs-radiator-card.js:967-969`). Same-backdrop
+re-renders (every hass push, ~once per second) detach all cached
+elements; without the post-rewrite invalidation, RAF would tick on
+orphan nodes and the visual would freeze after ~1 s. Animation
+accumulators (`_currentFlameAmp`, `_currentSnowAmp`,
+`_currentSnowSpeed`, `_snowWavePhase`, `_windPhase`, `_tipPhases`)
+deliberately survive both `_stopAnimation` and the post-rewrite
+invalidation so re-attach picks up where it left off without a
+visible snap.
+
+**Snow-mode cold-start defence.** A cold start straight into
+`'snow'` mode (e.g. `climate_state_on === 'cool'` on first paint)
+hits the N5 backdrop-transition reset, which mutates
+`this._currentSnowAmp` BEFORE `_startAnimation`'s lazy-init guard
+runs. The lazy-init uses PER-FIELD `if (this.<X> == null)` guards
+on `_currentSnowAmp` / `_currentSnowSpeed` / `_snowWavePhase` /
+`_snowflakes` / `_nextSnowflakeAt` (not a single combined guard) so
+the four sibling fields still initialise correctly. The N5 block
+also defensively initialises `_snowflakes`, `_snowWavePhase`, and
+`_nextSnowflakeAt` itself — belt + braces, robust to either
+init-order.
+
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
 Every JS card in `ui/resources/` follows the same defensive
