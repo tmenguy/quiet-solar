@@ -12,7 +12,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-23
+last_verified: 2026-05-22
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -218,6 +218,114 @@ New Jinja branches added by QS-194 use the idiomatic `is not none`
 test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`
 documentation comments (rather than `{# TODO: ... #}`); follow these
 conventions for any future template additions.
+
+**QS-200 — boiler card visual upgrade.** The water-boiler card
+adopted three layered visual changes on top of the QS-194 baseline,
+overriding the project-context "don't modify JS cards without explicit
+instruction" rule via direct issue-#200 authorisation:
+
+- **Heat palette.** The `const colors = { ... }` block was swapped
+  from the cool-blue scheme (`#2196F3` / `#00bcd4` / `#8bc34a` /
+  `#00e1ff` / `#0066ff`) to the climate card's `heat` scheme
+  (`#FF5722` / `#D32F2F` / `#FF6E40` / `#E64A19`). The cool-blue
+  hexes may still appear elsewhere in the file — e.g. `.power-btn.on`
+  uses `#2196F3` as a semantic "power" anchor — and that's preserved.
+- **Continuous RAF, mirroring the pool card.** `connectedCallback()`
+  calls `_startAnimation()` directly with no `showAnimation` gate;
+  `disconnectedCallback()` stops it. The wave is intrinsically
+  visible at all times (cool blue when not running, near-white
+  translucent when boiling) so the RAF loop itself is no longer
+  conditional. `showAnimation` survives only as a render-time switch
+  for the existing dashed-arc `<path id="running_anim">`. The
+  boiler is therefore removed from `test_card_raf_idle_gated`'s
+  parametrize list — that test pins the idle-gated model that the
+  other duration cards still follow.
+- **Dual-layer water cross-fade + bubbles + surface glow.** Inside
+  a circular `clipPath` (radius `CLIP_R = 120`), the card renders
+  six wave paths in pairs: `wave{0,1,2}_cool` (cool-blue HSLA) and
+  `wave{0,1,2}_boil` (near-white HSLA). Each pair shares geometry;
+  only `fill` and `opacity` differ. The RAF loop lerps
+  `_currentColorMix` toward `running ? 1 : 0` with the standard
+  `LERP_RATE` envelope and updates per-frame opacity: cool layer
+  gets `1 - colorMix`, boil layer gets `colorMix`. This avoids the
+  yellow-green midpoint that an HSL hue lerp from cyan to orange
+  would pass through, and eliminates the staircase a
+  `COLOR_MIX_REGEN_THRESHOLD` would have introduced. A dynamic
+  bubble system spawns `<circle>` nodes inside a bubble `<g>` layer
+  (capped at `MAX_CONCURRENT_BUBBLES = 12`, spawn rate
+  `BUBBLE_SPAWN_RATE_HZ = 6` Hz, paused when not running) — bubbles
+  rise from the bottom, expand slightly, fade with life, and retire
+  on surface contact or life expiry. A red surface glow
+  (`SURFACE_GLOW_COLOR = '#FF3D00'`) traces wave 0 via a Gaussian
+  blur + `mix-blend-mode: screen` filter; its `d` resyncs on
+  amplitude/level regen, `transform` resyncs every frame to follow
+  wave 0's `translateX`, and `opacity` is bound to `_currentColorMix`
+  so it cross-fades in/out with the boiling state.
+
+Per-instance SVG ids (`waterClipId`, `surfaceGlowFilterId`,
+`bubbleLayerId`) are derived from `QsWaterBoilerCard._nextClipId` so
+two boiler cards on the same dashboard never collide. The water
+layer renders BEFORE the dashed ring / progress arc / handle in DOM
+order (= lowest z), so the controls sit on top. The QS-194 optional
+`temperature_sensor` row is untouched: water level, wave amplitude,
+bubble rate, and surface-glow opacity are all independent of the
+temperature sensor (boiling is binary, driven by `running === true`).
+
+Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
+in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
+cap, the first frame after a multi-second hidden-tab window
+produced a huge `dt` that advanced wave phase by hundreds of pixels
+in one frame (visible "snap") and aged every bubble past
+`BUBBLE_MAX_LIFE_S` simultaneously. After the cap, all step-loop
+subsystems — phase advance, lerp envelope, bubble life — share the
+same upper-bound envelope and the visual smoothly resumes from where
+it left off. Pinned via the parametrized
+`test_card_caps_raf_dt_against_hidden_tab`.
+
+Review-fix #02 added one behavioral change to the boiler card and
+several internal refactors:
+
+- **N12 — reconnect re-prime.** `_stopAnimation()` now stashes
+  `_runningAtStop`. On the first `_render()` after reconnect, if
+  `_runningAtStop !== running`, `_needsAnimationPrime` is forced
+  true so the wave snaps to the current target instead of lerping
+  from the pre-disconnect state (otherwise a card detached while
+  boiling, with the boiler turning off mid-detach, would visibly
+  "calm down" on reattach despite the boiler having been off the
+  whole detach window). The consume rule has gone through three
+  revisions (see code comments in `_render()` for the full
+  history):
+  - Plan #02 N12: stash cleared unconditionally after the inner
+    guard. Hole: mid-detach hass-pushes (which fire `set hass →
+    _render` even while disconnected, since `set hass` doesn't gate
+    on `this.isConnected`) consume the stash on a stable-running
+    push, defeating the prime on the eventual reattach.
+  - Plan #03 S1: clear moved INSIDE the inner guard's if-body.
+    Closes the mid-detach-pushes hole, but opens a new one — on a
+    reattach where `running` is unchanged at reattach, the stash
+    leaks across renders and the next normal in-place state flip
+    (hours later, no detach involved) falsely fires the prime.
+  - Plan #04 M1: the entire consume is now gated by
+    `_pendingReattachCheck`, a one-shot flag set in
+    `connectedCallback` after `_startAnimation()`, cleared after
+    the one-shot consume in `_render`. The stash is consumed
+    EXACTLY ONCE on the first post-reattach render, regardless of
+    inner-guard outcome. Mid-detach pushes see the flag false and
+    skip the entire block, preserving the stash for the eventual
+    reattach. Subsequent renders after the consume see the flag
+    false and don't re-fire.
+- **S3 — `_resetDomRefs()` helper.** Both `_invalidateWaveCache()`
+  and the post-`innerHTML` cleanup block now share a single helper
+  that nulls DOM-ref memo keys and resets `_bubbles = []`. A future
+  memo-key addition lands at both call sites by construction.
+- **S1 — `CENTER_CX`/`CENTER_CY` for the ring center.** The arc /
+  handle / progress-ring center literal now uses the named
+  constants, completing the migration started by review-fix #01 N4
+  (water-clip cx/cy). The N4 finding had only migrated bubble
+  spawn and clipPath markup; the ring geometry was left inlined.
+- **N3 — pool-card dt-cap rationale note.** A code comment on
+  `qs-pool-card.js`'s `dt` cap documents the trade-off: cross-card
+  consistency over the prior "catch up after hidden tab" behavior.
 
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
