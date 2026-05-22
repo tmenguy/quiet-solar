@@ -364,7 +364,7 @@ climate entity's current vs. resolved-target temperature:
   renders as stroked lines, not filled polygons.
 - **fan_only / dry / off / unrecognised / null** → none (no
   backdrop). The four climate-entity attribute reads are gated on
-  `needsTemps = climateStateOn === 'auto' || === 'heat_cool'` so
+  `needsTemps = climateStateOn === 'auto' || climateStateOn === 'heat_cool'` so
   the off-path skips them entirely.
 
 The dashboard template emits the backing climate entity id via

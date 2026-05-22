@@ -400,7 +400,18 @@ class QsClimateCard extends HTMLElement {
       // the user would have seen the flakes blink in either case.
       // Re-parenting live `<circle>` nodes into the new `<g>` is a
       // valid stretch goal but out of scope (deferred to a follow-up).
-      const surfaceY = (this._snowBaseY ?? CENTER_CY) - 4;
+      // Pass-#3 N2 — when `_snowBaseY` is null (no valid pile base
+      // computed yet, e.g. cold-start before the first render finishes
+      // populating snow geometry), fall back to the BOTTOM of the
+      // clip (`CENTER_CY + CLIP_R`) rather than the ring centre.
+      // With a centre fallback, flakes spawned at the top
+      // (`CENTER_CY - CLIP_R + 8 ≈ 48 px`) had to traverse only
+      // ~108 px before retiring on the centre "surface", which at
+      // 30-60 px/s puts them at ~2.4s of life — close to
+      // `SNOW_MAX_LIFE_S = 3.0` and visibly truncated. Falling to the
+      // bottom of the clip lets them traverse the full visible chord
+      // so the cosmetic effect lands.
+      const surfaceY = (this._snowBaseY ?? (CENTER_CY + CLIP_R)) - 4;
       const alive = [];
       for (const b of this._snowflakes) {
         b.life += dt;
@@ -604,8 +615,14 @@ class QsClimateCard extends HTMLElement {
   _safeNumber(sensor, defaultValue) {
     if (!sensor || sensor.state == null) return defaultValue;
     const raw = sensor.state;
+    // Pass-#3 N3 — `trimmed` can only be (a) an empty/whitespace
+    // string after `.trim()` collapses to `""`, or (b) the original
+    // non-null `raw` for non-string types (the outer guard already
+    // rejected null/undefined). So `trimmed == null` was dead code.
+    // Keep the empty-string check; the `Number.isFinite` final guard
+    // catches NaN / ±Infinity that survive the string filter.
     const trimmed = (typeof raw === 'string') ? raw.trim() : raw;
-    if (trimmed === '' || trimmed == null) return defaultValue;
+    if (trimmed === '') return defaultValue;
     if (trimmed === 'unknown' || trimmed === 'unavailable') return defaultValue;
     const n = Number(trimmed);
     return Number.isFinite(n) ? n : defaultValue;
@@ -793,6 +810,14 @@ class QsClimateCard extends HTMLElement {
       //      above short-circuit to `null` via the `needsTemps` guard
       //      (review-fix S8 — matches AC5's "no reads when they
       //      cannot influence the outcome").
+      // Pass-#3 N1 — small helper to deduplicate the two sign-based
+      // ternary call sites (the non-deadband arm and the deadband
+      // sign-based fallback). Both pick flame vs snow purely from
+      // the temperature sign — no hysteresis, no `_lastBackdrop`
+      // dependency.
+      const _signBackdrop = (target, currentTemp) =>
+          target > currentTemp ? 'flame' : 'snow';
+
       const deriveBackdrop = () => {
         if (climateStateOn === 'heat') return 'flame';
         if (climateStateOn === 'cool') return 'snow';
@@ -815,9 +840,9 @@ class QsClimateCard extends HTMLElement {
               // first deadband render respects the user's intent.
               // (Subsequent renders fall into the hold-previous arm
               // above.)
-              return target > currentTemp ? 'flame' : 'snow';
+              return _signBackdrop(target, currentTemp);
             }
-            return target > currentTemp ? 'flame' : 'snow';
+            return _signBackdrop(target, currentTemp);
           }
           return running ? 'wind' : 'none';
         }

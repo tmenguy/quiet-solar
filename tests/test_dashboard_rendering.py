@@ -3188,27 +3188,40 @@ class TestClimateCardReviewFix01Hardening:
             "currentTemp) < BACKDROP_DEADBAND_C) { ... }` must be "
             "extractable inside `deriveBackdrop`."
         )
-        assert re.search(
+        # Pass-#2 N5 fallback may be the inline ternary
+        # `return target > currentTemp ? 'flame' : 'snow';` OR the
+        # pass-#3 N1 helper call `return _signBackdrop(target,
+        # currentTemp);`. Accept either form so the test stays robust
+        # across the helper-extraction refactor.
+        sign_inline = re.search(
             r"return\s+target\s*>\s*currentTemp\s*\?\s*'flame'\s*:\s*'snow'",
             deadband_body,
-        ) is not None, (
-            "Pass-#2 N5: the deadband fallback must be "
-            "`return target > currentTemp ? 'flame' : 'snow';` "
-            "(sign-based), not `return 'flame';`. The bare-flame "
-            "fallback ignored the temperature sign on first transition "
-            "into a deadband-AUTO state."
+        )
+        sign_helper = re.search(
+            r"return\s+_signBackdrop\s*\(\s*target\s*,\s*currentTemp\s*\)",
+            deadband_body,
+        )
+        assert sign_inline is not None or sign_helper is not None, (
+            "Pass-#2 N5 / pass-#3 N1: the deadband fallback must be "
+            "sign-based — either the inline ternary "
+            "`return target > currentTemp ? 'flame' : 'snow';` or the "
+            "extracted helper `return _signBackdrop(target, "
+            "currentTemp);`. The bare-flame fallback (`return 'flame';`) "
+            "ignored the temperature sign on first transition into a "
+            "deadband-AUTO state."
         )
         # The bare-flame fallback must NOT exist inside the deadband
         # body (the only remaining `return 'flame'` strings live OUTSIDE
-        # the deadband block — in the early HEAT branch and in the
-        # non-deadband sign-based ternary).
+        # the deadband block — in the early HEAT branch and the
+        # non-deadband sign-based site, both of which sit outside this
+        # extracted sub-block).
         assert not re.search(
             r"return\s+'flame'\s*;", deadband_body
         ), (
             "Pass-#2 N5: the deadband block must NOT contain an "
             "unconditional `return 'flame';` — use the sign-based "
-            "ternary instead so wind/none → deadband-AUTO transitions "
-            "respect the temp sign."
+            "ternary / helper instead so wind/none → deadband-AUTO "
+            "transitions respect the temp sign."
         )
 
     def test_climate_card_snowflake_spawn_uses_halfchord_geometry(self):
