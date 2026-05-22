@@ -2386,12 +2386,16 @@ def test_water_boiler_card_steam_retire_both_branches():
 
 
 def test_water_boiler_card_steam_opacity_formula():
-    """QS-214 AC-1/AC-3: per-frame opacity is the assignment
-    `lifeOpacity * this._currentColorMix` (not a compound `*=`), and
-    the life-curve breakpoints `0.15` (fade-in) and `0.85` (fade-out)
-    appear literally in the steam advance block. The `<circle>` fill
-    is the literal `STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)'` (cool
-    blue-gray tint, alpha 0.45 baked into the SVG fill literal)."""
+    """QS-214 AC-1/AC-3 + rim-fade iteration: per-frame opacity is the
+    assignment `lifeOpacity * rimOpacity * this._currentColorMix` (not
+    a compound `*=`), and the life-curve breakpoints `0.15` (fade-in)
+    and `0.85` (fade-out) appear literally in the steam advance block.
+    The `<circle>` fill is the literal `STEAM_FILL_COLOR =
+    'rgba(195,215,235,0.45)'` (cool blue-gray tint, alpha 0.45 baked
+    into the SVG fill literal). The rim-fade factor (`rimOpacity`)
+    fades each puff out gracefully as it approaches `localTopY`, so
+    puffs dissolve at the local clip-circle top instead of blinking
+    out on the geometric retire."""
     import re
 
     source = (
@@ -2406,15 +2410,18 @@ def test_water_boiler_card_steam_opacity_formula():
         "`'rgba(195,215,235,0.45)'` (cool blue-gray, alpha 0.45 baked in)."
     )
     assert re.search(
-        r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*this\._currentColorMix",
+        r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*rimOpacity\s*\*\s*"
+        r"this\._currentColorMix",
         executable,
     ), (
         "qs-water-boiler-card.js: the per-frame opacity must be an "
-        "ASSIGNMENT `const opacity = lifeOpacity * this._currentColorMix` "
-        "(NOT a compound `*=`, which would decay exponentially over "
-        "frames)."
+        "ASSIGNMENT `const opacity = lifeOpacity * rimOpacity * "
+        "this._currentColorMix` — both `lifeOpacity` (life-curve fade) "
+        "AND `rimOpacity` (rim-proximity fade) multiply through with "
+        "the colorMix cross-fade. Compound `*=` would decay exponentially."
     )
-    # Find the steam advance block and assert breakpoints appear inside it.
+    # Find the steam advance block and assert breakpoints + rim-fade
+    # derivations appear inside it.
     advance_start = executable.find("for (const p of this._steamPuffs)")
     assert advance_start != -1, (
         "qs-water-boiler-card.js: missing steam advance loop."
@@ -2434,6 +2441,27 @@ def test_water_boiler_card_steam_opacity_formula():
     ), (
         "qs-water-boiler-card.js: missing the `(lifeT - 0.85) / 0.15` "
         "fade-out ramp in the steam life-curve."
+    )
+    # Rim-proximity fade derivation. The puff fades to 0 over the last
+    # `STEAM_RIM_FADE_PX` pixels below `localTopY`, so it dissolves at
+    # the local clip-circle top instead of vanishing in one frame.
+    assert re.search(
+        r"const\s+rimDistance\s*=\s*p\.cy\s*-\s*localTopY",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: missing `rimDistance = p.cy - "
+        "localTopY` derivation inside the steam advance loop — this is "
+        "the input to the rim-proximity fade."
+    )
+    assert re.search(
+        r"const\s+rimOpacity\s*=\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,"
+        r"\s*rimDistance\s*/\s*STEAM_RIM_FADE_PX\s*\)\s*\)",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: missing `rimOpacity = "
+        "Math.max(0, Math.min(1, rimDistance / STEAM_RIM_FADE_PX))` "
+        "derivation inside the steam advance loop — this is the "
+        "rim-proximity fade factor."
     )
 
 

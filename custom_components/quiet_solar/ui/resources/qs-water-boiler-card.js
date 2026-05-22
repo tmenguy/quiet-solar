@@ -89,15 +89,29 @@ const MAX_CONCURRENT_STEAM = 8;
 const STEAM_SPAWN_RATE_HZ = 1.5;
 const STEAM_RADIUS_MIN = 4;
 const STEAM_RADIUS_MAX = 10;
-const STEAM_RISE_PX_PER_S_MIN = 18;
-const STEAM_RISE_PX_PER_S_MAX = 32;
+// Uniform vy (MIN == MAX): all puffs rise at the same rate so they
+// all reach the local clip-circle top within their life budget. The
+// rim-proximity fade (STEAM_RIM_FADE_PX) provides the graceful
+// dissolve at the rim; without uniform vy, slow puffs ran out of
+// life mid-tank and never reached the rim, looking inconsistent.
+// Organic variance still comes from spawn x, spawn time, drift phase,
+// and radius — not from vy.
+const STEAM_RISE_PX_PER_S_MIN = 24;
+const STEAM_RISE_PX_PER_S_MAX = 24;
 const STEAM_DRIFT_PX_PER_S = 6;
 const STEAM_DRIFT_FREQ_HZ = 0.4;
 const STEAM_RADIUS_GROW_PX_PER_S = 4;
-const STEAM_MAX_LIFE_S = 8.0;
+const STEAM_MAX_LIFE_S = 10.0;
 const STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)';
 const STEAM_BLUR_STDDEV = 3.5;
 const STEAM_TOP_MARGIN_PX = 4;
+// Rim-proximity fade band (in px). The puff's opacity ramps 1→0 over
+// the last STEAM_RIM_FADE_PX pixels below localTopY, so it dissolves
+// at the local clip-circle top instead of blinking out on the
+// geometric retire. At vy=24 the fade lasts STEAM_RIM_FADE_PX/24 s
+// (1.25s at 30px) — gentle, visible "reaches the top and dissipates"
+// reading without ever crossing the clip-path arc.
+const STEAM_RIM_FADE_PX = 30;
 
 // --- Surface glow ---
 const SURFACE_GLOW_COLOR = '#FF3D00';
@@ -480,15 +494,27 @@ class QsWaterBoilerCard extends HTMLElement {
             p.el.remove();
             continue;
           }
+          // Rim-proximity fade: opacity ramps 1 → 0 over the last
+          // STEAM_RIM_FADE_PX pixels below localTopY so the puff
+          // dissolves at the rim rather than blinking out on the
+          // geometric retire. `rimDistance` is positive while the puff
+          // is below the local top; it shrinks toward 0 as the puff
+          // approaches. Clamped to [0, 1] so puffs further below the
+          // rim render at full opacity.
+          const rimDistance = p.cy - localTopY;
+          const rimOpacity = Math.max(0, Math.min(1, rimDistance / STEAM_RIM_FADE_PX));
           // Life curve: piecewise linear — fade-in [0, 0.15], hold
-          // [0.15, 0.85], fade-out [0.85, 1]. QS-214 widened the hold
-          // band so fast puffs reach the rim before the fade kicks in.
+          // [0.15, 0.85], fade-out [0.85, 1]. With uniform vy and the
+          // longer maxLife, fast trajectories retire at the rim via
+          // the rim-fade well before the life-curve fade-out engages;
+          // the life-curve fade-out remains as the slow-puff / stalled-
+          // puff safety branch.
           const lifeT = p.life / p.maxLife;
           let lifeOpacity;
           if (lifeT < 0.15) lifeOpacity = lifeT / 0.15;
           else if (lifeT < 0.85) lifeOpacity = 1;
           else lifeOpacity = Math.max(0, 1 - (lifeT - 0.85) / 0.15);
-          const opacity = lifeOpacity * this._currentColorMix;
+          const opacity = lifeOpacity * rimOpacity * this._currentColorMix;
           p.el.setAttribute('cx', p.cx.toFixed(2));
           p.el.setAttribute('cy', p.cy.toFixed(2));
           p.el.setAttribute('r', p.r.toFixed(2));

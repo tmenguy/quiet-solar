@@ -298,14 +298,20 @@ running→false: existing puffs continue rising while their opacity
 ramps to 0 over the same ~1.5s envelope as bubbles. `_resetDomRefs()`
 extends to null `_steamLayerEl` and clear `_steamPuffs`;
 `disconnectedCallback` mirrors the bubble teardown to eagerly remove
-puff DOM nodes. **QS-214** widened the rise budget
-(`STEAM_MAX_LIFE_S = 8.0`, `STEAM_RISE_PX_PER_S_*` bumped to
-`[18, 32]`), tinted the puff color to a cool blue-gray for visibility
-against dark HA themes, and replaced the global-apex retire with a
-per-puff circle-aware predicate (`localTopY = CENTER_CY -
-sqrt(CLIP_R² - dx²) + STEAM_TOP_MARGIN_PX`) so puffs drifting toward
-the rim retire at the local clip top rather than continuing
-invisibly toward the global apex.
+puff DOM nodes. **QS-214** tinted the puff color to a cool blue-gray for visibility
+against dark HA themes; unified the rise rate (`STEAM_RISE_PX_PER_S_MIN
+= STEAM_RISE_PX_PER_S_MAX = 24`, with `STEAM_MAX_LIFE_S = 10.0`) so
+every puff reaches the local clip-circle top within its life budget
+rather than slow puffs stalling mid-tank; replaced the global-apex
+retire with a per-puff circle-aware predicate (`localTopY = CENTER_CY
+- sqrt(CLIP_R² - dx²) + STEAM_TOP_MARGIN_PX`); and added a
+rim-proximity fade (`rimOpacity = clamp((p.cy - localTopY) /
+STEAM_RIM_FADE_PX, 0, 1)`, multiplied into the per-frame opacity
+alongside `lifeOpacity` and `_currentColorMix`) so each puff
+gracefully dissolves over the last `STEAM_RIM_FADE_PX = 30` pixels
+below `localTopY` instead of blinking out on the geometric retire.
+The visible result reads as "puffs rise, reach the rim, and dissipate
+into it" with no abrupt removals.
 
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
