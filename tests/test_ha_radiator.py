@@ -473,7 +473,9 @@ def test_radiator_bistate_modes_set_is_pinned(
 
     AC-7 enumerated which states the `radiator_mode` select must
     expose. Set-equality (rather than `issubset`) catches both
-    missing and unexpected modes.
+    missing and unexpected modes. QS-204 renamed the force-on/off
+    literals to the namespaced ``radiator_mode_*`` form (decoupled
+    from the underlying HA state strings).
     """
     device = QSRadiator(
         hass=hass,
@@ -488,21 +490,23 @@ def test_radiator_bistate_modes_set_is_pinned(
         "bistate_mode_auto",
         "bistate_mode_exact_calendar",
         "bistate_mode_default",
-        "on",
-        "off",
+        "radiator_mode_on",
+        "radiator_mode_off",
     }
 
 
 def test_radiator_climate_bistate_modes_set_includes_on_off(
     hass: HomeAssistant, radiator_config_entry, radiator_home
 ):
-    """E3 + CR4 — climate-backed radiator also exposes `on`/`off` (not raw HVAC modes).
+    """E3 + CR4 — climate-backed radiator exposes the namespaced
+    ``radiator_mode_*`` literals (not raw HVAC modes).
 
-    E3 hardcoded the bistate-mode labels to `on`/`off` regardless of
-    the HVAC mode configured for the underlying climate entity. The
-    `radiator_mode` translation only carries `on` / `off` / calendar
-    keys; raw HVAC mode strings like `auto` would render unlocalised
-    otherwise.
+    Pre-QS-204 the labels were the bare strings ``"on"`` / ``"off"``;
+    QS-204 promoted them to namespaced ``radiator_mode_on`` /
+    ``radiator_mode_off`` so they no longer collide with raw HA switch
+    states. The `radiator_mode` translation now carries those keys
+    instead of `on` / `off`; raw HVAC mode strings like `auto` would
+    render unlocalised otherwise.
     """
     device = QSRadiator(
         hass=hass,
@@ -522,8 +526,8 @@ def test_radiator_climate_bistate_modes_set_includes_on_off(
         "bistate_mode_auto",
         "bistate_mode_exact_calendar",
         "bistate_mode_default",
-        "on",
-        "off",
+        "radiator_mode_on",
+        "radiator_mode_off",
     }
 
 
@@ -605,12 +609,15 @@ def test_radiator_kwargs_normalised_in_place(
 def test_radiator_bistate_mode_labels_independent_of_hvac_mode(
     hass: HomeAssistant, radiator_config_entry, radiator_home
 ):
-    """E3 regression — radiator bistate-mode labels are always `on`/`off`.
+    """E3 regression — radiator bistate-mode labels are always
+    namespaced ``radiator_mode_*`` strings.
 
     Even when the climate-backed radiator's HVAC ON is `auto`, the
-    bistate-mode select must expose `on`/`off` so the `radiator_mode`
-    translation can label them ("Force ON" / "Force OFF") instead of
-    showing the raw HVAC mode string.
+    bistate-mode select must expose the namespaced literals so the
+    `radiator_mode` translation can label them ("Force ON" / "Force
+    OFF") instead of showing the raw HVAC mode string. QS-204
+    promoted the literals from the bare ``"on"`` / ``"off"`` to
+    ``"radiator_mode_on"`` / ``"radiator_mode_off"``.
     """
     device = QSRadiator(
         hass=hass,
@@ -624,8 +631,8 @@ def test_radiator_bistate_mode_labels_independent_of_hvac_mode(
         },
     )
 
-    assert device._bistate_mode_on == "on"
-    assert device._bistate_mode_off == "off"
+    assert device._bistate_mode_on == "radiator_mode_on"
+    assert device._bistate_mode_off == "radiator_mode_off"
     # The transport still uses the raw HVAC mode for service calls.
     assert device._transport.state_on == "auto"
 
@@ -639,8 +646,9 @@ def test_bh_b_climate_vs_radiator_bistate_mode_convention_divergence(
     - `QSClimateDuration` carries the raw HVAC mode (the `climate_mode`
       translation registers each HVAC mode as a force-mode state key,
       so `"heat"` → "Force HVAC Mode HEAT").
-    - `QSRadiator` carries the literal `"on"` / `"off"` (the
-      `radiator_mode` translation only registers `"on"` / `"off"`, so
+    - `QSRadiator` carries the namespaced literals
+      ``"radiator_mode_on"`` / ``"radiator_mode_off"`` (the
+      `radiator_mode` translation only registers those keys, so
       raw HVAC modes like `"auto"` would render unlocalised).
 
     The divergence is documented in `QSBiStateDuration`'s docstring.
@@ -679,9 +687,9 @@ def test_bh_b_climate_vs_radiator_bistate_mode_convention_divergence(
     # Climate carries the raw HVAC mode.
     assert climate._bistate_mode_on == "heat"
     assert climate._bistate_mode_off == "off"
-    # Radiator carries the literal `"on"`/`"off"`, regardless of HVAC mode.
-    assert radiator._bistate_mode_on == "on"
-    assert radiator._bistate_mode_off == "off"
+    # Radiator carries the namespaced literals, regardless of HVAC mode.
+    assert radiator._bistate_mode_on == "radiator_mode_on"
+    assert radiator._bistate_mode_off == "radiator_mode_off"
 
     # Both classes still emit the actual HVAC mode through the
     # transport for service calls.

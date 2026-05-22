@@ -2254,12 +2254,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                     )
                     quantity_to_be_added = local_quantity_to_be_added
 
-            if has_a_cmd is False:
-                _LOGGER.warning(
-                    "compute_best_period_repartition: no power sorted commands for green energy %s", self.name
-                )
-                final_ret = False
-            elif quantity_to_be_added <= 0.0 or do_use_available_power_only:
+            if quantity_to_be_added <= 0.0 or do_use_available_power_only:
                 final_ret = quantity_to_be_added <= 0.0
             else:
                 # pure solar (or pure solar plus allowed battery depletion)  was not enough, we will try to see if we can get more solar energy directly if price is better

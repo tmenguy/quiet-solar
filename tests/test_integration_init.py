@@ -476,6 +476,99 @@ async def test_async_reload_quiet_solar_handles_errors(hass: HomeAssistant):
 
 
 @pytest.mark.asyncio
+async def test_async_reload_quiet_solar_except_one_reloads_excluded_after_loop(hass: HomeAssistant):
+    """QS-204 — the excluded entry MUST be reloaded after the main loop.
+
+    The fix closes the options-flow race where the excluded entry was
+    left orphaned (HA entities alive, but device missing from the
+    rebuilt `QSHome._all_devices`). The reload call goes to
+    `hass.config_entries.async_reload(except_for_entry_id)` AFTER the
+    main reload loop completes.
+    """
+    from homeassistant.config_entries import ConfigEntryState
+
+    entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
+    entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
+    entry1.add_to_hass(hass)
+    entry2.add_to_hass(hass)
+    _set_entry_state(entry1, ConfigEntryState.LOADED)
+    _set_entry_state(entry2, ConfigEntryState.LOADED)
+
+    with (
+        patch.object(hass.config_entries, "async_unload", new_callable=AsyncMock),
+        patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload,
+    ):
+        await async_reload_quiet_solar(hass, except_for_entry_id="entry1")
+
+        # The main loop reloads entry2 (the non-excluded one); the
+        # post-loop fix reloads entry1 (the excluded one) → 2 reload
+        # calls total, with the second one targeting "entry1".
+        assert mock_reload.call_count == 2
+        reloaded_ids = [c.args[0] for c in mock_reload.call_args_list]
+        assert reloaded_ids == ["entry2", "entry1"]
+
+
+@pytest.mark.asyncio
+async def test_async_reload_quiet_solar_except_one_missing_entry(hass: HomeAssistant):
+    """QS-204 — when the excluded entry id no longer exists, do nothing.
+
+    A defensive `if entry is not None` guard around the post-loop
+    reload. Covers the case where the excluded entry was removed
+    between the call site assembling the id and the reload running.
+    """
+    from homeassistant.config_entries import ConfigEntryState
+
+    entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
+    entry1.add_to_hass(hass)
+    _set_entry_state(entry1, ConfigEntryState.LOADED)
+
+    with (
+        patch.object(hass.config_entries, "async_unload", new_callable=AsyncMock),
+        patch.object(hass.config_entries, "async_reload", new_callable=AsyncMock) as mock_reload,
+    ):
+        # `nonexistent_id` is not registered — the guard must short-circuit.
+        await async_reload_quiet_solar(hass, except_for_entry_id="nonexistent_id")
+
+        # The main loop reloads entry1 (the only existing non-excluded
+        # entry). The post-loop fix sees `entry is None` for the
+        # missing id and skips the extra reload → 1 reload call only.
+        assert mock_reload.call_count == 1
+        mock_reload.assert_called_with("entry1")
+
+
+@pytest.mark.asyncio
+async def test_async_reload_quiet_solar_except_one_reload_handles_errors(hass: HomeAssistant):
+    """QS-204 — failures during the post-loop reload are logged, not raised.
+
+    `async_reload` for the excluded entry is wrapped in try/except so a
+    transient HA failure doesn't crash the options-flow save handler.
+    """
+    from homeassistant.config_entries import ConfigEntryState
+
+    entry1 = MockConfigEntry(domain=DOMAIN, entry_id="entry1", data={}, title="Entry 1")
+    entry2 = MockConfigEntry(domain=DOMAIN, entry_id="entry2", data={}, title="Entry 2")
+    entry1.add_to_hass(hass)
+    entry2.add_to_hass(hass)
+    _set_entry_state(entry1, ConfigEntryState.LOADED)
+    _set_entry_state(entry2, ConfigEntryState.LOADED)
+
+    # First reload call (entry2 during the main loop) succeeds; second
+    # reload call (entry1 in the post-loop fix) raises.
+    with (
+        patch.object(hass.config_entries, "async_unload", new_callable=AsyncMock),
+        patch.object(
+            hass.config_entries,
+            "async_reload",
+            side_effect=[None, Exception("Excluded reload failed")],
+        ) as mock_reload,
+    ):
+        # The call must complete without re-raising.
+        await async_reload_quiet_solar(hass, except_for_entry_id="entry1")
+
+        assert mock_reload.call_count == 2
+
+
+@pytest.mark.asyncio
 async def test_async_reload_quiet_solar_skips_non_loaded_entries(hass: HomeAssistant):
     """Test that reload skips entries not in LOADED state (e.g. FAILED_UNLOAD)."""
     from homeassistant.config_entries import ConfigEntryState

@@ -79,6 +79,34 @@ async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None
             # Log the error but continue with the next entry
             _LOGGER.error("Error reloading entry %s: %s", entry.entry_id, e, exc_info=True, stack_info=True)
 
+    # QS-204 — Close the options-flow race where the excluded entry was
+    # left orphaned (HA entities alive, but device missing from the
+    # rebuilt `QSHome._all_devices`). After the wipe and the reload of
+    # every other entry, explicitly reload the excluded entry so it
+    # registers with the freshly-built `QSDataHandler` / `QSHome`.
+    #
+    # HA's update-listener-driven reload from `async_update_entry`
+    # (registered in `async_setup_entry` via
+    # `entry.async_on_unload(entry.add_update_listener(async_reload_entry))`)
+    # may also fire as a queued task. That callback ends up calling
+    # `hass.config_entries.async_reload(entry.entry_id)` too — `async_reload`
+    # is idempotent (it unloads-then-sets-up regardless of current state),
+    # so the worst case is one extra unload+setup cycle for this entry.
+    # Acceptable: the alternative (leaving the entry orphaned) is a
+    # correctness bug; an extra reload is only wasted work.
+    if except_for_entry_id is not None:
+        if hass.config_entries.async_get_entry(except_for_entry_id) is not None:
+            try:
+                await hass.config_entries.async_reload(except_for_entry_id)
+            except Exception as e:
+                _LOGGER.error(
+                    "Error reloading excluded entry %s: %s",
+                    except_for_entry_id,
+                    e,
+                    exc_info=True,
+                    stack_info=True,
+                )
+
 
 @callback
 def register_reload_service(hass: HomeAssistant) -> None:

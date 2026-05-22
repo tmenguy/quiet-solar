@@ -230,36 +230,73 @@ def test_layer3_required_for_overnight_pre_discharge():
     assert total_state_delta <= max_allowed
 
 
-def test_full_solver_keeps_battery_above_floor_on_big_sun_day():
-    """Integration variant: run the full PeriodSolver.solve() on the AC-9
-    scenario and verify the resulting battery trajectory stays at/above
-    the safety floor inside the probe window.
+def test_full_solver_keeps_battery_above_floor_on_big_sun_day_solar_only():
+    """QS-204 review fix #02 — splits the previously-skipped invariant.
 
-    This is the AC-9 GREEN case at the full-solver level — Layer 3 is
-    threaded all the way through `_constraints_delta`.
+    Solar-only variant. When the solver runs the AC-9 big-sun-day
+    scenario in off-grid mode (``solve(is_off_grid=True)``), every
+    mandatory constraint's call to
+    ``compute_best_period_repartition`` receives
+    ``do_use_available_power_only=True``. The user's pure
+    constraints.py collapse keeps the original AC-9 invariant intact
+    in this mode: the
+    ``quantity_to_be_added <= 0.0 or do_use_available_power_only``
+    branch refuses to dispatch when no green-energy commands fit, so
+    the battery never discharges below its safety floor.
+
+    Pinning the solar-only invariant explicitly (rather than relying
+    on the implicit solver behaviour) lets the integration-level test
+    survive the grid-OK trade-off the user accepted in QS-204 review
+    fix #01.
     """
     solver, _, _, battery = _build_pre_discharge_scenario()
     floor = _compute_safety_floor(battery)
 
-    solver.solve(with_self_test=False)
+    solver.solve(is_off_grid=True, with_self_test=False)
 
-    # Resimulate the trajectory under the ACTUAL battery_commands
-    # chosen by `solve()` (review fix #04 should-fix #11).  Using
-    # `existing_battery_commands=None` would resim with the default
-    # CMD_GREEN_CHARGE_AND_DISCHARGE for every slot, producing a
-    # different trajectory when force-charge / charge-only commands
-    # were chosen — false-fail or false-pass risk.
     actual_battery_commands = solver._final_battery_commands
     final = solver._battery_get_charging_power(existing_battery_commands=actual_battery_commands)
     battery_charge = final[1]
     min_in_horizon = float(np.min(battery_charge))
-    # AC-9 GREEN: full-solver run must respect the SAFETY FLOOR (empty
-    # + safety_margin), not just absolute empty.  Matches the paired
-    # manual-call assertion in test_layer3_required_for_overnight_pre_discharge.
-    # Tolerance: 1 mWh slack to absorb accumulator rounding noise
-    # (review fix #03 should-fix #13).  Matches the paired unit-test
-    # assertion's tolerance.
     assert min_in_horizon >= floor - 1e-3, (
-        f"Full-solver run dipped below the safety floor: "
+        f"Solar-only run dipped below the safety floor: "
         f"min={min_in_horizon:.1f}, floor={floor:.1f} (AC-9 GREEN, tol=1e-3)"
+    )
+
+
+def test_battery_may_dip_below_floor_when_grid_ok_on_big_sun_day():
+    """QS-204 review fix #02 — splits the previously-skipped invariant.
+
+    Grid-OK variant. When the solver runs the same big-sun-day
+    scenario with ``solve(is_off_grid=False)`` (the production default),
+    the mandatory constraint runs with
+    ``do_use_available_power_only=False``. The user's pure
+    constraints.py collapse means the price-optimizer fallback
+    dispatches the car constraint at full power even when every
+    charger step exceeds the per-slot headroom. The battery then
+    discharges to cover the shortfall, breaching the AC-9 safety
+    floor. The user accepted this trade-off (rationale: 'below the
+    headroom is not used to limit the commands').
+
+    This test pins the relaxed contract at the integration layer so a
+    future PR cannot silently restore the floor invariant without
+    revisiting the QS-204 decision.
+    """
+    solver, _, _, battery = _build_pre_discharge_scenario()
+    floor = _compute_safety_floor(battery)
+
+    solver.solve(is_off_grid=False, with_self_test=False)
+
+    actual_battery_commands = solver._final_battery_commands
+    final = solver._battery_get_charging_power(existing_battery_commands=actual_battery_commands)
+    battery_charge = final[1]
+    min_in_horizon = float(np.min(battery_charge))
+    # The relaxed contract: in grid-OK mode the price-optimizer
+    # fallback can dispatch beyond per-slot headroom, so the battery
+    # may dip below the safety floor.
+    assert min_in_horizon < floor - 1e-3, (
+        f"Grid-OK run unexpectedly respected the safety floor "
+        f"(min={min_in_horizon:.1f}, floor={floor:.1f}). If headroom "
+        f"is now enforced through some other layer, revisit the "
+        f"QS-204 review fix #01 decision."
     )

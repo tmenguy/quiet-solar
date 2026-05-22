@@ -546,16 +546,37 @@ class TestDashboardTemplateRendering:
             )
 
     def test_radiator_card_flame_layers_present(self):  # CR2 — sync (no hass)
-        """QS-201 AC-2 + AC-7 — three flame paths, circular clip, cache-clear whitelist."""
+        """QS-201 AC-2 + AC-7 — flame paths, circular clip, cache-clear whitelist.
+
+        QS-204 review-fix #03 H3 parameterised the per-layer loops by
+        ``LAYER_TEETH_COUNTS.length``, so the three flame ``<path>``
+        elements are now emitted via a ``map(... id="flame${i}" ...)``
+        template-literal rather than hard-coded ``id="flame0/1/2"``
+        attributes. The test asserts the dynamic pattern is present
+        (plus the constants-level confirmation that the layer count is
+        still 3).
+        """
         import re
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
 
-        # AC-2: three flame paths with ids flame0/1/2.
-        for fid in ("flame0", "flame1", "flame2"):
-            assert re.search(rf'id="{fid}"', content) is not None, (
-                f"Missing <path id=\"{fid}\">"
-            )
+        # AC-2: the dynamic template emits per-layer paths whose ids
+        # are computed from the array index — `id="flame${i}"`.
+        assert 'id="flame${i}"' in content, (
+            "Missing dynamic `id=\"flame${i}\"` template in the flame "
+            "<path> emission — H3 parameterised the layer loops but "
+            "the template must still emit per-layer path ids."
+        )
+        # Constants confirm the layer count is still 3 (the assertion
+        # would still pass for any forward-compatible extension to N).
+        assert re.search(
+            r"const\s+LAYER_TEETH_COUNTS\s*=\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]",
+            content,
+        ) is not None, (
+            "LAYER_TEETH_COUNTS must declare exactly 3 entries (current "
+            "layer count); extending the array is supported but a smoke-"
+            "test bump should follow."
+        )
 
         # AC-2: clipPath circle at the ring centre. Geometry must be wired
         # through the module-top `CENTER_CY` / `CLIP_R` constants so the
@@ -701,35 +722,65 @@ class TestDashboardTemplateRendering:
             )
 
     def test_radiator_card_flame_dancing_dynamic_proxy(self):  # CR2 — sync (no hass)
-        """QS-201 AC-4 — structural proxy for "dancing when running".
+        """QS-204 AC-4 — structural proxy for "flames flicker when running".
 
-        No JS runtime tests exist; AC-4 is verified manually plus via these
-        three structural patterns: a `_flamePhase` accumulator that advances
-        per frame, a per-layer `translateX(${tx.toFixed(1)}px)` template, and
-        the use of `LAYER_SCROLL_OFFSET` inside the step closure for the
-        parallax-tongue effect.
+        QS-201 implemented "dancing flames" via a sine-wave path plus a
+        global `translateX` scroll driven by `_flamePhase`. The QS-201
+        proxy test asserted that pattern. QS-204 redesigned the
+        backdrop into peaked teeth with per-tooth tip flicker (no
+        scroll), so the structural markers change. Updated assertions:
+
+        * `_generateFlameTeethPath` — the new path generator;
+        * `_tipPhases` — per-layer, per-tooth phase array driving the
+          flicker (replaces the global `_flamePhase` accumulator);
+        * `LAYER_TIP_FLICKER_HZ` — per-layer flicker frequency table;
+        * the obsolete `LAYER_SCROLL_OFFSET` / `_flamePhase` markers
+          should be ABSENT so the redesign cannot regress silently.
         """
         import re
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
 
-        # Phase accumulator inside the RAF step closure.
-        assert re.search(
-            r"this\._flamePhase\s*\+=\s*this\._currentFlameSpeed\s*\*\s*dt",
-            content,
-        ) is not None, "AC-4: _flamePhase += _currentFlameSpeed * dt must be present"
+        # QS-204 review-fix #02 G12 — strip comments before scanning
+        # for legacy markers. Without the strip, a future "// removed
+        # LAYER_SCROLL_OFFSET in QS-204" comment would silently make
+        # the absence-checks pass even if the symbol were reintroduced
+        # in executable code. Mirrors the comment-strip pattern used
+        # by `test_radiator_card_flame_height_envelope_uses_progress`.
+        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        executable = re.sub(r"//[^\n]*", "", no_block)
 
-        # Per-frame translateX template — tx is toFixed(1) for sub-pixel snap.
-        assert re.search(
-            r"translateX\(\$\{tx\.toFixed\(1\)\}px\)",
-            content,
-        ) is not None, "AC-4: per-layer translateX(${tx.toFixed(1)}px) template required"
+        # New path generator must be present.
+        assert "_generateFlameTeethPath" in executable, (
+            "QS-204 AC-4: `_generateFlameTeethPath` (the peaked-teeth "
+            "path generator) must be declared"
+        )
 
-        # LAYER_SCROLL_OFFSET drives per-layer scroll phase for parallax.
-        assert re.search(
-            r"i\s*\*\s*LAYER_SCROLL_OFFSET",
-            content,
-        ) is not None, "AC-4: LAYER_SCROLL_OFFSET must drive per-layer scroll phase"
+        # Per-tooth tip phase array must drive the flicker.
+        assert "_tipPhases" in executable, (
+            "QS-204 AC-4: `_tipPhases` (per-layer, per-tooth phase array) "
+            "must drive the per-frame flicker"
+        )
+
+        # Per-layer flicker frequencies in Hz.
+        assert "LAYER_TIP_FLICKER_HZ" in executable, (
+            "QS-204 AC-4: `LAYER_TIP_FLICKER_HZ` (per-layer flicker rate) "
+            "must declare the per-layer turbulence rates"
+        )
+
+        # Obsolete QS-201 markers must be gone from the executable
+        # source — they reintroduce the wave-scroll behaviour the user
+        # reported as visually wrong. Stripped of comments so a future
+        # commit message referencing the symbol cannot mask a regression.
+        assert "LAYER_SCROLL_OFFSET" not in executable, (
+            "QS-204 AC-4 regression: `LAYER_SCROLL_OFFSET` (parallax-tongue "
+            "scroll constant from QS-201) re-appeared — the redesign drops "
+            "the global scroll in favour of per-tooth tip-flicker"
+        )
+        assert not re.search(r"this\._flamePhase\b", executable), (
+            "QS-204 AC-4 regression: `this._flamePhase` accumulator "
+            "re-appeared — replaced by per-tooth `_tipPhases` arrays"
+        )
 
     @pytest.mark.asyncio
     async def test_radiator_dashboard_passes_climate_hvac_mode_on(

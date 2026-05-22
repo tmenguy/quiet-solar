@@ -1088,9 +1088,8 @@
           "bistate_mode_auto": "Calendar: End+Duration",
           "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
           "bistate_mode_default": "Default: End+Duration",
-          "off": "Force OFF",
-          "on": "Force ON",
-          "heat": "Force HEAT"
+          "radiator_mode_on": "Force ON",
+          "radiator_mode_off": "Force OFF"
         }
       },
       "climate_state_on": {
