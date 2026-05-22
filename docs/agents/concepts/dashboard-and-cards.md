@@ -12,7 +12,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-23
+last_verified: 2026-05-22
 ---
 
 # Dashboard generation and JS Lovelace cards

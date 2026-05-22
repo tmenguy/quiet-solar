@@ -2573,6 +2573,19 @@ class TestClimateCardBackdropDerivation:
             "`running ? 'wind' : 'none'` when no setpoint resolves."
         )
 
+        # Review-fix S11: the `'wind'` literal must pair with `'none'`
+        # inside the SAME `running ? … : …` ternary so off-with-no-
+        # setpoint deterministically maps to `'none'`, not `'wind'`.
+        # Pin the ternary as a single semantic unit via a strict regex.
+        wind_none_pair = re.compile(
+            r"return\s+running\s*\?\s*'wind'\s*:\s*'none'\s*;"
+        )
+        assert wind_none_pair.search(executable) is not None, (
+            "QS-210 AC1 / review-fix S11: the `'wind'` literal must "
+            "appear in a `return running ? 'wind' : 'none';` ternary so "
+            "off-with-no-setpoint maps to 'none' (not 'wind')."
+        )
+
 
 class TestClimateCardFlameBackdrop:
     """QS-210 AC2 — HEAT backdrop uses the radiator-card flame engine."""
@@ -2753,6 +2766,32 @@ class TestClimateCardWindBackdrop:
             "linear-scroll translateX accumulator."
         )
 
+        # Review-fix S10: `_generateWispPath` must emit an OPEN
+        # sinusoidal path — NOT closed with `L width WAVE_BOTTOM_Y L 0
+        # WAVE_BOTTOM_Y Z` like the wave generator. Pin the difference
+        # so a refactor that copy-pastes the wave generator (closed
+        # polygon) is caught.
+        wisp_body = _extract_js_function_body(
+            executable,
+            r"_generateWispPath\s*\([^)]*\)\s*",
+        )
+        assert wisp_body is not None, (
+            "Review-fix S10: `_generateWispPath` method must be defined "
+            "in qs-climate-card.js."
+        )
+        assert "WAVE_BOTTOM_Y" not in wisp_body, (
+            "Review-fix S10: `_generateWispPath` must NOT reference "
+            "`WAVE_BOTTOM_Y` (that would close the path into a polygon — "
+            "the wisp is an OPEN stroked line)."
+        )
+        # The body's last meaningful character must be `;` from the
+        # return statement; no trailing ` Z` closing the path.
+        assert not re.search(r"\bZ\b", wisp_body), (
+            "Review-fix S10: `_generateWispPath` body must NOT contain "
+            "the SVG path-closing `Z` operator (the wisp is OPEN, not a "
+            "filled polygon)."
+        )
+
 
 class TestClimateCardNoneBackdrop:
     """QS-210 AC5 — fan_only/dry/off/null short-circuit to 'none'."""
@@ -2888,6 +2927,385 @@ class TestClimateCardJinjaClimateEntity:
             "`climate_entity: climate.<id>` line inside the climate "
             "device's `entities:` mapping (mirror of `backing_entity` "
             "on the radiator card)."
+        )
+
+    @pytest.mark.asyncio
+    async def test_dashboard_template_omits_climate_entity_when_device_attr_missing(
+        self, hass
+    ):
+        """Review-fix S9 — the `{% if device.climate_entity %}` guard
+        must omit the line entirely when the underlying device has no
+        backing climate entity (defensive AC7 path). Renders the climate
+        block against a tiny stub home with `device.climate_entity =
+        None` and asserts no `climate_entity:` line appears.
+        """
+        import re
+
+        # Minimal duck-typed stub for the climate block in the template.
+        # The template touches `device.device_type`, `device.name`,
+        # `device.ha_entities`, `device.climate_entity`, and the home's
+        # dashboard plumbing — supply only what's strictly required.
+        class _StubEntity:
+            def __init__(self, entity_id):
+                self.entity_id = entity_id
+
+        class _StubHaEntities(dict):
+            def get(self, key, default=None):
+                return super().get(key, default)
+
+        class _StubDevice:
+            device_type = "climate"
+            name = "Stub Climate"
+            calendar = None
+            ha_entities = _StubHaEntities()
+            climate_entity = None  # ← the falsy attribute under test
+            # The template also touches `device.home.ha_entities` for
+            # `qs_home_is_off_grid`. An empty dict short-circuits.
+            home = type("_StubHome", (), {"ha_entities": _StubHaEntities()})()
+
+        class _StubHome:
+            dashboard_sections = [("climate", None)]
+            ha_entities = _StubHaEntities()
+
+            def get_devices_for_dashboard_section(self, name):
+                return [_StubDevice()]
+
+        template_path = (
+            COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        )
+        template_content = await hass.async_add_executor_job(
+            template_path.read_text
+        )
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": _StubHome()})
+
+        # The negative path: no `climate_entity:` mapping at all.
+        assert re.search(r"\bclimate_entity:", rendered) is None, (
+            "Review-fix S9: when `device.climate_entity` is falsy, the "
+            "`{% if device.climate_entity %}` guard must omit the "
+            "`climate_entity:` line entirely so the JS card's defensive "
+            "`e.climate_entity ? … : null` path is exercised."
+        )
+
+
+class TestClimateCardReviewFix01Hardening:
+    """QS-210 review-fix #01 — hardening for cache staleness, prime
+    correctness, hysteresis, snowflake geometry, _safeNumber rigor,
+    and AC5 short-circuit semantics.
+    """
+
+    def test_climate_card_invalidates_caches_after_innerhtml_rewrite(self):
+        """Review-fix M1 — every `_render()` rewrites
+        `this._root.innerHTML`. The cache invalidators MUST run
+        unconditionally AFTER the rewrite (mirror of
+        `qs-radiator-card.js:967-969`), not only when the backdrop type
+        changes. Without this, same-backdrop re-renders (the common
+        case, every hass push) leave RAF holding stale DOM refs.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # Locate the innerHTML assignment.
+        innerhtml_match = re.search(
+            r"this\._root\.innerHTML\s*=\s*`",
+            executable,
+        )
+        assert innerhtml_match is not None, (
+            "Review-fix M1: `this._root.innerHTML = `…`` template "
+            "assignment must exist in qs-climate-card.js."
+        )
+        # The outer template literal contains nested `${... `…` ...}`
+        # template literals (e.g. for the power-btn fragment), so a
+        # naive `find('`', ...)` would land on a nested closing
+        # backtick rather than the outer one. Instead, look for the
+        # idiomatic outer-close pattern: a backtick immediately
+        # followed by `;` on its own line (`    `;`) — that's the
+        # template-literal end + statement terminator. Scan the
+        # whole file to find it.
+        outer_close = re.search(
+            r"^\s*`\s*;\s*$",
+            executable[innerhtml_match.end():],
+            re.MULTILINE,
+        )
+        assert outer_close is not None, (
+            "Review-fix M1: outer closing ```;`` for the "
+            "`this._root.innerHTML = `…`` template literal not found — "
+            "file refactored away from the established `<innerHTML> = "
+            "`…`;` shape?"
+        )
+        close_idx = innerhtml_match.end() + outer_close.end()
+        # The post-rewrite tail (next ~600 chars) must contain the three
+        # invalidator calls. This pins them as UNCONDITIONAL — they
+        # cannot be hidden behind an `if (this._backdrop !== _lastBackdrop)`
+        # guard (the pre-existing block at the top of `_render` stays;
+        # this is the post-rewrite mirror of the radiator pattern).
+        tail = executable[close_idx : close_idx + 600]
+        for invalidator in (
+            "_invalidateFlameCache",
+            "_invalidateSnowCache",
+            "_invalidateWindCache",
+        ):
+            assert f"this.{invalidator}()" in tail, (
+                f"Review-fix M1: `this.{invalidator}()` must be called "
+                f"unconditionally after the `this._root.innerHTML = `…`` "
+                f"rewrite (within ~600 chars of the closing backtick). "
+                f"Mirror of qs-radiator-card.js:967-969."
+            )
+
+    def test_climate_card_needs_flame_prime_initialized_in_render(self):
+        """Review-fix S1 — `_needsFlamePrime` MUST be initialised to
+        `true` somewhere in `_render()` (e.g.
+        `if (this._needsFlamePrime == null) this._needsFlamePrime =
+        true;`) before the prime block consumes it. Otherwise the
+        first-paint flame opens at STILL_AMP and lerps up over ~1.5s
+        instead of priming directly to DANCE_AMP.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # The initialiser pattern: any `_needsFlamePrime = true` or
+        # `_needsFlamePrime == null` guard that lives in `_render`
+        # (not just in `_startAnimation`'s lazy-init block).
+        # We approximate "in _render" by scanning for ALL occurrences
+        # and asserting that at least TWO exist (one in _startAnimation
+        # already; one new in _render).
+        occurrences = list(re.finditer(
+            r"_needsFlamePrime\s*(?:==|=)\s*(?:null|true)", executable
+        ))
+        assert len(occurrences) >= 2, (
+            "Review-fix S1: `_needsFlamePrime` must be initialised in "
+            "`_render()` (in addition to the lazy-init inside "
+            "`_startAnimation`) so the first paint primes directly to "
+            "DANCE_AMP. Expected at least 2 sites; found "
+            f"{len(occurrences)}."
+        )
+
+        # The render-side initialiser uses `== null` (so the prime fires
+        # exactly once on first paint).
+        assert re.search(
+            r"this\._needsFlamePrime\s*==\s*null", executable
+        ) is not None, (
+            "Review-fix S1: the render-side `_needsFlamePrime` "
+            "initialiser must use `== null` so the prime fires exactly "
+            "once on first paint."
+        )
+
+    def test_climate_card_backdrop_hysteresis_at_setpoint(self):
+        """Review-fix S4 — `|target - currentTemp| < BACKDROP_DEADBAND_C`
+        must use a deadband to avoid flipping flame↔snow on ±0.1°C
+        thermostat jitter at equilibrium.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # Constant declaration.
+        assert re.search(
+            r"const\s+BACKDROP_DEADBAND_C\s*=", executable
+        ) is not None, (
+            "Review-fix S4: `BACKDROP_DEADBAND_C` constant must be "
+            "declared at the file top (alongside other tuning constants)."
+        )
+
+        # The deadband comparison must appear inside the AUTO/HEAT_COOL
+        # branch — match `Math.abs(target - currentTemp) <
+        # BACKDROP_DEADBAND_C`.
+        assert re.search(
+            r"Math\.abs\(\s*target\s*-\s*currentTemp\s*\)\s*<\s*"
+            r"BACKDROP_DEADBAND_C",
+            executable,
+        ) is not None, (
+            "Review-fix S4: the AUTO/HEAT_COOL branch must guard the "
+            "flame/snow flip with "
+            "`Math.abs(target - currentTemp) < BACKDROP_DEADBAND_C`."
+        )
+
+    def test_climate_card_snowflake_spawn_uses_halfchord_geometry(self):
+        """Review-fix S5 — snowflake spawn `cx` must be biased toward
+        the actual visible chord at the spawn-y, not uniformly across
+        the bounding box. Pin the `halfChord` formula structurally.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # `CENTER_X` constant introduced alongside `CENTER_CY`.
+        assert re.search(
+            r"const\s+CENTER_X\s*=\s*160", executable
+        ) is not None, (
+            "Review-fix S5: `CENTER_X = 160` must be declared so the "
+            "snowflake spawn `cx` and clip `<circle cx=...>` use a "
+            "semantically-correct X-centre constant (not `CENTER_CY`)."
+        )
+
+        # The halfChord-bounded spawn formula.
+        assert re.search(
+            r"halfChord\s*=\s*Math\.sqrt", executable
+        ) is not None, (
+            "Review-fix S5: snowflake spawn `cx` must compute "
+            "`halfChord = Math.sqrt(…)` so it stays inside the visible "
+            "chord at the spawn-y."
+        )
+
+    def test_climate_card_safe_number_filters_whitespace_and_infinity(self):
+        """Review-fix S6 + S7 — `_safeNumber` must trim string state
+        and use `Number.isFinite(n)` (which also excludes ±Infinity).
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # Locate the _safeNumber body. The lookahead `(?=\{)` ensures
+        # we match the method DEFINITION, not the various call sites
+        # which are followed by `;` or `,`.
+        body = _extract_js_function_body(
+            executable, r"_safeNumber\s*\([^)]*\)\s*(?=\{)"
+        )
+        assert body is not None, (
+            "Review-fix S6/S7: `_safeNumber` method body must be "
+            "extractable for inspection."
+        )
+
+        # Trim of string state.
+        assert ".trim()" in body, (
+            "Review-fix S6: `_safeNumber` must call `.trim()` on the "
+            "raw string state so a whitespace-only state (e.g. \" \") "
+            "doesn't coerce to 0."
+        )
+
+        # Number.isFinite return guard.
+        assert "Number.isFinite" in body, (
+            "Review-fix S6/S7: `_safeNumber` must guard the return "
+            "with `Number.isFinite(n)` so `±Infinity` is rejected."
+        )
+
+    def test_climate_card_skips_temp_reads_for_fan_only_dry_off(self):
+        """Review-fix S8 — when `climateStateOn` is anything other than
+        `'auto'` / `'heat_cool'`, the four climate-entity attribute
+        reads must be gated so they short-circuit to `null`. The AC5
+        wording requires "no attribute reads when they cannot
+        influence the outcome".
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # `needsTemps` guard declared.
+        assert re.search(
+            r"const\s+needsTemps\s*=\s*"
+            r"climateStateOn\s*===\s*'auto'\s*\|\|\s*"
+            r"climateStateOn\s*===\s*'heat_cool'",
+            executable,
+        ) is not None, (
+            "Review-fix S8: `const needsTemps = climateStateOn === "
+            "'auto' || climateStateOn === 'heat_cool';` must gate the "
+            "four climate-entity attribute reads."
+        )
+
+        # Each attribute read uses the `needsTemps ? … : null` ternary.
+        for attr in (
+            "current_temperature",
+            "temperature",
+            "target_temp_low",
+            "target_temp_high",
+        ):
+            pattern = re.compile(
+                rf"needsTemps\s*\?\s*this\._safeNumber\s*\(\s*"
+                rf"\{{\s*state\s*:\s*attrs\??\.{attr}\s*\}}\s*,\s*"
+                rf"null\s*\)\s*:\s*null"
+            )
+            assert pattern.search(executable) is not None, (
+                f"Review-fix S8: the `{attr}` read must be gated as "
+                f"`needsTemps ? this._safeNumber({{state: attrs?.{attr}}}, null) "
+                f": null`."
+            )
+
+    def test_climate_card_snow_off_state_pile_keeps_scrolling(self):
+        """Review-fix S12 — in `_stepSnow`, the snowflake-spawn block
+        must be gated on `if (snowing)`, but the wave-scroll loop and
+        path-regen block must run unconditionally so the pile keeps
+        scrolling at calm rates when the device is off (per AC3's
+        "snow could be represented like the pool water when off,
+        moving very slowly" contract).
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # Extract _stepSnow body via balanced-brace walk. The signature
+        # regex requires an immediately-following `{` (method
+        # definition form) so it doesn't match the call site inside
+        # `_startAnimation`'s switch — `_stepSnow(ts, dt);` (semicolon)
+        # would otherwise hit first and the walker would pick up the
+        # wrong body.
+        snow_body = _extract_js_function_body(
+            executable, r"_stepSnow\s*\([^)]*\)\s*(?=\{)"
+        )
+        assert snow_body is not None, (
+            "Review-fix S12: `_stepSnow(ts, dt) { … }` method body must "
+            "be extractable."
+        )
+
+        # The per-layer translateX scroll loop must live OUTSIDE the
+        # `if (snowing)` guard. Locate the first
+        # `.style.transform = `translateX` site (the wave scroll) and
+        # the `if (snowing)` guard, and assert the scroll site comes
+        # FIRST in the body. That keeps the wave-pile scrolling at
+        # calm rates even when the device is off (AC3 contract).
+        scroll_site = snow_body.find(".style.transform = `translateX")
+        assert scroll_site != -1, (
+            "Review-fix S12: `_stepSnow` body must contain a "
+            "`<el>.style.transform = `translateX(…)`` assignment "
+            "driving the per-layer wave scroll."
+        )
+
+        # The `if (snowing)` guard exists.
+        snowing_guard = re.search(r"if\s*\(\s*snowing\s*\)", snow_body)
+        assert snowing_guard is not None, (
+            "Review-fix S12: `_stepSnow` must contain an "
+            "`if (snowing)` guard for the spawn block."
+        )
+
+        # The scroll site must appear BEFORE the `if (snowing)` guard
+        # so it runs every frame regardless of running state. The
+        # spawn guard sits later in the body.
+        assert scroll_site < snowing_guard.start(), (
+            "Review-fix S12: the per-layer wave-scroll site must come "
+            "BEFORE the `if (snowing)` spawn-gate so the snow pile "
+            "keeps scrolling at calm rates when the device is off."
+        )
+
+        # Also sanity-check the for-loop driving the scroll is the
+        # canonical `for (let i = 0; i < 3; i++)`.
+        assert re.search(
+            r"for\s*\(\s*let\s+i\s*=\s*0\s*;\s*i\s*<\s*3\s*;", snow_body
+        ) is not None, (
+            "Review-fix S12: snow scroll loop must iterate over the 3 "
+            "wave layers via `for (let i = 0; i < 3; i++)`."
         )
 
 

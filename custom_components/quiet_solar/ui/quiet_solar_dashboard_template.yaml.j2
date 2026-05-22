@@ -112,15 +112,7 @@ views:
               {% if e %}climate_state_on: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("climate_state_off") %}
               {% if e %}climate_state_off: {{ e.entity_id }}{% endif %}
-              {# QS-210: surface the backing climate entity id so the JS
-                 card can read the entity's `current_temperature` /
-                 `temperature` / `target_temp_low` / `target_temp_high`
-                 attributes for the AUTO/HEAT_COOL backdrop selection.
-                 Mirrors the radiator card's `backing_entity` plumbing.
-                 `device.climate_entity` is a plain string attribute on
-                 `QSClimateDuration` (set at
-                 `ha_model/climate_controller.py:52`) — accessible
-                 directly from Jinja, no helper needed. #}
+              {#- QS-210 backing climate entity id surface. The JS card reads attributes current_temperature, temperature, target_temp_low, target_temp_high for the AUTO/HEAT_COOL backdrop selection. Mirrors the radiator card's backing_entity plumbing. device.climate_entity is a plain string attribute on QSClimateDuration (set at ha_model/climate_controller.py:52). Review-fix N2 uses left-side whitespace stripping only so the comment does not emit blank lines, while the trailing newline is preserved so the YAML mapping stays indented. #}
               {% if device.climate_entity %}climate_entity: {{ device.climate_entity }}{% endif %}
               {%- set e = ha.get("qs_best_effort_green_only") %}
               {% if e %}green_only: {{ e.entity_id }}{% endif %}

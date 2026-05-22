@@ -30,6 +30,11 @@
 
 // --- Geometry (must match the SVG <clipPath> circle attributes below) ---
 const CENTER_CY = 160;              // SVG y-centre of the ring / clip circle
+// QS-210 review-fix S5 — explicit X-centre constant. The viewBox is
+// square (320×320) so `CENTER_X === CENTER_CY === 160` numerically,
+// but a separate name reads correctly and survives a future
+// non-square viewBox.
+const CENTER_X = 160;               // SVG x-centre of the ring / clip circle
 const CLIP_R = 120;                 // backdrop clip circle radius
 
 // --- Flame engine constants (QS-204 verbatim from qs-radiator-card.js) ---
@@ -118,6 +123,14 @@ const WIND_WISP_COLORS = [
 const WIND_WAVE_AMP = 8;
 const WIND_WAVE_FREQS = [2, 3, 4];          // cycles per WIND_WISP_WIDTH (integers → seamless wrap)
 
+// QS-210 review-fix S4 — backdrop hysteresis. Strict
+// `target > currentTemp ? 'flame' : 'snow'` flips on every ±0.1°C
+// thermostat jitter at equilibrium. Treat `|target - current| <
+// BACKDROP_DEADBAND_C` as "stay where we are" — keep the previous
+// resolved backdrop ('flame' or 'snow'); if there is none yet, default
+// to 'flame' (heating is the more common AUTO use case).
+const BACKDROP_DEADBAND_C = 0.2;
+
 class QsClimateCard extends HTMLElement {
   // M4: gate the requestAnimationFrame loop on `showAnimation` (the
   // dashed-arc) OR `this._backdrop !== 'none'` (any backdrop visual
@@ -187,6 +200,13 @@ class QsClimateCard extends HTMLElement {
     this._animRaf = requestAnimationFrame(step);
   }
 
+  // Review-fix N8 — animation accumulators (`_currentFlameAmp`,
+  // `_currentSnowAmp`, `_currentSnowSpeed`, `_snowWavePhase`,
+  // `_windPhase`, `_tipPhases`) deliberately survive `_stopAnimation`
+  // so the loop resumes seamlessly when `showAnimation` flips back to
+  // true (e.g. user toggles the device on after a long off-period).
+  // The DOM-ref caches DO get cleared in the post-innerHTML M1 block
+  // and on `disconnectedCallback`; only RAF bookkeeping is reset here.
   _stopAnimation() {
     if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
     this._animRaf = null;
@@ -326,8 +346,17 @@ class QsClimateCard extends HTMLElement {
       if (snowing) {
         this._nextSnowflakeAt -= dt;
         while (this._nextSnowflakeAt <= 0 && this._snowflakes.length < MAX_CONCURRENT_SNOWFLAKES) {
-          const cx = CENTER_CY - CLIP_R + 8 + Math.random() * (2 * (CLIP_R - 8));
-          const cy = CENTER_CY - CLIP_R + 8;
+          // Review-fix S5 — bias spawn `cx` toward the actual visible
+          // chord at the spawn-y (the clip is a CIRCLE, not the
+          // bounding box). Without this, ~62% of spawns at spawn-y =
+          // CENTER_CY - CLIP_R + 8 land outside the clipped region
+          // and are invisible; the effective concurrent-flake count
+          // drops to ~5 of MAX_CONCURRENT_SNOWFLAKES = 14.
+          const spawnYOffset = 8;
+          const dyFromCenter = (CENTER_CY - CLIP_R + spawnYOffset) - CENTER_CY;
+          const halfChord = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dyFromCenter * dyFromCenter));
+          const cx = CENTER_X + (Math.random() * 2 - 1) * Math.max(8, halfChord - 4);
+          const cy = CENTER_CY - CLIP_R + spawnYOffset;
           const r = SNOW_RADIUS_MIN + Math.random() * (SNOW_RADIUS_MAX - SNOW_RADIUS_MIN);
           const vy = SNOW_SPEED_PX_PER_S_MIN + Math.random() * (SNOW_SPEED_PX_PER_S_MAX - SNOW_SPEED_PX_PER_S_MIN);
           const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
@@ -463,8 +492,12 @@ class QsClimateCard extends HTMLElement {
     this._snowLayerEl = null;
     this._lastSnowBaseY = null;
     this._lastSnowAmp = null;
-    // Snowflakes themselves survive innerHTML rewrites' wipe (they were
-    // re-parented from the old <g id=...> to nothing; remove explicitly).
+    // Review-fix N7 — defensive: the upcoming innerHTML rewrite (or
+    // post-disconnect cleanup) wipes the parent `<g>` anyway, so the
+    // explicit `.remove()` calls are redundant in the rewrite path.
+    // They DO matter on the `disconnectedCallback` path where there is
+    // no rewrite, and they keep `_snowflakes.length` from drifting up
+    // toward MAX_CONCURRENT_SNOWFLAKES across re-renders.
     if (this._snowflakes && this._snowflakes.length) {
       this._snowflakes.forEach(b => b.el?.remove?.());
       this._snowflakes = [];
@@ -472,6 +505,10 @@ class QsClimateCard extends HTMLElement {
     this._nextSnowflakeAt = 0;
   }
 
+  // Review-fix N6 — wind has no path-regen state (constant scroll, no
+  // amp envelope, no per-layer geometry to memoize), so only the DOM
+  // ref needs clearing. Animation accumulator (`_windPhase`) survives
+  // so re-attach picks up where it left off.
   _invalidateWindCache() {
     this._windWispEls = null;
   }
@@ -532,12 +569,21 @@ class QsClimateCard extends HTMLElement {
   // the truthy string when `state === "unknown" | "unavailable"`, then
   // `Number("unknown")` is `NaN` and propagates into SVG cx/cy/d
   // attributes. Filter degenerate states BEFORE conversion.
+  //
+  // QS-210 review-fix S6 / S7:
+  //   - trim whitespace-only string state so `_safeNumber({state: " "})`
+  //     doesn't coerce via `Number(" ") === 0`;
+  //   - return-side `Number.isFinite(n)` guard so `±Infinity` (which
+  //     `Number.isNaN` does NOT catch) cannot propagate downstream into
+  //     the `target > currentTemp` ternary.
   _safeNumber(sensor, defaultValue) {
     if (!sensor || sensor.state == null) return defaultValue;
-    const s = sensor.state;
-    if (s === '' || s === 'unknown' || s === 'unavailable') return defaultValue;
-    const n = Number(s);
-    return Number.isNaN(n) ? defaultValue : n;
+    const raw = sensor.state;
+    const trimmed = (typeof raw === 'string') ? raw.trim() : raw;
+    if (trimmed === '' || trimmed == null) return defaultValue;
+    if (trimmed === 'unknown' || trimmed === 'unavailable') return defaultValue;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : defaultValue;
   }
 
   set hass(hass) {
@@ -615,6 +661,10 @@ class QsClimateCard extends HTMLElement {
       // Determine if climate is running (command state must be "on")
       const commandState = sCommand?.state || '';
       const running = commandState.toLowerCase() === 'on';
+      // Review-fix N3 — stash `running` immediately so the RAF step
+      // closures see a consistent value (single-threaded JS makes the
+      // race impossible, but the proximity is clearer for readers).
+      this._running = running;
 
       // Determine max hours and what to display
       let maxHours, displayTargetHours;
@@ -657,7 +707,13 @@ class QsClimateCard extends HTMLElement {
       const endTime = (sEndTime && isValidState(sEndTime.state)) ? sEndTime.state : '--:--';
       
       // Color schemes based on climate_state_on - MUST BE DEFINED BEFORE CSS
-      const climateStateOn = (selClimateStateOn?.state || 'cool').toLowerCase();
+      // Review-fix N4 — default to `''` (not `'cool'`) so the boot
+      // race condition (SELECT entity not yet populated) defers to the
+      // catch-all `'none'` branch instead of flashing snow until the
+      // real state arrives. The downstream `colorSchemes` lookup falls
+      // back to `colorSchemes.cool` for `''` (preserving existing ring
+      // chrome behaviour).
+      const climateStateOn = (selClimateStateOn?.state || '').toLowerCase();
 
       // QS-210: read backing climate entity for AUTO / HEAT_COOL temp
       // comparison. The dashboard template emits `climate_entity:`
@@ -665,12 +721,19 @@ class QsClimateCard extends HTMLElement {
       // state machine, all four reads return null and the resolved-
       // target algorithm falls through to the "ambiguous" branch
       // (wind / none) without crashing.
-      const climateEntity = e.climate_entity ? this._hass?.states?.[e.climate_entity] : null;
+      //
+      // Review-fix S8 — gate the reads on `needsTemps`. AC5 requires
+      // "no climate-entity attribute reads when they cannot influence
+      // the outcome" (fan_only / dry / off short-circuit). Only the
+      // AUTO / HEAT_COOL branch consults the temps; everything else
+      // gets `null`s that the resolved-target algorithm never sees.
+      const needsTemps = climateStateOn === 'auto' || climateStateOn === 'heat_cool';
+      const climateEntity = (needsTemps && e.climate_entity) ? this._hass?.states?.[e.climate_entity] : null;
       const attrs = climateEntity?.attributes;
-      const currentTemp = this._safeNumber({state: attrs?.current_temperature}, null);
-      const singleTarget = this._safeNumber({state: attrs?.temperature}, null);
-      const lowTarget = this._safeNumber({state: attrs?.target_temp_low}, null);
-      const highTarget = this._safeNumber({state: attrs?.target_temp_high}, null);
+      const currentTemp = needsTemps ? this._safeNumber({state: attrs?.current_temperature}, null) : null;
+      const singleTarget = needsTemps ? this._safeNumber({state: attrs?.temperature}, null) : null;
+      const lowTarget = needsTemps ? this._safeNumber({state: attrs?.target_temp_low}, null) : null;
+      const highTarget = needsTemps ? this._safeNumber({state: attrs?.target_temp_high}, null) : null;
 
       // Resolved-target algorithm (AC1):
       //   T finite           → target = T
@@ -692,20 +755,36 @@ class QsClimateCard extends HTMLElement {
       //   'heat'  → 'flame'
       //   'cool'  → 'snow'
       //   'auto' / 'heat_cool' →
-      //      target & current finite → target > current ? 'flame' : 'snow'
+      //      target & current finite →
+      //          |target - current| < BACKDROP_DEADBAND_C → hold the
+      //              previous resolved backdrop (review-fix S4 —
+      //              avoid flame↔snow flips on thermostat jitter at
+      //              equilibrium); default to 'flame' if there's no
+      //              previous resolved value yet (cold start).
+      //          else → target > current ? 'flame' : 'snow'
       //      else → running ? 'wind' : 'none'
-      //   anything else (fan_only / dry / off / unrecognised / null) →
-      //      'none' (short-circuits BEFORE any attribute read above —
-      //      the reads above are cheap and run unconditionally so the
-      //      decision body itself stays simple; the visual effect is
-      //      the same: no backdrop, and the four attrs are simply
-      //      ignored downstream).
+      //   anything else (fan_only / dry / off / unrecognised / '' /
+      //      null) → 'none'. The four climate-entity attribute reads
+      //      above short-circuit to `null` via the `needsTemps` guard
+      //      (review-fix S8 — matches AC5's "no reads when they
+      //      cannot influence the outcome").
       const deriveBackdrop = () => {
         if (climateStateOn === 'heat') return 'flame';
         if (climateStateOn === 'cool') return 'snow';
         if (climateStateOn === 'auto' || climateStateOn === 'heat_cool') {
           const target = resolveTarget();
           if (Number.isFinite(currentTemp) && target != null) {
+            if (Math.abs(target - currentTemp) < BACKDROP_DEADBAND_C) {
+              // Hysteresis: keep the previous resolved backdrop so
+              // ±0.1°C sensor jitter doesn't flip the visual every
+              // hass push. If we haven't resolved a backdrop yet,
+              // default to 'flame' (heating is the more common AUTO
+              // use case).
+              if (this._lastBackdrop === 'flame' || this._lastBackdrop === 'snow') {
+                return this._lastBackdrop;
+              }
+              return 'flame';
+            }
             return target > currentTemp ? 'flame' : 'snow';
           }
           return running ? 'wind' : 'none';
@@ -936,9 +1015,15 @@ class QsClimateCard extends HTMLElement {
       const backdropActive = this._backdrop !== 'none';
       const showAnimation = ringDashActive || backdropActive;
 
-      // QS-210: stash `running` so the RAF step functions can switch
-      // flame amp / snow amp / snowflake spawn cadence on/off.
-      this._running = running;
+      // Review-fix S1 — initialise `_needsFlamePrime` to `true` here so
+      // the first paint primes `_currentFlameAmp` directly to its
+      // target instead of lerping STILL_AMP→DANCE_AMP over ~1.5s. The
+      // lazy-init in `_startAnimation` only fires AFTER this point
+      // (and only when `_currentFlameAmp == null`), so without this
+      // line the flag would be `undefined` → falsy → skip on the
+      // first paint. `== null` (loose equality) catches both
+      // `undefined` and `null` so the prime fires exactly once.
+      if (this._needsFlamePrime == null) this._needsFlamePrime = true;
 
       // QS-210: flame backdrop — base-Y formula and colour palette.
       // Both reuse the radiator card's progress envelope.
@@ -948,7 +1033,11 @@ class QsClimateCard extends HTMLElement {
       this._flameBaseY = Number.isNaN(flameBaseY) ? null : flameBaseY;
       this._flameColors = running ? FLAME_FILLS : FLAME_GREY_FILLS;
       // Honour first-connect prime: skip the 1.5s boot lerp.
-      if (this._needsFlamePrime) {
+      // Review-fix S3 — only prime when the actual backdrop is flame.
+      // The state is otherwise unused for snow/wind/none, so mutating
+      // it would be semantically wrong (no visible bug today, but
+      // confusing to a reader).
+      if (this._backdrop === 'flame' && this._needsFlamePrime) {
         this._currentFlameAmp = running ? DANCE_AMP : STILL_AMP;
         this._needsFlamePrime = false;
       }
@@ -980,10 +1069,20 @@ class QsClimateCard extends HTMLElement {
       // type changes between renders, drop all three caches so the
       // next RAF tick re-queries fresh DOM refs after the upcoming
       // innerHTML rewrite.
+      //
+      // Review-fix N5 — when transitioning INTO snow from a non-snow
+      // backdrop, reset the snow amp/speed accumulators to their calm
+      // defaults so the pile doesn't briefly inherit RUN_SNOW_AMP /
+      // RUN_SNOW_SPEED from a previous off-transient. The phase
+      // accumulator stays so the scroll position is continuous.
       if (this._backdrop !== this._lastBackdrop) {
         this._invalidateFlameCache();
         this._invalidateSnowCache();
         this._invalidateWindCache();
+        if (this._backdrop === 'snow' && this._lastBackdrop !== 'snow') {
+          this._currentSnowAmp = CALM_SNOW_AMP;
+          this._currentSnowSpeed = CALM_SNOW_SPEED;
+        }
         this._lastBackdrop = this._backdrop;
       }
 
@@ -991,38 +1090,54 @@ class QsClimateCard extends HTMLElement {
       // the SVG renders with the backdrop immediately, avoiding an
       // empty-d="" flash between the innerHTML rewrite and the first
       // RAF tick.
-      const initialFlameAmp = this._currentFlameAmp ?? STILL_AMP;
-      const initialFlameBaseY = this._flameBaseY ?? CENTER_CY;
-      const initialFlameColors = this._flameColors ?? FLAME_GREY_FILLS;
-      if (!this._tipPhases) {
-        this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
+      //
+      // Review-fix S2 — gate each pre-generation block on the active
+      // backdrop. The SVG fragment below only references the matching
+      // initial-path variable for the active backdrop, so the other
+      // two arrays of generator calls would be pure waste (~9 paths
+      // generated per render, none consumed).
+      let initialFlamePaths = null;
+      let initialFlameColors = null;
+      if (this._backdrop === 'flame') {
+        const initialFlameAmp = this._currentFlameAmp ?? STILL_AMP;
+        const initialFlameBaseY = this._flameBaseY ?? CENTER_CY;
+        initialFlameColors = this._flameColors ?? FLAME_GREY_FILLS;
+        if (!this._tipPhases) {
+          this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
+        }
+        initialFlamePaths = Array.from(
+            {length: LAYER_TEETH_COUNTS.length},
+            (_, i) => this._generateFlameTeethPath(
+                FLAME_WIDTH,
+                initialFlameBaseY,
+                LAYER_BASE_HEIGHTS[i],
+                initialFlameAmp * LAYER_TIP_AMP_MULTS[i],
+                LAYER_TEETH_COUNTS[i],
+                this._tipPhases[i],
+                !running,
+            ),
+        );
       }
-      const initialFlamePaths = Array.from(
-          {length: LAYER_TEETH_COUNTS.length},
-          (_, i) => this._generateFlameTeethPath(
-              FLAME_WIDTH,
-              initialFlameBaseY,
-              LAYER_BASE_HEIGHTS[i],
-              initialFlameAmp * LAYER_TIP_AMP_MULTS[i],
-              LAYER_TEETH_COUNTS[i],
-              this._tipPhases[i],
-              !running,
-          ),
-      );
-      const initialSnowAmp = this._currentSnowAmp ?? CALM_SNOW_AMP;
-      const initialSnowBaseY = this._snowBaseY ?? CENTER_CY;
-      const initialSnowWavePaths = [0, 1, 2].map((i) => {
-        const freq = 2 + i;
-        const phaseOffset = i * LAYER_PHASE_OFFSET;
-        return this._generateWavePath(WAVE_WIDTH, initialSnowAmp, freq, phaseOffset, initialSnowBaseY);
-      });
-      const initialWindPaths = [0, 1, 2].map((i) => this._generateWispPath(
-          WIND_WISP_WIDTH,
-          WIND_WAVE_AMP,
-          WIND_WAVE_FREQS[i],
-          i * Math.PI / 3,
-          CENTER_CY + WIND_WISP_Y_OFFSETS[i],
-      ));
+      let initialSnowWavePaths = null;
+      if (this._backdrop === 'snow') {
+        const initialSnowAmp = this._currentSnowAmp ?? CALM_SNOW_AMP;
+        const initialSnowBaseY = this._snowBaseY ?? CENTER_CY;
+        initialSnowWavePaths = [0, 1, 2].map((i) => {
+          const freq = 2 + i;
+          const phaseOffset = i * LAYER_PHASE_OFFSET;
+          return this._generateWavePath(WAVE_WIDTH, initialSnowAmp, freq, phaseOffset, initialSnowBaseY);
+        });
+      }
+      let initialWindPaths = null;
+      if (this._backdrop === 'wind') {
+        initialWindPaths = [0, 1, 2].map((i) => this._generateWispPath(
+            WIND_WISP_WIDTH,
+            WIND_WAVE_AMP,
+            WIND_WAVE_FREQS[i],
+            i * Math.PI / 3,
+            CENTER_CY + WIND_WISP_Y_OFFSETS[i],
+        ));
+      }
 
       // M4: start/stop the RAF loop based on whether any visible
       // animation needs to run.
@@ -1259,6 +1374,21 @@ class QsClimateCard extends HTMLElement {
         ` : ''}
       </ha-card>
     `;
+
+      // Review-fix M1 — invalidate the three backdrop DOM caches
+      // AFTER every innerHTML rewrite (not only when the backdrop
+      // type changes, which the block higher up handles). The
+      // rewrite detaches every cached element (`_flameEls`,
+      // `_snowWaveEls`, `_snowLayerEl`, `_windWispEls`); without
+      // this unconditional reset, same-backdrop re-renders (the
+      // common case — every hass push, ~once per second) leave RAF
+      // ticking on orphan nodes and the visual freezes. Mirror of
+      // `qs-radiator-card.js:967-969`. `_invalidateSnowCache` also
+      // clears `_snowflakes[]`, so the spawn-cap stops drifting up
+      // toward MAX_CONCURRENT_SNOWFLAKES across renders.
+      this._invalidateFlameCache();
+      this._invalidateSnowCache();
+      this._invalidateWindCache();
 
       // Wire events
       const root = this._root;
