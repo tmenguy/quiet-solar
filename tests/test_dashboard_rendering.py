@@ -2506,6 +2506,66 @@ def test_water_boiler_card_render_preserves_steam_puffs_across_innerhtml():
     )
 
 
+def test_water_boiler_card_render_preserves_bubbles_across_innerhtml():
+    """Symmetric to the steam-puff preservation: `_render()` must also
+    snapshot `_bubbles` and `_nextBubbleAt` BEFORE the innerHTML
+    rewrite and restore them AFTER `_resetDomRefs()`, re-attaching
+    each preserved bubble's detached DOM node to the freshly-rendered
+    bubble layer.
+
+    The bubble blip on hass push was previously documented as
+    "barely-perceptible (167 ms respawn)" — accepted at the time
+    because bubbles live ~1.5 s. Now that we have the snapshot/
+    restore pattern in place for steam puffs, applying it
+    symmetrically to bubbles eliminates the blip entirely and removes
+    a per-push DOM-thrash spike."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    assert re.search(
+        r"const\s+preservedBubbles\s*=\s*this\._bubbles",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._bubbles` into `preservedBubbles` BEFORE the innerHTML "
+        "rewrite."
+    )
+    assert re.search(
+        r"const\s+preservedNextBubbleAt\s*=\s*this\._nextBubbleAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._nextBubbleAt` so the bubble spawn cadence doesn't "
+        "reset to 0 (which would burst-spawn on every push)."
+    )
+    assert re.search(
+        r"newBubbleLayer\.appendChild\s*\(\s*b\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must re-attach each "
+        "preserved bubble's DOM node to the new bubble layer via "
+        "`newBubbleLayer.appendChild(b.el)`."
+    )
+    assert re.search(
+        r"this\._bubbles\s*=\s*preservedBubbles",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._bubbles = preservedBubbles` after _resetDomRefs()."
+    )
+    assert re.search(
+        r"this\._nextBubbleAt\s*=\s*preservedNextBubbleAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._nextBubbleAt = preservedNextBubbleAt`."
+    )
+
+
 def test_water_boiler_card_steam_opacity_formula():
     """QS-214 per-puff proportional rim-fade iteration: per-frame
     opacity is `lifeOpacity * rimOpacity * this._currentColorMix`,

@@ -1159,19 +1159,27 @@ class QsWaterBoilerCard extends HTMLElement {
         }
       }
 
-      // QS-214: snapshot the in-flight steam puffs BEFORE the
-      // innerHTML rewrite below. The rewrite detaches every DOM node
-      // under `this._root`, including the steam layer's children.
-      // Without this snapshot, every HA state push (which fires
-      // `set hass → _render`) wipes the entire puff array
-      // simultaneously — the user-visible "3-4 puffs all disappear at
-      // the exact same time" symptom. The `p.el` references survive
-      // detachment (JS still holds them); we re-attach them to the
-      // new steam layer after `_resetDomRefs()` below. Spawn-cadence
-      // counter is also preserved so the next spawn doesn't reset to
-      // 0 (which would burst-spawn on every push).
+      // QS-214: snapshot the in-flight steam puffs AND bubbles BEFORE
+      // the innerHTML rewrite below. The rewrite detaches every DOM
+      // node under `this._root`, including the steam and bubble
+      // layers' children. Without this snapshot, every HA state push
+      // (which fires `set hass → _render`) wipes the entire particle
+      // arrays simultaneously — the user-visible "3-4 puffs all
+      // disappear at the exact same time" symptom for steam. Bubbles
+      // had the same wipe but it was previously accepted as a
+      // "barely-perceptible blip" (1.5s life, 167ms respawn); the
+      // symmetric preservation removes that blip too and eliminates a
+      // per-push DOM-thrash spike.
+      //
+      // The `p.el` / `b.el` references survive detachment (JS still
+      // holds them); we re-attach them to the new layers after
+      // `_resetDomRefs()` below. Spawn-cadence counters are also
+      // preserved so the next spawn doesn't reset to 0 (which would
+      // burst-spawn on every push).
       const preservedSteamPuffs = this._steamPuffs;
       const preservedNextSteamAt = this._nextSteamAt;
+      const preservedBubbles = this._bubbles;
+      const preservedNextBubbleAt = this._nextBubbleAt;
 
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
@@ -1322,16 +1330,16 @@ class QsWaterBoilerCard extends HTMLElement {
       this._lastAmplitude = initialAmp;
       this._resetDomRefs();
 
-      // QS-214: restore the preserved steam puffs into the FRESH
-      // steam layer (its DOM identity changed via innerHTML — same
-      // `id`, new element). For each preserved puff, re-attach its
-      // detached `el` to the new layer; the puff's per-frame state
-      // (cy, life, fadeBand, …) survived in the JS array, so the RAF
-      // advance loop picks up exactly where it left off, with no
-      // visual blink. Counter is restored so spawn cadence is
-      // continuous. If the new layer isn't found (defensive — e.g.
-      // template change removed it), drop the preserved puffs so they
-      // don't leak DOM nodes.
+      // QS-214: restore the preserved steam puffs AND bubbles into
+      // the FRESH layers (their DOM identity changed via innerHTML —
+      // same `id`, new element). For each preserved particle,
+      // re-attach its detached `el` to the new layer; the per-frame
+      // state (cy, life, fadeBand, …) survived in the JS array, so
+      // the RAF advance loop picks up exactly where it left off, with
+      // no visual blink. Counters are restored so spawn cadence is
+      // continuous. If a new layer isn't found (defensive — e.g.
+      // template change removed it), the preserved particles are
+      // dropped to avoid leaking detached DOM nodes.
       if (preservedSteamPuffs?.length) {
         const newSteamLayer = this._steamLayerId
           ? this._root.getElementById(this._steamLayerId)
@@ -1343,6 +1351,19 @@ class QsWaterBoilerCard extends HTMLElement {
           this._steamPuffs = preservedSteamPuffs;
           this._steamLayerEl = newSteamLayer;
           this._nextSteamAt = preservedNextSteamAt;
+        }
+      }
+      if (preservedBubbles?.length) {
+        const newBubbleLayer = this._bubbleLayerId
+          ? this._root.getElementById(this._bubbleLayerId)
+          : null;
+        if (newBubbleLayer) {
+          for (const b of preservedBubbles) {
+            if (b?.el) newBubbleLayer.appendChild(b.el);
+          }
+          this._bubbles = preservedBubbles;
+          this._bubbleLayerEl = newBubbleLayer;
+          this._nextBubbleAt = preservedNextBubbleAt;
         }
       }
 

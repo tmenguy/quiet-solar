@@ -320,13 +320,18 @@ of their rise budget at full opacity, then fade smoothly over the
 upper 60 % as they approach the local rim". The disjunctive retire
 (`p.cy < localTopY || p.life >= p.maxLife`) is preserved: by the time
 geometric retire fires, opacity is already 0, so the remove is
-invisible. **Steam puffs survive `_render()` innerHTML rewrites** —
-`_render()` snapshots `_steamPuffs` and `_nextSteamAt` before the
-rewrite, then re-attaches each preserved puff's detached DOM node to
-the freshly-rendered steam layer after `_resetDomRefs()`. Without
-this preservation, every HA state push wiped all in-flight puffs
-simultaneously (the "3-4 puffs all disappear at the exact same time"
-symptom), making the per-puff lifecycle invisible.
+invisible. **Steam puffs AND bubbles survive `_render()` innerHTML rewrites** —
+`_render()` snapshots `_steamPuffs` / `_nextSteamAt` and `_bubbles` /
+`_nextBubbleAt` before the rewrite, then re-attaches each preserved
+particle's detached DOM node to the freshly-rendered steam / bubble
+layer after `_resetDomRefs()`. Without this preservation, every HA
+state push wiped all in-flight particles simultaneously: the "3-4
+puffs all disappear at the exact same time" symptom for steam
+(visible because puffs now live ~8 s with a long fade) and the
+previously-accepted "barely-perceptible blip" for bubbles (which
+respawned in ~167 ms because their life is only ~1.5 s). The
+symmetric snapshot/restore for both subsystems also removes a
+per-push DOM-thrash spike.
 
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
