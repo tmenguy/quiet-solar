@@ -2328,39 +2328,70 @@ def test_water_boiler_card_steam_spawn_is_boiling_gated():
 
 
 def test_water_boiler_card_steam_retire_both_branches():
-    """QS-211 AC-3: the steam retire predicate covers BOTH branches —
-    `p.cy < topY` (reached top of clip) AND `p.life >= p.maxLife`
-    (hard upper-bound). Either condition retires the puff."""
+    """QS-214 AC-4: the steam retire predicate covers BOTH branches —
+    `p.cy < localTopY` (reached the local clip-circle top at the
+    puff's current x) AND `p.life >= p.maxLife` (hard upper-bound).
+    Either condition retires the puff. The per-puff `localTopY`
+    derivation replaces QS-211's global `topY = CENTER_CY - CLIP_R +
+    STEAM_TOP_MARGIN_PX` so puffs drifting toward the rim retire at
+    the local clip top rather than continuing invisibly toward the
+    global apex."""
     import re
 
     source = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
     executable = _strip_js_comments(source)
+    # Find the steam advance block and assert the per-puff geometry
+    # appears inside it (mirrors the opacity test's window extraction).
+    advance_start = executable.find("for (const p of this._steamPuffs)")
+    assert advance_start != -1, (
+        "qs-water-boiler-card.js: missing steam advance loop."
+    )
+    advance_block = executable[advance_start : advance_start + 1500]
     assert re.search(
-        r"p\.cy\s*<\s*topY\s*\|\|\s*p\.life\s*>=\s*p\.maxLife",
-        executable,
+        r"p\.cy\s*<\s*localTopY\s*\|\|\s*p\.life\s*>=\s*p\.maxLife",
+        advance_block,
     ), (
         "qs-water-boiler-card.js: the steam retire predicate must be "
-        "exactly `p.cy < topY || p.life >= p.maxLife` — both branches "
-        "are required (top-of-clip + maxLife)."
+        "exactly `p.cy < localTopY || p.life >= p.maxLife` — both "
+        "branches are required (local clip-top + maxLife)."
     )
     assert re.search(
-        r"const\s+topY\s*=\s*CENTER_CY\s*-\s*CLIP_R\s*\+\s*STEAM_TOP_MARGIN_PX",
-        executable,
+        r"const\s+dx\s*=\s*p\.cx\s*-\s*CENTER_CX",
+        advance_block,
     ), (
-        "qs-water-boiler-card.js: `topY` must be derived as "
-        "`CENTER_CY - CLIP_R + STEAM_TOP_MARGIN_PX`."
+        "qs-water-boiler-card.js: the per-puff retire geometry must "
+        "derive `dx = p.cx - CENTER_CX` inside the advance loop."
+    )
+    assert re.search(
+        r"const\s+localChordHalf\s*=\s*Math\.sqrt\(\s*Math\.max\(\s*0\s*,\s*"
+        r"CLIP_R\s*\*\s*CLIP_R\s*-\s*dx\s*\*\s*dx\s*\)\s*\)",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the per-puff retire geometry must "
+        "derive `localChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R "
+        "- dx * dx))` inside the advance loop (mirrors the spawn-side "
+        "chord-half formula)."
+    )
+    assert re.search(
+        r"const\s+localTopY\s*=\s*CENTER_CY\s*-\s*localChordHalf\s*\+\s*"
+        r"STEAM_TOP_MARGIN_PX",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the per-puff retire geometry must "
+        "derive `localTopY = CENTER_CY - localChordHalf + "
+        "STEAM_TOP_MARGIN_PX` inside the advance loop."
     )
 
 
 def test_water_boiler_card_steam_opacity_formula():
-    """QS-211 AC-4: per-frame opacity is the assignment
+    """QS-214 AC-1/AC-3: per-frame opacity is the assignment
     `lifeOpacity * this._currentColorMix` (not a compound `*=`), and
-    the life-curve breakpoints `0.15` (fade-in) and `0.7` (fade-out)
+    the life-curve breakpoints `0.15` (fade-in) and `0.85` (fade-out)
     appear literally in the steam advance block. The `<circle>` fill
-    is the literal `STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` so the
-    SVG alpha 0.45 is baked in."""
+    is the literal `STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)'` (cool
+    blue-gray tint, alpha 0.45 baked into the SVG fill literal)."""
     import re
 
     source = (
@@ -2368,11 +2399,11 @@ def test_water_boiler_card_steam_opacity_formula():
     ).read_text()
     executable = _strip_js_comments(source)
     assert re.search(
-        r"STEAM_FILL_COLOR\s*=\s*['\"]rgba\(255,\s*255,\s*255,\s*0\.45\)['\"]",
+        r"STEAM_FILL_COLOR\s*=\s*['\"]rgba\(195,\s*215,\s*235,\s*0\.45\)['\"]",
         executable,
     ), (
         "qs-water-boiler-card.js: STEAM_FILL_COLOR must be the literal "
-        "`'rgba(255,255,255,0.45)'` so SVG alpha 0.45 is baked in."
+        "`'rgba(195,215,235,0.45)'` (cool blue-gray, alpha 0.45 baked in)."
     )
     assert re.search(
         r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*this\._currentColorMix",
@@ -2394,9 +2425,15 @@ def test_water_boiler_card_steam_opacity_formula():
         "qs-water-boiler-card.js: missing the `0.15` fade-in breakpoint "
         "in the steam life-curve."
     )
-    assert "0.7" in advance_block, (
-        "qs-water-boiler-card.js: missing the `0.7` fade-out breakpoint "
-        "in the steam life-curve."
+    assert re.search(r"lifeT\s*<\s*0\.85", advance_block), (
+        "qs-water-boiler-card.js: missing the `lifeT < 0.85` fade-out "
+        "guard in the steam life-curve."
+    )
+    assert re.search(
+        r"\(\s*lifeT\s*-\s*0\.85\s*\)\s*/\s*0\.15", advance_block
+    ), (
+        "qs-water-boiler-card.js: missing the `(lifeT - 0.85) / 0.15` "
+        "fade-out ramp in the steam life-curve."
     )
 
 

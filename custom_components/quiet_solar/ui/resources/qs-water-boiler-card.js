@@ -89,13 +89,13 @@ const MAX_CONCURRENT_STEAM = 8;
 const STEAM_SPAWN_RATE_HZ = 1.5;
 const STEAM_RADIUS_MIN = 4;
 const STEAM_RADIUS_MAX = 10;
-const STEAM_RISE_PX_PER_S_MIN = 10;
-const STEAM_RISE_PX_PER_S_MAX = 22;
+const STEAM_RISE_PX_PER_S_MIN = 18;
+const STEAM_RISE_PX_PER_S_MAX = 32;
 const STEAM_DRIFT_PX_PER_S = 6;
 const STEAM_DRIFT_FREQ_HZ = 0.4;
 const STEAM_RADIUS_GROW_PX_PER_S = 4;
-const STEAM_MAX_LIFE_S = 4.5;
-const STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)';
+const STEAM_MAX_LIFE_S = 8.0;
+const STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)';
 const STEAM_BLUR_STDDEV = 3.5;
 const STEAM_TOP_MARGIN_PX = 4;
 
@@ -459,24 +459,35 @@ class QsWaterBoilerCard extends HTMLElement {
         // Advance + retire active puffs regardless of boiling state.
         // Graceful exit: in-flight puffs keep rising; opacity fades to
         // 0 via `_currentColorMix` over ~1.5s when running→false.
-        const topY = CENTER_CY - CLIP_R + STEAM_TOP_MARGIN_PX;
         const aliveSteam = [];
         for (const p of this._steamPuffs) {
           p.life += dt;
           p.cy -= p.vy * dt;
           p.cx += STEAM_DRIFT_PX_PER_S * Math.sin(2 * Math.PI * STEAM_DRIFT_FREQ_HZ * p.life + p.phase) * dt;
           p.r = Math.min(p.r + STEAM_RADIUS_GROW_PX_PER_S * dt, STEAM_RADIUS_MAX + 4);
-          if (p.cy < topY || p.life >= p.maxLife) {
+          // QS-214 retire predicate: per-puff circle-aware geometry.
+          // SVG convention: smaller y = visually higher. Retire when
+          // the puff rises above the local clip-circle top at this x,
+          // minus the STEAM_TOP_MARGIN_PX guard. Mirrors the spawn-side
+          // chord-half formula (`chordHalf = sqrt(max(0, CLIP_R² - dy²))`)
+          // a few lines above, so puffs drifting toward the rim retire
+          // at the local clip top rather than continuing invisibly
+          // toward the global apex.
+          const dx = p.cx - CENTER_CX;
+          const localChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dx * dx));
+          const localTopY = CENTER_CY - localChordHalf + STEAM_TOP_MARGIN_PX;
+          if (p.cy < localTopY || p.life >= p.maxLife) {
             p.el.remove();
             continue;
           }
           // Life curve: piecewise linear — fade-in [0, 0.15], hold
-          // [0.15, 0.7], fade-out [0.7, 1].
+          // [0.15, 0.85], fade-out [0.85, 1]. QS-214 widened the hold
+          // band so fast puffs reach the rim before the fade kicks in.
           const lifeT = p.life / p.maxLife;
           let lifeOpacity;
           if (lifeT < 0.15) lifeOpacity = lifeT / 0.15;
-          else if (lifeT < 0.7) lifeOpacity = 1;
-          else lifeOpacity = Math.max(0, 1 - (lifeT - 0.7) / 0.3);
+          else if (lifeT < 0.85) lifeOpacity = 1;
+          else lifeOpacity = Math.max(0, 1 - (lifeT - 0.85) / 0.15);
           const opacity = lifeOpacity * this._currentColorMix;
           p.el.setAttribute('cx', p.cx.toFixed(2));
           p.el.setAttribute('cy', p.cy.toFixed(2));

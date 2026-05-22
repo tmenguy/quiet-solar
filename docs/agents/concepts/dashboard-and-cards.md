@@ -284,20 +284,28 @@ wispy look at constant per-frame cost. Per-instance unique IDs
 (`_steamLayerId`, `_steamFilterId`) derived from
 `QsWaterBoilerCard._nextClipId` so two boiler cards on the same
 dashboard never collide. The `<circle>` fill is
-`STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` (the 0.45 alpha is
+`STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)'` (the 0.45 alpha is
 baked into the SVG fill literal — there is no separate
 `STEAM_FILL_ALPHA` JS constant); the runtime per-frame `opacity`
 attribute is `lifeOpacity * _currentColorMix` — assignment, not
 compound — where `lifeOpacity` is the piecewise-linear lifeCurve(t)
-with breakpoints at 0.15 (fade-in end) and 0.7 (fade-out start). The
+with breakpoints at 0.15 (fade-in end) and 0.85 (fade-out start). The
 effective rendered alpha multiplies through the SVG: `0.45 ×
-_currentColorMix × lifeOpacity`, peaking at 0.45 only during hold
-phase with a fully-ramped colorMix. Steam therefore cross-fades with
-`_currentColorMix` and gracefully exits on running→false: existing
-puffs continue rising while their opacity ramps to 0 over the same
-~1.5s envelope as bubbles. `_resetDomRefs()` extends to null
-`_steamLayerEl` and clear `_steamPuffs`; `disconnectedCallback`
-mirrors the bubble teardown to eagerly remove puff DOM nodes.
+_currentColorMix × lifeOpacity`, peaking at 0.45 across the wider
+0.15–0.85 hold band with a fully-ramped colorMix. Steam therefore
+cross-fades with `_currentColorMix` and gracefully exits on
+running→false: existing puffs continue rising while their opacity
+ramps to 0 over the same ~1.5s envelope as bubbles. `_resetDomRefs()`
+extends to null `_steamLayerEl` and clear `_steamPuffs`;
+`disconnectedCallback` mirrors the bubble teardown to eagerly remove
+puff DOM nodes. **QS-214** widened the rise budget
+(`STEAM_MAX_LIFE_S = 8.0`, `STEAM_RISE_PX_PER_S_*` bumped to
+`[18, 32]`), tinted the puff color to a cool blue-gray for visibility
+against dark HA themes, and replaced the global-apex retire with a
+per-puff circle-aware predicate (`localTopY = CENTER_CY -
+sqrt(CLIP_R² - dx²) + STEAM_TOP_MARGIN_PX`) so puffs drifting toward
+the rim retire at the local clip top rather than continuing
+invisibly toward the global apex.
 
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
