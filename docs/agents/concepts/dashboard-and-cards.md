@@ -271,6 +271,27 @@ order (= lowest z), so the controls sit on top. The QS-194 optional
 bubble rate, and surface-glow opacity are all independent of the
 temperature sensor (boiling is binary, driven by `running === true`).
 
+**QS-211 — boiling steam puffs.** A 4th boiling-state visual on top
+of QS-200's waves + bubbles + surface-glow. When `running === true`:
+soft white-translucent `<circle>` puffs spawn from the water surface
+(`_waterBaseY`) at `STEAM_SPAWN_RATE_HZ = 1.5` (capped at
+`MAX_CONCURRENT_STEAM = 8`), rise toward the top of the water clip
+circle with a small sin-wobble, grow with `STEAM_RADIUS_GROW_PX_PER_S
+= 4`, and fade in/hold/fade-out via a piecewise-linear life curve. A
+single `<filter>` (`feGaussianBlur stdDeviation = 3.5`) is applied to
+the `<g id="${steamLayerId}">` group (NOT per circle) for the soft
+wispy look at constant per-frame cost. Per-instance unique IDs
+(`_steamLayerId`, `_steamFilterId`) derived from
+`QsWaterBoilerCard._nextClipId` so two boiler cards on the same
+dashboard never collide. Opacity each frame is `STEAM_FILL_ALPHA ×
+_currentColorMix × lifeCurve(t)` — assignment, not compound — so
+steam cross-fades with `_currentColorMix` and gracefully exits on
+running→false: existing puffs continue rising while their opacity
+ramps to 0 over the same ~1.5s envelope as bubbles. `_resetDomRefs()`
+extends to null `_steamLayerEl` and clear `_steamPuffs`;
+`disconnectedCallback` mirrors the bubble teardown to eagerly remove
+puff DOM nodes.
+
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
 cap, the first frame after a multi-second hidden-tab window
