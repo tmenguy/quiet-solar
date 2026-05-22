@@ -144,27 +144,41 @@ class QsClimateCard extends HTMLElement {
   // DOM refs (NOT animation accumulators) after each innerHTML rewrite
   // so re-renders don't visibly snap.
   _startAnimation() {
-    // Lazy-init backdrop-specific animation state.
-    if (this._currentFlameAmp == null) {
-      this._currentFlameAmp = STILL_AMP;
-      this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
-      this._needsFlamePrime = true;
-    }
-    if (this._currentSnowAmp == null) {
-      this._currentSnowAmp = CALM_SNOW_AMP;
-      this._currentSnowSpeed = CALM_SNOW_SPEED;
-      this._snowWavePhase = 0;
-      this._snowflakes = [];
-      this._nextSnowflakeAt = 0;
-    }
-    if (this._windPhase == null) {
-      this._windPhase = 0;
-    }
-
+    // Pass-#2 N4 — early-return BEFORE the lazy-init so the init
+    // blocks only execute when actually starting a fresh RAF loop.
+    // (`_startAnimation` is called on every `_render` via the
+    // umbrella `showAnimation` gate; re-entries while RAF is running
+    // shouldn't pay the lazy-init cost.)
     if (this._animRaf != null) return;
-    this._invalidateFlameCache();
-    this._invalidateSnowCache();
-    this._invalidateWindCache();
+
+    // Pass-#2 M1 — per-field lazy-init guards. The legacy single
+    // guard `if (this._currentSnowAmp == null) { … five fields … }`
+    // was fragile: a render-side write to `_currentSnowAmp` (e.g.,
+    // the N5 transition reset) bypassed initialisation of the other
+    // four snow fields, leaving `_snowflakes` / `_snowWavePhase` /
+    // `_nextSnowflakeAt` as `undefined` and crashing the first RAF
+    // tick of `_stepSnow` with `TypeError: undefined is not
+    // iterable`. Per-field guards make the init robust regardless
+    // of which field is primed first.
+    if (this._currentFlameAmp == null) this._currentFlameAmp = STILL_AMP;
+    if (this._tipPhases == null) {
+      this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
+    }
+    if (this._needsFlamePrime == null) this._needsFlamePrime = true;
+    if (this._currentSnowAmp == null) this._currentSnowAmp = CALM_SNOW_AMP;
+    if (this._currentSnowSpeed == null) this._currentSnowSpeed = CALM_SNOW_SPEED;
+    if (this._snowWavePhase == null) this._snowWavePhase = 0;
+    if (this._snowflakes == null) this._snowflakes = [];
+    if (this._nextSnowflakeAt == null) this._nextSnowflakeAt = 0;
+    if (this._windPhase == null) this._windPhase = 0;
+
+    // Pass-#2 N2 — drop the three `_invalidate*Cache()` calls that
+    // used to live here. The post-innerHTML M1 block (at the tail of
+    // `_render`) now invalidates all three caches unconditionally, so
+    // the same calls here were redundant CPU work; worse,
+    // `_invalidateSnowCache`'s `.remove()` was detaching live nodes
+    // that the imminent rewrite was about to replace anyway.
+
     this._lastAnimTs = null;
 
     const step = (ts) => {
@@ -373,8 +387,19 @@ class QsClimateCard extends HTMLElement {
         if (this._nextSnowflakeAt < 0) this._nextSnowflakeAt = 0;
       }
 
-      // Advance + retire active snowflakes regardless of running state
-      // (graceful exit; mirrors boiler-bubble pattern).
+      // Advance + retire active snowflakes regardless of running state.
+      //
+      // Pass-#2 S2 note — this is an in-render graceful exit ONLY: a
+      // running→off transition that doesn't trigger a re-render lets
+      // active flakes finish their fall naturally. But the M1 (pass
+      // #1) post-innerHTML `_invalidateSnowCache()` wipes
+      // `_snowflakes = []` on every hass push (~once per second), so
+      // cross-render flakes do NOT survive in practice. The visual
+      // effect is acceptable because the wipe coincides with an
+      // innerHTML rewrite that also detaches the parent `<g>` —
+      // the user would have seen the flakes blink in either case.
+      // Re-parenting live `<circle>` nodes into the new `<g>` is a
+      // valid stretch goal but out of scope (deferred to a follow-up).
       const surfaceY = (this._snowBaseY ?? CENTER_CY) - 4;
       const alive = [];
       for (const b of this._snowflakes) {
@@ -777,13 +802,20 @@ class QsClimateCard extends HTMLElement {
             if (Math.abs(target - currentTemp) < BACKDROP_DEADBAND_C) {
               // Hysteresis: keep the previous resolved backdrop so
               // ±0.1°C sensor jitter doesn't flip the visual every
-              // hass push. If we haven't resolved a backdrop yet,
-              // default to 'flame' (heating is the more common AUTO
-              // use case).
+              // hass push.
               if (this._lastBackdrop === 'flame' || this._lastBackdrop === 'snow') {
                 return this._lastBackdrop;
               }
-              return 'flame';
+              // Pass-#2 N5 — sign-based fallback when there's no
+              // previous resolved backdrop (e.g., transitioning from
+              // 'wind' or 'none' straight into a deadband-AUTO state).
+              // The pass-#1 unconditional `return 'flame';` ignored
+              // the temp sign and showed flame even on a slight
+              // cooling delta — pick based on the sign so the very
+              // first deadband render respects the user's intent.
+              // (Subsequent renders fall into the hold-previous arm
+              // above.)
+              return target > currentTemp ? 'flame' : 'snow';
             }
             return target > currentTemp ? 'flame' : 'snow';
           }
@@ -1065,23 +1097,38 @@ class QsClimateCard extends HTMLElement {
       const snowLayerId = this._snowLayerId;
       const windLayerId = this._windLayerId;
 
-      // QS-210: backdrop-change cache invalidation. When the backdrop
-      // type changes between renders, drop all three caches so the
-      // next RAF tick re-queries fresh DOM refs after the upcoming
-      // innerHTML rewrite.
+      // QS-210: backdrop-change side-effects block.
       //
       // Review-fix N5 — when transitioning INTO snow from a non-snow
       // backdrop, reset the snow amp/speed accumulators to their calm
       // defaults so the pile doesn't briefly inherit RUN_SNOW_AMP /
       // RUN_SNOW_SPEED from a previous off-transient. The phase
       // accumulator stays so the scroll position is continuous.
+      //
+      // Pass-#2 M1 — additionally defend `_snowflakes`,
+      // `_snowWavePhase`, and `_nextSnowflakeAt`: on a cold start
+      // straight into `'snow'` mode (e.g., `climate_state_on === 'cool'`
+      // on first paint), the render-side write to `_currentSnowAmp`
+      // ran BEFORE `_startAnimation`'s legacy single-guard lazy-init,
+      // bypassing initialisation of the other four snow fields. The
+      // first RAF tick of `_stepSnow` then crashed on
+      // `for (const b of this._snowflakes)` (`undefined is not
+      // iterable`). The defensive `if (X == null) X = …;` guards here
+      // — combined with the per-field guards in `_startAnimation`
+      // (also added in pass-#2 M1) — make the init robust regardless
+      // of which field is primed first.
+      //
+      // Pass-#2 N1 — the three `_invalidate*Cache()` calls that used
+      // to live here have been removed. The post-innerHTML M1 block
+      // (at the tail of `_render`) now invalidates all three caches
+      // unconditionally, so calling them here was redundant CPU work.
       if (this._backdrop !== this._lastBackdrop) {
-        this._invalidateFlameCache();
-        this._invalidateSnowCache();
-        this._invalidateWindCache();
         if (this._backdrop === 'snow' && this._lastBackdrop !== 'snow') {
           this._currentSnowAmp = CALM_SNOW_AMP;
           this._currentSnowSpeed = CALM_SNOW_SPEED;
+          if (this._snowWavePhase == null) this._snowWavePhase = 0;
+          if (this._snowflakes == null) this._snowflakes = [];
+          if (this._nextSnowflakeAt == null) this._nextSnowflakeAt = 0;
         }
         this._lastBackdrop = this._backdrop;
       }
@@ -1271,7 +1318,7 @@ class QsClimateCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${climateClipId}">
-                  <circle cx="${CENTER_CY}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                  <circle cx="${CENTER_X}" cy="${CENTER_CY}" r="${CLIP_R}" />
                 </clipPath>
               </defs>
               <g clip-path="url(#${climateClipId})">

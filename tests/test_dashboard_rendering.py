@@ -3099,6 +3099,21 @@ class TestClimateCardReviewFix01Hardening:
             "once on first paint."
         )
 
+        # Pass-#2 S4 — the prime CONSUMER must be gated on
+        # `this._backdrop === 'flame'`. Without this gate, the prime
+        # mutates `_currentFlameAmp` even when the active backdrop is
+        # snow / wind / none (no visible bug today since flame state
+        # is unused for those, but semantically wrong — a regression
+        # that drops the gate could mask future flame-mode bugs).
+        assert re.search(
+            r"this\._backdrop\s*===\s*'flame'\s*&&\s*this\._needsFlamePrime",
+            executable,
+        ) is not None, (
+            "Pass-#2 S4: the `_needsFlamePrime` consumer must be gated "
+            "on `this._backdrop === 'flame' && this._needsFlamePrime` "
+            "so the prime only fires when the active backdrop is flame."
+        )
+
     def test_climate_card_backdrop_hysteresis_at_setpoint(self):
         """Review-fix S4 — `|target - currentTemp| < BACKDROP_DEADBAND_C`
         must use a deadband to avoid flipping flame↔snow on ±0.1°C
@@ -3132,6 +3147,70 @@ class TestClimateCardReviewFix01Hardening:
             "`Math.abs(target - currentTemp) < BACKDROP_DEADBAND_C`."
         )
 
+        # Pass-#2 S5 — pin the two-arm structure of the deadband block:
+        # (a) the "hold previous resolved backdrop" branch checks
+        #     `_lastBackdrop === 'flame' || _lastBackdrop === 'snow'`,
+        # (b) the no-prior fallback returns based on the temp sign
+        #     (`target > currentTemp ? 'flame' : 'snow'`), NOT an
+        #     unconditional `return 'flame'`. The "fallback to flame"
+        #     of pass-#1 was too aggressive — pass-#2 N5 refines.
+        derive_body = _extract_js_function_body(
+            executable, r"const\s+deriveBackdrop\s*=\s*\(\s*\)\s*=>\s*(?=\{)"
+        )
+        assert derive_body is not None, (
+            "Pass-#2 S5: `deriveBackdrop` arrow-function body must be "
+            "extractable to inspect the deadband two-arm structure."
+        )
+        # (a) hold-previous arm.
+        assert re.search(
+            r"this\._lastBackdrop\s*===\s*'flame'\s*\|\|\s*"
+            r"this\._lastBackdrop\s*===\s*'snow'",
+            derive_body,
+        ) is not None, (
+            "Pass-#2 S5: deadband block must check "
+            "`_lastBackdrop === 'flame' || _lastBackdrop === 'snow'` "
+            "before holding the previous resolved backdrop."
+        )
+        # (b) sign-based fallback (pass-#2 N5 — no unconditional flame).
+        # Extract the deadband sub-block body (inside
+        # `if (Math.abs(target - currentTemp) < BACKDROP_DEADBAND_C)
+        # { ... }`) and assert the sign-based ternary is the fallback,
+        # NOT an unconditional `return 'flame';`. The non-deadband
+        # branch also uses the sign-based ternary, so we must scope
+        # this check to the deadband body specifically.
+        deadband_body = _extract_js_function_body(
+            derive_body,
+            r"if\s*\(\s*Math\.abs\(\s*target\s*-\s*currentTemp\s*\)\s*<\s*"
+            r"BACKDROP_DEADBAND_C\s*\)\s*(?=\{)",
+        )
+        assert deadband_body is not None, (
+            "Pass-#2 N5: deadband sub-block `if (Math.abs(target - "
+            "currentTemp) < BACKDROP_DEADBAND_C) { ... }` must be "
+            "extractable inside `deriveBackdrop`."
+        )
+        assert re.search(
+            r"return\s+target\s*>\s*currentTemp\s*\?\s*'flame'\s*:\s*'snow'",
+            deadband_body,
+        ) is not None, (
+            "Pass-#2 N5: the deadband fallback must be "
+            "`return target > currentTemp ? 'flame' : 'snow';` "
+            "(sign-based), not `return 'flame';`. The bare-flame "
+            "fallback ignored the temperature sign on first transition "
+            "into a deadband-AUTO state."
+        )
+        # The bare-flame fallback must NOT exist inside the deadband
+        # body (the only remaining `return 'flame'` strings live OUTSIDE
+        # the deadband block — in the early HEAT branch and in the
+        # non-deadband sign-based ternary).
+        assert not re.search(
+            r"return\s+'flame'\s*;", deadband_body
+        ), (
+            "Pass-#2 N5: the deadband block must NOT contain an "
+            "unconditional `return 'flame';` — use the sign-based "
+            "ternary instead so wind/none → deadband-AUTO transitions "
+            "respect the temp sign."
+        )
+
     def test_climate_card_snowflake_spawn_uses_halfchord_geometry(self):
         """Review-fix S5 — snowflake spawn `cx` must be biased toward
         the actual visible chord at the spawn-y, not uniformly across
@@ -3160,6 +3239,24 @@ class TestClimateCardReviewFix01Hardening:
             "Review-fix S5: snowflake spawn `cx` must compute "
             "`halfChord = Math.sqrt(…)` so it stays inside the visible "
             "chord at the spawn-y."
+        )
+
+        # Pass-#2 S1 / N3 — the clip `<circle cx>` must use `CENTER_X`,
+        # not `CENTER_CY`. Numerically equivalent today (square
+        # viewBox) but the `CENTER_X` comment block claims
+        # future-proofing for a non-square viewBox; that claim only
+        # holds if EVERY x-coordinate reference uses `CENTER_X`. Pass-#1
+        # missed updating the clip-circle attribute; this is the
+        # finisher.
+        assert re.search(
+            r'<circle\s+cx="\$\{CENTER_X\}"\s+cy="\$\{CENTER_CY\}"\s+'
+            r'r="\$\{CLIP_R\}"',
+            content,
+        ) is not None, (
+            "Pass-#2 S1: the climate card's clip `<circle>` must read "
+            "`cx=\"${CENTER_X}\" cy=\"${CENTER_CY}\" r=\"${CLIP_R}\"` "
+            "(not `cx=\"${CENTER_CY}\"`) so the `CENTER_X` constant's "
+            "future-proofing comment is accurate."
         )
 
     def test_climate_card_safe_number_filters_whitespace_and_infinity(self):
@@ -3307,5 +3404,271 @@ class TestClimateCardReviewFix01Hardening:
             "Review-fix S12: snow scroll loop must iterate over the 3 "
             "wave layers via `for (let i = 0; i < 3; i++)`."
         )
+
+
+class TestClimateCardReviewFix02Hardening:
+    """QS-210 review-fix #02 — defensive snow init, clip CENTER_X,
+    initial-paths gating regex test, redundant invalidations removed.
+    """
+
+    def test_climate_card_snow_n5_reset_initialises_array_state(self):
+        """Pass-#2 M1 — the N5 backdrop-change snow block sets
+        `_currentSnowAmp = CALM_SNOW_AMP` BEFORE `_startAnimation()`
+        runs. That bypasses the `if (this._currentSnowAmp == null)`
+        lazy-init guard in `_startAnimation`, so `_snowflakes` /
+        `_snowWavePhase` / `_nextSnowflakeAt` stay undefined on the
+        first cool-mode render — first RAF tick of `_stepSnow` then
+        crashes with `TypeError: undefined is not iterable` on the
+        `for (const b of this._snowflakes)` loop.
+
+        Defence: the N5 block must defensively initialise the three
+        missing fields. ADDITIONALLY, `_startAnimation`'s lazy-init
+        should use per-field guards so the fix is robust in either
+        order.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # The N5 transition block: `if (this._backdrop === 'snow' &&
+        # this._lastBackdrop !== 'snow') { ... }`. Extract its body
+        # via a balanced-brace walk.
+        n5_body = _extract_js_function_body(
+            executable,
+            r"if\s*\(\s*this\._backdrop\s*===\s*'snow'\s*&&\s*"
+            r"this\._lastBackdrop\s*!==\s*'snow'\s*\)\s*(?=\{)",
+        )
+        assert n5_body is not None, (
+            "Pass-#2 M1: the `if (this._backdrop === 'snow' && "
+            "this._lastBackdrop !== 'snow') { ... }` N5 reset block "
+            "must exist for the defensive initialisation."
+        )
+
+        # The N5 block must reset amp/speed AND defensively initialise
+        # the three array/scalar fields the snow RAF step depends on.
+        assert "this._currentSnowAmp = CALM_SNOW_AMP" in n5_body, (
+            "Pass-#2 M1: the N5 block must reset "
+            "`this._currentSnowAmp = CALM_SNOW_AMP`."
+        )
+        assert "this._currentSnowSpeed = CALM_SNOW_SPEED" in n5_body, (
+            "Pass-#2 M1: the N5 block must reset "
+            "`this._currentSnowSpeed = CALM_SNOW_SPEED`."
+        )
+        for guard, field, init in (
+            ("this._snowWavePhase == null", "_snowWavePhase",
+             "this._snowWavePhase = 0"),
+            ("this._snowflakes == null", "_snowflakes",
+             "this._snowflakes = []"),
+            ("this._nextSnowflakeAt == null", "_nextSnowflakeAt",
+             "this._nextSnowflakeAt = 0"),
+        ):
+            assert guard in n5_body and init in n5_body, (
+                f"Pass-#2 M1: the N5 block must defensively initialise "
+                f"`{field}` (`if ({guard}) {init};`) so the first RAF "
+                f"tick of `_stepSnow` doesn't crash on `undefined`."
+            )
+
+        # And the `_startAnimation` lazy-init must use per-field
+        # guards (so the fix is robust in either order). The legacy
+        # single-guard `if (this._currentSnowAmp == null) { ... all
+        # five fields ... }` is fragile: any earlier write to
+        # `_currentSnowAmp` skips ALL five inits.
+        start_body = _extract_js_function_body(
+            executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)"
+        )
+        assert start_body is not None, (
+            "Pass-#2 M1: `_startAnimation()` body must be extractable."
+        )
+        for field, init in (
+            ("_currentSnowAmp", "this._currentSnowAmp = CALM_SNOW_AMP"),
+            ("_currentSnowSpeed", "this._currentSnowSpeed = CALM_SNOW_SPEED"),
+            ("_snowWavePhase", "this._snowWavePhase = 0"),
+            ("_snowflakes", "this._snowflakes = []"),
+            ("_nextSnowflakeAt", "this._nextSnowflakeAt = 0"),
+        ):
+            # Per-field guard `if (this.<field> == null) <init>;`
+            # (allow optional braces around the body).
+            pattern = re.compile(
+                rf"if\s*\(\s*this\.{field}\s*==\s*null\s*\)\s*"
+                rf"(?:\{{\s*)?{re.escape(init)}",
+            )
+            assert pattern.search(start_body) is not None, (
+                f"Pass-#2 M1: `_startAnimation` must use a per-field "
+                f"lazy-init for `{field}` "
+                f"(`if (this.{field} == null) {init};`) so the snow "
+                f"state initialisation is robust to any field being "
+                f"primed independently."
+            )
+
+    def test_climate_card_initial_paths_gated_on_active_backdrop(self):
+        """Pass-#2 S3 — the three pre-gen blocks must each be enclosed
+        by `if (this._backdrop === '<x>') { ... }`. Pass-#1 S2 added
+        the gates; this test pins them so a future copy-paste can't
+        silently lift them back out (the existing AC2/AC3/AC4 tests
+        check the emitted SVG, not the JS structure).
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # Each of the three initial-paths variables must be ASSIGNED
+        # inside an `if (this._backdrop === '<x>') { ... }` block, NOT
+        # at the top level of `_render`. Approximate this by scanning
+        # for the pattern `if (this._backdrop === '<x>') { … <var> = `
+        # within ~700 chars.
+        gating_pairs = [
+            ("flame", "initialFlamePaths"),
+            ("snow", "initialSnowWavePaths"),
+            ("wind", "initialWindPaths"),
+        ]
+        for backdrop, var_name in gating_pairs:
+            # Find the `if (this._backdrop === '<x>')` guard.
+            guard_match = re.search(
+                rf"if\s*\(\s*this\._backdrop\s*===\s*'{backdrop}'\s*\)\s*\{{",
+                executable,
+            )
+            assert guard_match is not None, (
+                f"Pass-#2 S3: missing `if (this._backdrop === "
+                f"'{backdrop}') {{ ... }}` guard before the "
+                f"`{var_name}` assignment."
+            )
+            # Walk balanced braces to find the guard's body close.
+            depth = 1
+            i = guard_match.end()
+            while i < len(executable) and depth > 0:
+                if executable[i] == "{":
+                    depth += 1
+                elif executable[i] == "}":
+                    depth -= 1
+                i += 1
+            guard_body = executable[guard_match.end():i - 1]
+            assert var_name in guard_body, (
+                f"Pass-#2 S3: `{var_name}` must be assigned INSIDE the "
+                f"`if (this._backdrop === '{backdrop}') {{ ... }}` "
+                f"block (currently assigned outside — pre-gen runs "
+                f"unconditionally, wasting ~3 path-generator calls)."
+            )
+
+    def test_climate_card_backdrop_change_block_drops_redundant_invalidators(self):
+        """Pass-#2 N1 — the backdrop-change block at the top of
+        `_render` no longer calls `_invalidateFlameCache/Snow/Wind()`.
+        Those invalidators run unconditionally post-rewrite (M1 from
+        pass-#1), so calling them BEFORE the rewrite was redundant
+        CPU work. Only the N5 accumulator reset has unique work; that
+        stays.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # Locate the backdrop-change block:
+        # `if (this._backdrop !== this._lastBackdrop) { ... }`.
+        bc_body = _extract_js_function_body(
+            executable,
+            r"if\s*\(\s*this\._backdrop\s*!==\s*this\._lastBackdrop\s*\)\s*(?=\{)",
+        )
+        assert bc_body is not None, (
+            "Pass-#2 N1: the backdrop-change block "
+            "`if (this._backdrop !== this._lastBackdrop) { ... }` "
+            "must still exist (it carries the N5 accumulator reset)."
+        )
+        for invalidator in (
+            "_invalidateFlameCache",
+            "_invalidateSnowCache",
+            "_invalidateWindCache",
+        ):
+            assert (
+                f"this.{invalidator}()" not in bc_body
+            ), (
+                f"Pass-#2 N1: the backdrop-change block must NOT call "
+                f"`this.{invalidator}()` — the post-innerHTML M1 block "
+                f"now runs the same invalidator unconditionally, so the "
+                f"pre-rewrite call is redundant CPU work."
+            )
+
+    def test_climate_card_start_animation_drops_redundant_invalidators(self):
+        """Pass-#2 N2 — `_startAnimation` no longer calls the three
+        `_invalidate*Cache()` helpers before starting RAF. The
+        post-innerHTML M1 block has already cleared the caches; the
+        pre-RAF call was redundant and `_invalidateSnowCache`'s
+        `.remove()` was also detaching live nodes that the imminent
+        rewrite was about to replace anyway.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        start_body = _extract_js_function_body(
+            executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)"
+        )
+        assert start_body is not None
+        for invalidator in (
+            "_invalidateFlameCache",
+            "_invalidateSnowCache",
+            "_invalidateWindCache",
+        ):
+            assert (
+                f"this.{invalidator}()" not in start_body
+            ), (
+                f"Pass-#2 N2: `_startAnimation` must NOT call "
+                f"`this.{invalidator}()` — the post-innerHTML M1 block "
+                f"already handles invalidation."
+            )
+
+    def test_climate_card_start_animation_lazy_init_below_early_return(self):
+        """Pass-#2 N4 — the lazy-init blocks must sit BELOW the
+        `if (this._animRaf != null) return;` early-return so they only
+        fire when actually starting a fresh RAF loop.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        start_body = _extract_js_function_body(
+            executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)"
+        )
+        assert start_body is not None
+
+        early_return = re.search(
+            r"if\s*\(\s*this\._animRaf\s*!=\s*null\s*\)\s*return\s*;",
+            start_body,
+        )
+        assert early_return is not None, (
+            "Pass-#2 N4: `_startAnimation` must contain the "
+            "`if (this._animRaf != null) return;` early-return guard."
+        )
+
+        # The lazy-init for at least one of the snow / wind / flame
+        # state fields must appear AFTER the early-return.
+        for field in ("_currentFlameAmp", "_currentSnowAmp", "_windPhase"):
+            lazy_init = re.search(
+                rf"if\s*\(\s*this\.{field}\s*==\s*null\s*\)",
+                start_body,
+            )
+            assert lazy_init is not None, (
+                f"Pass-#2 N4: `_startAnimation` must lazy-init "
+                f"`{field}`."
+            )
+            assert lazy_init.start() > early_return.end(), (
+                f"Pass-#2 N4: the lazy-init guard for `{field}` must "
+                f"appear AFTER the `if (this._animRaf != null) "
+                f"return;` early-return so it only fires when starting "
+                f"a fresh RAF loop."
+            )
 
 
