@@ -16,6 +16,14 @@
     bubbles rise bottom→top, and a red Gaussian-blurred glow with
     `mix-blend-mode: screen` traces the water surface.
 
+  QS-211 added a 4th boiling-state visual on top of QS-200:
+  - "Steam" layer above the water — soft white-translucent puffs
+    spawn at the surface, rise to the top of the clip circle with a
+    gentle sin-wobble, grow and fade with a piecewise-linear life
+    curve. Single Gaussian-blur filter applied to the layer group
+    (NOT per particle). Cross-fades with `_currentColorMix` like the
+    other boiling visuals; graceful exit on running→false.
+
   Other lit features:
   - Optional `temperature_sensor` entity row, rendered at the top of
     the card when configured (the QS-194 customisation).
@@ -69,6 +77,28 @@ const BUBBLE_SPEED_PX_PER_S_MAX = 80;
 const BUBBLE_MAX_LIFE_S = 2.5;
 const BUBBLE_FILL_COLOR = 'rgba(255,255,255,0.85)';
 
+// --- Steam (QS-211) ---
+// Wispy puffs rising from the water surface (_waterBaseY) to the top
+// of the clip circle (CENTER_CY - CLIP_R) while the boiler is running.
+// Architecture mirrors the bubble subsystem above: spawn-gated on
+// `boiling`, capped at MAX_CONCURRENT_STEAM, advance/retire outside
+// the gate for graceful exit. A single feGaussianBlur is applied to
+// the layer <g> (NOT per particle) for the soft wispy look without
+// per-circle filter cost.
+const MAX_CONCURRENT_STEAM = 8;
+const STEAM_SPAWN_RATE_HZ = 1.5;
+const STEAM_RADIUS_MIN = 4;
+const STEAM_RADIUS_MAX = 10;
+const STEAM_RISE_PX_PER_S_MIN = 10;
+const STEAM_RISE_PX_PER_S_MAX = 22;
+const STEAM_DRIFT_PX_PER_S = 6;
+const STEAM_DRIFT_FREQ_HZ = 0.4;
+const STEAM_RADIUS_GROW_PX_PER_S = 4;
+const STEAM_MAX_LIFE_S = 4.5;
+const STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)';
+const STEAM_BLUR_STDDEV = 3.5;
+const STEAM_TOP_MARGIN_PX = 4;
+
 // --- Surface glow ---
 const SURFACE_GLOW_COLOR = '#FF3D00';
 const SURFACE_GLOW_STROKE_WIDTH = 4;
@@ -110,11 +140,18 @@ class QsWaterBoilerCard extends HTMLElement {
   // If a future caller needs DOM-only reset WITHOUT touching bubbles,
   // split this into `_resetWaveDomRefs()` + explicit
   // `this._bubbles = []` at the call sites.
+  // QS-211: the same pattern is extended for the steam subsystem —
+  // `this._steamLayerEl` (cached DOM ref) and `this._steamPuffs`
+  // (logical particle array) are both reset here so the next RAF
+  // tick after an innerHTML rewrite or full memo invalidation starts
+  // with a clean slate (mirrors the QS-200 N1 note for bubbles).
   _resetDomRefs() {
     this._waveEls = null;
     this._bubbleLayerEl = null;
     this._surfaceGlowEl = null;
     this._bubbles = [];
+    this._steamLayerEl = null;
+    this._steamPuffs = [];
   }
 
   // Clear the wave-path memoization keys and cached DOM refs. Called on
@@ -153,6 +190,11 @@ class QsWaterBoilerCard extends HTMLElement {
       // Tell the next _render() to prime amp/speed/colorMix directly to
       // the actual running-state targets, skipping the 1.5s lerp envelope.
       this._needsAnimationPrime = true;
+      // QS-211: steam particle array + spawn cadence counter. Mirrors
+      // the bubble lazy-init above; runs once on first connect and is
+      // preserved across detach/re-attach.
+      this._steamPuffs = [];
+      this._nextSteamAt = 0;
     }
     this._lastAnimTs = null;
     this._invalidateWaveCache();
@@ -374,6 +416,77 @@ class QsWaterBoilerCard extends HTMLElement {
         this._bubbles = alive;
       }
 
+      // === QS-211 steam system: dynamic spawn, soft-capped at MAX_CONCURRENT_STEAM.
+      // Mirrors the bubble subsystem above. Spawn gated on `boiling`;
+      // advance/retire runs unconditionally (graceful exit on running→false
+      // via `_currentColorMix` opacity multiplier — see D15 in QS-211 story).
+      const steamLayer = this._steamLayerEl
+        ?? (this._steamLayerEl = this._steamLayerId
+              ? (this._root?.getElementById(this._steamLayerId) ?? null)
+              : null);
+      if (steamLayer) {
+        if (boiling) {
+          this._nextSteamAt -= dt;
+          while (this._nextSteamAt <= 0 && this._steamPuffs.length < MAX_CONCURRENT_STEAM) {
+            // Spawn at the water surface, within the chord of the clip
+            // circle at that Y (so puffs originate inside the visible
+            // water surface — degenerate chord → cluster near CENTER_CX,
+            // visually inconspicuous for an empty tank).
+            const jitter = Math.random() * 4 - 2;
+            const cySpawn = this._waterBaseY + jitter;
+            const dy = cySpawn - CENTER_CY;
+            const chordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dy * dy));
+            const cxSpawn = CENTER_CX + (Math.random() * 2 - 1) * chordHalf * 0.85;
+            const r = STEAM_RADIUS_MIN + Math.random() * (STEAM_RADIUS_MAX - STEAM_RADIUS_MIN);
+            const vy = STEAM_RISE_PX_PER_S_MIN + Math.random() * (STEAM_RISE_PX_PER_S_MAX - STEAM_RISE_PX_PER_S_MIN);
+            const phase = Math.random() * Math.PI * 2;
+            // createElementNS is REQUIRED for SVG inside a Shadow DOM.
+            const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            el.setAttribute('cx', cxSpawn.toFixed(2));
+            el.setAttribute('cy', cySpawn.toFixed(2));
+            el.setAttribute('r', r.toFixed(2));
+            el.setAttribute('fill', STEAM_FILL_COLOR);
+            el.setAttribute('pointer-events', 'none');
+            el.setAttribute('opacity', '0');
+            steamLayer.appendChild(el);
+            this._steamPuffs.push({el, cx: cxSpawn, cy: cySpawn, r, vy, phase, life: 0, maxLife: STEAM_MAX_LIFE_S});
+            this._nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ;
+          }
+          // Clamp to 0 to avoid a spawn-backlog burst when capacity recovers.
+          if (this._nextSteamAt < 0) this._nextSteamAt = 0;
+        }
+
+        // Advance + retire active puffs regardless of boiling state.
+        // Graceful exit: in-flight puffs keep rising; opacity fades to
+        // 0 via `_currentColorMix` over ~1.5s when running→false.
+        const topY = CENTER_CY - CLIP_R + STEAM_TOP_MARGIN_PX;
+        const aliveSteam = [];
+        for (const p of this._steamPuffs) {
+          p.life += dt;
+          p.cy -= p.vy * dt;
+          p.cx += STEAM_DRIFT_PX_PER_S * Math.sin(2 * Math.PI * STEAM_DRIFT_FREQ_HZ * p.life + p.phase) * dt;
+          p.r = Math.min(p.r + STEAM_RADIUS_GROW_PX_PER_S * dt, STEAM_RADIUS_MAX + 4);
+          if (p.cy < topY || p.life >= p.maxLife) {
+            p.el.remove();
+            continue;
+          }
+          // Life curve: piecewise linear — fade-in [0, 0.15], hold
+          // [0.15, 0.7], fade-out [0.7, 1].
+          const lifeT = p.life / p.maxLife;
+          let lifeOpacity;
+          if (lifeT < 0.15) lifeOpacity = lifeT / 0.15;
+          else if (lifeT < 0.7) lifeOpacity = 1;
+          else lifeOpacity = Math.max(0, 1 - (lifeT - 0.7) / 0.3);
+          const opacity = lifeOpacity * this._currentColorMix;
+          p.el.setAttribute('cx', p.cx.toFixed(2));
+          p.el.setAttribute('cy', p.cy.toFixed(2));
+          p.el.setAttribute('r', p.r.toFixed(2));
+          p.el.setAttribute('opacity', opacity.toFixed(3));
+          aliveSteam.push(p);
+        }
+        this._steamPuffs = aliveSteam;
+      }
+
       this._animRaf = requestAnimationFrame(step);
     };
     this._animRaf = requestAnimationFrame(step);
@@ -425,6 +538,12 @@ class QsWaterBoilerCard extends HTMLElement {
     // cheap and avoids dangling SVG nodes during a rapid detach/attach.
     this._bubbles?.forEach(b => b.el?.remove?.());
     this._bubbles = [];
+    // QS-211: same eager teardown for the steam <circle> nodes.
+    // Optional-chaining matches the bubble shape so a partially-
+    // constructed puff (e.g. from a mid-spawn throw) doesn't crash
+    // teardown.
+    this._steamPuffs?.forEach(p => p.el?.remove?.());
+    this._steamPuffs = [];
   }
 
   static getStubConfig() {
@@ -824,10 +943,17 @@ class QsWaterBoilerCard extends HTMLElement {
         this._waterClipId = `wb_wClip_${uid}`;
         this._surfaceGlowFilterId = `wb_surfGlow_${uid}`;
         this._bubbleLayerId = `wb_bubbleLayer_${uid}`;
+        // QS-211: per-instance unique IDs for the steam layer + filter.
+        // Derived from the same `uid` source as the other IDs so two
+        // boiler cards on the same dashboard never collide.
+        this._steamLayerId = `wb_steamLayer_${uid}`;
+        this._steamFilterId = `wb_steamFilter_${uid}`;
       }
       const waterClipId = this._waterClipId;
       const surfaceGlowFilterId = this._surfaceGlowFilterId;
       const bubbleLayerId = this._bubbleLayerId;
+      const steamLayerId = this._steamLayerId;
+      const steamFilterId = this._steamFilterId;
 
       // QS-200: water level from progress fill (same mapping as pool).
       // Treat null / NaN / negative / zero `displayTargetHours` as "no
@@ -1011,6 +1137,9 @@ class QsWaterBoilerCard extends HTMLElement {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
+                <filter id="${steamFilterId}" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="${STEAM_BLUR_STDDEV}" />
+                </filter>
               </defs>
               <g clip-path="url(#${waterClipId})">
                 <path id="wave0_cool" d="${initialWavePaths[0]}" fill="${COOL_WATER_COLORS[0]}" opacity="${initialCoolOpacity}" pointer-events="none" style="will-change: transform; mix-blend-mode: normal;" />
@@ -1025,6 +1154,7 @@ class QsWaterBoilerCard extends HTMLElement {
                      below and on wave0_cool/wave0_boil above; the RAF regen block then
                      resyncs d only when wave 0's geometry changes. -->
                 <path id="surface_glow" d="${initialWavePaths[0]}" stroke="${SURFACE_GLOW_COLOR}" stroke-width="${SURFACE_GLOW_STROKE_WIDTH}" fill="none" filter="url(#${surfaceGlowFilterId})" opacity="${initialBoilOpacity}" pointer-events="none" style="mix-blend-mode: screen; will-change: transform, opacity, d;" />
+                <g id="${steamLayerId}" filter="url(#${steamFilterId})" pointer-events="none"></g>
               </g>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />

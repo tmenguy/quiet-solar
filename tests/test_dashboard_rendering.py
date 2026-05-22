@@ -2221,6 +2221,459 @@ def test_water_boiler_card_factors_reset_dom_refs_helper():
     )
 
 
+def test_water_boiler_card_steam_layer_after_surface_glow_in_clip():
+    """QS-211 AC-1: the steam `<g>` is the new last child of the water
+    clip-path group, sitting AFTER `<path id="surface_glow">` in source
+    order. It carries the steam filter and `pointer-events="none"`."""
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    clip_open = source.find('<g clip-path="url(#${waterClipId})">')
+    assert clip_open != -1, (
+        "qs-water-boiler-card.js: missing the water clip-path group "
+        "opener `<g clip-path=\"url(#${waterClipId})\">` — has the "
+        "QS-200 markup been removed?"
+    )
+    surface_idx = source.find('id="surface_glow"', clip_open)
+    steam_idx = source.find('id="${steamLayerId}"', clip_open)
+    assert surface_idx != -1, (
+        "qs-water-boiler-card.js: missing `id=\"surface_glow\"` inside "
+        "the water clip group (QS-200 anchor)."
+    )
+    assert steam_idx != -1, (
+        "qs-water-boiler-card.js: missing the QS-211 steam layer "
+        "`<g id=\"${steamLayerId}\" ...>` inside the water clip group."
+    )
+    assert surface_idx < steam_idx, (
+        "qs-water-boiler-card.js: the steam `<g>` must appear AFTER "
+        "`<path id=\"surface_glow\">` in source order so it stacks "
+        "above the surface glow inside the clip group."
+    )
+    steam_group = (
+        '<g id="${steamLayerId}" filter="url(#${steamFilterId})" '
+        'pointer-events="none"></g>'
+    )
+    assert steam_group in source, (
+        "qs-water-boiler-card.js: steam group markup must be exactly "
+        f"`{steam_group}` (filter + pointer-events both required)."
+    )
+    # Review-fix #01 finding #1: the previous assertion
+    # `source.find("</g>", steam_idx)` resolved to the steam group's OWN
+    # self-closing tag — trivially `!= -1` even if the steam layer were
+    # OUTSIDE the clip group. To prove containment, advance the search
+    # past the steam group's own `</g>` so the next `</g>` we find must
+    # be a sibling/ancestor closer — specifically the outer water-clip
+    # group's `</g>`. AC-1: "both indices live within the clipped
+    # group".
+    steam_group_idx = source.find(steam_group, clip_open)
+    assert steam_group_idx != -1, (
+        "qs-water-boiler-card.js: literal steam group block must appear "
+        "inside the water clip group."
+    )
+    outer_close = source.find("</g>", steam_group_idx + len(steam_group))
+    assert outer_close != -1, (
+        "qs-water-boiler-card.js: no `</g>` AFTER the steam group's "
+        "self-close — the steam layer must be nested inside the outer "
+        "water-clip `<g>` so puffs are clipped at the ring."
+    )
+
+
+def test_water_boiler_card_steam_spawn_is_boiling_gated():
+    """QS-211 AC-2: the steam spawn `while` loop is wrapped in
+    `if (boiling) { ... }`, while the advance/retire `for` loop sits
+    OUTSIDE that guard (graceful-exit per design decision D15)."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    spawn_gate = re.search(
+        r"if \(boiling\)\s*\{[^}]*while\s*\(\s*this\._nextSteamAt\s*<=\s*0"
+        r"[^}]*MAX_CONCURRENT_STEAM",
+        executable,
+        re.DOTALL,
+    )
+    assert spawn_gate, (
+        "qs-water-boiler-card.js: the steam spawn `while` must live "
+        "inside an `if (boiling) { ... }` guard (the same `boiling` "
+        "const reused from the bubble block)."
+    )
+    advance_match = re.search(
+        r"for\s*\(\s*const\s+p\s+of\s+this\._steamPuffs\s*\)",
+        executable,
+    )
+    assert advance_match, (
+        "qs-water-boiler-card.js: missing the steam advance loop "
+        "`for (const p of this._steamPuffs)`."
+    )
+    cap_clamp = re.search(
+        r"if\s*\(\s*this\._nextSteamAt\s*<\s*0\s*\)\s*"
+        r"this\._nextSteamAt\s*=\s*0\s*;",
+        executable,
+    )
+    assert cap_clamp, (
+        "qs-water-boiler-card.js: missing the cap-recovery clamp "
+        "`if (this._nextSteamAt < 0) this._nextSteamAt = 0;`."
+    )
+    # The advance loop must come AFTER the cap-clamp line (which is the
+    # last statement inside the `if (boiling)` block), proving the
+    # advance loop is outside the boiling-gate.
+    assert advance_match.start() > cap_clamp.start(), (
+        "qs-water-boiler-card.js: the steam advance/retire loop must "
+        "appear AFTER the cap-clamp line — that is, OUTSIDE the "
+        "`if (boiling)` guard — so in-flight puffs continue to rise "
+        "and fade gracefully when boiling flips off."
+    )
+
+
+def test_water_boiler_card_steam_retire_both_branches():
+    """QS-211 AC-3: the steam retire predicate covers BOTH branches —
+    `p.cy < topY` (reached top of clip) AND `p.life >= p.maxLife`
+    (hard upper-bound). Either condition retires the puff."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    assert re.search(
+        r"p\.cy\s*<\s*topY\s*\|\|\s*p\.life\s*>=\s*p\.maxLife",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the steam retire predicate must be "
+        "exactly `p.cy < topY || p.life >= p.maxLife` — both branches "
+        "are required (top-of-clip + maxLife)."
+    )
+    assert re.search(
+        r"const\s+topY\s*=\s*CENTER_CY\s*-\s*CLIP_R\s*\+\s*STEAM_TOP_MARGIN_PX",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `topY` must be derived as "
+        "`CENTER_CY - CLIP_R + STEAM_TOP_MARGIN_PX`."
+    )
+
+
+def test_water_boiler_card_steam_opacity_formula():
+    """QS-211 AC-4: per-frame opacity is the assignment
+    `lifeOpacity * this._currentColorMix` (not a compound `*=`), and
+    the life-curve breakpoints `0.15` (fade-in) and `0.7` (fade-out)
+    appear literally in the steam advance block. The `<circle>` fill
+    is the literal `STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` so the
+    SVG alpha 0.45 is baked in."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    assert re.search(
+        r"STEAM_FILL_COLOR\s*=\s*['\"]rgba\(255,\s*255,\s*255,\s*0\.45\)['\"]",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: STEAM_FILL_COLOR must be the literal "
+        "`'rgba(255,255,255,0.45)'` so SVG alpha 0.45 is baked in."
+    )
+    assert re.search(
+        r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*this\._currentColorMix",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the per-frame opacity must be an "
+        "ASSIGNMENT `const opacity = lifeOpacity * this._currentColorMix` "
+        "(NOT a compound `*=`, which would decay exponentially over "
+        "frames)."
+    )
+    # Find the steam advance block and assert breakpoints appear inside it.
+    advance_start = executable.find("for (const p of this._steamPuffs)")
+    assert advance_start != -1, (
+        "qs-water-boiler-card.js: missing steam advance loop."
+    )
+    # Take a window large enough to cover the life-curve branches.
+    advance_block = executable[advance_start : advance_start + 1500]
+    assert "0.15" in advance_block, (
+        "qs-water-boiler-card.js: missing the `0.15` fade-in breakpoint "
+        "in the steam life-curve."
+    )
+    assert "0.7" in advance_block, (
+        "qs-water-boiler-card.js: missing the `0.7` fade-out breakpoint "
+        "in the steam life-curve."
+    )
+
+
+def test_water_boiler_card_steam_ids_derive_from_next_clip_id():
+    """QS-211 AC-5: `_steamLayerId` and `_steamFilterId` are assigned
+    inside the same `if (!this._waterClipId)` block that owns the other
+    per-instance IDs, and derive from the same `uid` variable sourced
+    from `QsWaterBoilerCard._nextClipId`. Naming convention:
+    `wb_steamLayer_${uid}` / `wb_steamFilter_${uid}`."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    assert re.search(
+        r"this\._steamLayerId\s*=\s*`wb_steamLayer_\$\{uid\}`",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: missing "
+        "`this._steamLayerId = \\`wb_steamLayer_${uid}\\`` assignment."
+    )
+    assert re.search(
+        r"this\._steamFilterId\s*=\s*`wb_steamFilter_\$\{uid\}`",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: missing "
+        "`this._steamFilterId = \\`wb_steamFilter_${uid}\\`` assignment."
+    )
+    # Both must live inside the per-instance ID guard, i.e. after the
+    # `_nextClipId` bump and before the next consumer (`const waterClipId
+    # = this._waterClipId;`).
+    guard_open = re.search(
+        r"if\s*\(\s*!this\._waterClipId\s*\)\s*\{",
+        executable,
+    )
+    assert guard_open, (
+        "qs-water-boiler-card.js: missing the "
+        "`if (!this._waterClipId) { ... }` per-instance ID guard."
+    )
+    consumer = executable.find(
+        "const waterClipId = this._waterClipId;",
+        guard_open.end(),
+    )
+    assert consumer != -1, (
+        "qs-water-boiler-card.js: missing the "
+        "`const waterClipId = this._waterClipId;` consumer line."
+    )
+    steam_layer_idx = executable.find("this._steamLayerId", guard_open.end())
+    steam_filter_idx = executable.find("this._steamFilterId", guard_open.end())
+    assert guard_open.end() < steam_layer_idx < consumer, (
+        "qs-water-boiler-card.js: `this._steamLayerId` must be assigned "
+        "inside the `if (!this._waterClipId)` block, alongside the "
+        "other per-instance IDs."
+    )
+    assert guard_open.end() < steam_filter_idx < consumer, (
+        "qs-water-boiler-card.js: `this._steamFilterId` must be "
+        "assigned inside the `if (!this._waterClipId)` block, alongside "
+        "the other per-instance IDs."
+    )
+
+
+def test_water_boiler_card_reset_dom_refs_includes_steam():
+    """QS-211 AC-6: `_resetDomRefs()` body nulls `_steamLayerEl` AND
+    clears `_steamPuffs`. Both call sites (`_invalidateWaveCache()`
+    and the post-innerHTML cleanup block) inherit the steam reset
+    automatically — no per-site duplication."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    body = _extract_js_function_body(executable, r"_resetDomRefs\s*\(\s*\)")
+    assert body is not None, (
+        "qs-water-boiler-card.js: missing `_resetDomRefs()` method."
+    )
+    assert re.search(r"this\._steamLayerEl\s*=\s*null", body), (
+        "qs-water-boiler-card.js: `_resetDomRefs()` must null "
+        "`this._steamLayerEl` so a stale ref doesn't survive into the "
+        "next RAF tick after an innerHTML rewrite."
+    )
+    assert re.search(r"this\._steamPuffs\s*=\s*\[\s*\]", body), (
+        "qs-water-boiler-card.js: `_resetDomRefs()` must clear "
+        "`this._steamPuffs = []` so a re-render starts with a fresh "
+        "particle array (matches the QS-200 bubble precedent)."
+    )
+
+
+def test_water_boiler_card_steam_cap_hit_clamps_next_steam_at():
+    """QS-211 AC-7: after the steam spawn `while` loop,
+    `if (this._nextSteamAt < 0) this._nextSteamAt = 0;` clamps the
+    cadence counter so capacity-recovery doesn't fire a backlog
+    burst. Mirrors the QS-200 bubble pattern (line 347)."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    assert re.search(
+        r"if\s*\(\s*this\._nextSteamAt\s*<\s*0\s*\)\s*"
+        r"this\._nextSteamAt\s*=\s*0\s*;",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: missing cap-recovery clamp "
+        "`if (this._nextSteamAt < 0) this._nextSteamAt = 0;` after the "
+        "steam spawn `while` loop."
+    )
+
+
+def test_water_boiler_card_disconnected_callback_clears_steam():
+    """QS-211 AC-8: `disconnectedCallback()` eagerly removes steam
+    `<circle>` DOM nodes and resets `_steamPuffs` to `[]`. Mirrors the
+    bubble teardown shape (line ~426)."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    body = _extract_js_function_body(
+        executable, r"disconnectedCallback\s*\(\s*\)"
+    )
+    assert body is not None, (
+        "qs-water-boiler-card.js: missing `disconnectedCallback()`."
+    )
+    assert re.search(
+        r"this\._steamPuffs\?\.forEach\s*\(\s*p\s*=>\s*p\.el\?\.remove\?\.\(\)\s*\)",
+        body,
+    ), (
+        "qs-water-boiler-card.js: `disconnectedCallback` must eagerly "
+        "tear down steam DOM with "
+        "`this._steamPuffs?.forEach(p => p.el?.remove?.())`."
+    )
+    assert re.search(r"this\._steamPuffs\s*=\s*\[\s*\]", body), (
+        "qs-water-boiler-card.js: `disconnectedCallback` must clear "
+        "`this._steamPuffs = []` after removing nodes."
+    )
+
+
+def test_water_boiler_card_steam_filter_region_attributes():
+    """QS-211 AC-9: the steam `<filter>` is declared in `<defs>` with
+    the safe-region attributes (`x="-50%" y="-50%" width="200%"
+    height="200%"`) so the Gaussian blur isn't clipped at the puff
+    bounding box. Mirrors the surface_glow filter precedent."""
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    filter_decl = (
+        '<filter id="${steamFilterId}" x="-50%" y="-50%" '
+        'width="200%" height="200%">'
+    )
+    assert filter_decl in source, (
+        "qs-water-boiler-card.js: steam filter declaration must include "
+        "the safe-region attributes — expected literal substring "
+        f"`{filter_decl}` (mirrors the surface_glow filter precedent)."
+    )
+    assert (
+        '<feGaussianBlur stdDeviation="${STEAM_BLUR_STDDEV}" />' in source
+    ), (
+        "qs-water-boiler-card.js: steam filter must contain "
+        "`<feGaussianBlur stdDeviation=\"${STEAM_BLUR_STDDEV}\" />`."
+    )
+
+
+def test_dashboard_and_cards_doc_pins_qs_211_steam_paragraph():
+    """Review-fix #01 finding #3: pin the QS-211 doc paragraph in
+    `docs/agents/concepts/dashboard-and-cards.md` so a future edit
+    can't silently strip the headline, move it, or stale the
+    `last_verified` field without flipping this test red.
+
+    AC-10 already routes verification through
+    `python scripts/qs/check_doc_drift.py`, but drift detection only
+    fires on co-modification mismatches — it does not enforce
+    placement, headline literal, or front-matter field shape. This
+    regression-test complements the drift checker on those three
+    dimensions.
+
+    Pinned invariants:
+
+    - The literal headline `**QS-211 — boiling steam puffs.**` is
+      present.
+    - Headline index is GREATER than the QS-200 block marker
+      (`**QS-200`) AND LESS than the first `Review-fix #01` marker —
+      i.e. the paragraph sits between the QS-200 block and the
+      review-fix history, per AC-10.
+    - The front-matter contains a `last_verified:` field with a
+      `YYYY-MM-DD` value. The regex deliberately does NOT pin a
+      specific date so the test doesn't go red every day; the goal
+      is that the field exists and is well-formed.
+    - The paragraph body mentions the four QS-211 anchors
+      (`MAX_CONCURRENT_STEAM`, `STEAM_FILL_COLOR`,
+      `_currentColorMix`, `disconnectedCallback`) so a future doc
+      rewrite can't silently strip the substantive content.
+    """
+    import re
+
+    doc_path = (
+        Path(__file__).parent.parent
+        / "docs"
+        / "agents"
+        / "concepts"
+        / "dashboard-and-cards.md"
+    )
+    doc = doc_path.read_text(encoding="utf-8")
+
+    headline = "**QS-211 — boiling steam puffs.**"
+    headline_idx = doc.find(headline)
+    assert headline_idx != -1, (
+        f"dashboard-and-cards.md: missing the literal QS-211 headline "
+        f"`{headline}`. AC-10 requires this exact wording so the "
+        "paragraph is discoverable from a substring search."
+    )
+
+    qs200_idx = doc.find("**QS-200")
+    assert qs200_idx != -1, (
+        "dashboard-and-cards.md: missing the `**QS-200` block marker — "
+        "AC-10 anchors the QS-211 paragraph relative to that block."
+    )
+    review_fix_idx = doc.find("Review-fix #01")
+    assert review_fix_idx != -1, (
+        "dashboard-and-cards.md: missing the `Review-fix #01` marker — "
+        "AC-10 anchors the QS-211 paragraph BEFORE that marker."
+    )
+    assert qs200_idx < headline_idx < review_fix_idx, (
+        "dashboard-and-cards.md: the QS-211 headline must appear AFTER "
+        "the `**QS-200` block AND BEFORE `Review-fix #01`. Current "
+        f"order: QS-200 at {qs200_idx}, QS-211 at {headline_idx}, "
+        f"Review-fix #01 at {review_fix_idx}."
+    )
+
+    # Front-matter `last_verified:` field must be present and shaped
+    # YYYY-MM-DD. We deliberately do NOT pin a specific date so this
+    # test doesn't go red every day — the field-exists + well-formed
+    # check is the right level for a regression test.
+    front_matter_match = re.search(
+        r"^last_verified:\s*(\d{4}-\d{2}-\d{2})\s*$",
+        doc,
+        re.MULTILINE,
+    )
+    assert front_matter_match, (
+        "dashboard-and-cards.md: front-matter must contain a "
+        "`last_verified: YYYY-MM-DD` field per AC-10."
+    )
+
+    # Body content guards: a future doc rewrite that strips these
+    # anchors leaves a paragraph without substance, defeating the
+    # AC-10 documentation intent. We pin the four most-load-bearing
+    # tokens (cap constant, fill-color constant, the colorMix
+    # cross-fade reference, the disconnectedCallback teardown
+    # reference).
+    #
+    # Review-fix #02 finding #1: the slice is bounded EXACTLY to the
+    # paragraph (terminated by the next blank line) — no widening. A
+    # `+ 2000` reach-ahead would let any of the four anchors live in
+    # a NEIGHBOURING section (e.g. Review-fix #01/#02 below) and
+    # still satisfy this test, defeating the "pin the substantive
+    # content of the QS-211 paragraph" intent of fix-plan #01 #3.
+    paragraph_end = doc.find("\n\n", headline_idx)
+    if paragraph_end == -1:
+        paragraph_end = len(doc)
+    paragraph = doc[headline_idx:paragraph_end]
+    for anchor in (
+        "MAX_CONCURRENT_STEAM",
+        "STEAM_FILL_COLOR",
+        "_currentColorMix",
+        "disconnectedCallback",
+    ):
+        assert anchor in paragraph, (
+            f"dashboard-and-cards.md: the QS-211 paragraph must "
+            f"mention `{anchor}` — it's one of the four load-bearing "
+            "anchors the AC-10 paragraph is required to cover. A "
+            "rewrite that drops it leaves the paragraph as a stub."
+        )
+
+
 def test_water_boiler_card_running_at_stop_consume_is_flag_gated():
     """Review-fix #04 M1: the `_runningAtStop` stash must be consumed
     EXACTLY ONCE on the first post-reattach `_render`, regardless of

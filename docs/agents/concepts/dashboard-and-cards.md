@@ -271,6 +271,34 @@ order (= lowest z), so the controls sit on top. The QS-194 optional
 bubble rate, and surface-glow opacity are all independent of the
 temperature sensor (boiling is binary, driven by `running === true`).
 
+**QS-211 — boiling steam puffs.** A 4th boiling-state visual on top
+of QS-200's waves + bubbles + surface-glow. When `running === true`:
+soft white-translucent `<circle>` puffs spawn from the water surface
+(`_waterBaseY`) at `STEAM_SPAWN_RATE_HZ = 1.5` (capped at
+`MAX_CONCURRENT_STEAM = 8`), rise toward the top of the water clip
+circle with a small sin-wobble, grow with `STEAM_RADIUS_GROW_PX_PER_S
+= 4`, and fade in/hold/fade-out via a piecewise-linear life curve. A
+single `<filter>` (`feGaussianBlur stdDeviation = 3.5`) is applied to
+the `<g id="${steamLayerId}">` group (NOT per circle) for the soft
+wispy look at constant per-frame cost. Per-instance unique IDs
+(`_steamLayerId`, `_steamFilterId`) derived from
+`QsWaterBoilerCard._nextClipId` so two boiler cards on the same
+dashboard never collide. The `<circle>` fill is
+`STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` (the 0.45 alpha is
+baked into the SVG fill literal — there is no separate
+`STEAM_FILL_ALPHA` JS constant); the runtime per-frame `opacity`
+attribute is `lifeOpacity * _currentColorMix` — assignment, not
+compound — where `lifeOpacity` is the piecewise-linear lifeCurve(t)
+with breakpoints at 0.15 (fade-in end) and 0.7 (fade-out start). The
+effective rendered alpha multiplies through the SVG: `0.45 ×
+_currentColorMix × lifeOpacity`, peaking at 0.45 only during hold
+phase with a fully-ramped colorMix. Steam therefore cross-fades with
+`_currentColorMix` and gracefully exits on running→false: existing
+puffs continue rising while their opacity ramps to 0 over the same
+~1.5s envelope as bubbles. `_resetDomRefs()` extends to null
+`_steamLayerEl` and clear `_steamPuffs`; `disconnectedCallback`
+mirrors the bubble teardown to eagerly remove puff DOM nodes.
+
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
 cap, the first frame after a multi-second hidden-tab window
