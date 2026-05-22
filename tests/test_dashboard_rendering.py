@@ -2327,75 +2327,99 @@ def test_water_boiler_card_steam_spawn_is_boiling_gated():
     )
 
 
-def test_water_boiler_card_steam_retire_both_branches():
-    """QS-214 AC-4: the steam retire predicate covers BOTH branches —
-    `p.cy < localTopY` (reached the local clip-circle top at the
-    puff's current x) AND `p.life >= p.maxLife` (hard upper-bound).
-    Either condition retires the puff. The per-puff `localTopY`
-    derivation replaces QS-211's global `topY = CENTER_CY - CLIP_R +
-    STEAM_TOP_MARGIN_PX` so puffs drifting toward the rim retire at
-    the local clip top rather than continuing invisibly toward the
-    global apex."""
+def test_water_boiler_card_steam_pin_at_rim_and_life_retire():
+    """QS-214 pin-at-rim iteration: the per-puff geometry (`dx`,
+    `localChordHalf`, `localTopY`) is unchanged from the AC-4 design,
+    but the abrupt geometric retire `if (p.cy < localTopY) {...remove}`
+    has been replaced by a position pin
+    `if (p.cy < localTopY) p.cy = localTopY` so the puff sits at the
+    local clip-circle top once it arrives. The sole `remove()` branch
+    is now the time-based `p.life >= p.maxLife`, allowing the
+    life-curve fade-out to dissolve the puff in place over the last
+    30% of its life budget. This addresses the user feedback that
+    puffs were "disappearing too abruptly" instead of fading at the
+    rim."""
     import re
 
     source = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
     executable = _strip_js_comments(source)
-    # Find the steam advance block and assert the per-puff geometry
-    # appears inside it (mirrors the opacity test's window extraction).
     advance_start = executable.find("for (const p of this._steamPuffs)")
     assert advance_start != -1, (
         "qs-water-boiler-card.js: missing steam advance loop."
     )
     advance_block = executable[advance_start : advance_start + 1500]
-    assert re.search(
-        r"p\.cy\s*<\s*localTopY\s*\|\|\s*p\.life\s*>=\s*p\.maxLife",
-        advance_block,
-    ), (
-        "qs-water-boiler-card.js: the steam retire predicate must be "
-        "exactly `p.cy < localTopY || p.life >= p.maxLife` — both "
-        "branches are required (local clip-top + maxLife)."
-    )
+    # Per-puff geometry (unchanged from AC-4).
     assert re.search(
         r"const\s+dx\s*=\s*p\.cx\s*-\s*CENTER_CX",
         advance_block,
     ), (
-        "qs-water-boiler-card.js: the per-puff retire geometry must "
-        "derive `dx = p.cx - CENTER_CX` inside the advance loop."
+        "qs-water-boiler-card.js: the per-puff geometry must derive "
+        "`dx = p.cx - CENTER_CX` inside the advance loop."
     )
     assert re.search(
         r"const\s+localChordHalf\s*=\s*Math\.sqrt\(\s*Math\.max\(\s*0\s*,\s*"
         r"CLIP_R\s*\*\s*CLIP_R\s*-\s*dx\s*\*\s*dx\s*\)\s*\)",
         advance_block,
     ), (
-        "qs-water-boiler-card.js: the per-puff retire geometry must "
-        "derive `localChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R "
-        "- dx * dx))` inside the advance loop (mirrors the spawn-side "
-        "chord-half formula)."
+        "qs-water-boiler-card.js: the per-puff geometry must derive "
+        "`localChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dx * "
+        "dx))` inside the advance loop (mirrors the spawn-side chord-"
+        "half formula)."
     )
     assert re.search(
         r"const\s+localTopY\s*=\s*CENTER_CY\s*-\s*localChordHalf\s*\+\s*"
         r"STEAM_TOP_MARGIN_PX",
         advance_block,
     ), (
-        "qs-water-boiler-card.js: the per-puff retire geometry must "
-        "derive `localTopY = CENTER_CY - localChordHalf + "
-        "STEAM_TOP_MARGIN_PX` inside the advance loop."
+        "qs-water-boiler-card.js: the per-puff geometry must derive "
+        "`localTopY = CENTER_CY - localChordHalf + STEAM_TOP_MARGIN_PX`"
+        " inside the advance loop."
+    )
+    # Pin-at-rim: when the puff rises past localTopY, clamp its cy back
+    # down so it sits at the rim instead of being removed.
+    assert re.search(
+        r"if\s*\(\s*p\.cy\s*<\s*localTopY\s*\)\s*p\.cy\s*=\s*localTopY",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the steam advance loop must pin the "
+        "puff at the local clip-circle top with "
+        "`if (p.cy < localTopY) p.cy = localTopY` — the geometric "
+        "retire was replaced by a position pin so the life-curve fade "
+        "dissolves the puff in place at the rim rather than blinking "
+        "it out."
+    )
+    # Sole remove() branch: time-based retire only. The negative
+    # assertion guards against a future regression that re-introduces
+    # the abrupt `p.cy < localTopY || ...` retire.
+    assert re.search(
+        r"if\s*\(\s*p\.life\s*>=\s*p\.maxLife\s*\)",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the steam advance loop must retire "
+        "on `if (p.life >= p.maxLife)` as the sole time-based remove "
+        "branch."
+    )
+    assert not re.search(
+        r"p\.cy\s*<\s*localTopY\s*\|\|", advance_block
+    ), (
+        "qs-water-boiler-card.js: the abrupt geometric retire "
+        "`p.cy < localTopY || ...` must NOT appear — it was replaced "
+        "by the position pin so the puff fades gracefully at the rim."
     )
 
 
 def test_water_boiler_card_steam_opacity_formula():
-    """QS-214 AC-1/AC-3 + rim-fade iteration: per-frame opacity is the
-    assignment `lifeOpacity * rimOpacity * this._currentColorMix` (not
-    a compound `*=`), and the life-curve breakpoints `0.15` (fade-in)
-    and `0.85` (fade-out) appear literally in the steam advance block.
-    The `<circle>` fill is the literal `STEAM_FILL_COLOR =
-    'rgba(195,215,235,0.45)'` (cool blue-gray tint, alpha 0.45 baked
-    into the SVG fill literal). The rim-fade factor (`rimOpacity`)
-    fades each puff out gracefully as it approaches `localTopY`, so
-    puffs dissolve at the local clip-circle top instead of blinking
-    out on the geometric retire."""
+    """QS-214 pin-at-rim iteration: per-frame opacity is the assignment
+    `lifeOpacity * this._currentColorMix` (not a compound `*=`), and
+    the life-curve breakpoints `0.15` (fade-in) and `0.7` (fade-out)
+    appear literally in the steam advance block. The `<circle>` fill
+    is the literal `STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)'` (cool
+    blue-gray tint, alpha 0.45 baked into the SVG fill literal). The
+    rim-fade factor has been removed — the puff is now pinned at
+    `localTopY` and the wider `[0.7, 1.0]` life-curve fade-out band
+    (30% of life) dissolves it gracefully in place at the rim."""
     import re
 
     source = (
@@ -2410,58 +2434,47 @@ def test_water_boiler_card_steam_opacity_formula():
         "`'rgba(195,215,235,0.45)'` (cool blue-gray, alpha 0.45 baked in)."
     )
     assert re.search(
-        r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*rimOpacity\s*\*\s*"
-        r"this\._currentColorMix",
+        r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*this\._currentColorMix",
         executable,
     ), (
         "qs-water-boiler-card.js: the per-frame opacity must be an "
-        "ASSIGNMENT `const opacity = lifeOpacity * rimOpacity * "
-        "this._currentColorMix` — both `lifeOpacity` (life-curve fade) "
-        "AND `rimOpacity` (rim-proximity fade) multiply through with "
-        "the colorMix cross-fade. Compound `*=` would decay exponentially."
+        "ASSIGNMENT `const opacity = lifeOpacity * this._currentColorMix` "
+        "— the rim-fade factor was removed in favour of pin-at-rim + "
+        "wider life-curve fade-out. Compound `*=` would decay "
+        "exponentially."
     )
-    # Find the steam advance block and assert breakpoints + rim-fade
-    # derivations appear inside it.
+    # Find the steam advance block and assert breakpoints appear inside it.
     advance_start = executable.find("for (const p of this._steamPuffs)")
     assert advance_start != -1, (
         "qs-water-boiler-card.js: missing steam advance loop."
     )
-    # Take a window large enough to cover the life-curve branches.
     advance_block = executable[advance_start : advance_start + 1500]
     assert "0.15" in advance_block, (
         "qs-water-boiler-card.js: missing the `0.15` fade-in breakpoint "
         "in the steam life-curve."
     )
-    assert re.search(r"lifeT\s*<\s*0\.85", advance_block), (
-        "qs-water-boiler-card.js: missing the `lifeT < 0.85` fade-out "
-        "guard in the steam life-curve."
+    assert re.search(r"lifeT\s*<\s*0\.7\b", advance_block), (
+        "qs-water-boiler-card.js: missing the `lifeT < 0.7` fade-out "
+        "guard in the steam life-curve (widened from 0.85 so the "
+        "fade-out band spans 30% of life)."
     )
     assert re.search(
-        r"\(\s*lifeT\s*-\s*0\.85\s*\)\s*/\s*0\.15", advance_block
+        r"\(\s*lifeT\s*-\s*0\.7\s*\)\s*/\s*0\.3", advance_block
     ), (
-        "qs-water-boiler-card.js: missing the `(lifeT - 0.85) / 0.15` "
+        "qs-water-boiler-card.js: missing the `(lifeT - 0.7) / 0.3` "
         "fade-out ramp in the steam life-curve."
     )
-    # Rim-proximity fade derivation. The puff fades to 0 over the last
-    # `STEAM_RIM_FADE_PX` pixels below `localTopY`, so it dissolves at
-    # the local clip-circle top instead of vanishing in one frame.
-    assert re.search(
-        r"const\s+rimDistance\s*=\s*p\.cy\s*-\s*localTopY",
-        advance_block,
-    ), (
-        "qs-water-boiler-card.js: missing `rimDistance = p.cy - "
-        "localTopY` derivation inside the steam advance loop — this is "
-        "the input to the rim-proximity fade."
+    # Negative guard: the rim-fade factor (rimDistance / rimOpacity /
+    # STEAM_RIM_FADE_PX) must NOT appear — it was removed in favour of
+    # the pin-at-rim design.
+    assert "rimOpacity" not in advance_block, (
+        "qs-water-boiler-card.js: `rimOpacity` must NOT appear — the "
+        "rim-proximity fade was removed in favour of pin-at-rim + "
+        "life-curve fade-out."
     )
-    assert re.search(
-        r"const\s+rimOpacity\s*=\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,"
-        r"\s*rimDistance\s*/\s*STEAM_RIM_FADE_PX\s*\)\s*\)",
-        advance_block,
-    ), (
-        "qs-water-boiler-card.js: missing `rimOpacity = "
-        "Math.max(0, Math.min(1, rimDistance / STEAM_RIM_FADE_PX))` "
-        "derivation inside the steam advance loop — this is the "
-        "rim-proximity fade factor."
+    assert "STEAM_RIM_FADE_PX" not in executable, (
+        "qs-water-boiler-card.js: `STEAM_RIM_FADE_PX` constant must "
+        "NOT appear — removed in the pin-at-rim iteration."
     )
 
 

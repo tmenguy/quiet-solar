@@ -289,29 +289,29 @@ baked into the SVG fill literal — there is no separate
 `STEAM_FILL_ALPHA` JS constant); the runtime per-frame `opacity`
 attribute is `lifeOpacity * _currentColorMix` — assignment, not
 compound — where `lifeOpacity` is the piecewise-linear lifeCurve(t)
-with breakpoints at 0.15 (fade-in end) and 0.85 (fade-out start). The
+with breakpoints at 0.15 (fade-in end) and 0.7 (fade-out start). The
 effective rendered alpha multiplies through the SVG: `0.45 ×
-_currentColorMix × lifeOpacity`, peaking at 0.45 across the wider
-0.15–0.85 hold band with a fully-ramped colorMix. Steam therefore
+_currentColorMix × lifeOpacity`, peaking at 0.45 during the hold band
+with a fully-ramped colorMix. Steam therefore
 cross-fades with `_currentColorMix` and gracefully exits on
 running→false: existing puffs continue rising while their opacity
 ramps to 0 over the same ~1.5s envelope as bubbles. `_resetDomRefs()`
 extends to null `_steamLayerEl` and clear `_steamPuffs`;
 `disconnectedCallback` mirrors the bubble teardown to eagerly remove
 puff DOM nodes. **QS-214** tinted the puff color to a cool blue-gray for visibility
-against dark HA themes; unified the rise rate (`STEAM_RISE_PX_PER_S_MIN
-= STEAM_RISE_PX_PER_S_MAX = 24`, with `STEAM_MAX_LIFE_S = 10.0`) so
-every puff reaches the local clip-circle top within its life budget
-rather than slow puffs stalling mid-tank; replaced the global-apex
-retire with a per-puff circle-aware predicate (`localTopY = CENTER_CY
-- sqrt(CLIP_R² - dx²) + STEAM_TOP_MARGIN_PX`); and added a
-rim-proximity fade (`rimOpacity = clamp((p.cy - localTopY) /
-STEAM_RIM_FADE_PX, 0, 1)`, multiplied into the per-frame opacity
-alongside `lifeOpacity` and `_currentColorMix`) so each puff
-gracefully dissolves over the last `STEAM_RIM_FADE_PX = 30` pixels
-below `localTopY` instead of blinking out on the geometric retire.
-The visible result reads as "puffs rise, reach the rim, and dissipate
-into it" with no abrupt removals.
+against dark HA themes; unified the rise rate
+(`STEAM_RISE_PX_PER_S_MIN = STEAM_RISE_PX_PER_S_MAX = 32`, with
+`STEAM_MAX_LIFE_S = 12.0`) so every puff reaches the local
+clip-circle top within its life budget; introduced the per-puff
+circle-aware geometry (`localTopY = CENTER_CY - sqrt(CLIP_R² - dx²) +
+STEAM_TOP_MARGIN_PX`) so puffs follow the arc shape rather than the
+global apex; and replaced the abrupt geometric retire with a position
+pin (`if (p.cy < localTopY) p.cy = localTopY`) so each puff sits at
+the local clip-circle top once it arrives, dissolving in place via
+the `[0.7, 1.0]` life-curve fade-out band (~3.6 s at maxLife=12). The
+visible result reads as "puffs rise to the rim, linger, and fade out
+there" — no abrupt removals, no fading during rise. The sole DOM
+remove path is now `p.life >= p.maxLife`.
 
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the

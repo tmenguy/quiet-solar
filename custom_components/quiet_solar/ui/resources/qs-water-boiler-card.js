@@ -90,28 +90,25 @@ const STEAM_SPAWN_RATE_HZ = 1.5;
 const STEAM_RADIUS_MIN = 4;
 const STEAM_RADIUS_MAX = 10;
 // Uniform vy (MIN == MAX): all puffs rise at the same rate so they
-// all reach the local clip-circle top within their life budget. The
-// rim-proximity fade (STEAM_RIM_FADE_PX) provides the graceful
-// dissolve at the rim; without uniform vy, slow puffs ran out of
-// life mid-tank and never reached the rim, looking inconsistent.
+// all reach the local clip-circle top within their life budget.
 // Organic variance still comes from spawn x, spawn time, drift phase,
-// and radius — not from vy.
-const STEAM_RISE_PX_PER_S_MIN = 24;
-const STEAM_RISE_PX_PER_S_MAX = 24;
+// and radius — not from vy. The 32 px/s value gives a 188 px worst-
+// case rise (empty tank, center column) in 5.88 s — well under
+// 0.7 × STEAM_MAX_LIFE_S = 8.4 s, leaving ~2.5 s of full-opacity hold
+// at the rim before the life-curve fade-out engages.
+const STEAM_RISE_PX_PER_S_MIN = 32;
+const STEAM_RISE_PX_PER_S_MAX = 32;
 const STEAM_DRIFT_PX_PER_S = 6;
 const STEAM_DRIFT_FREQ_HZ = 0.4;
 const STEAM_RADIUS_GROW_PX_PER_S = 4;
-const STEAM_MAX_LIFE_S = 10.0;
+// Long enough for the worst-case rise (5.88 s) PLUS the hold band
+// PLUS the life-curve fade-out [0.7, 1.0] (3.6 s). Total puff
+// lifespan exceeds the rise time by 6.12 s — that's the visible
+// "reaches the top and dissipates" time at the rim.
+const STEAM_MAX_LIFE_S = 12.0;
 const STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)';
 const STEAM_BLUR_STDDEV = 3.5;
 const STEAM_TOP_MARGIN_PX = 4;
-// Rim-proximity fade band (in px). The puff's opacity ramps 1→0 over
-// the last STEAM_RIM_FADE_PX pixels below localTopY, so it dissolves
-// at the local clip-circle top instead of blinking out on the
-// geometric retire. At vy=24 the fade lasts STEAM_RIM_FADE_PX/24 s
-// (1.25s at 30px) — gentle, visible "reaches the top and dissipates"
-// reading without ever crossing the clip-path arc.
-const STEAM_RIM_FADE_PX = 30;
 
 // --- Surface glow ---
 const SURFACE_GLOW_COLOR = '#FF3D00';
@@ -479,42 +476,41 @@ class QsWaterBoilerCard extends HTMLElement {
           p.cy -= p.vy * dt;
           p.cx += STEAM_DRIFT_PX_PER_S * Math.sin(2 * Math.PI * STEAM_DRIFT_FREQ_HZ * p.life + p.phase) * dt;
           p.r = Math.min(p.r + STEAM_RADIUS_GROW_PX_PER_S * dt, STEAM_RADIUS_MAX + 4);
-          // QS-214 retire predicate: per-puff circle-aware geometry.
-          // SVG convention: smaller y = visually higher. Retire when
-          // the puff rises above the local clip-circle top at this x,
-          // minus the STEAM_TOP_MARGIN_PX guard. Mirrors the spawn-side
-          // chord-half formula (`chordHalf = sqrt(max(0, CLIP_R² - dy²))`)
-          // a few lines above, so puffs drifting toward the rim retire
-          // at the local clip top rather than continuing invisibly
-          // toward the global apex.
+          // Per-puff circle-aware geometry (SVG convention: smaller y =
+          // visually higher). `localTopY` is the local clip-circle top
+          // at the puff's current x, minus the STEAM_TOP_MARGIN_PX
+          // guard. Mirrors the spawn-side chord-half formula
+          // (`chordHalf = sqrt(max(0, CLIP_R² - dy²))`) a few lines
+          // above.
           const dx = p.cx - CENTER_CX;
           const localChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dx * dx));
           const localTopY = CENTER_CY - localChordHalf + STEAM_TOP_MARGIN_PX;
-          if (p.cy < localTopY || p.life >= p.maxLife) {
+          // Pin-at-rim: when the puff rises past localTopY, clamp its
+          // cy back down so it sits at the local clip-circle top
+          // instead of being removed. The life-curve fade-out then
+          // dissolves it gracefully in place over the last 30% of its
+          // life budget — replaces the previous abrupt geometric
+          // retire that blinked puffs out at the rim.
+          if (p.cy < localTopY) p.cy = localTopY;
+          // Sole remove() branch: time-based retire. The geometric
+          // retire was demoted to a position pin (above); only
+          // maxLife removes the DOM node now.
+          if (p.life >= p.maxLife) {
             p.el.remove();
             continue;
           }
-          // Rim-proximity fade: opacity ramps 1 → 0 over the last
-          // STEAM_RIM_FADE_PX pixels below localTopY so the puff
-          // dissolves at the rim rather than blinking out on the
-          // geometric retire. `rimDistance` is positive while the puff
-          // is below the local top; it shrinks toward 0 as the puff
-          // approaches. Clamped to [0, 1] so puffs further below the
-          // rim render at full opacity.
-          const rimDistance = p.cy - localTopY;
-          const rimOpacity = Math.max(0, Math.min(1, rimDistance / STEAM_RIM_FADE_PX));
           // Life curve: piecewise linear — fade-in [0, 0.15], hold
-          // [0.15, 0.85], fade-out [0.85, 1]. With uniform vy and the
-          // longer maxLife, fast trajectories retire at the rim via
-          // the rim-fade well before the life-curve fade-out engages;
-          // the life-curve fade-out remains as the slow-puff / stalled-
-          // puff safety branch.
+          // [0.15, 0.7], fade-out [0.7, 1]. The 30%-of-life fade-out
+          // band gives a smooth ~3.6 s dissolve at maxLife = 12 s; the
+          // worst-case rise (5.88 s = 0.49 lifeT) lands the puff at
+          // the rim with ~2.5 s of full-opacity hold before the fade
+          // engages.
           const lifeT = p.life / p.maxLife;
           let lifeOpacity;
           if (lifeT < 0.15) lifeOpacity = lifeT / 0.15;
-          else if (lifeT < 0.85) lifeOpacity = 1;
-          else lifeOpacity = Math.max(0, 1 - (lifeT - 0.85) / 0.15);
-          const opacity = lifeOpacity * rimOpacity * this._currentColorMix;
+          else if (lifeT < 0.7) lifeOpacity = 1;
+          else lifeOpacity = Math.max(0, 1 - (lifeT - 0.7) / 0.3);
+          const opacity = lifeOpacity * this._currentColorMix;
           p.el.setAttribute('cx', p.cx.toFixed(2));
           p.el.setAttribute('cy', p.cy.toFixed(2));
           p.el.setAttribute('r', p.r.toFixed(2));
