@@ -720,32 +720,43 @@ class TestDashboardTemplateRendering:
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
 
+        # QS-204 review-fix #02 G12 — strip comments before scanning
+        # for legacy markers. Without the strip, a future "// removed
+        # LAYER_SCROLL_OFFSET in QS-204" comment would silently make
+        # the absence-checks pass even if the symbol were reintroduced
+        # in executable code. Mirrors the comment-strip pattern used
+        # by `test_radiator_card_flame_height_envelope_uses_progress`.
+        no_block = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
+        executable = re.sub(r"//[^\n]*", "", no_block)
+
         # New path generator must be present.
-        assert "_generateFlameTeethPath" in content, (
+        assert "_generateFlameTeethPath" in executable, (
             "QS-204 AC-4: `_generateFlameTeethPath` (the peaked-teeth "
             "path generator) must be declared"
         )
 
         # Per-tooth tip phase array must drive the flicker.
-        assert "_tipPhases" in content, (
+        assert "_tipPhases" in executable, (
             "QS-204 AC-4: `_tipPhases` (per-layer, per-tooth phase array) "
             "must drive the per-frame flicker"
         )
 
         # Per-layer flicker frequencies in Hz.
-        assert "LAYER_TIP_FLICKER_HZ" in content, (
+        assert "LAYER_TIP_FLICKER_HZ" in executable, (
             "QS-204 AC-4: `LAYER_TIP_FLICKER_HZ` (per-layer flicker rate) "
             "must declare the per-layer turbulence rates"
         )
 
-        # Obsolete QS-201 markers must be gone — they reintroduce the
-        # wave-scroll behaviour the user reported as visually wrong.
-        assert "LAYER_SCROLL_OFFSET" not in content, (
+        # Obsolete QS-201 markers must be gone from the executable
+        # source — they reintroduce the wave-scroll behaviour the user
+        # reported as visually wrong. Stripped of comments so a future
+        # commit message referencing the symbol cannot mask a regression.
+        assert "LAYER_SCROLL_OFFSET" not in executable, (
             "QS-204 AC-4 regression: `LAYER_SCROLL_OFFSET` (parallax-tongue "
             "scroll constant from QS-201) re-appeared — the redesign drops "
             "the global scroll in favour of per-tooth tip-flicker"
         )
-        assert not re.search(r"this\._flamePhase\b", content), (
+        assert not re.search(r"this\._flamePhase\b", executable), (
             "QS-204 AC-4 regression: `this._flamePhase` accumulator "
             "re-appeared — replaced by per-tooth `_tipPhases` arrays"
         )

@@ -43,6 +43,10 @@ const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
 const LERP_DT_CEIL = 0.1;           // s; clamp lerp dt to avoid snap-to after tab hidden
 const AMP_REGEN_THRESHOLD = 0.25;   // amplitude delta threshold for path regen (throttle)
 const LEVEL_REGEN_THRESHOLD = 0.01; // px; threshold for base-Y path regen (jitter-proof)
+// QS-204 review-fix #02 G4 — running-mode regen throttle. ~4.6° (0.08 rad)
+// per-tooth phase delta gives ~3-5 regen frames/sec at the slowest layer's
+// flicker rate, well under the 60Hz cost of the unthrottled fireOn path.
+const PHASE_REGEN_THRESHOLD = 0.08;
 
 // --- Flame dynamics targets (still vs dancing) ---
 // STILL_AMP = 0 — idle silhouette is fully frozen (per-tooth tip phases
@@ -64,6 +68,18 @@ const LAYER_TEETH_COUNTS = [3, 4, 5];          // fewer wider teeth read more li
 // the three layers desynchronise and read as turbulent fire rather than
 // a single global scroll. Frequencies are in Hz (tooth-phase cycles/sec).
 const LAYER_TIP_FLICKER_HZ = [8, 7, 9];
+
+// QS-204 review-fix #02 G7 — length-equality guard. All four per-layer
+// arrays MUST stay the same length; a future PR that extends one without
+// the others would silently produce `NaN` paths (out-of-bounds reads
+// yield undefined → arithmetic → NaN). `console.assert` is the
+// browser-side equivalent of a Python `assert`.
+console.assert(
+    LAYER_TEETH_COUNTS.length === LAYER_TIP_FLICKER_HZ.length &&
+    LAYER_TEETH_COUNTS.length === LAYER_BASE_HEIGHTS.length &&
+    LAYER_TEETH_COUNTS.length === LAYER_TIP_AMP_MULTS.length,
+    "qs-radiator-card: LAYER_* constants must be the same length"
+);
 
 // --- Flame height envelope (1/5..4/5 of clip diameter; mirrors pool) ---
 const FLAME_BASE_MIN_PCT = 0.2;     // hoursRun=0 → flame base low
@@ -136,14 +152,18 @@ class QsRadiatorCard extends HTMLElement {
       const lerpDt = Math.min(dt, LERP_DT_CEIL);
       const lerpFactor = 1 - Math.exp(-LERP_RATE * lerpDt);
       this._currentFlameAmp += (targetAmp - this._currentFlameAmp) * lerpFactor;
-      // QS-204 review-fix #01 F5 — snap amp to a clean zero once the
-      // asymptotic lerp brings it within an epsilon of STILL_AMP=0. The
-      // float64 lerp `factor = 1 - exp(-LERP_RATE * dt)` never reaches
-      // exactly 0, so without this snap the downstream
-      // `_generateFlameTeethPath` would never see `tipAmp < 0.05` for
-      // the idle-peak boost after a running→idle transition.
+      // QS-204 review-fix #01 F5 / #02 G6 — symmetric snap-to-target
+      // once the asymptotic lerp brings amp within an epsilon of its
+      // target. The float64 lerp factor never settles exactly on the
+      // target, so without these snaps the downstream throttle would
+      // pay regen frames forever; they're also what makes the running
+      // amp land cleanly on DANCE_AMP (avoids 7.99…px tip-amplitude
+      // jitter on the steady-state running silhouette).
       if (!fireOn && Math.abs(this._currentFlameAmp) < 0.05) {
         this._currentFlameAmp = 0;
+      }
+      if (fireOn && Math.abs(this._currentFlameAmp - DANCE_AMP) < 0.05) {
+        this._currentFlameAmp = DANCE_AMP;
       }
 
       // Advance per-layer, per-tooth tip phases ONLY when running. Idle
@@ -176,9 +196,10 @@ class QsRadiatorCard extends HTMLElement {
       // past; removed so each flame stays anchored in place while only
       // its tips flicker.
 
-      // Regenerate paths only when base-Y or amp changes appreciably (throttle).
-      // Guard against undefined/NaN base — the RAF loop can fire before
-      // _render() populates _flameBaseY on cold start.
+      // Regenerate paths only when base-Y or amp or per-tooth phases
+      // change appreciably (throttle). Guard against undefined/NaN base
+      // — the RAF loop can fire before _render() populates _flameBaseY
+      // on cold start.
       const flameBaseY = this._flameBaseY;
       const hasValidBase = flameBaseY != null && !Number.isNaN(flameBaseY);
       const ampDelta = this._lastFlameAmp == null
@@ -187,13 +208,43 @@ class QsRadiatorCard extends HTMLElement {
       // Threshold compare for float-jitter robustness vs strict !==.
       const levelChanged = hasValidBase &&
           Math.abs(flameBaseY - (this._lastFlameBaseY ?? Number.NEGATIVE_INFINITY)) > LEVEL_REGEN_THRESHOLD;
-      // When fire is on we need to regenerate every frame so the per-
-      // tooth flicker is visible; the amp/level throttle still applies
-      // for idle (which freezes anyway).
-      const shouldRegen = hasValidBase && (fireOn || levelChanged || ampDelta > AMP_REGEN_THRESHOLD);
+      // QS-204 review-fix #02 G4 — per-tooth phase-delta throttle for
+      // the fireOn regen path. Previously `fireOn` alone forced regen
+      // every RAF tick (60Hz), pushing 3 SVG `setAttribute('d', ...)`
+      // writes per frame and burning CPU on low-end browsers. The
+      // throttle now regenerates only when the largest per-tooth phase
+      // has accumulated more than PHASE_REGEN_THRESHOLD rad (~4.6°)
+      // since the last regen — visually smooth at the slowest layer's
+      // ~7Hz flicker but well under 60Hz of writes.
+      let maxPhaseDelta = Infinity;
+      if (fireOn && this._tipPhases && this._lastRegenTipPhases) {
+        maxPhaseDelta = 0;
+        for (let i = 0; i < this._tipPhases.length; i++) {
+          const cur = this._tipPhases[i];
+          const last = this._lastRegenTipPhases[i];
+          if (!cur || !last) continue;
+          for (let j = 0; j < cur.length; j++) {
+            // Wrap-aware delta on [0, 2π).
+            const raw = Math.abs(cur[j] - last[j]);
+            const d = raw > Math.PI ? 2 * Math.PI - raw : raw;
+            if (d > maxPhaseDelta) maxPhaseDelta = d;
+          }
+        }
+      }
+      const phaseChanged = fireOn && maxPhaseDelta > PHASE_REGEN_THRESHOLD;
+      const shouldRegen = hasValidBase && (
+          phaseChanged
+          || levelChanged
+          || ampDelta > AMP_REGEN_THRESHOLD
+      );
       if (shouldRegen) {
         this._lastFlameBaseY = flameBaseY;
         this._lastFlameAmp = this._currentFlameAmp;
+        // Snapshot phases for the next throttle comparison. Deep-clone
+        // to avoid the live `_tipPhases` mutation racing the check.
+        if (this._tipPhases) {
+          this._lastRegenTipPhases = this._tipPhases.map((row) => row.slice());
+        }
         const flameColors = this._flameColors || FLAME_GREY_FILLS;
         for (let i = 0; i < 3; i++) {
           const fEl = this._flameEls[i];
@@ -205,6 +256,7 @@ class QsRadiatorCard extends HTMLElement {
               this._currentFlameAmp * LAYER_TIP_AMP_MULTS[i],
               LAYER_TEETH_COUNTS[i],
               this._tipPhases ? this._tipPhases[i] : null,
+              !fireOn,
             );
             fEl.setAttribute('d', d);
             fEl.setAttribute('fill', flameColors[i]);
@@ -295,15 +347,21 @@ class QsRadiatorCard extends HTMLElement {
   //   tipPhases  — array of per-tooth phases (radians); length == numTeeth.
   //                When STILL_AMP === 0 + frozen tipPhases, the silhouette
   //                is static (idle).
-  _generateFlameTeethPath(width, baseY, peakHeight, tipAmp, numTeeth, tipPhases) {
+  //   isIdle     — true when the card is in the OFF / idle state. Drives
+  //                the STATIC_PEAK_HEIGHT boost so the idle silhouette
+  //                still shows visible peaks. QS-204 review-fix #02 G5
+  //                gates the boost on isIdle (not tipAmp < epsilon) so a
+  //                running→idle transition doesn't briefly "pop" the
+  //                flames taller during the lerp ramp.
+  _generateFlameTeethPath(width, baseY, peakHeight, tipAmp, numTeeth, tipPhases, isIdle) {
     const teethCount = Math.max(1, numTeeth | 0);
     const toothWidth = width / teethCount;
-    // Idle (STILL_AMP === 0) keeps a visible peak via STATIC_PEAK_HEIGHT
-    // so the silhouette doesn't collapse onto the baseline. Epsilon
-    // comparison (not `=== 0`) because step()'s exp-decay lerp toward
-    // STILL_AMP=0 leaves float64 residue and the strict check would
-    // never fire after a running→idle transition (review-fix #01 F5).
-    const idlePeakBoost = tipAmp < 0.05 ? STATIC_PEAK_HEIGHT : 0;
+    // Idle keeps a visible peak via STATIC_PEAK_HEIGHT so the silhouette
+    // doesn't collapse onto the baseline. Gated on the explicit isIdle
+    // flag (review-fix #02 G5) — using `tipAmp < epsilon` would briefly
+    // fire the boost during the running→idle and idle→running lerps,
+    // producing a momentary flame-pop.
+    const idlePeakBoost = isIdle ? STATIC_PEAK_HEIGHT : 0;
     let d = `M 0 ${baseY.toFixed(2)}`;
     for (let i = 0; i < teethCount; i++) {
       const phase = tipPhases && tipPhases[i] != null ? tipPhases[i] : 0;
@@ -517,6 +575,7 @@ class QsRadiatorCard extends HTMLElement {
         initialAmp * LAYER_TIP_AMP_MULTS[i],
         LAYER_TEETH_COUNTS[i],
         this._tipPhases[i],
+        !running,
       ));
 
       const css = `

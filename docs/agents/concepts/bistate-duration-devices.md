@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-05-22
+last_verified: 2026-05-23
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)

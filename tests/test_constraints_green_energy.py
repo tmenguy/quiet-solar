@@ -41,7 +41,7 @@ from custom_components.quiet_solar.home_model.load import TestLoad
 from tests.factories import TestDynamicGroupDouble
 
 
-def test_compute_best_period_green_no_cmd_does_not_short_circuit(caplog):
+def test_compute_best_period_green_no_cmd_does_not_short_circuit(caplog, monkeypatch):
     """QS-204 — empty green-energy pass falls through, no early-return.
 
     When ``adapt_power_steps_budgeting`` returns no candidate commands
@@ -79,27 +79,32 @@ def test_compute_best_period_green_no_cmd_does_not_short_circuit(caplog):
 
     # Force every slot to report "no candidates" — simulates a fresh
     # load with no command history whose adapt step produces nothing.
+    # QS-204 review-fix #02 G3 — use `monkeypatch.setattr` so the patch
+    # is xdist-safe and guaranteed to tear down even if an exception
+    # escapes between the patch and the call (the prior try/finally
+    # leaked on bare-attribute-access raises).
     def _no_candidates(self, slot_idx, commands, for_add, max_slot_power_headroom=None):
         del slot_idx, commands, for_add, max_slot_power_headroom
         return [], False, 0.0
 
-    original = MultiStepsPowerLoadConstraint.adapt_power_steps_budgeting
-    MultiStepsPowerLoadConstraint.adapt_power_steps_budgeting = _no_candidates
-    try:
-        with caplog.at_level(
-            logging.WARNING,
-            logger="custom_components.quiet_solar.home_model.constraints",
-        ):
-            result = constraint.compute_best_period_repartition(
-                do_use_available_power_only=True,
-                power_available_power=np.array([-2000.0] * num_slots, dtype=np.float64),
-                power_slots_duration_s=np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64),
-                prices=np.array([0.2] * num_slots, dtype=np.float64),
-                prices_ordered_values=[0.2],
-                time_slots=time_slots,
-            )
-    finally:
-        MultiStepsPowerLoadConstraint.adapt_power_steps_budgeting = original
+    monkeypatch.setattr(
+        MultiStepsPowerLoadConstraint,
+        "adapt_power_steps_budgeting",
+        _no_candidates,
+    )
+
+    with caplog.at_level(
+        logging.WARNING,
+        logger="custom_components.quiet_solar.home_model.constraints",
+    ):
+        result = constraint.compute_best_period_repartition(
+            do_use_available_power_only=True,
+            power_available_power=np.array([-2000.0] * num_slots, dtype=np.float64),
+            power_slots_duration_s=np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64),
+            prices=np.array([0.2] * num_slots, dtype=np.float64),
+            prices_ordered_values=[0.2],
+            time_slots=time_slots,
+        )
 
     final_ret = result[1]
 

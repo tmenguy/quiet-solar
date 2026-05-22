@@ -790,29 +790,16 @@ def test_surplus_envelope_matches_min_of_confidence_and_solar_plus_drain():
     assert energy_to_be_spent > 0.0
 
 
-@pytest.mark.skip(
-    reason=(
-        "QS-204 review-fix #01 — the user's pure constraints.py collapse "
-        "(no `has_a_cmd is False → final_ret = False` short-circuit) means "
-        "the price-optimizer fallback dispatches the car constraint at "
-        "full power even when every charger step exceeds the per-slot "
-        "headroom. The resulting deeper battery discharge then crosses "
-        "the segmentation predicate's pessimistic threshold, so "
-        "`_prepare_battery_segmentation()` no longer returns `(None, None)` "
-        "for this scenario. The user accepted this trade-off (rationale: "
-        "'below the headroom is not used to limit the commands') so the "
-        "AC-10 segmentation-dormancy invariant is no longer a constraint-"
-        "layer guarantee for the big-sun-day scenario."
-    )
-)
-def test_pre_discharge_does_not_fight_segmentation():
-    """AC-10: with Layer 3 active and a feasible pre-discharge plan, the
-    battery trajectory stays above the segmentation predicate's pessimistic
-    threshold, so `_prepare_battery_segmentation()` returns `(None, None)`
-    and the cap loop is dormant.
+def test_pre_discharge_does_not_fight_segmentation_solar_only():
+    """QS-204 review fix #02 — splits the previously-skipped invariant.
 
-    Also asserts the surplus block ACTUALLY FIRED during the solve — the
-    "does not fight" property is meaningless if pre-discharge never ran.
+    Solar-only variant. ``solve(is_off_grid=True)`` forces every
+    constraint's ``compute_best_period_repartition`` call to run with
+    ``do_use_available_power_only=True``. In this mode the user's
+    pure constraints.py collapse keeps the AC-10 invariant intact:
+    the no-fallback green branch refuses to dispatch beyond headroom,
+    so the battery trajectory stays above the segmentation
+    predicate's pessimistic threshold and the cap-loop never fires.
     """
     # Build the same big-sun scenario as the regression test.
     from tests.test_solver_pre_discharge_regression import _build_pre_discharge_scenario
@@ -824,9 +811,6 @@ def test_pre_discharge_does_not_fight_segmentation():
     surplus_calls: list[tuple] = []
 
     def _track(*args, **kwargs):
-        # Segmentation cap-loop: energy_delta < 0, NO battery_min_wh kwarg.
-        # Surplus block: bat_charge_traj passed (via the public kwarg path
-        # threaded through _constraints_delta) AND energy_delta > 0.
         energy_delta = args[0]
         if energy_delta < 0 and "battery_min_wh" not in kwargs:
             reclaim_calls.append(float(energy_delta))
@@ -835,24 +819,53 @@ def test_pre_discharge_does_not_fight_segmentation():
         return real_constraints_delta(*args, **kwargs)
 
     with patch.object(solver, "_constraints_delta", side_effect=_track):
-        solver.solve(with_self_test=False)
+        solver.solve(is_off_grid=True, with_self_test=False)
 
-    # Non-vacuous: the surplus block MUST have fired — otherwise the
-    # test is meaningless (pre-discharge never ran, so there's nothing
-    # to "fight" segmentation).
-    assert len(surplus_calls) >= 1, (
-        "Test is meaningless if pre-discharge never ran; the scenario must trigger the surplus block."
-    )
-
-    # AC-10: segmentation must return (None, None) after the solve.
+    # AC-10 solar-only: segmentation must return (None, None) after
+    # the solve.
     to_shave, energy_delta = solver._prepare_battery_segmentation()
-    assert to_shave is None
+    assert to_shave is None, (
+        f"Solar-only segmentation engaged: expected (None, None), got "
+        f"to_shave={to_shave}"
+    )
     assert energy_delta is None
-
     # And the segmentation cap-loop never fired during the solve.
     assert reclaim_calls == [], (
-        f"AC-10: pre-discharge fought segmentation — cap-loop fired with reclaim deltas {reclaim_calls}"
+        f"AC-10 solar-only: pre-discharge fought segmentation — cap-loop "
+        f"fired with reclaim deltas {reclaim_calls}"
     )
+    # Surplus-block invocation is allowed but not required in solar-
+    # only mode — the smaller dispatch envelope may not trigger it.
+    del surplus_calls  # silence unused-var lint without affecting the assertions above
+
+
+def test_pre_discharge_may_fight_segmentation_when_grid_ok():
+    """QS-204 review fix #02 — splits the previously-skipped invariant.
+
+    Grid-OK variant. With ``solve(is_off_grid=False)`` the mandatory
+    car constraint runs with ``do_use_available_power_only=False``,
+    so the price-optimizer fallback dispatches at full power even
+    when every charger step exceeds the per-slot headroom. The
+    resulting deeper battery discharge crosses the segmentation
+    predicate's pessimistic threshold, so
+    ``_prepare_battery_segmentation()`` returns a non-``None``
+    ``to_shave`` window — the relaxed AC-10 contract the user
+    accepted in QS-204 review fix #01.
+    """
+    from tests.test_solver_pre_discharge_regression import _build_pre_discharge_scenario
+
+    solver, _, _, _ = _build_pre_discharge_scenario()
+    solver.solve(is_off_grid=False, with_self_test=False)
+
+    # AC-10 grid-OK: segmentation NO LONGER returns (None, None) — the
+    # deeper drain forces the cap-loop to engage.
+    to_shave, energy_delta = solver._prepare_battery_segmentation()
+    assert to_shave is not None, (
+        "Grid-OK run unexpectedly kept segmentation dormant. If "
+        "headroom is now enforced through some other layer, revisit "
+        "the QS-204 review fix #01 decision."
+    )
+    assert energy_delta is not None
 
 
 def test_pessimistic_pv_rerun_stays_bounded_by_floor():

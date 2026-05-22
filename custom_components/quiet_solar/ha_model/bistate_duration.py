@@ -70,8 +70,13 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
        translation registers each HVAC mode as a force-mode state key
        so the dropdown renders "Force HVAC Mode HEAT" etc.
 
-    Subclasses follow ONE OF TWO conventions — QSClimateDuration uses
-    raw HVAC modes; everything else uses namespaced literals.
+    Cross-subclass logic that compares ``_state_on`` against
+    ``_bistate_mode_on`` (or ``_state_off`` vs ``_bistate_mode_off``)
+    MUST treat the two as decoupled — the raw HVAC mode and the
+    namespaced bistate literal share no namespace and may legitimately
+    differ for the same logical state. See
+    ``docs/agents/concepts/bistate-duration-devices.md`` for the
+    full convention.
     """
 
     # B6 review-fix — class-level default of `None` so

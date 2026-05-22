@@ -128,30 +128,74 @@ def test_radiator_card_palettes_still_referenced(card_source: str) -> None:
     )
 
 
-def test_radiator_card_idle_peak_boost_uses_epsilon(card_source: str) -> None:
-    """Review-fix #01 F5 — running→idle silhouette regression guard.
+def test_radiator_card_idle_peak_boost_gated_on_is_idle(card_source: str) -> None:
+    """Review-fix #02 G5 — idle peak-boost gated on explicit ``isIdle``.
 
-    The lerp in ``step()`` decays ``_currentFlameAmp`` toward
-    ``STILL_AMP = 0`` asymptotically via
-    ``factor = 1 - exp(-LERP_RATE * dt)`` and never reaches exactly
-    ``0`` in float64. The original ``tipAmp === 0`` strict-equality
-    check in ``_generateFlameTeethPath`` therefore never fired the
-    ``STATIC_PEAK_HEIGHT`` boost after a running→idle transition,
-    leaving a visibly shorter silhouette than the cold-boot idle.
+    Review-fix #01 F5 swapped the strict-equality ``tipAmp === 0``
+    check for an epsilon comparison ``tipAmp < 0.05`` so the
+    STATIC_PEAK_HEIGHT boost still fired after the asymptotic lerp
+    toward STILL_AMP=0. But the epsilon also fired transiently at the
+    start of a running ramp (when ``_currentFlameAmp`` was still
+    lerping 0→DANCE_AMP), producing a momentary visible "pop" of
+    taller flames before they settled.
 
-    The fix replaces strict-equality with an epsilon comparison
-    (``tipAmp < 0.05``). This test pins the regression class by
-    asserting the source no longer contains the strict-equality form
-    and does contain an epsilon literal that admits float64 lerp
-    residue.
+    Review-fix #02 G5 replaces the epsilon with the explicit
+    ``isIdle`` flag passed by the caller; the boost is now driven by
+    state, not amplitude residue.
     """
     assert "tipAmp === 0" not in card_source, (
         "review-fix #01 F5 regression: `tipAmp === 0` strict-equality "
-        "must be replaced with an epsilon comparison so the asymptotic "
-        "lerp toward STILL_AMP=0 still triggers the STATIC_PEAK_HEIGHT "
-        "boost on running→idle transitions."
+        "must not return — the per-tooth lerp residue prevents it from "
+        "firing after running→idle transitions."
     )
-    assert "tipAmp < 0.05" in card_source, (
-        "review-fix #01 F5: expected `tipAmp < 0.05` epsilon comparison "
-        "in qs-radiator-card.js to guard the idle peak-boost path."
+    assert "tipAmp < 0.05" not in card_source, (
+        "review-fix #02 G5 regression: `tipAmp < 0.05` epsilon was "
+        "removed from `_generateFlameTeethPath` because it briefly "
+        "fired the STATIC_PEAK_HEIGHT boost on idle→running lerps "
+        "(visible flame-pop). Use the `isIdle` flag instead."
+    )
+    assert "isIdle ? STATIC_PEAK_HEIGHT" in card_source, (
+        "review-fix #02 G5: expected `isIdle ? STATIC_PEAK_HEIGHT : 0` "
+        "to gate the idle peak boost on the explicit isIdle flag "
+        "(not on transient amplitude residue)."
+    )
+
+
+def test_radiator_card_phase_delta_throttle(card_source: str) -> None:
+    """Review-fix #02 G4 — running-mode regen path is phase-delta throttled.
+
+    Pre-fix, ``shouldRegen = hasValidBase && (fireOn || …)`` short-
+    circuited true every RAF tick when fire was on, forcing three
+    ``setAttribute('d', …)`` writes per frame at ~60Hz. Review-fix
+    #02 G4 introduces a ``PHASE_REGEN_THRESHOLD`` constant and a
+    ``maxPhaseDelta`` accumulator so regen only fires when the largest
+    per-tooth phase has drifted more than ~4.6° since the last regen.
+    """
+    assert "PHASE_REGEN_THRESHOLD" in card_source, (
+        "review-fix #02 G4: expected `PHASE_REGEN_THRESHOLD` constant "
+        "to throttle the fireOn regen path"
+    )
+    assert "maxPhaseDelta" in card_source, (
+        "review-fix #02 G4: expected `maxPhaseDelta` computation to "
+        "drive the per-tooth throttle decision"
+    )
+
+
+def test_radiator_card_layer_constants_length_assertion(card_source: str) -> None:
+    """Review-fix #02 G7 — module-load length-equality guard.
+
+    The four per-layer arrays (``LAYER_BASE_HEIGHTS``,
+    ``LAYER_TIP_AMP_MULTS``, ``LAYER_TEETH_COUNTS``,
+    ``LAYER_TIP_FLICKER_HZ``) must remain the same length. A future
+    PR that extends one without the others would silently produce
+    ``NaN`` paths from out-of-bounds reads. A ``console.assert`` at
+    module load catches the mismatch at boot.
+    """
+    assert "console.assert" in card_source, (
+        "review-fix #02 G7: expected a `console.assert` length-equality "
+        "guard on the LAYER_* constants at module load"
+    )
+    assert "LAYER_TEETH_COUNTS.length === LAYER_TIP_FLICKER_HZ.length" in card_source, (
+        "review-fix #02 G7: expected the length-equality guard to "
+        "check LAYER_TEETH_COUNTS.length === LAYER_TIP_FLICKER_HZ.length"
     )

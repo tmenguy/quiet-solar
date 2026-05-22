@@ -373,12 +373,88 @@ def test_mandatory_subject_to_power_guard():
     load_entry = load_commands[0]
     commands = load_entry[1]
 
-    for _, cmd in commands:
-        if not cmd.is_off_or_idle():
-            # Each active command must respect the headroom (2500W)
-            assert cmd.power_consign <= 2500.0, (
-                f"Mandatory command {cmd.power_consign}W should be capped by headroom 2500W"
-            )
+    # QS-204 review-fix #02 G11 — assert the dispatch is non-vacuous
+    # (at least one active command was emitted) AND that the headroom
+    # guard picked exactly the largest step that fits within 2500W
+    # (the 2000W step). The previous "≤ 2500" check passed vacuously
+    # when no active command was produced.
+    active_powers = [
+        cmd.power_consign for _, cmd in commands if not cmd.is_off_or_idle()
+    ]
+    assert active_powers, "Expected at least one active mandatory command"
+    assert max(active_powers) <= 2500.0, (
+        f"Mandatory commands must be capped by 2500W headroom, "
+        f"got {active_powers}"
+    )
+    assert 2000.0 in active_powers, (
+        f"Expected capped 2000W step to be selected, got {active_powers}"
+    )
+
+
+def test_mandatory_high_power_step_dispatched_unconditionally_when_grid_ok():
+    """QS-204 review-fix #02 G10 — pin the fallback-dispatch contract.
+
+    Single-step mandatory constraint whose only power step exceeds
+    the per-slot headroom. The user's pure ``constraints.py``
+    collapse removed the ``has_a_cmd is False → final_ret = False``
+    short-circuit, so when the green-energy pass returns no
+    candidates and the caller is in grid-OK mode
+    (``do_use_available_power_only=False``), the price-optimizer
+    fallback dispatches the high-power step unconditionally. This
+    test pins that contract at the constraint layer.
+    """
+    from custom_components.quiet_solar.const import SOLVER_STEP_S
+    from custom_components.quiet_solar.home_model.commands import CMD_ON, copy_command
+    from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
+
+    dt = datetime(2024, 6, 15, 10, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    time_slots = [dt + timedelta(seconds=i * SOLVER_STEP_S) for i in range(num_slots + 1)]
+
+    load = TestLoad(name="grid_ok_single_step_mandatory")
+    load.father_device = TestDynamicGroupDouble(max_amps=[50.0, 50.0, 50.0], num_slots=num_slots)
+
+    constraint = MultiStepsPowerLoadConstraint(
+        time=dt,
+        load=load,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=time_slots[-1],
+        target_value=4000,
+        power_steps=[copy_command(CMD_ON, power_consign=4000)],
+    )
+
+    # Tight headroom (1000W) — below the single 4000W step. The green
+    # pass therefore returns no candidates for any slot.
+    headroom = np.full(num_slots, 1000.0, dtype=np.float64)
+
+    result = constraint.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=np.array([-500.0] * num_slots, dtype=np.float64),
+        power_slots_duration_s=np.array([SOLVER_STEP_S] * num_slots, dtype=np.float64),
+        prices=np.array([0.2] * num_slots, dtype=np.float64),
+        prices_ordered_values=[0.2],
+        time_slots=time_slots,
+        power_headroom=headroom,
+    )
+
+    final_ret = result[1]
+    out_commands = result[2]
+
+    # Fallback dispatched: final_ret is True (target met) and at least
+    # one slot carries the 4000W command. Compare via `bool(...)`
+    # because `compute_best_period_repartition` returns a numpy
+    # boolean rather than a Python bool.
+    assert bool(final_ret) is True, (
+        f"QS-204 review-fix #02 G10: expected final_ret=True (fallback "
+        f"dispatched) in grid-OK mode with no green candidates, got "
+        f"final_ret={final_ret!r}"
+    )
+    dispatched_powers = [c.power_consign for c in out_commands if c is not None]
+    assert 4000.0 in dispatched_powers, (
+        f"QS-204 review-fix #02 G10: expected the 4000W step to be "
+        f"dispatched by the price-optimizer fallback (headroom 1000W < "
+        f"step 4000W). Dispatched powers: {dispatched_powers}"
+    )
 
 
 def test_total_consumed_power_initialized_from_ua():
