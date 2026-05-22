@@ -2705,6 +2705,19 @@ def test_water_boiler_card_steam_opacity_formula():
         "qs-water-boiler-card.js: STEAM_FILL_COLOR must be the literal "
         "`'rgba(195,215,235,0.45)'` (cool blue-gray, alpha 0.45 baked in)."
     )
+    # Review fix #01 finding #2: pin the uniform vy. The asymmetric
+    # [18, 32] band initially planned was retracted in favour of
+    # `MIN == MAX == 24` (see ARN-D1); without these pins a future
+    # edit could silently drift either constant and reintroduce the
+    # "two-stream" speed-sorting near the rim.
+    assert re.search(r"STEAM_RISE_PX_PER_S_MIN\s*=\s*24\b", executable), (
+        "qs-water-boiler-card.js: STEAM_RISE_PX_PER_S_MIN must be `24` "
+        "(uniform vy with STEAM_RISE_PX_PER_S_MAX — see ARN-D1)."
+    )
+    assert re.search(r"STEAM_RISE_PX_PER_S_MAX\s*=\s*24\b", executable), (
+        "qs-water-boiler-card.js: STEAM_RISE_PX_PER_S_MAX must be `24` "
+        "(uniform vy with STEAM_RISE_PX_PER_S_MIN — see ARN-D1)."
+    )
     assert re.search(
         r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*rimOpacity\s*\*\s*"
         r"this\._currentColorMix",
