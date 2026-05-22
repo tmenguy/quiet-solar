@@ -43,10 +43,13 @@ const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
 const LERP_DT_CEIL = 0.1;           // s; clamp lerp dt to avoid snap-to after tab hidden
 const AMP_REGEN_THRESHOLD = 0.25;   // amplitude delta threshold for path regen (throttle)
 const LEVEL_REGEN_THRESHOLD = 0.01; // px; threshold for base-Y path regen (jitter-proof)
-// QS-204 review-fix #02 G4 — running-mode regen throttle. ~4.6° (0.08 rad)
-// per-tooth phase delta gives ~3-5 regen frames/sec at the slowest layer's
-// flicker rate, well under the 60Hz cost of the unthrottled fireOn path.
-const PHASE_REGEN_THRESHOLD = 0.08;
+// QS-204 review-fix #03 H2 — running-mode regen throttle. Time-based
+// (NOT phase-delta) because phase advances ~0.84 rad/frame at 60 FPS
+// (2π × 8 Hz × 1/60), which would clear any reasonable phase threshold
+// every frame and defeat the throttle. PHASE_REGEN_MIN_DT = 0.20 s
+// caps running-mode regen at ~5 fps — well below the 7-9 Hz visual
+// flicker rate, and a 12× perf win over the unthrottled fireOn path.
+const PHASE_REGEN_MIN_DT = 0.20;
 
 // --- Flame dynamics targets (still vs dancing) ---
 // STILL_AMP = 0 — idle silhouette is fully frozen (per-tooth tip phases
@@ -169,10 +172,17 @@ class QsRadiatorCard extends HTMLElement {
       // Advance per-layer, per-tooth tip phases ONLY when running. Idle
       // keeps the phases frozen at their last value, which combined with
       // STILL_AMP === 0 produces a fully motionless silhouette (AC4).
+      //
+      // QS-204 review-fix #03 H4 — use `lerpDt` (clamped to
+      // `LERP_DT_CEIL`) instead of raw `dt`. After a long hidden-tab
+      // pause the browser may report dt ≈ 60 s, which would advance
+      // phase by `2π × 8 × 60 ≈ 3000 rad` and wrap to an essentially-
+      // arbitrary value — visible to the user as a sudden tip-pattern
+      // snap on re-show. Mirrors the amp-lerp clamp's purpose.
       if (fireOn && this._tipPhases) {
         for (let i = 0; i < LAYER_TEETH_COUNTS.length; i++) {
           const phasesForLayer = this._tipPhases[i];
-          const phaseStep = 2 * Math.PI * LAYER_TIP_FLICKER_HZ[i] * dt;
+          const phaseStep = 2 * Math.PI * LAYER_TIP_FLICKER_HZ[i] * lerpDt;
           for (let j = 0; j < phasesForLayer.length; j++) {
             // Scale phase advance by `(1 + 0.07 * j)` so each tooth
             // flickers at a slightly different rate — desynchronises
@@ -183,12 +193,15 @@ class QsRadiatorCard extends HTMLElement {
       }
 
       // Lazy-resolve flame DOM refs once per innerHTML rewrite.
+      // QS-204 review-fix #03 H3 — sized off LAYER_TEETH_COUNTS so a
+      // future PR extending the per-layer arrays automatically renders
+      // the new layers (G7's length-equality assertion + this dynamic
+      // sizing form a complete parameterisation of the layer count).
       if (!this._flameEls) {
-        this._flameEls = [
-          this._root?.getElementById('flame0') ?? null,
-          this._root?.getElementById('flame1') ?? null,
-          this._root?.getElementById('flame2') ?? null,
-        ];
+        this._flameEls = Array.from(
+            {length: LAYER_TEETH_COUNTS.length},
+            (_, i) => this._root?.getElementById(`flame${i}`) ?? null,
+        );
       }
 
       // QS-204 — no more translateX scroll. The horizontal-scroll
@@ -208,30 +221,16 @@ class QsRadiatorCard extends HTMLElement {
       // Threshold compare for float-jitter robustness vs strict !==.
       const levelChanged = hasValidBase &&
           Math.abs(flameBaseY - (this._lastFlameBaseY ?? Number.NEGATIVE_INFINITY)) > LEVEL_REGEN_THRESHOLD;
-      // QS-204 review-fix #02 G4 — per-tooth phase-delta throttle for
-      // the fireOn regen path. Previously `fireOn` alone forced regen
-      // every RAF tick (60Hz), pushing 3 SVG `setAttribute('d', ...)`
-      // writes per frame and burning CPU on low-end browsers. The
-      // throttle now regenerates only when the largest per-tooth phase
-      // has accumulated more than PHASE_REGEN_THRESHOLD rad (~4.6°)
-      // since the last regen — visually smooth at the slowest layer's
-      // ~7Hz flicker but well under 60Hz of writes.
-      let maxPhaseDelta = Infinity;
-      if (fireOn && this._tipPhases && this._lastRegenTipPhases) {
-        maxPhaseDelta = 0;
-        for (let i = 0; i < this._tipPhases.length; i++) {
-          const cur = this._tipPhases[i];
-          const last = this._lastRegenTipPhases[i];
-          if (!cur || !last) continue;
-          for (let j = 0; j < cur.length; j++) {
-            // Wrap-aware delta on [0, 2π).
-            const raw = Math.abs(cur[j] - last[j]);
-            const d = raw > Math.PI ? 2 * Math.PI - raw : raw;
-            if (d > maxPhaseDelta) maxPhaseDelta = d;
-          }
-        }
-      }
-      const phaseChanged = fireOn && maxPhaseDelta > PHASE_REGEN_THRESHOLD;
+      // QS-204 review-fix #03 H2 — time-based throttle for the fireOn
+      // regen path. The previous per-tooth phase-delta throttle
+      // (review-fix #02 G4) was a no-op: phase advances ~0.84 rad per
+      // frame at 60 FPS with LAYER_TIP_FLICKER_HZ ≈ 8, far above any
+      // reasonable phase threshold. Time-based gating
+      // (≥ PHASE_REGEN_MIN_DT seconds since last regen) caps regen at
+      // ~5 fps — well below the visual flicker rate (7-9 Hz) and a
+      // 12× perf win over per-frame regen.
+      const sinceLastRegen = (ts - (this._lastRegenTs ?? -Infinity)) / 1000;
+      const phaseChanged = fireOn && sinceLastRegen >= PHASE_REGEN_MIN_DT;
       const shouldRegen = hasValidBase && (
           phaseChanged
           || levelChanged
@@ -240,13 +239,9 @@ class QsRadiatorCard extends HTMLElement {
       if (shouldRegen) {
         this._lastFlameBaseY = flameBaseY;
         this._lastFlameAmp = this._currentFlameAmp;
-        // Snapshot phases for the next throttle comparison. Deep-clone
-        // to avoid the live `_tipPhases` mutation racing the check.
-        if (this._tipPhases) {
-          this._lastRegenTipPhases = this._tipPhases.map((row) => row.slice());
-        }
+        this._lastRegenTs = ts;
         const flameColors = this._flameColors || FLAME_GREY_FILLS;
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < LAYER_TEETH_COUNTS.length; i++) {
           const fEl = this._flameEls[i];
           if (fEl) {
             const d = this._generateFlameTeethPath(
@@ -365,7 +360,15 @@ class QsRadiatorCard extends HTMLElement {
     let d = `M 0 ${baseY.toFixed(2)}`;
     for (let i = 0; i < teethCount; i++) {
       const phase = tipPhases && tipPhases[i] != null ? tipPhases[i] : 0;
-      const tipWobble = tipAmp * Math.sin(phase);
+      // QS-204 review-fix #03 H1 — gate the per-tooth wobble on
+      // `!isIdle`. The RAF lerp is cancelled by `_stopAnimation()`
+      // when the radiator transitions running→idle, freezing
+      // `_currentFlameAmp` at ~DANCE_AMP rather than at STILL_AMP=0.
+      // Without this gate the idle silhouette inherits that frozen
+      // amplitude and shows an asymmetric mid-wobble per tooth,
+      // visually inconsistent with the cold-boot idle (which starts
+      // at amp=0). Mirrors the `idlePeakBoost` gate above.
+      const tipWobble = isIdle ? 0 : tipAmp * Math.sin(phase);
       const peakY = baseY - peakHeight - idlePeakBoost - tipWobble;
       const startX = i * toothWidth;
       const midX = startX + toothWidth / 2;
@@ -387,10 +390,17 @@ class QsRadiatorCard extends HTMLElement {
   // _render() innerHTML rewrite. Does NOT touch _currentFlameAmp or
   // _tipPhases — those survive disconnect so re-attach resumes the
   // dance without a visible jump.
+  //
+  // QS-204 review-fix #03 H5 — also reset the regen-throttle memo
+  // (`_lastRegenTs`). Without this, a re-render that lands within
+  // `PHASE_REGEN_MIN_DT` of the prior regen would skip the first
+  // running-mode regen against the new DOM nodes (the old `ts` is
+  // still cached). Symmetric cleanup with the other `_last*` fields.
   _invalidateFlameCache() {
     this._flameEls = null;
     this._lastFlameBaseY = null;
     this._lastFlameAmp = null;
+    this._lastRegenTs = -Infinity;
   }
 
   set hass(hass) {
@@ -568,15 +578,20 @@ class QsRadiatorCard extends HTMLElement {
       if (!this._tipPhases) {
         this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
       }
-      const initialFlamePaths = [0, 1, 2].map(i => this._generateFlameTeethPath(
-        FLAME_WIDTH,
-        initialBaseY,
-        LAYER_BASE_HEIGHTS[i],
-        initialAmp * LAYER_TIP_AMP_MULTS[i],
-        LAYER_TEETH_COUNTS[i],
-        this._tipPhases[i],
-        !running,
-      ));
+      // QS-204 review-fix #03 H3 — parameterised by LAYER_TEETH_COUNTS
+      // so the initial paint adapts to any layer count.
+      const initialFlamePaths = Array.from(
+          {length: LAYER_TEETH_COUNTS.length},
+          (_, i) => this._generateFlameTeethPath(
+              FLAME_WIDTH,
+              initialBaseY,
+              LAYER_BASE_HEIGHTS[i],
+              initialAmp * LAYER_TIP_AMP_MULTS[i],
+              LAYER_TEETH_COUNTS[i],
+              this._tipPhases[i],
+              !running,
+          ),
+      );
 
       const css = `
       :host {
@@ -872,9 +887,9 @@ class QsRadiatorCard extends HTMLElement {
                 </clipPath>
               </defs>
               <g clip-path="url(#${flameClipId})">
-                <path id="flame0" d="${initialFlamePaths[0]}" fill="${initialFlameColors[0]}" opacity="1" pointer-events="none" style="will-change: transform;" />
-                <path id="flame1" d="${initialFlamePaths[1]}" fill="${initialFlameColors[1]}" opacity="1" pointer-events="none" style="will-change: transform;" />
-                <path id="flame2" d="${initialFlamePaths[2]}" fill="${initialFlameColors[2]}" opacity="1" pointer-events="none" style="will-change: transform;" />
+                ${initialFlamePaths.map((d, i) =>
+                  `<path id="flame${i}" d="${d}" fill="${initialFlameColors[i]}" opacity="1" pointer-events="none" style="will-change: transform;" />`
+                ).join("\n                ")}
               </g>
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${ringDashActive ? 'stroke-opacity="0.35"' : ''} />

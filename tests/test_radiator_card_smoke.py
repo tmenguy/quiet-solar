@@ -161,28 +161,56 @@ def test_radiator_card_idle_peak_boost_gated_on_is_idle(card_source: str) -> Non
     )
 
 
-def test_radiator_card_phase_delta_throttle(card_source: str) -> None:
-    """Review-fix #02 G4 — running-mode regen path is phase-delta throttled.
+def test_radiator_card_regen_is_time_throttled(card_source: str) -> None:
+    """Review-fix #03 H2 — running-mode regen is time-throttled.
 
-    Pre-fix, ``shouldRegen = hasValidBase && (fireOn || …)`` short-
-    circuited true every RAF tick when fire was on, forcing three
-    ``setAttribute('d', …)`` writes per frame at ~60Hz. Review-fix
-    #02 G4 introduces a ``PHASE_REGEN_THRESHOLD`` constant and a
-    ``maxPhaseDelta`` accumulator so regen only fires when the largest
-    per-tooth phase has drifted more than ~4.6° since the last regen.
+    Review-fix #02 G4's phase-delta throttle (``PHASE_REGEN_THRESHOLD =
+    0.08 rad``) was effectively a no-op: phase advances ~0.84 rad per
+    frame at 60 FPS with ``LAYER_TIP_FLICKER_HZ ≈ 8``, so the gate
+    cleared every frame and regen still ran 60 times/sec. Review-fix
+    #03 H2 swaps the gate for a time-based one
+    (``PHASE_REGEN_MIN_DT = 0.20 s`` → ~5 fps cap), and drops the
+    stale ``maxPhaseDelta`` and ``PHASE_REGEN_THRESHOLD`` symbols.
     """
-    assert "PHASE_REGEN_THRESHOLD" in card_source, (
-        "review-fix #02 G4: expected `PHASE_REGEN_THRESHOLD` constant "
-        "to throttle the fireOn regen path"
+    assert "PHASE_REGEN_MIN_DT" in card_source, (
+        "review-fix #03 H2: expected `PHASE_REGEN_MIN_DT` constant "
+        "to time-throttle the fireOn regen path"
     )
-    assert "maxPhaseDelta" in card_source, (
-        "review-fix #02 G4: expected `maxPhaseDelta` computation to "
-        "drive the per-tooth throttle decision"
+    assert "sinceLastRegen" in card_source, (
+        "review-fix #03 H2: expected `sinceLastRegen` time-delta "
+        "computation to drive the running-mode throttle"
+    )
+    assert "PHASE_REGEN_THRESHOLD" not in card_source, (
+        "review-fix #03 H2 regression: `PHASE_REGEN_THRESHOLD` was "
+        "removed (it was a no-op at 60 FPS) — must not reappear"
+    )
+    assert "maxPhaseDelta" not in card_source, (
+        "review-fix #03 H2 regression: `maxPhaseDelta` was removed — "
+        "the time-based throttle replaces the per-tooth phase check"
+    )
+
+
+def test_radiator_card_idle_wobble_gated_on_is_idle(card_source: str) -> None:
+    """Review-fix #03 H1 — frozen-mid-wobble idle silhouette guard.
+
+    After a running→idle transition, ``_currentFlameAmp`` is frozen at
+    ~DANCE_AMP (the RAF lerp loop is cancelled by ``_stopAnimation()``
+    before it converges to STILL_AMP=0). G5 gated the +30 px peak
+    boost on ``isIdle`` but the per-tooth wobble term
+    ``tipAmp * Math.sin(phase)`` was NOT gated, so each idle re-
+    render baked in a frozen-mid-wobble silhouette inconsistent with
+    cold-boot idle. H1 gates the wobble on ``!isIdle`` (mirrors the
+    G5 peak-boost gate).
+    """
+    assert "isIdle ? 0 : tipAmp * Math.sin" in card_source, (
+        "review-fix #03 H1: expected the wobble term to be gated on "
+        "`isIdle` (`isIdle ? 0 : tipAmp * Math.sin(phase)`) so the "
+        "idle silhouette doesn't inherit a frozen mid-wobble"
     )
 
 
 def test_radiator_card_layer_constants_length_assertion(card_source: str) -> None:
-    """Review-fix #02 G7 — module-load length-equality guard.
+    """Review-fix #02 G7 + #03 H7 — module-load length-equality guard.
 
     The four per-layer arrays (``LAYER_BASE_HEIGHTS``,
     ``LAYER_TIP_AMP_MULTS``, ``LAYER_TEETH_COUNTS``,
@@ -190,6 +218,9 @@ def test_radiator_card_layer_constants_length_assertion(card_source: str) -> Non
     PR that extends one without the others would silently produce
     ``NaN`` paths from out-of-bounds reads. A ``console.assert`` at
     module load catches the mismatch at boot.
+
+    Review-fix #03 H7 — pin all three pair-equality checks so a
+    future PR cannot weaken the assertion to only one pair.
     """
     assert "console.assert" in card_source, (
         "review-fix #02 G7: expected a `console.assert` length-equality "
@@ -198,4 +229,12 @@ def test_radiator_card_layer_constants_length_assertion(card_source: str) -> Non
     assert "LAYER_TEETH_COUNTS.length === LAYER_TIP_FLICKER_HZ.length" in card_source, (
         "review-fix #02 G7: expected the length-equality guard to "
         "check LAYER_TEETH_COUNTS.length === LAYER_TIP_FLICKER_HZ.length"
+    )
+    assert "LAYER_TEETH_COUNTS.length === LAYER_BASE_HEIGHTS.length" in card_source, (
+        "review-fix #03 H7: expected the length-equality guard to "
+        "also check LAYER_TEETH_COUNTS.length === LAYER_BASE_HEIGHTS.length"
+    )
+    assert "LAYER_TEETH_COUNTS.length === LAYER_TIP_AMP_MULTS.length" in card_source, (
+        "review-fix #03 H7: expected the length-equality guard to "
+        "also check LAYER_TEETH_COUNTS.length === LAYER_TIP_AMP_MULTS.length"
     )

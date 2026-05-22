@@ -4,7 +4,7 @@ slug: constraints
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/constraints.py
-last_verified: 2026-05-23
+last_verified: 2026-05-22
 ---
 
 # LoadConstraint

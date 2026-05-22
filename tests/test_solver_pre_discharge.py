@@ -821,6 +821,17 @@ def test_pre_discharge_does_not_fight_segmentation_solar_only():
     with patch.object(solver, "_constraints_delta", side_effect=_track):
         solver.solve(is_off_grid=True, with_self_test=False)
 
+    # QS-204 review fix #03 H6 — restored meaningfulness guard. The
+    # solar-only test is vacuous if the surplus block (pre-discharge)
+    # never ran; the fixture's big-sun-day scenario should always
+    # trigger it, so this assert protects against fixture drift.
+    assert len(surplus_calls) >= 1, (
+        "Solar-only pre-discharge test is meaningless if the surplus "
+        "block never fired — the big-sun-day scenario fixture must "
+        "produce at least one surplus call to exercise AC-10's "
+        "segmentation invariant."
+    )
+
     # AC-10 solar-only: segmentation must return (None, None) after
     # the solve.
     to_shave, energy_delta = solver._prepare_battery_segmentation()
@@ -834,9 +845,6 @@ def test_pre_discharge_does_not_fight_segmentation_solar_only():
         f"AC-10 solar-only: pre-discharge fought segmentation — cap-loop "
         f"fired with reclaim deltas {reclaim_calls}"
     )
-    # Surplus-block invocation is allowed but not required in solar-
-    # only mode — the smaller dispatch envelope may not trigger it.
-    del surplus_calls  # silence unused-var lint without affecting the assertions above
 
 
 def test_pre_discharge_may_fight_segmentation_when_grid_ok():

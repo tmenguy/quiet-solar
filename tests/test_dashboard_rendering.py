@@ -546,16 +546,37 @@ class TestDashboardTemplateRendering:
             )
 
     def test_radiator_card_flame_layers_present(self):  # CR2 — sync (no hass)
-        """QS-201 AC-2 + AC-7 — three flame paths, circular clip, cache-clear whitelist."""
+        """QS-201 AC-2 + AC-7 — flame paths, circular clip, cache-clear whitelist.
+
+        QS-204 review-fix #03 H3 parameterised the per-layer loops by
+        ``LAYER_TEETH_COUNTS.length``, so the three flame ``<path>``
+        elements are now emitted via a ``map(... id="flame${i}" ...)``
+        template-literal rather than hard-coded ``id="flame0/1/2"``
+        attributes. The test asserts the dynamic pattern is present
+        (plus the constants-level confirmation that the layer count is
+        still 3).
+        """
         import re
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
 
-        # AC-2: three flame paths with ids flame0/1/2.
-        for fid in ("flame0", "flame1", "flame2"):
-            assert re.search(rf'id="{fid}"', content) is not None, (
-                f"Missing <path id=\"{fid}\">"
-            )
+        # AC-2: the dynamic template emits per-layer paths whose ids
+        # are computed from the array index — `id="flame${i}"`.
+        assert 'id="flame${i}"' in content, (
+            "Missing dynamic `id=\"flame${i}\"` template in the flame "
+            "<path> emission — H3 parameterised the layer loops but "
+            "the template must still emit per-layer path ids."
+        )
+        # Constants confirm the layer count is still 3 (the assertion
+        # would still pass for any forward-compatible extension to N).
+        assert re.search(
+            r"const\s+LAYER_TEETH_COUNTS\s*=\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]",
+            content,
+        ) is not None, (
+            "LAYER_TEETH_COUNTS must declare exactly 3 entries (current "
+            "layer count); extending the array is supported but a smoke-"
+            "test bump should follow."
+        )
 
         # AC-2: clipPath circle at the ring centre. Geometry must be wired
         # through the module-top `CENTER_CY` / `CLIP_R` constants so the
