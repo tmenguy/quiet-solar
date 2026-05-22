@@ -320,7 +320,15 @@ of their rise budget at full opacity, then fade smoothly over the
 upper 60 % as they approach the local rim". The disjunctive retire
 (`p.cy < localTopY || p.life >= p.maxLife`) is preserved: by the time
 geometric retire fires, opacity is already 0, so the remove is
-invisible. **Steam puffs AND bubbles survive `_render()` innerHTML rewrites** —
+invisible. **QS-214 also slows the wave speed.** The pool-card-inherited
+`CALM_SPEED = 0.2` and `BOIL_SPEED = 1.6` read as pumped flow on the
+boiler card, which the user flagged as "too fast — it's the speed
+from the pool pump running". Slowed to `CALM_SPEED = 0.1` /
+`BOIL_SPEED = 0.4` (~4× slower while boiling) so the surface reads
+as a gentle simmer rather than pumped circulation. Bubble and steam
+constants are unaffected.
+
+**Steam puffs AND bubbles survive `_render()` innerHTML rewrites** —
 `_render()` snapshots `_steamPuffs` / `_nextSteamAt` and `_bubbles` /
 `_nextBubbleAt` before the rewrite, then re-attaches each preserved
 particle's detached DOM node to the freshly-rendered steam / bubble

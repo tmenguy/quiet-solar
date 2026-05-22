@@ -2718,6 +2718,23 @@ def test_water_boiler_card_steam_opacity_formula():
         "qs-water-boiler-card.js: STEAM_RISE_PX_PER_S_MAX must be `24` "
         "(uniform vy with STEAM_RISE_PX_PER_S_MIN — see ARN-D1)."
     )
+    # User iteration on PR #215: the wave speed inherited from the
+    # pool card (`BOIL_SPEED = 1.6`, `CALM_SPEED = 0.2`) read as a
+    # pumped-flow pace — wrong for a heated boiler tank where the
+    # visible motion should be a gentle bubbling drift. Slowed to
+    # `CALM_SPEED = 0.1`, `BOIL_SPEED = 0.4` (~ 4× slower while
+    # boiling). Pinned so a future pool-card sync doesn't silently
+    # restore the pumped-flow speeds.
+    assert re.search(r"CALM_SPEED\s*=\s*0\.1\b", executable), (
+        "qs-water-boiler-card.js: CALM_SPEED must be `0.1` (slowed "
+        "from the pool-card-inherited 0.2 — gentle drift when not "
+        "boiling)."
+    )
+    assert re.search(r"BOIL_SPEED\s*=\s*0\.4\b", executable), (
+        "qs-water-boiler-card.js: BOIL_SPEED must be `0.4` (slowed "
+        "from the pool-card-inherited 1.6 — gentle bubbling pace, "
+        "not pumped flow)."
+    )
     assert re.search(
         r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*rimOpacity\s*\*\s*"
         r"this\._currentColorMix",

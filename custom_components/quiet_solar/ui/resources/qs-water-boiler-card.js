@@ -64,8 +64,11 @@ const PHASE_TO_PX = 60;
 // --- Calm vs boil targets ---
 const CALM_AMP = 1.5;
 const BOIL_AMP = 8;
-const CALM_SPEED = 0.2;
-const BOIL_SPEED = 1.6;
+// QS-214 user iteration: wave speeds slowed from the pool-card-
+// inherited values (CALM 0.2 / BOIL 1.6) to read as a gentle boiler-
+// tank simmer rather than pumped flow. ~4× slower while boiling.
+const CALM_SPEED = 0.1;
+const BOIL_SPEED = 0.4;
 
 // --- Bubbles ---
 const MAX_CONCURRENT_BUBBLES = 12;
