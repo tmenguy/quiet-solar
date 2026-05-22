@@ -2475,3 +2475,419 @@ async def test_water_boiler_temperature_sensor_row_absent_when_unset(
     )
 
 
+# ============================================================================
+# QS-210 — Climate card backdrop modes (HEAT flame / COOL snow / AUTO temp /
+# WIND fallback) and the dashboard jinja plumbing for the backing climate
+# entity id. Mirrors the regex-on-source pattern used by the radiator-card
+# tests above (`test_radiator_card_flame_layers_present` etc.).
+# ============================================================================
+
+
+class TestClimateCardBackdropDerivation:
+    """QS-210 AC1 — single resolved-target backdrop algorithm."""
+
+    def test_climate_card_backdrop_heat_cool_branches_present(self):
+        """HEAT → 'flame' and COOL → 'snow' must both appear, gated on
+        the configured HVAC-on state (typically `climate_state_on`).
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # 'heat' literal must drive a return-of-'flame' branch.
+        # Accept either `climateStateOn === 'heat'` directly or via the
+        # `deriveBackdrop` helper.
+        assert re.search(
+            r"===\s*'heat'.{0,200}return\s+'flame'",
+            executable,
+            re.DOTALL,
+        ) is not None, (
+            "QS-210 AC1: HEAT branch must short-circuit to "
+            "`return 'flame'` when the climate-state-on string is 'heat'."
+        )
+
+        # 'cool' literal must drive a return-of-'snow' branch.
+        assert re.search(
+            r"===\s*'cool'.{0,200}return\s+'snow'",
+            executable,
+            re.DOTALL,
+        ) is not None, (
+            "QS-210 AC1: COOL branch must short-circuit to "
+            "`return 'snow'` when the climate-state-on string is 'cool'."
+        )
+
+    def test_climate_card_backdrop_auto_resolves_single_target(self):
+        """AUTO / HEAT_COOL must read `temperature`, `target_temp_low`,
+        and `target_temp_high` attributes, blend dual setpoints via a
+        midpoint, and fall through to a `running ? 'wind' : 'none'`
+        branch when nothing resolves.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # All four climate attributes must be read.
+        for attr in (
+            "current_temperature",
+            "temperature",
+            "target_temp_low",
+            "target_temp_high",
+        ):
+            assert re.search(
+                rf"attrs\??\.{attr}\b", executable
+            ) is not None, (
+                f"QS-210 AC1: AUTO branch must read climate entity "
+                f"attribute `{attr}`."
+            )
+
+        # Midpoint blend for dual setpoints: (low + high) / 2.
+        # Accept identifier names (`lowTarget`, `highTarget`, `low`, `high`, `L`, `H`).
+        assert re.search(
+            r"\(\s*\w+Target\s*\+\s*\w+Target\s*\)\s*/\s*2",
+            executable,
+        ) is not None, (
+            "QS-210 AC1: AUTO branch must blend `target_temp_low` and "
+            "`target_temp_high` via a midpoint expression `(low + high) / 2`."
+        )
+
+        # 'auto' or 'heat_cool' literal entering the resolve branch.
+        assert (
+            "'auto'" in executable or "'heat_cool'" in executable
+        ), (
+            "QS-210 AC1: AUTO branch must trigger on `climate_state_on` "
+            "equalling 'auto' or 'heat_cool'."
+        )
+
+        # 'wind' fallback gated on `running`.
+        assert re.search(
+            r"running\s*\?\s*'wind'\s*:\s*'none'",
+            executable,
+        ) is not None, (
+            "QS-210 AC1: AUTO branch must fall through to "
+            "`running ? 'wind' : 'none'` when no setpoint resolves."
+        )
+
+
+class TestClimateCardFlameBackdrop:
+    """QS-210 AC2 — HEAT backdrop uses the radiator-card flame engine."""
+
+    def test_climate_card_flame_engine_markers_present(self):
+        """The radiator's flame engine is copied verbatim: path
+        generator, per-layer paths, fill branch, and the progress-tracked
+        base-Y formula.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # The peaked-teeth path generator.
+        assert "_generateFlameTeethPath" in executable, (
+            "QS-210 AC2: `_generateFlameTeethPath` (peaked-teeth path "
+            "generator copied from qs-radiator-card.js) must be declared."
+        )
+
+        # Per-layer flame template-literal id pattern.
+        assert 'id="flame${i}"' in content, (
+            "QS-210 AC2: per-layer flame path id must be emitted as "
+            "the template literal `id=\"flame${i}\"`."
+        )
+
+        # Running ? FLAME_FILLS : FLAME_GREY_FILLS branch.
+        assert re.search(
+            r"running\s*\?\s*FLAME_FILLS\s*:\s*FLAME_GREY_FILLS",
+            executable,
+        ) is not None, (
+            "QS-210 AC2: flame fill must branch on `running ? "
+            "FLAME_FILLS : FLAME_GREY_FILLS` (mirror radiator card)."
+        )
+
+        # The full flameBaseY formula matching the radiator's envelope.
+        assert re.search(
+            r"flameBaseY\s*=\s*CENTER_CY\s*\+\s*CLIP_R\s*-\s*\(\s*"
+            r"FLAME_BASE_MIN_PCT\s*\+\s*progressRatio\s*\*\s*\(\s*"
+            r"FLAME_BASE_MAX_PCT\s*-\s*FLAME_BASE_MIN_PCT\s*\)\s*\)\s*"
+            r"\*\s*2\s*\*\s*CLIP_R",
+            executable,
+        ) is not None, (
+            "QS-210 AC2: flameBaseY formula must mirror the radiator's "
+            "progress envelope verbatim."
+        )
+
+
+class TestClimateCardSnowBackdrop:
+    """QS-210 AC3 — COOL backdrop renders snow pile + falling snowflakes."""
+
+    def test_climate_card_snow_pile_three_waves_with_palette(self):
+        """3 snow-pile wave paths plus the documented palette (front
+        white-ish, back blue-ish).
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # 3 wave paths — either template-literal (`id="snowWave${i}"`)
+        # or three explicit ids. Accept both.
+        if 'id="snowWave${i}"' not in content:
+            for i in range(3):
+                assert re.search(
+                    rf'id="snowWave{i}"', executable
+                ) is not None, (
+                    f"QS-210 AC3: missing snow-pile wave path "
+                    f"`id=\"snowWave{i}\"`."
+                )
+
+        # Front white-ish literal.
+        assert "hsla(0, 0%, 95%, 0.65)" in executable, (
+            "QS-210 AC3: front snow-pile layer must use the white-ish "
+            "literal `hsla(0, 0%, 95%, 0.65)`."
+        )
+
+        # At least one blue-ish back literal (hue around 200-230).
+        assert re.search(
+            r"hsla\(\s*2[0-3]\d\s*,",
+            executable,
+        ) is not None, (
+            "QS-210 AC3: back snow-pile layer(s) must use a blue-ish "
+            "hue (regex on `hsla(2[0-3]X, …)`)."
+        )
+
+    def test_climate_card_snowflakes_fall_down(self):
+        """Snowflake particle loop INVERTS the boiler-bubble system:
+        spawn near the top of the clip and increment cy (fall down).
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # The fall direction: cy += b.vy * dt (or equivalent positive
+        # accumulation). Accept either `b.cy += b.vy * dt` or
+        # `b.cy = b.cy + b.vy * dt`.
+        cy_increments = bool(
+            re.search(r"b\.cy\s*\+=\s*b\.vy\s*\*\s*dt", executable)
+            or re.search(
+                r"b\.cy\s*=\s*b\.cy\s*\+\s*b\.vy\s*\*\s*dt", executable
+            )
+        )
+        assert cy_increments, (
+            "QS-210 AC3: snowflake fall must INCREMENT `cy` per frame "
+            "(`b.cy += b.vy * dt`) — boiler bubbles decrement, snow falls."
+        )
+
+        # Top-of-clip spawn — `CENTER_CY - CLIP_R + …` (contrast with
+        # the boiler's bottom-of-clip `CENTER_CY + CLIP_R - 8`).
+        assert re.search(
+            r"CENTER_CY\s*-\s*CLIP_R",
+            executable,
+        ) is not None, (
+            "QS-210 AC3: snowflake spawn `cy` must use "
+            "`CENTER_CY - CLIP_R` (top of clip) — contrasts with the "
+            "boiler's bottom-of-clip spawn formula."
+        )
+
+
+class TestClimateCardWindBackdrop:
+    """QS-210 AC4 — WIND backdrop renders 3 stroked sinusoidal wisps."""
+
+    def test_climate_card_wind_three_stroked_wisps(self):
+        """3 wind wisp paths each with `stroke=` and `fill="none"`,
+        plus the WIND_SPEED_PX_PER_S linear-scroll constant.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # 3 wind wisp paths — template-literal or three explicit ids.
+        if 'id="windWisp${i}"' not in content:
+            for i in range(3):
+                assert re.search(
+                    rf'id="windWisp{i}"', executable
+                ) is not None, (
+                    f"QS-210 AC4: missing wisp path "
+                    f"`id=\"windWisp{i}\"`."
+                )
+
+        # `stroke=` attribute on a wisp path.
+        # Accept stroke="..." or stroke="${...}".
+        assert re.search(
+            r'<path[^>]*id="windWisp[^"]*"[^>]*stroke=',
+            content,
+            re.DOTALL,
+        ) is not None, (
+            "QS-210 AC4: each wisp path must carry a `stroke=` attribute "
+            "(open sinusoidal line, not a filled polygon)."
+        )
+
+        # `fill="none"` on the wisp path.
+        assert re.search(
+            r'<path[^>]*id="windWisp[^"]*"[^>]*fill="none"',
+            content,
+            re.DOTALL,
+        ) is not None, (
+            "QS-210 AC4: each wisp path must carry `fill=\"none\"` so it "
+            "renders as a stroked open line, not a filled wave polygon."
+        )
+
+        # WIND_SPEED_PX_PER_S constant.
+        assert re.search(
+            r"const\s+WIND_SPEED_PX_PER_S\s*=", executable
+        ) is not None, (
+            "QS-210 AC4: `WIND_SPEED_PX_PER_S` constant must drive the "
+            "linear-scroll translateX accumulator."
+        )
+
+
+class TestClimateCardNoneBackdrop:
+    """QS-210 AC5 — fan_only/dry/off/null short-circuit to 'none'."""
+
+    def test_climate_card_fan_only_dry_off_short_circuit_to_none(self):
+        """The backdrop derivation must return 'none' for non-HEAT,
+        non-COOL, non-AUTO/HEAT_COOL values BEFORE any climate-entity
+        attribute read. Pin the structural shape: a `return 'none'`
+        exists inside the `deriveBackdrop` function body, at the
+        function's tail (catch-all branch).
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+
+        # Find the deriveBackdrop function body (handle balanced braces).
+        deriveBody = _extract_js_function_body(
+            content,
+            r"const\s+deriveBackdrop\s*=\s*\(\s*\)\s*=>\s*",
+        )
+        assert deriveBody is not None, (
+            "QS-210 AC5: a `deriveBackdrop = () => { ... }` arrow "
+            "function must be declared (the backdrop decision body)."
+        )
+
+        # Strip comments inside the body.
+        executable_body = _strip_js_comments(deriveBody)
+
+        # 'none' is returned somewhere in the body.
+        assert "return 'none'" in executable_body, (
+            "QS-210 AC5: `deriveBackdrop` body must contain a "
+            "`return 'none'` branch for the everything-else case."
+        )
+
+        # The catch-all `return 'none'` is at the tail of the body — i.e.
+        # AFTER the 'auto'/'heat_cool' branch, so values like
+        # 'fan_only'/'dry'/'off' never enter the attribute-read path.
+        # Approximate this with an order check: the last `return 'none'`
+        # comes AFTER the last `return 'snow'` AND the last `return 'flame'`.
+        last_none = executable_body.rfind("return 'none'")
+        last_snow = executable_body.rfind("return 'snow'")
+        last_flame = executable_body.rfind("return 'flame'")
+        assert last_none > last_snow and last_none > last_flame, (
+            "QS-210 AC5: the catch-all `return 'none'` must sit AFTER "
+            "all HEAT/COOL/AUTO branches so unrecognised "
+            "`climate_state_on` values short-circuit without attribute "
+            "reads."
+        )
+
+
+class TestClimateCardAutoTempComparison:
+    """QS-210 AC6 — `_safeNumber` wraps every climate-attribute read."""
+
+    def test_climate_card_inline_safe_number_at_four_attribute_reads(self):
+        """Each of the four climate-entity attributes is read via
+        `_safeNumber({state: ...}, null)`. No `_safeAttr` helper exists.
+        """
+        import re
+
+        content = (
+            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+        ).read_text()
+        executable = _strip_js_comments(content)
+
+        # Forbidden: no `_safeAttr` helper.
+        assert re.search(r"_safeAttr\s*\(", executable) is None, (
+            "QS-210 AC6: no `_safeAttr(...)` helper — adversarial review "
+            "rejected this as YAGNI; inline four `_safeNumber({state: …})` "
+            "calls instead."
+        )
+
+        # Four `_safeNumber({state: attrs?.<X>}, null)` calls, one per
+        # climate attribute, in close proximity.
+        attrs_in_order = [
+            "current_temperature",
+            "temperature",
+            "target_temp_low",
+            "target_temp_high",
+        ]
+        positions = []
+        for attr in attrs_in_order:
+            pattern = re.compile(
+                rf"_safeNumber\s*\(\s*\{{\s*state\s*:\s*attrs\??\.{attr}\s*\}}\s*,\s*null\s*\)"
+            )
+            m = pattern.search(executable)
+            assert m is not None, (
+                f"QS-210 AC6: missing `_safeNumber({{state: attrs?.{attr}}}, null)` "
+                f"wrapper for the `{attr}` attribute read."
+            )
+            positions.append(m.start())
+
+        # All four reads sit within ~600 characters of each other
+        # (~10 lines at typical formatting) so they read as a tight
+        # block, not scattered through the file.
+        assert (max(positions) - min(positions)) < 600, (
+            "QS-210 AC6: the four `_safeNumber` calls must sit close "
+            "together (within ~10 lines / 600 characters) so the reads "
+            "read as one block of code, not scattered."
+        )
+
+
+class TestClimateCardJinjaClimateEntity:
+    """QS-210 AC7 — dashboard jinja exposes the backing climate entity id."""
+
+    @pytest.mark.asyncio
+    async def test_dashboard_template_emits_climate_entity_for_climate_device(
+        self, hass, full_dashboard_home
+    ):
+        """The climate device block in the custom-card dashboard must
+        emit a `climate_entity: climate.X` mapping inside the
+        `qs-climate-card`'s `entities:` block. Regex `climate\\.\\w+`
+        so a fixture rename doesn't break the test.
+        """
+        import re
+
+        home = full_dashboard_home
+        template_path = (
+            COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        )
+        template_content = await hass.async_add_executor_job(
+            template_path.read_text
+        )
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        assert re.search(
+            r"climate_entity:\s*climate\.\w+", rendered
+        ) is not None, (
+            "QS-210 AC7: the rendered dashboard YAML must contain a "
+            "`climate_entity: climate.<id>` line inside the climate "
+            "device's `entities:` mapping (mirror of `backing_entity` "
+            "on the radiator card)."
+        )
+
+
