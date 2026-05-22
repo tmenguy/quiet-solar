@@ -52,6 +52,13 @@ command: any `pytest` invocation whose positional argument lacks
 `pytest tests/test_foo.py`. Use `--quick` on the enclosing file or
 directory instead.
 
+**UI-only fast path.** When only `custom_components/quiet_solar/ui/*.j2`
+templates and `custom_components/quiet_solar/ui/resources/**` assets
+change (optionally mixed with dev-only paths), the gate runs only
+`tests/test_dashboard_rendering.py` plus any changed test files —
+skipping ruff, mypy, translations, and full coverage. Use `--full` to
+force the full suite.
+
 ## Architecture constraints
 
 - **Two-layer boundary**: `home_model/` NEVER imports `homeassistant.*`. `ha_model/` bridges both.

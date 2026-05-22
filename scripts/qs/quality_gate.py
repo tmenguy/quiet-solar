@@ -79,6 +79,26 @@ _DEV_ONLY_PATTERNS = (
 )
 _DEV_ONLY_EXTENSIONS = (".md",)
 
+# QS-208: UI fast-path classification.
+#
+# The canonical UI test exercises every J2 template and every JS card via
+# regex assertions on the file contents — it is the right one-stop pytest
+# target when only UI assets changed.
+#
+# Kept as a tuple (not a string) so the ui-only branch can build
+# `sorted({*_UI_FAST_PATH_TESTS, *changed_test_files})` uniformly whether
+# the list grows to 2+ files or stays at one. Adding a second UI test
+# file is a one-line PR.
+#
+# tests/test_ui_dashboard.py is intentionally NOT here — it covers
+# ui/dashboard.py (Python module). If dashboard.py is in the diff,
+# scope becomes "full" and test_ui_dashboard.py runs via the full
+# pytest. If only .j2 / resources/ changed, that file is not needed.
+_UI_FAST_PATH_TESTS: tuple[str, ...] = ("tests/test_dashboard_rendering.py",)
+
+_UI_PREFIX = "custom_components/quiet_solar/ui/"
+_UI_RESOURCES_PREFIX = "custom_components/quiet_solar/ui/resources/"
+
 
 def _venv_tool(name: str) -> str:
     """Return the absolute path to a tool inside the venv."""
@@ -221,26 +241,69 @@ def _is_dev_only(filepath: str) -> bool:
     return False
 
 
+def _is_ui_asset(filepath: str) -> bool:
+    """Classify a repo-root-relative POSIX path (as produced by
+    ``git diff --name-only``) as a non-Python UI asset.
+
+    True iff the path is under ``custom_components/quiet_solar/ui/`` AND
+    either ends with ``.j2`` (top-level or nested) OR sits under
+    ``resources/`` (any extension, any depth).
+
+    Crucially returns False for any ``.py`` file directly under ``ui/``
+    — including ``ui/dashboard.py`` and ``ui/__init__.py`` — so Python
+    edits route to the full gate. Convention: nothing under
+    ``ui/resources/`` is Python; if a ``.py`` ever lands there, that's a
+    category error and should be moved out of ``resources/`` rather
+    than handled by a narrower extension allowlist here.
+
+    Examples:
+        ui/quiet_solar_dashboard_template.yaml.j2  → True
+        ui/subdir/partial.j2                       → True  (nested .j2)
+        ui/resources/qs-car-card.js                → True
+        ui/resources/sub/foo.css                   → True
+        ui/dashboard.py                            → False (Python)
+        ui/__init__.py                             → False (Python)
+        ui/something.py                            → False (Python)
+        home_model/load.py                         → False (not under ui/)
+    """
+    if not filepath.startswith(_UI_PREFIX):
+        return False
+    if filepath.startswith(_UI_RESOURCES_PREFIX):
+        return True
+    return filepath.endswith(".j2")
+
+
 def _detect_scope(changed_files: list[str]) -> dict:
     """Determine which gates to run based on changed files.
 
     Returns dict with:
-        scope: "full" | "dev-only"
-        changed_test_files: list of test files that changed (if dev-only)
+        scope: "full" | "dev-only" | "ui-only"
+        changed_test_files: list of test files that changed (dev-only / ui-only)
         reason: human-readable explanation
     """
     if not changed_files:
         return {"scope": "full", "changed_test_files": [], "reason": "no changes detected, running full"}
 
-    non_dev = [f for f in changed_files if not _is_dev_only(f)]
-    if non_dev:
+    non_dev_non_ui = [f for f in changed_files if not _is_dev_only(f) and not _is_ui_asset(f)]
+    if non_dev_non_ui:
         return {
             "scope": "full",
             "changed_test_files": [],
-            "reason": f"production files changed: {', '.join(non_dev[:5])}",
+            "reason": f"production files changed: {', '.join(non_dev_non_ui[:5])}",
         }
 
     test_files = [f for f in changed_files if f.startswith("tests/") and f.endswith(".py")]
+    ui_assets = [f for f in changed_files if _is_ui_asset(f)]
+    if ui_assets:
+        return {
+            "scope": "ui-only",
+            "changed_test_files": test_files,
+            "reason": (
+                f"only UI assets and dev files changed "
+                f"({len(ui_assets)} UI asset(s), {len(changed_files)} total)"
+            ),
+        }
+
     return {
         "scope": "dev-only",
         "changed_test_files": test_files,
@@ -837,6 +900,18 @@ def main() -> None:
         # Rename for clarity
         if test_files:
             result["name"] = f"pytest ({len(test_files)} changed test files)"
+        results.append(result)
+    elif scope == "ui-only":
+        sys.stderr.write(f"  scope: UI-ONLY ({scope_info['reason']})\n")
+        sys.stderr.write("  skipping ruff, mypy, translations, full coverage\n")
+        sys.stderr.flush()
+
+        results = []
+        # Always run the canonical dashboard-rendering test; dedupe against
+        # any test files that also appear in the diff via set semantics.
+        test_files = sorted({*_UI_FAST_PATH_TESTS, *scope_info["changed_test_files"]})
+        result = check_pytest_files(test_files)
+        result["name"] = f"pytest (UI fast path, {len(test_files)} file(s))"
         results.append(result)
     else:
         sys.stderr.write(f"  scope: FULL ({scope_info['reason']})\n")

@@ -1854,3 +1854,255 @@ class TestQuickMode:
         assert "must be non-empty" in err, (
             f"empty-path message missing/changed: {err!r}"
         )
+
+
+# --- QS-208 T1.1: _is_ui_asset detector ---
+
+
+class TestIsUIAsset:
+    """Tests for the `_is_ui_asset` UI-asset classifier (AC-6)."""
+
+    def test_recognizes_j2_template_anywhere_under_ui(self) -> None:
+        """Both top-level and nested `.j2` files under `ui/` count as UI assets."""
+        assert (
+            quality_gate._is_ui_asset(
+                "custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2"
+            )
+            is True
+        )
+        assert (
+            quality_gate._is_ui_asset(
+                "custom_components/quiet_solar/ui/subdir/partial.j2"
+            )
+            is True
+        )
+
+    def test_recognizes_any_file_under_resources(self) -> None:
+        """Any file under `ui/resources/` is a UI asset, regardless of extension.
+
+        Convention: nothing under `ui/resources/` is Python. Even a hypothetical
+        `.py` file there is treated as a UI asset (and would be a category error
+        — Python code belongs outside `resources/`).
+        """
+        assert (
+            quality_gate._is_ui_asset(
+                "custom_components/quiet_solar/ui/resources/qs-car-card.js"
+            )
+            is True
+        )
+        assert (
+            quality_gate._is_ui_asset(
+                "custom_components/quiet_solar/ui/resources/sub/nested.css"
+            )
+            is True
+        )
+        # Convention-documenting test: nothing should be .py here, but if it
+        # is, it still routes through the UI fast path. Users should move it.
+        assert (
+            quality_gate._is_ui_asset(
+                "custom_components/quiet_solar/ui/resources/hypothetical.py"
+            )
+            is True
+        )
+
+    def test_rejects_python_at_ui_root(self) -> None:
+        """`.py` files directly under `ui/` are Python production code, not UI assets."""
+        assert (
+            quality_gate._is_ui_asset("custom_components/quiet_solar/ui/dashboard.py")
+            is False
+        )
+        assert (
+            quality_gate._is_ui_asset("custom_components/quiet_solar/ui/__init__.py")
+            is False
+        )
+
+    def test_rejects_paths_outside_ui(self) -> None:
+        """Files outside `custom_components/quiet_solar/ui/` are never UI assets."""
+        assert (
+            quality_gate._is_ui_asset("custom_components/quiet_solar/home_model/foo.py")
+            is False
+        )
+        assert (
+            quality_gate._is_ui_asset("custom_components/quiet_solar/ha_model/bar.py")
+            is False
+        )
+        assert quality_gate._is_ui_asset("tests/test_baz.py") is False
+        assert quality_gate._is_ui_asset("scripts/qs/quality_gate.py") is False
+
+
+# --- QS-208 T1.2: _detect_scope returns "ui-only" ---
+
+
+class TestDetectScopeUIOnly:
+    """Tests for the new `"ui-only"` branch in `_detect_scope` (AC-1, AC-3, AC-5)."""
+
+    def test_returns_ui_only_when_only_j2_changed(self) -> None:
+        """Diff of one `.j2` template → scope is `"ui-only"`."""
+        info = quality_gate._detect_scope(
+            ["custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2"]
+        )
+        assert info["scope"] == "ui-only"
+        assert info["changed_test_files"] == []
+
+    def test_returns_ui_only_when_only_resources_changed(self) -> None:
+        """Diff of multiple files under `ui/resources/` → scope is `"ui-only"`."""
+        info = quality_gate._detect_scope(
+            [
+                "custom_components/quiet_solar/ui/resources/qs-car-card.js",
+                "custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js",
+            ]
+        )
+        assert info["scope"] == "ui-only"
+
+    def test_returns_full_when_dashboard_py_also_changed(self) -> None:
+        """Diff containing `ui/dashboard.py` plus a `.j2` → scope is `"full"`.
+
+        The Python module is production code under `quiet_solar/`; it doesn't
+        match `_is_dev_only` or `_is_ui_asset` and must force the full gate.
+        """
+        info = quality_gate._detect_scope(
+            [
+                "custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2",
+                "custom_components/quiet_solar/ui/dashboard.py",
+            ]
+        )
+        assert info["scope"] == "full"
+        assert "dashboard.py" in info["reason"]
+
+    def test_returns_full_when_init_py_also_changed(self) -> None:
+        """Diff containing `ui/__init__.py` plus a `.j2` → scope is `"full"`."""
+        info = quality_gate._detect_scope(
+            [
+                "custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2",
+                "custom_components/quiet_solar/ui/__init__.py",
+            ]
+        )
+        assert info["scope"] == "full"
+        assert "__init__.py" in info["reason"]
+
+    def test_returns_ui_only_when_mixed_with_dev_only_and_dedupes(self) -> None:
+        """UI assets mixed with dev-only paths still resolve to `"ui-only"`,
+        and changed test files surface in `changed_test_files`.
+        """
+        info = quality_gate._detect_scope(
+            [
+                "custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2",
+                "docs/stories/QS-208.story.md",
+                "tests/test_dashboard_rendering.py",
+            ]
+        )
+        assert info["scope"] == "ui-only"
+        assert info["changed_test_files"] == ["tests/test_dashboard_rendering.py"]
+
+
+# --- QS-208 T1.3 + T1.4: main() dispatches ui-only branch correctly ---
+
+
+class TestUIOnlyMainBranch:
+    """End-to-end tests for the ui-only branch in `main()` (AC-1, AC-2, AC-4, AC-5)."""
+
+    def test_ui_only_scope_skips_lint_gates_and_runs_only_dashboard_rendering(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """ui-only scope: skips all lint gates + full pytest; runs only the
+        canonical dashboard-rendering test; emits the UI-ONLY banner; JSON
+        scope field is `"ui-only"`."""
+        cache_path = tmp_path / ".quality_gate_cache"
+        ui_only_scope = {
+            "scope": "ui-only",
+            "changed_test_files": [],
+            "reason": "only UI assets and dev files changed (1 UI asset(s), 1 total)",
+        }
+        pytest_result = {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json"]),
+            _patch_git_state("QS_208", "abc123", True),
+            patch.object(quality_gate, "_detect_scope", return_value=ui_only_scope),
+            patch.object(quality_gate, "CACHE_FILE", cache_path),
+            patch.object(quality_gate, "check_pytest_files", return_value=pytest_result) as mock_pytest_files,
+            _patch_all_gates() as mocks,
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+
+        assert exc_info.value.code == 0
+        # mocks order: [ruff_format, ruff_lint, mypy, translations, pytest]
+        for m in mocks[:4]:
+            m.assert_not_called()
+        # Full pytest must NOT run either.
+        mocks[4].assert_not_called()
+        # Only the UI fast-path pytest invocation runs, on the canonical file.
+        mock_pytest_files.assert_called_once_with(["tests/test_dashboard_rendering.py"])
+
+        captured = capsys.readouterr()
+        # JSON output: scope is "ui-only".
+        output = json.loads(captured.out)
+        assert output["scope"] == "ui-only"
+        assert output["all_passed"] is True
+        # Stderr banner: exact text per AC-1.
+        assert "scope: UI-ONLY" in captured.err
+        assert "skipping ruff, mypy, translations, full coverage" in captured.err
+
+    def test_ui_only_scope_dedupes_when_canonical_test_in_changed_set(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """When the canonical test file is itself in the diff, the merged
+        list still contains it exactly once (set semantics)."""
+        cache_path = tmp_path / ".quality_gate_cache"
+        ui_only_scope = {
+            "scope": "ui-only",
+            "changed_test_files": [
+                "tests/test_dashboard_rendering.py",
+                "tests/test_other.py",
+            ],
+            "reason": "only UI assets and dev files changed",
+        }
+        pytest_result = {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json"]),
+            _patch_git_state("QS_208", "abc123", True),
+            patch.object(quality_gate, "_detect_scope", return_value=ui_only_scope),
+            patch.object(quality_gate, "CACHE_FILE", cache_path),
+            patch.object(quality_gate, "check_pytest_files", return_value=pytest_result) as mock_pytest_files,
+            _patch_all_gates(),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+
+        mock_pytest_files.assert_called_once_with(
+            ["tests/test_dashboard_rendering.py", "tests/test_other.py"]
+        )
+
+    def test_full_flag_overrides_ui_only_scope(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """`--full` forces the full gate even when ui-only would be detected."""
+        cache_path = tmp_path / ".quality_gate_cache"
+        ui_only_scope = {
+            "scope": "ui-only",
+            "changed_test_files": [],
+            "reason": "only UI assets and dev files changed",
+        }
+
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json", "--full"]),
+            _patch_git_state("QS_208", "abc123", True),
+            patch.object(quality_gate, "_detect_scope", return_value=ui_only_scope),
+            patch.object(quality_gate, "CACHE_FILE", cache_path),
+            patch.object(quality_gate, "check_pytest_files") as mock_pytest_files,
+            _patch_all_gates() as mocks,
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+
+        # All four lint gates + full pytest must have been called.
+        for m in mocks:
+            m.assert_called()
+        # The UI fast-path pytest must NOT have been called.
+        mock_pytest_files.assert_not_called()
