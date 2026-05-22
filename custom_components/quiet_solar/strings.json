@@ -27,7 +27,7 @@
           "car": "Add an electrical vehicle",
           "person": "Add a Person",
           "pool": "Add a pool",
-          "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
+          "on_off_duration": "Add a generic on/off load with duration constraint",
           "water_boiler": "Add a water boiler (cumulus or thermodynamic boiler)",
           "climate": "Add a climate duration based (e.g. a HVAC, a radiator, etc.)",
           "radiator": "Add a heating-only radiator (switch-backed or climate-backed)",

@@ -397,7 +397,7 @@
                     "dynamic_group": "Add a power group to limits amps (usefull for multiple chargers for ex)",
                     "heat_pump": "Add a centralized Heat Pump, to be used in conjunction with climate splits",
                     "home": "Create a Home",
-                    "on_off_duration": "Add an on/off load with duration constraint (e.g. a boiler, a simple electric heater, a pool pump, etc.)",
+                    "on_off_duration": "Add a generic on/off load with duration constraint",
                     "person": "Add a Person",
                     "pool": "Add a pool",
                     "radiator": "Add a heating-only radiator (switch-backed or climate-backed)",
