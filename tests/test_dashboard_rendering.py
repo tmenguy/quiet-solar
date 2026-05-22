@@ -2435,6 +2435,77 @@ def test_water_boiler_card_steam_spawn_cx_narrowed_to_central_band():
     )
 
 
+def test_water_boiler_card_render_preserves_steam_puffs_across_innerhtml():
+    """`_render()` rewrites `this._root.innerHTML` on every HA state
+    push, which previously wiped the entire SVG including every
+    in-flight steam puff. That caused the user-visible "3-4 puffs
+    rising and all disappearing at the exact same time" symptom —
+    puffs were being nuked by `set hass → _render → innerHTML`
+    every few seconds (whenever any watched entity state changed),
+    long before their individual lifecycles ended.
+
+    This test pins the snapshot-and-restore preservation pattern:
+    `_render()` must capture `_steamPuffs` / `_steamLayerEl` /
+    `_nextSteamAt` BEFORE the innerHTML rewrite, then re-attach the
+    preserved DOM nodes to the new steam layer AFTER `_resetDomRefs()`
+    and restore the array + cadence counter. Without this pattern, no
+    other steam-visual tuning can be perceived correctly — puffs get
+    wiped before the user sees the lifecycle.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Pre-innerHTML snapshot.
+    assert re.search(
+        r"const\s+preservedSteamPuffs\s*=\s*this\._steamPuffs",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._steamPuffs` into `preservedSteamPuffs` BEFORE the "
+        "innerHTML rewrite, so the puff DOM nodes survive."
+    )
+    assert re.search(
+        r"const\s+preservedNextSteamAt\s*=\s*this\._nextSteamAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._nextSteamAt` so the spawn cadence counter doesn't "
+        "reset to 0 on every render (which would cause a spawn-burst "
+        "after every HA state push)."
+    )
+
+    # Post-innerHTML restore: re-attach each preserved puff's DOM node
+    # to the new steam layer, then restore the array + counter.
+    assert re.search(
+        r"newSteamLayer\.appendChild\s*\(\s*p\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must re-attach each "
+        "preserved puff's DOM node to the new steam layer via "
+        "`newSteamLayer.appendChild(p.el)`."
+    )
+    assert re.search(
+        r"this\._steamPuffs\s*=\s*preservedSteamPuffs",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._steamPuffs = preservedSteamPuffs` after the innerHTML "
+        "rewrite + _resetDomRefs() cleanup."
+    )
+    assert re.search(
+        r"this\._nextSteamAt\s*=\s*preservedNextSteamAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._nextSteamAt = preservedNextSteamAt` so the spawn "
+        "cadence picks up where it left off."
+    )
+
+
 def test_water_boiler_card_steam_opacity_formula():
     """QS-214 per-puff proportional rim-fade iteration: per-frame
     opacity is `lifeOpacity * rimOpacity * this._currentColorMix`,

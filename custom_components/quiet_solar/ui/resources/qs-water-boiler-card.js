@@ -1159,6 +1159,20 @@ class QsWaterBoilerCard extends HTMLElement {
         }
       }
 
+      // QS-214: snapshot the in-flight steam puffs BEFORE the
+      // innerHTML rewrite below. The rewrite detaches every DOM node
+      // under `this._root`, including the steam layer's children.
+      // Without this snapshot, every HA state push (which fires
+      // `set hass → _render`) wipes the entire puff array
+      // simultaneously — the user-visible "3-4 puffs all disappear at
+      // the exact same time" symptom. The `p.el` references survive
+      // detachment (JS still holds them); we re-attach them to the
+      // new steam layer after `_resetDomRefs()` below. Spawn-cadence
+      // counter is also preserved so the next spawn doesn't reset to
+      // 0 (which would burst-spawn on every push).
+      const preservedSteamPuffs = this._steamPuffs;
+      const preservedNextSteamAt = this._nextSteamAt;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -1307,6 +1321,30 @@ class QsWaterBoilerCard extends HTMLElement {
       this._lastWaterBaseY = this._waterBaseY;
       this._lastAmplitude = initialAmp;
       this._resetDomRefs();
+
+      // QS-214: restore the preserved steam puffs into the FRESH
+      // steam layer (its DOM identity changed via innerHTML — same
+      // `id`, new element). For each preserved puff, re-attach its
+      // detached `el` to the new layer; the puff's per-frame state
+      // (cy, life, fadeBand, …) survived in the JS array, so the RAF
+      // advance loop picks up exactly where it left off, with no
+      // visual blink. Counter is restored so spawn cadence is
+      // continuous. If the new layer isn't found (defensive — e.g.
+      // template change removed it), drop the preserved puffs so they
+      // don't leak DOM nodes.
+      if (preservedSteamPuffs?.length) {
+        const newSteamLayer = this._steamLayerId
+          ? this._root.getElementById(this._steamLayerId)
+          : null;
+        if (newSteamLayer) {
+          for (const p of preservedSteamPuffs) {
+            if (p?.el) newSteamLayer.appendChild(p.el);
+          }
+          this._steamPuffs = preservedSteamPuffs;
+          this._steamLayerEl = newSteamLayer;
+          this._nextSteamAt = preservedNextSteamAt;
+        }
+      }
 
       // Wire events
       const root = this._root;
