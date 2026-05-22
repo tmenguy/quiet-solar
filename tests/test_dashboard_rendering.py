@@ -2504,6 +2504,30 @@ def test_water_boiler_card_render_preserves_steam_puffs_across_innerhtml():
         "`this._nextSteamAt = preservedNextSteamAt` so the spawn "
         "cadence picks up where it left off."
     )
+    # Truthy-branch array semantics: `_steamPuffs` is assigned the
+    # filtered set (drop entries whose `el` was missing) so the array
+    # is the canonical "preserved AND truthy" view (review fix #01
+    # finding #6, alignment with the null-layer drop).
+    assert re.search(
+        r"this\._steamPuffs\s*=\s*preservedSteamPuffs\.filter\(\s*p\s*=>\s*p\?\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the steam puff preserve truthy "
+        "branch must align array semantics with the null-layer drop "
+        "via `this._steamPuffs = preservedSteamPuffs.filter(p => p?.el)`."
+    )
+    # Null-layer else branch: explicit DOM removal of preserved puffs
+    # so detached nodes don't leak (honours the docstring contract;
+    # review fix #01 finding #6).
+    assert re.search(
+        r"for\s*\(\s*const\s+p\s+of\s+preservedSteamPuffs\s*\)\s*\{\s*"
+        r"p\?\.el\?\.remove\s*\(\s*\)\s*;?\s*\}",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the steam puff preserve null-layer "
+        "else branch must iterate `preservedSteamPuffs` and explicitly "
+        "call `p?.el?.remove()` so detached DOM nodes don't leak."
+    )
 
 
 def test_water_boiler_card_render_preserves_bubbles_across_innerhtml():
@@ -2563,6 +2587,95 @@ def test_water_boiler_card_render_preserves_bubbles_across_innerhtml():
     ), (
         "qs-water-boiler-card.js: `_render()` must restore "
         "`this._nextBubbleAt = preservedNextBubbleAt`."
+    )
+    # Truthy-branch filter for symmetry with the steam path.
+    assert re.search(
+        r"this\._bubbles\s*=\s*preservedBubbles\.filter\(\s*b\s*=>\s*b\?\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the bubble preserve truthy branch "
+        "must align array semantics with the null-layer drop via "
+        "`this._bubbles = preservedBubbles.filter(b => b?.el)`."
+    )
+    # Null-layer else branch: explicit DOM removal for bubbles.
+    assert re.search(
+        r"for\s*\(\s*const\s+b\s+of\s+preservedBubbles\s*\)\s*\{\s*"
+        r"b\?\.el\?\.remove\s*\(\s*\)\s*;?\s*\}",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the bubble preserve null-layer else "
+        "branch must iterate `preservedBubbles` and explicitly call "
+        "`b?.el?.remove()` so detached DOM nodes don't leak."
+    )
+
+
+def test_water_boiler_card_steam_spawn_defers_on_zero_budget():
+    """Review fix #01 finding #5: the spawn-loop `riseBudget <= 0`
+    branch must genuinely defer the spawn slot by advancing the
+    cadence counter (`_nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ`) and
+    `continue`-ing the while loop, NOT clamp `_nextSteamAt` to 0 and
+    `break`.
+
+    The old form (`_nextSteamAt = Math.max(_nextSteamAt, 0); break;`)
+    was a no-op: the while condition `_nextSteamAt <= 0` already
+    guarantees `_nextSteamAt <= 0` on entry, so `Math.max(_, 0)`
+    collapses to `0`. Next frame `_nextSteamAt -= dt` immediately
+    re-enters the loop, runs the random `cxSpawn` + two `Math.sqrt`
+    computations, hits the same branch, breaks — a per-frame CPU spin
+    when the tank is too full for any spawn cx to have positive
+    riseBudget.
+
+    The fix advances the cadence by a real spawn-slot duration so the
+    next attempt waits a full slot."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    # Locate the steam spawn while-loop.
+    spawn_idx = executable.find("while (this._nextSteamAt <= 0")
+    assert spawn_idx != -1, (
+        "qs-water-boiler-card.js: missing the steam spawn while loop."
+    )
+    spawn_block = executable[spawn_idx : spawn_idx + 3000]
+    # Pin the riseBudget guard exists in the spawn loop.
+    assert re.search(
+        r"if\s*\(\s*riseBudget\s*<=\s*0\s*\)",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: missing the `if (riseBudget <= 0)` "
+        "guard in the steam spawn loop."
+    )
+    # Pin the proper cadence advance.
+    assert re.search(
+        r"this\._nextSteamAt\s*\+=\s*1\s*/\s*STEAM_SPAWN_RATE_HZ",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: the `if (riseBudget <= 0)` branch "
+        "must advance the cadence with "
+        "`this._nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ` so the spawn "
+        "is genuinely deferred (not no-op-clamped)."
+    )
+    # Pin the `continue` (NOT `break`).
+    assert re.search(
+        r"if\s*\(\s*riseBudget\s*<=\s*0\s*\)\s*\{[^}]*continue\s*;",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: the `if (riseBudget <= 0)` branch "
+        "must use `continue` (re-check the while condition) rather "
+        "than `break` (which would exit the loop with no retry)."
+    )
+    # Negative guard: the old no-op clamp form must NOT appear inside
+    # the riseBudget block.
+    assert not re.search(
+        r"if\s*\(\s*riseBudget\s*<=\s*0\s*\)\s*\{[^}]*Math\.max\s*\(\s*this\._nextSteamAt",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: the no-op clamp "
+        "`Math.max(this._nextSteamAt, 0)` must NOT appear inside the "
+        "riseBudget guard (was the dead-code form before the review "
+        "fix)."
     )
 
 

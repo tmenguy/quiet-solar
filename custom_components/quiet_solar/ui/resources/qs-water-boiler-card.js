@@ -470,9 +470,18 @@ class QsWaterBoilerCard extends HTMLElement {
             const spawnLocalTopY = CENTER_CY - spawnLocalChordHalf + STEAM_TOP_MARGIN_PX;
             const riseBudget = cySpawn - spawnLocalTopY;
             if (riseBudget <= 0) {
-              // No vertical room above this spawn point — defer.
-              this._nextSteamAt = Math.max(this._nextSteamAt, 0);
-              break;
+              // Genuinely defer: advance the cadence counter by one
+              // full spawn slot so the next attempt waits a real
+              // interval. `continue` re-checks the while condition
+              // (which will be false after the +=) so we exit this
+              // frame cleanly. Previously this branch did
+              //   `_nextSteamAt = Math.max(_nextSteamAt, 0); break;`
+              // — a no-op (the while guarantees `_nextSteamAt <= 0`
+              // on entry, so the clamp collapses to 0) that spin-
+              // looped the spawn check every frame for near-full
+              // tanks (review fix #01 #5).
+              this._nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ;
+              continue;
             }
             const fadeBand = riseBudget * STEAM_RIM_FADE_FRACTION;
             const r = STEAM_RADIUS_MIN + Math.random() * (STEAM_RADIUS_MAX - STEAM_RADIUS_MIN);
@@ -1348,9 +1357,22 @@ class QsWaterBoilerCard extends HTMLElement {
           for (const p of preservedSteamPuffs) {
             if (p?.el) newSteamLayer.appendChild(p.el);
           }
-          this._steamPuffs = preservedSteamPuffs;
+          // .filter aligns the array with the truthy set we just
+          // re-attached, so the advance loop never has to defensively
+          // null-check `p.el` (review fix #01 #6).
+          this._steamPuffs = preservedSteamPuffs.filter(p => p?.el);
           this._steamLayerEl = newSteamLayer;
           this._nextSteamAt = preservedNextSteamAt;
+        } else {
+          // Defensive: the freshly-rendered template doesn't contain
+          // a steam layer (e.g. a future template variant elides it).
+          // Without this branch the detached `p.el` references would
+          // be GC'd silently while their DOM nodes remained orphaned.
+          // Honour the docstring contract: explicitly remove each
+          // preserved puff's DOM and reset the logical array
+          // (review fix #01 #6).
+          for (const p of preservedSteamPuffs) { p?.el?.remove(); }
+          this._steamPuffs = [];
         }
       }
       if (preservedBubbles?.length) {
@@ -1361,9 +1383,16 @@ class QsWaterBoilerCard extends HTMLElement {
           for (const b of preservedBubbles) {
             if (b?.el) newBubbleLayer.appendChild(b.el);
           }
-          this._bubbles = preservedBubbles;
+          // Symmetric with the steam path: filter aligns the array
+          // with the truthy set we just re-attached.
+          this._bubbles = preservedBubbles.filter(b => b?.el);
           this._bubbleLayerEl = newBubbleLayer;
           this._nextBubbleAt = preservedNextBubbleAt;
+        } else {
+          // Symmetric with the steam null-layer branch (review fix
+          // #01 #6).
+          for (const b of preservedBubbles) { b?.el?.remove(); }
+          this._bubbles = [];
         }
       }
 
