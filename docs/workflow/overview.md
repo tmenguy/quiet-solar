@@ -136,4 +136,6 @@ See [project-rules.md](project-rules.md) § "Harness sync" for the cross-harness
 
 `python scripts/qs/quality_gate.py` — pytest 100% coverage + ruff + mypy
 + translations. Smart scope detection skips the full suite when only
-dev-infrastructure files changed.
+dev-infrastructure files changed (**dev-only fast path**), or only
+UI assets under `custom_components/quiet_solar/ui/` changed (**ui-only
+fast path** — runs only `tests/test_dashboard_rendering.py`).

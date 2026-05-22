@@ -170,8 +170,14 @@ to grep the entire tree to figure out what an `ack` is.
 - **HA** — Home Assistant. The host platform.
 - **FakeHass** — the lightweight test double for the HA layer
   (`tests/conftest.py` + `tests/factories.py`).
-- **Quality gate** — `scripts/qs/quality_gate.py`. Runs pytest 100%
-  cov + ruff + mypy + translations. Required before every commit.
+- **Quality gate** — `scripts/qs/quality_gate.py`. Runs pytest 100% cov
+  + ruff + mypy + translations on full scope. Smart scope detection
+  picks one of three modes: **full** (default), **dev-only** (only
+  dev-infra paths changed → skip ruff/mypy/translations/coverage, run
+  only changed tests), **ui-only** (only `ui/*.j2` and `ui/resources/**`
+  changed → skip lint/coverage, run `tests/test_dashboard_rendering.py`
+  plus any changed tests). Required before every commit; `--full`
+  forces the full suite.
 - **Static agents** — agents whose body is committed to the repo
   (`.claude/agents/`, `.cursor/agents/`, `.opencode/agents/`),
   versus per-task rendering (legacy approach in `legacy/`).
