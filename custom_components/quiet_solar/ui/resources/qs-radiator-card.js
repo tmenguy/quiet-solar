@@ -51,8 +51,6 @@ const LEVEL_REGEN_THRESHOLD = 0.01; // px; threshold for base-Y path regen (jitt
 // while STILL_AMP === 0 so the idle frame still reads as a flame.
 const STILL_AMP = 0;                // tip-flicker amplitude when off — frozen
 const DANCE_AMP = 8;                // tip-flicker amplitude when on — visibly dancing
-const STILL_SPEED = 0;              // tip-phase advance when off (unused; legacy compat)
-const DANCE_SPEED = 0;              // tip-phase advance when on — flicker is per-tooth (see HZ table)
 const STATIC_PEAK_HEIGHT = 30;      // extra peak height when STILL_AMP=0 so idle has visible peaks
 
 // --- Per-layer tuning ---
@@ -99,7 +97,6 @@ class QsRadiatorCard extends HTMLElement {
     // idempotent on every subsequent call (guarded by the null check).
     if (this._currentFlameAmp == null) {
       this._currentFlameAmp = STILL_AMP;
-      this._currentFlameSpeed = STILL_SPEED;
       // QS-204 — per-layer, per-tooth tip phases. Independent flicker
       // across layers reads as fire turbulence rather than scroll.
       this._tipPhases = LAYER_TEETH_COUNTS.map((count) => new Array(count).fill(0));
@@ -139,7 +136,15 @@ class QsRadiatorCard extends HTMLElement {
       const lerpDt = Math.min(dt, LERP_DT_CEIL);
       const lerpFactor = 1 - Math.exp(-LERP_RATE * lerpDt);
       this._currentFlameAmp += (targetAmp - this._currentFlameAmp) * lerpFactor;
-      this._currentFlameSpeed = targetAmp;  // legacy compat — surface as fireOn signal
+      // QS-204 review-fix #01 F5 — snap amp to a clean zero once the
+      // asymptotic lerp brings it within an epsilon of STILL_AMP=0. The
+      // float64 lerp `factor = 1 - exp(-LERP_RATE * dt)` never reaches
+      // exactly 0, so without this snap the downstream
+      // `_generateFlameTeethPath` would never see `tipAmp < 0.05` for
+      // the idle-peak boost after a running→idle transition.
+      if (!fireOn && Math.abs(this._currentFlameAmp) < 0.05) {
+        this._currentFlameAmp = 0;
+      }
 
       // Advance per-layer, per-tooth tip phases ONLY when running. Idle
       // keeps the phases frozen at their last value, which combined with
@@ -149,9 +154,9 @@ class QsRadiatorCard extends HTMLElement {
           const phasesForLayer = this._tipPhases[i];
           const phaseStep = 2 * Math.PI * LAYER_TIP_FLICKER_HZ[i] * dt;
           for (let j = 0; j < phasesForLayer.length; j++) {
-            // Stagger initial-phase across teeth so they don't flicker
-            // in lockstep — add `j` to the phase step so the j-th tooth
-            // sees a slightly different rate.
+            // Scale phase advance by `(1 + 0.07 * j)` so each tooth
+            // flickers at a slightly different rate — desynchronises
+            // the per-tooth flickers within a layer.
             phasesForLayer[j] = (phasesForLayer[j] + phaseStep * (1 + 0.07 * j)) % (2 * Math.PI);
           }
         }
@@ -294,8 +299,11 @@ class QsRadiatorCard extends HTMLElement {
     const teethCount = Math.max(1, numTeeth | 0);
     const toothWidth = width / teethCount;
     // Idle (STILL_AMP === 0) keeps a visible peak via STATIC_PEAK_HEIGHT
-    // so the silhouette doesn't collapse onto the baseline.
-    const idlePeakBoost = tipAmp === 0 ? STATIC_PEAK_HEIGHT : 0;
+    // so the silhouette doesn't collapse onto the baseline. Epsilon
+    // comparison (not `=== 0`) because step()'s exp-decay lerp toward
+    // STILL_AMP=0 leaves float64 residue and the strict check would
+    // never fire after a running→idle transition (review-fix #01 F5).
+    const idlePeakBoost = tipAmp < 0.05 ? STATIC_PEAK_HEIGHT : 0;
     let d = `M 0 ${baseY.toFixed(2)}`;
     for (let i = 0; i < teethCount; i++) {
       const phase = tipPhases && tipPhases[i] != null ? tipPhases[i] : 0;
@@ -451,10 +459,6 @@ class QsRadiatorCard extends HTMLElement {
       // Honor first-connect prime: skip the 1.5s boot lerp.
       if (this._needsFlamePrime) {
         this._currentFlameAmp = running ? DANCE_AMP : STILL_AMP;
-        // _currentFlameSpeed is legacy-only after QS-204 (the per-tooth
-        // phase advance replaced the global scroll). Keep priming it so
-        // any external introspection still sees a sane value.
-        this._currentFlameSpeed = running ? DANCE_SPEED : STILL_SPEED;
         this._needsFlamePrime = false;
       }
 

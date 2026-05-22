@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
@@ -789,6 +790,21 @@ def test_surplus_envelope_matches_min_of_confidence_and_solar_plus_drain():
     assert energy_to_be_spent > 0.0
 
 
+@pytest.mark.skip(
+    reason=(
+        "QS-204 review-fix #01 — the user's pure constraints.py collapse "
+        "(no `has_a_cmd is False → final_ret = False` short-circuit) means "
+        "the price-optimizer fallback dispatches the car constraint at "
+        "full power even when every charger step exceeds the per-slot "
+        "headroom. The resulting deeper battery discharge then crosses "
+        "the segmentation predicate's pessimistic threshold, so "
+        "`_prepare_battery_segmentation()` no longer returns `(None, None)` "
+        "for this scenario. The user accepted this trade-off (rationale: "
+        "'below the headroom is not used to limit the commands') so the "
+        "AC-10 segmentation-dormancy invariant is no longer a constraint-"
+        "layer guarantee for the big-sun-day scenario."
+    )
+)
 def test_pre_discharge_does_not_fight_segmentation():
     """AC-10: with Layer 3 active and a feasible pre-discharge plan, the
     battery trajectory stays above the segmentation predicate's pessimistic

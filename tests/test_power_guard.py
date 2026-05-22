@@ -310,7 +310,22 @@ def test_power_guard_none_no_filtering():
 
 
 def test_mandatory_subject_to_power_guard():
-    """Mandatory constraints are subject to headroom guard — capped when exceeding production."""
+    """Mandatory constraints are subject to headroom guard — capped to a smaller step.
+
+    QS-204 review-fix #01 — the user's pure ``constraints.py`` collapse
+    removed the ``has_a_cmd is False → final_ret = False`` short-
+    circuit, so the green-energy pass no longer refuses to dispatch
+    when every candidate exceeds the headroom. Instead, the price-
+    optimizer fallback runs and dispatches the high-power command.
+
+    For the headroom guard to remain *observable* in this test, we
+    expose multiple power steps (1000W, 2000W, 4000W) so the green
+    pass can pick the largest step that still fits within the
+    headroom (2000W ≤ 2500W). With a single 4000W step the fallback
+    would dispatch unconditionally — that case is the QS-204 Force ON
+    radiator path and is exercised by the integration tests.
+    """
+    from custom_components.quiet_solar.home_model.commands import CMD_ON, copy_command
     from custom_components.quiet_solar.home_model.constraints import MultiStepsPowerLoadConstraint
 
     dt = datetime(2024, 6, 15, 10, 0, 0, tzinfo=pytz.UTC)
@@ -320,14 +335,20 @@ def test_mandatory_subject_to_power_guard():
     # Load with multiple steps so headroom can limit to a lower step
     load = TestLoad(name="mandatory_load", min_p=1000, max_p=4000)
 
-    # Create mandatory constraint requesting 4000W — exceeds production (3000W inverter)
+    # Create mandatory constraint with three power steps — the headroom
+    # guard caps dispatch to the highest step that still fits within
+    # the headroom (2500W).
     constraint = MultiStepsPowerLoadConstraint(
         time=dt,
         load=load,
         type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         end_of_constraint=dt + timedelta(hours=2),
         target_value=4000,
-        power=4000,
+        power_steps=[
+            copy_command(CMD_ON, power_consign=1000),
+            copy_command(CMD_ON, power_consign=2000),
+            copy_command(CMD_ON, power_consign=4000),
+        ],
     )
     load._constraints = [constraint]
 

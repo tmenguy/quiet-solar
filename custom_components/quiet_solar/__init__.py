@@ -95,8 +95,7 @@ async def async_reload_quiet_solar(hass: HomeAssistant, except_for_entry_id=None
     # Acceptable: the alternative (leaving the entry orphaned) is a
     # correctness bug; an extra reload is only wasted work.
     if except_for_entry_id is not None:
-        entry = hass.config_entries.async_get_entry(except_for_entry_id)
-        if entry is not None:
+        if hass.config_entries.async_get_entry(except_for_entry_id) is not None:
             try:
                 await hass.config_entries.async_reload(except_for_entry_id)
             except Exception as e:

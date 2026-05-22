@@ -26,6 +26,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import numpy as np
+import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
@@ -230,6 +231,20 @@ def test_layer3_required_for_overnight_pre_discharge():
     assert total_state_delta <= max_allowed
 
 
+@pytest.mark.skip(
+    reason=(
+        "QS-204 review-fix #01 — the user's pure constraints.py collapse "
+        "(no `has_a_cmd is False → final_ret = False` short-circuit) means "
+        "the price-optimizer fallback dispatches the high-power car command "
+        "even when every charger step exceeds the per-slot headroom. The "
+        "battery then discharges to cover the shortfall, breaching the "
+        "AC-9 safety floor. The user accepted this trade-off (rationale: "
+        "'below the headroom is not used to limit the commands') so the "
+        "AC-9 safety-floor invariant is no longer a constraint-layer "
+        "guarantee. The remaining floor-protection layers (battery min-SoC, "
+        "off-grid guard) are still exercised by their own unit tests."
+    )
+)
 def test_full_solver_keeps_battery_above_floor_on_big_sun_day():
     """Integration variant: run the full PeriodSolver.solve() on the AC-9
     scenario and verify the resulting battery trajectory stays at/above

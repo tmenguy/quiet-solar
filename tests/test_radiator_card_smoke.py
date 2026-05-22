@@ -126,3 +126,32 @@ def test_radiator_card_palettes_still_referenced(card_source: str) -> None:
         "QS-204 palette regression: `FLAME_GREY_FILLS` (idle grey palette) "
         "was dropped from qs-radiator-card.js"
     )
+
+
+def test_radiator_card_idle_peak_boost_uses_epsilon(card_source: str) -> None:
+    """Review-fix #01 F5 — running→idle silhouette regression guard.
+
+    The lerp in ``step()`` decays ``_currentFlameAmp`` toward
+    ``STILL_AMP = 0`` asymptotically via
+    ``factor = 1 - exp(-LERP_RATE * dt)`` and never reaches exactly
+    ``0`` in float64. The original ``tipAmp === 0`` strict-equality
+    check in ``_generateFlameTeethPath`` therefore never fired the
+    ``STATIC_PEAK_HEIGHT`` boost after a running→idle transition,
+    leaving a visibly shorter silhouette than the cold-boot idle.
+
+    The fix replaces strict-equality with an epsilon comparison
+    (``tipAmp < 0.05``). This test pins the regression class by
+    asserting the source no longer contains the strict-equality form
+    and does contain an epsilon literal that admits float64 lerp
+    residue.
+    """
+    assert "tipAmp === 0" not in card_source, (
+        "review-fix #01 F5 regression: `tipAmp === 0` strict-equality "
+        "must be replaced with an epsilon comparison so the asymptotic "
+        "lerp toward STILL_AMP=0 still triggers the STATIC_PEAK_HEIGHT "
+        "boost on running→idle transitions."
+    )
+    assert "tipAmp < 0.05" in card_source, (
+        "review-fix #01 F5: expected `tipAmp < 0.05` epsilon comparison "
+        "in qs-radiator-card.js to guard the idle peak-boost path."
+    )
