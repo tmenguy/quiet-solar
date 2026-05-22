@@ -2328,75 +2328,488 @@ def test_water_boiler_card_steam_spawn_is_boiling_gated():
 
 
 def test_water_boiler_card_steam_retire_both_branches():
-    """QS-211 AC-3: the steam retire predicate covers BOTH branches —
-    `p.cy < topY` (reached top of clip) AND `p.life >= p.maxLife`
-    (hard upper-bound). Either condition retires the puff."""
+    """QS-214 rim-fade iteration: the steam retire predicate covers
+    BOTH branches — `p.cy < localTopY` (reached the local clip-circle
+    top) AND `p.life >= p.maxLife` (hard upper-bound). Either retires.
+    The pin-at-rim experiment was reverted because it left puffs
+    statically pinned for several seconds, which read as "stuck above
+    the surface" rather than "rising and dissipating at the rim". The
+    rim-fade (re-added to the opacity test) makes the geometric retire
+    smooth — by the time the puff's cy reaches localTopY, its opacity
+    is already 0, so the remove is invisible."""
     import re
 
     source = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     ).read_text()
     executable = _strip_js_comments(source)
-    assert re.search(
-        r"p\.cy\s*<\s*topY\s*\|\|\s*p\.life\s*>=\s*p\.maxLife",
-        executable,
-    ), (
-        "qs-water-boiler-card.js: the steam retire predicate must be "
-        "exactly `p.cy < topY || p.life >= p.maxLife` — both branches "
-        "are required (top-of-clip + maxLife)."
-    )
-    assert re.search(
-        r"const\s+topY\s*=\s*CENTER_CY\s*-\s*CLIP_R\s*\+\s*STEAM_TOP_MARGIN_PX",
-        executable,
-    ), (
-        "qs-water-boiler-card.js: `topY` must be derived as "
-        "`CENTER_CY - CLIP_R + STEAM_TOP_MARGIN_PX`."
-    )
-
-
-def test_water_boiler_card_steam_opacity_formula():
-    """QS-211 AC-4: per-frame opacity is the assignment
-    `lifeOpacity * this._currentColorMix` (not a compound `*=`), and
-    the life-curve breakpoints `0.15` (fade-in) and `0.7` (fade-out)
-    appear literally in the steam advance block. The `<circle>` fill
-    is the literal `STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` so the
-    SVG alpha 0.45 is baked in."""
-    import re
-
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
-    executable = _strip_js_comments(source)
-    assert re.search(
-        r"STEAM_FILL_COLOR\s*=\s*['\"]rgba\(255,\s*255,\s*255,\s*0\.45\)['\"]",
-        executable,
-    ), (
-        "qs-water-boiler-card.js: STEAM_FILL_COLOR must be the literal "
-        "`'rgba(255,255,255,0.45)'` so SVG alpha 0.45 is baked in."
-    )
-    assert re.search(
-        r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*this\._currentColorMix",
-        executable,
-    ), (
-        "qs-water-boiler-card.js: the per-frame opacity must be an "
-        "ASSIGNMENT `const opacity = lifeOpacity * this._currentColorMix` "
-        "(NOT a compound `*=`, which would decay exponentially over "
-        "frames)."
-    )
-    # Find the steam advance block and assert breakpoints appear inside it.
     advance_start = executable.find("for (const p of this._steamPuffs)")
     assert advance_start != -1, (
         "qs-water-boiler-card.js: missing steam advance loop."
     )
-    # Take a window large enough to cover the life-curve branches.
+    advance_block = executable[advance_start : advance_start + 1500]
+    # Per-puff geometry (unchanged).
+    assert re.search(
+        r"const\s+dx\s*=\s*p\.cx\s*-\s*CENTER_CX",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the per-puff geometry must derive "
+        "`dx = p.cx - CENTER_CX` inside the advance loop."
+    )
+    assert re.search(
+        r"const\s+localChordHalf\s*=\s*Math\.sqrt\(\s*Math\.max\(\s*0\s*,\s*"
+        r"CLIP_R\s*\*\s*CLIP_R\s*-\s*dx\s*\*\s*dx\s*\)\s*\)",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the per-puff geometry must derive "
+        "`localChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dx * "
+        "dx))` inside the advance loop (mirrors the spawn-side chord-"
+        "half formula)."
+    )
+    assert re.search(
+        r"const\s+localTopY\s*=\s*CENTER_CY\s*-\s*localChordHalf\s*\+\s*"
+        r"STEAM_TOP_MARGIN_PX",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the per-puff geometry must derive "
+        "`localTopY = CENTER_CY - localChordHalf + STEAM_TOP_MARGIN_PX`"
+        " inside the advance loop."
+    )
+    # Disjunctive retire (geometric + time). With the rim-fade in
+    # place the puff is already at opacity 0 by the time `p.cy <
+    # localTopY` fires, so the remove is invisible — no abrupt blink.
+    assert re.search(
+        r"p\.cy\s*<\s*localTopY\s*\|\|\s*p\.life\s*>=\s*p\.maxLife",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: the steam retire predicate must be "
+        "exactly `p.cy < localTopY || p.life >= p.maxLife` — both "
+        "branches are required (local clip-top + maxLife)."
+    )
+    # Negative guard: the pin-at-rim assignment must NOT appear (it
+    # caused the "stuck above the surface" perception and has been
+    # superseded by the rim-fade design).
+    assert not re.search(
+        r"p\.cy\s*=\s*localTopY", advance_block
+    ), (
+        "qs-water-boiler-card.js: the pin-at-rim assignment "
+        "`p.cy = localTopY` must NOT appear — it was reverted in "
+        "favour of the rim-fade approach."
+    )
+
+
+def test_water_boiler_card_steam_spawn_cx_narrowed_to_central_band():
+    """QS-214 rim-fade iteration: spawn cx is constrained to a narrow
+    central band (CENTER_CX ± STEAM_SPAWN_CX_HALF_PX) regardless of
+    water level, so every spawned puff has a substantial vertical
+    rise budget before hitting the local rim. Previously the spawn
+    range was `chordHalf * 0.85` of the water-surface chord, which
+    let edge-spawned puffs land within 12 px of the local rim for
+    partial water levels — the "stops just above the surface"
+    complaint. The narrow central band guarantees ≥ 110 px of rise
+    for any water level above ≈ y=160 (mid-tank or lower).
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    assert re.search(
+        r"const\s+STEAM_SPAWN_CX_HALF_PX\s*=\s*\d+",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: missing the `STEAM_SPAWN_CX_HALF_PX` "
+        "constant that bounds the spawn cx band around CENTER_CX."
+    )
+    # The spawn formula must clamp the chord-half by
+    # STEAM_SPAWN_CX_HALF_PX so every puff lands in the narrow central
+    # band even when the water-surface chord is wider.
+    assert re.search(
+        r"Math\.min\(\s*[^,]*chordHalf[^,]*,\s*STEAM_SPAWN_CX_HALF_PX\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the steam spawn must clamp the "
+        "spawn-cx half-width to STEAM_SPAWN_CX_HALF_PX, e.g. "
+        "`Math.min(chordHalf * 0.85, STEAM_SPAWN_CX_HALF_PX)`."
+    )
+
+
+def test_water_boiler_card_render_preserves_steam_puffs_across_innerhtml():
+    """`_render()` rewrites `this._root.innerHTML` on every HA state
+    push, which previously wiped the entire SVG including every
+    in-flight steam puff. That caused the user-visible "3-4 puffs
+    rising and all disappearing at the exact same time" symptom —
+    puffs were being nuked by `set hass → _render → innerHTML`
+    every few seconds (whenever any watched entity state changed),
+    long before their individual lifecycles ended.
+
+    This test pins the snapshot-and-restore preservation pattern:
+    `_render()` must capture `_steamPuffs` / `_steamLayerEl` /
+    `_nextSteamAt` BEFORE the innerHTML rewrite, then re-attach the
+    preserved DOM nodes to the new steam layer AFTER `_resetDomRefs()`
+    and restore the array + cadence counter. Without this pattern, no
+    other steam-visual tuning can be perceived correctly — puffs get
+    wiped before the user sees the lifecycle.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Pre-innerHTML snapshot.
+    assert re.search(
+        r"const\s+preservedSteamPuffs\s*=\s*this\._steamPuffs",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._steamPuffs` into `preservedSteamPuffs` BEFORE the "
+        "innerHTML rewrite, so the puff DOM nodes survive."
+    )
+    assert re.search(
+        r"const\s+preservedNextSteamAt\s*=\s*this\._nextSteamAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._nextSteamAt` so the spawn cadence counter doesn't "
+        "reset to 0 on every render (which would cause a spawn-burst "
+        "after every HA state push)."
+    )
+
+    # Post-innerHTML restore: re-attach each preserved puff's DOM node
+    # to the new steam layer, then restore the array + counter.
+    assert re.search(
+        r"newSteamLayer\.appendChild\s*\(\s*p\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must re-attach each "
+        "preserved puff's DOM node to the new steam layer via "
+        "`newSteamLayer.appendChild(p.el)`."
+    )
+    assert re.search(
+        r"this\._steamPuffs\s*=\s*preservedSteamPuffs",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._steamPuffs = preservedSteamPuffs` after the innerHTML "
+        "rewrite + _resetDomRefs() cleanup."
+    )
+    assert re.search(
+        r"this\._nextSteamAt\s*=\s*preservedNextSteamAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._nextSteamAt = preservedNextSteamAt` so the spawn "
+        "cadence picks up where it left off."
+    )
+    # Truthy-branch array semantics: `_steamPuffs` is assigned the
+    # filtered set (drop entries whose `el` was missing) so the array
+    # is the canonical "preserved AND truthy" view (review fix #01
+    # finding #6, alignment with the null-layer drop).
+    assert re.search(
+        r"this\._steamPuffs\s*=\s*preservedSteamPuffs\.filter\(\s*p\s*=>\s*p\?\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the steam puff preserve truthy "
+        "branch must align array semantics with the null-layer drop "
+        "via `this._steamPuffs = preservedSteamPuffs.filter(p => p?.el)`."
+    )
+    # Null-layer else branch: explicit DOM removal of preserved puffs
+    # so detached nodes don't leak (honours the docstring contract;
+    # review fix #01 finding #6).
+    assert re.search(
+        r"for\s*\(\s*const\s+p\s+of\s+preservedSteamPuffs\s*\)\s*\{\s*"
+        r"p\?\.el\?\.remove\s*\(\s*\)\s*;?\s*\}",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the steam puff preserve null-layer "
+        "else branch must iterate `preservedSteamPuffs` and explicitly "
+        "call `p?.el?.remove()` so detached DOM nodes don't leak."
+    )
+
+
+def test_water_boiler_card_render_preserves_bubbles_across_innerhtml():
+    """Symmetric to the steam-puff preservation: `_render()` must also
+    snapshot `_bubbles` and `_nextBubbleAt` BEFORE the innerHTML
+    rewrite and restore them AFTER `_resetDomRefs()`, re-attaching
+    each preserved bubble's detached DOM node to the freshly-rendered
+    bubble layer.
+
+    The bubble blip on hass push was previously documented as
+    "barely-perceptible (167 ms respawn)" — accepted at the time
+    because bubbles live ~1.5 s. Now that we have the snapshot/
+    restore pattern in place for steam puffs, applying it
+    symmetrically to bubbles eliminates the blip entirely and removes
+    a per-push DOM-thrash spike."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    assert re.search(
+        r"const\s+preservedBubbles\s*=\s*this\._bubbles",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._bubbles` into `preservedBubbles` BEFORE the innerHTML "
+        "rewrite."
+    )
+    assert re.search(
+        r"const\s+preservedNextBubbleAt\s*=\s*this\._nextBubbleAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must snapshot "
+        "`this._nextBubbleAt` so the bubble spawn cadence doesn't "
+        "reset to 0 (which would burst-spawn on every push)."
+    )
+    assert re.search(
+        r"newBubbleLayer\.appendChild\s*\(\s*b\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must re-attach each "
+        "preserved bubble's DOM node to the new bubble layer via "
+        "`newBubbleLayer.appendChild(b.el)`."
+    )
+    assert re.search(
+        r"this\._bubbles\s*=\s*preservedBubbles",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._bubbles = preservedBubbles` after _resetDomRefs()."
+    )
+    assert re.search(
+        r"this\._nextBubbleAt\s*=\s*preservedNextBubbleAt",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: `_render()` must restore "
+        "`this._nextBubbleAt = preservedNextBubbleAt`."
+    )
+    # Truthy-branch filter for symmetry with the steam path.
+    assert re.search(
+        r"this\._bubbles\s*=\s*preservedBubbles\.filter\(\s*b\s*=>\s*b\?\.el\s*\)",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the bubble preserve truthy branch "
+        "must align array semantics with the null-layer drop via "
+        "`this._bubbles = preservedBubbles.filter(b => b?.el)`."
+    )
+    # Null-layer else branch: explicit DOM removal for bubbles.
+    assert re.search(
+        r"for\s*\(\s*const\s+b\s+of\s+preservedBubbles\s*\)\s*\{\s*"
+        r"b\?\.el\?\.remove\s*\(\s*\)\s*;?\s*\}",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the bubble preserve null-layer else "
+        "branch must iterate `preservedBubbles` and explicitly call "
+        "`b?.el?.remove()` so detached DOM nodes don't leak."
+    )
+
+
+def test_water_boiler_card_steam_spawn_defers_on_zero_budget():
+    """Review fix #01 finding #5: the spawn-loop `riseBudget <= 0`
+    branch must genuinely defer the spawn slot by advancing the
+    cadence counter (`_nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ`) and
+    `continue`-ing the while loop, NOT clamp `_nextSteamAt` to 0 and
+    `break`.
+
+    The old form (`_nextSteamAt = Math.max(_nextSteamAt, 0); break;`)
+    was a no-op: the while condition `_nextSteamAt <= 0` already
+    guarantees `_nextSteamAt <= 0` on entry, so `Math.max(_, 0)`
+    collapses to `0`. Next frame `_nextSteamAt -= dt` immediately
+    re-enters the loop, runs the random `cxSpawn` + two `Math.sqrt`
+    computations, hits the same branch, breaks — a per-frame CPU spin
+    when the tank is too full for any spawn cx to have positive
+    riseBudget.
+
+    The fix advances the cadence by a real spawn-slot duration so the
+    next attempt waits a full slot."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    # Locate the steam spawn while-loop.
+    spawn_idx = executable.find("while (this._nextSteamAt <= 0")
+    assert spawn_idx != -1, (
+        "qs-water-boiler-card.js: missing the steam spawn while loop."
+    )
+    spawn_block = executable[spawn_idx : spawn_idx + 3000]
+    # Pin the riseBudget guard exists in the spawn loop.
+    assert re.search(
+        r"if\s*\(\s*riseBudget\s*<=\s*0\s*\)",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: missing the `if (riseBudget <= 0)` "
+        "guard in the steam spawn loop."
+    )
+    # Pin the proper cadence advance.
+    assert re.search(
+        r"this\._nextSteamAt\s*\+=\s*1\s*/\s*STEAM_SPAWN_RATE_HZ",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: the `if (riseBudget <= 0)` branch "
+        "must advance the cadence with "
+        "`this._nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ` so the spawn "
+        "is genuinely deferred (not no-op-clamped)."
+    )
+    # Pin the `continue` (NOT `break`).
+    assert re.search(
+        r"if\s*\(\s*riseBudget\s*<=\s*0\s*\)\s*\{[^}]*continue\s*;",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: the `if (riseBudget <= 0)` branch "
+        "must use `continue` (re-check the while condition) rather "
+        "than `break` (which would exit the loop with no retry)."
+    )
+    # Negative guard: the old no-op clamp form must NOT appear inside
+    # the riseBudget block.
+    assert not re.search(
+        r"if\s*\(\s*riseBudget\s*<=\s*0\s*\)\s*\{[^}]*Math\.max\s*\(\s*this\._nextSteamAt",
+        spawn_block,
+    ), (
+        "qs-water-boiler-card.js: the no-op clamp "
+        "`Math.max(this._nextSteamAt, 0)` must NOT appear inside the "
+        "riseBudget guard (was the dead-code form before the review "
+        "fix)."
+    )
+
+
+def test_water_boiler_card_steam_opacity_formula():
+    """QS-214 per-puff proportional rim-fade iteration: per-frame
+    opacity is `lifeOpacity * rimOpacity * this._currentColorMix`,
+    where `rimOpacity` is the puff's distance below its local rim
+    divided by its STORED `p.fadeBand` (computed at spawn time as
+    `STEAM_RIM_FADE_FRACTION` of the rise budget at that spawn cx).
+    This makes the fade band geometry-aware: center puffs (long rise)
+    get a long fade band; side puffs (short local rise) get a
+    proportionally shorter one. The life-curve breakpoints `0.15`
+    (fade-in) and `0.85` (fade-out — safety branch for puffs that
+    stall via maxLife rather than geometric retire) remain literal in
+    the advance block. The `<circle>` fill is
+    `STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)'`."""
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    assert re.search(
+        r"STEAM_FILL_COLOR\s*=\s*['\"]rgba\(195,\s*215,\s*235,\s*0\.45\)['\"]",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: STEAM_FILL_COLOR must be the literal "
+        "`'rgba(195,215,235,0.45)'` (cool blue-gray, alpha 0.45 baked in)."
+    )
+    # Review fix #01 finding #2: pin the uniform vy. The asymmetric
+    # [18, 32] band initially planned was retracted in favour of
+    # `MIN == MAX == 24` (see ARN-D1); without these pins a future
+    # edit could silently drift either constant and reintroduce the
+    # "two-stream" speed-sorting near the rim.
+    assert re.search(r"STEAM_RISE_PX_PER_S_MIN\s*=\s*24\b", executable), (
+        "qs-water-boiler-card.js: STEAM_RISE_PX_PER_S_MIN must be `24` "
+        "(uniform vy with STEAM_RISE_PX_PER_S_MAX — see ARN-D1)."
+    )
+    assert re.search(r"STEAM_RISE_PX_PER_S_MAX\s*=\s*24\b", executable), (
+        "qs-water-boiler-card.js: STEAM_RISE_PX_PER_S_MAX must be `24` "
+        "(uniform vy with STEAM_RISE_PX_PER_S_MIN — see ARN-D1)."
+    )
+    # User iteration on PR #215: the wave speed inherited from the
+    # pool card (`BOIL_SPEED = 1.6`, `CALM_SPEED = 0.2`) read as a
+    # pumped-flow pace — wrong for a heated boiler tank where the
+    # visible motion should be a gentle bubbling drift. Slowed to
+    # `CALM_SPEED = 0.1`, `BOIL_SPEED = 0.4` (~ 4× slower while
+    # boiling). Pinned so a future pool-card sync doesn't silently
+    # restore the pumped-flow speeds.
+    assert re.search(r"CALM_SPEED\s*=\s*0\.1\b", executable), (
+        "qs-water-boiler-card.js: CALM_SPEED must be `0.1` (slowed "
+        "from the pool-card-inherited 0.2 — gentle drift when not "
+        "boiling)."
+    )
+    assert re.search(r"BOIL_SPEED\s*=\s*0\.4\b", executable), (
+        "qs-water-boiler-card.js: BOIL_SPEED must be `0.4` (slowed "
+        "from the pool-card-inherited 1.6 — gentle bubbling pace, "
+        "not pumped flow)."
+    )
+    assert re.search(
+        r"const\s+opacity\s*=\s*lifeOpacity\s*\*\s*rimOpacity\s*\*\s*"
+        r"this\._currentColorMix",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the per-frame opacity must be the "
+        "three-factor product `lifeOpacity * rimOpacity * "
+        "this._currentColorMix` — the rim-fade factor is back, this "
+        "time as a per-puff proportional fade band."
+    )
+    # Find the steam advance block and assert per-puff fade derivations.
+    advance_start = executable.find("for (const p of this._steamPuffs)")
+    assert advance_start != -1, (
+        "qs-water-boiler-card.js: missing steam advance loop."
+    )
     advance_block = executable[advance_start : advance_start + 1500]
     assert "0.15" in advance_block, (
         "qs-water-boiler-card.js: missing the `0.15` fade-in breakpoint "
         "in the steam life-curve."
     )
-    assert "0.7" in advance_block, (
-        "qs-water-boiler-card.js: missing the `0.7` fade-out breakpoint "
-        "in the steam life-curve."
+    assert re.search(r"lifeT\s*<\s*0\.85\b", advance_block), (
+        "qs-water-boiler-card.js: missing the `lifeT < 0.85` fade-out "
+        "guard in the steam life-curve (safety branch for puffs that "
+        "stall via maxLife rather than geometric retire)."
+    )
+    assert re.search(
+        r"\(\s*lifeT\s*-\s*0\.85\s*\)\s*/\s*0\.15", advance_block
+    ), (
+        "qs-water-boiler-card.js: missing the `(lifeT - 0.85) / 0.15` "
+        "fade-out ramp in the steam life-curve."
+    )
+    # Per-puff rim-fade derivation: rimDistance from p.cy to localTopY,
+    # divided by the STORED p.fadeBand (set at spawn).
+    assert re.search(
+        r"const\s+rimDistance\s*=\s*p\.cy\s*-\s*localTopY",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: missing `rimDistance = p.cy - "
+        "localTopY` derivation in the advance loop."
+    )
+    assert re.search(
+        r"const\s+rimOpacity\s*=\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,"
+        r"\s*rimDistance\s*/\s*p\.fadeBand\s*\)\s*\)",
+        advance_block,
+    ), (
+        "qs-water-boiler-card.js: missing `rimOpacity = Math.max(0, "
+        "Math.min(1, rimDistance / p.fadeBand))` in the advance loop — "
+        "the fade band is per-puff (stored on the puff at spawn time) "
+        "rather than a global pixel constant."
+    )
+    # The fade band must be assigned at spawn time as a fraction of the
+    # puff's spawn-side rise budget. Pin the constant and the spawn-side
+    # derivation.
+    assert re.search(
+        r"const\s+STEAM_RIM_FADE_FRACTION\s*=\s*0\.\d+",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: missing the STEAM_RIM_FADE_FRACTION "
+        "constant — controls the per-puff fade band as a fraction of "
+        "the puff's rise budget."
+    )
+    assert re.search(
+        r"fadeBand\s*[:=]\s*[^,;\n]*STEAM_RIM_FADE_FRACTION",
+        executable,
+    ), (
+        "qs-water-boiler-card.js: the spawn loop must store a per-puff "
+        "`fadeBand` computed from `STEAM_RIM_FADE_FRACTION` times the "
+        "puff's rise budget."
+    )
+    # Negative guard: the global STEAM_RIM_FADE_PX constant must NOT
+    # appear (replaced by the per-puff fadeBand).
+    assert "STEAM_RIM_FADE_PX" not in executable, (
+        "qs-water-boiler-card.js: `STEAM_RIM_FADE_PX` constant must "
+        "NOT appear — replaced by the per-puff `STEAM_RIM_FADE_FRACTION` "
+        "scaled by the per-puff rise budget."
     )
 
 

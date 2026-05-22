@@ -64,8 +64,11 @@ const PHASE_TO_PX = 60;
 // --- Calm vs boil targets ---
 const CALM_AMP = 1.5;
 const BOIL_AMP = 8;
-const CALM_SPEED = 0.2;
-const BOIL_SPEED = 1.6;
+// QS-214 user iteration: wave speeds slowed from the pool-card-
+// inherited values (CALM 0.2 / BOIL 1.6) to read as a gentle boiler-
+// tank simmer rather than pumped flow. ~4× slower while boiling.
+const CALM_SPEED = 0.1;
+const BOIL_SPEED = 0.4;
 
 // --- Bubbles ---
 const MAX_CONCURRENT_BUBBLES = 12;
@@ -89,15 +92,31 @@ const MAX_CONCURRENT_STEAM = 8;
 const STEAM_SPAWN_RATE_HZ = 1.5;
 const STEAM_RADIUS_MIN = 4;
 const STEAM_RADIUS_MAX = 10;
-const STEAM_RISE_PX_PER_S_MIN = 10;
-const STEAM_RISE_PX_PER_S_MAX = 22;
+// Uniform vy (MIN == MAX): all puffs rise at the same gentle rate.
+// Organic variance comes from spawn x/time, drift phase, radius.
+const STEAM_RISE_PX_PER_S_MIN = 24;
+const STEAM_RISE_PX_PER_S_MAX = 24;
 const STEAM_DRIFT_PX_PER_S = 6;
 const STEAM_DRIFT_FREQ_HZ = 0.4;
 const STEAM_RADIUS_GROW_PX_PER_S = 4;
-const STEAM_MAX_LIFE_S = 4.5;
-const STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)';
+const STEAM_MAX_LIFE_S = 8.0;
+const STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)';
 const STEAM_BLUR_STDDEV = 3.5;
 const STEAM_TOP_MARGIN_PX = 4;
+// Narrow the spawn cx band to ±STEAM_SPAWN_CX_HALF_PX around
+// CENTER_CX, regardless of water level. Without this clamp, edge-
+// spawned puffs at partial water levels had only 12–80 px of rise
+// before hitting their local rim — perceived as "stops just above the
+// surface". The narrow central band guarantees every puff has a
+// substantial visible rise (≥ 39 px even at near-full tank; > 110 px
+// for half-empty).
+const STEAM_SPAWN_CX_HALF_PX = 35;
+// Per-puff rim-fade band is `STEAM_RIM_FADE_FRACTION × riseBudget`,
+// computed at spawn time and stored on the puff. Geometry-aware:
+// center puffs (long rise) get a long fade band; side puffs (short
+// local rise) get a proportionally shorter band so the fade fits the
+// available space. The fade is the upper 60 % of each puff's rise.
+const STEAM_RIM_FADE_FRACTION = 0.6;
 
 // --- Surface glow ---
 const SURFACE_GLOW_COLOR = '#FF3D00';
@@ -436,7 +455,38 @@ class QsWaterBoilerCard extends HTMLElement {
             const cySpawn = this._waterBaseY + jitter;
             const dy = cySpawn - CENTER_CY;
             const chordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dy * dy));
-            const cxSpawn = CENTER_CX + (Math.random() * 2 - 1) * chordHalf * 0.85;
+            // QS-214: clamp spawn cx to a narrow central band so every
+            // puff has a substantial vertical rise budget regardless
+            // of water level. The water-surface chord at edge cx
+            // would otherwise let puffs spawn near the side rim with
+            // < 80 px of rise — perceived as "stops above the surface".
+            const spawnHalfWidth = Math.min(chordHalf * 0.85, STEAM_SPAWN_CX_HALF_PX);
+            const cxSpawn = CENTER_CX + (Math.random() * 2 - 1) * spawnHalfWidth;
+            // Per-puff rim-fade band: STEAM_RIM_FADE_FRACTION times
+            // the puff's actual rise budget (waterBaseY → localTopY at
+            // spawn cx). Stored on the puff so drift doesn't shift the
+            // fade band mid-flight. The clamp `riseBudget > 0` guards
+            // against very full tanks where the spawn could land
+            // inside the rim (skip those spawns entirely).
+            const spawnDx = cxSpawn - CENTER_CX;
+            const spawnLocalChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - spawnDx * spawnDx));
+            const spawnLocalTopY = CENTER_CY - spawnLocalChordHalf + STEAM_TOP_MARGIN_PX;
+            const riseBudget = cySpawn - spawnLocalTopY;
+            if (riseBudget <= 0) {
+              // Genuinely defer: advance the cadence counter by one
+              // full spawn slot so the next attempt waits a real
+              // interval. `continue` re-checks the while condition
+              // (which will be false after the +=) so we exit this
+              // frame cleanly. Previously this branch did
+              //   `_nextSteamAt = Math.max(_nextSteamAt, 0); break;`
+              // — a no-op (the while guarantees `_nextSteamAt <= 0`
+              // on entry, so the clamp collapses to 0) that spin-
+              // looped the spawn check every frame for near-full
+              // tanks (review fix #01 #5).
+              this._nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ;
+              continue;
+            }
+            const fadeBand = riseBudget * STEAM_RIM_FADE_FRACTION;
             const r = STEAM_RADIUS_MIN + Math.random() * (STEAM_RADIUS_MAX - STEAM_RADIUS_MIN);
             const vy = STEAM_RISE_PX_PER_S_MIN + Math.random() * (STEAM_RISE_PX_PER_S_MAX - STEAM_RISE_PX_PER_S_MIN);
             const phase = Math.random() * Math.PI * 2;
@@ -449,7 +499,7 @@ class QsWaterBoilerCard extends HTMLElement {
             el.setAttribute('pointer-events', 'none');
             el.setAttribute('opacity', '0');
             steamLayer.appendChild(el);
-            this._steamPuffs.push({el, cx: cxSpawn, cy: cySpawn, r, vy, phase, life: 0, maxLife: STEAM_MAX_LIFE_S});
+            this._steamPuffs.push({el, cx: cxSpawn, cy: cySpawn, r, vy, phase, life: 0, maxLife: STEAM_MAX_LIFE_S, fadeBand});
             this._nextSteamAt += 1 / STEAM_SPAWN_RATE_HZ;
           }
           // Clamp to 0 to avoid a spawn-backlog burst when capacity recovers.
@@ -459,25 +509,48 @@ class QsWaterBoilerCard extends HTMLElement {
         // Advance + retire active puffs regardless of boiling state.
         // Graceful exit: in-flight puffs keep rising; opacity fades to
         // 0 via `_currentColorMix` over ~1.5s when running→false.
-        const topY = CENTER_CY - CLIP_R + STEAM_TOP_MARGIN_PX;
         const aliveSteam = [];
         for (const p of this._steamPuffs) {
           p.life += dt;
           p.cy -= p.vy * dt;
           p.cx += STEAM_DRIFT_PX_PER_S * Math.sin(2 * Math.PI * STEAM_DRIFT_FREQ_HZ * p.life + p.phase) * dt;
           p.r = Math.min(p.r + STEAM_RADIUS_GROW_PX_PER_S * dt, STEAM_RADIUS_MAX + 4);
-          if (p.cy < topY || p.life >= p.maxLife) {
+          // Per-puff circle-aware geometry (SVG convention: smaller y =
+          // visually higher). `localTopY` is the local clip-circle top
+          // at the puff's current x, minus the STEAM_TOP_MARGIN_PX
+          // guard. Mirrors the spawn-side chord-half formula
+          // (`chordHalf = sqrt(max(0, CLIP_R² - dy²))`) a few lines
+          // above.
+          const dx = p.cx - CENTER_CX;
+          const localChordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dx * dx));
+          const localTopY = CENTER_CY - localChordHalf + STEAM_TOP_MARGIN_PX;
+          // Disjunctive retire: geometric (reached the local rim) OR
+          // time (life expired). The per-puff rim-fade below means the
+          // puff is already at opacity 0 by the time geometric retire
+          // fires — so the remove is invisible, no abrupt blink.
+          if (p.cy < localTopY || p.life >= p.maxLife) {
             p.el.remove();
             continue;
           }
+          // Per-puff rim-proximity fade. `p.fadeBand` was stored at
+          // spawn time as `STEAM_RIM_FADE_FRACTION × riseBudget`, so
+          // each puff fades over the upper 60 % of ITS OWN rise
+          // distance. Center puffs (long rise) get a long fade; side
+          // puffs (short local rise) get a proportionally shorter one
+          // — geometry-aware, never larger than the available space.
+          const rimDistance = p.cy - localTopY;
+          const rimOpacity = Math.max(0, Math.min(1, rimDistance / p.fadeBand));
           // Life curve: piecewise linear — fade-in [0, 0.15], hold
-          // [0.15, 0.7], fade-out [0.7, 1].
+          // [0.15, 0.85], fade-out [0.85, 1]. The fade-out is the
+          // safety branch for puffs that hit maxLife before geometric
+          // retire (stalled / very-full-tank puffs); the rim-fade
+          // handles the normal "rises and fades at the rim" case.
           const lifeT = p.life / p.maxLife;
           let lifeOpacity;
           if (lifeT < 0.15) lifeOpacity = lifeT / 0.15;
-          else if (lifeT < 0.7) lifeOpacity = 1;
-          else lifeOpacity = Math.max(0, 1 - (lifeT - 0.7) / 0.3);
-          const opacity = lifeOpacity * this._currentColorMix;
+          else if (lifeT < 0.85) lifeOpacity = 1;
+          else lifeOpacity = Math.max(0, 1 - (lifeT - 0.85) / 0.15);
+          const opacity = lifeOpacity * rimOpacity * this._currentColorMix;
           p.el.setAttribute('cx', p.cx.toFixed(2));
           p.el.setAttribute('cy', p.cy.toFixed(2));
           p.el.setAttribute('r', p.r.toFixed(2));
@@ -1098,6 +1171,28 @@ class QsWaterBoilerCard extends HTMLElement {
         }
       }
 
+      // QS-214: snapshot the in-flight steam puffs AND bubbles BEFORE
+      // the innerHTML rewrite below. The rewrite detaches every DOM
+      // node under `this._root`, including the steam and bubble
+      // layers' children. Without this snapshot, every HA state push
+      // (which fires `set hass → _render`) wipes the entire particle
+      // arrays simultaneously — the user-visible "3-4 puffs all
+      // disappear at the exact same time" symptom for steam. Bubbles
+      // had the same wipe but it was previously accepted as a
+      // "barely-perceptible blip" (1.5s life, 167ms respawn); the
+      // symmetric preservation removes that blip too and eliminates a
+      // per-push DOM-thrash spike.
+      //
+      // The `p.el` / `b.el` references survive detachment (JS still
+      // holds them); we re-attach them to the new layers after
+      // `_resetDomRefs()` below. Spawn-cadence counters are also
+      // preserved so the next spawn doesn't reset to 0 (which would
+      // burst-spawn on every push).
+      const preservedSteamPuffs = this._steamPuffs;
+      const preservedNextSteamAt = this._nextSteamAt;
+      const preservedBubbles = this._bubbles;
+      const preservedNextBubbleAt = this._nextBubbleAt;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -1246,6 +1341,63 @@ class QsWaterBoilerCard extends HTMLElement {
       this._lastWaterBaseY = this._waterBaseY;
       this._lastAmplitude = initialAmp;
       this._resetDomRefs();
+
+      // QS-214: restore the preserved steam puffs AND bubbles into
+      // the FRESH layers (their DOM identity changed via innerHTML —
+      // same `id`, new element). For each preserved particle,
+      // re-attach its detached `el` to the new layer; the per-frame
+      // state (cy, life, fadeBand, …) survived in the JS array, so
+      // the RAF advance loop picks up exactly where it left off, with
+      // no visual blink. Counters are restored so spawn cadence is
+      // continuous. If a new layer isn't found (defensive — e.g.
+      // template change removed it), the preserved particles are
+      // dropped to avoid leaking detached DOM nodes.
+      if (preservedSteamPuffs?.length) {
+        const newSteamLayer = this._steamLayerId
+          ? this._root.getElementById(this._steamLayerId)
+          : null;
+        if (newSteamLayer) {
+          for (const p of preservedSteamPuffs) {
+            if (p?.el) newSteamLayer.appendChild(p.el);
+          }
+          // .filter aligns the array with the truthy set we just
+          // re-attached, so the advance loop never has to defensively
+          // null-check `p.el` (review fix #01 #6).
+          this._steamPuffs = preservedSteamPuffs.filter(p => p?.el);
+          this._steamLayerEl = newSteamLayer;
+          this._nextSteamAt = preservedNextSteamAt;
+        } else {
+          // Defensive: the freshly-rendered template doesn't contain
+          // a steam layer (e.g. a future template variant elides it).
+          // Without this branch the detached `p.el` references would
+          // be GC'd silently while their DOM nodes remained orphaned.
+          // Honour the docstring contract: explicitly remove each
+          // preserved puff's DOM and reset the logical array
+          // (review fix #01 #6).
+          for (const p of preservedSteamPuffs) { p?.el?.remove(); }
+          this._steamPuffs = [];
+        }
+      }
+      if (preservedBubbles?.length) {
+        const newBubbleLayer = this._bubbleLayerId
+          ? this._root.getElementById(this._bubbleLayerId)
+          : null;
+        if (newBubbleLayer) {
+          for (const b of preservedBubbles) {
+            if (b?.el) newBubbleLayer.appendChild(b.el);
+          }
+          // Symmetric with the steam path: filter aligns the array
+          // with the truthy set we just re-attached.
+          this._bubbles = preservedBubbles.filter(b => b?.el);
+          this._bubbleLayerEl = newBubbleLayer;
+          this._nextBubbleAt = preservedNextBubbleAt;
+        } else {
+          // Symmetric with the steam null-layer branch (review fix
+          // #01 #6).
+          for (const b of preservedBubbles) { b?.el?.remove(); }
+          this._bubbles = [];
+        }
+      }
 
       // Wire events
       const root = this._root;
