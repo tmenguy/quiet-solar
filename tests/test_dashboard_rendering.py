@@ -2257,12 +2257,24 @@ def test_water_boiler_card_steam_layer_after_surface_glow_in_clip():
         "qs-water-boiler-card.js: steam group markup must be exactly "
         f"`{steam_group}` (filter + pointer-events both required)."
     )
-    # Outer </g> of the clip group must close AFTER the steam group, so
-    # the steam layer is still inside the clipped envelope.
-    outer_close = source.find("</g>", steam_idx)
+    # Review-fix #01 finding #1: the previous assertion
+    # `source.find("</g>", steam_idx)` resolved to the steam group's OWN
+    # self-closing tag — trivially `!= -1` even if the steam layer were
+    # OUTSIDE the clip group. To prove containment, advance the search
+    # past the steam group's own `</g>` so the next `</g>` we find must
+    # be a sibling/ancestor closer — specifically the outer water-clip
+    # group's `</g>`. AC-1: "both indices live within the clipped
+    # group".
+    steam_group_idx = source.find(steam_group, clip_open)
+    assert steam_group_idx != -1, (
+        "qs-water-boiler-card.js: literal steam group block must appear "
+        "inside the water clip group."
+    )
+    outer_close = source.find("</g>", steam_group_idx + len(steam_group))
     assert outer_close != -1, (
-        "qs-water-boiler-card.js: no `</g>` after the steam layer — "
-        "the clip group never closes."
+        "qs-water-boiler-card.js: no `</g>` AFTER the steam group's "
+        "self-close — the steam layer must be nested inside the outer "
+        "water-clip `<g>` so puffs are clipped at the ring."
     )
 
 
@@ -2549,6 +2561,110 @@ def test_water_boiler_card_steam_filter_region_attributes():
         "qs-water-boiler-card.js: steam filter must contain "
         "`<feGaussianBlur stdDeviation=\"${STEAM_BLUR_STDDEV}\" />`."
     )
+
+
+def test_dashboard_and_cards_doc_pins_qs_211_steam_paragraph():
+    """Review-fix #01 finding #3: pin the QS-211 doc paragraph in
+    `docs/agents/concepts/dashboard-and-cards.md` so a future edit
+    can't silently strip the headline, move it, or stale the
+    `last_verified` field without flipping this test red.
+
+    AC-10 already routes verification through
+    `python scripts/qs/check_doc_drift.py`, but drift detection only
+    fires on co-modification mismatches — it does not enforce
+    placement, headline literal, or front-matter field shape. This
+    regression-test complements the drift checker on those three
+    dimensions.
+
+    Pinned invariants:
+
+    - The literal headline `**QS-211 — boiling steam puffs.**` is
+      present.
+    - Headline index is GREATER than the QS-200 block marker
+      (`**QS-200`) AND LESS than the first `Review-fix #01` marker —
+      i.e. the paragraph sits between the QS-200 block and the
+      review-fix history, per AC-10.
+    - The front-matter contains a `last_verified:` field with a
+      `YYYY-MM-DD` value. The regex deliberately does NOT pin a
+      specific date so the test doesn't go red every day; the goal
+      is that the field exists and is well-formed.
+    - The paragraph body mentions the four QS-211 anchors
+      (`MAX_CONCURRENT_STEAM`, `STEAM_FILL_COLOR`,
+      `_currentColorMix`, `disconnectedCallback`) so a future doc
+      rewrite can't silently strip the substantive content.
+    """
+    import re
+
+    doc_path = (
+        Path(__file__).parent.parent
+        / "docs"
+        / "agents"
+        / "concepts"
+        / "dashboard-and-cards.md"
+    )
+    doc = doc_path.read_text(encoding="utf-8")
+
+    headline = "**QS-211 — boiling steam puffs.**"
+    headline_idx = doc.find(headline)
+    assert headline_idx != -1, (
+        f"dashboard-and-cards.md: missing the literal QS-211 headline "
+        f"`{headline}`. AC-10 requires this exact wording so the "
+        "paragraph is discoverable from a substring search."
+    )
+
+    qs200_idx = doc.find("**QS-200")
+    assert qs200_idx != -1, (
+        "dashboard-and-cards.md: missing the `**QS-200` block marker — "
+        "AC-10 anchors the QS-211 paragraph relative to that block."
+    )
+    review_fix_idx = doc.find("Review-fix #01")
+    assert review_fix_idx != -1, (
+        "dashboard-and-cards.md: missing the `Review-fix #01` marker — "
+        "AC-10 anchors the QS-211 paragraph BEFORE that marker."
+    )
+    assert qs200_idx < headline_idx < review_fix_idx, (
+        "dashboard-and-cards.md: the QS-211 headline must appear AFTER "
+        "the `**QS-200` block AND BEFORE `Review-fix #01`. Current "
+        f"order: QS-200 at {qs200_idx}, QS-211 at {headline_idx}, "
+        f"Review-fix #01 at {review_fix_idx}."
+    )
+
+    # Front-matter `last_verified:` field must be present and shaped
+    # YYYY-MM-DD. We deliberately do NOT pin a specific date so this
+    # test doesn't go red every day — the field-exists + well-formed
+    # check is the right level for a regression test.
+    front_matter_match = re.search(
+        r"^last_verified:\s*(\d{4}-\d{2}-\d{2})\s*$",
+        doc,
+        re.MULTILINE,
+    )
+    assert front_matter_match, (
+        "dashboard-and-cards.md: front-matter must contain a "
+        "`last_verified: YYYY-MM-DD` field per AC-10."
+    )
+
+    # Body content guards: a future doc rewrite that strips these
+    # anchors leaves a paragraph without substance, defeating the
+    # AC-10 documentation intent. We pin the four most-load-bearing
+    # tokens (cap constant, fill-color constant, the colorMix
+    # cross-fade reference, the disconnectedCallback teardown
+    # reference).
+    paragraph_end = doc.find("\n\n", headline_idx)
+    if paragraph_end == -1:
+        paragraph_end = len(doc)
+    paragraph = doc[headline_idx:paragraph_end + 2000]  # widen for follow-on lines
+    for anchor in (
+        "MAX_CONCURRENT_STEAM",
+        "STEAM_FILL_COLOR",
+        "_currentColorMix",
+        "disconnectedCallback",
+    ):
+        assert anchor in paragraph, (
+            f"dashboard-and-cards.md: the QS-211 paragraph must "
+            f"mention `{anchor}` — it's one of the four load-bearing "
+            "anchors the AC-10 paragraph is required to cover. A "
+            "rewrite that drops it leaves the paragraph as a stub."
+        )
 
 
 def test_water_boiler_card_running_at_stop_consume_is_flag_gated():

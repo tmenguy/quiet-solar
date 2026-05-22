@@ -283,14 +283,16 @@ the `<g id="${steamLayerId}">` group (NOT per circle) for the soft
 wispy look at constant per-frame cost. Per-instance unique IDs
 (`_steamLayerId`, `_steamFilterId`) derived from
 `QsWaterBoilerCard._nextClipId` so two boiler cards on the same
-dashboard never collide. Opacity each frame is `STEAM_FILL_ALPHA ×
-_currentColorMix × lifeCurve(t)` — assignment, not compound — so
-steam cross-fades with `_currentColorMix` and gracefully exits on
-running→false: existing puffs continue rising while their opacity
-ramps to 0 over the same ~1.5s envelope as bubbles. `_resetDomRefs()`
-extends to null `_steamLayerEl` and clear `_steamPuffs`;
-`disconnectedCallback` mirrors the bubble teardown to eagerly remove
-puff DOM nodes.
+dashboard never collide. The `<circle>` fill is
+`STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` (alpha 0.45 baked in
+via the SVG color literal); opacity each frame is
+`STEAM_FILL_ALPHA × _currentColorMix × lifeCurve(t)` — assignment,
+not compound — so steam cross-fades with `_currentColorMix` and
+gracefully exits on running→false: existing puffs continue rising
+while their opacity ramps to 0 over the same ~1.5s envelope as
+bubbles. `_resetDomRefs()` extends to null `_steamLayerEl` and clear
+`_steamPuffs`; `disconnectedCallback` mirrors the bubble teardown to
+eagerly remove puff DOM nodes.
 
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
