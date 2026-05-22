@@ -2649,10 +2649,17 @@ def test_dashboard_and_cards_doc_pins_qs_211_steam_paragraph():
     # tokens (cap constant, fill-color constant, the colorMix
     # cross-fade reference, the disconnectedCallback teardown
     # reference).
+    #
+    # Review-fix #02 finding #1: the slice is bounded EXACTLY to the
+    # paragraph (terminated by the next blank line) — no widening. A
+    # `+ 2000` reach-ahead would let any of the four anchors live in
+    # a NEIGHBOURING section (e.g. Review-fix #01/#02 below) and
+    # still satisfy this test, defeating the "pin the substantive
+    # content of the QS-211 paragraph" intent of fix-plan #01 #3.
     paragraph_end = doc.find("\n\n", headline_idx)
     if paragraph_end == -1:
         paragraph_end = len(doc)
-    paragraph = doc[headline_idx:paragraph_end + 2000]  # widen for follow-on lines
+    paragraph = doc[headline_idx:paragraph_end]
     for anchor in (
         "MAX_CONCURRENT_STEAM",
         "STEAM_FILL_COLOR",

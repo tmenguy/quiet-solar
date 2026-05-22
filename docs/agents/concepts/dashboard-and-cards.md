@@ -284,15 +284,20 @@ wispy look at constant per-frame cost. Per-instance unique IDs
 (`_steamLayerId`, `_steamFilterId`) derived from
 `QsWaterBoilerCard._nextClipId` so two boiler cards on the same
 dashboard never collide. The `<circle>` fill is
-`STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` (alpha 0.45 baked in
-via the SVG color literal); opacity each frame is
-`STEAM_FILL_ALPHA × _currentColorMix × lifeCurve(t)` — assignment,
-not compound — so steam cross-fades with `_currentColorMix` and
-gracefully exits on running→false: existing puffs continue rising
-while their opacity ramps to 0 over the same ~1.5s envelope as
-bubbles. `_resetDomRefs()` extends to null `_steamLayerEl` and clear
-`_steamPuffs`; `disconnectedCallback` mirrors the bubble teardown to
-eagerly remove puff DOM nodes.
+`STEAM_FILL_COLOR = 'rgba(255,255,255,0.45)'` (the 0.45 alpha is
+baked into the SVG fill literal — there is no separate
+`STEAM_FILL_ALPHA` JS constant); the runtime per-frame `opacity`
+attribute is `lifeOpacity * _currentColorMix` — assignment, not
+compound — where `lifeOpacity` is the piecewise-linear lifeCurve(t)
+with breakpoints at 0.15 (fade-in end) and 0.7 (fade-out start). The
+effective rendered alpha multiplies through the SVG: `0.45 ×
+_currentColorMix × lifeOpacity`, peaking at 0.45 only during hold
+phase with a fully-ramped colorMix. Steam therefore cross-fades with
+`_currentColorMix` and gracefully exits on running→false: existing
+puffs continue rising while their opacity ramps to 0 over the same
+~1.5s envelope as bubbles. `_resetDomRefs()` extends to null
+`_steamLayerEl` and clear `_steamPuffs`; `disconnectedCallback`
+mirrors the bubble teardown to eagerly remove puff DOM nodes.
 
 Review-fix #01 also caps the RAF step `dt` at `LERP_DT_CEIL` (`0.1s`)
 in BOTH `qs-water-boiler-card.js` AND `qs-pool-card.js`. Without the
