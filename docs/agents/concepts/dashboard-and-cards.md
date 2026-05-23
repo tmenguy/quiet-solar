@@ -499,6 +499,54 @@ restore's null-layer branch is therefore a real backdrop-transition
 path (not just defensive) and explicitly removes the preserved
 flakes' detached DOM so they don't leak.
 
+### QS-217 — Override-button cover overlay
+
+The semi-transparent bottom-center override "hand" button
+(`<div id="override_btn">`) was hard to read against the coloured
+animations (orange flames, white snow, blue water) painted by the
+clipPath group below it. QS-217 fixes the legibility by drawing a
+small **`<circle>` cover** with `fill="var(--card-background-color)"`
+on top of the clipped animation group, visually erasing the
+animation in a clean circular patch behind the button. The three
+affected cards — `qs-radiator-card.js`, `qs-water-boiler-card.js`,
+and `qs-climate-card.js` — each render the cover element
+immediately after their `<g clip-path="url(#…ClipId)">` group and
+before the outer-ring stroke, gated on `e.override_reset` (the same
+truthy check that already controls the button DOM render):
+
+```html
+<g clip-path="url(#…ClipId)"> … animation paths … </g>
+${e.override_reset ? `<circle id="override_btn_cover"
+  cx="${CENTER_*}"
+  cy="${OVERRIDE_BTN_CARVE_CY}"
+  r="${OVERRIDE_BTN_CARVE_R}"
+  fill="var(--card-background-color)"
+  pointer-events="none" />` : ''}
+<path d="${bgPath}" … />  <!-- outer ring stroke -->
+```
+
+Two module-level constants control the cover geometry:
+`OVERRIDE_BTN_CARVE_CY = 277` is the button centre y in SVG units
+(derived from the CSS `.override-btn` position: button centre
+`(150, 260)` CSS px, scaled by the SVG viewBox factor `320/300` →
+`(160, 277.33)`, rounded to integer). `OVERRIDE_BTN_CARVE_R` is
+the cover radius in SVG units; the integer is intentionally user-
+tunable for visual iteration (tests pin the constant NAME only,
+not the value). The cover applies uniformly across all backdrops
+(including the climate card's flame / snow / wind / none).
+
+**Why a cover overlay instead of a clipPath carve?** The first two
+implementation rounds used an `<clipPath>` with three subpaths
+(outer disc + carve disc + cancel subpath, evenodd fill rule) to
+create a hole in the animation. Across two visual-iteration rounds
+(R = 35 → 45 → 60) the user consistently reported a "lens" inside
+the button: the intersection of the carve disc with the outer
+clip disc is geometrically a lens (vesica piscis) shape, so the
+visible HOLE always took on that shape regardless of R. The cover
+overlay sidesteps the issue entirely — the patch is a `<circle>`
+by construction, so the user sees a circle on screen. No lens
+shape possible.
+
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
 Every JS card in `ui/resources/` follows the same defensive

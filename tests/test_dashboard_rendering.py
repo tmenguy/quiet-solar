@@ -10,6 +10,7 @@ These tests catch bugs where:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -578,18 +579,39 @@ class TestDashboardTemplateRendering:
             "test bump should follow."
         )
 
-        # AC-2: clipPath circle at the ring centre. Geometry must be wired
-        # through the module-top `CENTER_CY` / `CLIP_R` constants so the
-        # SVG cannot silently drift if those constants are tweaked
-        # (review fix S2).
+        # AC-2 / QS-217 AC-6: clipPath uses `<path clip-rule="evenodd"
+        # d="${clipPathD}" />`. The bare `<circle>` form was replaced
+        # by QS-217 to enable the override-button hole — review-fix
+        # #03 simplifies clipPathD back to just an outer-disc circle
+        # path (the lens-shape carve was dropped in favour of a cover
+        # overlay drawn ON TOP of the animation; see the
+        # test_radiator_card_override_btn_carve_out test for the cover
+        # invariants).
         assert re.search(
-            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<circle\s+cx=\"\$\{CENTER_CY\}\"\s+cy=\"\$\{CENTER_CY\}\"\s+r=\"\$\{CLIP_R\}\"",
+            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
             content,
             re.DOTALL,
         ) is not None, (
-            "Missing clipPath circle interpolating CENTER_CY / CLIP_R "
-            "(must use ${CENTER_CY} / ${CLIP_R}, not hard-coded 160 / 120)"
+            "Missing clipPath <path clip-rule=\"evenodd\" "
+            "d=\"${clipPathD}\" /> form."
         )
+        # The clipPathD builder must still reference `CENTER_CY` and
+        # `CLIP_R` (the outer-disc geometry). QS-217 review-fix #03
+        # drops the carve+cancel constants (no longer in the builder).
+        builder_match = re.search(
+            r"const\s+clipPathD\s*=([\s\S]*?);",
+            content,
+        )
+        assert builder_match is not None, (
+            "Missing `const clipPathD = …;` builder declaration — "
+            "must be present above the innerHTML template literal."
+        )
+        builder_block = builder_match.group(1)
+        for ident in ("CENTER_CY", "CLIP_R"):
+            assert re.search(rf"\b{ident}\b", builder_block) is not None, (
+                f"qs-radiator-card.js: clipPathD builder must "
+                f"reference `{ident}` by name (not hard-coded)."
+            )
         # The constants themselves carry the correct geometric values.
         assert re.search(r"const\s+CENTER_CY\s*=\s*160\b", content) is not None
         assert re.search(r"const\s+CLIP_R\s*=\s*120\b", content) is not None
@@ -2022,10 +2044,12 @@ def test_water_boiler_card_has_surface_glow():
 def test_water_boiler_card_pins_geometry_constants():
     """Review-fix #01 S5: pin the module-level geometry constants
     (AC-2). The SVG layout depends on `CLIP_R`, `CENTER_CX`, `CENTER_CY`,
-    and `WAVE_WIDTH` matching specific values that the clipPath
-    ``<circle cx cy r>`` markup interpolates. A future tweak that
-    changes any of them without re-checking the SVG would silently
-    misalign the water animation, so we pin each here.
+    and `WAVE_WIDTH` matching specific values that the ``<clipPath>``
+    markup interpolates via the `clipPathD` builder (QS-217 swapped the
+    bare ``<circle cx cy r>`` form for a ``<path>`` with evenodd
+    fill-rule so the override button can be carved out as a hole). A
+    future tweak that changes any of them without re-checking the SVG
+    would silently misalign the water animation, so we pin each here.
 
     `CENTER_CX` is review-fix #01 N4's new constant (was inlined as
     `160` in two places). `CENTER_CY` and `CLIP_R` and `WAVE_WIDTH`
@@ -3210,6 +3234,361 @@ def test_water_boiler_card_steam_filter_region_attributes():
     )
 
 
+# ============================================================================
+# QS-217 — Override-button carve-out across radiator / water-boiler / climate
+# cards. Each card now wraps a `<path clip-rule="evenodd" d="${clipPathD}" />`
+# in its `<clipPath>` so the semi-transparent bottom-center override "hand"
+# button is no longer painted over by the animation (orange flames, white
+# snow, blue water). The carve is gated on `e.override_reset`, identical to
+# the existing button-render gate, and pins the constant *names* — not
+# values — so the user can iterate visually on the radius.
+# ============================================================================
+
+
+def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None:
+    """Shared QS-217 invariant check used by the three carve-out tests.
+
+    Review-fix #03 abandoned the original clipPath carve-out approach
+    (outer disc + carve disc + cancel subpath under evenodd, which
+    produced a geometric lens-shape hole that the user repeatedly
+    flagged) in favour of a much simpler COVER OVERLAY: a single
+    ``<circle>`` element with ``fill="var(--card-background-color)"``
+    drawn ON TOP of the clipped animation group. The cover IS a
+    circle by construction — no lens shape possible.
+
+    Pinned invariants (review-fix #03):
+
+    - (a) the ``<clipPath>`` is just the outer disc (no carve, no
+      cancel subpath in ``clipPathD``).
+    - (b) the two module-level constants ``OVERRIDE_BTN_CARVE_CY = 277``
+      and ``OVERRIDE_BTN_CARVE_R`` (integer) are declared at file
+      scope. The radius value is intentionally NOT pinned by tests so
+      visual-iteration tweaks (e.g. 35 → 40 → 30) leave the suite
+      green — only the constant NAME is required.
+    - (c) the ``<circle id="override_btn_cover" …>`` cover element
+      is present in the SVG markup, gated on ``e.override_reset``
+      (same truthy check as the existing button render), and uses the
+      file-local x-centre constant for ``cx``, ``OVERRIDE_BTN_CARVE_CY``
+      for ``cy``, ``OVERRIDE_BTN_CARVE_R`` for ``r``, and
+      ``fill="var(--card-background-color)"`` so it visually erases
+      the animation in a clean circular patch.
+    - (d) ``<g clip-path="url(#${…ClipId})">`` wrapper unchanged.
+    - (e) the obsolete carve-out artifacts (carveSubpath, cancelSubpath,
+      OVERRIDE_BTN_CARVE_INT_X, OVERRIDE_BTN_CARVE_INT_Y) MUST be
+      absent — pinned as negative assertions so a regression can't
+      silently reintroduce the lens-shape approach.
+
+    ``x_center_name`` is the file-local x-centre constant name (radiator
+    uses ``CENTER_CY`` for both axes; water-boiler uses ``CENTER_CX``;
+    climate uses ``CENTER_X``).
+    """
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / card_filename
+    ).read_text()
+
+    # (a) clipPath has the simple outer disc (no carve, no cancel). The
+    # SVG markup uses the `<path clip-rule="evenodd" d="${clipPathD}">`
+    # form for backward-compatibility with other tests, but `clipPathD`
+    # is just an outer-disc circle path now.
+    assert re.search(
+        r"<clipPath\s+id=\"\$\{[^}]+\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
+        content,
+        re.DOTALL,
+    ) is not None, (
+        f"{card_filename}: missing `<clipPath …><path "
+        f"clip-rule=\"evenodd\" d=\"${{clipPathD}}\" /></clipPath>` "
+        f"form. The clipPath wraps the simple outer-disc circle now "
+        f"(review-fix #03 dropped the carve+cancel subpaths)."
+    )
+
+    # (b) The two module-level constants are declared. CY pinned by
+    # value (geometry-fixed, derives from CSS button position). R
+    # pinned by NAME only — visual-iteration friendly.
+    assert re.search(
+        r"const\s+OVERRIDE_BTN_CARVE_CY\s*=\s*277\b",
+        content,
+    ) is not None, (
+        f"{card_filename}: missing module-level `const "
+        f"OVERRIDE_BTN_CARVE_CY = 277;` declaration (button-centre y "
+        f"in SVG units, derived from CSS .override-btn position)."
+    )
+    assert re.search(
+        r"const\s+OVERRIDE_BTN_CARVE_R\s*=\s*\d+\b",
+        content,
+    ) is not None, (
+        f"{card_filename}: missing module-level `const "
+        f"OVERRIDE_BTN_CARVE_R = <integer>;` declaration. The integer "
+        f"value is user-tunable; tests pin the NAME only so visual-"
+        f"iteration tweaks leave the suite green."
+    )
+
+    # (c) The `<circle id="override_btn_cover" …>` cover element is
+    # present, gated on `e.override_reset`, and uses the correct
+    # constants for its geometry + the card-background-color fill.
+    cover_re = re.compile(
+        r"e\.override_reset\s*\?\s*`?\s*<circle\s+id=\"override_btn_cover\""
+        r"\s+cx=\"\$\{" + x_center_name + r"\}\""
+        r"\s+cy=\"\$\{OVERRIDE_BTN_CARVE_CY\}\""
+        r"\s+r=\"\$\{OVERRIDE_BTN_CARVE_R\}\""
+        r"\s+fill=\"var\(--card-background-color\)\""
+        r"\s+pointer-events=\"none\"\s*/>",
+    )
+    assert cover_re.search(content) is not None, (
+        f"{card_filename}: missing the override-button cover element "
+        f"`<circle id=\"override_btn_cover\" cx=\"${{{x_center_name}}}\" "
+        f"cy=\"${{OVERRIDE_BTN_CARVE_CY}}\" r=\"${{OVERRIDE_BTN_CARVE_R}}\" "
+        f"fill=\"var(--card-background-color)\" pointer-events=\"none\" />` "
+        f"gated on `e.override_reset`. Review-fix #03 replaces the "
+        f"clipPath carve approach with a simple cover overlay drawn on "
+        f"top of the animation."
+    )
+
+    # (d) `<g clip-path="url(#${…ClipId})">` wrapper unchanged.
+    assert re.search(
+        r'<g\s+clip-path="url\(#\$\{[a-zA-Z]+ClipId\}\)">',
+        content,
+    ) is not None, (
+        f"{card_filename}: expected unchanged "
+        f"`<g clip-path=\"url(#${{…ClipId}})\">` wrapper."
+    )
+
+    # (e) Negative pins — the obsolete carve+cancel artifacts MUST be
+    # absent so a regression cannot silently reintroduce the lens-
+    # shape approach.
+    for artifact in (
+        "carveSubpath",
+        "cancelSubpath",
+        "OVERRIDE_BTN_CARVE_INT_X",
+        "OVERRIDE_BTN_CARVE_INT_Y",
+    ):
+        assert artifact not in content, (
+            f"{card_filename}: review-fix #03 dropped the carve+cancel "
+            f"clipPath approach, but `{artifact}` is still present in "
+            f"the source. Removing the cover-overlay approach requires "
+            f"an explicit design discussion — don't silently reintroduce "
+            f"the lens-shape geometry."
+        )
+
+
+def test_radiator_card_override_btn_carve_out():
+    """QS-217 AC-7 — radiator card: clipPath swaps `<circle>` for
+    `<path clip-rule="evenodd" d="${clipPathD}" />`, adds the two
+    `OVERRIDE_BTN_CARVE_*` constants at module scope, and gates the
+    carve subpath on `e.override_reset`.
+
+    See the helper docstring for invariant (a)/(b)/(c) details.
+    """
+    _qs217_assert_card_carve_out(
+        "qs-radiator-card.js",
+        x_center_name="CENTER_CY",
+    )
+
+
+def test_water_boiler_card_override_btn_carve_out():
+    """QS-217 AC-7 — water-boiler card carve-out invariants.
+
+    Same three pins as the radiator card (AC-7 helper), anchored to
+    `qs-water-boiler-card.js`. The water-boiler card uses `CENTER_CX`
+    (not `CENTER_CY`) for the x-centre — review-fix #01 N4 introduced
+    that explicit constant, and QS-217's `clipPathD` builder must
+    reference it.
+    """
+    _qs217_assert_card_carve_out(
+        "qs-water-boiler-card.js",
+        x_center_name="CENTER_CX",
+    )
+
+
+def test_climate_card_override_btn_carve_out():
+    """QS-217 AC-7 — climate card carve-out invariants.
+
+    Same three pins as the radiator card (AC-7 helper), anchored to
+    `qs-climate-card.js`. The climate card uses `CENTER_X` (QS-210
+    review-fix S5 introduced that explicit x-centre constant), and
+    QS-217's `clipPathD` builder must reference it.
+    """
+    _qs217_assert_card_carve_out(
+        "qs-climate-card.js",
+        x_center_name="CENTER_X",
+    )
+
+
+def test_dashboard_and_cards_doc_pins_qs_217_carve_paragraph():
+    """QS-217 review-fix #01 should-fix #2: pin the QS-217 doc
+    paragraph in `docs/agents/concepts/dashboard-and-cards.md` so a
+    future edit can't silently strip the AC-8-required content.
+
+    AC-8 mandates the new "QS-217 — Override-button carve-out" section
+    mentions five specific items (a–e: legibility motivation, the
+    three affected cards, the `<path clip-rule="evenodd">` idiom, the
+    `OVERRIDE_BTN_CARVE_*` constants plus the CSS-to-SVG derivation,
+    the `e.override_reset` gate). The QS-211 precedent
+    (`test_dashboard_and_cards_doc_pins_qs_211_steam_paragraph`)
+    pins QS-211 the same way; QS-217 needs the analogous test.
+
+    Pinned invariants (mirror of the QS-211 test pattern):
+
+    - The literal H3 headline `### QS-217 — Override-button carve-out`
+      is present.
+    - Headline position is GREATER than the `### QS-210` headline
+      (which immediately precedes it per the in-doc order) AND LESS
+      than the `## Hardened JS-card patterns` H2 (which immediately
+      follows). This anchors the section between climate-backdrops
+      and the hardened-patterns history.
+    - Front-matter contains a `last_verified: YYYY-MM-DD` field — the
+      regex deliberately does NOT pin a specific date so the test
+      doesn't go red every day.
+    - The section body satisfies AC-8 (a)–(e):
+      (a) "legibility" OR "legible" AND "override" AND "button" —
+          the human-readable motivation;
+      (b) all three card filenames (`qs-radiator-card.js`,
+          `qs-water-boiler-card.js`, `qs-climate-card.js`);
+      (c) the literal string `clip-rule="evenodd"` (with quotes);
+      (d) both `OVERRIDE_BTN_CARVE_CY` and `OVERRIDE_BTN_CARVE_R`,
+          AND a CSS-to-SVG scale reference (any of `320/300`,
+          `320×320`, `300×300`, `1.0667`);
+      (e) the literal `e.override_reset`.
+
+    Review-fix #03 dropped the original `clip-rule="evenodd"` pin
+    in (c) — the implementation no longer uses the evenodd carve
+    approach. The (c) pin now anchors on `override_btn_cover` and
+    `var(--card-background-color)`, the two new identifiers for
+    the cover-overlay approach.
+    """
+    doc_path = (
+        Path(__file__).parent.parent
+        / "docs"
+        / "agents"
+        / "concepts"
+        / "dashboard-and-cards.md"
+    )
+    doc = doc_path.read_text(encoding="utf-8")
+
+    headline = "### QS-217 — Override-button cover overlay"
+    headline_idx = doc.find(headline)
+    assert headline_idx != -1, (
+        f"dashboard-and-cards.md: missing the literal QS-217 H3 "
+        f"headline `{headline}`. Review-fix #03 changed the wording "
+        f"from `carve-out` to `cover overlay` to match the simpler "
+        f"implementation (cover overlay instead of clipPath carve)."
+    )
+
+    # Anchor the section between the QS-210 H3 above and the next H2
+    # below (`## Hardened JS-card patterns`). The next-H2 search uses
+    # `\n## ` (with trailing space + capital H) so it doesn't match
+    # arbitrary `##` substrings or the front-matter delimiters.
+    qs210_idx = doc.find("### QS-210")
+    assert qs210_idx != -1, (
+        "dashboard-and-cards.md: missing the `### QS-210` headline — "
+        "AC-8 + review-fix #01 should-fix #2 anchor QS-217 AFTER "
+        "the climate-card backdrop section."
+    )
+    hardened_idx = doc.find("## Hardened JS-card patterns")
+    assert hardened_idx != -1, (
+        "dashboard-and-cards.md: missing `## Hardened JS-card patterns` "
+        "H2 — review-fix #01 should-fix #2 anchors QS-217 BEFORE that "
+        "section."
+    )
+    assert qs210_idx < headline_idx < hardened_idx, (
+        f"dashboard-and-cards.md: the QS-217 headline must appear "
+        f"AFTER `### QS-210` AND BEFORE `## Hardened JS-card "
+        f"patterns`. Current order: QS-210 at {qs210_idx}, QS-217 "
+        f"at {headline_idx}, Hardened at {hardened_idx}."
+    )
+
+    # Front-matter `last_verified: YYYY-MM-DD` shape — same deliberate-
+    # vagueness as the QS-211 test.
+    front_matter_match = re.search(
+        r"^last_verified:\s*(\d{4}-\d{2}-\d{2})\s*$",
+        doc,
+        re.MULTILINE,
+    )
+    assert front_matter_match, (
+        "dashboard-and-cards.md: front-matter must contain a "
+        "`last_verified: YYYY-MM-DD` field per AC-8."
+    )
+
+    # Slice the section body — from the QS-217 headline to the next H2
+    # (or H3) boundary. Use `\n## ` for the H2 sentinel (more reliable
+    # than `\n\n` because the body itself contains blank lines between
+    # paragraphs). Fall back to `hardened_idx` since we already
+    # asserted that exists above.
+    section = doc[headline_idx:hardened_idx]
+    section_lower = section.lower()
+
+    # (a) Legibility motivation: "legibility" or "legible" + "override"
+    # + "button".
+    assert "legibility" in section_lower or "legible" in section_lower, (
+        "dashboard-and-cards.md (QS-217 section): missing legibility-"
+        "motivation language. AC-8 (a) requires a human-readable "
+        "explanation of why the carve-out exists."
+    )
+    assert "override" in section_lower, (
+        "dashboard-and-cards.md (QS-217 section): missing `override` "
+        "reference — AC-8 (a) requires mentioning the override "
+        "button as the motivating element."
+    )
+    assert "button" in section_lower, (
+        "dashboard-and-cards.md (QS-217 section): missing `button` "
+        "reference — AC-8 (a) requires mentioning the override "
+        "button as the motivating element."
+    )
+
+    # (b) All three card filenames mentioned in the section.
+    for card_filename in (
+        "qs-radiator-card.js",
+        "qs-water-boiler-card.js",
+        "qs-climate-card.js",
+    ):
+        assert card_filename in section, (
+            f"dashboard-and-cards.md (QS-217 section): missing card "
+            f"filename `{card_filename}` — AC-8 (b) requires all "
+            f"three affected cards be named explicitly."
+        )
+
+    # (c) Literal `<circle ... fill="var(--card-background-color)"`
+    # describing the cover-overlay approach (review-fix #03 replaced
+    # the earlier `clip-rule="evenodd"` clipPath idiom). The cover
+    # element name `override_btn_cover` is also pinned so a doc
+    # rewrite can't silently drop the implementation anchor.
+    assert "override_btn_cover" in section, (
+        "dashboard-and-cards.md (QS-217 section): missing the literal "
+        "`override_btn_cover` element id — pin requires the doc "
+        "name the cover element so a reader can grep it back to the "
+        "source."
+    )
+    assert "var(--card-background-color)" in section, (
+        "dashboard-and-cards.md (QS-217 section): missing the literal "
+        "`var(--card-background-color)` — the cover overlay's fill "
+        "value must be documented so the visual behaviour is "
+        "reproducible from the doc alone."
+    )
+
+    # (d) Both constant names + a CSS-to-SVG scale reference.
+    for const_name in ("OVERRIDE_BTN_CARVE_CY", "OVERRIDE_BTN_CARVE_R"):
+        assert const_name in section, (
+            f"dashboard-and-cards.md (QS-217 section): missing "
+            f"`{const_name}` — AC-8 (d) requires both carve constants "
+            f"be named (so the doc reader can grep them back to the "
+            f"source)."
+        )
+    scale_patterns = ("320/300", "320×320", "300×300", "1.0667")
+    assert any(pat in section for pat in scale_patterns), (
+        f"dashboard-and-cards.md (QS-217 section): missing a CSS-to-"
+        f"SVG scale reference. AC-8 (d) requires one of "
+        f"{scale_patterns!r} so the derivation chain is reproducible "
+        f"from the doc alone."
+    )
+
+    # (e) Literal `e.override_reset`.
+    assert "e.override_reset" in section, (
+        "dashboard-and-cards.md (QS-217 section): missing the literal "
+        "`e.override_reset` — AC-8 (e) requires the gate idiom be "
+        "named so the reader knows which truthy check controls the "
+        "carve."
+    )
+
+
 def test_dashboard_and_cards_doc_pins_qs_211_steam_paragraph():
     """Review-fix #01 finding #3: pin the QS-211 doc paragraph in
     `docs/agents/concepts/dashboard-and-cards.md` so a future edit
@@ -4354,22 +4733,44 @@ class TestClimateCardReviewFix01Hardening:
             "chord at the spawn-y."
         )
 
-        # Pass-#2 S1 / N3 — the clip `<circle cx>` must use `CENTER_X`,
-        # not `CENTER_CY`. Numerically equivalent today (square
-        # viewBox) but the `CENTER_X` comment block claims
+        # Pass-#2 S1 / N3 — the clipPath x-coordinate must use
+        # `CENTER_X`, not `CENTER_CY`. Numerically equivalent today
+        # (square viewBox) but the `CENTER_X` comment block claims
         # future-proofing for a non-square viewBox; that claim only
-        # holds if EVERY x-coordinate reference uses `CENTER_X`. Pass-#1
-        # missed updating the clip-circle attribute; this is the
-        # finisher.
-        assert re.search(
-            r'<circle\s+cx="\$\{CENTER_X\}"\s+cy="\$\{CENTER_CY\}"\s+'
-            r'r="\$\{CLIP_R\}"',
+        # holds if EVERY x-coordinate reference uses `CENTER_X`.
+        # Review-fix #03 dropped the carve+cancel clipPath approach;
+        # the clipPathD is now just the outer-disc circle. The
+        # invariant carries over: outer-disc subpath must use
+        # `CENTER_X - CLIP_R`. The cover overlay (drawn after the
+        # clip group) ALSO uses `CENTER_X` for its `cx` (verified by
+        # test_climate_card_override_btn_carve_out via the shared
+        # helper).
+        builder_match = re.search(
+            r"const\s+clipPathD\s*=([\s\S]*?);",
             content,
+        )
+        assert builder_match is not None, (
+            "`clipPathD` builder declaration missing — must be "
+            "present above the innerHTML template literal."
+        )
+        builder_block = builder_match.group(1)
+        # Outer disc subpath uses `CENTER_X - CLIP_R`.
+        assert re.search(
+            r"\$\{\s*CENTER_X\s*-\s*CLIP_R\s*\}",
+            builder_block,
         ) is not None, (
-            "Pass-#2 S1: the climate card's clip `<circle>` must read "
-            "`cx=\"${CENTER_X}\" cy=\"${CENTER_CY}\" r=\"${CLIP_R}\"` "
-            "(not `cx=\"${CENTER_CY}\"`) so the `CENTER_X` constant's "
+            "Pass-#2 S1: the climate card's clipPathD outer-disc "
+            "subpath must use `${CENTER_X - CLIP_R}` (not "
+            "`${CENTER_CY - CLIP_R}`) so the `CENTER_X` constant's "
             "future-proofing comment is accurate."
+        )
+        # And the builder must NOT use `CENTER_CY - CLIP_R` for the
+        # x-coordinate (the pass-#2 anti-pattern). `CENTER_CY` still
+        # appears legitimately as a y-coordinate.
+        assert "CENTER_CY - CLIP_R" not in builder_block, (
+            "Pass-#2 S1: the climate card's clipPathD must NOT use "
+            "`CENTER_CY - CLIP_R` as an x-coordinate. That was the "
+            "pre-pass-#2 anti-pattern; use `CENTER_X - CLIP_R`."
         )
 
     def test_climate_card_safe_number_filters_whitespace_and_infinity(self):

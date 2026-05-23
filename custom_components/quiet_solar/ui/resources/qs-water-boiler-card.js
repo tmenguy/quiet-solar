@@ -37,6 +37,31 @@ const CLIP_R = 120;                 // water clip circle radius (10px inside rin
 const WAVE_WIDTH = 480;             // single wave period (2× clip diameter)
 const WAVE_BOTTOM_Y = 400;          // closing rectangle y; clipped by circle
 
+// QS-217 — Override-button cover overlay geometry.
+// Iteration history: the original PR #219 used a CLIPPATH carve
+// (outer disc + carve disc + cancel subpath, evenodd). That created
+// a hole in the water animation via the SVG clip-path mechanism.
+// Across three review-fix rounds (R=35 → 45 → 60) the user
+// consistently reported a visible "lens" inside the button — the
+// intersection of the carve disc and the outer clip disc is
+// geometrically a lens (vesica piscis) shape, so the visible HOLE
+// took on that shape regardless of R; bigger R just produced a
+// bigger lens. Review-fix #03 abandons the clipPath approach
+// entirely and uses a SIMPLE `<circle>` cover drawn ON TOP of the
+// clipped animation group, with `fill="var(--card-background-color)"`
+// so it visually erases the animation in a circular patch. The
+// patch IS a circle by construction — no lens shape possible.
+// Anchored to the CSS `.override-btn` at `position: absolute;
+// bottom: 15px; left: 50%; transform: translateX(-50%); width: 50px;
+// height: 50px;` inside `.ring` (300×300 CSS px). The SVG viewBox
+// (320×320) renders at 300×300 → scale 320/300 ≈ 1.0667.
+// Button centre CSS px (within .ring): (150, 260). Button centre
+// SVG units: (160, 277.33) → rounded to (CENTER_CX, 277).
+// Cover radius R = 35 SVG ≈ 33 CSS px ⇒ ~8 CSS px padding around
+// the 25 CSS-px-radius button outline. User-tunable.
+const OVERRIDE_BTN_CARVE_CY = 277;
+const OVERRIDE_BTN_CARVE_R  = 35;
+
 // --- Per-layer wave offsets ---
 const LAYER_SCROLL_OFFSET = 1.2;
 const LAYER_PHASE_OFFSET = 2.1;
@@ -1193,6 +1218,17 @@ class QsWaterBoilerCard extends HTMLElement {
       const preservedBubbles = this._bubbles;
       const preservedNextBubbleAt = this._nextBubbleAt;
 
+      // QS-217 review-fix #03 — clipPath is just the outer disc;
+      // the override-button area is hidden by a separate `<circle>`
+      // cover drawn AFTER the clipped animation group (see the SVG
+      // markup below). This replaces the earlier carve+cancel
+      // clipPath approach, which produced a geometric lens-shape
+      // hole that the user repeatedly flagged.
+      const clipPathD =
+        `M ${CENTER_CX - CLIP_R},${CENTER_CY}` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0`;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -1221,7 +1257,7 @@ class QsWaterBoilerCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${waterClipId}">
-                  <circle cx="${CENTER_CX}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                  <path clip-rule="evenodd" d="${clipPathD}" />
                 </clipPath>
                 <filter id="${surfaceGlowFilterId}" x="-50%" y="-50%" width="200%" height="200%">
                   <feGaussianBlur stdDeviation="${SURFACE_GLOW_BLUR_STDDEV}" result="blur" />
@@ -1251,6 +1287,7 @@ class QsWaterBoilerCard extends HTMLElement {
                 <path id="surface_glow" d="${initialWavePaths[0]}" stroke="${SURFACE_GLOW_COLOR}" stroke-width="${SURFACE_GLOW_STROKE_WIDTH}" fill="none" filter="url(#${surfaceGlowFilterId})" opacity="${initialBoilOpacity}" pointer-events="none" style="mix-blend-mode: screen; will-change: transform, opacity, d;" />
                 <g id="${steamLayerId}" filter="url(#${steamFilterId})" pointer-events="none"></g>
               </g>
+              ${e.override_reset ? `<circle id="override_btn_cover" cx="${CENTER_CX}" cy="${OVERRIDE_BTN_CARVE_CY}" r="${OVERRIDE_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `

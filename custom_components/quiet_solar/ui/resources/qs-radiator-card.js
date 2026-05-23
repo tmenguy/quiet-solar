@@ -38,6 +38,24 @@ const CLIP_R = 120;                 // flame clip circle radius
 const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)
 const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closing rect is clipped
 
+// QS-217 — Override-button cover overlay geometry.
+// Review-fix #03 abandons the earlier clipPath carve approach
+// (which created a geometric lens-shape hole — intersection of the
+// carve disc and the outer clip disc). Instead, a simple `<circle>`
+// cover with `fill="var(--card-background-color)"` is drawn ON TOP
+// of the clipped animation group, visually erasing the animation
+// in a clean circular patch behind the button.
+// Anchored to the CSS `.override-btn` at `position: absolute;
+// bottom: 15px; left: 50%; transform: translateX(-50%); width: 50px;
+// height: 50px;` inside `.ring` (300×300 CSS px). The SVG viewBox
+// (320×320) renders at 300×300 → scale 320/300 ≈ 1.0667.
+// Button centre CSS px (within .ring): (150, 260). Button centre
+// SVG units: (160, 277.33) → rounded to (CENTER_CY, 277). Cover
+// radius R = 35 SVG ≈ 33 CSS px ⇒ ~8 CSS px padding around the
+// 25 CSS-px-radius button outline. User-tunable.
+const OVERRIDE_BTN_CARVE_CY = 277;
+const OVERRIDE_BTN_CARVE_R  = 35;
+
 // --- Animation tuning ---
 const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
 const LERP_DT_CEIL = 0.1;           // s; clamp lerp dt to avoid snap-to after tab hidden
@@ -856,6 +874,18 @@ class QsRadiatorCard extends HTMLElement {
       // S16 — primary action `<div>`s get `role="button"` + `tabindex="0"`
       // so keyboard-only users can tab to and activate them. The Enter/
       // Space handlers are wired in the event-binding loops below.
+
+      // QS-217 review-fix #03 — clipPath is just the outer disc;
+      // the override-button area is hidden by a separate `<circle>`
+      // cover drawn AFTER the clipped animation group (see the SVG
+      // markup below). This replaces the earlier carve+cancel
+      // clipPath approach, which produced a geometric lens-shape
+      // hole.
+      const clipPathD =
+        `M ${CENTER_CY - CLIP_R},${CENTER_CY}` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0`;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -883,7 +913,7 @@ class QsRadiatorCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${flameClipId}">
-                  <circle cx="${CENTER_CY}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                  <path clip-rule="evenodd" d="${clipPathD}" />
                 </clipPath>
               </defs>
               <g clip-path="url(#${flameClipId})">
@@ -891,6 +921,7 @@ class QsRadiatorCard extends HTMLElement {
                   `<path id="flame${i}" d="${d}" fill="${initialFlameColors[i]}" opacity="1" pointer-events="none" style="will-change: transform;" />`
                 ).join("\n                ")}
               </g>
+              ${e.override_reset ? `<circle id="override_btn_cover" cx="${CENTER_CY}" cy="${OVERRIDE_BTN_CARVE_CY}" r="${OVERRIDE_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${ringDashActive ? 'stroke-opacity="0.35"' : ''} />
               ${ringDashActive ? `
