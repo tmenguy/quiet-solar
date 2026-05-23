@@ -499,73 +499,53 @@ restore's null-layer branch is therefore a real backdrop-transition
 path (not just defensive) and explicitly removes the preserved
 flakes' detached DOM so they don't leak.
 
-### QS-217 — Override-button carve-out
+### QS-217 — Override-button cover overlay
 
 The semi-transparent bottom-center override "hand" button
-(`<div id="override_btn">`) was hard to read against the colored
+(`<div id="override_btn">`) was hard to read against the coloured
 animations (orange flames, white snow, blue water) painted by the
-clipPath group below it. QS-217 fixes the legibility by carving an
-arc out of the animation behind the button, exposing the card
-background ring. The three affected cards — `qs-radiator-card.js`,
-`qs-water-boiler-card.js`, and `qs-climate-card.js` — each replace
-the single `<circle>` inside their `<clipPath>` with a single
-`<path clip-rule="evenodd" d="${clipPathD}">`. The `clipPathD`
-builder concatenates two circular subpaths: the outer full-disc
-clip (radius `CLIP_R = 120`) and, when the override button is
-rendered, an inner carve disc at
-`(CENTER_*, OVERRIDE_BTN_CARVE_CY = 277)` with
-`OVERRIDE_BTN_CARVE_R` (currently `45` after review-fix #02 visual
-iteration — see below). The button-centre `277` value derives from
-the CSS `.override-btn` geometry (button center `(150, 260)` CSS
-px, outer radius 25) scaled by the SVG viewBox factor `320/300`
-and rounded to an integer (sub-pixel residual invisible). The
-carve subpath is gated on `e.override_reset` — the same truthy
-gate that already controls the button DOM render — so cards
-without an override-reset entity render a visually identical
-full-disc clip.
+clipPath group below it. QS-217 fixes the legibility by drawing a
+small **`<circle>` cover** with `fill="var(--card-background-color)"`
+on top of the clipped animation group, visually erasing the
+animation in a clean circular patch behind the button. The three
+affected cards — `qs-radiator-card.js`, `qs-water-boiler-card.js`,
+and `qs-climate-card.js` — each render the cover element
+immediately after their `<g clip-path="url(#…ClipId)">` group and
+before the outer-ring stroke, gated on `e.override_reset` (the same
+truthy check that already controls the button DOM render):
 
-Review-fix #01 added a **third "crescent-cancel" subpath**
-(`cancelSubpath`) on top of the carve. The full carve disc extends
-below the outer clip disc (carve bottom at y ≈ 322 with R = 45
-vs. outer disc bottom at y = 280); under `clip-rule="evenodd"`
-that crescent of the carve disc lying outside the outer disc has
-winding count 1 → "inside the clip" → the underlying animation
-leaks through as a coloured arc just below the override button.
-The cancel subpath is shaped like that crescent — bordered by the
-outer-disc small arc and the carve-disc large arc that meet at
-the two circle intersections — so it raises the winding from 1 →
-2 → "outside the clip" → leak suppressed, with **no change** to
-the visible carve footprint. Two further module-level constants
-`OVERRIDE_BTN_CARVE_INT_X` and `OVERRIDE_BTN_CARVE_INT_Y` encode
-the circle-intersection point; review-fix #02 switched them from
-integer-rounded literals to RUNTIME-DERIVED expressions
-(`y_int = (CLIP_R² − R² + CARVE_CY² − CENTER_CY²) / (2·(CARVE_CY −
-CENTER_CY))`, `x_off = √(CLIP_R² − (y_int − CENTER_CY)²)`) so the
-cancel-subpath arc endpoints lie EXACTLY on the relevant circles
-— no sub-pixel chord-level gap — AND so a future iteration on
-`OVERRIDE_BTN_CARVE_R` automatically updates the cancel boundary.
-Both inner subpaths share a hardened gate
-`(e.override_reset && OVERRIDE_BTN_CARVE_R > 0)` so a visual-
-iteration tweak that sets the radius to 0 cannot emit degenerate
-`rx = ry = 0` arc commands.
+```html
+<g clip-path="url(#…ClipId)"> … animation paths … </g>
+${e.override_reset ? `<circle id="override_btn_cover"
+  cx="${CENTER_*}"
+  cy="${OVERRIDE_BTN_CARVE_CY}"
+  r="${OVERRIDE_BTN_CARVE_R}"
+  fill="var(--card-background-color)"
+  pointer-events="none" />` : ''}
+<path d="${bgPath}" … />  <!-- outer ring stroke -->
+```
 
-Review-fix #02 also **bumped `OVERRIDE_BTN_CARVE_R` 35 → 45 → 60**
-across two visual-iteration rounds: at R = 35 the carve circle
-pinched too tightly near its top, leaving thin slivers of
-animation visible at the top corners of the visible button area
-AND a "lens" curve where the outer-clip-disc bottom (y = 280)
-cut through the button area; at R = 45 the math said the carve
-fully contained the 50 CSS-px button outline, but the user-
-visible button (the `.override-btn` 2 px border + 4 % white
-background) renders larger than the strict 50-px box on retina /
-high-DPI displays (empirical: ≈ 92 SVG diameter / 46 SVG radius on
-the user's screen), so R = 45 was still just barely too small. At
-R = 60 the carve x range at the button top y ≈ 250 is
-`160 ± √(60² − 26.33²) ≈ 160 ± 53.9`, comfortably wider than any
-reasonable visible-button x range, with ~13 SVG ≈ ~12 CSS px of
-padding at the tightest spot. The value remains user-tunable —
-tests pin the constant NAME for builder-block references, the
-integer value is the current visual-iteration choice.
+Two module-level constants control the cover geometry:
+`OVERRIDE_BTN_CARVE_CY = 277` is the button centre y in SVG units
+(derived from the CSS `.override-btn` position: button centre
+`(150, 260)` CSS px, scaled by the SVG viewBox factor `320/300` →
+`(160, 277.33)`, rounded to integer). `OVERRIDE_BTN_CARVE_R` is
+the cover radius in SVG units; the integer is intentionally user-
+tunable for visual iteration (tests pin the constant NAME only,
+not the value). The cover applies uniformly across all backdrops
+(including the climate card's flame / snow / wind / none).
+
+**Why a cover overlay instead of a clipPath carve?** The first two
+implementation rounds used an `<clipPath>` with three subpaths
+(outer disc + carve disc + cancel subpath, evenodd fill rule) to
+create a hole in the animation. Across two visual-iteration rounds
+(R = 35 → 45 → 60) the user consistently reported a "lens" inside
+the button: the intersection of the carve disc with the outer
+clip disc is geometrically a lens (vesica piscis) shape, so the
+visible HOLE always took on that shape regardless of R. The cover
+overlay sidesteps the issue entirely — the patch is a `<circle>`
+by construction, so the user sees a circle on screen. No lens
+shape possible.
 
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 

@@ -38,69 +38,23 @@ const CLIP_R = 120;                 // flame clip circle radius
 const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)
 const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closing rect is clipped
 
-// QS-217: Override-button carve-out geometry.
+// QS-217 — Override-button cover overlay geometry.
+// Review-fix #03 abandons the earlier clipPath carve approach
+// (which created a geometric lens-shape hole — intersection of the
+// carve disc and the outer clip disc). Instead, a simple `<circle>`
+// cover with `fill="var(--card-background-color)"` is drawn ON TOP
+// of the clipped animation group, visually erasing the animation
+// in a clean circular patch behind the button.
 // Anchored to the CSS `.override-btn` at `position: absolute;
 // bottom: 15px; left: 50%; transform: translateX(-50%); width: 50px;
 // height: 50px;` inside `.ring` (300×300 CSS px). The SVG viewBox
-// (320×320) is rendered at 300×300 → uniform scale 320/300 ≈ 1.0667.
-//   Button center CSS px (within .ring):  (150, 260)
-//                                          = (.ring.w/2, .ring.h − 15 − 50/2)
-//   Button center SVG units:               (160, 277.33)  ← x = CENTER_CY
-//   Button outer radius CSS px:            25
-//   Button outer radius SVG units:         26.67
-//   Carve adds ≈ 8 CSS px padding:         (25 + 8) × 320/300 ≈ 35.2
-// QS-217 review-fix #02b — radius bumped 35 → 45 → 60 across two
-// visual-iteration rounds after the user reported a persistent
-// "lens" inside the button outline. At R = 35 the carve was clearly
-// too small; at R = 45 the math says the carve fully contains the
-// 50 CSS-px button outline, but the user-visible button (the
-// .override-btn 2px border + 4 % white background) renders larger
-// than the strict 50-px box on retina/high-DPI displays — empirical
-// measurement on the user's screenshot put the visible button at
-// ≈ 92 SVG diameter (46 SVG radius), so R = 45 was just barely too
-// small. R = 60 covers any reasonable visible-button radius with
-// ~13 SVG ≈ ~12 CSS px of padding even at the tightest button y
-// values. The constant remains user-tunable — tests pin the NAME
-// for builder-block references, and the integer value is pinned
-// at the current visual-iteration choice; bump both together on
-// future iterations.
+// (320×320) renders at 300×300 → scale 320/300 ≈ 1.0667.
+// Button centre CSS px (within .ring): (150, 260). Button centre
+// SVG units: (160, 277.33) → rounded to (CENTER_CY, 277). Cover
+// radius R = 35 SVG ≈ 33 CSS px ⇒ ~8 CSS px padding around the
+// 25 CSS-px-radius button outline. User-tunable.
 const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 60;
-
-// QS-217 review-fix #02: Crescent-cancel subpath intersection
-// geometry, now DERIVED at module load instead of integer-rounded.
-// Under `clip-rule="evenodd"`, the full carve disc extends below
-// the outer clip disc (OVERRIDE_BTN_CARVE_CY + OVERRIDE_BTN_CARVE_R
-// > CENTER_CY + CLIP_R); that crescent region has winding count 1
-// → "inside the clip" → the animation would leak through below the
-// override-hand button. The cancel subpath (a third subpath
-// concatenated into `clipPathD`) traces the leak crescent and
-// bumps its winding to 2 → outside clip → leak hidden.
-// The cancel subpath's two arcs MUST meet at the exact circle
-// intersection points so each arc segment actually lies on its
-// respective circle (outer-disc arc + carve-disc arc). Integer-
-// rounded endpoints (review-fix #01) caused SVG to fit the arcs
-// to slightly-OFFSET circles (centre shifted ≈ 0.22 SVG units
-// for the outer-disc arc), producing a thin sub-pixel gap at
-// chord level — visible on high-DPI displays as a faint circle
-// of animation colour just below the button. Runtime derivation
-// from the other constants eliminates the rounding artifact AND
-// auto-tracks future iterations on `OVERRIDE_BTN_CARVE_R`.
-// Subtracting the two circle equations (both centres on x =
-// CENTER_X, so x cancels) gives:
-//   y_int = (CLIP_R² − R² + CARVE_CY² − CENTER_CY²)
-//           / (2 × (CARVE_CY − CENTER_CY))
-//   x_off = √(CLIP_R² − (y_int − CENTER_CY)²)  ← from outer disc
-const OVERRIDE_BTN_CARVE_INT_Y = (
-  CLIP_R * CLIP_R
-  - OVERRIDE_BTN_CARVE_R * OVERRIDE_BTN_CARVE_R
-  + OVERRIDE_BTN_CARVE_CY * OVERRIDE_BTN_CARVE_CY
-  - CENTER_CY * CENTER_CY
-) / (2 * (OVERRIDE_BTN_CARVE_CY - CENTER_CY));
-const OVERRIDE_BTN_CARVE_INT_X = Math.sqrt(
-  CLIP_R * CLIP_R
-  - (OVERRIDE_BTN_CARVE_INT_Y - CENTER_CY) ** 2
-);
+const OVERRIDE_BTN_CARVE_R  = 35;
 
 // --- Animation tuning ---
 const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
@@ -921,61 +875,16 @@ class QsRadiatorCard extends HTMLElement {
       // so keyboard-only users can tab to and activate them. The Enter/
       // Space handlers are wired in the event-binding loops below.
 
-      // QS-217 — clipPath path builder. Three subpaths concatenated
-      // with `clip-rule="evenodd"` on the parent <path>:
-      //   1. Outer circle subpath — full ring clip (always present).
-      //   2. Inner circle subpath (`carveSubpath`) — the override-
-      //      button carve-out hole. Winding flip: inside outer +
-      //      inside carve = winding 2 = outside clip (hole), so the
-      //      animation is clipped OUT of that disc, exposing the
-      //      card background around the semi-transparent button.
-      //   3. Crescent-cancel subpath (`cancelSubpath`, review-fix #01
-      //      must-fix #1) — covers the region where the carve disc
-      //      protrudes below the outer clip disc (carve bottom y =
-      //      312 vs. outer disc bottom y = 280). Without it the
-      //      crescent has winding 1 = inside clip → animation leaks
-      //      below the button. The cancel subpath bumps that
-      //      crescent's winding from 1 → 2 → outside clip → leak
-      //      hidden, with no change to the visible carve footprint.
-      // Both inner subpaths are gated on
-      // `(e.override_reset && OVERRIDE_BTN_CARVE_R > 0)` — review-fix
-      // #01 nice-to-have #4 guards against degenerate `rx=ry=0` arc
-      // commands when the user iterates the radius down to 0 (which
-      // some browsers reject with a console warning). When the
-      // override-reset entity isn't wired the clipPath is byte-
-      // identical to the pre-QS-217 full-disc circle clip.
-      // SVG path semantics: each subpath needs its own M move-to so
-      // evenodd treats them as independent regions — both
-      // `carveSubpath` and `cancelSubpath` start with an explicit
-      // ` M …` separator.
-      const carveSubpath = (e.override_reset && OVERRIDE_BTN_CARVE_R > 0)
-        ? ` M ${CENTER_CY - OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_CY}` +
-          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${2 * OVERRIDE_BTN_CARVE_R},0` +
-          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${-2 * OVERRIDE_BTN_CARVE_R},0`
-        : '';
-      // Cancel subpath: triangle-like region bordered by
-      //   (a) outer-disc small arc from left intersection
-      //       (CENTER_CY − OVERRIDE_BTN_CARVE_INT_X,
-      //        OVERRIDE_BTN_CARVE_INT_Y) to right intersection
-      //       (CENTER_CY + OVERRIDE_BTN_CARVE_INT_X,
-      //        OVERRIDE_BTN_CARVE_INT_Y) — large-arc-flag = 0
-      //       (small arc through outer-disc bottom y = 280),
-      //       sweep-flag = 1 (clockwise in SVG y-down coords);
-      //   (b) carve-disc large arc back through the carve-disc
-      //       bottom (y = 312) — large-arc-flag = 1 (chord at
-      //       y = 275 is only 2 units above carve centre y = 277,
-      //       so most of the carve disc lies below), sweep-flag = 1.
-      const cancelSubpath = (e.override_reset && OVERRIDE_BTN_CARVE_R > 0)
-        ? ` M ${CENTER_CY - OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y}` +
-          ` A ${CLIP_R},${CLIP_R} 0 0 1 ${CENTER_CY + OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y}` +
-          ` A ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1 1 ${CENTER_CY - OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y} Z`
-        : '';
+      // QS-217 review-fix #03 — clipPath is just the outer disc;
+      // the override-button area is hidden by a separate `<circle>`
+      // cover drawn AFTER the clipped animation group (see the SVG
+      // markup below). This replaces the earlier carve+cancel
+      // clipPath approach, which produced a geometric lens-shape
+      // hole.
       const clipPathD =
         `M ${CENTER_CY - CLIP_R},${CENTER_CY}` +
         ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
-        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0` +
-        carveSubpath +
-        cancelSubpath;
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0`;
 
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
@@ -1012,6 +921,7 @@ class QsRadiatorCard extends HTMLElement {
                   `<path id="flame${i}" d="${d}" fill="${initialFlameColors[i]}" opacity="1" pointer-events="none" style="will-change: transform;" />`
                 ).join("\n                ")}
               </g>
+              ${e.override_reset ? `<circle id="override_btn_cover" cx="${CENTER_CY}" cy="${OVERRIDE_BTN_CARVE_CY}" r="${OVERRIDE_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${ringDashActive ? 'stroke-opacity="0.35"' : ''} />
               ${ringDashActive ? `

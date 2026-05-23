@@ -37,65 +37,30 @@ const CLIP_R = 120;                 // water clip circle radius (10px inside rin
 const WAVE_WIDTH = 480;             // single wave period (2× clip diameter)
 const WAVE_BOTTOM_Y = 400;          // closing rectangle y; clipped by circle
 
-// QS-217: Override-button carve-out geometry.
+// QS-217 — Override-button cover overlay geometry.
+// Iteration history: the original PR #219 used a CLIPPATH carve
+// (outer disc + carve disc + cancel subpath, evenodd). That created
+// a hole in the water animation via the SVG clip-path mechanism.
+// Across three review-fix rounds (R=35 → 45 → 60) the user
+// consistently reported a visible "lens" inside the button — the
+// intersection of the carve disc and the outer clip disc is
+// geometrically a lens (vesica piscis) shape, so the visible HOLE
+// took on that shape regardless of R; bigger R just produced a
+// bigger lens. Review-fix #03 abandons the clipPath approach
+// entirely and uses a SIMPLE `<circle>` cover drawn ON TOP of the
+// clipped animation group, with `fill="var(--card-background-color)"`
+// so it visually erases the animation in a circular patch. The
+// patch IS a circle by construction — no lens shape possible.
 // Anchored to the CSS `.override-btn` at `position: absolute;
 // bottom: 15px; left: 50%; transform: translateX(-50%); width: 50px;
 // height: 50px;` inside `.ring` (300×300 CSS px). The SVG viewBox
-// (320×320) is rendered at 300×300 → uniform scale 320/300 ≈ 1.0667.
-//   Button center CSS px (within .ring):  (150, 260)
-//                                          = (.ring.w/2, .ring.h − 15 − 50/2)
-//   Button center SVG units:               (160, 277.33)  ← x = CENTER_CX
-//   Button outer radius CSS px:            25
-//   Button outer radius SVG units:         26.67
-//   Carve adds ≈ 8 CSS px padding:         (25 + 8) × 320/300 ≈ 35.2
-// QS-217 review-fix #02b — radius bumped 35 → 45 → 60 across two
-// visual-iteration rounds after the user (testing on this boiler
-// card) reported a persistent "lens" inside the button outline.
-// At R = 35 the carve was clearly too small; at R = 45 the math
-// says the carve fully contains the 50 CSS-px button outline, but
-// the user-visible button (the .override-btn 2px border + 4 %
-// white background) renders larger than the strict 50-px box on
-// retina/high-DPI displays — empirical measurement on the user's
-// screenshot put the visible button at ≈ 92 SVG diameter (46 SVG
-// radius), so R = 45 was just barely too small. R = 60 covers any
-// reasonable visible-button radius with ~13 SVG ≈ ~12 CSS px of
-// padding even at the tightest button y values. The constant
-// remains user-tunable.
+// (320×320) renders at 300×300 → scale 320/300 ≈ 1.0667.
+// Button centre CSS px (within .ring): (150, 260). Button centre
+// SVG units: (160, 277.33) → rounded to (CENTER_CX, 277).
+// Cover radius R = 35 SVG ≈ 33 CSS px ⇒ ~8 CSS px padding around
+// the 25 CSS-px-radius button outline. User-tunable.
 const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 60;
-
-// QS-217 review-fix #02: Crescent-cancel subpath intersection
-// geometry, now DERIVED at module load instead of integer-rounded.
-// Under `clip-rule="evenodd"`, the full carve disc extends below
-// the outer clip disc (OVERRIDE_BTN_CARVE_CY + OVERRIDE_BTN_CARVE_R
-// > CENTER_CY + CLIP_R); that crescent region has winding count 1
-// → "inside the clip" → the water animation would leak through
-// below the override-hand button. The cancel subpath traces the
-// leak crescent and bumps its winding to 2 → outside clip → leak
-// hidden. The cancel subpath's two arcs MUST meet at the exact
-// circle intersection points so each arc segment actually lies on
-// its respective circle. Integer-rounded endpoints (review-fix
-// #01) caused SVG to fit the arcs to slightly-OFFSET circles
-// (centre shifted ≈ 0.22 SVG units for the outer-disc arc),
-// producing a thin sub-pixel gap at chord level — visible on
-// high-DPI displays as a faint circle of water colour just below
-// the button. Runtime derivation eliminates the rounding artifact
-// AND auto-tracks future iterations on `OVERRIDE_BTN_CARVE_R`.
-// Subtracting the two circle equations (both centres on x =
-// CENTER_CX, so x cancels) gives:
-//   y_int = (CLIP_R² − R² + CARVE_CY² − CENTER_CY²)
-//           / (2 × (CARVE_CY − CENTER_CY))
-//   x_off = √(CLIP_R² − (y_int − CENTER_CY)²)  ← from outer disc
-const OVERRIDE_BTN_CARVE_INT_Y = (
-  CLIP_R * CLIP_R
-  - OVERRIDE_BTN_CARVE_R * OVERRIDE_BTN_CARVE_R
-  + OVERRIDE_BTN_CARVE_CY * OVERRIDE_BTN_CARVE_CY
-  - CENTER_CY * CENTER_CY
-) / (2 * (OVERRIDE_BTN_CARVE_CY - CENTER_CY));
-const OVERRIDE_BTN_CARVE_INT_X = Math.sqrt(
-  CLIP_R * CLIP_R
-  - (OVERRIDE_BTN_CARVE_INT_Y - CENTER_CY) ** 2
-);
+const OVERRIDE_BTN_CARVE_R  = 35;
 
 // --- Per-layer wave offsets ---
 const LAYER_SCROLL_OFFSET = 1.2;
@@ -1253,48 +1218,16 @@ class QsWaterBoilerCard extends HTMLElement {
       const preservedBubbles = this._bubbles;
       const preservedNextBubbleAt = this._nextBubbleAt;
 
-      // QS-217 — clipPath path builder. Three subpaths concatenated
-      // with `clip-rule="evenodd"` on the parent <path>:
-      //   1. Outer circle subpath — full ring clip (always present).
-      //   2. Inner circle subpath (`carveSubpath`) — the override-
-      //      button carve-out hole. Winding flip: inside outer +
-      //      inside carve = winding 2 = outside clip (hole), so the
-      //      water animation is clipped OUT of that disc, exposing
-      //      the card background around the semi-transparent button.
-      //   3. Crescent-cancel subpath (`cancelSubpath`, review-fix #01
-      //      must-fix #1) — covers the region where the carve disc
-      //      protrudes below the outer clip disc. Without it the
-      //      crescent shows the wave animation as a coloured arc
-      //      below the override button (user-confirmed by
-      //      screenshot). The cancel subpath bumps that crescent's
-      //      winding from 1 → 2 → outside clip → leak hidden.
-      // Both inner subpaths are gated on
-      // `(e.override_reset && OVERRIDE_BTN_CARVE_R > 0)` — review-fix
-      // #01 nice-to-have #4 guards against degenerate `rx=ry=0` arc
-      // commands when the user iterates the radius down to 0.
-      // SVG path semantics: each subpath needs its own M move-to so
-      // evenodd treats them as independent regions.
-      const carveSubpath = (e.override_reset && OVERRIDE_BTN_CARVE_R > 0)
-        ? ` M ${CENTER_CX - OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_CY}` +
-          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${2 * OVERRIDE_BTN_CARVE_R},0` +
-          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${-2 * OVERRIDE_BTN_CARVE_R},0`
-        : '';
-      // Cancel subpath: triangle-like region bordered by the
-      // outer-disc small arc (large-arc-flag = 0, sweep-flag = 1)
-      // and the carve-disc large arc through the carve bottom
-      // (large-arc-flag = 1, sweep-flag = 1). See the radiator card
-      // arc-flag rationale comment for the derivation.
-      const cancelSubpath = (e.override_reset && OVERRIDE_BTN_CARVE_R > 0)
-        ? ` M ${CENTER_CX - OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y}` +
-          ` A ${CLIP_R},${CLIP_R} 0 0 1 ${CENTER_CX + OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y}` +
-          ` A ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1 1 ${CENTER_CX - OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y} Z`
-        : '';
+      // QS-217 review-fix #03 — clipPath is just the outer disc;
+      // the override-button area is hidden by a separate `<circle>`
+      // cover drawn AFTER the clipped animation group (see the SVG
+      // markup below). This replaces the earlier carve+cancel
+      // clipPath approach, which produced a geometric lens-shape
+      // hole that the user repeatedly flagged.
       const clipPathD =
         `M ${CENTER_CX - CLIP_R},${CENTER_CY}` +
         ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
-        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0` +
-        carveSubpath +
-        cancelSubpath;
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0`;
 
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
@@ -1354,6 +1287,7 @@ class QsWaterBoilerCard extends HTMLElement {
                 <path id="surface_glow" d="${initialWavePaths[0]}" stroke="${SURFACE_GLOW_COLOR}" stroke-width="${SURFACE_GLOW_STROKE_WIDTH}" fill="none" filter="url(#${surfaceGlowFilterId})" opacity="${initialBoilOpacity}" pointer-events="none" style="mix-blend-mode: screen; will-change: transform, opacity, d;" />
                 <g id="${steamLayerId}" filter="url(#${steamFilterId})" pointer-events="none"></g>
               </g>
+              ${e.override_reset ? `<circle id="override_btn_cover" cx="${CENTER_CX}" cy="${OVERRIDE_BTN_CARVE_CY}" r="${OVERRIDE_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `
