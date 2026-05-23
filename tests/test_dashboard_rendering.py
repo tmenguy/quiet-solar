@@ -578,18 +578,53 @@ class TestDashboardTemplateRendering:
             "test bump should follow."
         )
 
-        # AC-2: clipPath circle at the ring centre. Geometry must be wired
-        # through the module-top `CENTER_CY` / `CLIP_R` constants so the
-        # SVG cannot silently drift if those constants are tweaked
-        # (review fix S2).
+        # AC-2 / QS-217 AC-6: clipPath uses `<path clip-rule="evenodd"
+        # d="${clipPathD}" />`. The bare `<circle>` form was replaced
+        # by QS-217 to enable the override-button carve-out hole via
+        # the SVG evenodd fill rule. Geometry is still wired through
+        # the module-top `CENTER_CY` / `CLIP_R` constants — now via the
+        # `clipPathD` builder (the next assertion block) — so the SVG
+        # cannot silently drift if those constants are tweaked
+        # (review fix S2 preserved).
         assert re.search(
-            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<circle\s+cx=\"\$\{CENTER_CY\}\"\s+cy=\"\$\{CENTER_CY\}\"\s+r=\"\$\{CLIP_R\}\"",
+            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
             content,
             re.DOTALL,
         ) is not None, (
-            "Missing clipPath circle interpolating CENTER_CY / CLIP_R "
-            "(must use ${CENTER_CY} / ${CLIP_R}, not hard-coded 160 / 120)"
+            "Missing clipPath <path clip-rule=\"evenodd\" "
+            "d=\"${clipPathD}\" /> form — QS-217 replaced the bare "
+            "<circle> with this evenodd-rule path so the override "
+            "button gets a carve-out hole."
         )
+        # QS-217 AC-6: the `clipPathD` builder block must reference all
+        # four constants by NAME (not hard-coded values) — the original
+        # "constants-not-hardcoded" invariant from review-fix S2 carries
+        # over to the new builder. Capture BOTH the `carveSubpath` and
+        # `clipPathD` declarations as one contiguous span so the
+        # constants referenced from either statement count toward the
+        # invariant.
+        builder_match = re.search(
+            r"const\s+carveSubpath\s*=([\s\S]*?const\s+clipPathD\s*=[\s\S]*?);",
+            content,
+        )
+        assert builder_match is not None, (
+            "Missing `const carveSubpath = …;\\nconst clipPathD = …;` "
+            "builder block — QS-217 AC-3 requires both declarations "
+            "be present, in that order, above the innerHTML template "
+            "literal so the SVG clipPath can interpolate `${clipPathD}`."
+        )
+        builder_block = builder_match.group(1)
+        for ident in (
+            "CENTER_CY",
+            "CLIP_R",
+            "OVERRIDE_BTN_CARVE_CY",
+            "OVERRIDE_BTN_CARVE_R",
+        ):
+            assert re.search(rf"\b{ident}\b", builder_block) is not None, (
+                f"qs-radiator-card.js: clipPathD builder must "
+                f"reference `{ident}` by name (not hard-coded). QS-217 "
+                f"AC-6 preserves the constants-not-hardcoded invariant."
+            )
         # The constants themselves carry the correct geometric values.
         assert re.search(r"const\s+CENTER_CY\s*=\s*160\b", content) is not None
         assert re.search(r"const\s+CLIP_R\s*=\s*120\b", content) is not None
@@ -2022,10 +2057,12 @@ def test_water_boiler_card_has_surface_glow():
 def test_water_boiler_card_pins_geometry_constants():
     """Review-fix #01 S5: pin the module-level geometry constants
     (AC-2). The SVG layout depends on `CLIP_R`, `CENTER_CX`, `CENTER_CY`,
-    and `WAVE_WIDTH` matching specific values that the clipPath
-    ``<circle cx cy r>`` markup interpolates. A future tweak that
-    changes any of them without re-checking the SVG would silently
-    misalign the water animation, so we pin each here.
+    and `WAVE_WIDTH` matching specific values that the ``<clipPath>``
+    markup interpolates via the `clipPathD` builder (QS-217 swapped the
+    bare ``<circle cx cy r>`` form for a ``<path>`` with evenodd
+    fill-rule so the override button can be carved out as a hole). A
+    future tweak that changes any of them without re-checking the SVG
+    would silently misalign the water animation, so we pin each here.
 
     `CENTER_CX` is review-fix #01 N4's new constant (was inlined as
     `160` in two places). `CENTER_CY` and `CLIP_R` and `WAVE_WIDTH`
@@ -2973,6 +3010,163 @@ def test_water_boiler_card_steam_filter_region_attributes():
     ), (
         "qs-water-boiler-card.js: steam filter must contain "
         "`<feGaussianBlur stdDeviation=\"${STEAM_BLUR_STDDEV}\" />`."
+    )
+
+
+# ============================================================================
+# QS-217 — Override-button carve-out across radiator / water-boiler / climate
+# cards. Each card now wraps a `<path clip-rule="evenodd" d="${clipPathD}" />`
+# in its `<clipPath>` so the semi-transparent bottom-center override "hand"
+# button is no longer painted over by the animation (orange flames, white
+# snow, blue water). The carve is gated on `e.override_reset`, identical to
+# the existing button-render gate, and pins the constant *names* — not
+# values — so the user can iterate visually on the radius.
+# ============================================================================
+
+
+def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None:
+    """Shared QS-217 invariant check used by the three carve-out tests.
+
+    Pinned invariants (AC-1, AC-2, AC-3, AC-4, AC-7):
+
+    - (a) the ``<clipPath>`` block contains ``<path clip-rule="evenodd"
+      d="${clipPathD}" />`` (the bare ``<circle>`` form was removed).
+    - (b) the two new module-level constants
+      ``OVERRIDE_BTN_CARVE_CY = 277`` and ``OVERRIDE_BTN_CARVE_R = 35``
+      are declared at file scope; both are referenced by *name* in the
+      ``clipPathD`` builder block (so a later visual tweak to the radius
+      value leaves the test green — see DN-2).
+    - (c) the carve subpath is gated on ``e.override_reset`` — i.e. the
+      regex ``e\\.override_reset\\s*\\?`` appears inside the builder block,
+      matching the existing in-file gate for the
+      ``<div id="override_btn">`` render.
+
+    ``x_center_name`` is the file-local x-centre constant name (radiator
+    uses ``CENTER_CY`` for both axes; water-boiler uses ``CENTER_CX``;
+    climate uses ``CENTER_X``).
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / card_filename
+    ).read_text()
+
+    # (a) clipPath uses `<path clip-rule="evenodd" d="${clipPathD}" />`.
+    assert re.search(
+        r"<clipPath\s+id=\"\$\{[^}]+\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
+        content,
+        re.DOTALL,
+    ) is not None, (
+        f"{card_filename}: missing `<clipPath …><path clip-rule="
+        f"\"evenodd\" d=\"${{clipPathD}}\" /></clipPath>` form. QS-217 "
+        f"AC-2 replaces the bare `<circle>` with the evenodd path so "
+        f"the override button is carved out as a hole."
+    )
+
+    # (b) Top-level const declarations for the two new carve constants.
+    assert re.search(
+        r"const\s+OVERRIDE_BTN_CARVE_CY\s*=\s*277\b",
+        content,
+    ) is not None, (
+        f"{card_filename}: missing module-level `const "
+        f"OVERRIDE_BTN_CARVE_CY = 277;` declaration (QS-217 AC-1)."
+    )
+    assert re.search(
+        r"const\s+OVERRIDE_BTN_CARVE_R\s*=\s*35\b",
+        content,
+    ) is not None, (
+        f"{card_filename}: missing module-level `const "
+        f"OVERRIDE_BTN_CARVE_R = 35;` declaration (QS-217 AC-1)."
+    )
+
+    # (b) The `clipPathD` builder must reference the carve constants by
+    # NAME (not by value) so a later iteration on the radius leaves this
+    # test green. Scope the regex to BOTH declarations — `carveSubpath`
+    # (which holds the override gate + carve geometry) AND `clipPathD`
+    # (the final concatenated path). AC-3 requires `carveSubpath` to be
+    # declared immediately above `clipPathD`, so capturing the contiguous
+    # span is safe and pins the in-file ordering.
+    builder_match = re.search(
+        r"const\s+carveSubpath\s*=([\s\S]*?const\s+clipPathD\s*=[\s\S]*?);",
+        content,
+    )
+    assert builder_match is not None, (
+        f"{card_filename}: missing `const carveSubpath = …;\\n"
+        f"const clipPathD = …;` builder block. QS-217 AC-3 requires "
+        f"both declarations be present, in that order, immediately "
+        f"above the innerHTML template literal so the SVG clipPath "
+        f"can interpolate `${{clipPathD}}`."
+    )
+    builder_block = builder_match.group(1)
+    # The full-disc subpath references CLIP_R and the y-centre const.
+    # The radiator's `CENTER_CY` doubles as the x-centre name, while
+    # water-boiler uses `CENTER_CX` and climate uses `CENTER_X`. Pin
+    # the per-card x-centre name plus the shared invariants.
+    for ident in (
+        "CLIP_R",
+        "CENTER_CY",
+        x_center_name,
+        "OVERRIDE_BTN_CARVE_CY",
+        "OVERRIDE_BTN_CARVE_R",
+    ):
+        assert re.search(rf"\b{ident}\b", builder_block) is not None, (
+            f"{card_filename}: clipPathD builder must reference "
+            f"`{ident}` by name (not hard-coded). QS-217 AC-3/AC-7 "
+            f"preserves the constants-not-hardcoded invariant."
+        )
+
+    # (c) Carve subpath gated on `e.override_reset` — identical idiom to
+    # the existing `<div id="override_btn">` render gate (AC-4).
+    assert re.search(
+        r"e\.override_reset\s*\?",
+        builder_block,
+    ) is not None, (
+        f"{card_filename}: clipPathD builder must gate the carve "
+        f"subpath on `e.override_reset ? … : ''` — same truthy gate "
+        f"as the existing override-button render. QS-217 AC-4."
+    )
+
+
+def test_radiator_card_override_btn_carve_out():
+    """QS-217 AC-7 — radiator card: clipPath swaps `<circle>` for
+    `<path clip-rule="evenodd" d="${clipPathD}" />`, adds the two
+    `OVERRIDE_BTN_CARVE_*` constants at module scope, and gates the
+    carve subpath on `e.override_reset`.
+
+    See the helper docstring for invariant (a)/(b)/(c) details.
+    """
+    _qs217_assert_card_carve_out(
+        "qs-radiator-card.js",
+        x_center_name="CENTER_CY",
+    )
+
+
+def test_water_boiler_card_override_btn_carve_out():
+    """QS-217 AC-7 — water-boiler card carve-out invariants.
+
+    Same three pins as the radiator card (AC-7 helper), anchored to
+    `qs-water-boiler-card.js`. The water-boiler card uses `CENTER_CX`
+    (not `CENTER_CY`) for the x-centre — review-fix #01 N4 introduced
+    that explicit constant, and QS-217's `clipPathD` builder must
+    reference it.
+    """
+    _qs217_assert_card_carve_out(
+        "qs-water-boiler-card.js",
+        x_center_name="CENTER_CX",
+    )
+
+
+def test_climate_card_override_btn_carve_out():
+    """QS-217 AC-7 — climate card carve-out invariants.
+
+    Same three pins as the radiator card (AC-7 helper), anchored to
+    `qs-climate-card.js`. The climate card uses `CENTER_X` (QS-210
+    review-fix S5 introduced that explicit x-centre constant), and
+    QS-217's `clipPathD` builder must reference it.
+    """
+    _qs217_assert_card_carve_out(
+        "qs-climate-card.js",
+        x_center_name="CENTER_X",
     )
 
 
@@ -4120,22 +4314,58 @@ class TestClimateCardReviewFix01Hardening:
             "chord at the spawn-y."
         )
 
-        # Pass-#2 S1 / N3 — the clip `<circle cx>` must use `CENTER_X`,
-        # not `CENTER_CY`. Numerically equivalent today (square
-        # viewBox) but the `CENTER_X` comment block claims
+        # Pass-#2 S1 / N3 — the clipPath x-coordinate must use
+        # `CENTER_X`, not `CENTER_CY`. Numerically equivalent today
+        # (square viewBox) but the `CENTER_X` comment block claims
         # future-proofing for a non-square viewBox; that claim only
-        # holds if EVERY x-coordinate reference uses `CENTER_X`. Pass-#1
-        # missed updating the clip-circle attribute; this is the
-        # finisher.
-        assert re.search(
-            r'<circle\s+cx="\$\{CENTER_X\}"\s+cy="\$\{CENTER_CY\}"\s+'
-            r'r="\$\{CLIP_R\}"',
+        # holds if EVERY x-coordinate reference uses `CENTER_X`.
+        # QS-217 replaced the bare `<circle>` clipPath with a
+        # `<path d="${clipPathD}" />` whose builder concatenates an
+        # outer-disc and (optional) inner-carve subpath. The pass-#2
+        # S1 invariant carries over: the builder's x-coordinate
+        # expression must be `CENTER_X - …`, not `CENTER_CY - …`.
+        builder_match = re.search(
+            r"const\s+carveSubpath\s*=([\s\S]*?const\s+clipPathD\s*=[\s\S]*?);",
             content,
+        )
+        assert builder_match is not None, (
+            "Pass-#2 S1: `clipPathD` builder block missing — "
+            "QS-217 AC-3 requires `const carveSubpath = …; const "
+            "clipPathD = …;` above the innerHTML template literal."
+        )
+        builder_block = builder_match.group(1)
+        # Outer disc subpath uses `CENTER_X - CLIP_R`.
+        assert re.search(
+            r"\$\{\s*CENTER_X\s*-\s*CLIP_R\s*\}",
+            builder_block,
         ) is not None, (
-            "Pass-#2 S1: the climate card's clip `<circle>` must read "
-            "`cx=\"${CENTER_X}\" cy=\"${CENTER_CY}\" r=\"${CLIP_R}\"` "
-            "(not `cx=\"${CENTER_CY}\"`) so the `CENTER_X` constant's "
+            "Pass-#2 S1: the climate card's clipPathD outer-disc "
+            "subpath must use `${CENTER_X - CLIP_R}` (not "
+            "`${CENTER_CY - CLIP_R}`) so the `CENTER_X` constant's "
             "future-proofing comment is accurate."
+        )
+        # Inner-carve subpath uses `CENTER_X - OVERRIDE_BTN_CARVE_R`.
+        assert re.search(
+            r"\$\{\s*CENTER_X\s*-\s*OVERRIDE_BTN_CARVE_R\s*\}",
+            builder_block,
+        ) is not None, (
+            "Pass-#2 S1 (QS-217 extension): the climate card's "
+            "clipPathD inner-carve subpath must use `${CENTER_X - "
+            "OVERRIDE_BTN_CARVE_R}` so the x-centre is sourced from "
+            "`CENTER_X`, preserving the future-proofing invariant."
+        )
+        # And the builder must NOT use `CENTER_CY` for any x-coordinate
+        # arithmetic (the pass-#2 anti-pattern). We can pin this by
+        # asserting the absence of `CENTER_CY - CLIP_R` and
+        # `CENTER_CY - OVERRIDE_BTN_CARVE_R` in the builder block;
+        # `CENTER_CY` still appears legitimately as a y-coordinate.
+        assert re.search(
+            r"\$\{\s*CENTER_CY\s*-\s*CLIP_R\s*\}",
+            builder_block,
+        ) is None, (
+            "Pass-#2 S1: the climate card's clipPathD must NOT use "
+            "`${CENTER_CY - CLIP_R}` as an x-coordinate. That was "
+            "the pre-pass-#2 anti-pattern; use `CENTER_X - CLIP_R`."
         )
 
     def test_climate_card_safe_number_filters_whitespace_and_infinity(self):

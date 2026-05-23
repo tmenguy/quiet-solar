@@ -38,6 +38,24 @@ const CLIP_R = 120;                 // flame clip circle radius
 const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)
 const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closing rect is clipped
 
+// QS-217: Override-button carve-out geometry.
+// Anchored to the CSS `.override-btn` at `position: absolute;
+// bottom: 15px; left: 50%; transform: translateX(-50%); width: 50px;
+// height: 50px;` inside `.ring` (300×300 CSS px). The SVG viewBox
+// (320×320) is rendered at 300×300 → uniform scale 320/300 ≈ 1.0667.
+//   Button center CSS px (within .ring):  (150, 260)
+//                                          = (.ring.w/2, .ring.h − 15 − 50/2)
+//   Button center SVG units:               (160, 277.33)  ← x = CENTER_CY
+//   Button outer radius CSS px:            25
+//   Button outer radius SVG units:         26.67
+//   Carve adds ≈ 8 CSS px padding:         (25 + 8) × 320/300 ≈ 35.2
+// Both rounded to integers (snap to SVG grid; sub-pixel residual
+// is < 0.4 CSS px, invisible). `OVERRIDE_BTN_CARVE_R = 35` is a
+// deliberate test placeholder — the user iterates visually; tests
+// pin the constant NAME, not the value, so a later tweak stays green.
+const OVERRIDE_BTN_CARVE_CY = 277;
+const OVERRIDE_BTN_CARVE_R  = 35;
+
 // --- Animation tuning ---
 const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
 const LERP_DT_CEIL = 0.1;           // s; clamp lerp dt to avoid snap-to after tab hidden
@@ -856,6 +874,32 @@ class QsRadiatorCard extends HTMLElement {
       // S16 — primary action `<div>`s get `role="button"` + `tabindex="0"`
       // so keyboard-only users can tab to and activate them. The Enter/
       // Space handlers are wired in the event-binding loops below.
+
+      // QS-217 — clipPath path builder. Outer circle subpath = full
+      // ring clip; inner circle subpath = the override-button
+      // carve-out hole (when the button is rendered). The two subpaths
+      // are concatenated with `clip-rule="evenodd"` on the parent
+      // <path>, so the inner subpath becomes a hole — the animation
+      // is clipped OUT of that disc, exposing the card background
+      // around the semi-transparent button. The carve is gated on
+      // `e.override_reset`, byte-identical to the existing
+      // `<div id="override_btn">` render gate, so the clipPath is
+      // visually equivalent to the original full-circle clip when
+      // there is no override button.
+      // SVG path semantics: each subpath needs its own M move-to so
+      // evenodd treats them as independent regions — the explicit
+      // ` M …` prefix on `carveSubpath` provides that separator.
+      const carveSubpath = e.override_reset
+        ? ` M ${CENTER_CY - OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_CY}` +
+          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${2 * OVERRIDE_BTN_CARVE_R},0` +
+          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${-2 * OVERRIDE_BTN_CARVE_R},0`
+        : '';
+      const clipPathD =
+        `M ${CENTER_CY - CLIP_R},${CENTER_CY}` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0` +
+        carveSubpath;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -883,7 +927,7 @@ class QsRadiatorCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${flameClipId}">
-                  <circle cx="${CENTER_CY}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                  <path clip-rule="evenodd" d="${clipPathD}" />
                 </clipPath>
               </defs>
               <g clip-path="url(#${flameClipId})">

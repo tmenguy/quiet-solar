@@ -37,6 +37,26 @@ const CENTER_CY = 160;              // SVG y-centre of the ring / clip circle
 const CENTER_X = 160;               // SVG x-centre of the ring / clip circle
 const CLIP_R = 120;                 // backdrop clip circle radius
 
+// QS-217: Override-button carve-out geometry.
+// Anchored to the CSS `.override-btn` at `position: absolute;
+// bottom: 15px; left: 50%; transform: translateX(-50%); width: 50px;
+// height: 50px;` inside `.ring` (300×300 CSS px). The SVG viewBox
+// (320×320) is rendered at 300×300 → uniform scale 320/300 ≈ 1.0667.
+//   Button center CSS px (within .ring):  (150, 260)
+//                                          = (.ring.w/2, .ring.h − 15 − 50/2)
+//   Button center SVG units:               (160, 277.33)  ← x = CENTER_X
+//   Button outer radius CSS px:            25
+//   Button outer radius SVG units:         26.67
+//   Carve adds ≈ 8 CSS px padding:         (25 + 8) × 320/300 ≈ 35.2
+// Both rounded to integers (snap to SVG grid; sub-pixel residual
+// is < 0.4 CSS px, invisible). `OVERRIDE_BTN_CARVE_R = 35` is a
+// deliberate test placeholder — the user iterates visually; tests
+// pin the constant NAME, not the value, so a later tweak stays green.
+// The carve applies uniformly across all backdrops (flame / snow /
+// wind / none) — see DN-3 for the wind-backdrop preemptive rationale.
+const OVERRIDE_BTN_CARVE_CY = 277;
+const OVERRIDE_BTN_CARVE_R  = 35;
+
 // --- Flame engine constants (QS-204 verbatim from qs-radiator-card.js) ---
 const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)
 const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closing rect is clipped
@@ -1316,6 +1336,36 @@ class QsClimateCard extends HTMLElement {
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
+      // QS-217 — clipPath path builder. Outer circle subpath = full
+      // ring clip; inner circle subpath = the override-button
+      // carve-out hole (when the button is rendered). The two subpaths
+      // are concatenated with `clip-rule="evenodd"` on the parent
+      // <path>, so the inner subpath becomes a hole — the backdrop
+      // animation (flame / snow / wind) is clipped OUT of that disc,
+      // exposing the card background around the semi-transparent
+      // button. The carve is gated on `e.override_reset`, byte-
+      // identical to the existing `<div id="override_btn">` render
+      // gate, so the clipPath is visually equivalent to the original
+      // full-circle clip when there is no override button.
+      // DN-3 — the carve applies uniformly to ALL backdrops (including
+      // wind) by design. Wind wisps live at y = 130..190 (well above
+      // the carve top at y = 242 = 277 − 35), so the carve has no
+      // visible effect today; but a future wind redesign that extends
+      // toward the bottom inherits the carve automatically.
+      // SVG path semantics: each subpath needs its own M move-to so
+      // evenodd treats them as independent regions — the explicit
+      // ` M …` prefix on `carveSubpath` provides that separator.
+      const carveSubpath = e.override_reset
+        ? ` M ${CENTER_X - OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_CY}` +
+          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${2 * OVERRIDE_BTN_CARVE_R},0` +
+          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${-2 * OVERRIDE_BTN_CARVE_R},0`
+        : '';
+      const clipPathD =
+        `M ${CENTER_X - CLIP_R},${CENTER_CY}` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0` +
+        carveSubpath;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -1343,7 +1393,7 @@ class QsClimateCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${climateClipId}">
-                  <circle cx="${CENTER_X}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                  <path clip-rule="evenodd" d="${clipPathD}" />
                 </clipPath>
               </defs>
               <g clip-path="url(#${climateClipId})">

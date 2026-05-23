@@ -477,6 +477,31 @@ also defensively initialises `_snowflakes`, `_snowWavePhase`, and
 `_nextSnowflakeAt` itself — belt + braces, robust to either
 init-order.
 
+### QS-217 — Override-button carve-out
+
+The semi-transparent bottom-center override "hand" button
+(`<div id="override_btn">`) was hard to read against the colored
+animations (orange flames, white snow, blue water) painted by the
+clipPath group below it. QS-217 fixes the legibility by carving an
+arc out of the animation behind the button, exposing the card
+background ring. The three affected cards — `qs-radiator-card.js`,
+`qs-water-boiler-card.js`, and `qs-climate-card.js` — each replace
+the single `<circle>` inside their `<clipPath>` with a single
+`<path clip-rule="evenodd" d="${clipPathD}">`. The `clipPathD`
+builder concatenates two circular subpaths: the outer full-disc
+clip (radius `CLIP_R = 120`) and, when the override button is
+rendered, an inner carve disc at
+`(CENTER_*, OVERRIDE_BTN_CARVE_CY = 277)` with
+`OVERRIDE_BTN_CARVE_R = 35`. The `277`/`35` values derive from the
+CSS `.override-btn` geometry (button center `(150, 260)` CSS px,
+outer radius 25, plus ≈ 8 CSS px of padding so the card background
+is visible between the button outline and the carve edge) scaled
+by the SVG viewBox factor `320/300` and rounded to integers (the
+sub-pixel residual is invisible). The carve subpath is gated on
+`e.override_reset` — the same truthy gate that already controls
+the button DOM render — so cards without an override-reset entity
+render a visually identical full-disc clip.
+
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
 Every JS card in `ui/resources/` follows the same defensive

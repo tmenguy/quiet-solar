@@ -37,6 +37,24 @@ const CLIP_R = 120;                 // water clip circle radius (10px inside rin
 const WAVE_WIDTH = 480;             // single wave period (2× clip diameter)
 const WAVE_BOTTOM_Y = 400;          // closing rectangle y; clipped by circle
 
+// QS-217: Override-button carve-out geometry.
+// Anchored to the CSS `.override-btn` at `position: absolute;
+// bottom: 15px; left: 50%; transform: translateX(-50%); width: 50px;
+// height: 50px;` inside `.ring` (300×300 CSS px). The SVG viewBox
+// (320×320) is rendered at 300×300 → uniform scale 320/300 ≈ 1.0667.
+//   Button center CSS px (within .ring):  (150, 260)
+//                                          = (.ring.w/2, .ring.h − 15 − 50/2)
+//   Button center SVG units:               (160, 277.33)  ← x = CENTER_CX
+//   Button outer radius CSS px:            25
+//   Button outer radius SVG units:         26.67
+//   Carve adds ≈ 8 CSS px padding:         (25 + 8) × 320/300 ≈ 35.2
+// Both rounded to integers (snap to SVG grid; sub-pixel residual
+// is < 0.4 CSS px, invisible). `OVERRIDE_BTN_CARVE_R = 35` is a
+// deliberate test placeholder — the user iterates visually; tests
+// pin the constant NAME, not the value, so a later tweak stays green.
+const OVERRIDE_BTN_CARVE_CY = 277;
+const OVERRIDE_BTN_CARVE_R  = 35;
+
 // --- Per-layer wave offsets ---
 const LAYER_SCROLL_OFFSET = 1.2;
 const LAYER_PHASE_OFFSET = 2.1;
@@ -1193,6 +1211,31 @@ class QsWaterBoilerCard extends HTMLElement {
       const preservedBubbles = this._bubbles;
       const preservedNextBubbleAt = this._nextBubbleAt;
 
+      // QS-217 — clipPath path builder. Outer circle subpath = full
+      // ring clip; inner circle subpath = the override-button
+      // carve-out hole (when the button is rendered). The two subpaths
+      // are concatenated with `clip-rule="evenodd"` on the parent
+      // <path>, so the inner subpath becomes a hole — the water
+      // animation is clipped OUT of that disc, exposing the card
+      // background around the semi-transparent button. The carve is
+      // gated on `e.override_reset`, byte-identical to the existing
+      // `<div id="override_btn">` render gate, so the clipPath is
+      // visually equivalent to the original full-circle clip when
+      // there is no override button.
+      // SVG path semantics: each subpath needs its own M move-to so
+      // evenodd treats them as independent regions — the explicit
+      // ` M …` prefix on `carveSubpath` provides that separator.
+      const carveSubpath = e.override_reset
+        ? ` M ${CENTER_CX - OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_CY}` +
+          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${2 * OVERRIDE_BTN_CARVE_R},0` +
+          ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${-2 * OVERRIDE_BTN_CARVE_R},0`
+        : '';
+      const clipPathD =
+        `M ${CENTER_CX - CLIP_R},${CENTER_CY}` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
+        ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0` +
+        carveSubpath;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -1221,7 +1264,7 @@ class QsWaterBoilerCard extends HTMLElement {
                   </feMerge>
                 </filter>
                 <clipPath id="${waterClipId}">
-                  <circle cx="${CENTER_CX}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                  <path clip-rule="evenodd" d="${clipPathD}" />
                 </clipPath>
                 <filter id="${surfaceGlowFilterId}" x="-50%" y="-50%" width="200%" height="200%">
                   <feGaussianBlur stdDeviation="${SURFACE_GLOW_BLUR_STDDEV}" result="blur" />
