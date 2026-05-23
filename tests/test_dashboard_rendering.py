@@ -3344,14 +3344,16 @@ def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None
         f"OVERRIDE_BTN_CARVE_CY = 277;` declaration (QS-217 AC-1)."
     )
     assert re.search(
-        r"const\s+OVERRIDE_BTN_CARVE_R\s*=\s*45\b",
+        r"const\s+OVERRIDE_BTN_CARVE_R\s*=\s*60\b",
         content,
     ) is not None, (
         f"{card_filename}: missing module-level `const "
-        f"OVERRIDE_BTN_CARVE_R = 45;` declaration (QS-217 AC-1; R "
-        f"bumped from 35 → 45 during review-fix #02 visual iteration "
-        f"so the carve generously covers the visible button area + "
-        f"~9 CSS px padding at the tightest spot, the top corners)."
+        f"OVERRIDE_BTN_CARVE_R = 60;` declaration (QS-217 AC-1; R "
+        f"bumped 35 → 45 → 60 across two visual-iteration rounds — "
+        f"the user's rendered button is ~46 SVG radius after retina "
+        f"scaling, so R=45 was just barely too small; R=60 covers it "
+        f"with ~13 SVG ≈ ~12 CSS px of padding even at the tightest "
+        f"button y values)."
     )
     assert re.search(
         r"const\s+OVERRIDE_BTN_CARVE_INT_X\s*=",

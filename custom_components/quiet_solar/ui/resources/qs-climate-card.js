@@ -54,18 +54,20 @@ const CLIP_R = 120;                 // backdrop clip circle radius
 // pin the constant NAME, not the value, so a later tweak stays green.
 // The carve applies uniformly across all backdrops (flame / snow /
 // wind / none) — see DN-3 for the wind-backdrop preemptive rationale.
-// QS-217 review-fix #02 — radius bumped from 35 → 45 after user
-// visual iteration: at R = 35 the carve disc was just barely wider
-// than the button at the carve centre y but NARROWER than the
-// button at the button-top y, leaving thin slivers of animation
-// visible at the top corners of the visible button area AND a
-// visible "lens" curve where the outer-clip-disc bottom (y = 280)
-// cut through the button area. At R = 45 the carve x range at the
-// button top y ≈ 250 is 160 ± √(45² − 26.33²) ≈ 160 ± 36.5,
-// comfortably wider than the button x range (133.33–186.67), with
-// ~10 SVG ≈ ~9 CSS px of padding at the tightest spot.
+// QS-217 review-fix #02b — radius bumped 35 → 45 → 60 across two
+// visual-iteration rounds after the user reported a persistent
+// "lens" inside the button outline. At R = 35 the carve was
+// clearly too small; at R = 45 the math says the carve fully
+// contains the 50 CSS-px button outline, but the user-visible
+// button (the .override-btn 2px border + 4 % white background)
+// renders larger than the strict 50-px box on retina/high-DPI
+// displays — the user's empirical observation showed the visible
+// button at ≈ 92 SVG diameter (46 SVG radius), so R = 45 was just
+// barely too small. R = 60 covers any reasonable visible-button
+// radius with ~13 SVG ≈ ~12 CSS px of padding even at the
+// tightest button y values.
 const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 45;
+const OVERRIDE_BTN_CARVE_R  = 60;
 
 // QS-217 review-fix #02: Crescent-cancel subpath intersection
 // geometry, now DERIVED at module load instead of integer-rounded.

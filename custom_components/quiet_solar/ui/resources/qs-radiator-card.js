@@ -49,22 +49,23 @@ const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closin
 //   Button outer radius CSS px:            25
 //   Button outer radius SVG units:         26.67
 //   Carve adds ≈ 8 CSS px padding:         (25 + 8) × 320/300 ≈ 35.2
-// QS-217 review-fix #02 — radius bumped from 35 → 45 after user
-// visual iteration: at R = 35 the carve disc was just barely wider
-// than the button at the carve centre y but NARROWER than the
-// button at the button-top y (the carve circle pinches inward as
-// you move away from its centre), leaving thin slivers of animation
-// visible at the top corners of the visible button area AND a
-// visible "lens" curve where the outer-clip-disc bottom (y = 280)
-// cut through the button area (carve too small to cover it). At
-// R = 45 the carve x range at the button top y ≈ 250 is
-// 160 ± √(45² − 26.33²) ≈ 160 ± 36.5, comfortably wider than the
-// button x range (133.33–186.67), with ~10 SVG ≈ ~9 CSS px of
-// padding at the tightest spot. The constant remains user-tunable
-// — tests pin the NAME, the integer value is the current visual-
-// iteration choice.
+// QS-217 review-fix #02b — radius bumped 35 → 45 → 60 across two
+// visual-iteration rounds after the user reported a persistent
+// "lens" inside the button outline. At R = 35 the carve was clearly
+// too small; at R = 45 the math says the carve fully contains the
+// 50 CSS-px button outline, but the user-visible button (the
+// .override-btn 2px border + 4 % white background) renders larger
+// than the strict 50-px box on retina/high-DPI displays — empirical
+// measurement on the user's screenshot put the visible button at
+// ≈ 92 SVG diameter (46 SVG radius), so R = 45 was just barely too
+// small. R = 60 covers any reasonable visible-button radius with
+// ~13 SVG ≈ ~12 CSS px of padding even at the tightest button y
+// values. The constant remains user-tunable — tests pin the NAME
+// for builder-block references, and the integer value is pinned
+// at the current visual-iteration choice; bump both together on
+// future iterations.
 const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 45;
+const OVERRIDE_BTN_CARVE_R  = 60;
 
 // QS-217 review-fix #02: Crescent-cancel subpath intersection
 // geometry, now DERIVED at module load instead of integer-rounded.

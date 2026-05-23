@@ -549,18 +549,23 @@ Both inner subpaths share a hardened gate
 iteration tweak that sets the radius to 0 cannot emit degenerate
 `rx = ry = 0` arc commands.
 
-Review-fix #02 also **bumped `OVERRIDE_BTN_CARVE_R` from 35 → 45**
-after a user-visual confirmation that the original radius was too
-small: at R = 35 the carve circle pinched too tightly near its
-top, leaving thin slivers of animation visible at the corners of
-the visible button area AND a "lens" curve where the outer-clip-
-disc bottom (y = 280) cut through the button area itself. At
-R = 45 the carve x range at the button top y ≈ 250 is
-`160 ± √(45² − 26.33²) ≈ 160 ± 36.5`, comfortably wider than the
-button x range (`133.33–186.67`), with ~10 SVG ≈ ~9 CSS px of
+Review-fix #02 also **bumped `OVERRIDE_BTN_CARVE_R` 35 → 45 → 60**
+across two visual-iteration rounds: at R = 35 the carve circle
+pinched too tightly near its top, leaving thin slivers of
+animation visible at the top corners of the visible button area
+AND a "lens" curve where the outer-clip-disc bottom (y = 280)
+cut through the button area; at R = 45 the math said the carve
+fully contained the 50 CSS-px button outline, but the user-
+visible button (the `.override-btn` 2 px border + 4 % white
+background) renders larger than the strict 50-px box on retina /
+high-DPI displays (empirical: ≈ 92 SVG diameter / 46 SVG radius on
+the user's screen), so R = 45 was still just barely too small. At
+R = 60 the carve x range at the button top y ≈ 250 is
+`160 ± √(60² − 26.33²) ≈ 160 ± 53.9`, comfortably wider than any
+reasonable visible-button x range, with ~13 SVG ≈ ~12 CSS px of
 padding at the tightest spot. The value remains user-tunable —
-tests pin the constant NAME, the integer is the current
-visual-iteration choice.
+tests pin the constant NAME for builder-block references, the
+integer value is the current visual-iteration choice.
 
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
