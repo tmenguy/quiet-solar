@@ -54,30 +54,52 @@ const CLIP_R = 120;                 // backdrop clip circle radius
 // pin the constant NAME, not the value, so a later tweak stays green.
 // The carve applies uniformly across all backdrops (flame / snow /
 // wind / none) — see DN-3 for the wind-backdrop preemptive rationale.
+// QS-217 review-fix #02 — radius bumped from 35 → 45 after user
+// visual iteration: at R = 35 the carve disc was just barely wider
+// than the button at the carve centre y but NARROWER than the
+// button at the button-top y, leaving thin slivers of animation
+// visible at the top corners of the visible button area AND a
+// visible "lens" curve where the outer-clip-disc bottom (y = 280)
+// cut through the button area. At R = 45 the carve x range at the
+// button top y ≈ 250 is 160 ± √(45² − 26.33²) ≈ 160 ± 36.5,
+// comfortably wider than the button x range (133.33–186.67), with
+// ~10 SVG ≈ ~9 CSS px of padding at the tightest spot.
 const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 35;
+const OVERRIDE_BTN_CARVE_R  = 45;
 
-// QS-217 review-fix #01: Crescent-cancel subpath intersection geometry.
-// The full carve disc extends 32 SVG units below the outer clip disc
-// (OVERRIDE_BTN_CARVE_CY + OVERRIDE_BTN_CARVE_R = 312 vs. CENTER_CY +
-// CLIP_R = 280). Under `clip-rule="evenodd"`, that crescent region
-// (inside the carve disc, OUTSIDE the outer clip disc) has winding
-// count 1 → "inside the clip" → the backdrop animation (flame /
-// snow / wind) would leak through below the override-hand button.
-// We bump the count to 2 by adding a third subpath shaped like the
-// crescent, bordered by the small outer-disc arc and the large
-// carve-disc arc that meet at the two circle intersections.
-// Two circles intersect when:
-//   y_int = (CLIP_R² − OVERRIDE_BTN_CARVE_R² + OVERRIDE_BTN_CARVE_CY²
-//            − CENTER_CY²) / (2 × (OVERRIDE_BTN_CARVE_CY − CENTER_CY))
-//         = 64304 / 234 ≈ 274.80 → rounded to 275
-//   x_off = √(CLIP_R² − (y_int − CENTER_CY)²) ≈ 34.94 → 35
-// Integer rounding keeps the SVG path string short; the residual
-// (≤ 0.2 SVG units) is well below 1 CSS pixel and invisible. Swap
-// for floats (`274.80` / `34.94`) if a future visual review needs
-// exact alignment — the path string accepts decimals.
-const OVERRIDE_BTN_CARVE_INT_X = 35;
-const OVERRIDE_BTN_CARVE_INT_Y = 275;
+// QS-217 review-fix #02: Crescent-cancel subpath intersection
+// geometry, now DERIVED at module load instead of integer-rounded.
+// Under `clip-rule="evenodd"`, the full carve disc extends below
+// the outer clip disc (OVERRIDE_BTN_CARVE_CY + OVERRIDE_BTN_CARVE_R
+// > CENTER_CY + CLIP_R); that crescent region has winding count 1
+// → "inside the clip" → the backdrop animation (flame / snow /
+// wind) would leak through below the override-hand button. The
+// cancel subpath traces the leak crescent and bumps its winding to
+// 2 → outside clip → leak hidden. The cancel subpath's two arcs
+// MUST meet at the exact circle intersection points so each arc
+// segment actually lies on its respective circle. Integer-rounded
+// endpoints (review-fix #01) caused SVG to fit the arcs to
+// slightly-OFFSET circles (centre shifted ≈ 0.22 SVG units for
+// the outer-disc arc), producing a thin sub-pixel gap at chord
+// level — visible on high-DPI displays as a faint circle of
+// backdrop colour just below the button. Runtime derivation
+// eliminates the rounding artifact AND auto-tracks future
+// iterations on `OVERRIDE_BTN_CARVE_R`.
+// Subtracting the two circle equations (both centres on x =
+// CENTER_X, so x cancels) gives:
+//   y_int = (CLIP_R² − R² + CARVE_CY² − CENTER_CY²)
+//           / (2 × (CARVE_CY − CENTER_CY))
+//   x_off = √(CLIP_R² − (y_int − CENTER_CY)²)  ← from outer disc
+const OVERRIDE_BTN_CARVE_INT_Y = (
+  CLIP_R * CLIP_R
+  - OVERRIDE_BTN_CARVE_R * OVERRIDE_BTN_CARVE_R
+  + OVERRIDE_BTN_CARVE_CY * OVERRIDE_BTN_CARVE_CY
+  - CENTER_CY * CENTER_CY
+) / (2 * (OVERRIDE_BTN_CARVE_CY - CENTER_CY));
+const OVERRIDE_BTN_CARVE_INT_X = Math.sqrt(
+  CLIP_R * CLIP_R
+  - (OVERRIDE_BTN_CARVE_INT_Y - CENTER_CY) ** 2
+);
 
 // --- Flame engine constants (QS-204 verbatim from qs-radiator-card.js) ---
 const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)

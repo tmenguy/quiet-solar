@@ -514,19 +514,19 @@ builder concatenates two circular subpaths: the outer full-disc
 clip (radius `CLIP_R = 120`) and, when the override button is
 rendered, an inner carve disc at
 `(CENTER_*, OVERRIDE_BTN_CARVE_CY = 277)` with
-`OVERRIDE_BTN_CARVE_R = 35`. The `277`/`35` values derive from the
-CSS `.override-btn` geometry (button center `(150, 260)` CSS px,
-outer radius 25, plus ≈ 8 CSS px of padding so the card background
-is visible between the button outline and the carve edge) scaled
-by the SVG viewBox factor `320/300` and rounded to integers (the
-sub-pixel residual is invisible). The carve subpath is gated on
-`e.override_reset` — the same truthy gate that already controls
-the button DOM render — so cards without an override-reset entity
-render a visually identical full-disc clip.
+`OVERRIDE_BTN_CARVE_R` (currently `45` after review-fix #02 visual
+iteration — see below). The button-centre `277` value derives from
+the CSS `.override-btn` geometry (button center `(150, 260)` CSS
+px, outer radius 25) scaled by the SVG viewBox factor `320/300`
+and rounded to an integer (sub-pixel residual invisible). The
+carve subpath is gated on `e.override_reset` — the same truthy
+gate that already controls the button DOM render — so cards
+without an override-reset entity render a visually identical
+full-disc clip.
 
 Review-fix #01 added a **third "crescent-cancel" subpath**
 (`cancelSubpath`) on top of the carve. The full carve disc extends
-32 SVG units below the outer clip disc (carve bottom at y = 312
+below the outer clip disc (carve bottom at y ≈ 322 with R = 45
 vs. outer disc bottom at y = 280); under `clip-rule="evenodd"`
 that crescent of the carve disc lying outside the outer disc has
 winding count 1 → "inside the clip" → the underlying animation
@@ -536,12 +536,31 @@ outer-disc small arc and the carve-disc large arc that meet at
 the two circle intersections — so it raises the winding from 1 →
 2 → "outside the clip" → leak suppressed, with **no change** to
 the visible carve footprint. Two further module-level constants
-(`OVERRIDE_BTN_CARVE_INT_X = 35`, `OVERRIDE_BTN_CARVE_INT_Y = 275`)
-encode the rounded circle intersection point
-(y_int ≈ 274.80, x_off ≈ 34.94). Both inner subpaths share a
-hardened gate `(e.override_reset && OVERRIDE_BTN_CARVE_R > 0)` so
-a visual-iteration tweak that sets the radius to 0 cannot emit
-degenerate `rx = ry = 0` arc commands.
+`OVERRIDE_BTN_CARVE_INT_X` and `OVERRIDE_BTN_CARVE_INT_Y` encode
+the circle-intersection point; review-fix #02 switched them from
+integer-rounded literals to RUNTIME-DERIVED expressions
+(`y_int = (CLIP_R² − R² + CARVE_CY² − CENTER_CY²) / (2·(CARVE_CY −
+CENTER_CY))`, `x_off = √(CLIP_R² − (y_int − CENTER_CY)²)`) so the
+cancel-subpath arc endpoints lie EXACTLY on the relevant circles
+— no sub-pixel chord-level gap — AND so a future iteration on
+`OVERRIDE_BTN_CARVE_R` automatically updates the cancel boundary.
+Both inner subpaths share a hardened gate
+`(e.override_reset && OVERRIDE_BTN_CARVE_R > 0)` so a visual-
+iteration tweak that sets the radius to 0 cannot emit degenerate
+`rx = ry = 0` arc commands.
+
+Review-fix #02 also **bumped `OVERRIDE_BTN_CARVE_R` from 35 → 45**
+after a user-visual confirmation that the original radius was too
+small: at R = 35 the carve circle pinched too tightly near its
+top, leaving thin slivers of animation visible at the corners of
+the visible button area AND a "lens" curve where the outer-clip-
+disc bottom (y = 280) cut through the button area itself. At
+R = 45 the carve x range at the button top y ≈ 250 is
+`160 ± √(45² − 26.33²) ≈ 160 ± 36.5`, comfortably wider than the
+button x range (`133.33–186.67`), with ~10 SVG ≈ ~9 CSS px of
+padding at the tightest spot. The value remains user-tunable —
+tests pin the constant NAME, the integer is the current
+visual-iteration choice.
 
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
