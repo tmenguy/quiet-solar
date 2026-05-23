@@ -502,6 +502,25 @@ sub-pixel residual is invisible). The carve subpath is gated on
 the button DOM render — so cards without an override-reset entity
 render a visually identical full-disc clip.
 
+Review-fix #01 added a **third "crescent-cancel" subpath**
+(`cancelSubpath`) on top of the carve. The full carve disc extends
+32 SVG units below the outer clip disc (carve bottom at y = 312
+vs. outer disc bottom at y = 280); under `clip-rule="evenodd"`
+that crescent of the carve disc lying outside the outer disc has
+winding count 1 → "inside the clip" → the underlying animation
+leaks through as a coloured arc just below the override button.
+The cancel subpath is shaped like that crescent — bordered by the
+outer-disc small arc and the carve-disc large arc that meet at
+the two circle intersections — so it raises the winding from 1 →
+2 → "outside the clip" → leak suppressed, with **no change** to
+the visible carve footprint. Two further module-level constants
+(`OVERRIDE_BTN_CARVE_INT_X = 35`, `OVERRIDE_BTN_CARVE_INT_Y = 275`)
+encode the rounded circle intersection point
+(y_int ≈ 274.80, x_off ≈ 34.94). Both inner subpaths share a
+hardened gate `(e.override_reset && OVERRIDE_BTN_CARVE_R > 0)` so
+a visual-iteration tweak that sets the radius to 0 cannot emit
+degenerate `rx = ry = 0` arc commands.
+
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
 Every JS card in `ui/resources/` follows the same defensive

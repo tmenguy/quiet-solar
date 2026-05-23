@@ -57,6 +57,28 @@ const CLIP_R = 120;                 // backdrop clip circle radius
 const OVERRIDE_BTN_CARVE_CY = 277;
 const OVERRIDE_BTN_CARVE_R  = 35;
 
+// QS-217 review-fix #01: Crescent-cancel subpath intersection geometry.
+// The full carve disc extends 32 SVG units below the outer clip disc
+// (OVERRIDE_BTN_CARVE_CY + OVERRIDE_BTN_CARVE_R = 312 vs. CENTER_CY +
+// CLIP_R = 280). Under `clip-rule="evenodd"`, that crescent region
+// (inside the carve disc, OUTSIDE the outer clip disc) has winding
+// count 1 → "inside the clip" → the backdrop animation (flame /
+// snow / wind) would leak through below the override-hand button.
+// We bump the count to 2 by adding a third subpath shaped like the
+// crescent, bordered by the small outer-disc arc and the large
+// carve-disc arc that meet at the two circle intersections.
+// Two circles intersect when:
+//   y_int = (CLIP_R² − OVERRIDE_BTN_CARVE_R² + OVERRIDE_BTN_CARVE_CY²
+//            − CENTER_CY²) / (2 × (OVERRIDE_BTN_CARVE_CY − CENTER_CY))
+//         = 64304 / 234 ≈ 274.80 → rounded to 275
+//   x_off = √(CLIP_R² − (y_int − CENTER_CY)²) ≈ 34.94 → 35
+// Integer rounding keeps the SVG path string short; the residual
+// (≤ 0.2 SVG units) is well below 1 CSS pixel and invisible. Swap
+// for floats (`274.80` / `34.94`) if a future visual review needs
+// exact alignment — the path string accepts decimals.
+const OVERRIDE_BTN_CARVE_INT_X = 35;
+const OVERRIDE_BTN_CARVE_INT_Y = 275;
+
 // --- Flame engine constants (QS-204 verbatim from qs-radiator-card.js) ---
 const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)
 const FLAME_BOTTOM_Y = 400;         // ≥ SVG viewBox max-y (320) so the closing rect is clipped
@@ -1336,35 +1358,54 @@ class QsClimateCard extends HTMLElement {
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
-      // QS-217 — clipPath path builder. Outer circle subpath = full
-      // ring clip; inner circle subpath = the override-button
-      // carve-out hole (when the button is rendered). The two subpaths
-      // are concatenated with `clip-rule="evenodd"` on the parent
-      // <path>, so the inner subpath becomes a hole — the backdrop
-      // animation (flame / snow / wind) is clipped OUT of that disc,
-      // exposing the card background around the semi-transparent
-      // button. The carve is gated on `e.override_reset`, byte-
-      // identical to the existing `<div id="override_btn">` render
-      // gate, so the clipPath is visually equivalent to the original
-      // full-circle clip when there is no override button.
-      // DN-3 — the carve applies uniformly to ALL backdrops (including
-      // wind) by design. Wind wisps live at y = 130..190 (well above
-      // the carve top at y = 242 = 277 − 35), so the carve has no
-      // visible effect today; but a future wind redesign that extends
-      // toward the bottom inherits the carve automatically.
+      // QS-217 — clipPath path builder. Three subpaths concatenated
+      // with `clip-rule="evenodd"` on the parent <path>:
+      //   1. Outer circle subpath — full ring clip (always present).
+      //   2. Inner circle subpath (`carveSubpath`) — the override-
+      //      button carve-out hole. Winding flip: inside outer +
+      //      inside carve = winding 2 = outside clip (hole), so the
+      //      backdrop animation (flame / snow / wind) is clipped OUT
+      //      of that disc, exposing the card background around the
+      //      semi-transparent button.
+      //   3. Crescent-cancel subpath (`cancelSubpath`, review-fix #01
+      //      must-fix #1) — covers the region where the carve disc
+      //      protrudes below the outer clip disc. Without it the
+      //      crescent has winding 1 → backdrop leaks below the
+      //      button. The cancel subpath bumps that crescent's
+      //      winding from 1 → 2 → outside clip → leak hidden.
+      // Both inner subpaths are gated on
+      // `(e.override_reset && OVERRIDE_BTN_CARVE_R > 0)` — review-fix
+      // #01 nice-to-have #4 guards against degenerate `rx=ry=0` arc
+      // commands when the user iterates the radius down to 0.
+      // DN-3 — the carve + cancel apply uniformly to ALL backdrops
+      // (including wind) by design. Wind wisps live at y = 130..190
+      // (well above the carve top at y = 242 = 277 − 35), so the
+      // carve has no visible effect today; but a future wind
+      // redesign that extends toward the bottom inherits the carve
+      // (and the leak fix) automatically.
       // SVG path semantics: each subpath needs its own M move-to so
-      // evenodd treats them as independent regions — the explicit
-      // ` M …` prefix on `carveSubpath` provides that separator.
-      const carveSubpath = e.override_reset
+      // evenodd treats them as independent regions.
+      const carveSubpath = (e.override_reset && OVERRIDE_BTN_CARVE_R > 0)
         ? ` M ${CENTER_X - OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_CY}` +
           ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${2 * OVERRIDE_BTN_CARVE_R},0` +
           ` a ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1,0 ${-2 * OVERRIDE_BTN_CARVE_R},0`
+        : '';
+      // Cancel subpath: triangle-like region bordered by the
+      // outer-disc small arc (large-arc-flag = 0, sweep-flag = 1)
+      // and the carve-disc large arc through the carve bottom
+      // (large-arc-flag = 1, sweep-flag = 1). See the radiator card
+      // arc-flag rationale comment for the derivation.
+      const cancelSubpath = (e.override_reset && OVERRIDE_BTN_CARVE_R > 0)
+        ? ` M ${CENTER_X - OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y}` +
+          ` A ${CLIP_R},${CLIP_R} 0 0 1 ${CENTER_X + OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y}` +
+          ` A ${OVERRIDE_BTN_CARVE_R},${OVERRIDE_BTN_CARVE_R} 0 1 1 ${CENTER_X - OVERRIDE_BTN_CARVE_INT_X},${OVERRIDE_BTN_CARVE_INT_Y} Z`
         : '';
       const clipPathD =
         `M ${CENTER_X - CLIP_R},${CENTER_CY}` +
         ` a ${CLIP_R},${CLIP_R} 0 1,0 ${2 * CLIP_R},0` +
         ` a ${CLIP_R},${CLIP_R} 0 1,0 ${-2 * CLIP_R},0` +
-        carveSubpath;
+        carveSubpath +
+        cancelSubpath;
 
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
