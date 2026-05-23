@@ -464,8 +464,13 @@ accumulators (`_currentFlameAmp`, `_currentSnowAmp`,
 deliberately survive both `_stopAnimation` and the post-rewrite
 invalidation so re-attach picks up where it left off without a
 visible snap. QS-216 — snowflake array now survives innerHTML via a
-snapshot/restore block bracketing the `_invalidate*Cache()` triplet;
-`_invalidateSnowCache` itself is unchanged.
+snapshot/restore block bracketing the `_invalidate*Cache()` triplet.
+`_invalidateSnowCache` itself still calls `.remove()` on each flake
+and clears `_snowflakes = []` (it governs the
+`disconnectedCallback` + real-backdrop-transition paths) but the
+body MUST NOT null `b.el` — the truthy-branch restore filter
+`(b => b?.el)` silently drops anything nulled there. Pinned by
+`test_invalidate_snow_cache_does_not_null_el` (review-fix #01 S2).
 
 **Snow-mode cold-start defence.** A cold start straight into
 `'snow'` mode (e.g. `climate_state_on === 'cool'` on first paint)

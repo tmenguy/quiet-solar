@@ -389,17 +389,13 @@ class QsClimateCard extends HTMLElement {
 
       // Advance + retire active snowflakes regardless of running state.
       //
-      // Pass-#2 S2 note — this is an in-render graceful exit ONLY: a
-      // running→off transition that doesn't trigger a re-render lets
-      // active flakes finish their fall naturally. But the M1 (pass
-      // #1) post-innerHTML `_invalidateSnowCache()` wipes
-      // `_snowflakes = []` on every hass push (~once per second), so
-      // cross-render flakes do NOT survive in practice. The visual
-      // effect is acceptable because the wipe coincides with an
-      // innerHTML rewrite that also detaches the parent `<g>` —
-      // the user would have seen the flakes blink in either case.
-      // Re-parenting live `<circle>` nodes into the new `<g>` is a
-      // valid stretch goal but out of scope (deferred to a follow-up).
+      // QS-216 — cross-render flakes NOW survive same-backdrop
+      // re-renders: `_render()` snapshots `_snowflakes` BEFORE the
+      // innerHTML rewrite and re-attaches each `<circle>` to the
+      // fresh snow layer AFTER `_invalidateSnowCache()` (see AC-2).
+      // Flakes are still cleared on `disconnectedCallback` and on
+      // real backdrop transitions away from 'snow' (restore-block
+      // null-layer branch).
       // Pass-#3 N2 — when `_snowBaseY` is null (no valid pile base
       // computed yet, e.g. cold-start before the first render finishes
       // populating snow geometry), fall back to the BOTTOM of the
@@ -528,14 +524,16 @@ class QsClimateCard extends HTMLElement {
     this._snowLayerEl = null;
     this._lastSnowBaseY = null;
     this._lastSnowAmp = null;
-    // Review-fix N7 — defensive: the upcoming innerHTML rewrite (or
-    // post-disconnect cleanup) wipes the parent `<g>` anyway, so the
-    // explicit `.remove()` calls are redundant in the rewrite path.
-    // They DO matter on the `disconnectedCallback` path where there is
-    // no rewrite, and they keep `_snowflakes.length` from drifting up
-    // toward MAX_CONCURRENT_SNOWFLAKES across re-renders.
-    if (this._snowflakes && this._snowflakes.length) {
-      this._snowflakes.forEach(b => b.el?.remove?.());
+    // QS-216 — same-backdrop re-renders preserve flakes via
+    // _render()'s snapshot/restore block (AC-2); this reset only
+    // governs `disconnectedCallback` and real backdrop transitions
+    // away from 'snow'. Critical invariant (AC-3): do NOT null
+    // `b.el` — the truthy-branch restore filter `(b => b?.el)`
+    // would silently drop anything we null here.
+    if (this._snowflakes) {
+      for (const b of this._snowflakes) {
+        b?.el?.remove?.();
+      }
       this._snowflakes = [];
     }
     this._nextSnowflakeAt = 0;
@@ -1316,22 +1314,11 @@ class QsClimateCard extends HTMLElement {
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
-      // QS-216: snapshot the in-flight snowflakes BEFORE the
-      // innerHTML rewrite below. The rewrite detaches every DOM node
-      // under `this._root`, including the snow layer's children.
-      // Without this snapshot, every HA state push (which fires
-      // `set hass → _render`) wipes the entire snowflake array via
-      // the post-innerHTML `_invalidateSnowCache()` call (~once per
-      // second). Mirror of QS-214's boiler steam-puff + bubble
-      // preservation. The `b.el` references survive detachment (JS
-      // still holds them); we re-attach them to the new snow layer
-      // after `_invalidateSnowCache()` below. `_nextSnowflakeAt` is
-      // also preserved so the next spawn doesn't reset to 0 (which
-      // would burst-spawn on every push). On a cold render before
-      // `_startAnimation` or the snow backdrop-transition block has
-      // run, `this._snowflakes` and `this._nextSnowflakeAt` may be
-      // `undefined`; the restore-block's `?.length` guard handles
-      // that safely.
+      // QS-216 AC-1 — snapshot in-flight snowflakes before the
+      // innerHTML rewrite (mirror of QS-214 boiler precedent). Both
+      // locals may capture `undefined` on a cold render; the restore
+      // block's `?.length` guard handles that. See AC-2 + AC-4 for
+      // the restore + ordering invariant.
       const preservedSnowflakes = this._snowflakes;
       const preservedNextSnowflakeAt = this._nextSnowflakeAt;
 
@@ -1481,26 +1468,11 @@ class QsClimateCard extends HTMLElement {
       this._invalidateSnowCache();
       this._invalidateWindCache();
 
-      // QS-216: restore the preserved snowflakes into the FRESH snow
-      // layer (its DOM identity changed via innerHTML — same `id`,
-      // new element). For each preserved flake, re-attach its
-      // detached `el` to the new layer; the per-flake state (cx, cy,
-      // r, vy, life, maxLife) survived in the JS array, so the RAF
-      // advance loop in `_stepSnow` picks up exactly where it left
-      // off with no visual blink. `_nextSnowflakeAt` is restored so
-      // spawn cadence is continuous.
-      //
-      // Ordering invariant (AC-4): this restore runs AFTER both the
-      // innerHTML rewrite and `_invalidateSnowCache()`. The snapshot
-      // captured the array reference before any mutation; the
-      // innerHTML rewrite + `_invalidateSnowCache()` performed their
-      // normal cleanup against the *instance* fields (reassigning
-      // `this._snowflakes = []`, nulling `this._snowLayerEl`,
-      // zeroing `this._nextSnowflakeAt`). The local
-      // `preservedSnowflakes` const still holds the original array
-      // reference; `_invalidateSnowCache()` calls `b.el?.remove?.()`
-      // (does NOT null `b.el`), so each preserved entry's DOM ref
-      // survives intact for re-attachment via `appendChild`.
+      // QS-216 AC-2/AC-4 — restore snapshot into the fresh snow
+      // layer AFTER the _invalidate*Cache() triplet (mirror of QS-214
+      // boiler). The null-layer else is the real backdrop-transition
+      // path (snow `<g>` is emitted only when `_backdrop === 'snow'`),
+      // not just defensive belt-and-braces.
       if (preservedSnowflakes?.length) {
         const newSnowLayer = this._snowLayerId
           ? this._root.getElementById(this._snowLayerId)
@@ -1509,24 +1481,17 @@ class QsClimateCard extends HTMLElement {
           for (const b of preservedSnowflakes) {
             if (b?.el) newSnowLayer.appendChild(b.el);
           }
-          // .filter aligns the array with the truthy set we just
-          // re-attached, so the advance loop never has to defensively
-          // null-check b.el (mirror of boiler steam-puff pattern).
+          // N8 — `.filter` builds a fresh array. All hot-path code
+          // (`_stepSnow`, `_invalidateSnowCache`) reads `this._snowflakes`
+          // each call, so the new reference is safe; do not pass the
+          // original `preservedSnowflakes` const to any closure.
           this._snowflakes = preservedSnowflakes.filter(b => b?.el);
           this._snowLayerEl = newSnowLayer;
           this._nextSnowflakeAt = preservedNextSnowflakeAt;
         } else {
-          // Unlike the boiler (which ALWAYS renders the steam layer),
-          // the climate card emits the snow <g> only when
-          // `_backdrop === 'snow'`. This branch is therefore a real
-          // backdrop-transition path (flakes from a 'snow' render
-          // arriving at a 'flame'/'wind'/'none' render), not just
-          // defensive belt-and-braces. Explicitly remove each preserved
-          // flake's DOM and reset the logical array so detached nodes
-          // don't leak. `_snowLayerEl` was already nulled by
-          // `_invalidateSnowCache()` above, so no extra cleanup needed
-          // there (mirror of boiler's `_resetDomRefs()` semantics).
-          for (const b of preservedSnowflakes) { b?.el?.remove(); }
+          for (const b of preservedSnowflakes) {
+            b?.el?.remove();
+          }
           this._snowflakes = [];
         }
       }

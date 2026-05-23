@@ -2623,6 +2623,11 @@ def test_climate_card_render_preserves_snowflakes_across_innerhtml():
     then re-attach each preserved `<circle>` to the freshly-rendered
     snow layer AFTER the three `_invalidate*Cache()` calls and restore
     the array + cadence counter.
+
+    Six content regexes pin the presence of each clause; a follow-on
+    block (review fix #01 S1) extracts the `_render()` body via
+    `_extract_js_function_body` and pins the AC-4 ordering invariant
+    via character-offset comparisons.
     """
     import re
 
@@ -2661,14 +2666,6 @@ def test_climate_card_render_preserves_snowflakes_across_innerhtml():
         "`newSnowLayer.appendChild(b.el)`."
     )
     assert re.search(
-        r"this\._snowflakes\s*=\s*preservedSnowflakes",
-        executable,
-    ), (
-        "qs-climate-card.js: `_render()` must restore "
-        "`this._snowflakes = preservedSnowflakes` after the innerHTML "
-        "rewrite + _invalidateSnowCache() cleanup."
-    )
-    assert re.search(
         r"this\._nextSnowflakeAt\s*=\s*preservedNextSnowflakeAt",
         executable,
     ), (
@@ -2679,7 +2676,9 @@ def test_climate_card_render_preserves_snowflakes_across_innerhtml():
     # Truthy-branch array semantics: `_snowflakes` is assigned the
     # filtered set (drop entries whose `el` was missing) so the array
     # is the canonical "preserved AND truthy" view (mirror of boiler
-    # steam-puff pattern).
+    # steam-puff pattern). Review fix #01 N2: this filter assertion
+    # supersedes a previously-redundant bare-assignment regex; the
+    # filter form is a strict subset, so a single pin is sufficient.
     assert re.search(
         r"this\._snowflakes\s*=\s*preservedSnowflakes\.filter\(\s*b\s*=>\s*b\?\.el\s*\)",
         executable,
@@ -2698,6 +2697,149 @@ def test_climate_card_render_preserves_snowflakes_across_innerhtml():
         "qs-climate-card.js: the snowflake preserve null-layer "
         "else branch must iterate `preservedSnowflakes` and explicitly "
         "call `b?.el?.remove()` so detached DOM nodes don't leak."
+    )
+
+    # Review fix #01 S1 — AC-4 ordering invariant. Presence regexes
+    # above don't enforce *position*; a refactor that moved the
+    # snapshot AFTER innerHTML, or the restore BEFORE the
+    # _invalidate*Cache() triplet, would silently re-introduce the
+    # original wipe bug. Pin the ordering via character offsets on
+    # the stripped source.
+    #
+    # We deliberately don't use `_extract_js_function_body` here:
+    # (a) `r"_render\s*\(\s*\)"` would match a call site before the
+    #     declaration; and (b) the giant `this._root.innerHTML = \`…\``
+    #     template literal contains many `${…}` interpolation braces
+    #     that throw off the helper's balanced-brace walker (this is
+    #     the known limitation called out in the helper's docstring).
+    #
+    # Anchoring from `snap_idx` is sufficient: the snapshot string is
+    # unique, and every "after snap" needle below either occurs only
+    # in `_render()` (innerHTML, newSnowLayer.appendChild) or has its
+    # *other* occurrences strictly before `snap_idx` (the
+    # `_invalidate*Cache()` declarations + the `disconnectedCallback`
+    # call site, all earlier in the file).
+    snap_idx = executable.find("const preservedSnowflakes")
+    next_idx = executable.find("const preservedNextSnowflakeAt")
+    innerhtml_idx = executable.find("this._root.innerHTML")
+    assert snap_idx >= 0, (
+        "qs-climate-card.js: file must contain "
+        "`const preservedSnowflakes` (review fix #01 S1)."
+    )
+    assert next_idx >= 0, (
+        "qs-climate-card.js: file must contain "
+        "`const preservedNextSnowflakeAt` (review fix #01 S1)."
+    )
+    assert innerhtml_idx >= 0, (
+        "qs-climate-card.js: file must contain "
+        "`this._root.innerHTML` rewrite (review fix #01 S1)."
+    )
+    # All `_invalidate*Cache()` and `newSnowLayer.appendChild` lookups
+    # start AT `snap_idx` to skip the pre-_render() declaration and
+    # disconnectedCallback call-site occurrences.
+    inv_flame_idx = executable.find("_invalidateFlameCache()", snap_idx)
+    inv_snow_idx = executable.find("_invalidateSnowCache()", snap_idx)
+    inv_wind_idx = executable.find("_invalidateWindCache()", snap_idx)
+    attach_idx = executable.find("newSnowLayer.appendChild(b.el)", snap_idx)
+    assert inv_flame_idx >= 0, (
+        "qs-climate-card.js: `_render()` (after the snapshot) must "
+        "call `_invalidateFlameCache()` (review fix #01 S1)."
+    )
+    assert inv_snow_idx >= 0, (
+        "qs-climate-card.js: `_render()` (after the snapshot) must "
+        "call `_invalidateSnowCache()` (review fix #01 S1)."
+    )
+    assert inv_wind_idx >= 0, (
+        "qs-climate-card.js: `_render()` (after the snapshot) must "
+        "call `_invalidateWindCache()` (review fix #01 S1)."
+    )
+    assert attach_idx >= 0, (
+        "qs-climate-card.js: `_render()` (after the snapshot) must "
+        "call `newSnowLayer.appendChild(b.el)` (review fix #01 S1)."
+    )
+    assert snap_idx < innerhtml_idx, (
+        "qs-climate-card.js: AC-4 ordering invariant — "
+        "`const preservedSnowflakes` snapshot MUST appear BEFORE the "
+        "`this._root.innerHTML` rewrite in `_render()`. The snapshot "
+        "captures the array reference that the rewrite would otherwise "
+        "wipe (review fix #01 S1)."
+    )
+    assert next_idx < innerhtml_idx, (
+        "qs-climate-card.js: AC-4 ordering invariant — "
+        "`const preservedNextSnowflakeAt` snapshot MUST appear BEFORE "
+        "the `this._root.innerHTML` rewrite in `_render()` "
+        "(review fix #01 S1)."
+    )
+    assert attach_idx > inv_flame_idx, (
+        "qs-climate-card.js: AC-4 ordering invariant — the restore "
+        "block's `newSnowLayer.appendChild(b.el)` MUST appear AFTER "
+        "`_invalidateFlameCache()` in `_render()` (review fix #01 S1)."
+    )
+    assert attach_idx > inv_snow_idx, (
+        "qs-climate-card.js: AC-4 ordering invariant — the restore "
+        "block's `newSnowLayer.appendChild(b.el)` MUST appear AFTER "
+        "`_invalidateSnowCache()` in `_render()`. Calling it before "
+        "would let the invalidate-cache wipe the array we just "
+        "restored (review fix #01 S1)."
+    )
+    assert attach_idx > inv_wind_idx, (
+        "qs-climate-card.js: AC-4 ordering invariant — the restore "
+        "block's `newSnowLayer.appendChild(b.el)` MUST appear AFTER "
+        "`_invalidateWindCache()` in `_render()` (review fix #01 S1)."
+    )
+
+
+def test_invalidate_snow_cache_does_not_null_el():
+    """Review fix #01 S2 — pin the AC-3 invariant that
+    `_invalidateSnowCache()` calls `b.el.remove()` (or any safe-nav
+    variant thereof) but MUST NOT null `b.el`. If a future refactor
+    adds `b.el = null` (or any morally equivalent reassignment), the
+    truthy-branch `.filter(b => b?.el)` in `_render()`'s restore block
+    silently drops every preserved flake — the wipe bug returns
+    invisibly and the content regexes in
+    `test_climate_card_render_preserves_snowflakes_across_innerhtml`
+    all still pass.
+
+    This test extracts the `_invalidateSnowCache()` body and asserts:
+    1. A `.remove()` call on `b.el` is present (positive pin).
+    2. No `b.el = …` assignment is present (negative pin).
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    body = _extract_js_function_body(
+        executable, r"_invalidateSnowCache\s*\(\s*\)"
+    )
+    assert body is not None, (
+        "qs-climate-card.js: `_invalidateSnowCache()` body must be "
+        "extractable for the AC-3 invariant pin (review fix #01 S2)."
+    )
+    # Positive pin: some `b.el.remove()` or `b?.el?.remove?.()` form
+    # must be present so the disconnect path still tears down DOM.
+    # `(?:\?\.)?` permits the JS optional-chained call syntax
+    # `remove?.()` as well as the plain `remove()` form.
+    assert re.search(
+        r"b\??\.el\??\.remove(?:\?\.)?\(\s*\)", body
+    ), (
+        "qs-climate-card.js: AC-3 invariant — `_invalidateSnowCache()` "
+        "must call `.remove()` on each flake's `el` (e.g. "
+        "`b?.el?.remove?.()`) so the disconnectedCallback / real "
+        "backdrop-transition paths leave no orphaned DOM "
+        "(review fix #01 S2)."
+    )
+    # Negative pin: no `b.el = …` assignment. The boiler's symmetric
+    # helper avoids nulling `p.el`; matching that contract is what
+    # makes the truthy-branch filter `(b => b?.el)` safe.
+    assert not re.search(r"b\.el\s*=\s*", body), (
+        "qs-climate-card.js: AC-3 invariant — `_invalidateSnowCache()` "
+        "must NOT assign to `b.el` (e.g. `b.el = null`). The "
+        "truthy-branch restore filter `(b => b?.el)` in `_render()` "
+        "silently drops any entry whose `el` was nulled, which would "
+        "silently re-introduce the wipe pathology QS-216 fixed "
+        "(review fix #01 S2)."
     )
 
 
