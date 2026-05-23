@@ -431,17 +431,13 @@ class QsClimateCard extends HTMLElement {
 
       // Advance + retire active snowflakes regardless of running state.
       //
-      // Pass-#2 S2 note — this is an in-render graceful exit ONLY: a
-      // running→off transition that doesn't trigger a re-render lets
-      // active flakes finish their fall naturally. But the M1 (pass
-      // #1) post-innerHTML `_invalidateSnowCache()` wipes
-      // `_snowflakes = []` on every hass push (~once per second), so
-      // cross-render flakes do NOT survive in practice. The visual
-      // effect is acceptable because the wipe coincides with an
-      // innerHTML rewrite that also detaches the parent `<g>` —
-      // the user would have seen the flakes blink in either case.
-      // Re-parenting live `<circle>` nodes into the new `<g>` is a
-      // valid stretch goal but out of scope (deferred to a follow-up).
+      // QS-216 — cross-render flakes NOW survive same-backdrop
+      // re-renders: `_render()` snapshots `_snowflakes` BEFORE the
+      // innerHTML rewrite and re-attaches each `<circle>` to the
+      // fresh snow layer AFTER `_invalidateSnowCache()` (see AC-2).
+      // Flakes are still cleared on `disconnectedCallback` and on
+      // real backdrop transitions away from 'snow' (restore-block
+      // null-layer branch).
       // Pass-#3 N2 — when `_snowBaseY` is null (no valid pile base
       // computed yet, e.g. cold-start before the first render finishes
       // populating snow geometry), fall back to the BOTTOM of the
@@ -570,14 +566,16 @@ class QsClimateCard extends HTMLElement {
     this._snowLayerEl = null;
     this._lastSnowBaseY = null;
     this._lastSnowAmp = null;
-    // Review-fix N7 — defensive: the upcoming innerHTML rewrite (or
-    // post-disconnect cleanup) wipes the parent `<g>` anyway, so the
-    // explicit `.remove()` calls are redundant in the rewrite path.
-    // They DO matter on the `disconnectedCallback` path where there is
-    // no rewrite, and they keep `_snowflakes.length` from drifting up
-    // toward MAX_CONCURRENT_SNOWFLAKES across re-renders.
-    if (this._snowflakes && this._snowflakes.length) {
-      this._snowflakes.forEach(b => b.el?.remove?.());
+    // QS-216 — same-backdrop re-renders preserve flakes via
+    // _render()'s snapshot/restore block (AC-2); this reset only
+    // governs `disconnectedCallback` and real backdrop transitions
+    // away from 'snow'. Critical invariant (AC-3): do NOT null
+    // `b.el` — the truthy-branch restore filter `(b => b?.el)`
+    // would silently drop anything we null here.
+    if (this._snowflakes) {
+      for (const b of this._snowflakes) {
+        b?.el?.remove?.();
+      }
       this._snowflakes = [];
     }
     this._nextSnowflakeAt = 0;
@@ -1358,6 +1356,14 @@ class QsClimateCard extends HTMLElement {
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
+      // QS-216 AC-1 — snapshot in-flight snowflakes before the
+      // innerHTML rewrite (mirror of QS-214 boiler precedent). Both
+      // locals may capture `undefined` on a cold render; the restore
+      // block's `?.length` guard handles that. See AC-2 + AC-4 for
+      // the restore + ordering invariant.
+      const preservedSnowflakes = this._snowflakes;
+      const preservedNextSnowflakeAt = this._nextSnowflakeAt;
+
       // QS-217 — clipPath path builder. Three subpaths concatenated
       // with `clip-rule="evenodd"` on the parent <path>:
       //   1. Outer circle subpath — full ring clip (always present).
@@ -1552,6 +1558,34 @@ class QsClimateCard extends HTMLElement {
       this._invalidateFlameCache();
       this._invalidateSnowCache();
       this._invalidateWindCache();
+
+      // QS-216 AC-2/AC-4 — restore snapshot into the fresh snow
+      // layer AFTER the _invalidate*Cache() triplet (mirror of QS-214
+      // boiler). The null-layer else is the real backdrop-transition
+      // path (snow `<g>` is emitted only when `_backdrop === 'snow'`),
+      // not just defensive belt-and-braces.
+      if (preservedSnowflakes?.length) {
+        const newSnowLayer = this._snowLayerId
+          ? this._root.getElementById(this._snowLayerId)
+          : null;
+        if (newSnowLayer) {
+          for (const b of preservedSnowflakes) {
+            if (b?.el) newSnowLayer.appendChild(b.el);
+          }
+          // N8 — `.filter` builds a fresh array. All hot-path code
+          // (`_stepSnow`, `_invalidateSnowCache`) reads `this._snowflakes`
+          // each call, so the new reference is safe; do not pass the
+          // original `preservedSnowflakes` const to any closure.
+          this._snowflakes = preservedSnowflakes.filter(b => b?.el);
+          this._snowLayerEl = newSnowLayer;
+          this._nextSnowflakeAt = preservedNextSnowflakeAt;
+        } else {
+          for (const b of preservedSnowflakes) {
+            b?.el?.remove();
+          }
+          this._snowflakes = [];
+        }
+      }
 
       // Wire events
       const root = this._root;
