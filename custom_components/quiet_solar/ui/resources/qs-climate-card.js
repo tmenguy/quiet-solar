@@ -1316,6 +1316,25 @@ class QsClimateCard extends HTMLElement {
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
       const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
 
+      // QS-216: snapshot the in-flight snowflakes BEFORE the
+      // innerHTML rewrite below. The rewrite detaches every DOM node
+      // under `this._root`, including the snow layer's children.
+      // Without this snapshot, every HA state push (which fires
+      // `set hass → _render`) wipes the entire snowflake array via
+      // the post-innerHTML `_invalidateSnowCache()` call (~once per
+      // second). Mirror of QS-214's boiler steam-puff + bubble
+      // preservation. The `b.el` references survive detachment (JS
+      // still holds them); we re-attach them to the new snow layer
+      // after `_invalidateSnowCache()` below. `_nextSnowflakeAt` is
+      // also preserved so the next spawn doesn't reset to 0 (which
+      // would burst-spawn on every push). On a cold render before
+      // `_startAnimation` or the snow backdrop-transition block has
+      // run, `this._snowflakes` and `this._nextSnowflakeAt` may be
+      // `undefined`; the restore-block's `?.length` guard handles
+      // that safely.
+      const preservedSnowflakes = this._snowflakes;
+      const preservedNextSnowflakeAt = this._nextSnowflakeAt;
+
       this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -1461,6 +1480,56 @@ class QsClimateCard extends HTMLElement {
       this._invalidateFlameCache();
       this._invalidateSnowCache();
       this._invalidateWindCache();
+
+      // QS-216: restore the preserved snowflakes into the FRESH snow
+      // layer (its DOM identity changed via innerHTML — same `id`,
+      // new element). For each preserved flake, re-attach its
+      // detached `el` to the new layer; the per-flake state (cx, cy,
+      // r, vy, life, maxLife) survived in the JS array, so the RAF
+      // advance loop in `_stepSnow` picks up exactly where it left
+      // off with no visual blink. `_nextSnowflakeAt` is restored so
+      // spawn cadence is continuous.
+      //
+      // Ordering invariant (AC-4): this restore runs AFTER both the
+      // innerHTML rewrite and `_invalidateSnowCache()`. The snapshot
+      // captured the array reference before any mutation; the
+      // innerHTML rewrite + `_invalidateSnowCache()` performed their
+      // normal cleanup against the *instance* fields (reassigning
+      // `this._snowflakes = []`, nulling `this._snowLayerEl`,
+      // zeroing `this._nextSnowflakeAt`). The local
+      // `preservedSnowflakes` const still holds the original array
+      // reference; `_invalidateSnowCache()` calls `b.el?.remove?.()`
+      // (does NOT null `b.el`), so each preserved entry's DOM ref
+      // survives intact for re-attachment via `appendChild`.
+      if (preservedSnowflakes?.length) {
+        const newSnowLayer = this._snowLayerId
+          ? this._root.getElementById(this._snowLayerId)
+          : null;
+        if (newSnowLayer) {
+          for (const b of preservedSnowflakes) {
+            if (b?.el) newSnowLayer.appendChild(b.el);
+          }
+          // .filter aligns the array with the truthy set we just
+          // re-attached, so the advance loop never has to defensively
+          // null-check b.el (mirror of boiler steam-puff pattern).
+          this._snowflakes = preservedSnowflakes.filter(b => b?.el);
+          this._snowLayerEl = newSnowLayer;
+          this._nextSnowflakeAt = preservedNextSnowflakeAt;
+        } else {
+          // Unlike the boiler (which ALWAYS renders the steam layer),
+          // the climate card emits the snow <g> only when
+          // `_backdrop === 'snow'`. This branch is therefore a real
+          // backdrop-transition path (flakes from a 'snow' render
+          // arriving at a 'flame'/'wind'/'none' render), not just
+          // defensive belt-and-braces. Explicitly remove each preserved
+          // flake's DOM and reset the logical array so detached nodes
+          // don't leak. `_snowLayerEl` was already nulled by
+          // `_invalidateSnowCache()` above, so no extra cleanup needed
+          // there (mirror of boiler's `_resetDomRefs()` semantics).
+          for (const b of preservedSnowflakes) { b?.el?.remove(); }
+          this._snowflakes = [];
+        }
+      }
 
       // Wire events
       const root = this._root;

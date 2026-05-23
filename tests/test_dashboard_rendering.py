@@ -2609,6 +2609,98 @@ def test_water_boiler_card_render_preserves_bubbles_across_innerhtml():
     )
 
 
+def test_climate_card_render_preserves_snowflakes_across_innerhtml():
+    """Mirror of the QS-214 boiler steam-puff and bubble preservation,
+    applied to climate snowflakes per QS-216.
+
+    The climate card's `_render()` rewrites `this._root.innerHTML` on
+    every HA state push (`set hass → _render → innerHTML`). Before
+    QS-216 the rewrite + subsequent `_invalidateSnowCache()` call wiped
+    every in-flight snowflake simultaneously — the same systemic wipe
+    pathology QS-214 fixed for steam puffs and bubbles. This test pins
+    the snapshot-and-restore pattern: `_render()` must capture
+    `_snowflakes` / `_nextSnowflakeAt` BEFORE the innerHTML rewrite,
+    then re-attach each preserved `<circle>` to the freshly-rendered
+    snow layer AFTER the three `_invalidate*Cache()` calls and restore
+    the array + cadence counter.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Pre-innerHTML snapshot.
+    assert re.search(
+        r"const\s+preservedSnowflakes\s*=\s*this\._snowflakes",
+        executable,
+    ), (
+        "qs-climate-card.js: `_render()` must snapshot "
+        "`this._snowflakes` into `preservedSnowflakes` BEFORE the "
+        "innerHTML rewrite, so the snowflake DOM nodes survive."
+    )
+    assert re.search(
+        r"const\s+preservedNextSnowflakeAt\s*=\s*this\._nextSnowflakeAt",
+        executable,
+    ), (
+        "qs-climate-card.js: `_render()` must snapshot "
+        "`this._nextSnowflakeAt` so the spawn cadence counter doesn't "
+        "reset to 0 on every render (which would cause a spawn-burst "
+        "after every HA state push)."
+    )
+
+    # Post-innerHTML restore: re-attach each preserved snowflake's DOM
+    # node to the new snow layer, then restore the array + counter.
+    assert re.search(
+        r"newSnowLayer\.appendChild\s*\(\s*b\.el\s*\)",
+        executable,
+    ), (
+        "qs-climate-card.js: `_render()` must re-attach each "
+        "preserved snowflake's DOM node to the new snow layer via "
+        "`newSnowLayer.appendChild(b.el)`."
+    )
+    assert re.search(
+        r"this\._snowflakes\s*=\s*preservedSnowflakes",
+        executable,
+    ), (
+        "qs-climate-card.js: `_render()` must restore "
+        "`this._snowflakes = preservedSnowflakes` after the innerHTML "
+        "rewrite + _invalidateSnowCache() cleanup."
+    )
+    assert re.search(
+        r"this\._nextSnowflakeAt\s*=\s*preservedNextSnowflakeAt",
+        executable,
+    ), (
+        "qs-climate-card.js: `_render()` must restore "
+        "`this._nextSnowflakeAt = preservedNextSnowflakeAt` so the "
+        "spawn cadence picks up where it left off."
+    )
+    # Truthy-branch array semantics: `_snowflakes` is assigned the
+    # filtered set (drop entries whose `el` was missing) so the array
+    # is the canonical "preserved AND truthy" view (mirror of boiler
+    # steam-puff pattern).
+    assert re.search(
+        r"this\._snowflakes\s*=\s*preservedSnowflakes\.filter\(\s*b\s*=>\s*b\?\.el\s*\)",
+        executable,
+    ), (
+        "qs-climate-card.js: the snowflake preserve truthy branch "
+        "must align array semantics with the null-layer drop via "
+        "`this._snowflakes = preservedSnowflakes.filter(b => b?.el)`."
+    )
+    # Null-layer else branch: explicit DOM removal of preserved
+    # snowflakes so detached nodes don't leak (mirror of boiler).
+    assert re.search(
+        r"for\s*\(\s*const\s+b\s+of\s+preservedSnowflakes\s*\)\s*\{\s*"
+        r"b\?\.el\?\.remove\s*\(\s*\)\s*;?\s*\}",
+        executable,
+    ), (
+        "qs-climate-card.js: the snowflake preserve null-layer "
+        "else branch must iterate `preservedSnowflakes` and explicitly "
+        "call `b?.el?.remove()` so detached DOM nodes don't leak."
+    )
+
+
 def test_water_boiler_card_steam_spawn_defers_on_zero_budget():
     """Review fix #01 finding #5: the spawn-loop `riseBudget <= 0`
     branch must genuinely defer the spawn slot by advancing the

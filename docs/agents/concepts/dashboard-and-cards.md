@@ -463,7 +463,9 @@ accumulators (`_currentFlameAmp`, `_currentSnowAmp`,
 `_currentSnowSpeed`, `_snowWavePhase`, `_windPhase`, `_tipPhases`)
 deliberately survive both `_stopAnimation` and the post-rewrite
 invalidation so re-attach picks up where it left off without a
-visible snap.
+visible snap. QS-216 — snowflake array now survives innerHTML via a
+snapshot/restore block bracketing the `_invalidate*Cache()` triplet;
+`_invalidateSnowCache` itself is unchanged.
 
 **Snow-mode cold-start defence.** A cold start straight into
 `'snow'` mode (e.g. `climate_state_on === 'cool'` on first paint)
@@ -476,6 +478,21 @@ the four sibling fields still initialise correctly. The N5 block
 also defensively initialises `_snowflakes`, `_snowWavePhase`, and
 `_nextSnowflakeAt` itself — belt + braces, robust to either
 init-order.
+
+**QS-216 — snowflake preservation across `innerHTML`.** Mirror of
+the QS-214 boiler steam-puff and bubble preservation. `_render()`
+snapshots `_snowflakes` and `_nextSnowflakeAt` BEFORE the
+innerHTML rewrite, then re-attaches each preserved `<circle>` to
+the freshly-rendered snow layer AFTER the three
+`_invalidate*Cache()` calls. Without this, every HA state push
+wiped every in-flight snowflake simultaneously (`_invalidateSnowCache`
+calls `b.el.remove()` on each then sets `_snowflakes = []`) — the
+same systemic wipe pathology QS-214 fixed for boiler steam. Unlike
+the boiler, which always renders the steam layer, the climate
+card emits the snow `<g>` only when `_backdrop === 'snow'`; the
+restore's null-layer branch is therefore a real backdrop-transition
+path (not just defensive) and explicitly removes the preserved
+flakes' detached DOM so they don't leak.
 
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
