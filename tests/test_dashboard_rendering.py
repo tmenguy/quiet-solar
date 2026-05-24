@@ -2183,10 +2183,16 @@ def test_water_boiler_card_pins_opacity_cross_fade():
 
 
 def test_water_boiler_card_pins_boil_water_palette():
-    """QS-220: BOIL_WATER_COLORS is in the pool-blue family
-    (hue 185, same as cool/pool default), not the legacy
-    near-white triplet. Saturation/lightness/alpha are
-    intentionally unpinned — they are iterable knobs."""
+    """QS-220 + QS-225 AC-4: BOIL_WATER_COLORS is in the true-blue
+    family, not the legacy near-white triplet. QS-220 originally
+    pinned `hue == 185` (cyan-teal); QS-225's post-PR amendment
+    widened the band to `[200, 230]` (true blue, matching the pool's
+    direction) and added two further direction pins: saturation
+    `[20, 45]` (paler than QS-220's sat 60) and alpha `[0.05, 0.30]`
+    (more transparent than QS-220's 0.40/0.32/0.24). The intent of the
+    QS-220 sentinel is preserved — BOIL stays in the blue-water
+    family, not the legacy near-white triplet — only the band shape
+    changes."""
     import re
     content = (
         COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
@@ -2202,20 +2208,37 @@ def test_water_boiler_card_pins_boil_water_palette():
         "must remain a literal array."
     )
     body = match.group("body")
-    entries = re.findall(r"'hsla\(([^']+)\)'", body)
-    assert len(entries) >= 1, (
-        "qs-water-boiler-card.js: BOIL_WATER_COLORS must have "
-        "at least one hsla literal."
+    entries = re.findall(
+        r"hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)",
+        body,
     )
-    for entry in entries:
-        assert entry.lstrip().startswith("185,"), (
-            "QS-220 AC-1: every BOIL_WATER_COLORS entry must "
-            f"use the pool-blue hue (185); got `{entry}`."
+    assert len(entries) == 3, (
+        "QS-225 AC-4: BOIL_WATER_COLORS must contain exactly 3 hsla "
+        f"entries; got {len(entries)}."
+    )
+    for hue_s, sat_s, _light_s, alpha_s in entries:
+        hue, sat, alpha = int(hue_s), int(sat_s), float(alpha_s)
+        assert 200 <= hue <= 230, (
+            f"QS-225 AC-4: BOIL_WATER_COLORS hue {hue} outside "
+            "[200, 230] (true-blue band; legacy QS-220 was 185)."
         )
-    # Sentinel: legacy near-white pattern is gone.
+        assert 20 <= sat <= 45, (
+            f"QS-225 AC-4: BOIL_WATER_COLORS saturation {sat} outside "
+            "[20, 45] (paler direction; legacy QS-220 was 60)."
+        )
+        assert 0.05 <= alpha <= 0.30, (
+            f"QS-225 AC-4: BOIL_WATER_COLORS alpha {alpha} outside "
+            "[0.05, 0.30] (more transparent than legacy 0.24-0.40)."
+        )
+    # Sentinel: legacy near-white pattern is gone (preserved from QS-220).
     assert "hsla(0, 0%" not in body, (
         "QS-220 AC-1: the legacy near-white pattern "
         "`hsla(0, 0%, …)` must not appear in BOIL_WATER_COLORS."
+    )
+    # Sentinel: legacy QS-220 cyan-teal pattern is gone.
+    assert "hsla(185, 60%" not in body, (
+        "QS-225 AC-4: the legacy QS-220 cyan-teal pattern "
+        "`hsla(185, 60%, …)` must not appear in BOIL_WATER_COLORS."
     )
 
 
