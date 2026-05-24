@@ -109,7 +109,7 @@ const LAYER_PHASE_OFFSET = 2.1;
 const LAYER_SCROLL_OFFSET = 1.2;
 const SNOW_BACK_COLOR  = 'hsla(220, 60%, 82%, 0.55)';
 const SNOW_MID_COLOR   = 'hsla(210, 50%, 88%, 0.45)';
-const SNOW_FRONT_COLOR = 'hsla(0, 0%, 95%, 0.65)';
+const SNOW_FRONT_COLOR = 'hsla(210, 30%, 92%, 0.45)';
 const SNOW_PILE_COLORS = [SNOW_BACK_COLOR, SNOW_MID_COLOR, SNOW_FRONT_COLOR];
 // Snow doesn't agitate like boiling water — smaller deltas than pool's
 // CALM_AMP=2 / PUMP_AMP=6.
