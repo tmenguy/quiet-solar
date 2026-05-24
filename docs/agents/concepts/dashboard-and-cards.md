@@ -12,7 +12,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-24
+last_verified: 2026-05-25
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -599,6 +599,21 @@ patterns after the cross-card audit:
   `buttons` is empty, and the per-button `activate` closure wraps
   `b.onClick?.()` in `try/finally` so a synchronous throw can't
   leave the modal locked open.
+
+### Ring text readability — uniform shadow (QS-228)
+
+Every QS Lovelace card declares
+`--ring-text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5)`
+on `:host` and applies `text-shadow: var(--ring-text-shadow)` to every
+inside-the-ring text class across all six cards (`qs-car-card`,
+`qs-climate-card`, `qs-on-off-duration-card`, `qs-pool-card`,
+`qs-radiator-card`, `qs-water-boiler-card`). The shadow originated in
+QS-201 for the radiator's warm flame and the pool's animated water;
+QS-228 extends it to the remaining cards for visual consistency. The
+contract is pinned by
+`tests/test_dashboard_rendering.py::TestDashboardTemplateRendering::test_all_qs_cards_apply_ring_text_shadow_for_readability`
+(the per-card `CARDS_TO_RING_TEXT_CLASSES` mapping enumerates which
+classes each card must shadow).
 
 Follow these patterns when adding new JS cards. 
 

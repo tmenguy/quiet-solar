@@ -743,6 +743,93 @@ class TestDashboardTemplateRendering:
                 f"AC-9: .ring .{cls} must apply text-shadow: var(--ring-text-shadow)"
             )
 
+    # QS-228 — uniform ring text shadow across all 6 QS Lovelace cards.
+    # Map each card to its enumerated ring-text classes. The test method
+    # below loops via Python `for` (matches the radiator AC-9 idiom — the
+    # surrounding class lacks parametrize precedent).
+    CARDS_TO_RING_TEXT_CLASSES = {
+        "qs-pool-card.js": ("pct", "target-label", "target-value"),
+        "qs-radiator-card.js": (
+            "target-label",
+            "target-value",
+            "from-to-label",
+            "from-to-value",
+        ),
+        "qs-car-card.js": (
+            "pct",
+            "target-label",
+            "target-value",
+            "mini-title",
+            "mini-value",
+            "mini-range",
+            "mini-range-now",
+            "mini-range-target",
+        ),
+        "qs-climate-card.js": (
+            "target-label",
+            "target-value",
+            "from-to-label",
+            "from-to-value",
+        ),
+        "qs-on-off-duration-card.js": (
+            "target-label",
+            "target-value",
+            "from-to-label",
+            "from-to-value",
+        ),
+        "qs-water-boiler-card.js": (
+            "target-label",
+            "target-value",
+            "from-to-label",
+            "from-to-value",
+        ),
+    }
+
+    def test_all_qs_cards_apply_ring_text_shadow_for_readability(self):  # CR2 — sync (no hass)
+        """QS-228 — uniform ring text shadow across all 6 QS Lovelace cards.
+
+        The pool and radiator cards already shipped this in QS-201 to keep
+        inside-the-ring text legible over their animated backdrops. QS-228
+        extends the same `--ring-text-shadow` variable and `text-shadow:
+        var(--ring-text-shadow)` per-rule application to the four remaining
+        cards (car, climate, on-off-duration, water-boiler). Some of these
+        cards have animated backdrops (climate flame/snow/wind,
+        water-boiler bubble/steam/wave) and some don't (car, on-off-duration)
+        — the maintainer asked for visual consistency across the set.
+
+        Block-scoped regex (`\\{[^}]*`) prevents a commented-out CSS rule
+        from satisfying the assertion. Pattern matches the existing
+        `test_radiator_card_text_shadow_for_flame_readability` idiom
+        verbatim — the radiator test is kept intact and the two tests
+        overlap on radiator by design (AC-9's own pin is its contract).
+        """
+        import re
+
+        for card_filename, classes in self.CARDS_TO_RING_TEXT_CLASSES.items():
+            content = (
+                COMPONENT_ROOT / "ui" / "resources" / card_filename
+            ).read_text()
+
+            # AC-1: --ring-text-shadow declared on :host (whitespace-tolerant).
+            assert re.search(
+                r"--ring-text-shadow:\s*0 0 12px rgba\(0,0,0,0\.8\),\s*0 2px 4px rgba\(0,0,0,0\.5\)",
+                content,
+            ) is not None, (
+                f"AC-1 ({card_filename}): --ring-text-shadow variable must "
+                "be declared on :host with the verbatim value "
+                "`0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5)`"
+            )
+
+            # AC-2: every enumerated ring-text class applies the variable.
+            for cls in classes:
+                assert re.search(
+                    rf"\.ring\s+\.{cls}\s*\{{[^}}]*text-shadow:\s*var\(--ring-text-shadow\)",
+                    content,
+                ) is not None, (
+                    f"AC-2 ({card_filename}): .ring .{cls} must apply "
+                    "text-shadow: var(--ring-text-shadow)"
+                )
+
     def test_radiator_card_flame_dancing_dynamic_proxy(self):  # CR2 — sync (no hass)
         """QS-204 AC-4 — structural proxy for "flames flicker when running".
 
