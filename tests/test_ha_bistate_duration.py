@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import logging
 from datetime import time as dt_time
 from unittest.mock import AsyncMock, MagicMock
 
@@ -762,6 +763,96 @@ class TestQSBiStateDurationCheckLoadActivityUserOverride:
 
         assert bistate_check_load_device.external_user_initiated_state == "on"
         assert bistate_check_load_device.external_user_initiated_state_time == time
+
+    @pytest.mark.asyncio
+    async def test_user_override_log_includes_entity_and_previous_state_when_override_already_active(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice, caplog
+    ):
+        """AC1: prior-override branch logs entity + previous override + current state, no UNKNOWN UNKNOWN, no expected:."""
+        caplog.set_level(
+            logging.INFO,
+            logger="custom_components.quiet_solar.ha_model.bistate_duration",
+        )
+
+        bistate_check_load_device.current_command = None
+        bistate_check_load_device.running_command = None
+        bistate_check_load_device.bistate_mode = "bistate_mode_auto"
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
+        time = datetime.datetime.now(pytz.UTC)
+        bistate_check_load_device.external_user_initiated_state = "on"
+        bistate_check_load_device.external_user_initiated_state_time = time - datetime.timedelta(minutes=1)
+        bistate_check_load_device.asked_for_reset_user_initiated_state_time = None
+        bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        hass.states.async_set("switch.test_device", "off")
+
+        bistate_check_load_device.set_live_constraints = MagicMock()
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=(True, False))
+        bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+
+        await bistate_check_load_device.check_load_activity_and_constraints(time)
+
+        override_records = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.INFO and "OVERRIDE BY USER" in record.getMessage()
+        ]
+        assert len(override_records) == 1, (
+            f"expected exactly one OVERRIDE BY USER INFO record, got {len(override_records)}: "
+            f"{[r.getMessage() for r in override_records]}"
+        )
+        message = override_records[0].getMessage()
+        assert "switch.test_device" in message
+        assert "previous override: on" in message
+        assert "current state: off" in message
+        assert "UNKNOWN UNKNOWN" not in message
+        assert "expected:" not in message
+
+    @pytest.mark.asyncio
+    async def test_user_override_log_includes_entity_and_expected_state_when_no_prior_override(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice, caplog
+    ):
+        """AC2: no-prior-override branch logs entity + current state + expected state, no UNKNOWN UNKNOWN."""
+        caplog.set_level(
+            logging.INFO,
+            logger="custom_components.quiet_solar.ha_model.bistate_duration",
+        )
+
+        bistate_check_load_device.current_command = None
+        bistate_check_load_device.running_command = None
+        bistate_check_load_device.bistate_mode = "bistate_mode_auto"
+        bistate_check_load_device.is_load_command_set = MagicMock(return_value=True)
+        bistate_check_load_device.external_user_initiated_state = None
+        bistate_check_load_device.external_user_initiated_state_time = None
+        bistate_check_load_device.asked_for_reset_user_initiated_state_time = None
+        bistate_check_load_device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        bistate_check_load_device.current_command = CMD_OFF
+        bistate_check_load_device.running_command = CMD_OFF
+        hass.states.async_set("switch.test_device", "on")
+
+        bistate_check_load_device.set_live_constraints = MagicMock()
+        bistate_check_load_device.push_live_constraint = MagicMock(return_value=(True, False))
+        bistate_check_load_device.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+
+        time = datetime.datetime.now(pytz.UTC)
+
+        await bistate_check_load_device.check_load_activity_and_constraints(time)
+
+        override_records = [
+            record
+            for record in caplog.records
+            if record.levelno == logging.INFO and "OVERRIDE BY USER" in record.getMessage()
+        ]
+        assert len(override_records) == 1, (
+            f"expected exactly one OVERRIDE BY USER INFO record, got {len(override_records)}: "
+            f"{[r.getMessage() for r in override_records]}"
+        )
+        message = override_records[0].getMessage()
+        assert "switch.test_device" in message
+        assert "current state: on" in message
+        assert "expected: off" in message
+        assert "UNKNOWN UNKNOWN" not in message
 
     @pytest.mark.asyncio
     async def test_user_override_idle_resets_constraints(

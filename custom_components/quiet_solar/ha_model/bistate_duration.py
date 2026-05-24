@@ -626,14 +626,27 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             override_constraint = None
                             do_force_next_solve = True
                         else:
-                            _LOGGER.info(
-                                "check_load_activity_and_constraints: bistate "
-                                "OVERRIDE BY USER %s for load %s instead of %s %s",
-                                state.state,
-                                self.name,
-                                expected_state,
-                                expected_state_running,
-                            )
+                            if self.external_user_initiated_state is not None:
+                                _LOGGER.info(
+                                    "check_load_activity_and_constraints: bistate "
+                                    "OVERRIDE BY USER on %s for load %s "
+                                    "(previous override: %s, current state: %s)",
+                                    self.bistate_entity,
+                                    self.name,
+                                    self.external_user_initiated_state,
+                                    current_state,
+                                )
+                            else:
+                                _LOGGER.info(
+                                    "check_load_activity_and_constraints: bistate "
+                                    "OVERRIDE BY USER on %s for load %s "
+                                    "(current state: %s, expected: %s, running expected: %s)",
+                                    self.bistate_entity,
+                                    self.name,
+                                    current_state,
+                                    expected_state,
+                                    expected_state_running,
+                                )
 
                             # the user did something different ... just OVERRIDE the automation for a given time
                             self.external_user_initiated_state = current_state
