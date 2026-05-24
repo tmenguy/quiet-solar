@@ -2182,6 +2182,43 @@ def test_water_boiler_card_pins_opacity_cross_fade():
     )
 
 
+def test_water_boiler_card_pins_boil_water_palette():
+    """QS-220: BOIL_WATER_COLORS is in the pool-blue family
+    (hue 185, same as cool/pool default), not the legacy
+    near-white triplet. Saturation/lightness/alpha are
+    intentionally unpinned — they are iterable knobs."""
+    import re
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    # Extract the array body so the regex isn't tricked by
+    # unrelated literals elsewhere in the file.
+    match = re.search(
+        r"const\s+BOIL_WATER_COLORS\s*=\s*\[(?P<body>[^\]]+)\]",
+        content,
+    )
+    assert match, (
+        "qs-water-boiler-card.js: BOIL_WATER_COLORS declaration "
+        "must remain a literal array."
+    )
+    body = match.group("body")
+    entries = re.findall(r"'hsla\(([^']+)\)'", body)
+    assert len(entries) >= 1, (
+        "qs-water-boiler-card.js: BOIL_WATER_COLORS must have "
+        "at least one hsla literal."
+    )
+    for entry in entries:
+        assert entry.lstrip().startswith("185,"), (
+            "QS-220 AC-1: every BOIL_WATER_COLORS entry must "
+            f"use the pool-blue hue (185); got `{entry}`."
+        )
+    # Sentinel: legacy near-white pattern is gone.
+    assert "hsla(0, 0%" not in body, (
+        "QS-220 AC-1: the legacy near-white pattern "
+        "`hsla(0, 0%, …)` must not appear in BOIL_WATER_COLORS."
+    )
+
+
 def test_water_boiler_card_center_uses_named_constants():
     """Review-fix #02 S1: the arc / handle / progress-ring `center`
     object in `_render()` must use the named `CENTER_CX` / `CENTER_CY`
@@ -4140,19 +4177,30 @@ class TestClimateCardSnowBackdrop:
                     f"`id=\"snowWave{i}\"`."
                 )
 
-        # Front white-ish literal.
-        assert "hsla(0, 0%, 95%, 0.65)" in executable, (
-            "QS-210 AC3: front snow-pile layer must use the white-ish "
-            "literal `hsla(0, 0%, 95%, 0.65)`."
+        # QS-220 AC-2: the front layer is no longer pure white.
+        assert "hsla(0, 0%, 95%, 0.65)" not in executable, (
+            "QS-220 AC-2: the legacy pure-white SNOW_FRONT_COLOR "
+            "literal `hsla(0, 0%, 95%, 0.65)` must be replaced "
+            "with a translucent pale-blue value."
+        )
+        # SNOW_FRONT_COLOR constant must still exist and reference an
+        # hsla literal — direction-only, no hue/sat/light/alpha pin.
+        assert re.search(
+            r"const\s+SNOW_FRONT_COLOR\s*=\s*'hsla\([^']+\)'",
+            executable,
+        ), (
+            "QS-220 AC-2: SNOW_FRONT_COLOR must remain a module-level "
+            "const assigned to an hsla literal."
         )
 
-        # At least one blue-ish back literal (hue around 200-230).
+        # At least one blue-ish layer (hue around 200-230) — after
+        # QS-220 the front layer also matches; back/mid still do.
         assert re.search(
             r"hsla\(\s*2[0-3]\d\s*,",
             executable,
         ) is not None, (
-            "QS-210 AC3: back snow-pile layer(s) must use a blue-ish "
-            "hue (regex on `hsla(2[0-3]X, …)`)."
+            "QS-210 AC3: ≥1 blue-ish pile layer (back/mid/front) must "
+            "use a blue-ish hue (regex on `hsla(2[0-3]X, …)`)."
         )
 
     def test_climate_card_snowflakes_fall_down(self):

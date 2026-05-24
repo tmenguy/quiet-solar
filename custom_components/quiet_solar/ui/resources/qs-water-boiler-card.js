@@ -73,9 +73,9 @@ const COOL_WATER_COLORS = [
   'hsla(185, 60%, 18%, 0.35)',
 ];
 const BOIL_WATER_COLORS = [
-  'hsla(0, 0%, 95%, 0.65)',
-  'hsla(0, 0%, 90%, 0.55)',
-  'hsla(0, 0%, 85%, 0.45)',
+  'hsla(185, 60%, 28%, 0.40)',
+  'hsla(185, 60%, 26%, 0.32)',
+  'hsla(185, 60%, 24%, 0.24)',
 ];
 
 // --- Animation tuning (lerp envelope; mirror pool) ---

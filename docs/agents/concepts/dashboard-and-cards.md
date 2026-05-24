@@ -12,7 +12,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-23
+last_verified: 2026-05-24
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -233,8 +233,8 @@ instruction" rule via direct issue-#200 authorisation:
 - **Continuous RAF, mirroring the pool card.** `connectedCallback()`
   calls `_startAnimation()` directly with no `showAnimation` gate;
   `disconnectedCallback()` stops it. The wave is intrinsically
-  visible at all times (cool blue when not running, near-white
-  translucent when boiling) so the RAF loop itself is no longer
+  visible at all times (cool blue when not running, translucent
+  pool-blue when boiling) so the RAF loop itself is no longer
   conditional. `showAnimation` survives only as a render-time switch
   for the existing dashed-arc `<path id="running_anim">`. The
   boiler is therefore removed from `test_card_raf_idle_gated`'s
@@ -243,7 +243,7 @@ instruction" rule via direct issue-#200 authorisation:
 - **Dual-layer water cross-fade + bubbles + surface glow.** Inside
   a circular `clipPath` (radius `CLIP_R = 120`), the card renders
   six wave paths in pairs: `wave{0,1,2}_cool` (cool-blue HSLA) and
-  `wave{0,1,2}_boil` (near-white HSLA). Each pair shares geometry;
+  `wave{0,1,2}_boil` (translucent pool-blue HSLA). Each pair shares geometry;
   only `fill` and `opacity` differ. The RAF loop lerps
   `_currentColorMix` toward `running ? 1 : 0` with the standard
   `LERP_RATE` envelope and updates per-frame opacity: cool layer
@@ -503,7 +503,7 @@ flakes' detached DOM so they don't leak.
 
 The semi-transparent bottom-center override "hand" button
 (`<div id="override_btn">`) was hard to read against the coloured
-animations (orange flames, white snow, blue water) painted by the
+animations (orange flames, pale-blue snow, blue water) painted by the
 clipPath group below it. QS-217 fixes the legibility by drawing a
 small **`<circle>` cover** with `fill="var(--card-background-color)"`
 on top of the clipped animation group, visually erasing the
