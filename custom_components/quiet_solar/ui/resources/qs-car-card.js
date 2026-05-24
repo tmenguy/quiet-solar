@@ -46,19 +46,21 @@ const LAYER_SCROLL_OFFSET = 1.2;                             // per-layer extra 
 const LAYER_PHASE_OFFSET  = 2.1;                             // per-layer static sine phase
 
 // Water palettes — opacity cross-fade between idle/green and charging/blue.
-// IDLE family: hue 150 (green; matches the gradGreenId cyan→green
-// gradient direction). CHARGING family: hue 205 (blue; matches the
-// gradChargeId cyan→deep-blue gradient direction). Lightness/alpha
-// step down per layer for depth.
+// Review-fix #01 FX-01 + FX-02: collapsed from 3 layers to 1 with a
+// BRIGHT (lightness ≥ 85%) + VERY TRANSLUCENT (alpha ≤ 0.35) palette.
+// The original mid-saturation mid-lightness 3-layer stack read as a
+// dark muddy green and obscured the SOC arc; the user wants the
+// water to read as "fresh / lively" and the existing ring + SOC
+// arc to remain clearly visible THROUGH the water. The single-layer
+// design avoids the multi-path overlay density that defeated the
+// "very translucent" goal. Loop counts in `_render()` and
+// `_startAnimation()` are driven by `IDLE_WATER_COLORS.length` so
+// adding entries back later is a one-line change.
 const IDLE_WATER_COLORS = [
-  'hsla(150, 60%, 35%, 0.55)',
-  'hsla(150, 60%, 30%, 0.45)',
-  'hsla(150, 60%, 25%, 0.35)',
+  'hsla(135, 95%, 88%, 0.30)',   // bright vibrant green, very translucent
 ];
 const CHARGING_WATER_COLORS = [
-  'hsla(205, 80%, 40%, 0.60)',
-  'hsla(205, 80%, 35%, 0.50)',
-  'hsla(205, 80%, 30%, 0.40)',
+  'hsla(205, 95%, 88%, 0.32)',   // bright sky-blue, slightly more present while charging
 ];
 
 // Animation tuning — mirror the boiler exactly (gentle calm, more
@@ -98,9 +100,20 @@ const LIGHTNING_FADE_OUT_FRACTION = 0.7;                     // 0.2 → 0.7 hold
 
 // Battery outline appearance — alpha lerped between idle/charging via
 // JS rgba interpolation (NOT CSS color-mix, for browser compat).
-const BATTERY_OUTLINE_STROKE_IDLE_ALPHA = 0.30;
-const BATTERY_OUTLINE_STROKE_CHARGING_ALPHA = 0.55;
-const BATTERY_OUTLINE_STROKE_WIDTH = 2;
+// Review-fix #01 FX-03: the user reported the outline was invisible
+// against the ring and the (post-FX-01 brighter) water. Three knobs
+// were tuned together:
+//   1. STROKE color swapped from near-white `rgba(255,255,255,…)` to
+//      a neutral grey `rgba(180,180,180,…)` so the silhouette reads
+//      against both the ring and the bright translucent water.
+//   2. STROKE_WIDTH widened from a literal `2` to `MDI_UNIT_PX`
+//      (= 1 mdi-unit ≈ 7.8 px) — the canonical mdi:battery-outline
+//      stroke ratio (1/12 of body width).
+//   3. ALPHA range bumped from `0.30 / 0.55` to `0.55 / 0.80` so the
+//      wider grey stroke reads at idle and pops while charging.
+const BATTERY_OUTLINE_STROKE_IDLE_ALPHA = 0.55;
+const BATTERY_OUTLINE_STROKE_CHARGING_ALPHA = 0.80;
+const BATTERY_OUTLINE_STROKE_WIDTH = MDI_UNIT_PX;
 
 class QsCarCard extends HTMLElement {
   constructor() {
@@ -275,27 +288,45 @@ class QsCarCard extends HTMLElement {
       this._wavePhase += this._currentSpeed * dt;
       this._wavePhase = ((this._wavePhase % PHASE_WRAP) + PHASE_WRAP) % PHASE_WRAP;
 
-      // Lazy-resolve wave / lightning layer / outline DOM refs once
-      // per innerHTML rewrite. Six wave nodes (3 idle + 3 charge pairs);
-      // the pair shares geometry, only `fill` differs.
-      if (!this._waveEls) {
-        const idle0   = this._root?.getElementById('wave0_idle') ?? null;
-        const charge0 = this._root?.getElementById('wave0_charge') ?? null;
-        const idle1   = this._root?.getElementById('wave1_idle') ?? null;
-        const charge1 = this._root?.getElementById('wave1_charge') ?? null;
-        const idle2   = this._root?.getElementById('wave2_idle') ?? null;
-        const charge2 = this._root?.getElementById('wave2_charge') ?? null;
-        this._waveEls = [idle0, charge0, idle1, charge1, idle2, charge2];
+      // Lazy-resolve wave / lightning layer / outline DOM refs.
+      // Review-fix #01 FX-07: the resolve guard checks `null` on
+      // EACH cached entry (not just the array's existence) — if the
+      // first RAF tick lands before `_render()` populates the
+      // shadow root, every `getElementById` returns `null` and the
+      // resulting all-nulls array is truthy, which would lock the
+      // cache permanently. Re-querying when any entry is null
+      // covers the eager-RAF case (and is idempotent once the refs
+      // are populated). The layer-count loop is driven by
+      // `IDLE_WATER_COLORS.length` per FX-02.
+      const waveLayerCount = IDLE_WATER_COLORS.length;
+      if (!this._waveEls || this._waveEls.some(el => el == null)) {
+        const refs = [];
+        for (let i = 0; i < waveLayerCount; i++) {
+          refs.push(this._root?.getElementById(`wave${i}_idle`) ?? null);
+          refs.push(this._root?.getElementById(`wave${i}_charge`) ?? null);
+        }
+        this._waveEls = refs;
       }
-      const lightningLayer = this._lightningLayerEl
-        ?? (this._lightningLayerEl = this._lightningLayerId
-              ? (this._root?.getElementById(this._lightningLayerId) ?? null)
-              : null);
-      const outlineEl = this._batteryOutlineEl
-        ?? (this._batteryOutlineEl = this._root?.getElementById('battery_outline') ?? null);
+      // Same null-recheck idiom for `_lightningLayerEl` and
+      // `_batteryOutlineEl` — the prior `el ?? (el = …)` pattern
+      // re-ran `getElementById` every frame when the result was
+      // `null` (assignment-as-cache short-circuits to the truthy
+      // result only). The explicit null check is clearer.
+      if (this._lightningLayerEl == null && this._lightningLayerId) {
+        this._lightningLayerEl =
+          this._root?.getElementById(this._lightningLayerId) ?? null;
+      }
+      const lightningLayer = this._lightningLayerEl;
+      if (this._batteryOutlineEl == null) {
+        this._batteryOutlineEl =
+          this._root?.getElementById('battery_outline') ?? null;
+      }
+      const outlineEl = this._batteryOutlineEl;
 
       // --- Wave transforms (per-layer translateX).
-      for (let i = 0; i < 3; i++) {
+      // Loop bound from `waveLayerCount = IDLE_WATER_COLORS.length`
+      // (FX-02) — same idiom for the regen and opacity loops below.
+      for (let i = 0; i < waveLayerCount; i++) {
         const phaseOffset = i * LAYER_SCROLL_OFFSET;
         const raw = (this._wavePhase + phaseOffset) * PHASE_TO_PX;
         const scrollOffset = ((raw % WAVE_WIDTH) + WAVE_WIDTH) % WAVE_WIDTH;
@@ -321,7 +352,7 @@ class QsCarCard extends HTMLElement {
       if (hasValidBase && (levelChanged || ampDelta > AMP_REGEN_THRESHOLD)) {
         this._lastWaterBaseY = waterBaseY;
         this._lastAmplitude = this._currentAmplitude;
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < waveLayerCount; i++) {
           const phaseOffset = i * LAYER_PHASE_OFFSET;
           const freq = 2 + i;
           const d = this._generateWavePath(WAVE_WIDTH, this._currentAmplitude, freq, phaseOffset, waterBaseY);
@@ -336,20 +367,23 @@ class QsCarCard extends HTMLElement {
       // Per-PATH opacity (NOT group opacity on parent <g>) per AC-3.
       const idleOpacity   = (1 - this._currentColorMix).toFixed(3);
       const chargeOpacity = this._currentColorMix.toFixed(3);
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < waveLayerCount; i++) {
         const idleEl   = this._waveEls[i * 2];
         const chargeEl = this._waveEls[i * 2 + 1];
         if (idleEl)   idleEl.setAttribute('opacity', idleOpacity);
         if (chargeEl) chargeEl.setAttribute('opacity', chargeOpacity);
       }
 
-      // --- Battery outline alpha lerp (idle 0.30 → charging 0.55).
+      // --- Battery outline alpha lerp (idle 0.55 → charging 0.80).
+      // Review-fix #01 FX-03: stroke RGB is `180,180,180` (neutral
+      // grey) — was `255,255,255` (white) — and the alpha range is
+      // wider so the (also-widened) stroke is always readable.
       // JS rgba interpolation (NOT CSS color-mix, for browser compat).
       if (outlineEl) {
         const outlineAlpha = BATTERY_OUTLINE_STROKE_IDLE_ALPHA
           + this._currentColorMix
             * (BATTERY_OUTLINE_STROKE_CHARGING_ALPHA - BATTERY_OUTLINE_STROKE_IDLE_ALPHA);
-        outlineEl.setAttribute('stroke', `rgba(255,255,255,${outlineAlpha.toFixed(3)})`);
+        outlineEl.setAttribute('stroke', `rgba(180,180,180,${outlineAlpha.toFixed(3)})`);
       }
 
       // === QS-224 lightning particle system: charging-only spawn,
@@ -390,7 +424,16 @@ class QsCarCard extends HTMLElement {
             this._lightning.push({ el, life: 0, maxLife: LIGHTNING_LIFE_S });
             this._nextLightningAt += 1 / LIGHTNING_SPAWN_RATE_HZ;
           }
-          if (this._nextLightningAt < 0) this._nextLightningAt = 0;
+          // Review-fix #01 FX-06: ONLY clamp when not capped, so the
+          // accumulated spawn debt is preserved across cap-blocked
+          // frames and a freed slot is filled immediately. Previously
+          // the unconditional clamp discarded the debt when the cap
+          // was hit, making the next post-retire spawn wait the full
+          // `1/SPAWN_RATE_HZ` window.
+          if (this._lightning.length < MAX_CONCURRENT_LIGHTNING
+              && this._nextLightningAt < 0) {
+            this._nextLightningAt = 0;
+          }
         }
 
         // Advance + retire — graceful exit on charging→false.
@@ -936,20 +979,31 @@ class QsCarCard extends HTMLElement {
       // QS-224: prime the wave animation state to the actual charging
       // targets on the first render after connect, avoiding the
       // ~1.5s boot transient. Mirror qs-water-boiler-card.js:1072-1077.
-      if (this._needsAnimationPrime) {
+      // Review-fix #01 FX-05: also prime when `_currentAmplitude` is
+      // still uninitialised — the very first `_render` is called by
+      // `setConfig` BEFORE `connectedCallback → _startAnimation`
+      // initialises any animation state, so `_needsAnimationPrime`
+      // is still `undefined` on that path. Without the
+      // `|| _currentAmplitude == null` clause, an actively-charging
+      // car shows calm green on its very first paint and only the
+      // second `_render` snaps to charging.
+      if (this._needsAnimationPrime || this._currentAmplitude == null) {
         this._currentAmplitude = charging ? CHARGING_AMP : CALM_AMP;
         this._currentSpeed     = charging ? CHARGING_SPEED : CALM_SPEED;
         this._currentColorMix  = charging ? 1 : 0;
         this._needsAnimationPrime = false;
       }
 
-      // QS-224: pre-generate the 3 initial wave path `d` strings so
+      // QS-224: pre-generate the initial wave path `d` strings so
       // the SVG renders with water immediately, avoiding an empty-`d`
       // flash between the innerHTML rewrite and the first RAF tick.
       // The idle/charge siblings of each layer share the same `d`.
+      // Review-fix #01 FX-02: layer count driven by
+      // `IDLE_WATER_COLORS.length` (= 1 today) so a future palette
+      // tweak that re-adds layers doesn't require touching the loop.
       const initialAmp = this._currentAmplitude ?? CALM_AMP;
       const initialColorMix = this._currentColorMix ?? 0;
-      const initialWavePaths = [0, 1, 2].map(i => {
+      const initialWavePaths = IDLE_WATER_COLORS.map((_color, i) => {
         const freq = 2 + i;
         const phaseOffset = i * LAYER_PHASE_OFFSET;
         return this._generateWavePath(WAVE_WIDTH, initialAmp, freq, phaseOffset, waterBaseY);
@@ -969,6 +1023,20 @@ class QsCarCard extends HTMLElement {
       this._lightningLayerId = lightningLayerId;
       const batteryBodyClipD = this._generateBatteryBodyClipPath();
       const batteryOutlineD  = this._generateBatteryOutlinePath();
+
+      // Review-fix #01 FX-04: snapshot in-flight lightning bolts AND
+      // the spawn cadence counter BEFORE the innerHTML rewrite below.
+      // The rewrite detaches every DOM node under `this._root`,
+      // including the `<polyline>`s appended to the lightning layer.
+      // Without this snapshot, every HA state push during charging
+      // wiped all in-flight bolts simultaneously (the "particles all
+      // disappear at the exact same time" symptom QS-214 fixed on
+      // the boiler card). The `b.el` references survive detachment
+      // (JS still holds them); they get re-attached to the new
+      // layer below. Mirrors qs-water-boiler-card.js:1216-1219 for
+      // the snapshot side and 1418-1437 for the restore side.
+      const preservedLightning = this._lightning;
+      const preservedNextLightningAt = this._nextLightningAt;
 
       this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''} ${isStale ? 'stale' : ''}">
@@ -1023,10 +1091,6 @@ class QsCarCard extends HTMLElement {
               <g clip-path="url(#${batteryClipId})">
                 <path id="wave0_idle"   d="${initialWavePaths[0]}" fill="${IDLE_WATER_COLORS[0]}"     opacity="${initialIdleOpacity}"   pointer-events="none" style="will-change: transform;" />
                 <path id="wave0_charge" d="${initialWavePaths[0]}" fill="${CHARGING_WATER_COLORS[0]}" opacity="${initialChargeOpacity}" pointer-events="none" style="will-change: transform;" />
-                <path id="wave1_idle"   d="${initialWavePaths[1]}" fill="${IDLE_WATER_COLORS[1]}"     opacity="${initialIdleOpacity}"   pointer-events="none" style="will-change: transform;" />
-                <path id="wave1_charge" d="${initialWavePaths[1]}" fill="${CHARGING_WATER_COLORS[1]}" opacity="${initialChargeOpacity}" pointer-events="none" style="will-change: transform;" />
-                <path id="wave2_idle"   d="${initialWavePaths[2]}" fill="${IDLE_WATER_COLORS[2]}"     opacity="${initialIdleOpacity}"   pointer-events="none" style="will-change: transform;" />
-                <path id="wave2_charge" d="${initialWavePaths[2]}" fill="${CHARGING_WATER_COLORS[2]}" opacity="${initialChargeOpacity}" pointer-events="none" style="will-change: transform;" />
                 <g id="${lightningLayerId}" filter="url(#${lightningGlowId})" pointer-events="none"></g>
               </g>
               <path id="battery_outline" d="${batteryOutlineD}" fill="none"
@@ -1117,10 +1181,37 @@ class QsCarCard extends HTMLElement {
       this._waveEls = null;
       this._lightningLayerEl = null;
       this._batteryOutlineEl = null;
-      // Lightning nodes from the previous render were detached; clear
-      // the logical array so the next spawn cycle starts clean (mirrors
-      // the boiler bubble-array reset on innerHTML rewrite).
-      this._lightning = [];
+
+      // Review-fix #01 FX-04: restore the preserved lightning bolts
+      // into the FRESH lightning layer. Their DOM identity changed
+      // via innerHTML (same `id`, new element); for each preserved
+      // bolt, re-attach its detached `el` to the new layer. The
+      // per-frame state (life, maxLife) survived in the JS array, so
+      // the RAF advance loop picks up exactly where it left off with
+      // no visual blink. The spawn cadence counter is also restored
+      // so the next spawn doesn't reset to 0 (which would burst-
+      // spawn up to the cap on every HA state push). If no layer
+      // exists in the fresh markup (defensive — e.g. a future
+      // template change removed it), drop the preserved bolts via
+      // explicit `el.remove()` so detached DOM nodes don't leak.
+      if (preservedLightning?.length) {
+        const newLightningLayer = this._lightningLayerId
+          ? this._root.getElementById(this._lightningLayerId)
+          : null;
+        if (newLightningLayer) {
+          for (const b of preservedLightning) {
+            if (b?.el) newLightningLayer.appendChild(b.el);
+          }
+          this._lightning = preservedLightning.filter(b => b?.el);
+          this._lightningLayerEl = newLightningLayer;
+          this._nextLightningAt = preservedNextLightningAt;
+        } else {
+          for (const b of preservedLightning) { b?.el?.remove(); }
+          this._lightning = [];
+        }
+      } else {
+        this._lightning = [];
+      }
 
       // old buttons:
 /*      <div className="below-line">

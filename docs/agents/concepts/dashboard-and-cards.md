@@ -403,24 +403,42 @@ boiler card's continuous-RAF model and renders an
 300×300 ring. The battery vertically spans the user-anchored "+1/5 /
 −1/5 of diameter" rule (`BATTERY_TOTAL_HEIGHT = 156` SVG-px, body
 12:18 mdi proportions preserved). The battery body interior is a
-rounded-rect `<clipPath>` containing three sine-wave layers as in
-the pool card: two siblings per layer (`wave{0,1,2}_idle` in
-green-family hsla, `wave{0,1,2}_charge` in blue-family hsla),
-cross-faded via per-path opacity from `_currentColorMix`
-(`1 − colorMix` for idle, `colorMix` for charging) — the same
-opacity cross-fade mechanism QS-200 introduced on the boiler. The
-amplitude/speed lerp mirrors the boiler (`CALM_AMP=1.5`,
-`CHARGING_AMP=8`, `CALM_SPEED=0.1`, `CHARGING_SPEED=0.4`). A
-combined body+terminal `<path id="battery_outline">` is drawn after
-the clipped water group with `fill="none"` and stroke alpha lerped
-from 0.30 (idle) to 0.55 (charging) so the silhouette is always
-visible. A charging-only lightning particle system (hard cap
+rounded-rect `<clipPath>` containing a single sine-wave layer
+(two `<path>` siblings — `wave0_idle` in green-family hsla,
+`wave0_charge` in blue-family hsla, cross-faded via per-path
+opacity from `_currentColorMix`). The single-layer design (driven
+off `IDLE_WATER_COLORS.length`) is a review-fix #01 collapse from
+the original 3-layer stack: with the bright translucent palette
+(lightness ≥ 85 %, alpha ≤ 0.35) the user reported the multi-layer
+stack as dark / muddy and obscuring the SOC arc; the single layer
+preserves the cross-fade machinery while keeping the water "very
+translucent" so the ring and arc read through it cleanly. The
+amplitude / speed / colorMix lerp envelope mirrors the boiler
+(`CALM_AMP=1.5`, `CHARGING_AMP=8`, `CALM_SPEED=0.1`,
+`CHARGING_SPEED=0.4`). A combined body+terminal
+`<path id="battery_outline">` is drawn after the clipped water
+group; its stroke is a wide neutral grey
+(`rgba(180,180,180,${alpha})`, `BATTERY_OUTLINE_STROKE_WIDTH =
+MDI_UNIT_PX ≈ 7.8 px`, the canonical mdi:battery-outline 1/12 of
+body-width ratio) with alpha lerped from 0.55 (idle) to 0.80
+(charging) so the silhouette reads against both the ring and the
+bright translucent water — a review-fix #01 retune from the
+original 2-px near-white outline that the user reported as
+invisible. A charging-only lightning particle system (hard cap
 `MAX_CONCURRENT_LIGHTNING=3`, spawn `LIGHTNING_SPAWN_RATE_HZ=3`,
 life 0.5 s with a piecewise-linear 0/0.2/0.7/1.0 opacity curve)
 spawns `<polyline>` zigzag bolts inside the same clipPath as the
 water — white core with a blue Gaussian-blur glow filter applied to
 the layer group (NOT per polyline), mirroring the boiler steam
-subsystem. Per-instance unique SVG ids
+subsystem. The post-spawn-loop debt clamp is guarded by the cap
+check (`if (length < cap && _nextLightningAt < 0)`) so accumulated
+spawn debt is preserved across cap-blocked frames and a freed slot
+fills immediately — review-fix #01 fix for the original
+unconditional clamp that desynced the spawn rhythm. Lightning bolts
+ALSO survive `_render()` innerHTML rewrites via a snapshot/restore
+pattern (mirror of QS-214's boiler bubble/steam preservation): each
+HA state push during charging would otherwise wipe every in-flight
+bolt simultaneously. Per-instance unique SVG ids
 (`batteryClipId`/`lightningGlowId`/`lightningLayerId`) use the
 existing `Math.floor(Math.random() * 1e6)` pattern. The new layer
 slots between `</defs>` and the gauge background `<path
