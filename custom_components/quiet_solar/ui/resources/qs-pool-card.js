@@ -15,17 +15,17 @@ const LAYER_SCROLL_OFFSET = 1.2;  // per-layer extra scroll phase (visual depth)
 const LAYER_PHASE_OFFSET = 2.1;   // per-layer static sine phase (shape variety)
 
 // --- Water color (HSL endpoints) ---
-const COOL_HUE = 195, WARM_HUE = 175;     // deeper blue-teal → warmer cyan
-const COOL_SAT = 70,  WARM_SAT = 55;
-const COOL_LIGHT = 18, WARM_LIGHT = 28;
+const COOL_HUE = 210, WARM_HUE = 200;     // true-blue cool → slightly warmer blue
+const COOL_SAT = 65,  WARM_SAT = 55;
+const COOL_LIGHT = 32, WARM_LIGHT = 42;
 const COOL_TEMP_C = 15;           // °C at which tint is coolest
 const WARM_TEMP_C = 30;           // °C at which tint is warmest
 
 // --- Fallback water colors (no temp sensor / NaN / non-number input) ---
 const DEFAULT_WATER_COLORS = [
-    'hsla(185, 60%, 22%, 0.55)',
-    'hsla(185, 60%, 20%, 0.45)',
-    'hsla(185, 60%, 18%, 0.35)',
+    'hsla(210, 65%, 35%, 0.30)',
+    'hsla(210, 65%, 33%, 0.20)',
+    'hsla(210, 65%, 31%, 0.12)',
 ];
 
 // --- Animation tuning ---
@@ -75,9 +75,9 @@ class QsPoolCard extends HTMLElement {
     const s = COOL_SAT + t * (WARM_SAT - COOL_SAT);
     const l = COOL_LIGHT + t * (WARM_LIGHT - COOL_LIGHT);
     return [
-      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${(l + 2).toFixed(0)}%, 0.55)`,
-      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${l.toFixed(0)}%, 0.45)`,
-      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${(l - 2).toFixed(0)}%, 0.35)`,
+      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${(l + 2).toFixed(0)}%, 0.30)`,
+      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${l.toFixed(0)}%, 0.20)`,
+      `hsla(${h.toFixed(0)}, ${s.toFixed(0)}%, ${(l - 2).toFixed(0)}%, 0.12)`,
     ];
   }
 

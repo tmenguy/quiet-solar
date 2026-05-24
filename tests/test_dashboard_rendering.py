@@ -2219,6 +2219,210 @@ def test_water_boiler_card_pins_boil_water_palette():
     )
 
 
+def test_pool_card_pins_default_water_palette_direction():
+    """QS-225 AC-1 (fallback): DEFAULT_WATER_COLORS is in the true-blue
+    family (hue 200-230) and substantially more transparent than the
+    legacy 0.55/0.45/0.35 alphas. Hue/sat/light are direction-only —
+    the implementer can iterate inside the bands without amending the
+    story."""
+    import re
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
+    ).read_text()
+    match = re.search(
+        r"const\s+DEFAULT_WATER_COLORS\s*=\s*\[(?P<body>[^\]]+)\]",
+        content,
+    )
+    assert match, (
+        "qs-pool-card.js: DEFAULT_WATER_COLORS declaration must remain "
+        "a literal array."
+    )
+    body = match.group("body")
+    entries = re.findall(
+        r"hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)",
+        body,
+    )
+    assert len(entries) == 3, (
+        "QS-225 AC-1: DEFAULT_WATER_COLORS must contain exactly 3 "
+        f"hsla entries; got {len(entries)}."
+    )
+    for hue_s, _sat_s, _light_s, alpha_s in entries:
+        hue = int(hue_s)
+        alpha = float(alpha_s)
+        assert 200 <= hue <= 230, (
+            f"QS-225 AC-1: DEFAULT_WATER_COLORS hue {hue} outside "
+            "[200, 230] (true-blue band)."
+        )
+        assert 0.05 <= alpha <= 0.40, (
+            f"QS-225 AC-1: DEFAULT_WATER_COLORS alpha {alpha} outside "
+            "[0.05, 0.40] (substantially more transparent than legacy)."
+        )
+    assert "hsla(185, 60%, 22%, 0.55)" not in content, (
+        "QS-225 AC-1: legacy literal `hsla(185, 60%, 22%, 0.55)` must "
+        "be removed from qs-pool-card.js."
+    )
+
+
+def test_pool_card_pins_temp_envelope_direction():
+    """QS-225 AC-1 (runtime): _tempToColor's HSL envelope shifted to
+    the true-blue band and the embedded alphas dropped substantially.
+    This is the runtime path used whenever the pool has a temp sensor —
+    DEFAULT_WATER_COLORS is only the no-sensor fallback."""
+    import re
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+
+    # Envelope constants.
+    env = re.search(
+        r"const\s+COOL_HUE\s*=\s*(\d+)\s*,\s*WARM_HUE\s*=\s*(\d+)\s*;",
+        executable,
+    )
+    assert env, (
+        "qs-pool-card.js: COOL_HUE / WARM_HUE declaration must remain "
+        "in the canonical `const COOL_HUE = N, WARM_HUE = M;` shape."
+    )
+    cool_hue, warm_hue = int(env.group(1)), int(env.group(2))
+    assert 200 <= cool_hue <= 230, (
+        f"QS-225 AC-1: COOL_HUE {cool_hue} outside [200, 230]."
+    )
+    assert 195 <= warm_hue <= 225, (
+        f"QS-225 AC-1: WARM_HUE {warm_hue} outside [195, 225]."
+    )
+    assert warm_hue <= cool_hue, (
+        f"QS-225 AC-1: WARM_HUE ({warm_hue}) must be ≤ COOL_HUE "
+        f"({cool_hue}) to preserve cool>warm hue ordering."
+    )
+    assert "const COOL_HUE = 195, WARM_HUE = 175" not in executable, (
+        "QS-225 AC-1: legacy declaration `const COOL_HUE = 195, "
+        "WARM_HUE = 175;` must be removed."
+    )
+
+    # Embedded alphas inside _tempToColor's body only — must scope via
+    # the brace-walker helper to avoid catching CSS `rgba(0,0,0,0.8)`
+    # at the bottom of the file.
+    body = _extract_js_function_body(executable, r"_tempToColor\s*\(")
+    assert body is not None, (
+        "qs-pool-card.js: _tempToColor function body must be "
+        "extractable (signature unchanged)."
+    )
+    # Alpha literals look like `, 0.NN)` at the end of an hsla(...)
+    # template — exclude `toFixed(N)` which has the form `(N)`.
+    alphas = [float(a) for a in re.findall(r",\s*(0\.\d+)\s*\)", body)]
+    assert len(alphas) >= 3, (
+        f"QS-225 AC-1: _tempToColor body must contain ≥3 alpha "
+        f"literals; got {len(alphas)} ({alphas})."
+    )
+    for alpha in alphas:
+        assert 0.05 <= alpha <= 0.40, (
+            f"QS-225 AC-1: _tempToColor alpha {alpha} outside "
+            "[0.05, 0.40]."
+        )
+
+
+def test_water_boiler_card_pins_cool_water_palette_direction():
+    """QS-225 AC-2: COOL_WATER_COLORS (boiler "not running") shifted
+    less-blue + greyish + more transparent. Sat ≤ 30 makes it read
+    grey-ish instead of saturated blue."""
+    import re
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
+    ).read_text()
+    # Scope by symbol name (mirrors the QS-220 BOIL_WATER_COLORS pin)
+    # so the BOIL palette is not walked into.
+    match = re.search(
+        r"const\s+COOL_WATER_COLORS\s*=\s*\[(?P<body>[^\]]+)\]",
+        content,
+    )
+    assert match, (
+        "qs-water-boiler-card.js: COOL_WATER_COLORS declaration must "
+        "remain a literal array."
+    )
+    body = match.group("body")
+    entries = re.findall(
+        r"hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)",
+        body,
+    )
+    assert len(entries) == 3, (
+        "QS-225 AC-2: COOL_WATER_COLORS must contain exactly 3 hsla "
+        f"entries; got {len(entries)}."
+    )
+    for hue_s, sat_s, _light_s, alpha_s in entries:
+        hue, sat, alpha = int(hue_s), int(sat_s), float(alpha_s)
+        assert 195 <= hue <= 215, (
+            f"QS-225 AC-2: COOL_WATER_COLORS hue {hue} outside "
+            "[195, 215] (still cool, but not the legacy 185 teal)."
+        )
+        assert 10 <= sat <= 30, (
+            f"QS-225 AC-2: COOL_WATER_COLORS saturation {sat} outside "
+            "[10, 30] (greyish direction; legacy was 60)."
+        )
+        assert 0.05 <= alpha <= 0.40, (
+            f"QS-225 AC-2: COOL_WATER_COLORS alpha {alpha} outside "
+            "[0.05, 0.40]."
+        )
+    assert "hsla(185, 60%, 22%, 0.55)" not in body, (
+        "QS-225 AC-2: legacy literal `hsla(185, 60%, 22%, 0.55)` must "
+        "be removed from COOL_WATER_COLORS."
+    )
+
+
+def test_climate_card_snowflake_matches_pile_tint_more_solid():
+    """QS-225 AC-3: SNOW_FILL_COLOR (falling snowflakes) shares the
+    hue/sat/light of SNOW_FRONT_COLOR (pile front) so the in-flight
+    flake reads as the same material as the snow below it, but its
+    alpha is higher so flakes look more solid than the translucent
+    pile."""
+    import re
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+
+    hsla_re = (
+        r"'hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)'"
+    )
+    front = re.search(
+        r"const\s+SNOW_FRONT_COLOR\s*=\s*" + hsla_re, executable,
+    )
+    fill = re.search(
+        r"const\s+SNOW_FILL_COLOR\s*=\s*" + hsla_re, executable,
+    )
+    assert front, (
+        "qs-climate-card.js: SNOW_FRONT_COLOR must remain a "
+        "module-level const assigned to an hsla literal."
+    )
+    assert fill, (
+        "QS-225 AC-3: SNOW_FILL_COLOR must be a module-level const "
+        "assigned to an hsla literal (no longer the legacy rgba)."
+    )
+
+    fh, fs, fl, fa = int(front.group(1)), int(front.group(2)), \
+                     int(front.group(3)), float(front.group(4))
+    xh, xs, xl, xa = int(fill.group(1)), int(fill.group(2)), \
+                     int(fill.group(3)), float(fill.group(4))
+
+    assert (xh, xs, xl) == (fh, fs, fl), (
+        f"QS-225 AC-3: SNOW_FILL_COLOR hue/sat/light ({xh},{xs}%,{xl}%) "
+        f"must equal SNOW_FRONT_COLOR ({fh},{fs}%,{fl}%) so the "
+        "snowflake tint matches the pile below."
+    )
+    assert xa > fa, (
+        f"QS-225 AC-3: SNOW_FILL_COLOR alpha {xa} must be strictly "
+        f"greater than SNOW_FRONT_COLOR alpha {fa} so flakes read as "
+        "more solid than the translucent pile."
+    )
+    assert 0.65 <= xa <= 0.95, (
+        f"QS-225 AC-3: SNOW_FILL_COLOR alpha {xa} outside [0.65, 0.95] "
+        "(solid enough to read in flight, not pure-opaque)."
+    )
+    assert "rgba(255, 255, 255, 0.9)" not in content, (
+        "QS-225 AC-3: legacy literal `rgba(255, 255, 255, 0.9)` must "
+        "be removed from qs-climate-card.js."
+    )
+
+
 def test_water_boiler_card_center_uses_named_constants():
     """Review-fix #02 S1: the arc / handle / progress-ring `center`
     object in `_render()` must use the named `CENTER_CX` / `CENTER_CY`

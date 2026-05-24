@@ -68,9 +68,9 @@ const LAYER_PHASE_OFFSET = 2.1;
 
 // --- Water palettes ---
 const COOL_WATER_COLORS = [
-  'hsla(185, 60%, 22%, 0.55)',
-  'hsla(185, 60%, 20%, 0.45)',
-  'hsla(185, 60%, 18%, 0.35)',
+  'hsla(200, 20%, 40%, 0.30)',
+  'hsla(200, 20%, 38%, 0.22)',
+  'hsla(200, 20%, 36%, 0.14)',
 ];
 const BOIL_WATER_COLORS = [
   'hsla(185, 60%, 28%, 0.40)',

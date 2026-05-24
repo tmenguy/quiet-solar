@@ -127,7 +127,7 @@ const SNOW_RADIUS_MAX = 4;
 const SNOW_SPEED_PX_PER_S_MIN = 30;
 const SNOW_SPEED_PX_PER_S_MAX = 60;
 const SNOW_MAX_LIFE_S = 3.0;
-const SNOW_FILL_COLOR = 'rgba(255, 255, 255, 0.9)';
+const SNOW_FILL_COLOR = 'hsla(210, 30%, 92%, 0.85)';
 
 // --- Wind engine constants (minimal — stroked sinusoidal wisps with a
 //     linear scroll, no lerp envelope, no path regen) ---
