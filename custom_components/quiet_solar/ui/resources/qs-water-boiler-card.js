@@ -814,7 +814,7 @@ class QsWaterBoilerCard extends HTMLElement {
       };
       
       const css = `
-      :host { --pad: 18px; display:block; }
+      :host { --pad: 18px; --ring-text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); display:block; }
       .card { padding: var(--pad); position: relative; }
       .card.off-grid { background: rgba(244, 67, 54, 0.08); }
       .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
@@ -857,14 +857,14 @@ class QsWaterBoilerCard extends HTMLElement {
       .card.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
       .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(-5px); }
-      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
-      .ring .target-value { font-weight:800; font-size: 2.5rem; line-height: 1.1; }
+      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
+      .ring .target-value { font-weight:800; font-size: 2.5rem; line-height: 1.1; text-shadow: var(--ring-text-shadow); }
       .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; width: 220px; margin: 0 auto; }
       .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:6px; }
       .ring .from-to-row { display:flex; justify-content:space-between; width:140px; margin-top: 8px; gap:20px; }
       .ring .from-to-item { display:flex; flex-direction:column; align-items:center; gap:2px; }
-      .ring .from-to-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; }
-      .ring .from-to-value { color: var(--primary-text-color); font-weight:800; font-size: 1.4rem; }
+      .ring .from-to-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
+      .ring .from-to-value { color: var(--primary-text-color); font-weight:800; font-size: 1.4rem; text-shadow: var(--ring-text-shadow); }
       .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
       .ring .override-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .override-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; }
