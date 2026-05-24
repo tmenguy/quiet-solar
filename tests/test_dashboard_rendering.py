@@ -1725,24 +1725,32 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
 # list) means a future reviewer scanning the parametrize entries can
 # read them as a clean enumeration without losing the removed-card
 # rationale.
+#
+# QS-224: `qs-car-card.js` was previously in the idle-gated cluster
+# (the `if (charging) { _startAnimation() }` form in _render). QS-224
+# moves the car card to the same continuous-RAF model the pool and
+# boiler cards already use, because the new battery+water animation
+# must keep animating gently (calm green waves) even when idle. See
+# AC-7 of docs/stories/QS-224.story.md. Coverage moves to
+# `test_car_card_continuous_raf_refactor` below.
 @pytest.mark.parametrize(
     "card_filename,gate",
     [
         ("qs-on-off-duration-card.js", "showAnimation"),
         ("qs-climate-card.js", "showAnimation"),
-        ("qs-car-card.js", "charging"),
         ("qs-radiator-card.js", "showAnimation"),
     ],
 )
 def test_card_raf_idle_gated(card_filename, gate):
-    """M4: every card except pool / water boiler gates `_startAnimation`
-    on a runtime condition (`showAnimation` for on-off-duration/
-    climate, `charging` for car). The pool card's wave is intrinsically
-    continuous-while-connected and uses `_startAnimation` from
-    `connectedCallback` directly — that file is covered by the
-    presence-of-helper check below. QS-200 moved
-    `qs-water-boiler-card.js` to the same continuous-RAF model, also
-    covered separately.
+    """M4: every card except pool / water-boiler / car gates
+    `_startAnimation` on a runtime condition (`showAnimation` for
+    on-off-duration / climate / radiator). The pool card's wave is
+    intrinsically continuous-while-connected and uses
+    `_startAnimation` from `connectedCallback` directly — that file is
+    covered by the presence-of-helper check below. QS-200 moved
+    `qs-water-boiler-card.js` to the same continuous-RAF model, and
+    QS-224 moved `qs-car-card.js` to it as well; both are covered
+    separately.
     """
     import re
 
@@ -3268,6 +3276,536 @@ def test_water_boiler_card_steam_filter_region_attributes():
     ), (
         "qs-water-boiler-card.js: steam filter must contain "
         "`<feGaussianBlur stdDeviation=\"${STEAM_BLUR_STDDEV}\" />`."
+    )
+
+
+# ============================================================================
+# QS-224 — Car card battery backdrop (water + lightning + outline).
+# Sentinel tests pin the source-level invariants of the new animation:
+# battery geometry, three-layer water palette + cross-fade, amplitude /
+# speed lerp mirroring the boiler, body+terminal outline, lightning
+# particle system, continuous-RAF refactor, z-order vs the gauge ring.
+# All assertions read `qs-car-card.js` and walk the source — no JS
+# runtime required (boiler/pool precedent).
+# ============================================================================
+
+
+def test_car_card_pins_battery_geometry_constants():
+    """QS-224 AC-1: pin the module-level battery geometry constants
+    derived from the mdi:battery-outline 24×24 viewBox.
+
+    - `BATTERY_TOTAL_HEIGHT = 156` — vertical span of the battery
+      inside the 300×300 ring, per the issue's literal "+1/5 / −1/5
+      of diameter" rule (= 0.6 × 2 × ringCirc(130)).
+    - `MDI_UNIT_PX = BATTERY_TOTAL_HEIGHT / 20` — one mdi-unit in SVG
+      pixels (20 mdi-units = body 18 + terminal 2).
+    - `BATTERY_BODY_HEIGHT = 18 * MDI_UNIT_PX` and
+      `BATTERY_BODY_WIDTH = 12 * MDI_UNIT_PX` encode the 12:18 body
+      aspect ratio of the mdi icon (NOT 1:1, NOT square — drift here
+      breaks the silhouette).
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    assert re.search(
+        r"const\s+BATTERY_TOTAL_HEIGHT\s*=\s*156\b", content
+    ), (
+        "qs-car-card.js: missing module-level "
+        "`const BATTERY_TOTAL_HEIGHT = 156;` (vertical span derived "
+        "from issue's `+1/5 / −1/5 of diameter` rule = 0.6 × 2 × 130)."
+    )
+    assert re.search(
+        r"const\s+MDI_UNIT_PX\s*=\s*BATTERY_TOTAL_HEIGHT\s*/\s*20\b",
+        content,
+    ), (
+        "qs-car-card.js: missing module-level "
+        "`const MDI_UNIT_PX = BATTERY_TOTAL_HEIGHT / 20;` "
+        "(one mdi-unit in SVG pixels — body 18 + terminal 2 = 20)."
+    )
+    assert re.search(
+        r"const\s+BATTERY_BODY_HEIGHT\s*=\s*18\s*\*\s*MDI_UNIT_PX\b",
+        content,
+    ), (
+        "qs-car-card.js: missing "
+        "`const BATTERY_BODY_HEIGHT = 18 * MDI_UNIT_PX;` "
+        "(18 mdi-units = mdi body height)."
+    )
+    assert re.search(
+        r"const\s+BATTERY_BODY_WIDTH\s*=\s*12\s*\*\s*MDI_UNIT_PX\b",
+        content,
+    ), (
+        "qs-car-card.js: missing "
+        "`const BATTERY_BODY_WIDTH = 12 * MDI_UNIT_PX;` "
+        "(12 mdi-units = mdi body width — preserves the 12:18 ratio)."
+    )
+
+
+def test_car_card_battery_clippath_in_defs():
+    """QS-224 AC-1: exactly one `<clipPath id="${batteryClipId}">`
+    in defs whose content is a SINGLE `<path>` child describing the
+    rounded-rect battery BODY interior. The terminal nub is NOT part
+    of the clip — water and lightning never bleed into it.
+
+    Also pins the existence of the `_generateBatteryBodyClipPath()`
+    helper method (the body's `d` builder)."""
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+    # The clipPath element with stable id substitution + single <path>
+    # child (the body rounded-rect d string).
+    clip_re = re.compile(
+        r'<clipPath\s+id="\$\{batteryClipId\}">\s*'
+        r'<path\s+d="\$\{batteryBodyClipD\}"\s*/>\s*'
+        r'</clipPath>',
+        re.DOTALL,
+    )
+    assert clip_re.search(executable), (
+        "qs-car-card.js: expected exactly one "
+        '`<clipPath id="${batteryClipId}"><path d="${batteryBodyClipD}" />'
+        "</clipPath>` element in <defs>. The clip is body-only — the "
+        "terminal nub is drawn only on the outline path, never in the "
+        "clip (per AC-1)."
+    )
+    assert re.search(
+        r"_generateBatteryBodyClipPath\s*\(\s*\)\s*\{", executable
+    ), (
+        "qs-car-card.js: missing `_generateBatteryBodyClipPath()` "
+        "method (helper that returns the body rounded-rect `d` string "
+        "used by the clipPath child <path>)."
+    )
+
+
+def test_car_card_renders_water_layer():
+    """QS-224 AC-2: six `<path>` elements with stable ids
+    `wave{0,1,2}_{idle,charge}` are nested inside a single
+    `<g clip-path="url(#${batteryClipId})">`. The two siblings per
+    layer share `d` (same wave geometry) and differ only in `fill`
+    + per-frame `opacity` (cross-fade contract — AC-3).
+
+    Also pins `_generateWavePath` method (ported from
+    `qs-pool-card.js`), `WAVE_WIDTH = 480`, `WAVE_BOTTOM_Y = 400` —
+    the "same kind of animation" the issue asked for (pool/boiler
+    values reused verbatim)."""
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+    # The wrapper <g> presence (anchor used by z-order test below).
+    g_anchor = '<g clip-path="url(#${batteryClipId})">'
+    assert g_anchor in executable, (
+        f"qs-car-card.js: missing clipped water-group anchor `{g_anchor}` "
+        f"(the parent <g> wrapping all six waveX_{{idle,charge}} <path>s)."
+    )
+    for layer in (
+        "wave0_idle",
+        "wave0_charge",
+        "wave1_idle",
+        "wave1_charge",
+        "wave2_idle",
+        "wave2_charge",
+    ):
+        assert re.search(rf'id="{layer}"', executable), (
+            f'qs-car-card.js: missing <path id="{layer}"> — AC-2 '
+            f"requires three layers × two palette siblings each."
+        )
+    assert re.search(r"_generateWavePath\s*\(", executable), (
+        "qs-car-card.js: missing `_generateWavePath(...)` method "
+        "(ported verbatim from qs-pool-card.js — the issue asked for "
+        "the `same kind of animation` as the pool card)."
+    )
+    assert re.search(r"const\s+WAVE_WIDTH\s*=\s*480\b", content), (
+        "qs-car-card.js: missing `const WAVE_WIDTH = 480;` (matches "
+        "pool/boiler — the issue's `same kind of animation` clause)."
+    )
+    assert re.search(r"const\s+WAVE_BOTTOM_Y\s*=\s*400\b", content), (
+        "qs-car-card.js: missing `const WAVE_BOTTOM_Y = 400;` "
+        "(matches pool/boiler — closing rectangle y below viewBox)."
+    )
+
+
+def test_car_card_pins_water_palette_triplets():
+    """QS-224 AC-3: `IDLE_WATER_COLORS` is a 3-element `hsla(...)`
+    array whose hue token is in `[100, 180]` (green family — rules
+    out blue/red/yellow/grey); `CHARGING_WATER_COLORS` is a 3-element
+    `hsla(...)` array whose hue token is in `[190, 230]` (blue family
+    — rules out green/red/grey).
+
+    Lightness and alpha step down per layer for depth (mirror the
+    boiler's `COOL_WATER_COLORS` triplet pattern at
+    qs-water-boiler-card.js:70-79).
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+
+    def extract_triplet(name: str) -> list[tuple[int, int, int, float]]:
+        match = re.search(
+            rf"const\s+{name}\s*=\s*\[(?P<body>[^\]]+)\]",
+            content,
+            re.DOTALL,
+        )
+        assert match is not None, (
+            f"qs-car-card.js: missing module-level `const {name} = [...]`"
+        )
+        body = match.group("body")
+        entries = re.findall(
+            r"'hsla\(\s*(\d+)\s*,\s*(\d+)\s*%\s*,\s*(\d+)\s*%\s*,\s*"
+            r"([\d.]+)\s*\)'",
+            body,
+        )
+        assert len(entries) == 3, (
+            f"qs-car-card.js: {name} must have exactly 3 hsla entries "
+            f"(one per wave layer); got {len(entries)}."
+        )
+        return [
+            (int(h), int(s), int(lt), float(a)) for h, s, lt, a in entries
+        ]
+
+    idle = extract_triplet("IDLE_WATER_COLORS")
+    for h, _s, _lt, _a in idle:
+        assert 100 <= h <= 180, (
+            f"qs-car-card.js: IDLE_WATER_COLORS hue must be in the "
+            f"green family [100, 180]; got hue={h}. The issue says "
+            f"`when not charging the color will be green (same bright "
+            f"green already used in the circle not running)`."
+        )
+    # Stepped lightness AND alpha per layer (deeper = lower).
+    for i in range(1, 3):
+        assert idle[i][2] <= idle[i - 1][2], (
+            f"qs-car-card.js: IDLE_WATER_COLORS lightness must step "
+            f"DOWN (or stay equal) per layer for depth; got "
+            f"{[c[2] for c in idle]}."
+        )
+        assert idle[i][3] <= idle[i - 1][3], (
+            f"qs-car-card.js: IDLE_WATER_COLORS alpha must step DOWN "
+            f"(or stay equal) per layer for depth; got "
+            f"{[c[3] for c in idle]}."
+        )
+
+    charging = extract_triplet("CHARGING_WATER_COLORS")
+    for h, _s, _lt, _a in charging:
+        assert 190 <= h <= 230, (
+            f"qs-car-card.js: CHARGING_WATER_COLORS hue must be in "
+            f"the blue family [190, 230]; got hue={h}. The issue says "
+            f"`when charging ... be blue (same electric blue as the one "
+            f"used in the charging circle)`."
+        )
+    for i in range(1, 3):
+        assert charging[i][2] <= charging[i - 1][2], (
+            f"qs-car-card.js: CHARGING_WATER_COLORS lightness must "
+            f"step DOWN per layer; got {[c[2] for c in charging]}."
+        )
+        assert charging[i][3] <= charging[i - 1][3], (
+            f"qs-car-card.js: CHARGING_WATER_COLORS alpha must step "
+            f"DOWN per layer; got {[c[3] for c in charging]}."
+        )
+
+    # AC-3 (cont.) — per-path opacity cross-fade is applied to the
+    # waveX_idle / waveX_charge <path> elements (NOT a group opacity
+    # on the parent <g>). Verify the RAF loop calls `setAttribute(
+    # 'opacity', ...)` on the six wave elements. The boiler precedent
+    # uses `for (let i = 0; i < 3; i++) { ... setAttribute('opacity',
+    # ...) }` — the same idiom is the canonical "per-path" form here.
+    executable = _strip_js_comments(content)
+    assert re.search(
+        r"setAttribute\s*\(\s*['\"]opacity['\"]\s*,\s*idleOpacity",
+        executable,
+    ), (
+        "qs-car-card.js (AC-3): the RAF loop must set per-path "
+        "opacity on each wave element via "
+        "`setAttribute('opacity', idleOpacity)` (and the charging "
+        "sibling with `chargeOpacity`). Group-level opacity on the "
+        "parent <g> is forbidden — the cross-fade is per-path."
+    )
+    assert re.search(
+        r"setAttribute\s*\(\s*['\"]opacity['\"]\s*,\s*chargeOpacity",
+        executable,
+    ), (
+        "qs-car-card.js (AC-3): the RAF loop must set per-path "
+        "opacity on each charging-sibling wave element via "
+        "`setAttribute('opacity', chargeOpacity)`."
+    )
+
+
+def test_car_card_pins_amplitude_speed_constants():
+    """QS-224 AC-4: the calm vs charging amp/speed targets and the
+    lerp envelope are byte-identical to the boiler's tuning (which
+    QS-214 already iterated for a gentle simmer). Drift here would
+    desync the visual rhythm across the boiler and car cards — both
+    intentionally read as "gentle calm, more pronounced when active".
+
+    Pins:
+    - `CALM_AMP = 1.5`, `CHARGING_AMP = 8` (= boiler CALM_AMP /
+      BOIL_AMP)
+    - `CALM_SPEED = 0.1`, `CHARGING_SPEED = 0.4` (= boiler CALM_SPEED /
+      BOIL_SPEED — QS-214-slowed values)
+    - `LERP_RATE = 2`, `LERP_DT_CEIL = 0.1` (= boiler envelope)
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    expected = {
+        "CALM_AMP": "1.5",
+        "CHARGING_AMP": "8",
+        "CALM_SPEED": "0.1",
+        "CHARGING_SPEED": "0.4",
+        "LERP_RATE": "2",
+        "LERP_DT_CEIL": "0.1",
+    }
+    for name, value in expected.items():
+        pat = re.compile(rf"const\s+{name}\s*=\s*{re.escape(value)}\b")
+        assert pat.search(content), (
+            f"qs-car-card.js: expected module-level "
+            f"`const {name} = {value};` declaration. Drift from the "
+            f"boiler's amp/speed/lerp tuning desyncs the visual "
+            f"rhythm across cards."
+        )
+
+
+def test_car_card_battery_outline_present_with_distinct_strokes():
+    """QS-224 AC-5: a single `<path id="battery_outline">` is drawn
+    AFTER the clipped water/lightning group, with `fill="none"` and
+    a non-empty `stroke` attribute. The `d` covers BOTH the body
+    rounded-rect AND the terminal nub in ONE combined path (no seam
+    at the join).
+
+    Module-level `BATTERY_OUTLINE_STROKE_IDLE_ALPHA = 0.30` and
+    `BATTERY_OUTLINE_STROKE_CHARGING_ALPHA = 0.55` exist and are
+    distinct — the alpha lerps with `_currentColorMix` so the
+    silhouette is brighter when charging.
+
+    Also pins the existence of the `_generateBatteryOutlinePath()`
+    helper (the combined body+terminal `d` builder)."""
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+    # The outline element: id, d binding, fill="none", non-empty stroke.
+    outline_re = re.compile(
+        r'<path\s+id="battery_outline"\s+d="\$\{batteryOutlineD\}"\s+'
+        r'fill="none"\s+stroke="[^"]+"',
+        re.DOTALL,
+    )
+    assert outline_re.search(executable), (
+        "qs-car-card.js (AC-5): expected "
+        '`<path id="battery_outline" d="${batteryOutlineD}" fill="none" '
+        'stroke="...">` after the clipped water/lightning group. The '
+        "outline is fill=none — body+terminal silhouette only."
+    )
+    # Module-level alpha constants, distinct values.
+    idle_match = re.search(
+        r"const\s+BATTERY_OUTLINE_STROKE_IDLE_ALPHA\s*=\s*0\.30\b", content
+    )
+    charge_match = re.search(
+        r"const\s+BATTERY_OUTLINE_STROKE_CHARGING_ALPHA\s*=\s*0\.55\b",
+        content,
+    )
+    assert idle_match is not None, (
+        "qs-car-card.js (AC-5): missing "
+        "`const BATTERY_OUTLINE_STROKE_IDLE_ALPHA = 0.30;` — idle "
+        "outline alpha must be a pinned constant."
+    )
+    assert charge_match is not None, (
+        "qs-car-card.js (AC-5): missing "
+        "`const BATTERY_OUTLINE_STROKE_CHARGING_ALPHA = 0.55;` — "
+        "charging outline alpha must be a pinned constant."
+    )
+    assert re.search(
+        r"_generateBatteryOutlinePath\s*\(\s*\)\s*\{", executable
+    ), (
+        "qs-car-card.js (AC-5): missing "
+        "`_generateBatteryOutlinePath()` method (helper that returns "
+        "the combined body+terminal `d` string used by "
+        '<path id="battery_outline">).'
+    )
+
+
+def test_car_card_has_lightning_system():
+    """QS-224 AC-6: charging-only lightning particle system with
+    a HARD CAP. Pins the six tuning constants, the `<filter>` decl
+    in defs, and the `<g id="${lightningLayerId}" filter=` group
+    inside the clipped wrapper.
+
+    - `MAX_CONCURRENT_LIGHTNING = 3` — hard cap; spawn rejected when
+      `_lightning.length >= cap`.
+    - `LIGHTNING_SPAWN_RATE_HZ = 3` × `LIGHTNING_LIFE_S = 0.5` =
+      ~1.5 avg, occasional 3-cap (review-fix rebalance).
+    - `LIGHTNING_SEGMENTS = 4` — zigzag polyline has 5 vertices.
+    - `LIGHTNING_FADE_IN_FRACTION = 0.2`,
+      `LIGHTNING_FADE_OUT_FRACTION = 0.7` — piecewise-linear life
+      curve breakpoints.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    expected = {
+        "MAX_CONCURRENT_LIGHTNING": "3",
+        "LIGHTNING_SPAWN_RATE_HZ": "3",
+        "LIGHTNING_LIFE_S": "0.5",
+        "LIGHTNING_SEGMENTS": "4",
+        "LIGHTNING_FADE_IN_FRACTION": "0.2",
+        "LIGHTNING_FADE_OUT_FRACTION": "0.7",
+    }
+    for name, value in expected.items():
+        pat = re.compile(rf"const\s+{name}\s*=\s*{re.escape(value)}\b")
+        assert pat.search(content), (
+            f"qs-car-card.js (AC-6): expected module-level "
+            f"`const {name} = {value};` declaration."
+        )
+    # The <filter id="${lightningGlowId}"> must exist in defs.
+    assert re.search(
+        r'<filter\s+id="\$\{lightningGlowId\}"', content
+    ), (
+        "qs-car-card.js (AC-6): missing "
+        '`<filter id="${lightningGlowId}" ...>` in <defs>. The glow '
+        "is one filter applied to the layer group, NOT per-polyline "
+        "(mirrors boiler steam pattern)."
+    )
+    # The lightning layer <g>, with filter attribute, inside the
+    # clipped wrapper.
+    assert re.search(
+        r'<g\s+id="\$\{lightningLayerId\}"\s+filter=', content
+    ), (
+        "qs-car-card.js (AC-6): missing "
+        '`<g id="${lightningLayerId}" filter="...">` inside the '
+        "clipped water-group wrapper. The lightning layer must be "
+        "body-clipped (same `batteryClipId` as the water)."
+    )
+    # Spawn guarded on `charging` (no spawns when calm).
+    executable = _strip_js_comments(content)
+    spawn_re = re.compile(
+        r"if\s*\(\s*charging\s*\)\s*\{[^{}]*?"
+        r"while\s*\([^)]*?this\._lightning\.length\s*<\s*MAX_CONCURRENT_LIGHTNING",
+        re.DOTALL,
+    )
+    assert spawn_re.search(executable), (
+        "qs-car-card.js (AC-6): expected the lightning spawn block to "
+        "be `if (charging) { ... while (... this._lightning.length < "
+        "MAX_CONCURRENT_LIGHTNING) { ... } }` — hard cap (NO overflow), "
+        "calm has NO spawns."
+    )
+
+
+def test_car_card_continuous_raf_refactor():
+    """QS-224 AC-7: continuous RAF while connected.
+
+    - `connectedCallback()` calls `this._startAnimation()` directly,
+      with no `if`-gate in the body (mirror boiler/pool).
+    - `_render()` no longer contains the prior
+      `if (charging) { _startAnimation } else { _stopAnimation }`
+      block — that toggle is gone; the RAF runs continuously and the
+      calm↔charging difference is amp/speed/colorMix lerp.
+
+    The body extraction uses the balanced-brace walker so future
+    template literals or arrow functions inside `connectedCallback`
+    don't trip a false negative (mirrors the boiler test pattern).
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+    # AC-7 (a) — connectedCallback calls _startAnimation directly,
+    # no if-gate.
+    cb_body = _extract_js_function_body(
+        executable, r"connectedCallback\s*\(\s*\)\s*"
+    )
+    assert cb_body is not None, (
+        "qs-car-card.js: connectedCallback() not found"
+    )
+    assert re.search(r"this\._startAnimation\s*\(\s*\)", cb_body), (
+        "qs-car-card.js (AC-7): connectedCallback must call "
+        "`this._startAnimation()` directly (continuous-RAF model, "
+        "mirror boiler/pool)."
+    )
+    assert re.search(r"\bif\s*\(", cb_body) is None, (
+        "qs-car-card.js (AC-7): connectedCallback must call "
+        "`_startAnimation()` UNCONDITIONALLY — no `if (...)` gate. "
+        "QS-224 moved the car card to the continuous-RAF model the "
+        "pool and boiler cards already use."
+    )
+    # AC-7 (b) — the legacy charging-gated `_render` block is GONE.
+    # Reject the canonical `if (charging) { this._startAnimation() }
+    # else { this._stopAnimation() }` form. The replacement is
+    # purely amp/speed/colorMix lerp — no RAF on/off based on the
+    # per-frame `charging` boolean.
+    legacy_gate = re.compile(
+        r"if\s*\(\s*charging\s*\)\s*\{\s*this\._startAnimation\s*\(\s*\)\s*;\s*\}"
+        r"\s*else\s*\{\s*this\._stopAnimation",
+        re.DOTALL,
+    )
+    assert legacy_gate.search(executable) is None, (
+        "qs-car-card.js (AC-7): the legacy "
+        "`if (charging) { this._startAnimation(); } else { "
+        "this._stopAnimation(); }` block in `_render()` must be "
+        "removed. The car card now runs continuous RAF while "
+        "connected; calm waves animate gently when idle (per "
+        "the issue's `when not charging the color will be green` "
+        "clause)."
+    )
+
+
+def test_car_card_z_order_battery_group_before_bgpath():
+    """QS-224 AC-8: source order for the new battery layer.
+
+    The clipped water/lightning group MUST appear BEFORE the gauge
+    background `<path d="${bgPath}">` in source order. The battery
+    outline MUST appear BETWEEN the clipped group and bgPath. Anchor:
+
+      g_anchor < outline_anchor < bg_anchor
+
+    Mirrors the boiler's
+    `test_water_boiler_card_renders_water_layer` z-order assertion
+    pattern (lines 1979-1984). This pins the issue's "transparent and
+    backward to all text, button etc" requirement at the SVG source
+    level: the ring, SOC arc, charging-dash anim, target handle, and
+    HTML overlay all sit AFTER bgPath, so they render on top of the
+    new battery layer.
+    """
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+    g_anchor = '<g clip-path="url(#${batteryClipId})">'
+    outline_anchor = '<path id="battery_outline"'
+    bg_anchor = '<path d="${bgPath}"'
+    g_idx = executable.find(g_anchor)
+    outline_idx = executable.find(outline_anchor)
+    bg_idx = executable.find(bg_anchor)
+    assert g_idx != -1, (
+        f"qs-car-card.js (AC-8): missing clipped water-group anchor "
+        f"{g_anchor!r}."
+    )
+    assert outline_idx != -1, (
+        f"qs-car-card.js (AC-8): missing battery-outline anchor "
+        f"{outline_anchor!r}."
+    )
+    assert bg_idx != -1, (
+        f"qs-car-card.js (AC-8): missing bgPath anchor {bg_anchor!r}."
+    )
+    assert g_idx < outline_idx < bg_idx, (
+        "qs-car-card.js (AC-8): source order must be "
+        "`<g clip-path=...> ... <path id=\"battery_outline\"> ... "
+        "<path d=\"${bgPath}\">` so the gauge ring renders ON TOP of "
+        "the new battery+water layer (per the issue's `transparent "
+        "and backward to all text, button etc` clause). "
+        f"Got g_idx={g_idx}, outline_idx={outline_idx}, bg_idx={bg_idx}."
     )
 
 

@@ -397,6 +397,37 @@ several internal refactors:
   `qs-pool-card.js`'s `dt` cap documents the trade-off: cross-card
   consistency over the prior "catch up after hidden tab" behavior.
 
+**QS-224 — car card battery backdrop.** The car card adopts the
+boiler card's continuous-RAF model and renders an
+`mdi:battery-outline`-shaped translucent overlay inside the existing
+300×300 ring. The battery vertically spans the user-anchored "+1/5 /
+−1/5 of diameter" rule (`BATTERY_TOTAL_HEIGHT = 156` SVG-px, body
+12:18 mdi proportions preserved). The battery body interior is a
+rounded-rect `<clipPath>` containing three sine-wave layers as in
+the pool card: two siblings per layer (`wave{0,1,2}_idle` in
+green-family hsla, `wave{0,1,2}_charge` in blue-family hsla),
+cross-faded via per-path opacity from `_currentColorMix`
+(`1 − colorMix` for idle, `colorMix` for charging) — the same
+opacity cross-fade mechanism QS-200 introduced on the boiler. The
+amplitude/speed lerp mirrors the boiler (`CALM_AMP=1.5`,
+`CHARGING_AMP=8`, `CALM_SPEED=0.1`, `CHARGING_SPEED=0.4`). A
+combined body+terminal `<path id="battery_outline">` is drawn after
+the clipped water group with `fill="none"` and stroke alpha lerped
+from 0.30 (idle) to 0.55 (charging) so the silhouette is always
+visible. A charging-only lightning particle system (hard cap
+`MAX_CONCURRENT_LIGHTNING=3`, spawn `LIGHTNING_SPAWN_RATE_HZ=3`,
+life 0.5 s with a piecewise-linear 0/0.2/0.7/1.0 opacity curve)
+spawns `<polyline>` zigzag bolts inside the same clipPath as the
+water — white core with a blue Gaussian-blur glow filter applied to
+the layer group (NOT per polyline), mirroring the boiler steam
+subsystem. Per-instance unique SVG ids
+(`batteryClipId`/`lightningGlowId`/`lightningLayerId`) use the
+existing `Math.floor(Math.random() * 1e6)` pattern. The new layer
+slots between `</defs>` and the gauge background `<path
+d="${bgPath}">` so the ring, SOC arc, charging-dash animation,
+target handle, and the HTML `<div class="center">` overlay all
+render on top — none of those existing elements were touched.
+
 ### QS-210 — Climate card backdrops
 
 The climate card (`qs-climate-card.js`) renders one of four backdrop
