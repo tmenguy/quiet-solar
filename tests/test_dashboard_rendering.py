@@ -4065,20 +4065,31 @@ def test_car_card_lightning_life_and_glow_filter():
         "lightning must be `<path>` per boiler-precedent shape."
     )
 
-    # Stroke / stroke-width constants.
+    # Lightning palette + shape constants.
+    # `LIGHTNING_STROKE_COLOR` is the bolt's fill colour. The value
+    # is user-tunable per the QS-217 visual-iteration precedent
+    # (initial `#E0F7FF` pale-white → review-fix #02 user follow-up
+    # `#33B5FF` electric blue, per user "they should be light and
+    # bright blue, like Zeus thunderbolts").
     assert re.search(
-        r"const\s+LIGHTNING_STROKE_COLOR\s*=\s*['\"]#E0F7FF['\"]",
+        r"const\s+LIGHTNING_STROKE_COLOR\s*=\s*['\"]#[0-9A-Fa-f]{3,8}['\"]",
         executable,
     ), (
-        "qs-car-card.js (AC-6): missing `const LIGHTNING_STROKE_COLOR "
-        "= '#E0F7FF';`"
+        "qs-car-card.js (AC-6): expected `const LIGHTNING_STROKE_COLOR "
+        "= '#<hex>';` — value user-tunable."
     )
+    # `LIGHTNING_TOP_WIDTH` is the width at the top of the tapered
+    # bolt outline (pixel value user-tunable; pinned by NAME only).
+    # The previous `LIGHTNING_STROKE_WIDTH` was removed when the
+    # shape changed from uniform-stroke polyline to filled-polygon
+    # taper (user feedback: "wider from the top and reducing to the
+    # bottom").
     assert re.search(
-        r"const\s+LIGHTNING_STROKE_WIDTH\s*=\s*1\.8\b",
+        r"const\s+LIGHTNING_TOP_WIDTH\s*=\s*\d+(?:\.\d+)?\b",
         executable,
     ), (
-        "qs-car-card.js (AC-6): missing `const LIGHTNING_STROKE_WIDTH "
-        "= 1.8;`"
+        "qs-car-card.js (AC-6): expected `const LIGHTNING_TOP_WIDTH "
+        "= <number>;` (value user-tunable; pinned by NAME only)."
     )
 
 

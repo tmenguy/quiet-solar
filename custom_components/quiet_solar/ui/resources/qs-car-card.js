@@ -110,18 +110,39 @@ const SPARKLE_LIFE_S = 0.45;
 // --- Lightning bolts ("thunder from the top to the soup surface") ---
 // Only spawn when `_charging === true && !degraded`. In-flight bolts
 // complete their fade-out naturally on charging → false.
+//
+// Each bolt is a FILLED tapered polygon (Zeus-thunderbolt shape):
+// wide at the top, zig-zags via two lateral kinks, narrows to a
+// point at the soup surface. The previous form used a uniform-width
+// stroked polyline (~1.8 px) and a near-white colour that bloomed
+// to grey through the glow filter — user feedback: "they should be
+// light and bright blue, wider at top and reducing to the bottom
+// … like the ones from Zeus".
 const MAX_CONCURRENT_LIGHTNING = 3;
 const LIGHTNING_SPAWN_MIN_S = 1.5;
 const LIGHTNING_SPAWN_MAX_S = 3.0;
 const LIGHTNING_LIFE_S = 0.25;
-const LIGHTNING_STROKE_COLOR = '#E0F7FF';
-const LIGHTNING_STROKE_WIDTH = 1.8;
+// Fill colour for the bolt polygon. The name `LIGHTNING_STROKE_COLOR`
+// is retained for backward-compat with the AC-6 test (which pins the
+// constant NAME); semantically it's now a fill colour. Value is the
+// "Light Blue A400" Material Design tone — saturated enough to read
+// as electric blue even after the Gaussian-blur glow softens edges.
+const LIGHTNING_STROKE_COLOR = '#33B5FF';
 const LIGHTNING_GLOW_STDDEV = 2.5;
 const LIGHTNING_TOP_MARGIN_PX = 4;
 const LIGHTNING_LATERAL_JITTER_PX = 18;
+// Tapering widths for the thunderbolt outline (in SVG units).
+// `LIGHTNING_TOP_WIDTH` is the width at the top of the bolt; the
+// path then narrows to a point at the soup surface via two
+// intermediate widths (~55% and ~25% of the top, computed inline).
+const LIGHTNING_TOP_WIDTH = 9;
 // Review-fix #01 #16: removed unused `LIGHTNING_SEGMENTS = 3` —
-// the lightning path hardcodes its three `L` segments inline rather
-// than driving an emission loop, so the constant served no purpose.
+// the lightning path hardcodes its skeleton inline rather than
+// driving an emission loop, so the constant served no purpose.
+// Review-fix #02 user follow-up: removed `LIGHTNING_STROKE_WIDTH`
+// — the new tapered-polygon shape has no uniform stroke; widths
+// vary along the skeleton via `LIGHTNING_TOP_WIDTH` and its
+// inline percentages.
 
 // --- Inside-disc button carve-out covers (QS-232 D17) ---
 // Mirror of QS-217 for THREE buttons that sit inside the clip disc.
@@ -518,7 +539,11 @@ class QsCarCard extends HTMLElement {
         if (charging && !degraded) {
           this._nextLightningAt -= dt;
           while (this._nextLightningAt <= 0 && this._lightningBolts.length < MAX_CONCURRENT_LIGHTNING) {
-            // 3-segment jagged path: top → mid (with lateral kink) → surface.
+            // Tapered Zeus-thunderbolt path. 4-node skeleton from
+            // top (wide) to soup tip (point), with lateral jitter at
+            // the two midpoints for the zig-zag. The outline is a
+            // closed polygon: left side top→bottom, tip, right side
+            // bottom→top.
             const topY = CENTER_CY - CLIP_R + LIGHTNING_TOP_MARGIN_PX;
             const startCx = CENTER_CX + (Math.random() * 2 - 1) * (CLIP_R * 0.4);
             const dy = this._waterBaseY - CENTER_CY;
@@ -529,16 +554,34 @@ class QsCarCard extends HTMLElement {
               continue;
             }
             const endCx = CENTER_CX + (Math.random() * 2 - 1) * chordHalf * 0.7;
-            const midY = (topY + this._waterBaseY) / 2;
-            const midCx = (startCx + endCx) / 2 +
-                          (Math.random() * 2 - 1) * LIGHTNING_LATERAL_JITTER_PX;
-            const d = `M ${startCx.toFixed(2)} ${topY.toFixed(2)} L ${midCx.toFixed(2)} ${midY.toFixed(2)} L ${endCx.toFixed(2)} ${this._waterBaseY.toFixed(2)}`;
+            const totalLen = this._waterBaseY - topY;
+            // Two lateral jitters at 33% and 67% down the bolt —
+            // smaller than the original mid-kink so the overall
+            // shape still reads as "going down" rather than
+            // "sideways squiggle".
+            const j1 = (Math.random() * 2 - 1) * LIGHTNING_LATERAL_JITTER_PX * 0.5;
+            const j2 = (Math.random() * 2 - 1) * LIGHTNING_LATERAL_JITTER_PX * 0.5;
+            const x1 = startCx + (endCx - startCx) * 0.33 + j1;
+            const x2 = startCx + (endCx - startCx) * 0.67 + j2;
+            const y1 = topY + totalLen * 0.33;
+            const y2 = topY + totalLen * 0.67;
+            // Half-widths along the skeleton. Top is the widest; the
+            // path narrows to a point at the tip (water surface).
+            const h0 = LIGHTNING_TOP_WIDTH * 0.50;
+            const h1 = LIGHTNING_TOP_WIDTH * 0.30;
+            const h2 = LIGHTNING_TOP_WIDTH * 0.15;
+            const d = `M ${(startCx - h0).toFixed(2)},${topY.toFixed(2)}`
+                    + ` L ${(x1 - h1).toFixed(2)},${y1.toFixed(2)}`
+                    + ` L ${(x2 - h2).toFixed(2)},${y2.toFixed(2)}`
+                    + ` L ${endCx.toFixed(2)},${this._waterBaseY.toFixed(2)}`
+                    + ` L ${(x2 + h2).toFixed(2)},${y2.toFixed(2)}`
+                    + ` L ${(x1 + h1).toFixed(2)},${y1.toFixed(2)}`
+                    + ` L ${(startCx + h0).toFixed(2)},${topY.toFixed(2)}`
+                    + ` Z`;
             const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             el.setAttribute('d', d);
-            el.setAttribute('stroke', LIGHTNING_STROKE_COLOR);
-            el.setAttribute('stroke-width', String(LIGHTNING_STROKE_WIDTH));
-            el.setAttribute('fill', 'none');
-            el.setAttribute('stroke-linecap', 'round');
+            el.setAttribute('fill', LIGHTNING_STROKE_COLOR);
+            el.setAttribute('stroke', 'none');
             el.setAttribute('pointer-events', 'none');
             el.setAttribute('opacity', '0');
             lightningLayer.appendChild(el);
