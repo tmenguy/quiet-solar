@@ -416,14 +416,53 @@ i.e. behind the HTML overlay, NOT in front of it. Review-fix
 the (then-undiagnosed) filter zero-bbox failure. With #04 #1
 fixing the actual root cause, the layering hack is no longer
 needed AND turned the line into a foreground decoration
-covering the rabbit / target-value / time / "--:--" cells —
-the user-reported "awful" result. The layering CSS is removed
-(SVG sits beneath `.center` per default DOM stacking), and the
-ECG stroke is tuned for a subtle watermark feel:
-`stroke-width="2"`, `stroke-opacity="0.45"` — visible through
-gaps between text/button glyphs as a translucent blue line
-behind the UI, not on top of it. Bands enforced by sentinel:
-`stroke-width ∈ [2, 3]`, `stroke-opacity ∈ [0.3, 0.6]`.
+covering the rabbit / target-value / time / "--:--" cells.
+The layering CSS is removed (SVG sits beneath `.center` per
+default DOM stacking).
+**Review-fix #06 — full visual rework after the first
+user-visible iteration.** Six issues addressed in one commit
+once the line was finally visible:
+*(1) Vertical placement.* `ECG_BASELINE_Y` moved 198 → 180,
+into the gap between the `range-now` text ("362 km") and the
+mini-grid title row. Sentinel band relaxed to `[170, 215]`.
+*(2) Horizontal coverage.* `<clipPath>` circle radius bumped
+120 → 130 to match the ring radius — the line now visually
+"touches" the ring on both sides (the ring stroke paints
+after the ECG and overlays the line at the perimeter).
+*(3) Idle styling.* New `_buildIdleECGPath(amp, baselineY,
+totalWidth)` method emits a SINGLE static QRS pulse positioned
+at the golden-ratio LEFT (`ECG_TOTAL_WIDTH_PX *
+ECG_IDLE_GOLDEN_LEFT`, ≈ x=122). The markup conditionally
+calls `_buildQRSPath` when `charging` and `_buildIdleECGPath`
+when idle. Stroke is grey (`#888888`, opacity ~0.55) in idle,
+blue (`#00b8ff`, opacity ~0.85) when charging.
+*(4) Glow effect.* New `<filter id="ecgGlow"
+filterUnits="userSpaceOnUse" x="-50" y="0" width="420"
+height="320">` with a 2.5 stdDev Gaussian blur, doubled
+feMergeNode for a sun-btn-style halo. userSpaceOnUse is
+load-bearing — the previous `chargeGlow`
+(`filterUnits="objectBoundingBox"`) collapsed on the flatline's
+zero-height bbox. The ECG path now references `ecgGlow` (the
+dashed-arc keeps `chargeGlow` since its bbox is always
+non-zero).
+*(5) Wobble fix (the actual bug).* The S-back segment was
+`-0.15 * a`, which left a residual `+0.15 * a` cumulative dy
+per complex — each successive complex started at a lower y,
+the path tilted downward across the viewBox, and the user
+perceived this as "1-2 pixel vertical translation of the whole
+line". Fixed to `-0.30 * a` so the per-complex cumulative dy is
+exactly 0. A new sentinel pins the invariant
+`abs(sum(coeffs[:12])) < 1e-9` so it can't drift back. The
+per-complex layout also widened (pre-flat 8→10, P-Q/S-T flats
+2→3, post-flat 34→50) to keep the dx-sum equal to the new
+`ECG_SPIKE_SPACING_PX = 80`.
+*(6) Pulse sizing + frequency.* `ECG_MIN_AMP_PX` 4→8,
+`ECG_MAX_AMP_PX` 18→24 (bigger spikes for visibility at low
+charge), `ECG_MIN_SPEED_PX_S` 30→25, `ECG_MAX_SPEED_PX_S`
+140→100, `ECG_SPIKE_SPACING_PX` 60→80. At 22 kW the rate is
+now ~75 bpm (was ~140 — "frantic"); at 4.5 kW it's ~30 bpm
+(was ~50 — "too fast"). Sentinel bands updated for all five
+constants.
 The RAF step closure clamps `dt = Math.min(dt, 0.1)` (S6 dt-cap
 parity with pool + boiler), benefiting both the new ECG scroll AND
 the existing dashed-arc scroll — the car card is added to the

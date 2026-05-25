@@ -13,29 +13,41 @@ const ANIM_SPEED_RANGE = ANIM_MAX_SPEED - ANIM_MIN_SPEED;
 const ANIM_POWER_RANGE = ANIM_MAX_POWER_W - ANIM_MIN_POWER_W;
 
 // QS-229 - ECG / heartbeat charge-rate trace constants.
-// Vertical placement: golden ratio of the 320x320 viewBox
-// (320 x 0.618 = 197.76 -> 198). Lands between the SoC % big number
-// and the Force-Now / Target / Time mini-grid row.
-const ECG_BASELINE_Y = 198;
+// Vertical placement (review-fix #06): moved up from y=198 (golden-
+// ratio of 320 viewBox) to y=180, into the visible gap between the
+// `range-now` text ("362 km") and the title row ("Force Now / Target
+// SOC / Finish"). At y=198 the line landed on the title row and
+// looked like it cut through the labels.
+const ECG_BASELINE_Y = 180;
 // R-wave peak amplitude (px). Linear lerp between MIN (at <= 500 W)
-// and MAX (at >= 22 kW); both endpoints anchored to the existing
-// ANIM_MIN_POWER_W / ANIM_MAX_POWER_W envelope.
-const ECG_MIN_AMP_PX = 4;
-const ECG_MAX_AMP_PX = 18;
-// Scroll speed (px/s). With ECG_SPIKE_SPACING_PX = 60, this gives a
-// heartbeat rate of ~0.5 Hz (30 bpm) at trickle and ~2.3 Hz (140 bpm)
-// at full charge.
-const ECG_MIN_SPEED_PX_S = 30;
-const ECG_MAX_SPEED_PX_S = 140;
-// Horizontal pitch between QRS complex starts (px). Determines the
-// heartbeat rate at any given scroll speed.
-const ECG_SPIKE_SPACING_PX = 60;
+// and MAX (at >= 22 kW). Review-fix #06 bumped both endpoints so
+// low-power spikes (~4.5 kW) have more visual presence.
+const ECG_MIN_AMP_PX = 8;
+const ECG_MAX_AMP_PX = 24;
+// Scroll speed (px/s). Review-fix #06 lowered both endpoints so the
+// heartbeat reads as a relaxed rhythm rather than a frantic flicker.
+// With ECG_SPIKE_SPACING_PX = 80, the rate is ~0.31 Hz (19 bpm) at
+// trickle and ~1.25 Hz (75 bpm) at full charge.
+const ECG_MIN_SPEED_PX_S = 25;
+const ECG_MAX_SPEED_PX_S = 100;
+// Horizontal pitch between QRS complex starts (px). Review-fix #06
+// widened from 60 to 80 so fewer pulses are on-screen at once.
+const ECG_SPIKE_SPACING_PX = 80;
 // SVG viewBox width (px). Used by `_buildQRSPath` as the `totalWidth`
 // argument: the path tiles `Math.ceil(totalWidth / ECG_SPIKE_SPACING_PX)
 // + 1` complexes across the visible band. Promoted from a bare 320
 // literal so a future viewBox resize updates the path span in one
 // place (QS-229 review-fix #01 #7).
 const ECG_TOTAL_WIDTH_PX = 320;
+// Idle-state amplitude (px) for the single static pulse rendered
+// when plugged but not charging. Per user feedback (review-fix #06):
+// "show it in grey with one not moving pulse, golden ratio on the
+// left" - i.e. a static visual cue that says "plugged in, no power
+// flowing yet" rather than a featureless line.
+const ECG_IDLE_AMP_PX = 10;
+// Golden ratio of the LEFT half (1 - 0.618). Used to position the
+// single idle pulse: rPeakX = ECG_TOTAL_WIDTH_PX * ECG_IDLE_GOLDEN_LEFT.
+const ECG_IDLE_GOLDEN_LEFT = 0.382;
 
 class QsCarCard extends HTMLElement {
   constructor() {
@@ -56,41 +68,80 @@ class QsCarCard extends HTMLElement {
   // x = -ECG_SPIKE_SPACING_PX (one-complex LEFT buffer) to
   // x = totalWidth + ECG_SPIKE_SPACING_PX. The LEFT buffer fills the
   // scroll-gap left by `translate(+offset)` shifting the path
-  // rightward. Per-complex layout (60 px total width):
-  //   pre-flat=8, P_up=2, P_down=2, flat=2,
-  //   Q_dip=1, R_up=1, R_S_down=1, S_back=1, flat=2,
-  //   T_up=3, T_down=3, post-flat=34
-  // Sums: 8+2+2+2+1+1+1+1+2+3+3 = 26 active + 34 tail = 60. The 26/34
-  // active/tail split deliberately mirrors a real ECG cycle (~60% flat
-  // baseline between beats).
+  // rightward. Per-complex layout (80 px total width after #06):
+  //   pre-flat=10, P_up=2, P_down=2, flat=3,
+  //   Q_dip=1, R_up=1, R_S_down=1, S_back=1, flat=3,
+  //   T_up=3, T_down=3, post-flat=50
+  // Sums: 10+2+2+3+1+1+1+1+3+3+3 = 30 active + 50 tail = 80.
   // Relative dy magnitudes (x amp):
-  //   P = +/-0.20, Q = +0.15, R = -1.15 (-0.15 to undo Q dip, then
-  //   -1.00 peak), S = +1.30 (undo R then +0.30 past baseline), S
-  //   back = -0.15 to baseline, T = +/-0.40. SVG y grows DOWN so
-  //   "up" = negative dy.
+  //   P = +/-0.20, Q = +0.15, R = -1.15 (-0.15 undo Q + -1.00 peak),
+  //   S down = +1.30 (undo R then +0.30 past baseline),
+  //   S back = -0.30 to BASELINE (review-fix #06: was -0.15, which
+  //     left a +0.15 residual per complex - the user-reported
+  //     "1-2 pixel vertical translation of the whole line").
+  //   T = +/-0.40. SVG y grows DOWN so "up" = negative dy.
+  // Cumulative dy per complex: 0 - 0.20 + 0.20 + 0 + 0.15 - 1.15
+  //   + 1.30 - 0.30 + 0 - 0.40 + 0.40 + 0 = 0 (exact - no drift).
   // At amp=0 every dy collapses to 0 -> flatline.
-  // Defined before _startAnimation so this is the first occurrence
-  // of `_buildQRSPath(` in source order (the sentinel test parses
-  // the first matching brace block as the function body).
   _buildQRSPath(amp, baselineY, totalWidth) {
     const a = Number(amp) || 0;
     const startX = -ECG_SPIKE_SPACING_PX;
     const segments = [`M ${startX},${baselineY}`];
     const complexCount = Math.ceil(totalWidth / ECG_SPIKE_SPACING_PX) + 1;
     for (let i = 0; i < complexCount; i++) {
-      segments.push(`l 8,0`);                                    // pre-flat
+      segments.push(`l 10,0`);                                   // pre-flat
       segments.push(`l 2,${(-0.20 * a).toFixed(2)}`);            // P up
       segments.push(`l 2,${(+0.20 * a).toFixed(2)}`);            // P down
-      segments.push(`l 2,0`);                                    // P-Q flat
+      segments.push(`l 3,0`);                                    // P-Q flat
       segments.push(`l 1,${(+0.15 * a).toFixed(2)}`);            // Q dip
       segments.push(`l 1,${(-1.15 * a).toFixed(2)}`);            // R up (undo Q + peak)
       segments.push(`l 1,${(+1.30 * a).toFixed(2)}`);            // R+S down past baseline
-      segments.push(`l 1,${(-0.15 * a).toFixed(2)}`);            // S back to baseline
-      segments.push(`l 2,0`);                                    // S-T flat
+      segments.push(`l 1,${(-0.30 * a).toFixed(2)}`);            // S back to baseline (FIX #06)
+      segments.push(`l 3,0`);                                    // S-T flat
       segments.push(`l 3,${(-0.40 * a).toFixed(2)}`);            // T up
       segments.push(`l 3,${(+0.40 * a).toFixed(2)}`);            // T down
-      segments.push(`l 34,0`);                                   // post-T flat tail
+      segments.push(`l 50,0`);                                   // post-T flat tail
     }
+    return segments.join(' ');
+  }
+
+  // QS-229 review-fix #06 - emit a SINGLE static QRS pulse positioned
+  // at the golden ratio of the LEFT (~38.2% of viewBox width), with
+  // long flat baselines on either side. Used when the car is plugged
+  // but NOT charging - the user wanted a visual cue ("one not moving
+  // pulse") rather than a featureless flatline. Shares the same QRS
+  // shape as `_buildQRSPath` so charging->idle transitions show the
+  // same waveform style.
+  _buildIdleECGPath(amp, baselineY, totalWidth) {
+    const a = Number(amp) || 0;
+    const startX = -ECG_SPIKE_SPACING_PX;
+    // R-peak offset within the complex (sum of pre-flat + P up + P down
+    // + flat + Q dip + R up's first 1px = 10+2+2+3+1+1 = 19 before R
+    // hits its peak; the peak itself is at the end of the R-up step,
+    // i.e. at offset 18 from complex start). Centre the visible pulse
+    // so the R-peak lands at x = rPeakX.
+    const rPeakOffsetInComplex = 18;
+    const rPeakX = totalWidth * ECG_IDLE_GOLDEN_LEFT;
+    const complexStartX = rPeakX - rPeakOffsetInComplex;
+    const preFlatDx = complexStartX - startX;
+    const segments = [`M ${startX},${baselineY}`];
+    if (preFlatDx > 0) segments.push(`l ${preFlatDx.toFixed(2)},0`);
+    segments.push(`l 10,0`);
+    segments.push(`l 2,${(-0.20 * a).toFixed(2)}`);
+    segments.push(`l 2,${(+0.20 * a).toFixed(2)}`);
+    segments.push(`l 3,0`);
+    segments.push(`l 1,${(+0.15 * a).toFixed(2)}`);
+    segments.push(`l 1,${(-1.15 * a).toFixed(2)}`);
+    segments.push(`l 1,${(+1.30 * a).toFixed(2)}`);
+    segments.push(`l 1,${(-0.30 * a).toFixed(2)}`);
+    segments.push(`l 3,0`);
+    segments.push(`l 3,${(-0.40 * a).toFixed(2)}`);
+    segments.push(`l 3,${(+0.40 * a).toFixed(2)}`);
+    segments.push(`l 50,0`);
+    // Post-pulse flat tail to the end of the viewBox + buffer.
+    const lastX = complexStartX + ECG_SPIKE_SPACING_PX;
+    const postFlatDx = (totalWidth + ECG_SPIKE_SPACING_PX) - lastX;
+    if (postFlatDx > 0) segments.push(`l ${postFlatDx.toFixed(2)},0`);
     return segments.join(' ');
   }
 
@@ -730,28 +781,51 @@ class QsCarCard extends HTMLElement {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
+                <!-- QS-229 review-fix #06: dedicated ECG glow filter using
+                     filterUnits="userSpaceOnUse". The chargeGlow filter
+                     above uses the default objectBoundingBox and collapses
+                     to zero-pixel height on the flatline path's degenerate
+                     bbox (every dy=0). userSpaceOnUse + an explicit
+                     viewBox-sized region avoids that failure mode AND
+                     supports a stronger blur (doubled feMergeNode of the
+                     blur layer = sun-btn style halo). -->
+                <filter id="ecgGlow" filterUnits="userSpaceOnUse" x="-50" y="0" width="420" height="320">
+                  <feGaussianBlur stdDeviation="2.5" result="ecgBlur" />
+                  <feMerge>
+                    <feMergeNode in="ecgBlur" />
+                    <feMergeNode in="ecgBlur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                <!-- QS-229 review-fix #06: ECG clip-circle radius bumped
+                     from 120 -> 130 to match the ring radius so the line
+                     "touches" the ring on both sides (user feedback: "on
+                     the right it is not touching the circle"). The ring
+                     stroke is painted AFTER the ECG, so the ring overlays
+                     the line at its perimeter. -->
                 <clipPath id="${ecgClipId}">
-                  <circle cx="160" cy="160" r="120" />
+                  <circle cx="160" cy="160" r="130" />
                 </clipPath>
               </defs>
               ${(!isDisconnected && !shouldShowPlaceholder) ? `
               <g clip-path="url(#${ecgClipId})" pointer-events="none">
-                <!-- QS-229: NO filter="url(#chargeGlow)" on this path. The
-                     chargeGlow filter uses the default filterUnits="objectBoundingBox",
-                     and the flatline path's bbox has height=0 (all dy=0
-                     segments). That makes the filter region height=0 too
-                     (height="200%" * 0 = 0), so the filtered output buffer
-                     is zero-pixels-tall and the stroke renders as nothing —
-                     the user-reported "I see no line" failure mode even with
-                     a solid stroke at width=4 opacity=1. The dashed-arc still
-                     uses chargeGlow (non-zero bbox; filter works fine there). -->
+                <!-- QS-229 review-fix #06: conditional render. When NOT
+                     charging, emit a SINGLE static QRS pulse at the
+                     golden-ratio-left x, in grey, with NO scroll. When
+                     charging, the multi-complex scrolling path takes over
+                     and the RAF loop updates the transform + d. The new
+                     ecgGlow filter is used in BOTH states (works
+                     regardless of bbox via userSpaceOnUse). -->
                 <path id="ecg_anim"
-                      d="${this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX)}"
-                      stroke="#00b8ff"
+                      d="${charging
+                          ? this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX)
+                          : this._buildIdleECGPath(ECG_IDLE_AMP_PX, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX)}"
+                      stroke="${charging ? '#00b8ff' : '#888888'}"
                       stroke-width="2"
                       fill="none"
                       stroke-linecap="round"
-                      stroke-opacity="0.45"
+                      stroke-opacity="${charging ? '0.85' : '0.55'}"
+                      filter="url(#ecgGlow)"
                       transform="translate(${(this._ecgOffset || 0).toFixed(2)}, 0)"
                       style="will-change: transform;"
                 />

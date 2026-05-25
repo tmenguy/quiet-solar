@@ -1884,38 +1884,62 @@ def test_car_card_ecg_tuning_constants_in_band():
     # future viewBox resize doesn't silently break the ECG span.
     total_width = _extract_number("ECG_TOTAL_WIDTH_PX")
 
-    assert 185 <= baseline_y <= 215, (
-        f"QS-229 AC-1: ECG_BASELINE_Y {baseline_y} outside [185, 215] "
-        "(golden-ratio band of 320 viewBox)."
+    # Review-fix #06 expanded the baseline band downward (toward the
+    # range-now text, above the title labels). Previously [185, 215];
+    # now [170, 215] so the line lands in the empty gap between
+    # range-now and the mini-grid titles.
+    assert 170 <= baseline_y <= 215, (
+        f"QS-229 review-fix #06: ECG_BASELINE_Y {baseline_y} outside "
+        "[170, 215] (empty gap between range-now and title labels)."
     )
-    assert 2 <= min_amp <= 8, (
-        f"QS-229 AC-5: ECG_MIN_AMP_PX {min_amp} outside [2, 8]."
+    # Review-fix #06 raised both amp endpoints so 4.5 kW reads visibly.
+    assert 4 <= min_amp <= 12, (
+        f"QS-229 review-fix #06: ECG_MIN_AMP_PX {min_amp} outside [4, 12]."
     )
-    assert 15 <= max_amp <= 28, (
-        f"QS-229 AC-5: ECG_MAX_AMP_PX {max_amp} outside [15, 28]."
+    assert 18 <= max_amp <= 30, (
+        f"QS-229 review-fix #06: ECG_MAX_AMP_PX {max_amp} outside [18, 30]."
     )
     assert min_amp < max_amp, (
         f"QS-229 AC-5: ECG_MIN_AMP_PX ({min_amp}) must be < "
         f"ECG_MAX_AMP_PX ({max_amp})."
     )
+    # Review-fix #06 slowed the rhythm. Previous [20, 60] / [100, 180];
+    # now [20, 60] / [80, 180] (max-speed lower bound dropped 100->80
+    # to allow a more relaxed heartbeat).
     assert 20 <= min_speed <= 60, (
         f"QS-229 AC-5: ECG_MIN_SPEED_PX_S {min_speed} outside [20, 60]."
     )
-    assert 100 <= max_speed <= 180, (
-        f"QS-229 AC-5: ECG_MAX_SPEED_PX_S {max_speed} outside [100, 180]."
+    assert 80 <= max_speed <= 180, (
+        f"QS-229 review-fix #06: ECG_MAX_SPEED_PX_S {max_speed} outside "
+        "[80, 180]."
     )
     assert min_speed < max_speed, (
         f"QS-229 AC-5: ECG_MIN_SPEED_PX_S ({min_speed}) must be < "
         f"ECG_MAX_SPEED_PX_S ({max_speed})."
     )
-    assert 40 <= spike_spacing <= 80, (
-        f"QS-229 AC-5: ECG_SPIKE_SPACING_PX {spike_spacing} outside "
-        "[40, 80]."
+    # Review-fix #06 widened spacing (60 -> 80) so fewer pulses on-screen.
+    assert 40 <= spike_spacing <= 100, (
+        f"QS-229 review-fix #06: ECG_SPIKE_SPACING_PX {spike_spacing} "
+        "outside [40, 100]."
     )
     assert total_width == 320, (
         f"QS-229 review-fix #01 #7: ECG_TOTAL_WIDTH_PX must equal 320 "
         f"(the SVG viewBox width) - got {total_width}. If the viewBox "
         "is ever resized, change this constant and the path will follow."
+    )
+    # Review-fix #06 added a static-pulse idle state ("show it in grey
+    # with one not moving pulse, golden ratio on the left"). The
+    # idle-amp constant must produce a clearly visible pulse without
+    # overshooting the available vertical band above the baseline.
+    idle_amp = _extract_number("ECG_IDLE_AMP_PX")
+    golden_left = _extract_number("ECG_IDLE_GOLDEN_LEFT")
+    assert 6 <= idle_amp <= 14, (
+        f"QS-229 review-fix #06: ECG_IDLE_AMP_PX {idle_amp} outside "
+        "[6, 14] (visible static pulse without overshooting the band)."
+    )
+    assert 0.30 <= golden_left <= 0.45, (
+        f"QS-229 review-fix #06: ECG_IDLE_GOLDEN_LEFT {golden_left} "
+        "outside [0.30, 0.45] (~golden-ratio of LEFT half)."
     )
 
 
@@ -1948,18 +1972,20 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "1e6)}\\`;` alongside the other gradXId declarations."
     )
 
-    # The <clipPath> definition uses the per-instance id and the
-    # ring's existing center/radius.
+    # The <clipPath> definition uses the per-instance id and a radius
+    # in [120, 140] (review-fix #06 bumped to 130 so the line "touches"
+    # the ring — the ring is at radius 130 with stroke-width 14).
     clip_def = re.search(
         r"<clipPath\s+id\s*=\s*[\"']\$\{ecgClipId\}[\"'][^>]*>\s*"
         r"<circle[^>]*cx\s*=\s*[\"']160[\"'][^>]*cy\s*=\s*[\"']160[\"']"
-        r"[^>]*r\s*=\s*[\"']120[\"']",
+        r"[^>]*r\s*=\s*[\"'](1[23]\d)[\"']",
         content,
     )
     assert clip_def, (
-        "QS-229 AC-1: ECG clipPath must use `id=\"${ecgClipId}\"` "
-        "and contain `<circle cx=\"160\" cy=\"160\" r=\"120\" />` "
-        "matching the existing ring clip geometry."
+        "QS-229 AC-1 (review-fix #06): ECG clipPath must use "
+        "`id=\"${ecgClipId}\"` and contain `<circle cx=\"160\" cy=\"160\" "
+        "r=\"...\" />` with r in [120, 139]. Default r=130 matches the "
+        "ring radius so the line visually touches the ring."
     )
 
     # The <g> wrapper references the per-instance clip id, sets
@@ -1975,25 +2001,23 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "id=\"ecg_anim\">`."
     )
 
-    # AC-6 (revised after review-fix #03): stroke is a SOLID electric
-    # blue hex color, NOT a linearGradient. Rationale: the original
-    # cyan->blue `gradChargeId` linearGradient uses the default
-    # `gradientUnits="objectBoundingBox"`, which fails to render on
-    # the flatline path's zero-height bounding box (all `dy=0`
-    # segments). User-reported repro: even after the screen-blend
-    # removal AND the visibility bumps, the flatline was invisible
-    # because the gradient was painting as transparent. A solid color
-    # bypasses the zero-bbox concern entirely.
+    # AC-6 (revised in review-fix #06): stroke is a CHARGING/IDLE
+    # ternary of two SOLID hex colors — `charging ? '#00b8ff' :
+    # '#888888'` (vivid blue when charging, grey when plugged-idle).
+    # Neither branch references a linearGradient (the original
+    # gradChargeId fails on the flatline path's zero-height bbox).
     path_attrs = re.search(
         r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?stroke\s*=\s*"
-        r"[\"']#[0-9a-fA-F]{6}[\"']",
+        r"[\"']\$\{\s*charging\s*\?\s*['\"]#[0-9a-fA-F]{6}['\"]"
+        r"\s*:\s*['\"]#[0-9a-fA-F]{6}['\"]\s*\}[\"']",
         content,
     )
     assert path_attrs, (
-        "QS-229 review-fix #03 #1: ECG stroke must be a solid hex "
-        "color (e.g. `stroke=\"#00b8ff\"`), NOT `url(#gradChargeId)`. "
-        "The objectBoundingBox linearGradient fails on the flatline's "
-        "zero-height path bbox in several browsers."
+        "QS-229 review-fix #06: ECG stroke must be a `charging` "
+        "ternary of two solid hex colors, e.g. "
+        "`stroke=\"${charging ? '#00b8ff' : '#888888'}\"` — blue "
+        "while charging, grey when plugged-idle. No gradient "
+        "(objectBoundingBox fails on the zero-bbox flatline)."
     )
 
     # AC-6: no gradient reference on the ECG path (any of the five
@@ -2020,15 +2044,15 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "must be preserved."
     )
 
-    # QS-229 review-fix #04 #1 - the ECG path MUST NOT reference
+    # QS-229 review-fix #04 #1 + #06 - the ECG path MUST NOT reference
     # `filter="url(#chargeGlow)"`. The chargeGlow filter uses the
     # default filterUnits="objectBoundingBox"; the flatline path
     # has bbox height=0 (every per-complex segment has dy=0), so
     # the filter region's `height="200%" * 0 = 0` clips the
     # filtered output to a zero-pixel-tall buffer - the stroke
-    # paints as nothing. User-reported repro: even with solid
-    # `stroke="#00b8ff"`, stroke-width=4, opacity=1, the line was
-    # invisible because the filter clipped it.
+    # paints as nothing. Review-fix #06 introduced a NEW filter
+    # `ecgGlow` with `filterUnits="userSpaceOnUse"` that bypasses
+    # the zero-bbox issue; the ECG path now references THAT.
     ecg_path_block = re.search(
         r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?/>",
         content,
@@ -2037,13 +2061,47 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
     assert ecg_path_block, (
         "QS-229: ECG `<path id=\"ecg_anim\" ... />` must be present."
     )
-    assert "filter=" not in ecg_path_block.group(0), (
+    assert "url(#chargeGlow)" not in ecg_path_block.group(0), (
         "QS-229 review-fix #04 #1: ECG `<path id=\"ecg_anim\">` must "
-        "NOT carry a `filter=\"...\"` attribute. The chargeGlow "
-        "filter's objectBoundingBox region collapses to zero-pixel "
-        "height on the flatline's degenerate bbox and the stroke "
-        "renders as nothing. The dashed-arc keeps chargeGlow "
-        "(non-zero bbox; filter works fine there)."
+        "NOT reference `chargeGlow` - that filter uses "
+        "objectBoundingBox and collapses on the flatline's degenerate "
+        "bbox. Use the dedicated `ecgGlow` filter instead (review-fix "
+        "#06)."
+    )
+    assert "url(#ecgGlow)" in ecg_path_block.group(0), (
+        "QS-229 review-fix #06: ECG `<path id=\"ecg_anim\">` must "
+        "reference the new `ecgGlow` filter (userSpaceOnUse) for the "
+        "sun-btn-style halo."
+    )
+
+    # QS-229 review-fix #06: the `ecgGlow` filter MUST use
+    # `filterUnits="userSpaceOnUse"` — that's the whole point of
+    # introducing the new filter (the existing chargeGlow uses
+    # objectBoundingBox and collapses on the flatline bbox).
+    ecg_glow_def = re.search(
+        r"<filter[^>]*id\s*=\s*[\"']ecgGlow[\"'][^>]*"
+        r"filterUnits\s*=\s*[\"']userSpaceOnUse[\"']",
+        content,
+    )
+    assert ecg_glow_def, (
+        "QS-229 review-fix #06: `<filter id=\"ecgGlow\" "
+        "filterUnits=\"userSpaceOnUse\" ...>` must be defined inside "
+        "<defs>. userSpaceOnUse is load-bearing - objectBoundingBox "
+        "would re-introduce the zero-bbox filter-collapse bug."
+    )
+
+    # QS-229 review-fix #06: `_buildIdleECGPath` instance method
+    # must be defined. Used when plugged but not charging - emits a
+    # SINGLE static QRS pulse at the golden-ratio-left x.
+    assert re.search(
+        r"_buildIdleECGPath\s*\(\s*[A-Za-z_]+\s*,\s*[A-Za-z_]+\s*,"
+        r"\s*[A-Za-z_]+\s*\)\s*\{",
+        content,
+    ), (
+        "QS-229 review-fix #06: `_buildIdleECGPath(amp, baselineY, "
+        "totalWidth)` instance method must be defined on QsCarCard. "
+        "Called from the markup when `charging` is false to render "
+        "the single static idle pulse."
     )
 
     # QS-229 review-fix #02 #1 ROLLBACK of review-fix #01 #8:
@@ -2085,19 +2143,16 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "be re-introduced. See test docstring rationale."
     )
 
-    # QS-229 review-fix #05 - "watermark" subtle look. User feedback:
-    # the previous 4 px / opacity-1 stroke on top of the HTML overlay
-    # was visible BUT "awful" — covering buttons + text at full
-    # intensity. The user's original spec was "an horizontal line,
-    # probably electric blue but transparent, on the background"
-    # (verbatim, see story §Issue clarification 1). So the line must
-    # be:
-    #   (a) BEHIND the HTML overlay (no z-index lift — the SVG sits
-    #       below `.center` per default DOM order)
-    #   (b) translucent (opacity in [0.3, 0.6]) so it reads as a
-    #       background watermark, not a foreground decoration
-    #   (c) thin (width in [2, 3]) so the spike-amplitude scaling
-    #       has visual headroom from baseline to peak
+    # QS-229 review-fix #06 - tuned visibility with NEW vertical
+    # placement (above the title row) + ecgGlow filter:
+    #   (a) thin stroke (width in [2, 3]) so the spike amplitude has
+    #       visual headroom
+    #   (b) opacity is a `charging` ternary: charging form
+    #       in [0.6, 1.0] (prominent + glow); idle (grey) form in
+    #       [0.3, 0.7] (subtle "plugged but waiting" cue)
+    # The line now sits in the empty band between range-now and the
+    # title labels (ECG_BASELINE_Y=180), so it doesn't visually
+    # collide with text — full charging-opacity is no longer "awful".
     path_block = re.search(
         r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?/>",
         content,
@@ -2114,23 +2169,38 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
     )
     width_val = float(width_match.group(1))
     assert 2 <= width_val <= 3, (
-        f"QS-229 review-fix #05: ECG stroke-width ({width_val}) must "
-        f"be in [2, 3]. Width 4+ with opacity 1.0 (foreground) was "
-        f"reported 'awful' by the user; the line is meant to be a "
-        f"subtle background watermark."
+        f"QS-229 review-fix #06: ECG stroke-width ({width_val}) must "
+        f"be in [2, 3]. The spike amplitudes scale up to 24 px above "
+        f"baseline, so a thin stroke leaves headroom; a glow filter "
+        f"adds visual presence on top of the thin stroke."
     )
+    # stroke-opacity is now a `charging` ternary (charging brighter,
+    # idle dimmer). Extract BOTH branches and check each band.
     opacity_match = re.search(
-        r"stroke-opacity\s*=\s*[\"'](\d+(?:\.\d+)?)[\"']", block,
+        r"stroke-opacity\s*=\s*[\"']\$\{\s*charging\s*\?\s*"
+        r"['\"]([0-9.]+)['\"]\s*:\s*['\"]([0-9.]+)['\"]\s*\}[\"']",
+        block,
     )
     assert opacity_match, (
-        "QS-229: ECG path must declare `stroke-opacity=\"...\"`."
+        "QS-229 review-fix #06: ECG path must declare "
+        "`stroke-opacity=\"${charging ? '0.85' : '0.55'}\"` "
+        "(or similar `charging` ternary of two numeric literals) — "
+        "brighter when charging, softer when idle."
     )
-    opacity_val = float(opacity_match.group(1))
-    assert 0.3 <= opacity_val <= 0.6, (
-        f"QS-229 review-fix #05: ECG stroke-opacity ({opacity_val}) "
-        f"must be in [0.3, 0.6] — translucent watermark behind the "
-        f"HTML overlay. Opacity 1.0 was reported 'awful' (too "
-        f"prominent); below 0.3 the line disappears."
+    charging_opacity = float(opacity_match.group(1))
+    idle_opacity = float(opacity_match.group(2))
+    assert 0.6 <= charging_opacity <= 1.0, (
+        f"QS-229 review-fix #06: charging stroke-opacity "
+        f"({charging_opacity}) must be in [0.6, 1.0]."
+    )
+    assert 0.3 <= idle_opacity <= 0.7, (
+        f"QS-229 review-fix #06: idle stroke-opacity "
+        f"({idle_opacity}) must be in [0.3, 0.7]."
+    )
+    assert idle_opacity <= charging_opacity, (
+        f"QS-229 review-fix #06: idle opacity ({idle_opacity}) must "
+        f"be <= charging opacity ({charging_opacity}) — the static "
+        f"idle pulse is meant to be a softer plugged-in cue."
     )
 
     # QS-229 review-fix #05 - SVG layering REVERTED. The CSS must NOT
@@ -2440,11 +2510,57 @@ def test_car_card_ecg_build_qrs_path_tiles_and_left_buffers():
         f"(parsed {len(matches)})."
     )
     one_complex_dx_sum = sum(float(dx) for dx in matches[:12])
-    assert one_complex_dx_sum == 60.0, (
-        f"QS-229 AC-4: per-complex dx-sum must equal ECG_SPIKE_SPACING_PX "
-        f"= 60 (got {one_complex_dx_sum}). Successive complexes must tile "
-        f"without gaps; if you change a segment dx, adjust the tail to "
-        f"keep the sum at 60."
+    # Review-fix #06 widened the per-complex pitch from 60 -> 80 px.
+    # We parse ECG_SPIKE_SPACING_PX from the source and assert the
+    # dx-sum matches it (whatever the tuning value is, the tiling
+    # invariant must hold).
+    spacing_match = re.search(
+        r"const\s+ECG_SPIKE_SPACING_PX\s*=\s*([0-9.]+)", content,
+    )
+    assert spacing_match, "QS-229: ECG_SPIKE_SPACING_PX constant missing"
+    expected_pitch = float(spacing_match.group(1))
+    assert one_complex_dx_sum == expected_pitch, (
+        f"QS-229 AC-4: per-complex dx-sum must equal "
+        f"ECG_SPIKE_SPACING_PX ({expected_pitch}) — got "
+        f"{one_complex_dx_sum}. Successive complexes must tile without "
+        f"gaps; if you change a segment dx, adjust the tail to keep "
+        f"the sum equal to the spacing constant."
+    )
+
+    # QS-229 review-fix #06 - per-complex baseline-return invariant.
+    # User-reported "1-2 pixel vertical translation of the whole line"
+    # was caused by the S-back segment being -0.15 * a (cumulative dy
+    # at end of complex = +0.15 * a, NOT zero). Each successive
+    # complex started below the previous one - the path tilted
+    # downward across the viewBox. Fix: S back = -0.30 * a so the
+    # cumulative dy is exactly 0 after each complex. Pin this with a
+    # dedicated sentinel.
+    coeff_re = re.compile(
+        r"`l\s+[0-9.]+,"
+        r"(?:"
+        r"\$\{\(?\s*([+-]?[0-9.]+)\s*\*\s*a\s*\)?\.toFixed\(\d+\)\}"
+        r"|"
+        r"(0)"
+        r")`",
+    )
+    coeff_matches = coeff_re.findall(body)
+    assert len(coeff_matches) >= 12, (
+        f"QS-229 AC-4: _buildQRSPath must emit >=12 segments per "
+        f"complex (parsed {len(coeff_matches)} coefficients)."
+    )
+
+    def _coeff(m):
+        if m[1]:  # literal `0`
+            return 0.0
+        return float(m[0])
+
+    one_complex_dy_sum = sum(_coeff(m) for m in coeff_matches[:12])
+    assert abs(one_complex_dy_sum) < 1e-9, (
+        f"QS-229 review-fix #06: per-complex cumulative dy must be "
+        f"exactly 0 (got {one_complex_dy_sum} × amp). A non-zero sum "
+        f"makes each successive complex start at a different y, and "
+        f"the line tilts across the viewBox - the user-reported "
+        f"'whole line going up and down 1-2 pixels'."
     )
 
 
