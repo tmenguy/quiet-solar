@@ -140,9 +140,16 @@ const LIGHTNING_LATERAL_JITTER_PX = 18;
 // - Review-fix #02:    SUN=288, RABBIT/TIME=192,192  R=38 (R bump made things worse)
 // - Review-fix #03:    SUN=277 R=35, RABBIT/TIME=215 R=32 — sun matches
 //                      OVERRIDE_BTN_CARVE_CY/R from the other cards.
-// - Review-fix #05:    RABBIT/TIME=200 R=32 — user instruction "move the
-//                      holes UP by 15 pixels" from the 215 deployment.
-//                      Sun stays at 277 (matches override-btn position).
+// - Review-fix #05:    RABBIT/TIME=200 R=32 — user "move the holes
+//                      UP by 15 pixels" from the 215 deployment.
+// - Review-fix #06:    RABBIT/TIME=206 R=32 — user measured "hole
+//                      apex 22 image px above button apex, lower
+//                      by 11 image px to align". With a ~1.9× retina
+//                      screenshot scale (the user measured the
+//                      circle diameter at ~490 image px ÷ ~258 CSS
+//                      px ring-stroke diameter), 11 image px ≈
+//                      5.5 CSS px ≈ 6 SVG units → 200 + 6 = 206.
+//                      Sun stays at 277 (matches override-btn).
 // - The sun-btn DOM was restructured to a direct child of the
 //   .ring container (out of `.center > .stack > .center-controls`)
 //   so its CSS layout matches override-btn exactly.
@@ -150,10 +157,10 @@ const SUN_BTN_CARVE_CX = 160;       // bottom-center of ring
 const SUN_BTN_CARVE_CY = 277;       // matches OVERRIDE_BTN_CARVE_CY in other cards
 const SUN_BTN_CARVE_R  = 35;        // matches OVERRIDE_BTN_CARVE_R in other cards
 const RABBIT_BTN_CARVE_CX = 96;     // left column of mini-grid
-const RABBIT_BTN_CARVE_CY = 200;
+const RABBIT_BTN_CARVE_CY = 206;
 const RABBIT_BTN_CARVE_R  = 32;
 const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
-const TIME_BTN_CARVE_CY = 200;
+const TIME_BTN_CARVE_CY = 206;
 const TIME_BTN_CARVE_R  = 32;
 
 class QsCarCard extends HTMLElement {
