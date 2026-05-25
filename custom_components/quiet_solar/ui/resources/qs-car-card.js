@@ -1,6 +1,38 @@
 /*
   QS Car Card - custom:qs-car-card
   Zero-build single-file Lit-style web component compatible with Home Assistant
+
+  QS-232 layered an "electron soup" SOC animation inside the ring,
+  mirroring the QS-200/QS-211/QS-214 boiler architecture:
+  - A single sine wave inside a circular clipPath, with dual-opacity
+    cross-fade between an idle green palette and a charging blue
+    palette (binary `_currentColorMix` lerp, NOT HSL hue lerp).
+  - Lightning-blue "electron" sparkles popping randomly inside the
+    soup. Sparkle density / spawn-rate / radius scale linearly with
+    charge power on [1500W, 22000W]; below 1500W (but still
+    `_charging`) the visuals clamp to the 1500W MIN endpoint. Idle
+    uses a fixed low rate of greenish sparkles independent of power.
+  - Lightning bolts flashing from the top of the clip circle to the
+    soup surface when charging — 3-segment `<path>` with a glow
+    filter and `mix-blend-mode: screen`, life 0.25s, spawn interval
+    randomised on [1.5, 3.0]s.
+  - feTurbulence grain filter applied to the wave path's fill (NOT a
+    separate overlay rect) so the grain composites within the wave
+    shape via `feComposite operator="in"`.
+  - Degraded states (`isDisconnected || isFaulted || isStale`)
+    desaturate the entire clipped group via a CSS filter
+    (`saturate(0.3) brightness(0.7)`) and suppress lightning
+    entirely. `isOffGrid` is NOT folded in (the card-level pinkish
+    .off-grid tint already covers it).
+  - Continuous RAF while connected (no more `_charging`-gated
+    start/stop). Mirrors QS-200 / QS-211 pool & boiler precedent.
+  - QS-217 carve-cover pattern extended from one button (override-
+    reset on boiler/radiator/climate) to THREE inside-disc buttons
+    on the car card: sun-btn (Solar priority), rabbit-btn (Force
+    now), time-btn (Finish time).
+
+  Existing dashed-arc animation (`<path id="charge_anim">`) is
+  preserved verbatim; `showAnimation` remains its render-time switch.
 */
 
 const INVALID_STATES = ['unavailable', 'unknown', 'none'];
@@ -12,6 +44,90 @@ const ANIM_MAX_POWER_W = 22000;
 const ANIM_SPEED_RANGE = ANIM_MAX_SPEED - ANIM_MIN_SPEED;
 const ANIM_POWER_RANGE = ANIM_MAX_POWER_W - ANIM_MIN_POWER_W;
 
+// === QS-232 electron-soup constants ===
+
+// --- Geometry (must match the SVG <clipPath> circle attributes below) ---
+const CENTER_CX = 160;              // SVG x-center of the ring / clip circle
+const CENTER_CY = 160;              // SVG y-center of the ring / clip circle
+const CLIP_R = 120;                 // soup clip circle radius (10 px inside ringCirc=130, same as boiler)
+const WAVE_WIDTH = 480;             // single wave period (2× clip diameter)
+const WAVE_BOTTOM_Y = 400;          // closing rectangle y; clipped by circle
+
+// --- Wave palette (dual-opacity cross-fade idle ↔ charge) ---
+const IDLE_SOUP_COLOR   = 'hsla(140, 80%, 50%, 0.12)';   // very translucent electric green
+const CHARGE_SOUP_COLOR = 'hsla(180, 90%, 55%, 0.25)';   // bluer, slightly less transparent
+
+// --- Animation tuning (lerp envelope; mirror boiler) ---
+const LERP_RATE = 2;
+const LERP_DT_CEIL = 0.1;
+const AMP_REGEN_THRESHOLD = 0.25;
+const LEVEL_REGEN_THRESHOLD = 0.01;
+const PHASE_WRAP = 1e6;
+const PHASE_TO_PX = 60;
+
+// --- Calm vs charge targets (single layer, gentler than boiler) ---
+const CALM_AMP = 1.2;
+const CALM_SPEED = 0.03;            // very slow per issue brief
+const CHARGE_AMP = 3.5;
+const CHARGE_SPEED = 0.15;          // still gentle
+
+// --- Sparkles ("electrons popping in the water") ---
+// Idle: always visible, very few, very small, green.
+const SPARKLE_IDLE_MAX = 4;
+const SPARKLE_IDLE_RATE_HZ = 0.6;
+const SPARKLE_IDLE_RADIUS_MIN = 0.8;
+const SPARKLE_IDLE_RADIUS_MAX = 1.6;
+const SPARKLE_IDLE_COLOR = 'hsla(140, 90%, 70%, 0.9)';
+// Charging endpoints — scale linearly on [SPARKLE_POWER_MIN_W, SPARKLE_POWER_MAX_W].
+// Below MIN (but still `_charging`) the values clamp to the MIN-power
+// endpoint per user intent (1500W = MIN charging density, NOT a ramp
+// from 0W). The idle→charging boundary at 50W is a deliberate
+// visible step in density and colour.
+const SPARKLE_POWER_MIN_W = 1500;
+const SPARKLE_POWER_MAX_W = 22000;
+const SPARKLE_CHARGE_MAX_AT_MIN_POWER = 12;
+const SPARKLE_CHARGE_MAX_AT_MAX_POWER = 28;
+const SPARKLE_CHARGE_RATE_HZ_AT_MIN_POWER = 3;
+const SPARKLE_CHARGE_RATE_HZ_AT_MAX_POWER = 10;
+const SPARKLE_CHARGE_RADIUS_MIN_AT_MIN_POWER = 1.2;
+const SPARKLE_CHARGE_RADIUS_MAX_AT_MIN_POWER = 2.5;
+const SPARKLE_CHARGE_RADIUS_MIN_AT_MAX_POWER = 1.8;
+const SPARKLE_CHARGE_RADIUS_MAX_AT_MAX_POWER = 3.5;
+const SPARKLE_CHARGE_COLOR = '#00E5FF';   // electric "lightning blue"
+const SPARKLE_LIFE_S = 0.45;
+
+// --- Lightning bolts ("thunder from the top to the soup surface") ---
+// Only spawn when `_charging === true && !degraded`. In-flight bolts
+// complete their fade-out naturally on charging → false.
+const MAX_CONCURRENT_LIGHTNING = 3;
+const LIGHTNING_SPAWN_MIN_S = 1.5;
+const LIGHTNING_SPAWN_MAX_S = 3.0;
+const LIGHTNING_LIFE_S = 0.25;
+const LIGHTNING_STROKE_COLOR = '#E0F7FF';
+const LIGHTNING_STROKE_WIDTH = 1.8;
+const LIGHTNING_GLOW_STDDEV = 2.5;
+const LIGHTNING_TOP_MARGIN_PX = 4;
+const LIGHTNING_LATERAL_JITTER_PX = 18;
+const LIGHTNING_SEGMENTS = 3;
+
+// --- Inside-disc button carve-out covers (QS-232 D17) ---
+// Mirror of QS-217 for THREE buttons that sit inside the clip disc:
+// sun-btn (Solar priority, bottom-center), rabbit-btn (Force now,
+// left column of mini-grid), time-btn (Finish time, right column).
+// The CSS positions are pinned in the .ring layout; the SVG-unit
+// coordinates here track those positions. Integer values are
+// intentionally user-tunable for visual iteration — tests pin the
+// constant NAMES only (mirrors the QS-217 precedent).
+const SUN_BTN_CARVE_CX = 160;       // bottom-center of stack
+const SUN_BTN_CARVE_CY = 267;
+const SUN_BTN_CARVE_R  = 32;
+const RABBIT_BTN_CARVE_CX = 96;     // left column of mini-grid
+const RABBIT_BTN_CARVE_CY = 180;
+const RABBIT_BTN_CARVE_R  = 32;
+const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
+const TIME_BTN_CARVE_CY = 180;
+const TIME_BTN_CARVE_R  = 32;
+
 class QsCarCard extends HTMLElement {
   constructor() {
     super();
@@ -19,35 +135,321 @@ class QsCarCard extends HTMLElement {
     this._charging = false;
   }
 
-  // M4: gate the requestAnimationFrame loop on `_charging`. The loop
-  // is started lazily by `_render()` only when the car is actually
-  // charging, and stopped in `disconnectedCallback` AND whenever
-  // `_charging` becomes false. Avoids constant per-card repaint
-  // overhead when the car isn't drawing any current.
+  // QS-232: generate an SVG path for a sine-wave-based closed shape
+  // (ported verbatim from `qs-water-boiler-card.js` / `qs-pool-card.js`).
+  // Emits TWO repetitions of the wave (path extent = [0, 2*width]) so
+  // the translated path always covers the clip region regardless of
+  // scroll offset. The car uses ONE call site with `frequency = 2`
+  // (single layer per D1).
+  _generateWavePath(width, amplitude, frequency, phase, yOffset) {
+    const points = [];
+    const stepsPerPeriod = 60;
+    const totalSteps = stepsPerPeriod * 2;
+    const totalWidth = 2 * width;
+    for (let i = 0; i <= totalSteps; i++) {
+      const x = (i / stepsPerPeriod) * width;
+      const y = yOffset + amplitude * Math.sin((x / width) * frequency * 2 * Math.PI + phase);
+      points.push(`${x.toFixed(2)} ${y.toFixed(2)}`);
+    }
+    return `M ${points[0]} ` +
+           points.slice(1).map(p => `L ${p}`).join(' ') +
+           ` L ${totalWidth.toFixed(2)} ${WAVE_BOTTOM_Y} L 0 ${WAVE_BOTTOM_Y} Z`;
+  }
+
+  // QS-232: reset cached DOM refs and the logical sparkle / lightning
+  // arrays. Shared between `_invalidateAnimCache()` (full memo reset
+  // on (re-)connect) and the post-`innerHTML` cleanup block in
+  // `_render()`. Factored out so a future memo-key addition lands at
+  // BOTH call sites — without the helper, the two paths would drift
+  // silently and the post-render block would carry stale refs into
+  // the next RAF frame (boiler precedent —
+  // `test_water_boiler_card_factors_reset_dom_refs_helper`).
+  _resetDomRefs() {
+    this._waveEls = null;             // [idleWave, chargeWave]
+    this._grainFilterEl = null;
+    this._sparkleLayerEl = null;
+    this._lightningLayerEl = null;
+    this._sparkles = [];
+    this._lightningBolts = [];
+  }
+
+  // QS-232: clear wave-path memoization keys and cached DOM refs.
+  // Called on every (re-)connect and after each _render() innerHTML
+  // rewrite. Mirrors boiler `_invalidateWaveCache` (it nulls
+  // `_lastWaterBaseY` / `_lastAmplitude` for full invalidation; the
+  // post-innerHTML path syncs them to the current render state, so
+  // they stay outside `_resetDomRefs()`).
+  _invalidateAnimCache() {
+    this._lastWaterBaseY = null;
+    this._lastAmplitude = null;
+    this._resetDomRefs();
+  }
+
+  // QS-232: continuous RAF while connected, mirroring
+  // `qs-water-boiler-card.js`. The electron-soup wave is intrinsically
+  // visible at all times (idle green when not charging, charging blue
+  // when `_charging`, desaturated grey when `degraded`) so RAF is no
+  // longer gated on `_charging`. Calm vs. charging is amplitude /
+  // speed / color-mix lerp, not RAF on/off. The existing dashed-arc
+  // animation (`<path id="charge_anim">`) is preserved verbatim and
+  // continues to be driven by `_animOffset` inside the step closure
+  // below — `showAnimation` remains its render-time switch.
   _startAnimation() {
     if (this._animRaf != null) return;
+    // Lazy-init: runs ONCE on first connect, preserved across
+    // detach/re-attach so `_currentAmplitude` / `_wavePhase` /
+    // `_currentColorMix` don't snap back on tab navigation.
+    if (this._currentAmplitude == null) {
+      this._currentAmplitude = CALM_AMP;
+      this._currentSpeed     = CALM_SPEED;
+      this._wavePhase        = 0;
+      this._currentColorMix  = 0;
+      this._sparkles         = [];
+      this._nextSparkleAt    = 0;
+      this._lightningBolts   = [];
+      this._nextLightningAt  = LIGHTNING_SPAWN_MIN_S +
+        Math.random() * (LIGHTNING_SPAWN_MAX_S - LIGHTNING_SPAWN_MIN_S);
+      this._needsAnimationPrime = true;
+    }
     this._lastAnimTs = null;
+    this._invalidateAnimCache();
+
     const step = (ts) => {
       if (!this.isConnected) { this._animRaf = null; return; }
-      if (!this._charging) {
-        // _charging went false between renders — stop the loop entirely
-        // rather than spin idle.
-        this._animOffset = 0;
-        this._lastAnimTs = null;
-        this._animRaf = null;
-        return;
-      }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
-      const dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      // QS-232 (mirror QS-200 fix #02 S6): cap `dt` against hidden-tab
+      // return. Without this cap, the first frame after a multi-second
+      // tab-hidden window produces a huge dt, snapping wave phase by
+      // hundreds of pixels in one frame and aging every sparkle past
+      // SPARKLE_LIFE_S simultaneously. The cap matches LERP_DT_CEIL
+      // so every step-loop subsystem shares the same envelope.
+      let dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      dt = Math.min(dt, LERP_DT_CEIL);
       this._lastAnimTs = ts;
+
+      // --- Existing dashed-arc animation (PRESERVED from M4).
+      // The dashed `<path id="charge_anim">` still drives off
+      // `showAnimation`, which is now applied as a render-time switch
+      // on the element. The RAF loop itself no longer gates on
+      // `_charging` (D9).
       const patternLen = Math.max(8, this._animPatternLen || 64);
       const cp = this._chargePower || 0;
-      const speed = Math.min(ANIM_MAX_SPEED, Math.max(ANIM_MIN_SPEED, ANIM_MIN_SPEED + (cp - ANIM_MIN_POWER_W) * ANIM_SPEED_RANGE / ANIM_POWER_RANGE));
-      this._animOffset = ((this._animOffset || 0) + speed * dt) % patternLen;
-      const p = this._root?.getElementById('charge_anim');
-      if (p) {
-        p.setAttribute('stroke-dashoffset', String(-this._animOffset));
+      const dashSpeed = Math.min(ANIM_MAX_SPEED, Math.max(ANIM_MIN_SPEED, ANIM_MIN_SPEED + (cp - ANIM_MIN_POWER_W) * ANIM_SPEED_RANGE / ANIM_POWER_RANGE));
+      this._animOffset = ((this._animOffset || 0) + dashSpeed * dt) % patternLen;
+      const dashEl = this._root?.getElementById('charge_anim');
+      if (dashEl) {
+        dashEl.setAttribute('stroke-dashoffset', String(-this._animOffset));
       }
+
+      // --- Lerp amplitude / speed / colorMix toward charge targets.
+      // The lerp is binary (idle ↔ charge); the degraded palette is
+      // a separate runtime path via CSS filter on the clip group (D8).
+      const charging = this._charging === true;
+      const degraded = this._degraded === true;
+      const targetAmplitude = charging ? CHARGE_AMP : CALM_AMP;
+      const targetSpeed     = charging ? CHARGE_SPEED : CALM_SPEED;
+      const targetColorMix  = charging ? 1 : 0;
+      const lerpFactor = 1 - Math.exp(-LERP_RATE * dt);
+      this._currentAmplitude += (targetAmplitude - this._currentAmplitude) * lerpFactor;
+      this._currentSpeed     += (targetSpeed - this._currentSpeed) * lerpFactor;
+      this._currentColorMix  += (targetColorMix - this._currentColorMix) * lerpFactor;
+      this._wavePhase += this._currentSpeed * dt;
+      this._wavePhase = ((this._wavePhase % PHASE_WRAP) + PHASE_WRAP) % PHASE_WRAP;
+
+      // --- Lazy-resolve wave / sparkle / lightning DOM refs once per
+      //     innerHTML rewrite (two wave nodes — idle + charge).
+      if (!this._waveEls) {
+        const idleEl   = this._root?.getElementById('electron_wave_idle')   ?? null;
+        const chargeEl = this._root?.getElementById('electron_wave_charge') ?? null;
+        this._waveEls = [idleEl, chargeEl];
+      }
+      const sparkleLayer = this._sparkleLayerEl
+        ?? (this._sparkleLayerEl = this._sparkleLayerId
+              ? (this._root?.getElementById(this._sparkleLayerId) ?? null)
+              : null);
+      const lightningLayer = this._lightningLayerEl
+        ?? (this._lightningLayerEl = this._lightningLayerId
+              ? (this._root?.getElementById(this._lightningLayerId) ?? null)
+              : null);
+
+      // --- Wave transform (single layer translateX).
+      // Path extent is [0, 2*WAVE_WIDTH] so the translated path always
+      // covers the clip region.
+      const raw = this._wavePhase * PHASE_TO_PX;
+      const scrollOffset = ((raw % WAVE_WIDTH) + WAVE_WIDTH) % WAVE_WIDTH;
+      const tx = -CLIP_R - scrollOffset;
+      const txStr = `translateX(${tx.toFixed(1)}px)`;
+      const idleWave   = this._waveEls[0];
+      const chargeWave = this._waveEls[1];
+      if (idleWave)   idleWave.style.transform   = txStr;
+      if (chargeWave) chargeWave.style.transform = txStr;
+
+      // --- Wave path regen (throttled by amplitude / soup-level delta).
+      const waterBaseY = this._waterBaseY;
+      const hasValidBase = waterBaseY != null && !Number.isNaN(waterBaseY);
+      const ampDelta = this._lastAmplitude == null
+          ? Infinity
+          : Math.abs(this._currentAmplitude - this._lastAmplitude);
+      const levelChanged = hasValidBase &&
+          Math.abs(waterBaseY - (this._lastWaterBaseY ?? Number.NEGATIVE_INFINITY)) > LEVEL_REGEN_THRESHOLD;
+      if (hasValidBase && (levelChanged || ampDelta > AMP_REGEN_THRESHOLD)) {
+        this._lastWaterBaseY = waterBaseY;
+        this._lastAmplitude = this._currentAmplitude;
+        const d = this._generateWavePath(WAVE_WIDTH, this._currentAmplitude, 2, 0, waterBaseY);
+        if (idleWave)   idleWave.setAttribute('d', d);
+        if (chargeWave) chargeWave.setAttribute('d', d);
+      }
+
+      // --- Per-frame wave opacity (idle ↔ charge cross-fade).
+      // Dual-layer opacity rather than HSL lerp — passing through
+      // yellow at the midpoint is artifact-prone.
+      const idleOpacity   = (1 - this._currentColorMix).toFixed(3);
+      const chargeOpacity = this._currentColorMix.toFixed(3);
+      if (idleWave)   idleWave.setAttribute('opacity', idleOpacity);
+      if (chargeWave) chargeWave.setAttribute('opacity', chargeOpacity);
+
+      // === QS-232 sparkle subsystem ===========================
+      // Always visible. Colour / density / spawn-rate / radius
+      // depend on `_charging` state. Spawns advance even when idle
+      // (low rate). The advance + retire loop runs every frame for
+      // graceful exit on `_charging` flips (in-flight sparkles
+      // complete their natural fade).
+      if (sparkleLayer && hasValidBase) {
+        // Power-scaling for the charging endpoints (clamped to
+        // [SPARKLE_POWER_MIN_W, SPARKLE_POWER_MAX_W]).
+        let sparkleMax, sparkleRateHz, rMin, rMax;
+        if (charging) {
+          const power = this._chargePower || 0;
+          const clamped = Math.max(SPARKLE_POWER_MIN_W, Math.min(SPARKLE_POWER_MAX_W, power));
+          const t = (clamped - SPARKLE_POWER_MIN_W) / (SPARKLE_POWER_MAX_W - SPARKLE_POWER_MIN_W);
+          sparkleMax = SPARKLE_CHARGE_MAX_AT_MIN_POWER + t * (SPARKLE_CHARGE_MAX_AT_MAX_POWER - SPARKLE_CHARGE_MAX_AT_MIN_POWER);
+          sparkleRateHz = SPARKLE_CHARGE_RATE_HZ_AT_MIN_POWER + t * (SPARKLE_CHARGE_RATE_HZ_AT_MAX_POWER - SPARKLE_CHARGE_RATE_HZ_AT_MIN_POWER);
+          rMin = SPARKLE_CHARGE_RADIUS_MIN_AT_MIN_POWER + t * (SPARKLE_CHARGE_RADIUS_MIN_AT_MAX_POWER - SPARKLE_CHARGE_RADIUS_MIN_AT_MIN_POWER);
+          rMax = SPARKLE_CHARGE_RADIUS_MAX_AT_MIN_POWER + t * (SPARKLE_CHARGE_RADIUS_MAX_AT_MAX_POWER - SPARKLE_CHARGE_RADIUS_MAX_AT_MIN_POWER);
+        } else {
+          sparkleMax = SPARKLE_IDLE_MAX;
+          sparkleRateHz = SPARKLE_IDLE_RATE_HZ;
+          rMin = SPARKLE_IDLE_RADIUS_MIN;
+          rMax = SPARKLE_IDLE_RADIUS_MAX;
+        }
+
+        this._nextSparkleAt -= dt;
+        while (this._nextSparkleAt <= 0 && this._sparkles.length < sparkleMax) {
+          // Spawn position: random inside the water portion of the
+          // clip circle. `continue`-with-cadence-advance pattern
+          // (no `break`) avoids a per-frame spin-loop on degenerate
+          // empty soup, mirroring QS-214 review-fix #01 #5.
+          const cyMin = this._waterBaseY + 2;
+          const cyMax = CENTER_CY + CLIP_R - 4;
+          if (cyMax <= cyMin) {
+            this._nextSparkleAt += 1 / sparkleRateHz;
+            continue;
+          }
+          const cy = cyMin + Math.random() * (cyMax - cyMin);
+          const dy = cy - CENTER_CY;
+          const chordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dy * dy));
+          if (chordHalf < 2) {
+            this._nextSparkleAt += 1 / sparkleRateHz;
+            continue;
+          }
+          const cx = CENTER_CX + (Math.random() * 2 - 1) * chordHalf * 0.9;
+          const r = rMin + Math.random() * (rMax - rMin);
+          // Fill decided ONCE at spawn — never re-assigned in advance.
+          const fill = charging ? SPARKLE_CHARGE_COLOR : SPARKLE_IDLE_COLOR;
+          const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+          el.setAttribute('cx', cx.toFixed(2));
+          el.setAttribute('cy', cy.toFixed(2));
+          el.setAttribute('r', r.toFixed(2));
+          el.setAttribute('fill', fill);
+          el.setAttribute('pointer-events', 'none');
+          el.setAttribute('opacity', '0');
+          sparkleLayer.appendChild(el);
+          this._sparkles.push({el, cx, cy, r, life: 0, maxLife: SPARKLE_LIFE_S});
+          this._nextSparkleAt += 1 / sparkleRateHz;
+        }
+        if (this._nextSparkleAt < 0) this._nextSparkleAt = 0;
+
+        // Advance + retire active sparkles. Three-phase opacity
+        // curve: fade-in [0, 0.20], hold [0.20, 0.50], fade-out
+        // [0.50, 1.0]. No rising motion (unlike boiler bubbles).
+        const aliveSparkles = [];
+        for (const s of this._sparkles) {
+          s.life += dt;
+          if (s.life >= s.maxLife) {
+            s.el.remove();
+            continue;
+          }
+          const lifeT = s.life / s.maxLife;
+          let opacity;
+          if (lifeT < 0.20) opacity = lifeT / 0.20;
+          else if (lifeT < 0.50) opacity = 1;
+          else opacity = Math.max(0, 1 - (lifeT - 0.50) / 0.50);
+          s.el.setAttribute('opacity', opacity.toFixed(3));
+          aliveSparkles.push(s);
+        }
+        this._sparkles = aliveSparkles;
+      }
+
+      // === QS-232 lightning subsystem =========================
+      // Only spawn when `charging && !degraded`. The advance/retire
+      // loop runs unconditionally for graceful exit (in-flight bolts
+      // complete their fade-out ~0.25s).
+      if (lightningLayer && hasValidBase) {
+        if (charging && !degraded) {
+          this._nextLightningAt -= dt;
+          while (this._nextLightningAt <= 0 && this._lightningBolts.length < MAX_CONCURRENT_LIGHTNING) {
+            // 3-segment jagged path: top → mid (with lateral kink) → surface.
+            const topY = CENTER_CY - CLIP_R + LIGHTNING_TOP_MARGIN_PX;
+            const startCx = CENTER_CX + (Math.random() * 2 - 1) * (CLIP_R * 0.4);
+            const dy = this._waterBaseY - CENTER_CY;
+            const chordHalf = Math.sqrt(Math.max(0, CLIP_R * CLIP_R - dy * dy));
+            if (chordHalf < 2) {
+              this._nextLightningAt += LIGHTNING_SPAWN_MIN_S +
+                Math.random() * (LIGHTNING_SPAWN_MAX_S - LIGHTNING_SPAWN_MIN_S);
+              continue;
+            }
+            const endCx = CENTER_CX + (Math.random() * 2 - 1) * chordHalf * 0.7;
+            const midY = (topY + this._waterBaseY) / 2;
+            const midCx = (startCx + endCx) / 2 +
+                          (Math.random() * 2 - 1) * LIGHTNING_LATERAL_JITTER_PX;
+            const d = `M ${startCx.toFixed(2)} ${topY.toFixed(2)} L ${midCx.toFixed(2)} ${midY.toFixed(2)} L ${endCx.toFixed(2)} ${this._waterBaseY.toFixed(2)}`;
+            const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            el.setAttribute('d', d);
+            el.setAttribute('stroke', LIGHTNING_STROKE_COLOR);
+            el.setAttribute('stroke-width', String(LIGHTNING_STROKE_WIDTH));
+            el.setAttribute('fill', 'none');
+            el.setAttribute('stroke-linecap', 'round');
+            el.setAttribute('pointer-events', 'none');
+            el.setAttribute('opacity', '0');
+            lightningLayer.appendChild(el);
+            this._lightningBolts.push({el, life: 0, maxLife: LIGHTNING_LIFE_S});
+            this._nextLightningAt = LIGHTNING_SPAWN_MIN_S +
+              Math.random() * (LIGHTNING_SPAWN_MAX_S - LIGHTNING_SPAWN_MIN_S);
+          }
+          if (this._nextLightningAt < 0) this._nextLightningAt = 0;
+        }
+
+        // Advance + retire (runs every frame, graceful exit).
+        // Three-phase opacity curve: fade-in [0, 0.10], hold
+        // [0.10, 0.70], fade-out [0.70, 1.0].
+        const aliveBolts = [];
+        for (const b of this._lightningBolts) {
+          b.life += dt;
+          if (b.life >= b.maxLife) {
+            b.el.remove();
+            continue;
+          }
+          const lifeT = b.life / b.maxLife;
+          let opacity;
+          if (lifeT < 0.10) opacity = lifeT / 0.10;
+          else if (lifeT < 0.70) opacity = 1;
+          else opacity = Math.max(0, 1 - (lifeT - 0.70) / 0.30);
+          b.el.setAttribute('opacity', opacity.toFixed(3));
+          aliveBolts.push(b);
+        }
+        this._lightningBolts = aliveBolts;
+      }
+
       this._animRaf = requestAnimationFrame(step);
     };
     this._animRaf = requestAnimationFrame(step);
@@ -60,8 +462,11 @@ class QsCarCard extends HTMLElement {
   }
 
   connectedCallback() {
-    // RAF intentionally NOT started here — _render() calls
-    // _startAnimation() when `_charging` is true.
+    // QS-232: continuous RAF while connected, mirroring
+    // qs-water-boiler-card.js / qs-pool-card.js. The electron-soup
+    // wave is intrinsically visible at all times (idle green / charge
+    // blue / degraded grey) so RAF is no longer gated on `_charging`.
+    this._startAnimation();
   }
 
   disconnectedCallback() {
@@ -73,6 +478,15 @@ class QsCarCard extends HTMLElement {
     this._isInteractingPerson = false;
     this._isInteractingTarget = false;
     this._modalOpen = false;
+    // QS-232: eagerly tear down sparkle and lightning DOM nodes.
+    // Without this they would be GC'd along with the shadow root, but
+    // explicit cleanup is cheap and avoids dangling SVG nodes during
+    // a rapid detach/attach. Optional-chaining shape matches the
+    // boiler bubble / steam teardown pattern.
+    this._sparkles?.forEach(s => s.el?.remove?.());
+    this._sparkles = [];
+    this._lightningBolts?.forEach(b => b.el?.remove?.());
+    this._lightningBolts = [];
   }
   static getStubConfig() {
     return { name: "QS Car", entities: {} };
@@ -166,13 +580,24 @@ class QsCarCard extends HTMLElement {
       const target = selLimit?.state || "";
       const charging = (Number(power) > 50);
       this._charging = charging;
-      // M4: start/stop the RAF loop based on whether the car is actually
-      // charging. Idle cards consume zero per-frame work.
-      if (charging) {
-        this._startAnimation();
-      } else {
-        this._stopAnimation();
+      // QS-232: per-instance unique SVG IDs so two car cards on the
+      // same dashboard don't collide (cheap insurance — households
+      // can plausibly have ≥ 2 cars on one dashboard). Mirrors the
+      // boiler / pool _nextClipId pattern.
+      if (!this._electronClipId) {
+        QsCarCard._nextClipId = (QsCarCard._nextClipId || 0) + 1;
+        const uid = QsCarCard._nextClipId;
+        this._electronClipId    = `car_eClip_${uid}`;
+        this._sparkleLayerId    = `car_sparkLayer_${uid}`;
+        this._lightningLayerId  = `car_lightningLayer_${uid}`;
+        this._grainFilterId     = `car_grainFilter_${uid}`;
+        this._lightningFilterId = `car_lightningFilter_${uid}`;
       }
+      const electronClipId    = this._electronClipId;
+      const sparkleLayerId    = this._sparkleLayerId;
+      const lightningLayerId  = this._lightningLayerId;
+      const grainFilterId     = this._grainFilterId;
+      const lightningFilterId = this._lightningFilterId;
       const carChargeTypeIcons = {
           "Unknown": "mdi:help-circle-outline",
           "Not Plugged": "mdi:power-plug-off",
@@ -547,6 +972,43 @@ class QsCarCard extends HTMLElement {
       //const displayTitle = showForecastedPerson ? `${title} (${forecastedPersonStr})` : title;
       const displayTitle = title;
 
+      // QS-232 D8: degraded state combines disconnected / faulted /
+      // stale. `isOffGrid` is excluded — off-grid keeps the
+      // card-level pinkish tint already applied via the `.off-grid`
+      // CSS class; the soup is unaffected.
+      const degraded = isDisconnected || isFaulted || isStale;
+      // Stash on the instance so the RAF step closure can read it
+      // without re-deriving (and so degraded-state lightning
+      // suppression has a consistent value across the frame).
+      this._degraded = degraded;
+
+      // QS-232 D15: water surface y from SOC fill ratio. Matches the
+      // boiler envelope (`0.2 + ratio × 0.6`) so the visual character
+      // is consistent across the two water-style cards.
+      const progressRatio = Math.max(0, Math.min(1, soc / 100));
+      this._waterBaseY = CENTER_CY + CLIP_R - (0.2 + progressRatio * 0.6) * 2 * CLIP_R;
+
+      // QS-232: prime the wave animation state to the actual charging
+      // targets on the first render after connect, avoiding the
+      // ~1.5s boot transient. Without this, a card mounted while the
+      // car is already charging would visibly lerp up from CALM.
+      if (this._needsAnimationPrime) {
+        this._currentAmplitude = charging ? CHARGE_AMP : CALM_AMP;
+        this._currentSpeed     = charging ? CHARGE_SPEED : CALM_SPEED;
+        this._currentColorMix  = charging ? 1 : 0;
+        this._needsAnimationPrime = false;
+      }
+
+      // QS-232: pre-generate the initial wave path so the SVG renders
+      // with soup immediately, avoiding the empty-`d=""` flash between
+      // the innerHTML rewrite and the first RAF tick. Both idle/charge
+      // siblings share the same `d`; only fill + opacity differ.
+      const initialAmp = this._currentAmplitude ?? CALM_AMP;
+      const initialColorMix = this._currentColorMix ?? 0;
+      const initialWavePath = this._generateWavePath(WAVE_WIDTH, initialAmp, 2, 0, this._waterBaseY);
+      const initialIdleOpacity   = (1 - initialColorMix).toFixed(3);
+      const initialChargeOpacity = initialColorMix.toFixed(3);
+
       this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''} ${isStale ? 'stale' : ''}">
         <style>${css}</style>
@@ -584,7 +1046,30 @@ class QsCarCard extends HTMLElement {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
+                <filter id="${grainFilterId}" x="-20%" y="-20%" width="140%" height="140%">
+                  <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3" result="noise" />
+                  <feComposite in="noise" in2="SourceGraphic" operator="in" result="grain" />
+                  <feMerge>
+                    <feMergeNode in="SourceGraphic" />
+                    <feMergeNode in="grain" />
+                  </feMerge>
+                </filter>
+                <filter id="${lightningFilterId}" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="${LIGHTNING_GLOW_STDDEV}" />
+                </filter>
+                <clipPath id="${electronClipId}">
+                  <circle cx="${CENTER_CX}" cy="${CENTER_CY}" r="${CLIP_R}" />
+                </clipPath>
               </defs>
+              <g clip-path="url(#${electronClipId})" style="${degraded ? 'filter: saturate(0.3) brightness(0.7);' : ''}">
+                <path id="electron_wave_idle" d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" opacity="${initialIdleOpacity}" filter="url(#${grainFilterId})" pointer-events="none" style="will-change: transform;" />
+                <path id="electron_wave_charge" d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" opacity="${initialChargeOpacity}" filter="url(#${grainFilterId})" pointer-events="none" style="will-change: transform;" />
+                <g id="${sparkleLayerId}" pointer-events="none"></g>
+                <g id="${lightningLayerId}" filter="url(#${lightningFilterId})" pointer-events="none" style="mix-blend-mode: screen; will-change: opacity;"></g>
+              </g>
+              ${swPriority ? `<circle id="sun_btn_cover" cx="${SUN_BTN_CARVE_CX}" cy="${SUN_BTN_CARVE_CY}" r="${SUN_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
+              ${e.force_now ? `<circle id="rabbit_btn_cover" cx="${RABBIT_BTN_CARVE_CX}" cy="${RABBIT_BTN_CARVE_CY}" r="${RABBIT_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
+              ${(tNext && e.schedule) ? `<circle id="time_btn_cover" cx="${TIME_BTN_CARVE_CX}" cy="${TIME_BTN_CARVE_CY}" r="${TIME_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
               <path d="${bgPath}" stroke="${isFaulted ? 'rgba(244,67,54,0.35)' : 'var(--divider-color)'}" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `
@@ -655,6 +1140,17 @@ class QsCarCard extends HTMLElement {
         </div>
       </ha-card>
     `;
+
+      // QS-232: innerHTML rewrite just replaced the wave <path> nodes
+      // and the sparkle/lightning layer <g>s. Sync the memo keys to
+      // the freshly-rendered state (prevents a redundant regen on the
+      // next frame) and null cached DOM refs + clear the logical
+      // particle arrays via _resetDomRefs() so subsequent spawns
+      // don't try to advance dead nodes. No snapshot/restore — short
+      // particle life (≤ 0.45s) makes nuke-and-respawn imperceptible.
+      this._lastWaterBaseY = this._waterBaseY;
+      this._lastAmplitude  = this._currentAmplitude ?? CALM_AMP;
+      this._resetDomRefs();
 
       // old buttons:
 /*      <div className="below-line">
