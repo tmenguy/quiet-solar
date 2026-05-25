@@ -429,9 +429,12 @@ it below"). y=145 sits in the gap between `range-now` ("367 km")
 and the title labels, clearly above the labels rather than on
 their baseline. Sentinel band: `[135, 215]`.
 *(2) Horizontal coverage.* `<clipPath>` circle radius bumped
-120 → 130 to match the ring radius — the line now visually
-"touches" the ring on both sides (the ring stroke paints
-after the ECG and overlays the line at the perimeter).
+120 → 130 in #06, then 130 → **123** in #08 after user feedback
+("left and right limit of the pulse line are 'in the middle of
+the circle stroke' ... I dont want this overlap"). r=123 is the
+ring's inner stroke edge (center=130, stroke-width=14, inner =
+130 - 7 = 123) — the line ends exactly at the inner edge,
+touching the ring but not extending into the stroke.
 *(3) Idle styling.* New `_buildIdleECGPath(amp, baselineY,
 totalWidth)` method emits a SINGLE static QRS pulse positioned
 at the golden-ratio LEFT (`ECG_TOTAL_WIDTH_PX *

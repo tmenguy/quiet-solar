@@ -801,14 +801,19 @@ class QsCarCard extends HTMLElement {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
-                <!-- QS-229 review-fix #06: ECG clip-circle radius bumped
-                     from 120 -> 130 to match the ring radius so the line
-                     "touches" the ring on both sides (user feedback: "on
-                     the right it is not touching the circle"). The ring
-                     stroke is painted AFTER the ECG, so the ring overlays
-                     the line at its perimeter. -->
+                <!-- QS-229 review-fix #08: ECG clip-circle radius set
+                     to 123 = ring center radius (130) minus half the
+                     ring stroke-width (14/2 = 7). The line now ends
+                     exactly at the INNER edge of the ring stroke
+                     instead of extending into the middle of it
+                     (user feedback: "left and right limit of the pulse
+                     line are 'in the middle of the circle stroke' ...
+                     I dont want this overlap"). #06 had used r=130
+                     which overshot to the ring center; #01 had used
+                     r=120 which left a gap. r=123 is the clean
+                     "touches but doesn't overlap" tangent. -->
                 <clipPath id="${ecgClipId}">
-                  <circle cx="160" cy="160" r="130" />
+                  <circle cx="160" cy="160" r="123" />
                 </clipPath>
               </defs>
               ${(!isDisconnected && !shouldShowPlaceholder) ? `
