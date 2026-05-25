@@ -404,7 +404,18 @@ Pointer-events are preserved exactly: the .center container keeps
 `pointer-events: none`, its interactive children keep their own
 `pointer-events: auto`, and the ECG wrapper `<g>` keeps
 `pointer-events: none` so the line never intercepts clicks on
-underlying buttons.
+underlying buttons. **Review-fix #04 #1 — no `chargeGlow` filter
+on the ECG path.** The `chargeGlow` `<filter>` uses the default
+`filterUnits="objectBoundingBox"`. For a path with bbox height 0
+(every flatline segment is `l dx,0`), the filter region
+`height="200%" * 0 = 0` collapses to zero-pixel-tall — the
+filtered output buffer has nothing to paint into, and the stroke
+disappears even with solid color + full opacity. User-reported
+repro: stroke="#00b8ff", width=4, opacity=1 in the DOM, but
+visually nothing because the filter clipped the output to a
+zero-height buffer. The ECG path now carries NO `filter`
+attribute; the dashed-arc (`charge_anim`) keeps `chargeGlow`
+because its bbox is always non-zero during active charging.
 The RAF step closure clamps `dt = Math.min(dt, 0.1)` (S6 dt-cap
 parity with pool + boiler), benefiting both the new ECG scroll AND
 the existing dashed-arc scroll — the car card is added to the

@@ -744,6 +744,15 @@ class QsCarCard extends HTMLElement {
               </defs>
               ${(!isDisconnected && !shouldShowPlaceholder) ? `
               <g clip-path="url(#${ecgClipId})" pointer-events="none">
+                <!-- QS-229: NO filter="url(#chargeGlow)" on this path. The
+                     chargeGlow filter uses the default filterUnits="objectBoundingBox",
+                     and the flatline path's bbox has height=0 (all dy=0
+                     segments). That makes the filter region height=0 too
+                     (height="200%" * 0 = 0), so the filtered output buffer
+                     is zero-pixels-tall and the stroke renders as nothing —
+                     the user-reported "I see no line" failure mode even with
+                     a solid stroke at width=4 opacity=1. The dashed-arc still
+                     uses chargeGlow (non-zero bbox; filter works fine there). -->
                 <path id="ecg_anim"
                       d="${this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX)}"
                       stroke="#00b8ff"
@@ -751,7 +760,6 @@ class QsCarCard extends HTMLElement {
                       fill="none"
                       stroke-linecap="round"
                       stroke-opacity="1"
-                      filter="url(#chargeGlow)"
                       transform="translate(${(this._ecgOffset || 0).toFixed(2)}, 0)"
                       style="will-change: transform;"
                 />

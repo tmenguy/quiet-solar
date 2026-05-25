@@ -2020,6 +2020,32 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "must be preserved."
     )
 
+    # QS-229 review-fix #04 #1 - the ECG path MUST NOT reference
+    # `filter="url(#chargeGlow)"`. The chargeGlow filter uses the
+    # default filterUnits="objectBoundingBox"; the flatline path
+    # has bbox height=0 (every per-complex segment has dy=0), so
+    # the filter region's `height="200%" * 0 = 0` clips the
+    # filtered output to a zero-pixel-tall buffer - the stroke
+    # paints as nothing. User-reported repro: even with solid
+    # `stroke="#00b8ff"`, stroke-width=4, opacity=1, the line was
+    # invisible because the filter clipped it.
+    ecg_path_block = re.search(
+        r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?/>",
+        content,
+        re.DOTALL,
+    )
+    assert ecg_path_block, (
+        "QS-229: ECG `<path id=\"ecg_anim\" ... />` must be present."
+    )
+    assert "filter=" not in ecg_path_block.group(0), (
+        "QS-229 review-fix #04 #1: ECG `<path id=\"ecg_anim\">` must "
+        "NOT carry a `filter=\"...\"` attribute. The chargeGlow "
+        "filter's objectBoundingBox region collapses to zero-pixel "
+        "height on the flatline's degenerate bbox and the stroke "
+        "renders as nothing. The dashed-arc keeps chargeGlow "
+        "(non-zero bbox; filter works fine there)."
+    )
+
     # QS-229 review-fix #02 #1 ROLLBACK of review-fix #01 #8:
     # The ECG outer guard MUST be exactly
     # `(!isDisconnected && !shouldShowPlaceholder)` -
