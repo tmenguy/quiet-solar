@@ -670,10 +670,14 @@ patterns after the cross-card audit:
 - **RAF idle-gating (M4).** Each card defines `_startAnimation()` and
   `_stopAnimation()` helpers. The render path starts/stops the
   animation conditionally — on `showAnimation` for the
-  duration-based cards, on `_charging` for the car card, and
-  continuously while connected for the pool wave (intrinsically
-  visible). `connectedCallback` no longer kicks off RAF
-  unconditionally; `disconnectedCallback` always stops it.
+  duration-based cards (`qs-on-off-duration-card`, `qs-radiator-card`,
+  `qs-climate-card`) — and continuously while connected for the
+  three water-style cards (`qs-pool-card`, `qs-water-boiler-card`,
+  and `qs-car-card` per QS-232) whose wave is intrinsically visible.
+  `disconnectedCallback` always stops the loop. The
+  `_charging`-gated form previously used by `qs-car-card.js` was
+  retired by QS-232 — see "QS-232 — Car-card electron-soup
+  animation" above.
 - **try/finally around service calls (M2).** Every
   `_isProcessing*` flag setter is wrapped in `try { await
   this._select(...) } finally { setTimeout(() => _isProcessing... =

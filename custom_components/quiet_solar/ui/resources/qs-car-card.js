@@ -73,10 +73,14 @@ const CHARGE_SPEED = 0.15;          // still gentle
 
 // --- Sparkles ("electrons popping in the water") ---
 // Idle: always visible, very few, very small, green.
+// Review-fix #01 #2: radii roughly doubled from the initial QS-232
+// constants — user reported the electron pops barely read in the
+// rendered card. Final values pinned visually against the user's
+// reference car configuration.
 const SPARKLE_IDLE_MAX = 4;
 const SPARKLE_IDLE_RATE_HZ = 0.6;
-const SPARKLE_IDLE_RADIUS_MIN = 0.8;
-const SPARKLE_IDLE_RADIUS_MAX = 1.6;
+const SPARKLE_IDLE_RADIUS_MIN = 1.6;
+const SPARKLE_IDLE_RADIUS_MAX = 3.0;
 const SPARKLE_IDLE_COLOR = 'hsla(140, 90%, 70%, 0.9)';
 // Charging endpoints — scale linearly on [SPARKLE_POWER_MIN_W, SPARKLE_POWER_MAX_W].
 // Below MIN (but still `_charging`) the values clamp to the MIN-power
@@ -89,10 +93,10 @@ const SPARKLE_CHARGE_MAX_AT_MIN_POWER = 12;
 const SPARKLE_CHARGE_MAX_AT_MAX_POWER = 28;
 const SPARKLE_CHARGE_RATE_HZ_AT_MIN_POWER = 3;
 const SPARKLE_CHARGE_RATE_HZ_AT_MAX_POWER = 10;
-const SPARKLE_CHARGE_RADIUS_MIN_AT_MIN_POWER = 1.2;
-const SPARKLE_CHARGE_RADIUS_MAX_AT_MIN_POWER = 2.5;
-const SPARKLE_CHARGE_RADIUS_MIN_AT_MAX_POWER = 1.8;
-const SPARKLE_CHARGE_RADIUS_MAX_AT_MAX_POWER = 3.5;
+const SPARKLE_CHARGE_RADIUS_MIN_AT_MIN_POWER = 2.4;
+const SPARKLE_CHARGE_RADIUS_MAX_AT_MIN_POWER = 4.5;
+const SPARKLE_CHARGE_RADIUS_MIN_AT_MAX_POWER = 3.4;
+const SPARKLE_CHARGE_RADIUS_MAX_AT_MAX_POWER = 6.5;
 const SPARKLE_CHARGE_COLOR = '#00E5FF';   // electric "lightning blue"
 const SPARKLE_LIFE_S = 0.45;
 
@@ -108,7 +112,9 @@ const LIGHTNING_STROKE_WIDTH = 1.8;
 const LIGHTNING_GLOW_STDDEV = 2.5;
 const LIGHTNING_TOP_MARGIN_PX = 4;
 const LIGHTNING_LATERAL_JITTER_PX = 18;
-const LIGHTNING_SEGMENTS = 3;
+// Review-fix #01 #16: removed unused `LIGHTNING_SEGMENTS = 3` —
+// the lightning path hardcodes its three `L` segments inline rather
+// than driving an emission loop, so the constant served no purpose.
 
 // --- Inside-disc button carve-out covers (QS-232 D17) ---
 // Mirror of QS-217 for THREE buttons that sit inside the clip disc:
@@ -118,14 +124,17 @@ const LIGHTNING_SEGMENTS = 3;
 // coordinates here track those positions. Integer values are
 // intentionally user-tunable for visual iteration — tests pin the
 // constant NAMES only (mirrors the QS-217 precedent).
+// Review-fix #01 #1: bumped all three CY values down from the
+// initial QS-232 estimates after a user screenshot showed the
+// holes drawn above the actual button centers.
 const SUN_BTN_CARVE_CX = 160;       // bottom-center of stack
-const SUN_BTN_CARVE_CY = 267;
+const SUN_BTN_CARVE_CY = 285;
 const SUN_BTN_CARVE_R  = 32;
 const RABBIT_BTN_CARVE_CX = 96;     // left column of mini-grid
-const RABBIT_BTN_CARVE_CY = 180;
+const RABBIT_BTN_CARVE_CY = 195;
 const RABBIT_BTN_CARVE_R  = 32;
 const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
-const TIME_BTN_CARVE_CY = 180;
+const TIME_BTN_CARVE_CY = 195;
 const TIME_BTN_CARVE_R  = 32;
 
 class QsCarCard extends HTMLElement {
@@ -166,7 +175,10 @@ class QsCarCard extends HTMLElement {
   // `test_water_boiler_card_factors_reset_dom_refs_helper`).
   _resetDomRefs() {
     this._waveEls = null;             // [idleWave, chargeWave]
-    this._grainFilterEl = null;
+    // Review-fix #01 #14: removed `_grainFilterEl` — no code path
+    // ever read or lazily-resolved it. The grain filter is declared
+    // once in `<defs>` and referenced by the wave paths via
+    // `filter="url(#${grainFilterId})"`; no JS-side ref needed.
     this._sparkleLayerEl = null;
     this._lightningLayerEl = null;
     this._sparkles = [];
@@ -196,6 +208,13 @@ class QsCarCard extends HTMLElement {
   // below — `showAnimation` remains its render-time switch.
   _startAnimation() {
     if (this._animRaf != null) return;
+    // Review-fix #01 #22: bail if `_root` isn't yet attached. A
+    // `connectedCallback` that fires before `setConfig` would
+    // otherwise spin RAF with every DOM lookup returning null. The
+    // re-entry happens via `setConfig` → `_render` (which doesn't
+    // call `_startAnimation` directly today) — for safety, we also
+    // re-attempt from `connectedCallback` if it runs first.
+    if (!this._root) return;
     // Lazy-init: runs ONCE on first connect, preserved across
     // detach/re-attach so `_currentAmplitude` / `_wavePhase` /
     // `_currentColorMix` don't snap back on tab navigation.
@@ -227,11 +246,12 @@ class QsCarCard extends HTMLElement {
       dt = Math.min(dt, LERP_DT_CEIL);
       this._lastAnimTs = ts;
 
-      // --- Existing dashed-arc animation (PRESERVED from M4).
-      // The dashed `<path id="charge_anim">` still drives off
-      // `showAnimation`, which is now applied as a render-time switch
-      // on the element. The RAF loop itself no longer gates on
-      // `_charging` (D9).
+      // --- Existing dashed-arc animation (preserved from the prior
+      //     car-card revision). The dashed `<path id="charge_anim">`
+      //     still drives off `showAnimation`, which is applied as a
+      //     render-time switch on the element. The RAF loop itself
+      //     is no longer gated on `_charging` — QS-232 D9 migrated
+      //     the card to the continuous-RAF model.
       const patternLen = Math.max(8, this._animPatternLen || 64);
       const cp = this._chargePower || 0;
       const dashSpeed = Math.min(ANIM_MAX_SPEED, Math.max(ANIM_MIN_SPEED, ANIM_MIN_SPEED + (cp - ANIM_MIN_POWER_W) * ANIM_SPEED_RANGE / ANIM_POWER_RANGE));
@@ -258,6 +278,8 @@ class QsCarCard extends HTMLElement {
 
       // --- Lazy-resolve wave / sparkle / lightning DOM refs once per
       //     innerHTML rewrite (two wave nodes — idle + charge).
+      //     Review-fix #01 #15: `getElementById` already returns
+      //     `null` on miss; the prior inner `?? null` was redundant.
       if (!this._waveEls) {
         const idleEl   = this._root?.getElementById('electron_wave_idle')   ?? null;
         const chargeEl = this._root?.getElementById('electron_wave_charge') ?? null;
@@ -265,11 +287,11 @@ class QsCarCard extends HTMLElement {
       }
       const sparkleLayer = this._sparkleLayerEl
         ?? (this._sparkleLayerEl = this._sparkleLayerId
-              ? (this._root?.getElementById(this._sparkleLayerId) ?? null)
+              ? this._root?.getElementById(this._sparkleLayerId)
               : null);
       const lightningLayer = this._lightningLayerEl
         ?? (this._lightningLayerEl = this._lightningLayerId
-              ? (this._root?.getElementById(this._lightningLayerId) ?? null)
+              ? this._root?.getElementById(this._lightningLayerId)
               : null);
 
       // --- Wave transform (single layer translateX).
@@ -302,9 +324,13 @@ class QsCarCard extends HTMLElement {
 
       // --- Per-frame wave opacity (idle ↔ charge cross-fade).
       // Dual-layer opacity rather than HSL lerp — passing through
-      // yellow at the midpoint is artifact-prone.
-      const idleOpacity   = (1 - this._currentColorMix).toFixed(3);
-      const chargeOpacity = this._currentColorMix.toFixed(3);
+      // yellow at the midpoint is artifact-prone. Review-fix #01 #18:
+      // clamp `_currentColorMix` to `[0, 1]` for opacity emission so
+      // floating-point lerp drift (e.g., `1.0000000001`) doesn't
+      // surface as ugly `"-0.000"` opacity tokens.
+      const mix = Math.max(0, Math.min(1, this._currentColorMix));
+      const idleOpacity   = (1 - mix).toFixed(3);
+      const chargeOpacity = mix.toFixed(3);
       if (idleWave)   idleWave.setAttribute('opacity', idleOpacity);
       if (chargeWave) chargeWave.setAttribute('opacity', chargeOpacity);
 
@@ -317,9 +343,12 @@ class QsCarCard extends HTMLElement {
       if (sparkleLayer && hasValidBase) {
         // Power-scaling for the charging endpoints (clamped to
         // [SPARKLE_POWER_MIN_W, SPARKLE_POWER_MAX_W]).
+        // Review-fix #01 #20: defensively floor negative chargePower
+        // (V2L discharge / sensor glitch) to 0 at the source so
+        // downstream scaling never receives a negative `power`.
         let sparkleMax, sparkleRateHz, rMin, rMax;
         if (charging) {
-          const power = this._chargePower || 0;
+          const power = Math.max(0, this._chargePower || 0);
           const clamped = Math.max(SPARKLE_POWER_MIN_W, Math.min(SPARKLE_POWER_MAX_W, power));
           const t = (clamped - SPARKLE_POWER_MIN_W) / (SPARKLE_POWER_MAX_W - SPARKLE_POWER_MIN_W);
           sparkleMax = SPARKLE_CHARGE_MAX_AT_MIN_POWER + t * (SPARKLE_CHARGE_MAX_AT_MAX_POWER - SPARKLE_CHARGE_MAX_AT_MIN_POWER);
@@ -332,9 +361,14 @@ class QsCarCard extends HTMLElement {
           rMin = SPARKLE_IDLE_RADIUS_MIN;
           rMax = SPARKLE_IDLE_RADIUS_MAX;
         }
+        // Review-fix #01 #19: `Math.floor(sparkleMax)` for the
+        // concurrent-cap comparison so a fractional max (e.g. 18.5
+        // from linear interpolation between 12 and 28) doesn't read
+        // confusingly when compared against `length`.
+        const sparkleCap = Math.floor(sparkleMax);
 
         this._nextSparkleAt -= dt;
-        while (this._nextSparkleAt <= 0 && this._sparkles.length < sparkleMax) {
+        while (this._nextSparkleAt <= 0 && this._sparkles.length < sparkleCap) {
           // Spawn position: random inside the water portion of the
           // clip circle. `continue`-with-cadence-advance pattern
           // (no `break`) avoids a per-frame spin-loop on degenerate
@@ -372,10 +406,13 @@ class QsCarCard extends HTMLElement {
         // Advance + retire active sparkles. Three-phase opacity
         // curve: fade-in [0, 0.20], hold [0.20, 0.50], fade-out
         // [0.50, 1.0]. No rising motion (unlike boiler bubbles).
+        // Review-fix #01 #21: retire slightly before maxLife so a
+        // sparkle whose `lifeT` lands exactly on `1.0` doesn't
+        // linger one frame at opacity 0 before the next-tick retire.
         const aliveSparkles = [];
         for (const s of this._sparkles) {
           s.life += dt;
-          if (s.life >= s.maxLife) {
+          if (s.life >= s.maxLife * 0.999) {
             s.el.remove();
             continue;
           }
@@ -423,7 +460,13 @@ class QsCarCard extends HTMLElement {
             el.setAttribute('opacity', '0');
             lightningLayer.appendChild(el);
             this._lightningBolts.push({el, life: 0, maxLife: LIGHTNING_LIFE_S});
-            this._nextLightningAt = LIGHTNING_SPAWN_MIN_S +
+            // Review-fix #01 #12: use `+=` (cadence accumulation) for
+            // symmetry with the degenerate-chord `continue` branch
+            // above AND with the sparkle subsystem — both spawn
+            // paths advance the cadence counter identically, and the
+            // post-loop clamp `if (… < 0) … = 0` below absorbs any
+            // backlog drift.
+            this._nextLightningAt += LIGHTNING_SPAWN_MIN_S +
               Math.random() * (LIGHTNING_SPAWN_MAX_S - LIGHTNING_SPAWN_MIN_S);
           }
           if (this._nextLightningAt < 0) this._nextLightningAt = 0;
@@ -467,6 +510,20 @@ class QsCarCard extends HTMLElement {
     // wave is intrinsically visible at all times (idle green / charge
     // blue / degraded grey) so RAF is no longer gated on `_charging`.
     this._startAnimation();
+    // Review-fix #01 #7: re-prime on reconnect ONLY when the implied
+    // colorMix state diverged from the actual `_charging` during the
+    // detached interval. Without this, the lazy-init guard in
+    // `_startAnimation()` preserves the pre-detach `_currentColorMix`
+    // across reconnect, so a state-flip mid-detach causes the soup to
+    // visibly lerp on reattach rather than snap. The `?? 0` fallback
+    // covers the very first connect (before lazy-init has run), where
+    // both _charging and _currentColorMix are still at their initial
+    // values — the equation `(false ? 1 : 0) !== Math.round(0)`
+    // evaluates `0 !== 0`, so no spurious prime fires.
+    const impliedMix = Math.round(this._currentColorMix ?? 0);
+    if ((this._charging ? 1 : 0) !== impliedMix) {
+      this._needsAnimationPrime = true;
+    }
   }
 
   disconnectedCallback() {
@@ -496,6 +553,16 @@ class QsCarCard extends HTMLElement {
     if (!config || !config.entities) throw new Error("entities is required");
     this._config = config;
     this._root = this.attachShadow({ mode: "open" });
+    // Review-fix #01 #4: arm the priming flag so the FIRST `_render()`
+    // below — which runs from `setConfig`, BEFORE `connectedCallback`
+    // fires — primes `_currentAmplitude` / `_currentSpeed` /
+    // `_currentColorMix` against the about-to-be-computed `_charging`
+    // state. Without this, the first paint always uses
+    // `initialAmp = CALM_AMP` and `initialColorMix = 0` (idle palette)
+    // regardless of `_charging`, and either the RAF lerps visibly
+    // over ~1.5 s or a quick hass push snaps the values
+    // (green-to-blue flash).
+    this._needsAnimationPrime = true;
     this._render();
   }
 
@@ -985,7 +1052,13 @@ class QsCarCard extends HTMLElement {
       // QS-232 D15: water surface y from SOC fill ratio. Matches the
       // boiler envelope (`0.2 + ratio × 0.6`) so the visual character
       // is consistent across the two water-style cards.
-      const progressRatio = Math.max(0, Math.min(1, soc / 100));
+      // Review-fix #01 #3: guard `soc` against NaN (a non-numeric
+      // `current_inputed_energy` state in `useEnergyMode`, or a
+      // corrupted percent reading) so the resulting `_waterBaseY`
+      // never propagates `NaN` into the SVG `d` attribute. Mirrors
+      // the boiler's `Number.isFinite(displayTargetHours)` guard.
+      const safeSoc = Number.isFinite(soc) ? soc : 0;
+      const progressRatio = Math.max(0, Math.min(1, safeSoc / 100));
       this._waterBaseY = CENTER_CY + CLIP_R - (0.2 + progressRatio * 0.6) * 2 * CLIP_R;
 
       // QS-232: prime the wave animation state to the actual charging
@@ -1003,9 +1076,17 @@ class QsCarCard extends HTMLElement {
       // with soup immediately, avoiding the empty-`d=""` flash between
       // the innerHTML rewrite and the first RAF tick. Both idle/charge
       // siblings share the same `d`; only fill + opacity differ.
+      // Review-fix #01 #5: belt-and-braces guard at the call site —
+      // even with the upstream `safeSoc` guard, a regression that
+      // bypasses it would still poison the emitted `d` attribute.
+      // Wrapping the `_generateWavePath(...)` call with a
+      // `Number.isFinite(this._waterBaseY)` ternary makes the empty-
+      // string fallback explicit at the call site.
       const initialAmp = this._currentAmplitude ?? CALM_AMP;
       const initialColorMix = this._currentColorMix ?? 0;
-      const initialWavePath = this._generateWavePath(WAVE_WIDTH, initialAmp, 2, 0, this._waterBaseY);
+      const initialWavePath = Number.isFinite(this._waterBaseY)
+        ? this._generateWavePath(WAVE_WIDTH, initialAmp, 2, 0, this._waterBaseY)
+        : '';
       const initialIdleOpacity   = (1 - initialColorMix).toFixed(3);
       const initialChargeOpacity = initialColorMix.toFixed(3);
 
@@ -1106,7 +1187,7 @@ class QsCarCard extends HTMLElement {
                     <div id="target_value" class="target-value">${displayTargetValue}</div>
                     ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
                   </div>
-                  <div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}">${chargeTime}</div>
+                  ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}">${chargeTime}</div>` : ''}
                 </div>
                 </div>
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
@@ -1149,7 +1230,13 @@ class QsCarCard extends HTMLElement {
       // don't try to advance dead nodes. No snapshot/restore — short
       // particle life (≤ 0.45s) makes nuke-and-respawn imperceptible.
       this._lastWaterBaseY = this._waterBaseY;
-      this._lastAmplitude  = this._currentAmplitude ?? CALM_AMP;
+      // Review-fix #01 #8: `??` does NOT trap NaN — if
+      // `_currentAmplitude` ever became NaN, the prior form would
+      // assign NaN to `_lastAmplitude`, making `ampDelta` always NaN
+      // (i.e. always `< AMP_REGEN_THRESHOLD`), and the wave-path
+      // regen would freeze for the lifetime of the card. Use an
+      // explicit `Number.isFinite` check instead.
+      this._lastAmplitude  = Number.isFinite(this._currentAmplitude) ? this._currentAmplitude : CALM_AMP;
       this._resetDomRefs();
 
       // old buttons:
