@@ -361,6 +361,21 @@ path baked into `innerHTML` when not charging, NOT a continuously-
 running RAF. `_stopAnimation()` resets the ECG accumulators
 (`_currentEcgAmp`, `_currentEcgSpeed`, `_ecgOffset`, `_lastEcgAmp`,
 `_lastEcgRegenTs`) so the next plug-in starts from a clean flatline.
+**Review-fix #01 #1:** the wrapper `<g>` does NOT carry
+`mix-blend-mode: screen` — screen blend strips the 2 px cyan→blue
+stroke against light HA themes (user-reported "I don't see any line"
+on plug-in / flatline). The wrapper is plain alpha-blend; the
+existing `charge_anim` dashed-arc keeps its `mix-blend-mode: screen`
+(separate scope, only renders during active charging). **Review-fix
+#01 #7:** the SVG viewBox width is a module constant
+`ECG_TOTAL_WIDTH_PX = 320` — both call sites
+(`_buildQRSPath(..., ECG_TOTAL_WIDTH_PX)`) reference the constant
+so a future resize lands in one place. **Review-fix #01 #8:** the
+outer guard reads `!isDisconnected && !shouldShowPlaceholder &&
+!isFaulted && !isStale` — the ECG is also omitted on faulted /
+stale states (pairing a cyan→blue heartbeat with a red faulted
+SoC arc reads contradictory). The state-machine truth table in
+the story is superseded for those rows.
 The RAF step closure clamps `dt = Math.min(dt, 0.1)` (S6 dt-cap
 parity with pool + boiler), benefiting both the new ECG scroll AND
 the existing dashed-arc scroll — the car card is added to the

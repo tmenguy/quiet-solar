@@ -30,6 +30,12 @@ const ECG_MAX_SPEED_PX_S = 140;
 // Horizontal pitch between QRS complex starts (px). Determines the
 // heartbeat rate at any given scroll speed.
 const ECG_SPIKE_SPACING_PX = 60;
+// SVG viewBox width (px). Used by `_buildQRSPath` as the `totalWidth`
+// argument: the path tiles `Math.ceil(totalWidth / ECG_SPIKE_SPACING_PX)
+// + 1` complexes across the visible band. Promoted from a bare 320
+// literal so a future viewBox resize updates the path span in one
+// place (QS-229 review-fix #01 #7).
+const ECG_TOTAL_WIDTH_PX = 320;
 
 class QsCarCard extends HTMLElement {
   constructor() {
@@ -159,12 +165,18 @@ class QsCarCard extends HTMLElement {
       const ecgEl = this._root?.getElementById('ecg_anim');
       if (ecgEl) {
         ecgEl.setAttribute('transform', `translate(${this._ecgOffset.toFixed(2)}, 0)`);
+        // QS-229 - `-Infinity` sentinels force a first-frame regen when
+        // `_lastEcgRegenTs` / `_lastEcgAmp` are still `null` (sinceLastRegen
+        // -> +Infinity, ampDelta -> +Infinity, both threshold checks
+        // fire). Do NOT "simplify" these to `?? 0`: that breaks the
+        // cold-start regen and the initial flatline-from-markup never
+        // gets replaced once amp/speed lerp away from 0.
         const sinceLastRegen = (ts - (this._lastEcgRegenTs ?? -Infinity)) / 1000;
         const ampDelta = Math.abs(this._currentEcgAmp - (this._lastEcgAmp ?? -Infinity));
         if (sinceLastRegen >= 0.1 && ampDelta > 0.5) {
           ecgEl.setAttribute(
               'd',
-              this._buildQRSPath(this._currentEcgAmp, ECG_BASELINE_Y, 320),
+              this._buildQRSPath(this._currentEcgAmp, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX),
           );
           this._lastEcgAmp = this._currentEcgAmp;
           this._lastEcgRegenTs = ts;
@@ -722,10 +734,10 @@ class QsCarCard extends HTMLElement {
                   <circle cx="160" cy="160" r="120" />
                 </clipPath>
               </defs>
-              ${(!isDisconnected && !shouldShowPlaceholder) ? `
-              <g clip-path="url(#${ecgClipId})" pointer-events="none" style="mix-blend-mode:screen;">
+              ${(!isDisconnected && !shouldShowPlaceholder && !isFaulted && !isStale) ? `
+              <g clip-path="url(#${ecgClipId})" pointer-events="none">
                 <path id="ecg_anim"
-                      d="${this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, 320)}"
+                      d="${this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX)}"
                       stroke="url(#${gradChargeId})"
                       stroke-width="2"
                       fill="none"

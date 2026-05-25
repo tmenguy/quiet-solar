@@ -1879,6 +1879,10 @@ def test_car_card_ecg_tuning_constants_in_band():
     min_speed = _extract_number("ECG_MIN_SPEED_PX_S")
     max_speed = _extract_number("ECG_MAX_SPEED_PX_S")
     spike_spacing = _extract_number("ECG_SPIKE_SPACING_PX")
+    # QS-229 review-fix #01 finding #7: the previously-bare `320` literal
+    # (the SVG viewBox width) is promoted to a module constant so a
+    # future viewBox resize doesn't silently break the ECG span.
+    total_width = _extract_number("ECG_TOTAL_WIDTH_PX")
 
     assert 185 <= baseline_y <= 215, (
         f"QS-229 AC-1: ECG_BASELINE_Y {baseline_y} outside [185, 215] "
@@ -1907,6 +1911,11 @@ def test_car_card_ecg_tuning_constants_in_band():
     assert 40 <= spike_spacing <= 80, (
         f"QS-229 AC-5: ECG_SPIKE_SPACING_PX {spike_spacing} outside "
         "[40, 80]."
+    )
+    assert total_width == 320, (
+        f"QS-229 review-fix #01 #7: ECG_TOTAL_WIDTH_PX must equal 320 "
+        f"(the SVG viewBox width) - got {total_width}. If the viewBox "
+        "is ever resized, change this constant and the path will follow."
     )
 
 
@@ -1998,6 +2007,21 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
     assert 'filter="url(#chargeGlow)"' in content, (
         "QS-229 AC-7: the dashed-arc block's chargeGlow filter "
         "must be preserved."
+    )
+
+    # QS-229 review-fix #01 finding #8: the ECG outer guard must
+    # additionally skip faulted and stale states (pairing a cyan->blue
+    # heartbeat with a red faulted SoC arc reads contradictory).
+    guard_pattern = re.search(
+        r"\$\{\s*\(\s*!isDisconnected\s*&&\s*!shouldShowPlaceholder"
+        r"\s*&&\s*!isFaulted\s*&&\s*!isStale\s*\)",
+        content,
+    )
+    assert guard_pattern, (
+        "QS-229 review-fix #01 #8: ECG outer guard must be "
+        "`${(!isDisconnected && !shouldShowPlaceholder && !isFaulted "
+        "&& !isStale) ? ` ... so the ECG group is omitted whenever the "
+        "card is in a non-nominal state."
     )
 
 
@@ -2132,6 +2156,207 @@ def test_car_card_ecg_power_to_amp_speed_endpoints():
         "_chargingPowerToEcgSpeed",
         "ECG_MIN_SPEED_PX_S",
         "ECG_MAX_SPEED_PX_S",
+    )
+
+
+def test_car_card_ecg_wrapper_has_no_screen_blend():
+    """QS-229 review-fix #01 finding #1: ECG wrapper `<g>` MUST NOT
+    carry `mix-blend-mode:screen`.
+
+    User-reported visual regression: on a light HA theme, the flatline
+    cyan->blue trace becomes invisible because screen blend washes the
+    luminance contrast against the white card surface. Plain alpha-blend
+    reads cleanly on both themes.
+
+    Regression net: a future edit that re-introduces
+    `style="mix-blend-mode:screen;"` on the ECG wrapper would silently
+    re-break the light theme.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+
+    # Locate the ECG wrapper line(s) — start tag containing
+    # `clip-path="url(#${ecgClipId})"`. The whole opening tag must be
+    # captured up to its `>` so we can inspect the inline style.
+    wrapper_tag = re.search(
+        r"<g[^>]*clip-path\s*=\s*[\"']url\(#\$\{ecgClipId\}\)[\"'][^>]*>",
+        content,
+    )
+    assert wrapper_tag, (
+        "QS-229 review-fix #01 #1b: ECG `<g clip-path=...>` wrapper "
+        "must exist (the wrapper anchor on `clip-path=\"url(#${ecgClipId})\"` "
+        "could not be found)."
+    )
+
+    # The captured opening tag MUST NOT carry mix-blend-mode (screen or
+    # otherwise — the entire family is a no-go on this wrapper).
+    assert "mix-blend-mode" not in wrapper_tag.group(0), (
+        "QS-229 review-fix #01 #1: ECG `<g>` wrapper must NOT carry "
+        "`mix-blend-mode:screen` (or any mix-blend-mode value). Screen "
+        "blend strips the 2 px cyan->blue stroke against light HA themes "
+        "and the user-reported flatline becomes invisible. Use plain "
+        "alpha-blend (no `style` on the wrapper). The existing "
+        "`charge_anim` dashed-arc path keeps its `mix-blend-mode:screen` "
+        "(separate scope, only renders during active charging)."
+    )
+
+
+def test_car_card_ecg_step_closure_advance_and_throttle():
+    """QS-229 review-fix #01 finding #2: AC-3 enumerates five behaviors;
+    only the modulo precedence is asserted by the prior sentinel. Cover
+    the remaining four: the lerp rate (`Math.exp(-4 * dt)`), the
+    positive translate (left->right scroll), and the two throttle
+    thresholds (`>= 0.1 s`, `> 0.5 px`).
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+
+    # AC-3: lerp rate hardcoded inline (mirrors radiator card pattern).
+    assert re.search(r"Math\.exp\(\s*-\s*4(?:\.0)?\s*\*", executable), (
+        "QS-229 AC-3: ECG lerp factor must use `Math.exp(-4 * dt)` (or "
+        "`-4.0 * dt`) - the radiator-card inlined lerp-rate pattern."
+    )
+
+    # AC-3: positive translate (left -> right scroll per user clarification 5).
+    assert re.search(
+        r"setAttribute\(\s*['\"]transform['\"]\s*,\s*`translate\(",
+        executable,
+    ), (
+        "QS-229 AC-3: ECG scroll must apply `setAttribute('transform', "
+        "`translate(${this._ecgOffset.toFixed(2)}, 0)`)` (positive "
+        "translate -> pulses move left to right per user-clarification 5)."
+    )
+
+    # AC-3: throttle thresholds (time + amp).
+    assert re.search(r"sinceLastRegen\s*>=\s*0\.1", executable), (
+        "QS-229 AC-3: ECG path-regen throttle must check "
+        "`sinceLastRegen >= 0.1` (capped ~10 fps regardless of float "
+        "jitter)."
+    )
+    assert re.search(r"ampDelta\s*>\s*0\.5", executable), (
+        "QS-229 AC-3: ECG path-regen throttle must check "
+        "`ampDelta > 0.5` (suppress sub-pixel-noisy regens)."
+    )
+
+
+def test_car_card_ecg_build_qrs_path_tiles_and_left_buffers():
+    """QS-229 review-fix #01 finding #3: AC-4 enumerates more than just
+    the sign sequence. Cover the LEFT-buffer start (`startX =
+    -ECG_SPIKE_SPACING_PX`), the complex-count tiling formula
+    (`Math.ceil(totalWidth / ECG_SPIKE_SPACING_PX) + 1`), and the
+    invariant that one complex's dx-sum equals `ECG_SPIKE_SPACING_PX`.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+    body = _extract_js_function_body(
+        executable, r"_buildQRSPath\s*\(",
+    )
+    assert body is not None, (
+        "QS-229 AC-4: `_buildQRSPath` instance method must be defined "
+        "(the sign-sequence sentinel also needs this)."
+    )
+
+    # LEFT buffer: complex starts at x = -ECG_SPIKE_SPACING_PX so the
+    # scroll's left edge fills cleanly when translate(+offset) shifts
+    # the path rightward.
+    assert re.search(
+        r"const\s+startX\s*=\s*-\s*ECG_SPIKE_SPACING_PX\s*;", body,
+    ), (
+        "QS-229 AC-4: _buildQRSPath must set "
+        "`const startX = -ECG_SPIKE_SPACING_PX;` (one-complex LEFT "
+        "buffer so the modulo-wrap is seamless)."
+    )
+
+    # Complex-count tiling: ceil(totalWidth / SPACING) + 1.
+    assert re.search(
+        r"Math\.ceil\(\s*totalWidth\s*/\s*ECG_SPIKE_SPACING_PX\s*\)"
+        r"\s*\+\s*1",
+        body,
+    ), (
+        "QS-229 AC-4: _buildQRSPath must emit "
+        "`Math.ceil(totalWidth / ECG_SPIKE_SPACING_PX) + 1` complexes "
+        "(LEFT-buffer + enough to fill the viewBox + one trailing)."
+    )
+
+    # Per-complex dx-sum invariant: first 12 segments sum to
+    # ECG_SPIKE_SPACING_PX (the tiling width). Parse dx values out of
+    # the segment templates and sum them; reuse the same regex shape
+    # the sign-sequence sentinel uses.
+    seg_re = re.compile(
+        r"`l\s+([0-9.]+),"
+        r"(?:"
+        r"\$\{\(?\s*[+-]?[0-9.]+\s*\*\s*a\s*\)?\.toFixed\(\d+\)\}"
+        r"|"
+        r"0"
+        r")`",
+    )
+    matches = seg_re.findall(body)
+    assert len(matches) >= 12, (
+        "QS-229 AC-4: _buildQRSPath must emit >=12 segments per complex "
+        f"(parsed {len(matches)})."
+    )
+    one_complex_dx_sum = sum(float(dx) for dx in matches[:12])
+    assert one_complex_dx_sum == 60.0, (
+        f"QS-229 AC-4: per-complex dx-sum must equal ECG_SPIKE_SPACING_PX "
+        f"= 60 (got {one_complex_dx_sum}). Successive complexes must tile "
+        f"without gaps; if you change a segment dx, adjust the tail to "
+        f"keep the sum at 60."
+    )
+
+
+def test_car_card_ecg_flatline_render_path_and_stop_reset():
+    """QS-229 review-fix #01 finding #9: AC-2 wants the initial render
+    path to start from a zero amp (flatline) and `_stopAnimation` to
+    reset both amp AND speed accumulators. A regression that hardcoded
+    a non-zero starting amp would slip past every other sentinel.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+
+    # Initial render markup uses `|| 0` to coalesce a fresh /
+    # undefined `_currentEcgAmp` so cold-start renders as a flatline
+    # even before the constructor's initializer landed (defensive).
+    assert re.search(
+        r"_buildQRSPath\(\s*this\._currentEcgAmp\s*\|\|\s*0\s*,",
+        content,
+    ), (
+        "QS-229 AC-2: initial markup must call "
+        "`this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, ...)` "
+        "so a cold-start render produces a flatline (amp = 0 collapses "
+        "every per-complex `l dx,dy` to `l dx,0`)."
+    )
+
+    # `_stopAnimation` resets both accumulators so charge -> idle
+    # produces a clean flatline on the very next render.
+    stop_body = _extract_js_function_body(
+        executable, r"_stopAnimation\s*\(\s*\)\s*",
+    )
+    assert stop_body is not None, (
+        "QS-229 AC-2: `_stopAnimation()` method must be defined."
+    )
+    assert re.search(r"this\._currentEcgAmp\s*=\s*0\s*;", stop_body), (
+        "QS-229 AC-2: `_stopAnimation()` must reset "
+        "`this._currentEcgAmp = 0;` so the next render snaps to flatline."
+    )
+    assert re.search(r"this\._currentEcgSpeed\s*=\s*0\s*;", stop_body), (
+        "QS-229 AC-2: `_stopAnimation()` must reset "
+        "`this._currentEcgSpeed = 0;` so the scroll offset doesn't "
+        "advance during idle."
     )
 
 
