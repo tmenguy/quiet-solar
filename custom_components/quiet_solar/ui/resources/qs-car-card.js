@@ -877,11 +877,16 @@ class QsCarCard extends HTMLElement {
          positioning as override-btn on boiler/radiator/climate cards.
          Bottom: 15px from .ring bottom, centered horizontally. */
       .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      /* QS-232 review-fix #04: icon bumped 26 → 30 px and centered via
-         flex (instead of grid+place-items + the legacy translateY(3px)
-         hack) so the sun renders at the same visual size as the hand
-         on the override-btn in climate/radiator/boiler. */
-      .ring .sun-btn ha-icon { --mdc-icon-size: 30px; color: var(--secondary-text-color); display:flex; align-items:center; justify-content:center; line-height:1; }
+      /* QS-232 review-fix #04: icon bumped 26 → 30 px so the sun
+         renders at the same visual size as the hand on the
+         override-btn in climate/radiator/boiler.
+         Review-fix #07: kept 'transform: translateY(3px)' on the icon
+         (same as the rabbit-btn icon) — the mdi:weather-sunny glyph
+         has rays extending upward more than downward, so its bounding-
+         box center sits above its visual center. The 3 px nudge
+         pushes the icon down so it reads as centered in the 50×50
+         button shell. */
+      .ring .sun-btn ha-icon { --mdc-icon-size: 30px; color: var(--secondary-text-color); display:flex; align-items:center; justify-content:center; line-height:1; transform: translateY(3px); }
       .ring .sun-btn.on { border-color: rgba(255,202,40,.45); background: rgba(255,202,40,.14); box-shadow: 0 0 0 3px rgba(255,202,40,.20), 0 0 16px #FFCA28; }
       .ring .sun-btn.on ha-icon { color: #FFCA28; }
       /* QS-232 review-fix #04: invisible spacer that preserves the
