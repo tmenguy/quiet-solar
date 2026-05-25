@@ -1,35 +1,21 @@
 /*
   QS Car Card - custom:qs-car-card
-  Zero-build single-file Lit-style web component compatible with Home Assistant
+  Zero-build single-file Lit-style web component compatible with Home
+  Assistant.
 
-  QS-232 layered an "electron soup" SOC animation inside the ring,
-  mirroring the QS-200/QS-211/QS-214 boiler architecture:
-  - A single sine wave inside a circular clipPath, with dual-opacity
-    cross-fade between an idle green palette and a charging blue
-    palette (binary `_currentColorMix` lerp, NOT HSL hue lerp).
-  - Lightning-blue "electron" sparkles popping randomly inside the
-    soup. Sparkle density / spawn-rate / radius scale linearly with
-    charge power on [1500W, 22000W]; below 1500W (but still
-    `_charging`) the visuals clamp to the 1500W MIN endpoint. Idle
-    uses a fixed low rate of greenish sparkles independent of power.
-  - Lightning bolts flashing from the top of the clip circle to the
-    soup surface when charging — 3-segment `<path>` with a glow
-    filter and `mix-blend-mode: screen`, life 0.25s, spawn interval
-    randomised on [1.5, 3.0]s.
-  - feTurbulence grain filter applied to the wave path's fill (NOT a
-    separate overlay rect) so the grain composites within the wave
-    shape via `feComposite operator="in"`.
-  - Degraded states (`isDisconnected || isFaulted || isStale`)
-    desaturate the entire clipped group via a CSS filter
-    (`saturate(0.3) brightness(0.7)`) and suppress lightning
-    entirely. `isOffGrid` is NOT folded in (the card-level pinkish
-    .off-grid tint already covers it).
-  - Continuous RAF while connected (no more `_charging`-gated
-    start/stop). Mirrors QS-200 / QS-211 pool & boiler precedent.
-  - QS-217 carve-cover pattern extended from one button (override-
-    reset on boiler/radiator/climate) to THREE inside-disc buttons
-    on the car card: sun-btn (Solar priority), rabbit-btn (Force
-    now), time-btn (Finish time).
+  QS-232 layers an "electron soup" SOC animation inside the ring,
+  mirroring the QS-200 / QS-211 / QS-214 boiler architecture. The
+  high-level design — single-layer sine wave inside a clipPath,
+  idle↔charge cross-fade, lightning-blue sparkle particles, lightning
+  bolts during charging, feTurbulence grain on the wave fill,
+  degraded-state CSS desaturate, continuous RAF, and QS-217 carve
+  covers extended to three inside-disc buttons — is documented in
+  `docs/agents/concepts/dashboard-and-cards.md` (search for
+  "QS-232 — Car-card electron-soup animation"). Tuning constants
+  (sparkle power-scaling range, lightning spawn interval, life
+  curves, palette colours) live in the constants block immediately
+  below this header — those values are the source of truth; the
+  docstring intentionally avoids duplicating them.
 
   Existing dashed-arc animation (`<path id="charge_anim">`) is
   preserved verbatim; `showAnimation` remains its render-time switch.
@@ -241,21 +227,34 @@ class QsCarCard extends HTMLElement {
     // call `_startAnimation` directly today) — for safety, we also
     // re-attempt from `connectedCallback` if it runs first.
     if (!this._root) return;
-    // Lazy-init: runs ONCE on first connect, preserved across
-    // detach/re-attach so `_currentAmplitude` / `_wavePhase` /
-    // `_currentColorMix` don't snap back on tab navigation.
-    if (this._currentAmplitude == null) {
-      this._currentAmplitude = CALM_AMP;
-      this._currentSpeed     = CALM_SPEED;
-      this._wavePhase        = 0;
-      this._currentColorMix  = 0;
-      this._sparkles         = [];
-      this._nextSparkleAt    = 0;
-      this._lightningBolts   = [];
-      this._nextLightningAt  = LIGHTNING_SPAWN_MIN_S +
-        Math.random() * (LIGHTNING_SPAWN_MAX_S - LIGHTNING_SPAWN_MIN_S);
-      this._needsAnimationPrime = true;
-    }
+    // Lazy-init: each RAF-state field guards itself individually.
+    // Review-fix #02 #1: the previous form bundled ALL five
+    // RAF-state fields (`_currentAmplitude`, `_wavePhase`,
+    // `_nextSparkleAt`, `_nextLightningAt`, `_sparkles`,
+    // `_lightningBolts`) inside `if (this._currentAmplitude == null)`,
+    // and review-fix #01 #4 added a `_needsAnimationPrime` consumer
+    // in `_render()` that pre-seeds `_currentAmplitude` / `_currentSpeed`
+    // / `_currentColorMix`. Combined effect: the lazy-init guard
+    // evaluated FALSE on first `_startAnimation()`, leaving
+    // `_wavePhase` / `_nextSparkleAt` / `_nextLightningAt` /
+    // `_sparkles` / `_lightningBolts` undefined. First RAF tick:
+    // `_wavePhase += dt` = NaN, sparkle/lightning spawn loops never
+    // enter (since `NaN <= 0 === false`). User-visible symptom:
+    // "no sparkles at all". Per-field guards eliminate the coupling.
+    if (this._currentAmplitude == null) this._currentAmplitude = CALM_AMP;
+    if (this._currentSpeed     == null) this._currentSpeed     = CALM_SPEED;
+    if (this._currentColorMix  == null) this._currentColorMix  = 0;
+    if (this._wavePhase        == null) this._wavePhase        = 0;
+    if (this._sparkles         == null) this._sparkles         = [];
+    if (this._nextSparkleAt    == null) this._nextSparkleAt    = 0;
+    if (this._lightningBolts   == null) this._lightningBolts   = [];
+    if (this._nextLightningAt  == null) this._nextLightningAt  = LIGHTNING_SPAWN_MIN_S +
+      Math.random() * (LIGHTNING_SPAWN_MAX_S - LIGHTNING_SPAWN_MIN_S);
+    // `_needsAnimationPrime` is armed by `setConfig` (review-fix #01 #4)
+    // and consumed by `_render`'s prime block; only set here on the
+    // very first lazy-init if neither `setConfig` nor `_render` has
+    // touched it yet.
+    if (this._needsAnimationPrime == null) this._needsAnimationPrime = true;
     this._lastAnimTs = null;
     this._invalidateAnimCache();
 
@@ -304,21 +303,35 @@ class QsCarCard extends HTMLElement {
 
       // --- Lazy-resolve wave / sparkle / lightning DOM refs once per
       //     innerHTML rewrite (two wave nodes — idle + charge).
-      //     Review-fix #01 #15: `getElementById` already returns
-      //     `null` on miss; the prior inner `?? null` was redundant.
-      if (!this._waveEls) {
+      //     The inner `?? null` is intentional: `_root?.getElementById`
+      //     can return `undefined` (when `_root` itself is null), and
+      //     the retry guard below distinguishes a successful cache
+      //     (truthy elements) from a stale `[null, null]` cache hit.
+      //     Review-fix #02 #10: retry the lookup if EITHER slot is
+      //     null (the previous form cached `[null, null]` — truthy —
+      //     permanently if both lookups missed during a transient
+      //     detach).
+      // Review-fix #02 #12: align all three DOM-ref lookups on the
+      // block-form (was: inline `?? (... = ...)` for sparkle/lightning
+      // and block-form for `_waveEls`). One shape across all layers
+      // makes the retry-on-null behaviour easier to reason about.
+      if (!this._waveEls || !this._waveEls[0] || !this._waveEls[1]) {
         const idleEl   = this._root?.getElementById('electron_wave_idle')   ?? null;
         const chargeEl = this._root?.getElementById('electron_wave_charge') ?? null;
         this._waveEls = [idleEl, chargeEl];
       }
-      const sparkleLayer = this._sparkleLayerEl
-        ?? (this._sparkleLayerEl = this._sparkleLayerId
-              ? this._root?.getElementById(this._sparkleLayerId)
-              : null);
-      const lightningLayer = this._lightningLayerEl
-        ?? (this._lightningLayerEl = this._lightningLayerId
-              ? this._root?.getElementById(this._lightningLayerId)
-              : null);
+      if (!this._sparkleLayerEl) {
+        this._sparkleLayerEl = this._sparkleLayerId
+          ? (this._root?.getElementById(this._sparkleLayerId) ?? null)
+          : null;
+      }
+      if (!this._lightningLayerEl) {
+        this._lightningLayerEl = this._lightningLayerId
+          ? (this._root?.getElementById(this._lightningLayerId) ?? null)
+          : null;
+      }
+      const sparkleLayer = this._sparkleLayerEl;
+      const lightningLayer = this._lightningLayerEl;
 
       // --- Wave transform (single layer translateX).
       // Path extent is [0, 2*WAVE_WIDTH] so the translated path always
@@ -334,15 +347,27 @@ class QsCarCard extends HTMLElement {
 
       // --- Wave path regen (throttled by amplitude / soup-level delta).
       const waterBaseY = this._waterBaseY;
-      const hasValidBase = waterBaseY != null && !Number.isNaN(waterBaseY);
-      const ampDelta = this._lastAmplitude == null
+      // Review-fix #02 #11: use `Number.isFinite(...)` instead of
+      // `!Number.isNaN(...)` so a spurious `Infinity` doesn't slip
+      // through the guard. Asymmetric otherwise with the
+      // `Number.isFinite(soc)` guard in `_render` (fix #01 #3) and
+      // the call-site guard on `initialWavePath` (fix #01 #5).
+      const hasValidBase = waterBaseY != null && Number.isFinite(waterBaseY);
+      // Review-fix #02 #5: the in-RAF read AND write must guard
+      // against non-finite `_lastAmplitude`. Fix-#01-#8 only patched
+      // the post-innerHTML write at the end of `_render`; if NaN
+      // ever lands in `_lastAmplitude` here mid-frame, all
+      // subsequent regen checks evaluate `Math.abs(_ - NaN) = NaN`
+      // (always `< threshold`), freezing the wave-path regen for
+      // the lifetime of the card.
+      const ampDelta = (this._lastAmplitude == null || !Number.isFinite(this._lastAmplitude))
           ? Infinity
           : Math.abs(this._currentAmplitude - this._lastAmplitude);
       const levelChanged = hasValidBase &&
           Math.abs(waterBaseY - (this._lastWaterBaseY ?? Number.NEGATIVE_INFINITY)) > LEVEL_REGEN_THRESHOLD;
       if (hasValidBase && (levelChanged || ampDelta > AMP_REGEN_THRESHOLD)) {
         this._lastWaterBaseY = waterBaseY;
-        this._lastAmplitude = this._currentAmplitude;
+        this._lastAmplitude = Number.isFinite(this._currentAmplitude) ? this._currentAmplitude : CALM_AMP;
         const d = this._generateWavePath(WAVE_WIDTH, this._currentAmplitude, 2, 0, waterBaseY);
         if (idleWave)   idleWave.setAttribute('d', d);
         if (chargeWave) chargeWave.setAttribute('d', d);
@@ -354,7 +379,12 @@ class QsCarCard extends HTMLElement {
       // clamp `_currentColorMix` to `[0, 1]` for opacity emission so
       // floating-point lerp drift (e.g., `1.0000000001`) doesn't
       // surface as ugly `"-0.000"` opacity tokens.
-      const mix = Math.max(0, Math.min(1, this._currentColorMix));
+      // Review-fix #02 #9: `Math.max(0, Math.min(1, NaN)) === NaN`,
+      // so the clamp alone doesn't trap NaN. Wrap with a
+      // `Number.isFinite` ternary so a poisoned lerp falls back to
+      // the idle palette (`mix = 0`).
+      const mix = Number.isFinite(this._currentColorMix)
+        ? Math.max(0, Math.min(1, this._currentColorMix)) : 0;
       const idleOpacity   = (1 - mix).toFixed(3);
       const chargeOpacity = mix.toFixed(3);
       if (idleWave)   idleWave.setAttribute('opacity', idleOpacity);
@@ -495,8 +525,14 @@ class QsCarCard extends HTMLElement {
             this._nextLightningAt += LIGHTNING_SPAWN_MIN_S +
               Math.random() * (LIGHTNING_SPAWN_MAX_S - LIGHTNING_SPAWN_MIN_S);
           }
-          if (this._nextLightningAt < 0) this._nextLightningAt = 0;
         }
+        // Review-fix #02 #8: hoist the cap-recovery clamp out of the
+        // `if (charging && !degraded)` spawn gate so the structure
+        // mirrors the sparkle subsystem above. Currently safe because
+        // the `-= dt` decrement is also gated, but a future refactor
+        // moving the decrement out would create a permanent
+        // negative-drift bug.
+        if (this._nextLightningAt < 0) this._nextLightningAt = 0;
 
         // Advance + retire (runs every frame, graceful exit).
         // Three-phase opacity curve: fade-in [0, 0.10], hold
@@ -546,9 +582,16 @@ class QsCarCard extends HTMLElement {
     // both _charging and _currentColorMix are still at their initial
     // values — the equation `(false ? 1 : 0) !== Math.round(0)`
     // evaluates `0 !== 0`, so no spurious prime fires.
+    //
+    // Review-fix #02 #4: arming the flag isn't enough — `_render`
+    // consumes it. Without an explicit `_render` call, the flag
+    // sits until the next hass push (which can be seconds away)
+    // and the RAF lerps visibly during the gap. Call `_render`
+    // immediately so the prime takes effect on the next paint.
     const impliedMix = Math.round(this._currentColorMix ?? 0);
     if ((this._charging ? 1 : 0) !== impliedMix) {
       this._needsAnimationPrime = true;
+      this._render();
     }
   }
 
@@ -590,6 +633,13 @@ class QsCarCard extends HTMLElement {
     // (green-to-blue flash).
     this._needsAnimationPrime = true;
     this._render();
+    // Review-fix #02 #3: complete the fix-#01-#22 fix. `_startAnimation`
+    // bails early on `!this._root`; if `connectedCallback` fires
+    // BEFORE `setConfig` (uncommon but valid lifecycle), the bail
+    // would never be retried. Re-invoke here once `_root` is set.
+    if (this.isConnected && this._animRaf == null) {
+      this._startAnimation();
+    }
   }
 
   // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
@@ -894,10 +944,16 @@ class QsCarCard extends HTMLElement {
          .center-controls to absolute positioning. Without this, the
          shorter stack gets grid-centered higher in .center, pushing
          the soc-block (89%, range) and the mini-grid buttons (rabbit,
-         time) visibly downward — the symptom the user flagged
-         ("you moved all the texts and stuff down"). The 74 px height
-         matches the former .center-controls outer footprint
-         (6 px margin + 14 px label + 4 px gap + 50 px button). */
+         time) visibly downward.
+         Review-fix #02 #17 — components of the 74 px height:
+           - 6 px margin-top on the original .center-controls block
+           - 14 px label ("Solar priority", font-size 0.7rem,
+             font-weight 700)
+           - 4 px gap between label and button (column-gap: 4)
+           - 50 px sun-btn button height
+         If any of those four numbers changes (icon-size, label
+         typography, button dimensions), this height MUST be updated
+         in lockstep, otherwise the layout drifts. */
       .ring .sun-btn-spacer { width: 50px; height: 74px; pointer-events: none; }
       .ring .rabbit-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .rabbit-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; transform: translateY(3px); }
@@ -1130,13 +1186,26 @@ class QsCarCard extends HTMLElement {
       // Wrapping the `_generateWavePath(...)` call with a
       // `Number.isFinite(this._waterBaseY)` ternary makes the empty-
       // string fallback explicit at the call site.
-      const initialAmp = this._currentAmplitude ?? CALM_AMP;
-      const initialColorMix = this._currentColorMix ?? 0;
+      // Review-fix #02 #2: `??` only traps null/undefined; a runtime
+      // NaN in either `_currentAmplitude` or `_currentColorMix` would
+      // propagate into the initial wave path's `d` attribute and the
+      // opacity attribute strings. Mirror the fix-#01-#8 finite-guard
+      // shape so NaN falls back to the calm/idle defaults.
+      const initialAmp = Number.isFinite(this._currentAmplitude)
+        ? this._currentAmplitude : CALM_AMP;
+      const initialColorMix = Number.isFinite(this._currentColorMix)
+        ? this._currentColorMix : 0;
       const initialWavePath = Number.isFinite(this._waterBaseY)
         ? this._generateWavePath(WAVE_WIDTH, initialAmp, 2, 0, this._waterBaseY)
         : '';
-      const initialIdleOpacity   = (1 - initialColorMix).toFixed(3);
-      const initialChargeOpacity = initialColorMix.toFixed(3);
+      // Review-fix #02 #6: clamp `initialColorMix` to [0, 1] before
+      // `.toFixed(3)` so floating-point lerp drift outside the
+      // envelope (e.g., `1.0000000001`) doesn't surface as an ugly
+      // `"-0.000"` opacity token at the initial-paint sites
+      // (review-fix #01 #18 clamped only the RAF-step emission).
+      const initialMix = Math.max(0, Math.min(1, initialColorMix));
+      const initialIdleOpacity   = (1 - initialMix).toFixed(3);
+      const initialChargeOpacity = initialMix.toFixed(3);
 
       // QS-232 review-fix #03: snapshot the in-flight sparkles AND
       // lightning bolts BEFORE the innerHTML rewrite below. The
@@ -1149,9 +1218,13 @@ class QsCarCard extends HTMLElement {
       // that 0.45 s lifetime made the wipe imperceptible, but in
       // practice with HA pushing every 100-500 ms the sparkles never
       // accumulate). Mirrors the QS-214 boiler snapshot/restore.
-      const preservedSparkles      = this._sparkles;
+      // Review-fix #02 #18: defensive `?? []` so a future caller
+      // that dereferences `.length` on the snapshot result can't
+      // crash when `_render` runs from `setConfig` BEFORE
+      // `_startAnimation` has lazy-init'd the particle arrays.
+      const preservedSparkles      = this._sparkles ?? [];
       const preservedNextSparkleAt = this._nextSparkleAt;
-      const preservedLightningBolts  = this._lightningBolts;
+      const preservedLightningBolts  = this._lightningBolts ?? [];
       const preservedNextLightningAt = this._nextLightningAt;
 
       this._root.innerHTML = `
@@ -1246,7 +1319,7 @@ class QsCarCard extends HTMLElement {
                   <div class="mini-title">${useEnergyMode ? 'Target Energy' : 'Target SOC'}</div>
                   <div class="mini-title">${chargeTimeLabel}</div>
 
-                  <div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}"><ha-icon icon="mdi:rabbit"></ha-icon></div>
+                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
                   <div class="target-cell">
                     <div id="target_value" class="target-value">${displayTargetValue}</div>
                     ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
@@ -1312,12 +1385,19 @@ class QsCarCard extends HTMLElement {
       // preserved particle, re-attach its detached `el` to the new
       // layer; the per-frame state (cy, life, …) survived in the
       // JS array so the RAF advance loop picks up exactly where it
-      // left off, with no visual blink. Cadence counters are
-      // restored so spawn timing is continuous. If a new layer
-      // isn't found (defensive — e.g. shadow root was torn down
-      // mid-flight), preserved particles are dropped to avoid
-      // leaking detached DOM. Mirrors the QS-214 boiler steam/bubble
-      // snapshot/restore pattern.
+      // left off, with no visual blink. Cadence counters
+      // (`_nextSparkleAt`, `_nextLightningAt`) are restored
+      // INSIDE the `length > 0` branches below; when the snapshot
+      // arrays are empty (common — sparkles live ~0.45 s and
+      // hass-pushes fire every 100–500 ms, so most renders snapshot
+      // 0–3 sparkles), the cadence counters survive the rebuild
+      // because `_resetDomRefs` doesn't touch them. Net effect: a
+      // spawn cadence is continuous regardless of whether the
+      // particle arrays were populated at snapshot time. If a new
+      // layer isn't found (defensive — e.g. shadow root was torn
+      // down mid-flight), preserved particles are dropped to avoid
+      // leaking detached DOM. Mirrors the QS-214 boiler
+      // steam/bubble snapshot/restore pattern.
       if (preservedSparkles?.length) {
         const newSparkleLayer = this._sparkleLayerId
           ? this._root.getElementById(this._sparkleLayerId)
@@ -1326,7 +1406,21 @@ class QsCarCard extends HTMLElement {
           for (const s of preservedSparkles) {
             if (s?.el) newSparkleLayer.appendChild(s.el);
           }
-          this._sparkles = preservedSparkles.filter(s => s?.el);
+          // Review-fix #02 #16: drop preserved sparkles whose `cy`
+          // is now ABOVE the new `_waterBaseY` (i.e., the SOC dropped
+          // enough that the soup surface rose past the sparkle's
+          // frozen y-position). Otherwise the sparkle would visually
+          // float in the air above the soup for the remainder of its
+          // ~0.45s life. The DOM `<circle>` is removed too so it
+          // doesn't paint during the brief gap.
+          this._sparkles = preservedSparkles.filter(s => {
+            if (!s?.el) return false;
+            if (s.cy < this._waterBaseY) {
+              s.el.remove();
+              return false;
+            }
+            return true;
+          });
           this._sparkleLayerEl = newSparkleLayer;
           this._nextSparkleAt = preservedNextSparkleAt;
         } else {
