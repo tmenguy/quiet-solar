@@ -868,10 +868,24 @@ class QsCarCard extends HTMLElement {
       /* QS-232 review-fix #03: sun-btn now uses the same absolute
          positioning as override-btn on boiler/radiator/climate cards.
          Bottom: 15px from .ring bottom, centered horizontally. */
-      .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      .ring .sun-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; }
+      .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+      /* QS-232 review-fix #04: icon bumped 26 → 30 px and centered via
+         flex (instead of grid+place-items + the legacy translateY(3px)
+         hack) so the sun renders at the same visual size as the hand
+         on the override-btn in climate/radiator/boiler. */
+      .ring .sun-btn ha-icon { --mdc-icon-size: 30px; color: var(--secondary-text-color); display:flex; align-items:center; justify-content:center; line-height:1; }
       .ring .sun-btn.on { border-color: rgba(255,202,40,.45); background: rgba(255,202,40,.14); box-shadow: 0 0 0 3px rgba(255,202,40,.20), 0 0 16px #FFCA28; }
       .ring .sun-btn.on ha-icon { color: #FFCA28; }
+      /* QS-232 review-fix #04: invisible spacer that preserves the
+         .stack's vertical balance after the sun-btn was moved out of
+         .center-controls to absolute positioning. Without this, the
+         shorter stack gets grid-centered higher in .center, pushing
+         the soc-block (89%, range) and the mini-grid buttons (rabbit,
+         time) visibly downward — the symptom the user flagged
+         ("you moved all the texts and stuff down"). The 74 px height
+         matches the former .center-controls outer footprint
+         (6 px margin + 14 px label + 4 px gap + 50 px button). */
+      .ring .sun-btn-spacer { width: 50px; height: 74px; pointer-events: none; }
       .ring .rabbit-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .rabbit-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; transform: translateY(3px); }
       .ring .rabbit-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
@@ -1227,6 +1241,10 @@ class QsCarCard extends HTMLElement {
                   ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}">${chargeTime}</div>` : ''}
                 </div>
                 </div>
+                <!-- QS-232 review-fix #04: invisible spacer preserves .stack's vertical balance
+                     after sun-btn was moved to absolute positioning. Without this, the soc-block
+                     and mini-grid visibly shift downward. -->
+                <div class="sun-btn-spacer" aria-hidden="true"></div>
               </div>
             </div>
             <!-- QS-232 review-fix #03: sun-btn moved out of .center > .stack > .center-controls
