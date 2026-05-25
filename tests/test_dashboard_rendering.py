@@ -1975,28 +1975,39 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "id=\"ecg_anim\">`."
     )
 
-    # AC-6: stroke is the existing gradChargeId gradient.
+    # AC-6 (revised after review-fix #03): stroke is a SOLID electric
+    # blue hex color, NOT a linearGradient. Rationale: the original
+    # cyan->blue `gradChargeId` linearGradient uses the default
+    # `gradientUnits="objectBoundingBox"`, which fails to render on
+    # the flatline path's zero-height bounding box (all `dy=0`
+    # segments). User-reported repro: even after the screen-blend
+    # removal AND the visibility bumps, the flatline was invisible
+    # because the gradient was painting as transparent. A solid color
+    # bypasses the zero-bbox concern entirely.
     path_attrs = re.search(
         r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?stroke\s*=\s*"
-        r"[\"']url\(#\$\{gradChargeId\}\)[\"']",
+        r"[\"']#[0-9a-fA-F]{6}[\"']",
         content,
     )
     assert path_attrs, (
-        "QS-229 AC-6: ECG `<path id=\"ecg_anim\">` stroke must be "
-        "`url(#${gradChargeId})` exactly (the existing cyan->blue "
-        "charge gradient). No conditional ternary on swPriority "
-        "or any other gradient."
+        "QS-229 review-fix #03 #1: ECG stroke must be a solid hex "
+        "color (e.g. `stroke=\"#00b8ff\"`), NOT `url(#gradChargeId)`. "
+        "The objectBoundingBox linearGradient fails on the flatline's "
+        "zero-height path bbox in several browsers."
     )
 
-    # AC-6: no other gradient referenced on the ECG path.
+    # AC-6: no gradient reference on the ECG path (any of the five
+    # would re-introduce the zero-bbox failure mode).
     forbidden = re.search(
         r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*"
-        r"(gradGreenId|gradDisabledId|gradFaultId|gradStaleId)",
+        r"(gradGreenId|gradChargeId|gradDisabledId|gradFaultId|gradStaleId)",
         content,
     )
     assert not forbidden, (
-        "QS-229 AC-6: ECG path must not reference "
-        "gradGreenId/Disabled/Fault/Stale - always electric blue."
+        "QS-229 review-fix #03 #1: ECG path must not reference ANY "
+        "gradient (Green/Charge/Disabled/Fault/Stale) - all use "
+        "objectBoundingBox and fail on the zero-height flatline bbox. "
+        "Use a solid hex color stroke instead."
     )
 
     # AC-7: the existing charge_anim block must still be present.
@@ -2085,6 +2096,38 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         f"QS-229 review-fix #02 #2: ECG stroke-opacity "
         f"({opacity_match.group(1)}) must be >= 1.0. The original "
         f"0.6 was reported invisible on light themes."
+    )
+
+    # QS-229 review-fix #03 #2 - SVG z-index layering. The `.center`
+    # HTML overlay is positioned `absolute; inset:0` over the SVG;
+    # its mini-grid (Force Now / Target / Finish labels and buttons)
+    # sits at viewBox y ~190-215. Without an explicit z-index on the
+    # SVG, the HTML overlay paints ABOVE the SVG and the ECG line at
+    # y=198 is visually covered by the mini-grid text. Pin the
+    # layering rules so the SVG renders on top.
+    assert re.search(
+        r"\.ring\s+svg\s*\{[^}]*position\s*:\s*relative[^}]*\}",
+        content,
+    ), (
+        "QS-229 review-fix #03 #2: `.ring svg` must declare "
+        "`position: relative;` so its `z-index` takes effect "
+        "(needed to lift the SVG above the .center HTML overlay)."
+    )
+    assert re.search(
+        r"\.ring\s+svg\s*\{[^}]*z-index\s*:\s*1[^}]*\}",
+        content,
+    ), (
+        "QS-229 review-fix #03 #2: `.ring svg` must declare "
+        "`z-index: 1` so it renders above the `.center` HTML "
+        "overlay (otherwise the mini-grid text covers the ECG)."
+    )
+    assert re.search(
+        r"\.ring\s+\.center\s*\{[^}]*z-index\s*:\s*0[^}]*\}",
+        content,
+    ), (
+        "QS-229 review-fix #03 #2: `.ring .center` must declare "
+        "`z-index: 0` (or any value lower than the SVG's) so the "
+        "SVG paints above it."
     )
 
 

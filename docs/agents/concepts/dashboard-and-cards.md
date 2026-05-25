@@ -381,13 +381,30 @@ solar / scheduled / not-yet-asked-to-charge). The user
 re-reported "I still see no line" on both light and dark themes
 after the screen-blend removal alone — the missing fix was the
 rollback. **Review-fix #02 #2 — stroke visibility bump.** The
-ECG stroke is `stroke-width="3"` (was 2) and `stroke-opacity="1"`
-(was 0.6). The cyan end of the cyan→blue gradient has low
-luminance contrast on light HA themes; even with screen-blend
-removed, the original 2 px / 0.6 opacity stroke read as
-near-invisible. The 3 px / 1.0 opacity combination reads cleanly
-on both themes without overpowering the dashed-arc during active
-charging.
+ECG stroke is `stroke-width="4"` and `stroke-opacity="1"` (was
+2 px / 0.6). **Review-fix #03 #1 — solid color stroke.** The
+ECG stroke is now `stroke="#00b8ff"` (a vivid electric cyan-blue),
+NOT `url(#gradChargeId)`. The cyan→blue linearGradient uses the
+default `gradientUnits="objectBoundingBox"`, which fails to render
+on the flatline path's **zero-height bounding box** (every per-
+complex `l dx,dy` collapses to `l dx,0` at amp=0, leaving the
+path geometrically purely horizontal). On Chromium-based browsers
+(and HA's WebKit-based mobile webviews) the gradient paints as
+transparent against zero-bbox geometry — the user-reported "still
+no line" symptom even after the screen-blend removal. A solid hex
+color sidesteps the issue entirely and the visual ("electric blue
+flatline") matches the original cyan→blue intent closely enough.
+**Review-fix #03 #2 — SVG/.center z-index layering.** The
+`.ring svg` selector adds `position: relative; z-index: 1;` and
+`.ring .center` adds `z-index: 0` so the SVG renders ABOVE the
+HTML overlay. Without this, the .center's mini-grid (Force Now /
+Target SOC / Finish labels + rabbit/time/sun buttons) sits at
+viewBox y≈190-215 and visually covers the ECG line at y=198.
+Pointer-events are preserved exactly: the .center container keeps
+`pointer-events: none`, its interactive children keep their own
+`pointer-events: auto`, and the ECG wrapper `<g>` keeps
+`pointer-events: none` so the line never intercepts clicks on
+underlying buttons.
 The RAF step closure clamps `dt = Math.min(dt, 0.1)` (S6 dt-cap
 parity with pool + boiler), benefiting both the new ECG scroll AND
 the existing dashed-arc scroll — the car card is added to the
