@@ -139,20 +139,21 @@ const LIGHTNING_LATERAL_JITTER_PX = 18;
 // - Review-fix #01:    SUN=285, RABBIT/TIME=195,195  R=32 (still too high)
 // - Review-fix #02:    SUN=288, RABBIT/TIME=192,192  R=38 (R bump made things worse)
 // - Review-fix #03:    SUN=277 R=35, RABBIT/TIME=215 R=32 — sun matches
-//                      OVERRIDE_BTN_CARVE_CY/R from the other cards,
-//                      rabbit/time moved +20 SVG down per user instruction.
-//
-// The sun-btn DOM was also restructured to a direct child of the
-// .ring container (out of `.center > .stack > .center-controls`)
-// so its CSS layout matches override-btn exactly.
+//                      OVERRIDE_BTN_CARVE_CY/R from the other cards.
+// - Review-fix #05:    RABBIT/TIME=200 R=32 — user instruction "move the
+//                      holes UP by 15 pixels" from the 215 deployment.
+//                      Sun stays at 277 (matches override-btn position).
+// - The sun-btn DOM was restructured to a direct child of the
+//   .ring container (out of `.center > .stack > .center-controls`)
+//   so its CSS layout matches override-btn exactly.
 const SUN_BTN_CARVE_CX = 160;       // bottom-center of ring
 const SUN_BTN_CARVE_CY = 277;       // matches OVERRIDE_BTN_CARVE_CY in other cards
 const SUN_BTN_CARVE_R  = 35;        // matches OVERRIDE_BTN_CARVE_R in other cards
 const RABBIT_BTN_CARVE_CX = 96;     // left column of mini-grid
-const RABBIT_BTN_CARVE_CY = 215;
+const RABBIT_BTN_CARVE_CY = 200;
 const RABBIT_BTN_CARVE_R  = 32;
 const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
-const TIME_BTN_CARVE_CY = 215;
+const TIME_BTN_CARVE_CY = 200;
 const TIME_BTN_CARVE_R  = 32;
 
 class QsCarCard extends HTMLElement {
