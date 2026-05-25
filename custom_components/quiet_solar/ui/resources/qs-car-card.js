@@ -77,16 +77,19 @@ const CHARGE_AMP = 3.5;
 const CHARGE_SPEED = 0.15;          // still gentle
 
 // --- Sparkles ("electrons popping in the water") ---
-// Idle: always visible, very few, very small, green.
-// Review-fix #01 #2: radii roughly doubled from the initial QS-232
-// constants — user reported the electron pops barely read in the
-// rendered card. Final values pinned visually against the user's
-// reference car configuration.
-const SPARKLE_IDLE_MAX = 4;
-const SPARKLE_IDLE_RATE_HZ = 0.6;
-const SPARKLE_IDLE_RADIUS_MIN = 1.6;
-const SPARKLE_IDLE_RADIUS_MAX = 3.0;
-const SPARKLE_IDLE_COLOR = 'hsla(140, 90%, 70%, 0.9)';
+// Idle: always visible, low rate, small, near-white minty highlight.
+// Review-fix history:
+// - #01 #2: radii roughly doubled (0.8/1.6 → 1.6/3.0).
+// - #03:    bumped further — user reported sparkles became invisible
+//           against the brighter idle soup palette. Idle sparkles now
+//           use a near-white minty colour for high contrast vs the
+//           green soup, larger radius, and a higher spawn rate so
+//           there's always a visible sparkle at any moment.
+const SPARKLE_IDLE_MAX = 8;
+const SPARKLE_IDLE_RATE_HZ = 1.5;
+const SPARKLE_IDLE_RADIUS_MIN = 2.5;
+const SPARKLE_IDLE_RADIUS_MAX = 5.0;
+const SPARKLE_IDLE_COLOR = 'hsla(140, 100%, 92%, 0.95)';   // near-white mint, high contrast vs soup green
 // Charging endpoints — scale linearly on [SPARKLE_POWER_MIN_W, SPARKLE_POWER_MAX_W].
 // Below MIN (but still `_charging`) the values clamp to the MIN-power
 // endpoint per user intent (1500W = MIN charging density, NOT a ramp
@@ -122,30 +125,35 @@ const LIGHTNING_LATERAL_JITTER_PX = 18;
 // than driving an emission loop, so the constant served no purpose.
 
 // --- Inside-disc button carve-out covers (QS-232 D17) ---
-// Mirror of QS-217 for THREE buttons that sit inside the clip disc:
-// sun-btn (Solar priority, bottom-center), rabbit-btn (Force now,
-// left column of mini-grid), time-btn (Finish time, right column).
-// The CSS positions are pinned in the .ring layout; the SVG-unit
-// coordinates here track those positions. Integer values are
-// intentionally user-tunable for visual iteration — tests pin the
-// constant NAMES only (mirrors the QS-217 precedent).
+// Mirror of QS-217 for THREE buttons that sit inside the clip disc.
+// The sun-btn (Solar priority, bottom-center) now follows the EXACT
+// same pattern as `override-btn` on the boiler/radiator/climate
+// cards — absolute-positioned at `bottom: 15px; left: 50%;` in the
+// .ring container, carved with CY=277 / R=35 (matching
+// OVERRIDE_BTN_CARVE_* on those cards). Rabbit-btn (Force now, left
+// column of mini-grid) and time-btn (Finish time, right column) sit
+// inside the .stack flow and are carved with CY=215 / R=32.
 //
 // Review-fix iteration history:
-// - QS-232 initial:     267 / 180 / 180  (CY too high — holes above buttons)
-// - Review-fix #01:     285 / 195 / 195  (overshot — holes slightly below buttons)
-// - Review-fix #02:     288 / 192 / 192  (pixel-measured from user screenshot)
-// Plus all radii bumped 32 → 38 so any residual ±3 SVG offset
-// stays inside the cover area and never leaves a sliver of green
-// peeking around the button outline.
-const SUN_BTN_CARVE_CX = 160;       // bottom-center of stack
-const SUN_BTN_CARVE_CY = 288;
-const SUN_BTN_CARVE_R  = 38;
+// - QS-232 initial:    SUN=267, RABBIT/TIME=180,180  R=32
+// - Review-fix #01:    SUN=285, RABBIT/TIME=195,195  R=32 (still too high)
+// - Review-fix #02:    SUN=288, RABBIT/TIME=192,192  R=38 (R bump made things worse)
+// - Review-fix #03:    SUN=277 R=35, RABBIT/TIME=215 R=32 — sun matches
+//                      OVERRIDE_BTN_CARVE_CY/R from the other cards,
+//                      rabbit/time moved +20 SVG down per user instruction.
+//
+// The sun-btn DOM was also restructured to a direct child of the
+// .ring container (out of `.center > .stack > .center-controls`)
+// so its CSS layout matches override-btn exactly.
+const SUN_BTN_CARVE_CX = 160;       // bottom-center of ring
+const SUN_BTN_CARVE_CY = 277;       // matches OVERRIDE_BTN_CARVE_CY in other cards
+const SUN_BTN_CARVE_R  = 35;        // matches OVERRIDE_BTN_CARVE_R in other cards
 const RABBIT_BTN_CARVE_CX = 96;     // left column of mini-grid
-const RABBIT_BTN_CARVE_CY = 192;
-const RABBIT_BTN_CARVE_R  = 38;
+const RABBIT_BTN_CARVE_CY = 215;
+const RABBIT_BTN_CARVE_R  = 32;
 const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
-const TIME_BTN_CARVE_CY = 192;
-const TIME_BTN_CARVE_R  = 38;
+const TIME_BTN_CARVE_CY = 215;
+const TIME_BTN_CARVE_R  = 32;
 
 class QsCarCard extends HTMLElement {
   constructor() {
@@ -857,8 +865,11 @@ class QsCarCard extends HTMLElement {
       /* Mobile touch fix: touch-action:manipulation removes the 300ms tap delay that mobile
          browsers impose for double-tap detection, making button taps register immediately.
          Without this, a hass re-render can destroy the DOM node before the synthetic click fires. */
-      .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      .ring .sun-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; transform: translateY(3px); }
+      /* QS-232 review-fix #03: sun-btn now uses the same absolute
+         positioning as override-btn on boiler/radiator/climate cards.
+         Bottom: 15px from .ring bottom, centered horizontally. */
+      .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+      .ring .sun-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; }
       .ring .sun-btn.on { border-color: rgba(255,202,40,.45); background: rgba(255,202,40,.14); box-shadow: 0 0 0 3px rgba(255,202,40,.20), 0 0 16px #FFCA28; }
       .ring .sun-btn.on ha-icon { color: #FFCA28; }
       .ring .rabbit-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
@@ -1100,6 +1111,22 @@ class QsCarCard extends HTMLElement {
       const initialIdleOpacity   = (1 - initialColorMix).toFixed(3);
       const initialChargeOpacity = initialColorMix.toFixed(3);
 
+      // QS-232 review-fix #03: snapshot the in-flight sparkles AND
+      // lightning bolts BEFORE the innerHTML rewrite below. The
+      // rewrite detaches every DOM node under `this._root`, including
+      // the sparkle and lightning layers' children. Without this
+      // snapshot, every HA state push (which fires `set hass →
+      // _render`) wipes the entire particle arrays — the user-
+      // visible "no sparkles at all" symptom on a fast-updating car
+      // (the original story dropped snapshot/restore on the theory
+      // that 0.45 s lifetime made the wipe imperceptible, but in
+      // practice with HA pushing every 100-500 ms the sparkles never
+      // accumulate). Mirrors the QS-214 boiler snapshot/restore.
+      const preservedSparkles      = this._sparkles;
+      const preservedNextSparkleAt = this._nextSparkleAt;
+      const preservedLightningBolts  = this._lightningBolts;
+      const preservedNextLightningAt = this._nextLightningAt;
+
       this._root.innerHTML = `
       <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''} ${isStale ? 'stale' : ''}">
         <style>${css}</style>
@@ -1200,12 +1227,12 @@ class QsCarCard extends HTMLElement {
                   ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}">${chargeTime}</div>` : ''}
                 </div>
                 </div>
-                <div class="center-controls" style="flex-direction:column; gap:4px;">
-                  <div class="mini-title">Solar priority</div>
-                  <div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>
-                </div>
               </div>
             </div>
+            <!-- QS-232 review-fix #03: sun-btn moved out of .center > .stack > .center-controls
+                 to a direct child of .ring, matching the override-btn placement pattern in
+                 boiler/radiator/climate cards (position: absolute; bottom: 15px;). -->
+            ${swPriority ? `<div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>` : ''}
           </div>
         </div>
 
@@ -1237,8 +1264,7 @@ class QsCarCard extends HTMLElement {
       // the freshly-rendered state (prevents a redundant regen on the
       // next frame) and null cached DOM refs + clear the logical
       // particle arrays via _resetDomRefs() so subsequent spawns
-      // don't try to advance dead nodes. No snapshot/restore — short
-      // particle life (≤ 0.45s) makes nuke-and-respawn imperceptible.
+      // don't try to advance dead nodes.
       this._lastWaterBaseY = this._waterBaseY;
       // Review-fix #01 #8: `??` does NOT trap NaN — if
       // `_currentAmplitude` ever became NaN, the prior form would
@@ -1248,6 +1274,51 @@ class QsCarCard extends HTMLElement {
       // explicit `Number.isFinite` check instead.
       this._lastAmplitude  = Number.isFinite(this._currentAmplitude) ? this._currentAmplitude : CALM_AMP;
       this._resetDomRefs();
+
+      // QS-232 review-fix #03: restore the preserved sparkles AND
+      // lightning bolts into the FRESH layers (their DOM identity
+      // changed via innerHTML — same `id`, new element). For each
+      // preserved particle, re-attach its detached `el` to the new
+      // layer; the per-frame state (cy, life, …) survived in the
+      // JS array so the RAF advance loop picks up exactly where it
+      // left off, with no visual blink. Cadence counters are
+      // restored so spawn timing is continuous. If a new layer
+      // isn't found (defensive — e.g. shadow root was torn down
+      // mid-flight), preserved particles are dropped to avoid
+      // leaking detached DOM. Mirrors the QS-214 boiler steam/bubble
+      // snapshot/restore pattern.
+      if (preservedSparkles?.length) {
+        const newSparkleLayer = this._sparkleLayerId
+          ? this._root.getElementById(this._sparkleLayerId)
+          : null;
+        if (newSparkleLayer) {
+          for (const s of preservedSparkles) {
+            if (s?.el) newSparkleLayer.appendChild(s.el);
+          }
+          this._sparkles = preservedSparkles.filter(s => s?.el);
+          this._sparkleLayerEl = newSparkleLayer;
+          this._nextSparkleAt = preservedNextSparkleAt;
+        } else {
+          for (const s of preservedSparkles) { s?.el?.remove(); }
+          this._sparkles = [];
+        }
+      }
+      if (preservedLightningBolts?.length) {
+        const newLightningLayer = this._lightningLayerId
+          ? this._root.getElementById(this._lightningLayerId)
+          : null;
+        if (newLightningLayer) {
+          for (const b of preservedLightningBolts) {
+            if (b?.el) newLightningLayer.appendChild(b.el);
+          }
+          this._lightningBolts = preservedLightningBolts.filter(b => b?.el);
+          this._lightningLayerEl = newLightningLayer;
+          this._nextLightningAt = preservedNextLightningAt;
+        } else {
+          for (const b of preservedLightningBolts) { b?.el?.remove(); }
+          this._lightningBolts = [];
+        }
+      }
 
       // old buttons:
 /*      <div className="below-line">

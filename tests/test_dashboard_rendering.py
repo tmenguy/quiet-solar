@@ -3867,20 +3867,29 @@ def test_car_card_sparkle_color_decided_at_spawn():
     ).read_text()
     executable = _strip_js_comments(source)
 
-    # Literal palette constants.
+    # Palette constants. SPARKLE_IDLE_COLOR is a `hsla(140, …, …, …)`
+    # expression — hue MUST be 140 (green family) so the idle palette
+    # is recognisable as "electron green", but saturation / lightness /
+    # alpha are user-tunable per the QS-217 visual-iteration precedent
+    # (review-fix #03 retuned to near-white mint for higher contrast
+    # against the brighter soup palette).
     assert re.search(
-        r"const\s+SPARKLE_IDLE_COLOR\s*=\s*['\"]hsla\(\s*140\s*,\s*90%\s*,\s*70%\s*,\s*0\.9\s*\)['\"]",
+        r"const\s+SPARKLE_IDLE_COLOR\s*=\s*['\"]hsla\(\s*140\s*,",
         executable,
     ), (
         "qs-car-card.js (AC-4): expected `const SPARKLE_IDLE_COLOR = "
-        "'hsla(140, 90%, 70%, 0.9)';`"
+        "'hsla(140, …, …, …)';` — hue must be 140 (green family); "
+        "saturation/lightness/alpha are user-tunable."
     )
+    # SPARKLE_CHARGE_COLOR — pinned by name only (value is the
+    # electric-blue family but the user is free to retune the exact
+    # hex code).
     assert re.search(
-        r"const\s+SPARKLE_CHARGE_COLOR\s*=\s*['\"]#00E5FF['\"]",
+        r"const\s+SPARKLE_CHARGE_COLOR\s*=\s*['\"]#[0-9A-Fa-f]{3,8}['\"]",
         executable,
     ), (
         "qs-car-card.js (AC-4): expected `const SPARKLE_CHARGE_COLOR = "
-        "'#00E5FF';` (electric lightning blue)."
+        "'#<hex>';` (electric lightning blue — value user-tunable)."
     )
 
     # Ternary selecting fill at spawn (mention both constants in a
