@@ -63,19 +63,32 @@ const CHARGE_AMP = 3.5;
 const CHARGE_SPEED = 0.15;          // still gentle
 
 // --- Sparkles ("electrons popping in the water") ---
-// Idle: always visible, low rate, small, near-white minty highlight.
+// Idle: always visible, low rate, vivid yellow-green burst-shaped
+// "electron pops" rather than smooth discs. Each sparkle is an
+// 8-ray asterisk path (4 long rays in a cross + 4 short rays in
+// an X) drawn with stroke (no fill) — see the spawn code in
+// `_startAnimation` for the exact `d` builder. Mimics the
+// little-explosion mental model of an electron flashing in the
+// soup, vs. the smooth-disc look the previous `<circle>` form
+// gave.
+//
 // Review-fix history:
 // - #01 #2: radii roughly doubled (0.8/1.6 → 1.6/3.0).
 // - #03:    bumped further — user reported sparkles became invisible
-//           against the brighter idle soup palette. Idle sparkles now
-//           use a near-white minty colour for high contrast vs the
-//           green soup, larger radius, and a higher spawn rate so
-//           there's always a visible sparkle at any moment.
+//           against the brighter idle soup palette.
+// - #04:    shape changed `<circle>` → 8-ray `<path>` burst; colour
+//           changed near-white mint → vivid yellow-green (hue 80)
+//           per user feedback "they have to be green/yellow ... not
+//           a disc as today but should be more like a little
+//           explosion".
 const SPARKLE_IDLE_MAX = 8;
 const SPARKLE_IDLE_RATE_HZ = 1.5;
 const SPARKLE_IDLE_RADIUS_MIN = 2.5;
 const SPARKLE_IDLE_RADIUS_MAX = 5.0;
-const SPARKLE_IDLE_COLOR = 'hsla(140, 100%, 92%, 0.95)';   // near-white mint, high contrast vs soup green
+const SPARKLE_IDLE_COLOR = 'hsla(80, 100%, 65%, 0.95)';    // vivid yellow-green / lime, high contrast vs soup green
+// Stroke-width for the asterisk-style sparkle path. Tuned so a 5 px
+// sparkle still reads as a "spark" rather than a clump.
+const SPARKLE_STROKE_WIDTH = 1.4;
 // Charging endpoints — scale linearly on [SPARKLE_POWER_MIN_W, SPARKLE_POWER_MAX_W].
 // Below MIN (but still `_charging`) the values clamp to the MIN-power
 // endpoint per user intent (1500W = MIN charging density, NOT a ramp
@@ -446,11 +459,25 @@ class QsCarCard extends HTMLElement {
           const r = rMin + Math.random() * (rMax - rMin);
           // Fill decided ONCE at spawn — never re-assigned in advance.
           const fill = charging ? SPARKLE_CHARGE_COLOR : SPARKLE_IDLE_COLOR;
-          const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-          el.setAttribute('cx', cx.toFixed(2));
-          el.setAttribute('cy', cy.toFixed(2));
-          el.setAttribute('r', r.toFixed(2));
-          el.setAttribute('fill', fill);
+          // Review-fix #02 user follow-up: sparkles are now 8-ray
+          // asterisk bursts (4 long axial rays + 4 short diagonal
+          // rays) drawn with stroke, evoking a small electron-soup
+          // flash. The path origin is the spawn (cx, cy); ray length
+          // scales with `r` from the power-scaling formula.
+          const longR  = r;
+          const shortR = r * 0.6;
+          const cxs = cx.toFixed(2);
+          const cys = cy.toFixed(2);
+          const d = `M ${cxs},${(cy - longR).toFixed(2)} L ${cxs},${(cy + longR).toFixed(2)}`
+                  + ` M ${(cx - longR).toFixed(2)},${cys} L ${(cx + longR).toFixed(2)},${cys}`
+                  + ` M ${(cx - shortR).toFixed(2)},${(cy - shortR).toFixed(2)} L ${(cx + shortR).toFixed(2)},${(cy + shortR).toFixed(2)}`
+                  + ` M ${(cx - shortR).toFixed(2)},${(cy + shortR).toFixed(2)} L ${(cx + shortR).toFixed(2)},${(cy - shortR).toFixed(2)}`;
+          const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          el.setAttribute('d', d);
+          el.setAttribute('stroke', fill);
+          el.setAttribute('stroke-width', String(SPARKLE_STROKE_WIDTH));
+          el.setAttribute('stroke-linecap', 'round');
+          el.setAttribute('fill', 'none');
           el.setAttribute('pointer-events', 'none');
           el.setAttribute('opacity', '0');
           sparkleLayer.appendChild(el);

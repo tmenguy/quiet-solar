@@ -3867,19 +3867,31 @@ def test_car_card_sparkle_color_decided_at_spawn():
     ).read_text()
     executable = _strip_js_comments(source)
 
-    # Palette constants. SPARKLE_IDLE_COLOR is a `hsla(140, …, …, …)`
-    # expression — hue MUST be 140 (green family) so the idle palette
-    # is recognisable as "electron green", but saturation / lightness /
-    # alpha are user-tunable per the QS-217 visual-iteration precedent
-    # (review-fix #03 retuned to near-white mint for higher contrast
-    # against the brighter soup palette).
-    assert re.search(
-        r"const\s+SPARKLE_IDLE_COLOR\s*=\s*['\"]hsla\(\s*140\s*,",
-        executable,
-    ), (
+    # Palette constants. `SPARKLE_IDLE_COLOR` is an `hsla(...)`
+    # expression with a hue in the yellow-green-to-green family
+    # `[60, 160]`. The exact hue is user-tunable per the QS-217
+    # visual-iteration precedent:
+    # - QS-232 initial:   hue 140 (pure green, light)
+    # - Review-fix #03:   hue 140, near-white mint (saturation drop)
+    # - Review-fix #02
+    #   user follow-up:   hue 80 (vivid yellow-green / lime) — user
+    #                     said "they have to be green/yellow … not a
+    #                     disc … little explosion".
+    idle_color_re = re.compile(
+        r"const\s+SPARKLE_IDLE_COLOR\s*=\s*"
+        r"['\"]hsla\(\s*(\d+)\s*,",
+    )
+    idle_color_m = idle_color_re.search(executable)
+    assert idle_color_m is not None, (
         "qs-car-card.js (AC-4): expected `const SPARKLE_IDLE_COLOR = "
-        "'hsla(140, …, …, …)';` — hue must be 140 (green family); "
-        "saturation/lightness/alpha are user-tunable."
+        "'hsla(<hue>, …, …, …)';` — value user-tunable."
+    )
+    idle_hue = int(idle_color_m.group(1))
+    assert 60 <= idle_hue <= 160, (
+        f"qs-car-card.js (AC-4): `SPARKLE_IDLE_COLOR` hue must be in "
+        f"the yellow-green-to-green family `[60, 160]` so the idle "
+        f"palette reads as \"electron green / yellow\". Got hue "
+        f"{idle_hue}."
     )
     # SPARKLE_CHARGE_COLOR — pinned by name only (value is the
     # electric-blue family but the user is free to retune the exact
