@@ -12,11 +12,102 @@ const ANIM_MAX_POWER_W = 22000;
 const ANIM_SPEED_RANGE = ANIM_MAX_SPEED - ANIM_MIN_SPEED;
 const ANIM_POWER_RANGE = ANIM_MAX_POWER_W - ANIM_MIN_POWER_W;
 
+// QS-229 - ECG / heartbeat charge-rate trace constants.
+// Vertical placement: golden ratio of the 320x320 viewBox
+// (320 x 0.618 = 197.76 -> 198). Lands between the SoC % big number
+// and the Force-Now / Target / Time mini-grid row.
+const ECG_BASELINE_Y = 198;
+// R-wave peak amplitude (px). Linear lerp between MIN (at <= 500 W)
+// and MAX (at >= 22 kW); both endpoints anchored to the existing
+// ANIM_MIN_POWER_W / ANIM_MAX_POWER_W envelope.
+const ECG_MIN_AMP_PX = 4;
+const ECG_MAX_AMP_PX = 18;
+// Scroll speed (px/s). With ECG_SPIKE_SPACING_PX = 60, this gives a
+// heartbeat rate of ~0.5 Hz (30 bpm) at trickle and ~2.3 Hz (140 bpm)
+// at full charge.
+const ECG_MIN_SPEED_PX_S = 30;
+const ECG_MAX_SPEED_PX_S = 140;
+// Horizontal pitch between QRS complex starts (px). Determines the
+// heartbeat rate at any given scroll speed.
+const ECG_SPIKE_SPACING_PX = 60;
+
 class QsCarCard extends HTMLElement {
   constructor() {
     super();
     this._chargePower = 0;
     this._charging = false;
+    // QS-229 - ECG accumulators. Initialized here so the first RAF
+    // step doesn't read `undefined` (which would propagate NaN into
+    // the scroll-offset modulo and freeze the trace).
+    this._currentEcgAmp = 0;
+    this._currentEcgSpeed = 0;
+    this._ecgOffset = 0;
+    this._lastEcgAmp = null;
+    this._lastEcgRegenTs = null;
+  }
+
+  // QS-229 - emit `complexCount + 1` QRS complexes laid out from
+  // x = -ECG_SPIKE_SPACING_PX (one-complex LEFT buffer) to
+  // x = totalWidth + ECG_SPIKE_SPACING_PX. The LEFT buffer fills the
+  // scroll-gap left by `translate(+offset)` shifting the path
+  // rightward. Per-complex layout (60 px total width):
+  //   pre-flat=8, P_up=2, P_down=2, flat=2,
+  //   Q_dip=1, R_up=1, R_S_down=1, S_back=1, flat=2,
+  //   T_up=3, T_down=3, post-flat=34
+  // Sums: 8+2+2+2+1+1+1+1+2+3+3 = 26 active + 34 tail = 60. The 26/34
+  // active/tail split deliberately mirrors a real ECG cycle (~60% flat
+  // baseline between beats).
+  // Relative dy magnitudes (x amp):
+  //   P = +/-0.20, Q = +0.15, R = -1.15 (-0.15 to undo Q dip, then
+  //   -1.00 peak), S = +1.30 (undo R then +0.30 past baseline), S
+  //   back = -0.15 to baseline, T = +/-0.40. SVG y grows DOWN so
+  //   "up" = negative dy.
+  // At amp=0 every dy collapses to 0 -> flatline.
+  // Defined before _startAnimation so this is the first occurrence
+  // of `_buildQRSPath(` in source order (the sentinel test parses
+  // the first matching brace block as the function body).
+  _buildQRSPath(amp, baselineY, totalWidth) {
+    const a = Number(amp) || 0;
+    const startX = -ECG_SPIKE_SPACING_PX;
+    const segments = [`M ${startX},${baselineY}`];
+    const complexCount = Math.ceil(totalWidth / ECG_SPIKE_SPACING_PX) + 1;
+    for (let i = 0; i < complexCount; i++) {
+      segments.push(`l 8,0`);                                    // pre-flat
+      segments.push(`l 2,${(-0.20 * a).toFixed(2)}`);            // P up
+      segments.push(`l 2,${(+0.20 * a).toFixed(2)}`);            // P down
+      segments.push(`l 2,0`);                                    // P-Q flat
+      segments.push(`l 1,${(+0.15 * a).toFixed(2)}`);            // Q dip
+      segments.push(`l 1,${(-1.15 * a).toFixed(2)}`);            // R up (undo Q + peak)
+      segments.push(`l 1,${(+1.30 * a).toFixed(2)}`);            // R+S down past baseline
+      segments.push(`l 1,${(-0.15 * a).toFixed(2)}`);            // S back to baseline
+      segments.push(`l 2,0`);                                    // S-T flat
+      segments.push(`l 3,${(-0.40 * a).toFixed(2)}`);            // T up
+      segments.push(`l 3,${(+0.40 * a).toFixed(2)}`);            // T down
+      segments.push(`l 34,0`);                                   // post-T flat tail
+    }
+    return segments.join(' ');
+  }
+
+  // QS-229 - linear lerp between (ANIM_MIN_POWER_W, ECG_MIN_AMP_PX)
+  // and (ANIM_MAX_POWER_W, ECG_MAX_AMP_PX), clamped at both endpoints.
+  // Below ANIM_MIN_POWER_W returns 0 so a stale "1 watt" reading
+  // doesn't paint a stub spike. Mirrors the dashed-arc speed lerp's
+  // ANIM_* envelope so amp/speed stay in sync with the existing
+  // visual. Defined before _startAnimation so the sentinel test sees
+  // the definition body (not the call site inside `step`).
+  _chargingPowerToEcgAmp(power) {
+    const p = Math.max(0, Number(power) || 0);
+    if (p < ANIM_MIN_POWER_W) return 0;
+    const t = Math.min(1, (p - ANIM_MIN_POWER_W) / ANIM_POWER_RANGE);
+    return ECG_MIN_AMP_PX + t * (ECG_MAX_AMP_PX - ECG_MIN_AMP_PX);
+  }
+
+  // QS-229 - same shape as _chargingPowerToEcgAmp, for scroll speed.
+  _chargingPowerToEcgSpeed(power) {
+    const p = Math.max(0, Number(power) || 0);
+    if (p < ANIM_MIN_POWER_W) return 0;
+    const t = Math.min(1, (p - ANIM_MIN_POWER_W) / ANIM_POWER_RANGE);
+    return ECG_MIN_SPEED_PX_S + t * (ECG_MAX_SPEED_PX_S - ECG_MIN_SPEED_PX_S);
   }
 
   // M4: gate the requestAnimationFrame loop on `_charging`. The loop
@@ -38,7 +129,11 @@ class QsCarCard extends HTMLElement {
         return;
       }
       if (this._lastAnimTs == null) this._lastAnimTs = ts;
-      const dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      let dt = Math.max(0, (ts - this._lastAnimTs) / 1000);
+      // QS-229 S6 parity: cap dt against hidden-tab return so the
+      // dashed-arc scroll AND the new ECG advance don't burst forward
+      // by many seconds in a single frame when the tab re-foregrounds.
+      dt = Math.min(dt, 0.1);
       this._lastAnimTs = ts;
       const patternLen = Math.max(8, this._animPatternLen || 64);
       const cp = this._chargePower || 0;
@@ -47,6 +142,33 @@ class QsCarCard extends HTMLElement {
       const p = this._root?.getElementById('charge_anim');
       if (p) {
         p.setAttribute('stroke-dashoffset', String(-this._animOffset));
+      }
+      // QS-229 - ECG amp / speed lerp + scroll. Shares the RAF clock
+      // with the dashed-arc above. Lerp rate 4/s hardcoded inline
+      // (mirrors radiator card's pattern). Regen `d` only when amp
+      // has shifted by >= 0.5 px AND >= 0.1 s has elapsed since the
+      // last regen - bounded ~10 fps regen rate.
+      const ecgTargetAmp = this._chargingPowerToEcgAmp(this._chargePower);
+      const ecgTargetSpeed = this._chargingPowerToEcgSpeed(this._chargePower);
+      const ecgLerpFactor = 1 - Math.exp(-4.0 * dt);
+      this._currentEcgAmp = this._currentEcgAmp +
+          (ecgTargetAmp - this._currentEcgAmp) * ecgLerpFactor;
+      this._currentEcgSpeed = this._currentEcgSpeed +
+          (ecgTargetSpeed - this._currentEcgSpeed) * ecgLerpFactor;
+      this._ecgOffset = (this._ecgOffset + this._currentEcgSpeed * dt) % ECG_SPIKE_SPACING_PX;
+      const ecgEl = this._root?.getElementById('ecg_anim');
+      if (ecgEl) {
+        ecgEl.setAttribute('transform', `translate(${this._ecgOffset.toFixed(2)}, 0)`);
+        const sinceLastRegen = (ts - (this._lastEcgRegenTs ?? -Infinity)) / 1000;
+        const ampDelta = Math.abs(this._currentEcgAmp - (this._lastEcgAmp ?? -Infinity));
+        if (sinceLastRegen >= 0.1 && ampDelta > 0.5) {
+          ecgEl.setAttribute(
+              'd',
+              this._buildQRSPath(this._currentEcgAmp, ECG_BASELINE_Y, 320),
+          );
+          this._lastEcgAmp = this._currentEcgAmp;
+          this._lastEcgRegenTs = ts;
+        }
       }
       this._animRaf = requestAnimationFrame(step);
     };
@@ -57,6 +179,15 @@ class QsCarCard extends HTMLElement {
     if (this._animRaf != null) cancelAnimationFrame(this._animRaf);
     this._animRaf = null;
     this._lastAnimTs = null;
+    // QS-229 - reset ECG accumulators so the next render snaps to
+    // flatline. Charge sessions are discrete events; preserving the
+    // last amp/speed across an unplug would produce a visual jolt
+    // when the next car plugs in with a different power profile.
+    this._currentEcgAmp = 0;
+    this._currentEcgSpeed = 0;
+    this._ecgOffset = 0;
+    this._lastEcgAmp = null;
+    this._lastEcgRegenTs = null;
   }
 
   connectedCallback() {
@@ -510,6 +641,9 @@ class QsCarCard extends HTMLElement {
       const gradDisabledId = `gradD-${Math.floor(Math.random() * 1e6)}`;
       const gradFaultId = `gradF-${Math.floor(Math.random() * 1e6)}`;
       const gradStaleId = `gradS-${Math.floor(Math.random() * 1e6)}`;
+      // QS-229 - per-instance clip id so two car cards on the same
+      // dashboard never collide on a literal "ecgClip".
+      const ecgClipId = `ecgClip-${Math.floor(Math.random() * 1e6)}`;
       const isDisconnected = (sChargeType?.state === 'Not Plugged' || sChargeType?.state === 'Unknown');
       const chargeTypeState = (sChargeType?.state || '').toLowerCase();
       const isFaulted = chargeTypeState === 'faulted' || chargeTypeState === 'unknown' || chargeTypeState === 'no power to car';
@@ -584,7 +718,25 @@ class QsCarCard extends HTMLElement {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
+                <clipPath id="${ecgClipId}">
+                  <circle cx="160" cy="160" r="120" />
+                </clipPath>
               </defs>
+              ${(!isDisconnected && !shouldShowPlaceholder) ? `
+              <g clip-path="url(#${ecgClipId})" pointer-events="none" style="mix-blend-mode:screen;">
+                <path id="ecg_anim"
+                      d="${this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, 320)}"
+                      stroke="url(#${gradChargeId})"
+                      stroke-width="2"
+                      fill="none"
+                      stroke-linecap="round"
+                      stroke-opacity="0.6"
+                      filter="url(#chargeGlow)"
+                      transform="translate(${(this._ecgOffset || 0).toFixed(2)}, 0)"
+                      style="will-change: transform;"
+                />
+              </g>
+              ` : ''}
               <path d="${bgPath}" stroke="${isFaulted ? 'rgba(244,67,54,0.35)' : 'var(--divider-color)'}" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `

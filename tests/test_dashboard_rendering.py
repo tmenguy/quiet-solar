@@ -1850,6 +1850,332 @@ def test_card_raf_idle_gated(card_filename, gate):
     )
 
 
+def test_car_card_ecg_tuning_constants_in_band():
+    """QS-229 AC-1, AC-5: ECG tuning constants exist at module scope
+    with direction-only bands. The implementer can iterate inside
+    these bands without amending the story.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+
+    def _extract_number(name: str) -> float:
+        match = re.search(
+            rf"const\s+{re.escape(name)}\s*=\s*([0-9.]+)\s*;",
+            executable,
+        )
+        assert match, (
+            f"QS-229: const {name} must be declared at module scope "
+            f"in qs-car-card.js."
+        )
+        return float(match.group(1))
+
+    baseline_y = _extract_number("ECG_BASELINE_Y")
+    min_amp = _extract_number("ECG_MIN_AMP_PX")
+    max_amp = _extract_number("ECG_MAX_AMP_PX")
+    min_speed = _extract_number("ECG_MIN_SPEED_PX_S")
+    max_speed = _extract_number("ECG_MAX_SPEED_PX_S")
+    spike_spacing = _extract_number("ECG_SPIKE_SPACING_PX")
+
+    assert 185 <= baseline_y <= 215, (
+        f"QS-229 AC-1: ECG_BASELINE_Y {baseline_y} outside [185, 215] "
+        "(golden-ratio band of 320 viewBox)."
+    )
+    assert 2 <= min_amp <= 8, (
+        f"QS-229 AC-5: ECG_MIN_AMP_PX {min_amp} outside [2, 8]."
+    )
+    assert 15 <= max_amp <= 28, (
+        f"QS-229 AC-5: ECG_MAX_AMP_PX {max_amp} outside [15, 28]."
+    )
+    assert min_amp < max_amp, (
+        f"QS-229 AC-5: ECG_MIN_AMP_PX ({min_amp}) must be < "
+        f"ECG_MAX_AMP_PX ({max_amp})."
+    )
+    assert 20 <= min_speed <= 60, (
+        f"QS-229 AC-5: ECG_MIN_SPEED_PX_S {min_speed} outside [20, 60]."
+    )
+    assert 100 <= max_speed <= 180, (
+        f"QS-229 AC-5: ECG_MAX_SPEED_PX_S {max_speed} outside [100, 180]."
+    )
+    assert min_speed < max_speed, (
+        f"QS-229 AC-5: ECG_MIN_SPEED_PX_S ({min_speed}) must be < "
+        f"ECG_MAX_SPEED_PX_S ({max_speed})."
+    )
+    assert 40 <= spike_spacing <= 80, (
+        f"QS-229 AC-5: ECG_SPIKE_SPACING_PX {spike_spacing} outside "
+        "[40, 80]."
+    )
+
+
+def test_car_card_ecg_path_clipped_and_pointer_inert():
+    """QS-229 AC-1, AC-6: ECG `<path id="ecg_anim">` is wrapped in a
+    `<g clip-path="url(#${ecgClipId})" pointer-events="none">` group,
+    the matching `<clipPath id="${ecgClipId}">` defines a
+    cx=160/cy=160/r=120 circle inside `<defs>`, the clip id is
+    generated per-instance via the existing
+    `Math.floor(Math.random() * 1e6)` pattern, and the stroke is
+    locked to the existing `gradChargeId` cyan->blue gradient.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+
+    # The clip id must be declared as a per-instance random literal,
+    # NOT as a bare string "ecgClip" (which would collide on
+    # multi-card dashboards).
+    clip_id_decl = re.search(
+        r"const\s+ecgClipId\s*=\s*`ecgClip-\$\{Math\.floor\("
+        r"Math\.random\(\)\s*\*\s*1e6\)\}`",
+        content,
+    )
+    assert clip_id_decl, (
+        "QS-229 AC-1: ecgClipId must be declared per-instance via "
+        "`const ecgClipId = \\`ecgClip-${Math.floor(Math.random() * "
+        "1e6)}\\`;` alongside the other gradXId declarations."
+    )
+
+    # The <clipPath> definition uses the per-instance id and the
+    # ring's existing center/radius.
+    clip_def = re.search(
+        r"<clipPath\s+id\s*=\s*[\"']\$\{ecgClipId\}[\"'][^>]*>\s*"
+        r"<circle[^>]*cx\s*=\s*[\"']160[\"'][^>]*cy\s*=\s*[\"']160[\"']"
+        r"[^>]*r\s*=\s*[\"']120[\"']",
+        content,
+    )
+    assert clip_def, (
+        "QS-229 AC-1: ECG clipPath must use `id=\"${ecgClipId}\"` "
+        "and contain `<circle cx=\"160\" cy=\"160\" r=\"120\" />` "
+        "matching the existing ring clip geometry."
+    )
+
+    # The <g> wrapper references the per-instance clip id, sets
+    # pointer-events:none, and contains the <path id="ecg_anim">.
+    group_pattern = re.compile(
+        r"<g[^>]*clip-path\s*=\s*[\"']url\(#\$\{ecgClipId\}\)[\"']"
+        r"[^>]*pointer-events\s*=\s*[\"']none[\"']"
+        r"[\s\S]*?<path[^>]*id\s*=\s*[\"']ecg_anim[\"']",
+    )
+    assert group_pattern.search(content), (
+        "QS-229 AC-1: `<g clip-path=\"url(#${ecgClipId})\" "
+        "pointer-events=\"none\" ...>` must wrap `<path "
+        "id=\"ecg_anim\">`."
+    )
+
+    # AC-6: stroke is the existing gradChargeId gradient.
+    path_attrs = re.search(
+        r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?stroke\s*=\s*"
+        r"[\"']url\(#\$\{gradChargeId\}\)[\"']",
+        content,
+    )
+    assert path_attrs, (
+        "QS-229 AC-6: ECG `<path id=\"ecg_anim\">` stroke must be "
+        "`url(#${gradChargeId})` exactly (the existing cyan->blue "
+        "charge gradient). No conditional ternary on swPriority "
+        "or any other gradient."
+    )
+
+    # AC-6: no other gradient referenced on the ECG path.
+    forbidden = re.search(
+        r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*"
+        r"(gradGreenId|gradDisabledId|gradFaultId|gradStaleId)",
+        content,
+    )
+    assert not forbidden, (
+        "QS-229 AC-6: ECG path must not reference "
+        "gradGreenId/Disabled/Fault/Stale - always electric blue."
+    )
+
+    # AC-7: the existing charge_anim block must still be present.
+    assert 'id="charge_anim"' in content, (
+        "QS-229 AC-7: the existing `<path id=\"charge_anim\">` "
+        "(dashed scrolling arc) must be preserved."
+    )
+    assert 'filter="url(#chargeGlow)"' in content, (
+        "QS-229 AC-7: the dashed-arc block's chargeGlow filter "
+        "must be preserved."
+    )
+
+
+def test_car_card_ecg_build_qrs_path_sign_sequence():
+    """QS-229 AC-4: `_buildQRSPath` body emits relative-l segments
+    in the P-Q-R-S-T order. We parse the segment list out of the
+    function body and assert the sign sequence of the dy components
+    matches the spec.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    body = _extract_js_function_body(
+        _strip_js_comments(content),
+        r"_buildQRSPath\s*\(",
+    )
+    assert body is not None, (
+        "QS-229 AC-4: `_buildQRSPath(amp, baselineY, totalWidth)` "
+        "instance method must be defined on QsCarCard."
+    )
+
+    # Extract every `l dx,${expr}` segment template from the body.
+    # We're not evaluating JS — we're inspecting the sign of the dy
+    # expression's leading coefficient. Each segment is shaped like
+    # `l 8,0` (flat), `l 2,${(-0.20 * a).toFixed(2)}` (negative), or
+    # `l 1,${(+0.15 * a).toFixed(2)}` (positive). We collapse to a
+    # sign string {-1, 0, +1}.
+    seg_re = re.compile(
+        r"`l\s+([0-9.]+),"
+        r"(?:"
+        r"\$\{\(?\s*([+-]?)([0-9.]+)\s*\*\s*a\s*\)?\.toFixed\(\d+\)\}"
+        r"|"
+        r"(0)"
+        r")`",
+    )
+    matches = seg_re.findall(body)
+    assert matches, (
+        "QS-229 AC-4: _buildQRSPath body must emit relative-`l dx,dy` "
+        "segments via template literals - none parsed."
+    )
+
+    def _sign(m):
+        # m = (dx, sign_token, magnitude, zero_token)
+        if m[3]:  # literal `0` dy
+            return 0
+        # Coefficient sign: `+` or empty -> +1 (above baseline DOWN in
+        # SVG = positive dy), `-` -> -1.
+        return -1 if m[1] == "-" else 1
+
+    signs = [_sign(m) for m in matches]
+    # We expect 12 segments per complex (8 of which carry dy != 0 in
+    # general; 4 are flat). Take the first complex.
+    one_complex = signs[:12]
+    assert len(one_complex) == 12, (
+        f"QS-229 AC-4: _buildQRSPath must emit >=12 segments for the "
+        f"first complex (got {len(one_complex)})."
+    )
+
+    # Expected sign sequence per AC-4 (P up -> P down -> flat -> Q dip
+    # down -> R up -> R+S down -> S up -> flat -> T up -> T down -> flat -> tail).
+    # SVG y grows DOWN, so "up" = negative dy.
+    #   [pre-flat=0, P_up=-1, P_down=+1, flat=0, Q_down=+1, R_up=-1,
+    #    R_S_down=+1, S_up=-1, flat=0, T_up=-1, T_down=+1, post-flat=0]
+    expected = [0, -1, +1, 0, +1, -1, +1, -1, 0, -1, +1, 0]
+    assert one_complex == expected, (
+        f"QS-229 AC-4: QRS sign sequence mismatch.\n"
+        f"  expected: {expected}\n"
+        f"  got:      {one_complex}"
+    )
+
+
+def test_car_card_ecg_power_to_amp_speed_endpoints():
+    """QS-229 AC-5: `_chargingPowerToEcgAmp` and `_chargingPowerToEcg
+    Speed` produce the documented endpoint outputs for inputs 0,
+    ANIM_MIN_POWER_W, ANIM_MAX_POWER_W, and an overshoot. Verified by
+    parsing the body and reconstructing the lerp formula — no JS
+    runtime needed.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+
+    def _verify_helper(name: str, min_const: str, max_const: str):
+        body = _extract_js_function_body(
+            executable, rf"{re.escape(name)}\s*\("
+        )
+        assert body is not None, (
+            f"QS-229 AC-5: instance method `{name}` must be defined."
+        )
+        # Must reference the existing ANIM_MIN_POWER_W / ANIM_POWER_RANGE
+        # constants — not hardcoded numbers — so the power range stays
+        # in sync with the dashed-arc.
+        assert "ANIM_MIN_POWER_W" in body, (
+            f"QS-229 AC-5: {name} must reference `ANIM_MIN_POWER_W` "
+            "(not hardcode 500) to stay in sync with the dashed-arc."
+        )
+        assert "ANIM_POWER_RANGE" in body or "ANIM_MAX_POWER_W" in body, (
+            f"QS-229 AC-5: {name} must reference `ANIM_POWER_RANGE` "
+            "or `ANIM_MAX_POWER_W` (not hardcode 22000)."
+        )
+        # Must reference both endpoint constants.
+        assert min_const in body, (
+            f"QS-229 AC-5: {name} must reference `{min_const}` (the "
+            "low-power endpoint constant)."
+        )
+        assert max_const in body, (
+            f"QS-229 AC-5: {name} must reference `{max_const}` (the "
+            "high-power endpoint constant)."
+        )
+        # Below the 500 W threshold returns 0 (or MIN — both are
+        # acceptable per AC-5 prose; the test pins the below-threshold
+        # branch explicitly).
+        assert re.search(
+            r"<\s*ANIM_MIN_POWER_W\s*\)\s*return\s+0|ANIM_MIN_POWER_W\s*\)"
+            r"\s*\?\s*0",
+            body,
+        ), (
+            f"QS-229 AC-5: {name} must short-circuit to 0 when "
+            "power < ANIM_MIN_POWER_W (so a stale 1-watt reading "
+            "doesn't paint a stub spike)."
+        )
+
+    _verify_helper(
+        "_chargingPowerToEcgAmp", "ECG_MIN_AMP_PX", "ECG_MAX_AMP_PX",
+    )
+    _verify_helper(
+        "_chargingPowerToEcgSpeed",
+        "ECG_MIN_SPEED_PX_S",
+        "ECG_MAX_SPEED_PX_S",
+    )
+
+
+def test_car_card_ecg_offset_modulo_precedence():
+    """QS-229 AC-3: `_ecgOffset` advance MUST wrap the sum, not just
+    `speed*dt`. Critic finding: `_ecgOffset += speed*dt % SPACING`
+    binds as `+= (speed*dt % SPACING)` and the offset grows unbounded,
+    losing SVG transform precision over long charge sessions. The
+    correct form is `(_ecgOffset + speed*dt) % SPACING`.
+    """
+    import re
+
+    content = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(content)
+
+    # The correct expression: outer parens around the sum.
+    correct = re.compile(
+        r"this\._ecgOffset\s*=\s*\(\s*"
+        r"(?:this\._ecgOffset\s*(?:\?\?\s*0)?)\s*\+\s*"
+        r"this\._currentEcgSpeed\s*\*\s*dt"
+        r"\s*\)\s*%\s*ECG_SPIKE_SPACING_PX",
+    )
+    assert correct.search(executable), (
+        "QS-229 AC-3: ECG offset must be `this._ecgOffset = "
+        "(this._ecgOffset + this._currentEcgSpeed * dt) % "
+        "ECG_SPIKE_SPACING_PX;` - note outer parens. The += "
+        "form is FORBIDDEN: it binds `% SPACING` to `speed*dt` "
+        "alone and the offset grows unbounded."
+    )
+
+    # The forbidden form: `+= speed*dt % SPACING` (no outer parens).
+    forbidden = re.compile(
+        r"this\._ecgOffset\s*\+=\s*"
+        r"this\._currentEcgSpeed\s*\*\s*dt\s*%\s*ECG_SPIKE_SPACING_PX",
+    )
+    assert not forbidden.search(executable), (
+        "QS-229 AC-3: forbidden form `this._ecgOffset += "
+        "this._currentEcgSpeed * dt % ECG_SPIKE_SPACING_PX` "
+        "(operator precedence bug - grows unbounded)."
+    )
+
+
 def test_pool_card_has_start_stop_helpers():
     """M4 pool-variant: pool's RAF is intrinsically continuous, but the
     `_startAnimation` / `_stopAnimation` helper-naming is still present
@@ -1891,10 +2217,11 @@ def test_water_boiler_card_uses_safe_number_helper():
     [
         "qs-water-boiler-card.js",
         "qs-pool-card.js",
+        "qs-car-card.js",  # QS-229: ECG scroll also needs dt clamp
     ],
 )
 def test_card_caps_raf_dt_against_hidden_tab(card_filename):
-    """QS-200 review-fix S6: cap RAF `dt` against hidden-tab return.
+    """QS-200 review-fix S6 + QS-229: cap RAF `dt` against hidden-tab return.
 
     Without a cap, the first frame after a tab returns from a hidden
     state can produce a `dt` of many seconds (or more). Effects on
