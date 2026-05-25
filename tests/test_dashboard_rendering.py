@@ -2009,19 +2009,82 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "must be preserved."
     )
 
-    # QS-229 review-fix #01 finding #8: the ECG outer guard must
-    # additionally skip faulted and stale states (pairing a cyan->blue
-    # heartbeat with a red faulted SoC arc reads contradictory).
+    # QS-229 review-fix #02 #1 ROLLBACK of review-fix #01 #8:
+    # The ECG outer guard MUST be exactly
+    # `(!isDisconnected && !shouldShowPlaceholder)` -
+    # NOT `(... && !isFaulted && !isStale)`. Rationale:
+    #
+    # - `isFaulted` is true for `chargeType ∈ {faulted, unknown,
+    #   no power to car}` (line 661). "No Power To Car" is a NORMAL
+    #   plugged-but-not-actively-charging state (e.g. scheduled wait,
+    #   solar-priority waiting for sun), NOT a fault. Gating the ECG
+    #   on `!isFaulted` thus removes the flatline exactly when the
+    #   user is most curious to see it ("am I plugged in?").
+    # - The original story §"State machine (truth table)" explicitly
+    #   said faulted/stale do NOT gate the ECG separately - the user
+    #   wants to see charge activity "even during a transient fault".
+    # - User reported invisible flatline on BOTH light and dark themes
+    #   after fix #1 (screen-blend removal) alone; the missing fix
+    #   was the rollback of fix #8.
     guard_pattern = re.search(
         r"\$\{\s*\(\s*!isDisconnected\s*&&\s*!shouldShowPlaceholder"
-        r"\s*&&\s*!isFaulted\s*&&\s*!isStale\s*\)",
+        r"\s*\)\s*\?",
         content,
     )
     assert guard_pattern, (
-        "QS-229 review-fix #01 #8: ECG outer guard must be "
-        "`${(!isDisconnected && !shouldShowPlaceholder && !isFaulted "
-        "&& !isStale) ? ` ... so the ECG group is omitted whenever the "
-        "card is in a non-nominal state."
+        "QS-229 review-fix #02 #1: ECG outer guard must be exactly "
+        "`${(!isDisconnected && !shouldShowPlaceholder) ? ` ... - "
+        "the original story behavior. Do NOT add `&& !isFaulted && "
+        "!isStale` (it gates out the flatline for normal "
+        "'No Power To Car' / 'Stale' states the user wants to see)."
+    )
+    # Regression net: explicitly forbid the fix #8 form.
+    forbidden_guard = re.search(
+        r"!isDisconnected\s*&&\s*!shouldShowPlaceholder\s*&&\s*!isFaulted",
+        content,
+    )
+    assert not forbidden_guard, (
+        "QS-229 review-fix #02 #1: the `&& !isFaulted` guard MUST NOT "
+        "be re-introduced. See test docstring rationale."
+    )
+
+    # QS-229 review-fix #02 #2 - stroke visibility. After the screen-
+    # blend removal (fix #01 #1), the 2 px stroke at 0.6 opacity was
+    # still hard to see on light themes - the cyan end of the gradient
+    # has low luminance contrast. Bump to 3 px / 1.0 opacity so the
+    # flatline reads cleanly on both themes.
+    path_block = re.search(
+        r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?/>",
+        content,
+        re.DOTALL,
+    )
+    assert path_block, (
+        "QS-229: ECG `<path id=\"ecg_anim\">` self-closing tag must be "
+        "present (the previous sentinel anchored on the opening tag "
+        "alone)."
+    )
+    block = path_block.group(0)
+    width_match = re.search(r"stroke-width\s*=\s*[\"'](\d+(?:\.\d+)?)[\"']", block)
+    assert width_match, (
+        "QS-229: ECG path must declare `stroke-width=\"...\"`."
+    )
+    assert float(width_match.group(1)) >= 3, (
+        f"QS-229 review-fix #02 #2: ECG stroke-width "
+        f"({width_match.group(1)}) must be >= 3 px so the flatline "
+        f"reads on both light and dark themes. The original 2 px was "
+        f"reported invisible by the user even after the screen-blend "
+        f"removal."
+    )
+    opacity_match = re.search(
+        r"stroke-opacity\s*=\s*[\"'](\d+(?:\.\d+)?)[\"']", block,
+    )
+    assert opacity_match, (
+        "QS-229: ECG path must declare `stroke-opacity=\"...\"`."
+    )
+    assert float(opacity_match.group(1)) >= 1.0, (
+        f"QS-229 review-fix #02 #2: ECG stroke-opacity "
+        f"({opacity_match.group(1)}) must be >= 1.0. The original "
+        f"0.6 was reported invisible on light themes."
     )
 
 

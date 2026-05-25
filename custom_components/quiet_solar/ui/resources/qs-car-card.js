@@ -734,15 +734,15 @@ class QsCarCard extends HTMLElement {
                   <circle cx="160" cy="160" r="120" />
                 </clipPath>
               </defs>
-              ${(!isDisconnected && !shouldShowPlaceholder && !isFaulted && !isStale) ? `
+              ${(!isDisconnected && !shouldShowPlaceholder) ? `
               <g clip-path="url(#${ecgClipId})" pointer-events="none">
                 <path id="ecg_anim"
                       d="${this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX)}"
                       stroke="url(#${gradChargeId})"
-                      stroke-width="2"
+                      stroke-width="3"
                       fill="none"
                       stroke-linecap="round"
-                      stroke-opacity="0.6"
+                      stroke-opacity="1"
                       filter="url(#chargeGlow)"
                       transform="translate(${(this._ecgOffset || 0).toFixed(2)}, 0)"
                       style="will-change: transform;"

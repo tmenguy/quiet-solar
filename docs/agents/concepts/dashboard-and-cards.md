@@ -370,12 +370,24 @@ existing `charge_anim` dashed-arc keeps its `mix-blend-mode: screen`
 #01 #7:** the SVG viewBox width is a module constant
 `ECG_TOTAL_WIDTH_PX = 320` — both call sites
 (`_buildQRSPath(..., ECG_TOTAL_WIDTH_PX)`) reference the constant
-so a future resize lands in one place. **Review-fix #01 #8:** the
-outer guard reads `!isDisconnected && !shouldShowPlaceholder &&
-!isFaulted && !isStale` — the ECG is also omitted on faulted /
-stale states (pairing a cyan→blue heartbeat with a red faulted
-SoC arc reads contradictory). The state-machine truth table in
-the story is superseded for those rows.
+so a future resize lands in one place. **Review-fix #02 #1 —
+ROLLBACK of fix #01 #8.** The outer guard is exactly
+`(!isDisconnected && !shouldShowPlaceholder)`, matching the
+original story behavior. Fix #01 #8 added `&& !isFaulted &&
+!isStale` thinking it prevented a "cyan ECG + red faulted arc"
+visual mismatch, but `isFaulted = true` also fires for the normal
+`chargeType === 'No Power To Car'` state (plugged, waiting for
+solar / scheduled / not-yet-asked-to-charge). The user
+re-reported "I still see no line" on both light and dark themes
+after the screen-blend removal alone — the missing fix was the
+rollback. **Review-fix #02 #2 — stroke visibility bump.** The
+ECG stroke is `stroke-width="3"` (was 2) and `stroke-opacity="1"`
+(was 0.6). The cyan end of the cyan→blue gradient has low
+luminance contrast on light HA themes; even with screen-blend
+removed, the original 2 px / 0.6 opacity stroke read as
+near-invisible. The 3 px / 1.0 opacity combination reads cleanly
+on both themes without overpowering the dashed-arc during active
+charging.
 The RAF step closure clamps `dt = Math.min(dt, 0.1)` (S6 dt-cap
 parity with pool + boiler), benefiting both the new ECG scroll AND
 the existing dashed-arc scroll — the car card is added to the
