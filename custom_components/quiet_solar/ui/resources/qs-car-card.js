@@ -494,15 +494,7 @@ class QsCarCard extends HTMLElement {
       /* Mobile touch fix: touch-action:none on the SVG (not the inner <circle>) prevents the
          browser from initiating scroll/pan gestures when dragging the ring handle. SVG child
          elements like <circle> don't reliably honor touch-action on iOS Safari / HA Companion. */
-      .ring svg { touch-action: none; position: relative; z-index: 1; }
-      /* QS-229: position .center BELOW the SVG (z-index: 0) so the ECG line
-         at y=198 renders ABOVE the mini-grid HTML text/buttons rather than
-         being visually covered by them. The .center keeps pointer-events:none
-         on the container so it doesn't intercept SVG handle drags; its
-         interactive children (rabbit/time/sun buttons) keep their own
-         pointer-events:auto so taps still work — the line is purely visual
-         and never covers a click target. */
-      .ring .center { z-index: 0; }
+      .ring svg { touch-action: none; }
       /* Mobile touch fix: touch-action:manipulation removes the 300ms tap delay that mobile
          browsers impose for double-tap detection, making button taps register immediately.
          Without this, a hass re-render can destroy the DOM node before the synthetic click fires. */
@@ -756,10 +748,10 @@ class QsCarCard extends HTMLElement {
                 <path id="ecg_anim"
                       d="${this._buildQRSPath(this._currentEcgAmp || 0, ECG_BASELINE_Y, ECG_TOTAL_WIDTH_PX)}"
                       stroke="#00b8ff"
-                      stroke-width="4"
+                      stroke-width="2"
                       fill="none"
                       stroke-linecap="round"
-                      stroke-opacity="1"
+                      stroke-opacity="0.45"
                       transform="translate(${(this._ecgOffset || 0).toFixed(2)}, 0)"
                       style="will-change: transform;"
                 />

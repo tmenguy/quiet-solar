@@ -2085,11 +2085,19 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
         "be re-introduced. See test docstring rationale."
     )
 
-    # QS-229 review-fix #02 #2 - stroke visibility. After the screen-
-    # blend removal (fix #01 #1), the 2 px stroke at 0.6 opacity was
-    # still hard to see on light themes - the cyan end of the gradient
-    # has low luminance contrast. Bump to 3 px / 1.0 opacity so the
-    # flatline reads cleanly on both themes.
+    # QS-229 review-fix #05 - "watermark" subtle look. User feedback:
+    # the previous 4 px / opacity-1 stroke on top of the HTML overlay
+    # was visible BUT "awful" — covering buttons + text at full
+    # intensity. The user's original spec was "an horizontal line,
+    # probably electric blue but transparent, on the background"
+    # (verbatim, see story §Issue clarification 1). So the line must
+    # be:
+    #   (a) BEHIND the HTML overlay (no z-index lift — the SVG sits
+    #       below `.center` per default DOM order)
+    #   (b) translucent (opacity in [0.3, 0.6]) so it reads as a
+    #       background watermark, not a foreground decoration
+    #   (c) thin (width in [2, 3]) so the spike-amplitude scaling
+    #       has visual headroom from baseline to peak
     path_block = re.search(
         r"<path[^>]*id\s*=\s*[\"']ecg_anim[\"'][^>]*?/>",
         content,
@@ -2097,20 +2105,19 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
     )
     assert path_block, (
         "QS-229: ECG `<path id=\"ecg_anim\">` self-closing tag must be "
-        "present (the previous sentinel anchored on the opening tag "
-        "alone)."
+        "present."
     )
     block = path_block.group(0)
     width_match = re.search(r"stroke-width\s*=\s*[\"'](\d+(?:\.\d+)?)[\"']", block)
     assert width_match, (
         "QS-229: ECG path must declare `stroke-width=\"...\"`."
     )
-    assert float(width_match.group(1)) >= 3, (
-        f"QS-229 review-fix #02 #2: ECG stroke-width "
-        f"({width_match.group(1)}) must be >= 3 px so the flatline "
-        f"reads on both light and dark themes. The original 2 px was "
-        f"reported invisible by the user even after the screen-blend "
-        f"removal."
+    width_val = float(width_match.group(1))
+    assert 2 <= width_val <= 3, (
+        f"QS-229 review-fix #05: ECG stroke-width ({width_val}) must "
+        f"be in [2, 3]. Width 4+ with opacity 1.0 (foreground) was "
+        f"reported 'awful' by the user; the line is meant to be a "
+        f"subtle background watermark."
     )
     opacity_match = re.search(
         r"stroke-opacity\s*=\s*[\"'](\d+(?:\.\d+)?)[\"']", block,
@@ -2118,42 +2125,36 @@ def test_car_card_ecg_path_clipped_and_pointer_inert():
     assert opacity_match, (
         "QS-229: ECG path must declare `stroke-opacity=\"...\"`."
     )
-    assert float(opacity_match.group(1)) >= 1.0, (
-        f"QS-229 review-fix #02 #2: ECG stroke-opacity "
-        f"({opacity_match.group(1)}) must be >= 1.0. The original "
-        f"0.6 was reported invisible on light themes."
+    opacity_val = float(opacity_match.group(1))
+    assert 0.3 <= opacity_val <= 0.6, (
+        f"QS-229 review-fix #05: ECG stroke-opacity ({opacity_val}) "
+        f"must be in [0.3, 0.6] — translucent watermark behind the "
+        f"HTML overlay. Opacity 1.0 was reported 'awful' (too "
+        f"prominent); below 0.3 the line disappears."
     )
 
-    # QS-229 review-fix #03 #2 - SVG z-index layering. The `.center`
-    # HTML overlay is positioned `absolute; inset:0` over the SVG;
-    # its mini-grid (Force Now / Target / Finish labels and buttons)
-    # sits at viewBox y ~190-215. Without an explicit z-index on the
-    # SVG, the HTML overlay paints ABOVE the SVG and the ECG line at
-    # y=198 is visually covered by the mini-grid text. Pin the
-    # layering rules so the SVG renders on top.
-    assert re.search(
-        r"\.ring\s+svg\s*\{[^}]*position\s*:\s*relative[^}]*\}",
+    # QS-229 review-fix #05 - SVG layering REVERTED. The CSS must NOT
+    # carry `.ring svg { position: relative; z-index: 1 }` or
+    # `.ring .center { z-index: 0 }` — those lifted the SVG above the
+    # HTML overlay and turned the line into a foreground decoration
+    # covering buttons / text. The SVG sits BEHIND `.center` per
+    # default DOM order (.center is `position:absolute` and stacks
+    # above non-positioned siblings); the translucent line shows
+    # through gaps between text/button glyphs as a subtle watermark.
+    assert not re.search(
+        r"\.ring\s+svg\s*\{[^}]*z-index\s*:\s*[1-9][^}]*\}",
         content,
     ), (
-        "QS-229 review-fix #03 #2: `.ring svg` must declare "
-        "`position: relative;` so its `z-index` takes effect "
-        "(needed to lift the SVG above the .center HTML overlay)."
+        "QS-229 review-fix #05: `.ring svg` must NOT declare "
+        "a positive z-index — that lifts the SVG above the HTML "
+        "overlay and the line covers buttons (user-reported 'awful')."
     )
-    assert re.search(
-        r"\.ring\s+svg\s*\{[^}]*z-index\s*:\s*1[^}]*\}",
-        content,
-    ), (
-        "QS-229 review-fix #03 #2: `.ring svg` must declare "
-        "`z-index: 1` so it renders above the `.center` HTML "
-        "overlay (otherwise the mini-grid text covers the ECG)."
-    )
-    assert re.search(
+    assert not re.search(
         r"\.ring\s+\.center\s*\{[^}]*z-index\s*:\s*0[^}]*\}",
         content,
     ), (
-        "QS-229 review-fix #03 #2: `.ring .center` must declare "
-        "`z-index: 0` (or any value lower than the SVG's) so the "
-        "SVG paints above it."
+        "QS-229 review-fix #05: `.ring .center` must NOT declare "
+        "`z-index: 0` (the partner rule that pushed it below the SVG)."
     )
 
 

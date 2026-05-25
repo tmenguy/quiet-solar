@@ -394,18 +394,8 @@ transparent against zero-bbox geometry — the user-reported "still
 no line" symptom even after the screen-blend removal. A solid hex
 color sidesteps the issue entirely and the visual ("electric blue
 flatline") matches the original cyan→blue intent closely enough.
-**Review-fix #03 #2 — SVG/.center z-index layering.** The
-`.ring svg` selector adds `position: relative; z-index: 1;` and
-`.ring .center` adds `z-index: 0` so the SVG renders ABOVE the
-HTML overlay. Without this, the .center's mini-grid (Force Now /
-Target SOC / Finish labels + rabbit/time/sun buttons) sits at
-viewBox y≈190-215 and visually covers the ECG line at y=198.
-Pointer-events are preserved exactly: the .center container keeps
-`pointer-events: none`, its interactive children keep their own
-`pointer-events: auto`, and the ECG wrapper `<g>` keeps
-`pointer-events: none` so the line never intercepts clicks on
-underlying buttons. **Review-fix #04 #1 — no `chargeGlow` filter
-on the ECG path.** The `chargeGlow` `<filter>` uses the default
+**Review-fix #04 #1 — no `chargeGlow` filter on the ECG path.**
+The `chargeGlow` `<filter>` uses the default
 `filterUnits="objectBoundingBox"`. For a path with bbox height 0
 (every flatline segment is `l dx,0`), the filter region
 `height="200%" * 0 = 0` collapses to zero-pixel-tall — the
@@ -416,6 +406,24 @@ visually nothing because the filter clipped the output to a
 zero-height buffer. The ECG path now carries NO `filter`
 attribute; the dashed-arc (`charge_anim`) keeps `chargeGlow`
 because its bbox is always non-zero during active charging.
+**Review-fix #05 — translucent background watermark
+(REVERT of #03 #2 + opacity tune).** The story's §Issue
+clarification 1 literally said the line should be "probably
+electric blue but **transparent**, on the **background**" —
+i.e. behind the HTML overlay, NOT in front of it. Review-fix
+#03 #2 had lifted the SVG above the overlay via
+`.ring svg { position: relative; z-index: 1 }` to work around
+the (then-undiagnosed) filter zero-bbox failure. With #04 #1
+fixing the actual root cause, the layering hack is no longer
+needed AND turned the line into a foreground decoration
+covering the rabbit / target-value / time / "--:--" cells —
+the user-reported "awful" result. The layering CSS is removed
+(SVG sits beneath `.center` per default DOM stacking), and the
+ECG stroke is tuned for a subtle watermark feel:
+`stroke-width="2"`, `stroke-opacity="0.45"` — visible through
+gaps between text/button glyphs as a translucent blue line
+behind the UI, not on top of it. Bands enforced by sentinel:
+`stroke-width ∈ [2, 3]`, `stroke-opacity ∈ [0.3, 0.6]`.
 The RAF step closure clamps `dt = Math.min(dt, 0.1)` (S6 dt-cap
 parity with pool + boiler), benefiting both the new ECG scroll AND
 the existing dashed-arc scroll — the car card is added to the
