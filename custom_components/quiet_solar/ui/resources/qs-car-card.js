@@ -54,8 +54,13 @@ const WAVE_WIDTH = 480;             // single wave period (2× clip diameter)
 const WAVE_BOTTOM_Y = 400;          // closing rectangle y; clipped by circle
 
 // --- Wave palette (dual-opacity cross-fade idle ↔ charge) ---
-const IDLE_SOUP_COLOR   = 'hsla(140, 80%, 50%, 0.12)';   // very translucent electric green
-const CHARGE_SOUP_COLOR = 'hsla(180, 90%, 55%, 0.25)';   // bluer, slightly less transparent
+// Review-fix #02: user reported the idle green was too dark / muddy
+// to read at a glance. Bumped from `hsla(140, 80%, 50%, 0.12)` →
+// `hsla(140, 85%, 60%, 0.30)` — slightly brighter, slightly more
+// saturated, 2.5× more opaque. Charging blue bumped in parallel
+// so the cross-fade contrast remains balanced.
+const IDLE_SOUP_COLOR   = 'hsla(140, 85%, 60%, 0.30)';   // electric green, clearly visible
+const CHARGE_SOUP_COLOR = 'hsla(180, 90%, 60%, 0.38)';   // bright cyan-blue, equally visible
 
 // --- Animation tuning (lerp envelope; mirror boiler) ---
 const LERP_RATE = 2;
@@ -124,18 +129,23 @@ const LIGHTNING_LATERAL_JITTER_PX = 18;
 // coordinates here track those positions. Integer values are
 // intentionally user-tunable for visual iteration — tests pin the
 // constant NAMES only (mirrors the QS-217 precedent).
-// Review-fix #01 #1: bumped all three CY values down from the
-// initial QS-232 estimates after a user screenshot showed the
-// holes drawn above the actual button centers.
+//
+// Review-fix iteration history:
+// - QS-232 initial:     267 / 180 / 180  (CY too high — holes above buttons)
+// - Review-fix #01:     285 / 195 / 195  (overshot — holes slightly below buttons)
+// - Review-fix #02:     288 / 192 / 192  (pixel-measured from user screenshot)
+// Plus all radii bumped 32 → 38 so any residual ±3 SVG offset
+// stays inside the cover area and never leaves a sliver of green
+// peeking around the button outline.
 const SUN_BTN_CARVE_CX = 160;       // bottom-center of stack
-const SUN_BTN_CARVE_CY = 285;
-const SUN_BTN_CARVE_R  = 32;
+const SUN_BTN_CARVE_CY = 288;
+const SUN_BTN_CARVE_R  = 38;
 const RABBIT_BTN_CARVE_CX = 96;     // left column of mini-grid
-const RABBIT_BTN_CARVE_CY = 195;
-const RABBIT_BTN_CARVE_R  = 32;
+const RABBIT_BTN_CARVE_CY = 192;
+const RABBIT_BTN_CARVE_R  = 38;
 const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
-const TIME_BTN_CARVE_CY = 195;
-const TIME_BTN_CARVE_R  = 32;
+const TIME_BTN_CARVE_CY = 192;
+const TIME_BTN_CARVE_R  = 38;
 
 class QsCarCard extends HTMLElement {
   constructor() {
