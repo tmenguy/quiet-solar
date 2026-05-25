@@ -1884,20 +1884,25 @@ def test_car_card_ecg_tuning_constants_in_band():
     # future viewBox resize doesn't silently break the ECG span.
     total_width = _extract_number("ECG_TOTAL_WIDTH_PX")
 
-    # Review-fix #06 expanded the baseline band downward (toward the
-    # range-now text, above the title labels). Previously [185, 215];
-    # now [170, 215] so the line lands in the empty gap between
-    # range-now and the mini-grid titles.
-    assert 170 <= baseline_y <= 215, (
-        f"QS-229 review-fix #06: ECG_BASELINE_Y {baseline_y} outside "
-        "[170, 215] (empty gap between range-now and title labels)."
+    # Review-fix #07 (user-feedback round 2): the line must sit ABOVE
+    # the "Force Now / Target SOC / Finish" title row, NOT below /
+    # on it. Band lowered further to [135, 200] so y=145 is allowed
+    # (the gap between `range-now` and the title labels). Upper bound
+    # kept loose because the original story spec had y=198 as the
+    # golden ratio.
+    assert 135 <= baseline_y <= 215, (
+        f"QS-229 review-fix #07: ECG_BASELINE_Y {baseline_y} outside "
+        "[135, 215]. The line must sit ABOVE the title labels (user "
+        "feedback: 'I have said ABOVE the text Force Now / Target SOC "
+        "/ Finish line - you put it below')."
     )
-    # Review-fix #06 raised both amp endpoints so 4.5 kW reads visibly.
+    # Review-fix #07 trimmed max-amp from 24 -> 20 to leave room above
+    # the new baseline (y=145) before the SoC % big number.
     assert 4 <= min_amp <= 12, (
         f"QS-229 review-fix #06: ECG_MIN_AMP_PX {min_amp} outside [4, 12]."
     )
-    assert 18 <= max_amp <= 30, (
-        f"QS-229 review-fix #06: ECG_MAX_AMP_PX {max_amp} outside [18, 30]."
+    assert 16 <= max_amp <= 30, (
+        f"QS-229 review-fix #07: ECG_MAX_AMP_PX {max_amp} outside [16, 30]."
     )
     assert min_amp < max_amp, (
         f"QS-229 AC-5: ECG_MIN_AMP_PX ({min_amp}) must be < "

@@ -13,17 +13,21 @@ const ANIM_SPEED_RANGE = ANIM_MAX_SPEED - ANIM_MIN_SPEED;
 const ANIM_POWER_RANGE = ANIM_MAX_POWER_W - ANIM_MIN_POWER_W;
 
 // QS-229 - ECG / heartbeat charge-rate trace constants.
-// Vertical placement (review-fix #06): moved up from y=198 (golden-
-// ratio of 320 viewBox) to y=180, into the visible gap between the
-// `range-now` text ("362 km") and the title row ("Force Now / Target
-// SOC / Finish"). At y=198 the line landed on the title row and
-// looked like it cut through the labels.
-const ECG_BASELINE_Y = 180;
+// Vertical placement (review-fix #07): moved up from y=180 to y=145
+// per user feedback - they want the line ABOVE the title row
+// ("Force Now / Target SOC / Finish"), not below it. At y=180 the
+// line was still landing on / just below the title labels; y=145
+// puts it in the cleaner gap between the `range-now` text
+// ("367 km") and the title row.
+const ECG_BASELINE_Y = 145;
 // R-wave peak amplitude (px). Linear lerp between MIN (at <= 500 W)
-// and MAX (at >= 22 kW). Review-fix #06 bumped both endpoints so
-// low-power spikes (~4.5 kW) have more visual presence.
+// and MAX (at >= 22 kW). Review-fix #07 trimmed the max from 24 -> 20
+// because the new baseline at y=145 leaves only ~22 px of clearance
+// above the baseline before the SoC % big number's bottom; an R peak
+// of -1.00 * amp = -20 lands at y=125, just outside the SoC % glyph
+// box at peak charge. MIN stays at 8 so 4.5 kW reads visibly.
 const ECG_MIN_AMP_PX = 8;
-const ECG_MAX_AMP_PX = 24;
+const ECG_MAX_AMP_PX = 20;
 // Scroll speed (px/s). Review-fix #06 lowered both endpoints so the
 // heartbeat reads as a relaxed rhythm rather than a frantic flicker.
 // With ECG_SPIKE_SPACING_PX = 80, the rate is ~0.31 Hz (19 bpm) at

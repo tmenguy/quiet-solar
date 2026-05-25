@@ -422,9 +422,12 @@ default DOM stacking).
 **Review-fix #06 — full visual rework after the first
 user-visible iteration.** Six issues addressed in one commit
 once the line was finally visible:
-*(1) Vertical placement.* `ECG_BASELINE_Y` moved 198 → 180,
-into the gap between the `range-now` text ("362 km") and the
-mini-grid title row. Sentinel band relaxed to `[170, 215]`.
+*(1) Vertical placement.* `ECG_BASELINE_Y` moved 198 → 180 in
+#06, then 180 → **145** in #07 after user feedback ("I have said
+ABOVE the text 'Force Now / Target SOC / Finish line' — you put
+it below"). y=145 sits in the gap between `range-now` ("367 km")
+and the title labels, clearly above the labels rather than on
+their baseline. Sentinel band: `[135, 215]`.
 *(2) Horizontal coverage.* `<clipPath>` circle radius bumped
 120 → 130 to match the ring radius — the line now visually
 "touches" the ring on both sides (the ring stroke paints
@@ -456,13 +459,15 @@ exactly 0. A new sentinel pins the invariant
 per-complex layout also widened (pre-flat 8→10, P-Q/S-T flats
 2→3, post-flat 34→50) to keep the dx-sum equal to the new
 `ECG_SPIKE_SPACING_PX = 80`.
-*(6) Pulse sizing + frequency.* `ECG_MIN_AMP_PX` 4→8,
-`ECG_MAX_AMP_PX` 18→24 (bigger spikes for visibility at low
-charge), `ECG_MIN_SPEED_PX_S` 30→25, `ECG_MAX_SPEED_PX_S`
-140→100, `ECG_SPIKE_SPACING_PX` 60→80. At 22 kW the rate is
-now ~75 bpm (was ~140 — "frantic"); at 4.5 kW it's ~30 bpm
-(was ~50 — "too fast"). Sentinel bands updated for all five
-constants.
+*(6) Pulse sizing + frequency.* `ECG_MIN_AMP_PX` 4→8;
+`ECG_MAX_AMP_PX` 18→24 in #06, then 24→**20** in #07 (the new
+y=145 baseline left only ~22 px of clearance above before the
+SoC % big number's bottom; max R-peak = -1.0 × 20 = -20 lands
+at y=125, just outside the SoC % glyph box). `ECG_MIN_SPEED_PX_S`
+30→25, `ECG_MAX_SPEED_PX_S` 140→100, `ECG_SPIKE_SPACING_PX`
+60→80. At 22 kW the rate is now ~75 bpm (was ~140 — "frantic");
+at 4.5 kW it's ~30 bpm (was ~50 — "too fast"). Sentinel bands
+updated for all five constants.
 The RAF step closure clamps `dt = Math.min(dt, 0.1)` (S6 dt-cap
 parity with pool + boiler), benefiting both the new ECG scroll AND
 the existing dashed-arc scroll — the car card is added to the
