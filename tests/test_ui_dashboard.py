@@ -867,12 +867,22 @@ def test_generate_qs_tag_high_resolution_distinct_within_one_second(monkeypatch)
     granularity (coarse on some Windows builds → flaky). Monkeypatch
     `time.time_ns` to return a controlled increasing sequence so the
     test deterministically yields multiple distinct tags.
+
+    QS-199 review-fix #06 G1 — the patched clock MUST be inexhaustible.
+    A bounded `iter(range(1000, 1050))` (exactly 50 values, zero
+    headroom) leaked into a pending teardown coroutine from an earlier
+    test under full-suite ordering, where a stray 51st `time_ns()` call
+    raised `StopIteration` inside a coroutine → `RuntimeError` (PEP 479),
+    failing the gate with `errors=1` (only under full-suite ordering, so
+    targeted runs missed it). `itertools.count` never exhausts; 50 calls
+    still yield 50 distinct increasing values.
     """
+    import itertools
     import time
 
     from custom_components.quiet_solar.ui.dashboard import _generate_qs_tag
 
-    seq = iter(range(1000, 1050))
+    seq = itertools.count(1000)
     monkeypatch.setattr(time, "time_ns", lambda: next(seq))
 
     tags = {_generate_qs_tag() for _ in range(50)}
@@ -1983,6 +1993,37 @@ async def test_async_update_resources_generic_exception():
                 ):
                     # Should not raise
                     await async_update_resources(mock_hass)
+
+
+@pytest.mark.asyncio
+async def test_async_update_resources_skips_when_source_dir_missing():
+    """QS-199 review-fix #06 G2 — `_async_update_resources_locked` returns
+    early (without copying/registering) when the bundled `_RESOURCES_DIR`
+    source tree doesn't exist, logging "No bundled resources directory
+    found, skipping". Covers the `if not await isdir(_RESOURCES_DIR):`
+    branch (dashboard.py:617-618) — the production code is correct; this
+    test just exercises the branch so coverage reaches 100%.
+    """
+    mock_hass, _ = create_mock_hass()
+
+    with (
+        patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock),
+        patch("custom_components.quiet_solar.ui.dashboard._async_remove_orphan_temps", new_callable=AsyncMock),
+        # Drive the missing-source-dir branch.
+        patch(
+            "custom_components.quiet_solar.ui.dashboard.aiofiles.os.path.isdir",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
+            new_callable=AsyncMock,
+        ) as mock_copy,
+    ):
+        await async_update_resources(mock_hass)
+
+        # Early return → no copy/register attempted.
+        mock_copy.assert_not_called()
 
 
 @pytest.mark.asyncio
