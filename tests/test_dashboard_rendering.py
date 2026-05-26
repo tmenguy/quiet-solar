@@ -119,6 +119,7 @@ def _extract_js_function_body(source: str, signature_regex: str) -> str | None:
         return None
     return source[brace_idx + 1 : i - 1]
 
+
 # Pool config (not in ha_tests/const.py)
 MOCK_POOL_CONFIG = {
     "name": "Test Pool",
@@ -336,8 +337,7 @@ class TestDashboardTemplateRendering:
         # Raw `Number(state || fallback)` is the anti-pattern.
         raw_pattern = re.compile(r"Number\(\s*[^()]+\|\|[^()]+\)")
         assert raw_pattern.search(executable) is None, (
-            "Found a raw `Number(... || ...)` pattern in executable code "
-            "— should use `_safeNumber(...)`"
+            "Found a raw `Number(... || ...)` pattern in executable code — should use `_safeNumber(...)`"
         )
 
     def test_radiator_card_s15_escape_html_before_innerHTML(self):  # CR2 — sync (no hass)
@@ -354,13 +354,13 @@ class TestDashboardTemplateRendering:
         assert "_escapeHtml" in content
         # The card-title interpolation (a primary injection vector) is
         # routed through `_escapeHtml` (closure-local or method form).
-        assert re.search(
-            r'class="card-title">\s*\$\{(?:this\.)?_escapeHtml\(title\)\}', content
-        ) is not None, "Card title is not escaped before innerHTML"
+        assert re.search(r'class="card-title">\s*\$\{(?:this\.)?_escapeHtml\(title\)\}', content) is not None, (
+            "Card title is not escaped before innerHTML"
+        )
         # Mode labels in the bistate-mode select go through `_escapeHtml`.
-        assert re.search(
-            r"\$\{(?:this\.)?_escapeHtml\(translateBistateMode\(o\)\)\}", content
-        ) is not None, "Bistate mode labels are not escaped before innerHTML"
+        assert re.search(r"\$\{(?:this\.)?_escapeHtml\(translateBistateMode\(o\)\)\}", content) is not None, (
+            "Bistate mode labels are not escaped before innerHTML"
+        )
 
     def test_radiator_card_s16_keyboard_accessibility(self):  # CR2 — sync (no hass)
         """A2 — pin S16 via regex: each primary action div has
@@ -381,12 +381,8 @@ class TestDashboardTemplateRendering:
 
         # Every action `<div>` carries the role/tabindex attribute pair.
         for button_id in ("power_btn", "green_btn", "override_btn", "time_btn"):
-            pattern = re.compile(
-                rf'id="{button_id}"[^>]*role="button"[^>]*tabindex="0"', re.DOTALL
-            )
-            assert pattern.search(content) is not None, (
-                f"Missing role/tabindex on `{button_id}`"
-            )
+            pattern = re.compile(rf'id="{button_id}"[^>]*role="button"[^>]*tabindex="0"', re.DOTALL)
+            assert pattern.search(content) is not None, f"Missing role/tabindex on `{button_id}`"
 
         # The keyboard helper exists across the card + shared modules,
         # and is wired into every action via the shared wire-helpers.
@@ -423,14 +419,10 @@ class TestDashboardTemplateRendering:
                 if call_signature in line:
                     # Look backwards up to 30 lines for `try {`.
                     has_try_before = any(
-                        "try {" in lines[j] or "try{" in lines[j]
-                        for j in range(max(0, idx - 30), idx)
+                        "try {" in lines[j] or "try{" in lines[j] for j in range(max(0, idx - 30), idx)
                     )
                     # Look forwards up to 30 lines for `} finally {`.
-                    has_finally_after = any(
-                        "finally" in lines[j]
-                        for j in range(idx, min(len(lines), idx + 30))
-                    )
+                    has_finally_after = any("finally" in lines[j] for j in range(idx, min(len(lines), idx + 30)))
                     if has_try_before and has_finally_after:
                         return True
             return False
@@ -470,8 +462,7 @@ class TestDashboardTemplateRendering:
         m = re.search(r"_showDialog\s*\(", content)
         legacy = content.find("const showDialog")
         assert m is not None or legacy != -1, (
-            "Missing `_showDialog(...)` method (or legacy `const showDialog`) "
-            "declaration"
+            "Missing `_showDialog(...)` method (or legacy `const showDialog`) declaration"
         )
         start = m.start() if m is not None else legacy
         # Find the opening `{` after the parameter list.
@@ -521,12 +512,9 @@ class TestDashboardTemplateRendering:
         assert "e.backing_entity" in content
         # The `running` constant must be an OR over command state + live backing.
         # We allow surrounding whitespace and `liveBackingOn`/similar locals.
-        pattern = re.compile(
-            r"const\s+running\s*=\s*commandReportsOn\s*\|\|\s*liveBackingOn"
-        )
+        pattern = re.compile(r"const\s+running\s*=\s*commandReportsOn\s*\|\|\s*liveBackingOn")
         assert pattern.search(content) is not None, (
-            "Cold-start `running` fallback is missing — radiator may show as off "
-            "during the cold-start grace window"
+            "Cold-start `running` fallback is missing — radiator may show as off during the cold-start grace window"
         )
 
     def test_radiator_card_bh10_configured_hvac_on_compared(self):  # CR2 — sync (no hass)
@@ -546,9 +534,7 @@ class TestDashboardTemplateRendering:
         # compatibility.
         assert "e.climate_hvac_mode_on" in content
         # The comparison against `configuredHvacOn` MUST be present.
-        pattern = re.compile(
-            r"liveBackingState\s*===\s*configuredHvacOn"
-        )
+        pattern = re.compile(r"liveBackingState\s*===\s*configuredHvacOn")
         assert pattern.search(content) is not None, (
             "Cold-start `running` derivation no longer compares against the "
             "configured HVAC ON mode — non-default HVAC modes won't be recognised"
@@ -568,15 +554,11 @@ class TestDashboardTemplateRendering:
             assert literal in no_comments, f"Missing heat-palette literal {literal}"
 
         # The `colors` const must use these literals (not just appear somewhere).
-        assert re.search(
-            r"const\s+colors\s*=\s*\{[^}]*primary:\s*'#FF5722'", no_comments
-        ) is not None
+        assert re.search(r"const\s+colors\s*=\s*\{[^}]*primary:\s*'#FF5722'", no_comments) is not None
 
         # Cool-palette literals must NOT appear in executable code.
         for forbidden in ("'#2196F3'", "'#00bcd4'", "'#8bc34a'", "'#00e1ff'", "'#0066ff'"):
-            assert forbidden not in no_comments, (
-                f"Stale cool-palette literal {forbidden} still present"
-            )
+            assert forbidden not in no_comments, f"Stale cool-palette literal {forbidden} still present"
 
     def test_radiator_card_flame_layers_present(self):  # CR2 — sync (no hass)
         """QS-201 AC-2 + AC-7 — flame paths, circular clip, cache-clear whitelist.
@@ -596,16 +578,19 @@ class TestDashboardTemplateRendering:
         # AC-2: the dynamic template emits per-layer paths whose ids
         # are computed from the array index — `id="flame${i}"`.
         assert 'id="flame${i}"' in content, (
-            "Missing dynamic `id=\"flame${i}\"` template in the flame "
+            'Missing dynamic `id="flame${i}"` template in the flame '
             "<path> emission — H3 parameterised the layer loops but "
             "the template must still emit per-layer path ids."
         )
         # Constants confirm the layer count is still 3 (the assertion
         # would still pass for any forward-compatible extension to N).
-        assert re.search(
-            r"const\s+LAYER_TEETH_COUNTS\s*=\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]",
-            content,
-        ) is not None, (
+        assert (
+            re.search(
+                r"const\s+LAYER_TEETH_COUNTS\s*=\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]",
+                content,
+            )
+            is not None
+        ), (
             "LAYER_TEETH_COUNTS must declare exactly 3 entries (current "
             "layer count); extending the array is supported but a smoke-"
             "test bump should follow."
@@ -619,14 +604,14 @@ class TestDashboardTemplateRendering:
         # overlay drawn ON TOP of the animation; see the
         # test_radiator_card_override_btn_carve_out test for the cover
         # invariants).
-        assert re.search(
-            r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
-            content,
-            re.DOTALL,
-        ) is not None, (
-            "Missing clipPath <path clip-rule=\"evenodd\" "
-            "d=\"${clipPathD}\" /> form."
-        )
+        assert (
+            re.search(
+                r"<clipPath\s+id=\"\$\{flameClipId\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
+                content,
+                re.DOTALL,
+            )
+            is not None
+        ), 'Missing clipPath <path clip-rule="evenodd" d="${clipPathD}" /> form.'
         # The clipPathD builder must still reference `CENTER_CY` and
         # `CLIP_R` (the outer-disc geometry). QS-217 review-fix #03
         # drops the carve+cancel constants (no longer in the builder).
@@ -635,14 +620,12 @@ class TestDashboardTemplateRendering:
             content,
         )
         assert builder_match is not None, (
-            "Missing `const clipPathD = …;` builder declaration — "
-            "must be present above the innerHTML template literal."
+            "Missing `const clipPathD = …;` builder declaration — must be present above the innerHTML template literal."
         )
         builder_block = builder_match.group(1)
         for ident in ("CENTER_CY", "CLIP_R"):
             assert re.search(rf"\b{ident}\b", builder_block) is not None, (
-                f"qs-radiator-card.js: clipPathD builder must "
-                f"reference `{ident}` by name (not hard-coded)."
+                f"qs-radiator-card.js: clipPathD builder must reference `{ident}` by name (not hard-coded)."
             )
         # The constants themselves carry the correct geometric values.
         assert re.search(r"const\s+CENTER_CY\s*=\s*160\b", content) is not None
@@ -661,9 +644,7 @@ class TestDashboardTemplateRendering:
         body = inv_match.group(1)
         # Required positive whitelist.
         for required in ("_flameEls", "_lastFlameBaseY", "_lastFlameAmp"):
-            assert required in body, (
-                f"_invalidateFlameCache must clear `this.{required}`"
-            )
+            assert required in body, f"_invalidateFlameCache must clear `this.{required}`"
         # Forbidden: fields that must SURVIVE disconnect.
         for forbidden in ("_currentFlameAmp", "_currentFlameSpeed", "_flamePhase"):
             assert forbidden not in body, (
@@ -689,29 +670,29 @@ class TestDashboardTemplateRendering:
         no_comments = re.sub(r"//[^\n]*", "", no_block)
 
         # AC-3: progressRatio is clamped against maxHours.
-        assert re.search(
-            r"progressRatio\s*=\s*maxHours\s*>\s*0\s*\?\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,\s*hoursRun\s*/\s*maxHours",
-            no_comments,
-        ) is not None, "Missing progressRatio clamp"
+        assert (
+            re.search(
+                r"progressRatio\s*=\s*maxHours\s*>\s*0\s*\?\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,\s*hoursRun\s*/\s*maxHours",
+                no_comments,
+            )
+            is not None
+        ), "Missing progressRatio clamp"
 
         # AC-3: flameBaseY formula uses the 1/5..4/5 envelope.
         assert "FLAME_BASE_MIN_PCT" in no_comments
         assert "FLAME_BASE_MAX_PCT" in no_comments
-        assert re.search(
-            r"flameBaseY\s*=\s*CENTER_CY\s*\+\s*CLIP_R\s*-\s*\(\s*FLAME_BASE_MIN_PCT\s*\+\s*progressRatio\s*\*\s*\(\s*FLAME_BASE_MAX_PCT\s*-\s*FLAME_BASE_MIN_PCT\s*\)\s*\)\s*\*\s*2\s*\*\s*CLIP_R",
-            no_comments,
-        ) is not None, "flameBaseY formula does not mirror pool's water-level envelope"
+        assert (
+            re.search(
+                r"flameBaseY\s*=\s*CENTER_CY\s*\+\s*CLIP_R\s*-\s*\(\s*FLAME_BASE_MIN_PCT\s*\+\s*progressRatio\s*\*\s*\(\s*FLAME_BASE_MAX_PCT\s*-\s*FLAME_BASE_MIN_PCT\s*\)\s*\)\s*\*\s*2\s*\*\s*CLIP_R",
+                no_comments,
+            )
+            is not None
+        ), "flameBaseY formula does not mirror pool's water-level envelope"
 
         # AC-8: gate split.
-        assert re.search(
-            r"const\s+ringDashActive\s*=\s*running\s*&&\s*segLen\s*>\s*6", no_comments
-        ) is not None
-        assert re.search(
-            r"const\s+fireActive\s*=\s*running", no_comments
-        ) is not None
-        assert re.search(
-            r"const\s+showAnimation\s*=\s*ringDashActive\s*\|\|\s*fireActive", no_comments
-        ) is not None
+        assert re.search(r"const\s+ringDashActive\s*=\s*running\s*&&\s*segLen\s*>\s*6", no_comments) is not None
+        assert re.search(r"const\s+fireActive\s*=\s*running", no_comments) is not None
+        assert re.search(r"const\s+showAnimation\s*=\s*ringDashActive\s*\|\|\s*fireActive", no_comments) is not None
 
         # AC-8: <path id="running_anim"> emission is gated on ringDashActive,
         # not the umbrella showAnimation.
@@ -733,7 +714,7 @@ class TestDashboardTemplateRendering:
             content,
         )
         assert legacy_form is not None or call_form is not None, (
-            "`<path id=\"running_anim\">` must be gated on `ringDashActive` "
+            '`<path id="running_anim">` must be gated on `ringDashActive` '
             "(either via legacy `${ringDashActive ? ...}` inline template "
             "or via `showAnimation: ringDashActive` call to `_buildRingHTML`)."
         )
@@ -750,17 +731,13 @@ class TestDashboardTemplateRendering:
         assert "FLAME_GREY_FILLS" in no_comments
         # Constant is an array of at least three grey values (rgba with all
         # three channels equal or near-equal — accept the simple form).
-        grey_array = re.search(
-            r"FLAME_GREY_FILLS\s*=\s*\[([^\]]+)\]", no_comments
-        )
+        grey_array = re.search(r"FLAME_GREY_FILLS\s*=\s*\[([^\]]+)\]", no_comments)
         assert grey_array is not None
         # FLAME_FILLS (warm) also present — both constants required.
         assert "FLAME_FILLS" in no_comments
 
         # Selection between the two constants is gated on `running`.
-        assert re.search(
-            r"running\s*\?\s*FLAME_FILLS\s*:\s*FLAME_GREY_FILLS", no_comments
-        ) is not None, (
+        assert re.search(r"running\s*\?\s*FLAME_FILLS\s*:\s*FLAME_GREY_FILLS", no_comments) is not None, (
             "Fill-selection must branch on `running` — `running ? FLAME_FILLS : FLAME_GREY_FILLS`"
         )
 
@@ -782,19 +759,23 @@ class TestDashboardTemplateRendering:
         content = card_source_union("qs-radiator-card.js")
 
         # CSS variable declaration on :host (whitespace-tolerant).
-        assert re.search(
-            r"--ring-text-shadow:\s*0 0 12px rgba\(0,0,0,0\.8\),\s*0 2px 4px rgba\(0,0,0,0\.5\)",
-            content,
-        ) is not None, "AC-9: --ring-text-shadow variable must be declared on :host"
+        assert (
+            re.search(
+                r"--ring-text-shadow:\s*0 0 12px rgba\(0,0,0,0\.8\),\s*0 2px 4px rgba\(0,0,0,0\.5\)",
+                content,
+            )
+            is not None
+        ), "AC-9: --ring-text-shadow variable must be declared on :host"
 
         # Each of the four ring text classes applies the variable.
         for cls in ("target-label", "target-value", "from-to-label", "from-to-value"):
-            assert re.search(
-                rf"\.ring\s+\.{cls}\s*\{{[^}}]*text-shadow:\s*var\(--ring-text-shadow\)",
-                content,
-            ) is not None, (
-                f"AC-9: .ring .{cls} must apply text-shadow: var(--ring-text-shadow)"
-            )
+            assert (
+                re.search(
+                    rf"\.ring\s+\.{cls}\s*\{{[^}}]*text-shadow:\s*var\(--ring-text-shadow\)",
+                    content,
+                )
+                is not None
+            ), f"AC-9: .ring .{cls} must apply text-shadow: var(--ring-text-shadow)"
 
     # QS-228 — uniform ring text shadow across all 6 QS Lovelace cards.
     # Map each card to its enumerated ring-text classes. The test method
@@ -867,10 +848,13 @@ class TestDashboardTemplateRendering:
             content = card_source_union(card_filename)
 
             # AC-1: --ring-text-shadow declared on :host (whitespace-tolerant).
-            assert re.search(
-                r"--ring-text-shadow:\s*0 0 12px rgba\(0,0,0,0\.8\),\s*0 2px 4px rgba\(0,0,0,0\.5\)",
-                content,
-            ) is not None, (
+            assert (
+                re.search(
+                    r"--ring-text-shadow:\s*0 0 12px rgba\(0,0,0,0\.8\),\s*0 2px 4px rgba\(0,0,0,0\.5\)",
+                    content,
+                )
+                is not None
+            ), (
                 f"AC-1 ({card_filename}): --ring-text-shadow variable must "
                 "be declared on :host with the verbatim value "
                 "`0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5)`"
@@ -878,13 +862,13 @@ class TestDashboardTemplateRendering:
 
             # AC-2: every enumerated ring-text class applies the variable.
             for cls in classes:
-                assert re.search(
-                    rf"\.ring\s+\.{cls}\s*\{{[^}}]*text-shadow:\s*var\(--ring-text-shadow\)",
-                    content,
-                ) is not None, (
-                    f"AC-2 ({card_filename}): .ring .{cls} must apply "
-                    "text-shadow: var(--ring-text-shadow)"
-                )
+                assert (
+                    re.search(
+                        rf"\.ring\s+\.{cls}\s*\{{[^}}]*text-shadow:\s*var\(--ring-text-shadow\)",
+                        content,
+                    )
+                    is not None
+                ), f"AC-2 ({card_filename}): .ring .{cls} must apply text-shadow: var(--ring-text-shadow)"
 
     def test_radiator_card_flame_dancing_dynamic_proxy(self):  # CR2 — sync (no hass)
         """QS-204 AC-4 — structural proxy for "flames flicker when running".
@@ -901,10 +885,19 @@ class TestDashboardTemplateRendering:
         * `LAYER_TIP_FLICKER_HZ` — per-layer flicker frequency table;
         * the obsolete `LAYER_SCROLL_OFFSET` / `_flamePhase` markers
           should be ABSENT so the redesign cannot regress silently.
+
+        QS-199 — `_generateFlameTeethPath` / `_tipPhases` /
+        `LAYER_TIP_FLICKER_HZ` now live in the shared `QsFlameEngine`
+        (`shared/qs-anim-flame.js`); `card_source_union` includes it.
+        The ABSENCE checks (`LAYER_SCROLL_OFFSET` / `this._flamePhase`)
+        still target the radiator card file directly — those obsolete
+        markers must not reappear anywhere in the card-or-engine union.
         """
         import re
 
-        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        from tests.utils.card_sources import card_source_union
+
+        content = card_source_union("qs-radiator-card.js")
 
         # QS-204 review-fix #02 G12 — strip comments before scanning
         # for legacy markers. Without the strip, a future "// removed
@@ -917,20 +910,17 @@ class TestDashboardTemplateRendering:
 
         # New path generator must be present.
         assert "_generateFlameTeethPath" in executable, (
-            "QS-204 AC-4: `_generateFlameTeethPath` (the peaked-teeth "
-            "path generator) must be declared"
+            "QS-204 AC-4: `_generateFlameTeethPath` (the peaked-teeth path generator) must be declared"
         )
 
         # Per-tooth tip phase array must drive the flicker.
         assert "_tipPhases" in executable, (
-            "QS-204 AC-4: `_tipPhases` (per-layer, per-tooth phase array) "
-            "must drive the per-frame flicker"
+            "QS-204 AC-4: `_tipPhases` (per-layer, per-tooth phase array) must drive the per-frame flicker"
         )
 
         # Per-layer flicker frequencies in Hz.
         assert "LAYER_TIP_FLICKER_HZ" in executable, (
-            "QS-204 AC-4: `LAYER_TIP_FLICKER_HZ` (per-layer flicker rate) "
-            "must declare the per-layer turbulence rates"
+            "QS-204 AC-4: `LAYER_TIP_FLICKER_HZ` (per-layer flicker rate) must declare the per-layer turbulence rates"
         )
 
         # Obsolete QS-201 markers must be gone from the executable
@@ -948,9 +938,7 @@ class TestDashboardTemplateRendering:
         )
 
     @pytest.mark.asyncio
-    async def test_radiator_dashboard_passes_climate_hvac_mode_on(
-        self, hass, full_dashboard_home
-    ):
+    async def test_radiator_dashboard_passes_climate_hvac_mode_on(self, hass, full_dashboard_home):
         """BH10 — the dashboard template plumbs `climate_hvac_mode_on` through.
 
         The card reads it from `entities.climate_hvac_mode_on`. The
@@ -1133,9 +1121,7 @@ class TestConfirmationPopups:
         ],
     )
     @pytest.mark.asyncio
-    async def test_confirmation_text_present_for_all_action_buttons(
-        self, hass, full_dashboard_home, template_name
-    ):
+    async def test_confirmation_text_present_for_all_action_buttons(self, hass, full_dashboard_home, template_name):
         """All 9 home/solar action buttons must have confirmation text in rendered output."""
         home = full_dashboard_home
         template_path = COMPONENT_ROOT / "ui" / template_name
@@ -1149,9 +1135,7 @@ class TestConfirmationPopups:
             if f"text: {expected_text}" not in rendered:
                 missing.append(entity_key)
 
-        assert missing == [], (
-            f"Template {template_name} missing confirmation text for: {', '.join(missing)}"
-        )
+        assert missing == [], f"Template {template_name} missing confirmation text for: {', '.join(missing)}"
 
 
 class TestDashboardSectionMapping:
@@ -1299,9 +1283,9 @@ class TestDashboardSectionMapping:
 
         input_sections = [
             ("cars", "mdi:car"),
-            ("my_workshop", "mdi:hammer"),   # custom
+            ("my_workshop", "mdi:hammer"),  # custom
             ("pools", "mdi:pool"),
-            ("garden_lights", "mdi:lamp"),    # custom
+            ("garden_lights", "mdi:lamp"),  # custom
             ("settings", "mdi:cog-outline"),
         ]
 
@@ -1341,8 +1325,7 @@ class TestDashboardSectionMapping:
         result = _normalize_dashboard_sections_order(input_sections)
 
         assert result == [("cars", "mdi:car"), ("pools", "mdi:pool")], (
-            f"Duplicate section names must be deduped (first wins). "
-            f"Got {result}"
+            f"Duplicate section names must be deduped (first wins). Got {result}"
         )
 
     def test_normalize_dashboard_sections_order_empty_input(self):
@@ -1380,9 +1363,7 @@ class TestDashboardSectionMapping:
             #   maxHours = Math.max(<fallback>, targetHours);
             # Detect ANY clamp-style guard around `targetHours` near the
             # `maxHours = targetHours` assignment.
-            unguarded_pat = re.compile(
-                r"maxHours\s*=\s*targetHours\s*;", re.MULTILINE
-            )
+            unguarded_pat = re.compile(r"maxHours\s*=\s*targetHours\s*;", re.MULTILINE)
             assert unguarded_pat.search(executable) is None, (
                 f"{card_filename}: a bare `maxHours = targetHours;` assignment "
                 f"would divide by zero when the constraint sensor reports 0 "
@@ -1466,14 +1447,12 @@ class TestDashboardSectionMapping:
             # Search backwards from `m.start()` for the nearest
             # non-whitespace token. Accept `String(`, `String  (`,
             # or any usage that doesn't lead to `.toLowerCase()`.
-            tail = executable[m.end():m.end() + 200]
+            tail = executable[m.end() : m.end() + 200]
             if ".toLowerCase" not in tail:
                 continue  # not a stringy use, irrelevant
             preceding = executable[max(0, m.start() - 60) : m.start()]
             if not re.search(r"String\s*\(\s*$", preceding):
-                unsafe_uses.append(
-                    f"...{preceding[-50:]}<HERE>{executable[m.start() : m.end() + 40]}..."
-                )
+                unsafe_uses.append(f"...{preceding[-50:]}<HERE>{executable[m.start() : m.end() + 40]}...")
         assert not unsafe_uses, (
             "qs-radiator-card.js: every `e.climate_hvac_mode_on` use that "
             "leads to `.toLowerCase()` must be wrapped in `String(...)`. "
@@ -1540,6 +1519,7 @@ class TestDashboardSectionMapping:
         literal or a `[%key:...%]` reference).
         """
         import json
+
         from custom_components.quiet_solar.const import LOAD_TYPE_DASHBOARD_DEFAULT_SECTION
 
         strings_path = COMPONENT_ROOT / "strings.json"
@@ -1572,8 +1552,16 @@ class TestDashboardSectionMapping:
         ]
         # Sanity: must cover at least the post-QS-195 set.
         for must_have in (
-            "home", "battery", "solar", "person", "car", "pool",
-            "water_boiler", "on_off_duration", "climate", "heat_pump",
+            "home",
+            "battery",
+            "solar",
+            "person",
+            "car",
+            "pool",
+            "water_boiler",
+            "on_off_duration",
+            "climate",
+            "heat_pump",
             "radiator",
         ):
             assert must_have in required_steps, (
@@ -1593,9 +1581,7 @@ class TestDashboardSectionMapping:
                     missing.append(f"{namespace}.step.{step}.data (missing)")
                     continue
                 if "device_dashboard_section" not in data_block:
-                    missing.append(
-                        f"{namespace}.step.{step}.data.device_dashboard_section"
-                    )
+                    missing.append(f"{namespace}.step.{step}.data.device_dashboard_section")
 
         assert not missing, (
             f"Every step that includes the CONF_DEVICE_DASHBOARD_SECTION "
@@ -1706,9 +1692,7 @@ def _collect_water_boiler_entity_rows(parsed: dict) -> list[str]:
     ],
 )
 @pytest.mark.asyncio
-async def test_water_boiler_temperature_sensor_row_present_when_configured(
-    hass, template_name
-):
+async def test_water_boiler_temperature_sensor_row_present_when_configured(hass, template_name):
     """When the temp sensor is configured, its entity id is in the card's entities."""
     home = await _build_water_boiler_home(hass, MOCK_WATER_BOILER_CONFIG)
     template_path = COMPONENT_ROOT / "ui" / template_name
@@ -1721,8 +1705,7 @@ async def test_water_boiler_temperature_sensor_row_present_when_configured(
     assert parsed is not None
     entity_ids = _collect_water_boiler_entity_rows(parsed)
     assert "sensor.test_water_boiler_temperature" in entity_ids, (
-        f"Expected the configured temperature sensor in the boiler card; "
-        f"got rows: {entity_ids}"
+        f"Expected the configured temperature sensor in the boiler card; got rows: {entity_ids}"
     )
 
 
@@ -1868,8 +1851,8 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
     )
     assert pattern.search(content), (
         f"M2: {card_filename} must wrap the `_isProcessing... = true; "
-        f"await this._select(...)` block in `try { '{' }...{ '}' } finally "
-        f"{ '{' }...{ '}' }` so a rejected service call doesn't leave "
+        f"await this._select(...)` block in `try {'{'}...{'}'} finally "
+        f"{'{'}...{'}'}` so a rejected service call doesn't leave "
         f"the flag wedged."
     )
 
@@ -1921,8 +1904,7 @@ def test_card_raf_idle_gated(card_filename, gate):
 
     content = card_source_union(card_filename)
     assert "_startAnimation" in content and "_stopAnimation" in content, (
-        f"M4: {card_filename} must define both _startAnimation and "
-        f"_stopAnimation helpers."
+        f"M4: {card_filename} must define both _startAnimation and _stopAnimation helpers."
     )
     # The render path must call _startAnimation conditionally on `gate`.
     gate_call_pattern = re.compile(
@@ -1930,8 +1912,7 @@ def test_card_raf_idle_gated(card_filename, gate):
         re.DOTALL,
     )
     assert gate_call_pattern.search(content), (
-        f"M4: {card_filename} must call `_startAnimation()` conditionally "
-        f"on `{gate}` from within `_render()`."
+        f"M4: {card_filename} must call `_startAnimation()` conditionally on `{gate}` from within `_render()`."
     )
 
 
@@ -1961,9 +1942,7 @@ def test_water_boiler_card_uses_safe_number_helper():
 
     js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
     content = js_path.read_text(encoding="utf-8")
-    assert "_safeNumber" in content, (
-        "S8: qs-water-boiler-card.js must define `_safeNumber(...)` helper."
-    )
+    assert "_safeNumber" in content, "S8: qs-water-boiler-card.js must define `_safeNumber(...)` helper."
     # The duration-related reads must use _safeNumber, not raw `Number(.state || N)`.
     # Forbidden pattern: `Number(s<X>?.state || N)` where <X> is one of the duration sensors.
     forbidden = re.compile(
@@ -2002,15 +1981,11 @@ def test_card_caps_raf_dt_against_hidden_tab(card_filename):
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / card_filename
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
     executable = _strip_js_comments(content)
     # Accept either the literal `0.1` or the named `LERP_DT_CEIL` form
     # (both cards expose the same constant; pool's value is the same).
-    pattern = re.compile(
-        r"dt\s*=\s*Math\.min\s*\(\s*dt\s*,\s*(?:0\.1|LERP_DT_CEIL)\s*\)"
-    )
+    pattern = re.compile(r"dt\s*=\s*Math\.min\s*\(\s*dt\s*,\s*(?:0\.1|LERP_DT_CEIL)\s*\)")
     assert pattern.search(executable), (
         f"S6: {card_filename} must clamp the RAF step `dt` with "
         f"`dt = Math.min(dt, LERP_DT_CEIL)` (or `Math.min(dt, 0.1)`) "
@@ -2043,9 +2018,7 @@ def test_water_boiler_card_has_start_stop_helpers():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     # Strip comments first so the regex only matches executable code.
     executable = _strip_js_comments(content)
     assert re.search(r"_startAnimation\s*\(\s*\)\s*\{", executable), (
@@ -2054,12 +2027,8 @@ def test_water_boiler_card_has_start_stop_helpers():
     assert re.search(r"_stopAnimation\s*\(\s*\)\s*\{", executable), (
         "qs-water-boiler-card.js: missing _stopAnimation method"
     )
-    cb_body = _extract_js_function_body(
-        executable, r"connectedCallback\s*\(\s*\)\s*"
-    )
-    assert cb_body is not None, (
-        "qs-water-boiler-card.js: connectedCallback() not found"
-    )
+    cb_body = _extract_js_function_body(executable, r"connectedCallback\s*\(\s*\)\s*")
+    assert cb_body is not None, "qs-water-boiler-card.js: connectedCallback() not found"
     assert re.search(r"this\._startAnimation\s*\(\s*\)", cb_body), (
         "qs-water-boiler-card.js: connectedCallback must call "
         "_startAnimation directly (continuous-RAF model, mirror pool)"
@@ -2083,27 +2052,19 @@ def test_water_boiler_card_uses_heat_palette():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     block_match = re.search(
         r"const\s+colors\s*=\s*\{(?P<body>.*?)\};",
         content,
         flags=re.DOTALL,
     )
-    assert block_match is not None, (
-        "qs-water-boiler-card.js: expected `const colors = { ... };` block"
-    )
+    assert block_match is not None, "qs-water-boiler-card.js: expected `const colors = { ... };` block"
     body = block_match.group("body")
     for heat_hex in ("#FF5722", "#D32F2F", "#FF6E40", "#E64A19"):
-        assert heat_hex in body, (
-            f"qs-water-boiler-card.js: heat-palette color {heat_hex} "
-            f"missing from `const colors`"
-        )
+        assert heat_hex in body, f"qs-water-boiler-card.js: heat-palette color {heat_hex} missing from `const colors`"
     for cool_hex in ("#2196F3", "#00bcd4", "#8bc34a", "#00e1ff", "#0066ff"):
         assert cool_hex not in body, (
-            f"qs-water-boiler-card.js: legacy cool-blue color {cool_hex} "
-            f"still present in `const colors`"
+            f"qs-water-boiler-card.js: legacy cool-blue color {cool_hex} still present in `const colors`"
         )
 
 
@@ -2118,13 +2079,9 @@ def test_water_boiler_card_renders_water_layer():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
-    assert re.search(r"<clipPath\s+id=", executable), (
-        "qs-water-boiler-card.js: missing <clipPath> definition"
-    )
+    assert re.search(r"<clipPath\s+id=", executable), "qs-water-boiler-card.js: missing <clipPath> definition"
     for layer in (
         "wave0_cool",
         "wave0_boil",
@@ -2133,12 +2090,8 @@ def test_water_boiler_card_renders_water_layer():
         "wave2_cool",
         "wave2_boil",
     ):
-        assert re.search(rf'id="{layer}"', executable), (
-            f'qs-water-boiler-card.js: missing <path id="{layer}">'
-        )
-    assert re.search(r"_generateWavePath\s*\(", executable), (
-        "qs-water-boiler-card.js: missing _generateWavePath method"
-    )
+        assert re.search(rf'id="{layer}"', executable), f'qs-water-boiler-card.js: missing <path id="{layer}">'
+    assert re.search(r"_generateWavePath\s*\(", executable), "qs-water-boiler-card.js: missing _generateWavePath method"
     # N9: z-order — the clipped water <g> must precede the bgPath <path>
     # in source order. Pin via index comparison on stable anchor strings
     # that appear exactly once in `_render()`'s SVG template literal.
@@ -2146,13 +2099,8 @@ def test_water_boiler_card_renders_water_layer():
     bg_anchor = '<path d="${bgPath}"'
     g_idx = executable.find(g_anchor)
     bg_idx = executable.find(bg_anchor)
-    assert g_idx != -1, (
-        f"qs-water-boiler-card.js: missing clipped water group anchor "
-        f"{g_anchor!r}"
-    )
-    assert bg_idx != -1, (
-        f"qs-water-boiler-card.js: missing bgPath anchor {bg_anchor!r}"
-    )
+    assert g_idx != -1, f"qs-water-boiler-card.js: missing clipped water group anchor {g_anchor!r}"
+    assert bg_idx != -1, f"qs-water-boiler-card.js: missing bgPath anchor {bg_anchor!r}"
     assert g_idx < bg_idx, (
         "qs-water-boiler-card.js: the clipped water <g> must appear "
         "BEFORE the bgPath <path> in DOM order so the dashed ring, "
@@ -2165,13 +2113,10 @@ def test_water_boiler_card_has_bubble_system():
     """QS-200: boiler card has a dynamic bubble system with a soft cap."""
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
     assert re.search(r"MAX_CONCURRENT_BUBBLES\s*=\s*12", executable), (
-        "qs-water-boiler-card.js: missing `MAX_CONCURRENT_BUBBLES = 12` "
-        "constant"
+        "qs-water-boiler-card.js: missing `MAX_CONCURRENT_BUBBLES = 12` constant"
     )
     assert re.search(r"BUBBLE_SPAWN_RATE_HZ\s*=", executable), (
         "qs-water-boiler-card.js: missing BUBBLE_SPAWN_RATE_HZ constant"
@@ -2193,25 +2138,16 @@ def test_water_boiler_card_has_surface_glow():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
-    assert re.search(r"<filter\s+id=", executable) and (
-        "feGaussianBlur" in executable
-    ), (
+    assert re.search(r"<filter\s+id=", executable) and ("feGaussianBlur" in executable), (
         "qs-water-boiler-card.js: missing <filter>/<feGaussianBlur> in defs"
     )
-    assert re.search(r'id="surface_glow"', executable), (
-        'qs-water-boiler-card.js: missing <path id="surface_glow">'
-    )
+    assert re.search(r'id="surface_glow"', executable), 'qs-water-boiler-card.js: missing <path id="surface_glow">'
     assert re.search(r"mix-blend-mode\s*:\s*screen", executable), (
-        "qs-water-boiler-card.js: surface_glow must use "
-        "`mix-blend-mode: screen`"
+        "qs-water-boiler-card.js: surface_glow must use `mix-blend-mode: screen`"
     )
-    assert re.search(
-        r"SURFACE_GLOW_COLOR\s*=\s*['\"]#FF3D00['\"]", executable
-    ), (
+    assert re.search(r"SURFACE_GLOW_COLOR\s*=\s*['\"]#FF3D00['\"]", executable), (
         "qs-water-boiler-card.js: SURFACE_GLOW_COLOR must be the "
         "canonical `'#FF3D00'` (Material Deep Orange A400). Any drift "
         "should be deliberate — update this assertion in lock-step."
@@ -2234,9 +2170,7 @@ def test_water_boiler_card_pins_geometry_constants():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     expected = {
         "CENTER_CX": "160",
         "CENTER_CY": "160",
@@ -2246,18 +2180,14 @@ def test_water_boiler_card_pins_geometry_constants():
     for name, value in expected.items():
         pat = re.compile(rf"const\s+{name}\s*=\s*{re.escape(value)}\b")
         assert pat.search(content), (
-            f"qs-water-boiler-card.js: expected module-level "
-            f"`const {name} = {value};` declaration"
+            f"qs-water-boiler-card.js: expected module-level `const {name} = {value};` declaration"
         )
     # N5: pin BUBBLE_FILL_COLOR as a named constant too (was inlined
     # as `'rgba(255,255,255,0.85)'` in the bubble createElementNS call).
     assert re.search(
         r"const\s+BUBBLE_FILL_COLOR\s*=\s*['\"]rgba\(\s*255\s*,\s*255\s*,\s*255\s*,\s*0\.85\s*\)['\"]",
         content,
-    ), (
-        "qs-water-boiler-card.js: expected module-level "
-        "`const BUBBLE_FILL_COLOR = 'rgba(255,255,255,0.85)';`"
-    )
+    ), "qs-water-boiler-card.js: expected module-level `const BUBBLE_FILL_COLOR = 'rgba(255,255,255,0.85)';`"
 
 
 def test_water_boiler_card_pins_water_level_formula():
@@ -2275,9 +2205,7 @@ def test_water_boiler_card_pins_water_level_formula():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
     assert re.search(
         r"Number\.isFinite\s*\(\s*displayTargetHours\s*\)\s*&&\s*displayTargetHours\s*>\s*0",
@@ -2323,9 +2251,7 @@ def test_water_boiler_card_pins_opacity_cross_fade():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
     # Cool-layer opacity literal — allow either `(1 - this._currentColorMix).toFixed(N)`
     # or `1 - this._currentColorMix` direct.
@@ -2341,10 +2267,7 @@ def test_water_boiler_card_pins_opacity_cross_fade():
     assert re.search(
         r"this\._currentColorMix\s*\.toFixed\s*\(",
         executable,
-    ), (
-        "qs-water-boiler-card.js (AC-6): expected the boil-layer "
-        "opacity literal `this._currentColorMix.toFixed(N)`."
-    )
+    ), "qs-water-boiler-card.js (AC-6): expected the boil-layer opacity literal `this._currentColorMix.toFixed(N)`."
     # Lerp target: `targetColorMix = ... ? 1 : 0` — accept any condition
     # token (e.g. `boiling`, `this._running === true`, etc.) so future
     # readability tweaks don't break the test, but pin the `: 0` tail
@@ -2371,37 +2294,28 @@ def test_water_boiler_card_pins_boil_water_palette():
     family, not the legacy near-white triplet — only the band shape
     changes."""
     import re
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     # Extract the array body so the regex isn't tricked by
     # unrelated literals elsewhere in the file.
     match = re.search(
         r"const\s+BOIL_WATER_COLORS\s*=\s*\[(?P<body>[^\]]+)\]",
         content,
     )
-    assert match, (
-        "qs-water-boiler-card.js: BOIL_WATER_COLORS declaration "
-        "must remain a literal array."
-    )
+    assert match, "qs-water-boiler-card.js: BOIL_WATER_COLORS declaration must remain a literal array."
     body = match.group("body")
     entries = re.findall(
         r"hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)",
         body,
     )
-    assert len(entries) == 3, (
-        "QS-225 AC-4: BOIL_WATER_COLORS must contain exactly 3 hsla "
-        f"entries; got {len(entries)}."
-    )
+    assert len(entries) == 3, f"QS-225 AC-4: BOIL_WATER_COLORS must contain exactly 3 hsla entries; got {len(entries)}."
     for hue_s, sat_s, _light_s, alpha_s in entries:
         hue, sat, alpha = int(hue_s), int(sat_s), float(alpha_s)
         assert 200 <= hue <= 230, (
-            f"QS-225 AC-4: BOIL_WATER_COLORS hue {hue} outside "
-            "[200, 230] (true-blue band; legacy QS-220 was 185)."
+            f"QS-225 AC-4: BOIL_WATER_COLORS hue {hue} outside [200, 230] (true-blue band; legacy QS-220 was 185)."
         )
         assert 20 <= sat <= 45, (
-            f"QS-225 AC-4: BOIL_WATER_COLORS saturation {sat} outside "
-            "[20, 45] (paler direction; legacy QS-220 was 60)."
+            f"QS-225 AC-4: BOIL_WATER_COLORS saturation {sat} outside [20, 45] (paler direction; legacy QS-220 was 60)."
         )
         assert 0.05 <= alpha <= 0.30, (
             f"QS-225 AC-4: BOIL_WATER_COLORS alpha {alpha} outside "
@@ -2409,13 +2323,11 @@ def test_water_boiler_card_pins_boil_water_palette():
         )
     # Sentinel: legacy near-white pattern is gone (preserved from QS-220).
     assert "hsla(0, 0%" not in body, (
-        "QS-220 AC-1: the legacy near-white pattern "
-        "`hsla(0, 0%, …)` must not appear in BOIL_WATER_COLORS."
+        "QS-220 AC-1: the legacy near-white pattern `hsla(0, 0%, …)` must not appear in BOIL_WATER_COLORS."
     )
     # Sentinel: legacy QS-220 cyan-teal pattern is gone.
     assert "hsla(185, 60%" not in body, (
-        "QS-225 AC-4: the legacy QS-220 cyan-teal pattern "
-        "`hsla(185, 60%, …)` must not appear in BOIL_WATER_COLORS."
+        "QS-225 AC-4: the legacy QS-220 cyan-teal pattern `hsla(185, 60%, …)` must not appear in BOIL_WATER_COLORS."
     )
 
 
@@ -2426,40 +2338,31 @@ def test_pool_card_pins_default_water_palette_direction():
     the implementer can iterate inside the bands without amending the
     story."""
     import re
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
-    ).read_text()
+
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text()
     match = re.search(
         r"const\s+DEFAULT_WATER_COLORS\s*=\s*\[(?P<body>[^\]]+)\]",
         content,
     )
-    assert match, (
-        "qs-pool-card.js: DEFAULT_WATER_COLORS declaration must remain "
-        "a literal array."
-    )
+    assert match, "qs-pool-card.js: DEFAULT_WATER_COLORS declaration must remain a literal array."
     body = match.group("body")
     entries = re.findall(
         r"hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)",
         body,
     )
     assert len(entries) == 3, (
-        "QS-225 AC-1: DEFAULT_WATER_COLORS must contain exactly 3 "
-        f"hsla entries; got {len(entries)}."
+        f"QS-225 AC-1: DEFAULT_WATER_COLORS must contain exactly 3 hsla entries; got {len(entries)}."
     )
     for hue_s, _sat_s, _light_s, alpha_s in entries:
         hue = int(hue_s)
         alpha = float(alpha_s)
-        assert 200 <= hue <= 230, (
-            f"QS-225 AC-1: DEFAULT_WATER_COLORS hue {hue} outside "
-            "[200, 230] (true-blue band)."
-        )
+        assert 200 <= hue <= 230, f"QS-225 AC-1: DEFAULT_WATER_COLORS hue {hue} outside [200, 230] (true-blue band)."
         assert 0.05 <= alpha <= 0.40, (
             f"QS-225 AC-1: DEFAULT_WATER_COLORS alpha {alpha} outside "
             "[0.05, 0.40] (substantially more transparent than legacy)."
         )
     assert "hsla(185, 60%, 22%, 0.55)" not in content, (
-        "QS-225 AC-1: legacy literal `hsla(185, 60%, 22%, 0.55)` must "
-        "be removed from qs-pool-card.js."
+        "QS-225 AC-1: legacy literal `hsla(185, 60%, 22%, 0.55)` must be removed from qs-pool-card.js."
     )
 
 
@@ -2469,9 +2372,8 @@ def test_pool_card_pins_temp_envelope_direction():
     This is the runtime path used whenever the pool has a temp sensor —
     DEFAULT_WATER_COLORS is only the no-sensor fallback."""
     import re
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
-    ).read_text()
+
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text()
     executable = _strip_js_comments(content)
 
     # Envelope constants.
@@ -2484,41 +2386,28 @@ def test_pool_card_pins_temp_envelope_direction():
         "in the canonical `const COOL_HUE = N, WARM_HUE = M;` shape."
     )
     cool_hue, warm_hue = int(env.group(1)), int(env.group(2))
-    assert 200 <= cool_hue <= 230, (
-        f"QS-225 AC-1: COOL_HUE {cool_hue} outside [200, 230]."
-    )
-    assert 195 <= warm_hue <= 225, (
-        f"QS-225 AC-1: WARM_HUE {warm_hue} outside [195, 225]."
-    )
+    assert 200 <= cool_hue <= 230, f"QS-225 AC-1: COOL_HUE {cool_hue} outside [200, 230]."
+    assert 195 <= warm_hue <= 225, f"QS-225 AC-1: WARM_HUE {warm_hue} outside [195, 225]."
     assert warm_hue <= cool_hue, (
-        f"QS-225 AC-1: WARM_HUE ({warm_hue}) must be ≤ COOL_HUE "
-        f"({cool_hue}) to preserve cool>warm hue ordering."
+        f"QS-225 AC-1: WARM_HUE ({warm_hue}) must be ≤ COOL_HUE ({cool_hue}) to preserve cool>warm hue ordering."
     )
     assert "const COOL_HUE = 195, WARM_HUE = 175" not in executable, (
-        "QS-225 AC-1: legacy declaration `const COOL_HUE = 195, "
-        "WARM_HUE = 175;` must be removed."
+        "QS-225 AC-1: legacy declaration `const COOL_HUE = 195, WARM_HUE = 175;` must be removed."
     )
 
     # Embedded alphas inside _tempToColor's body only — must scope via
     # the brace-walker helper to avoid catching CSS `rgba(0,0,0,0.8)`
     # at the bottom of the file.
     body = _extract_js_function_body(executable, r"_tempToColor\s*\(")
-    assert body is not None, (
-        "qs-pool-card.js: _tempToColor function body must be "
-        "extractable (signature unchanged)."
-    )
+    assert body is not None, "qs-pool-card.js: _tempToColor function body must be extractable (signature unchanged)."
     # Alpha literals look like `, 0.NN)` at the end of an hsla(...)
     # template — exclude `toFixed(N)` which has the form `(N)`.
     alphas = [float(a) for a in re.findall(r",\s*(0\.\d+)\s*\)", body)]
     assert len(alphas) >= 3, (
-        f"QS-225 AC-1: _tempToColor body must contain ≥3 alpha "
-        f"literals; got {len(alphas)} ({alphas})."
+        f"QS-225 AC-1: _tempToColor body must contain ≥3 alpha literals; got {len(alphas)} ({alphas})."
     )
     for alpha in alphas:
-        assert 0.05 <= alpha <= 0.40, (
-            f"QS-225 AC-1: _tempToColor alpha {alpha} outside "
-            "[0.05, 0.40]."
-        )
+        assert 0.05 <= alpha <= 0.40, f"QS-225 AC-1: _tempToColor alpha {alpha} outside [0.05, 0.40]."
 
 
 def test_water_boiler_card_pins_cool_water_palette_direction():
@@ -2526,45 +2415,32 @@ def test_water_boiler_card_pins_cool_water_palette_direction():
     less-blue + greyish + more transparent. Sat ≤ 30 makes it read
     grey-ish instead of saturated blue."""
     import re
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     # Scope by symbol name (mirrors the QS-220 BOIL_WATER_COLORS pin)
     # so the BOIL palette is not walked into.
     match = re.search(
         r"const\s+COOL_WATER_COLORS\s*=\s*\[(?P<body>[^\]]+)\]",
         content,
     )
-    assert match, (
-        "qs-water-boiler-card.js: COOL_WATER_COLORS declaration must "
-        "remain a literal array."
-    )
+    assert match, "qs-water-boiler-card.js: COOL_WATER_COLORS declaration must remain a literal array."
     body = match.group("body")
     entries = re.findall(
         r"hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)",
         body,
     )
-    assert len(entries) == 3, (
-        "QS-225 AC-2: COOL_WATER_COLORS must contain exactly 3 hsla "
-        f"entries; got {len(entries)}."
-    )
+    assert len(entries) == 3, f"QS-225 AC-2: COOL_WATER_COLORS must contain exactly 3 hsla entries; got {len(entries)}."
     for hue_s, sat_s, _light_s, alpha_s in entries:
         hue, sat, alpha = int(hue_s), int(sat_s), float(alpha_s)
         assert 195 <= hue <= 215, (
-            f"QS-225 AC-2: COOL_WATER_COLORS hue {hue} outside "
-            "[195, 215] (still cool, but not the legacy 185 teal)."
+            f"QS-225 AC-2: COOL_WATER_COLORS hue {hue} outside [195, 215] (still cool, but not the legacy 185 teal)."
         )
         assert 10 <= sat <= 30, (
-            f"QS-225 AC-2: COOL_WATER_COLORS saturation {sat} outside "
-            "[10, 30] (greyish direction; legacy was 60)."
+            f"QS-225 AC-2: COOL_WATER_COLORS saturation {sat} outside [10, 30] (greyish direction; legacy was 60)."
         )
-        assert 0.05 <= alpha <= 0.40, (
-            f"QS-225 AC-2: COOL_WATER_COLORS alpha {alpha} outside "
-            "[0.05, 0.40]."
-        )
+        assert 0.05 <= alpha <= 0.40, f"QS-225 AC-2: COOL_WATER_COLORS alpha {alpha} outside [0.05, 0.40]."
     assert "hsla(185, 60%, 22%, 0.55)" not in body, (
-        "QS-225 AC-2: legacy literal `hsla(185, 60%, 22%, 0.55)` must "
-        "be removed from COOL_WATER_COLORS."
+        "QS-225 AC-2: legacy literal `hsla(185, 60%, 22%, 0.55)` must be removed from COOL_WATER_COLORS."
     )
 
 
@@ -2575,33 +2451,27 @@ def test_climate_card_snowflake_matches_pile_tint_more_solid():
     alpha is higher so flakes look more solid than the translucent
     pile."""
     import re
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-    ).read_text()
+
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
     executable = _strip_js_comments(content)
 
-    hsla_re = (
-        r"'hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)'"
-    )
+    hsla_re = r"'hsla\(\s*(\d+)\s*,\s*(\d+)%\s*,\s*(\d+)%\s*,\s*(0\.\d+)\s*\)'"
     front = re.search(
-        r"const\s+SNOW_FRONT_COLOR\s*=\s*" + hsla_re, executable,
+        r"const\s+SNOW_FRONT_COLOR\s*=\s*" + hsla_re,
+        executable,
     )
     fill = re.search(
-        r"const\s+SNOW_FILL_COLOR\s*=\s*" + hsla_re, executable,
+        r"const\s+SNOW_FILL_COLOR\s*=\s*" + hsla_re,
+        executable,
     )
-    assert front, (
-        "qs-climate-card.js: SNOW_FRONT_COLOR must remain a "
-        "module-level const assigned to an hsla literal."
-    )
+    assert front, "qs-climate-card.js: SNOW_FRONT_COLOR must remain a module-level const assigned to an hsla literal."
     assert fill, (
         "QS-225 AC-3: SNOW_FILL_COLOR must be a module-level const "
         "assigned to an hsla literal (no longer the legacy rgba)."
     )
 
-    fh, fs, fl, fa = int(front.group(1)), int(front.group(2)), \
-                     int(front.group(3)), float(front.group(4))
-    xh, xs, xl, xa = int(fill.group(1)), int(fill.group(2)), \
-                     int(fill.group(3)), float(fill.group(4))
+    fh, fs, fl, fa = int(front.group(1)), int(front.group(2)), int(front.group(3)), float(front.group(4))
+    xh, xs, xl, xa = int(fill.group(1)), int(fill.group(2)), int(fill.group(3)), float(fill.group(4))
 
     assert (xh, xs, xl) == (fh, fs, fl), (
         f"QS-225 AC-3: SNOW_FILL_COLOR hue/sat/light ({xh},{xs}%,{xl}%) "
@@ -2618,8 +2488,7 @@ def test_climate_card_snowflake_matches_pile_tint_more_solid():
         "(solid enough to read in flight, not pure-opaque)."
     )
     assert "rgba(255, 255, 255, 0.9)" not in content, (
-        "QS-225 AC-3: legacy literal `rgba(255, 255, 255, 0.9)` must "
-        "be removed from qs-climate-card.js."
+        "QS-225 AC-3: legacy literal `rgba(255, 255, 255, 0.9)` must be removed from qs-climate-card.js."
     )
 
 
@@ -2633,13 +2502,9 @@ def test_water_boiler_card_center_uses_named_constants():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
-    positive = re.compile(
-        r"const\s+center\s*=\s*\{\s*cx\s*:\s*CENTER_CX\s*,\s*cy\s*:\s*CENTER_CY\s*\}"
-    )
+    positive = re.compile(r"const\s+center\s*=\s*\{\s*cx\s*:\s*CENTER_CX\s*,\s*cy\s*:\s*CENTER_CY\s*\}")
     assert positive.search(executable), (
         "qs-water-boiler-card.js: the `const center = {...}` literal "
         "must use `CENTER_CX` / `CENTER_CY`, not inlined `160` values. "
@@ -2667,9 +2532,7 @@ def test_water_boiler_card_factors_reset_dom_refs_helper():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
     helper_def = re.search(r"_resetDomRefs\s*\(\s*\)\s*\{", executable)
     assert helper_def, (
@@ -2690,34 +2553,28 @@ def test_water_boiler_card_steam_layer_after_surface_glow_in_clip():
     """QS-211 AC-1: the steam `<g>` is the new last child of the water
     clip-path group, sitting AFTER `<path id="surface_glow">` in source
     order. It carries the steam filter and `pointer-events="none"`."""
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     clip_open = source.find('<g clip-path="url(#${waterClipId})">')
     assert clip_open != -1, (
         "qs-water-boiler-card.js: missing the water clip-path group "
-        "opener `<g clip-path=\"url(#${waterClipId})\">` — has the "
+        'opener `<g clip-path="url(#${waterClipId})">` — has the '
         "QS-200 markup been removed?"
     )
     surface_idx = source.find('id="surface_glow"', clip_open)
     steam_idx = source.find('id="${steamLayerId}"', clip_open)
     assert surface_idx != -1, (
-        "qs-water-boiler-card.js: missing `id=\"surface_glow\"` inside "
-        "the water clip group (QS-200 anchor)."
+        'qs-water-boiler-card.js: missing `id="surface_glow"` inside the water clip group (QS-200 anchor).'
     )
     assert steam_idx != -1, (
         "qs-water-boiler-card.js: missing the QS-211 steam layer "
-        "`<g id=\"${steamLayerId}\" ...>` inside the water clip group."
+        '`<g id="${steamLayerId}" ...>` inside the water clip group.'
     )
     assert surface_idx < steam_idx, (
         "qs-water-boiler-card.js: the steam `<g>` must appear AFTER "
-        "`<path id=\"surface_glow\">` in source order so it stacks "
+        '`<path id="surface_glow">` in source order so it stacks '
         "above the surface glow inside the clip group."
     )
-    steam_group = (
-        '<g id="${steamLayerId}" filter="url(#${steamFilterId})" '
-        'pointer-events="none"></g>'
-    )
+    steam_group = '<g id="${steamLayerId}" filter="url(#${steamFilterId})" pointer-events="none"></g>'
     assert steam_group in source, (
         "qs-water-boiler-card.js: steam group markup must be exactly "
         f"`{steam_group}` (filter + pointer-events both required)."
@@ -2732,8 +2589,7 @@ def test_water_boiler_card_steam_layer_after_surface_glow_in_clip():
     # group".
     steam_group_idx = source.find(steam_group, clip_open)
     assert steam_group_idx != -1, (
-        "qs-water-boiler-card.js: literal steam group block must appear "
-        "inside the water clip group."
+        "qs-water-boiler-card.js: literal steam group block must appear inside the water clip group."
     )
     outer_close = source.find("</g>", steam_group_idx + len(steam_group))
     assert outer_close != -1, (
@@ -2749,9 +2605,7 @@ def test_water_boiler_card_steam_spawn_is_boiling_gated():
     OUTSIDE that guard (graceful-exit per design decision D15)."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     spawn_gate = re.search(
         r"if \(boiling\)\s*\{[^}]*while\s*\(\s*this\._nextSteamAt\s*<=\s*0"
@@ -2768,18 +2622,14 @@ def test_water_boiler_card_steam_spawn_is_boiling_gated():
         r"for\s*\(\s*const\s+p\s+of\s+this\._steamPuffs\s*\)",
         executable,
     )
-    assert advance_match, (
-        "qs-water-boiler-card.js: missing the steam advance loop "
-        "`for (const p of this._steamPuffs)`."
-    )
+    assert advance_match, "qs-water-boiler-card.js: missing the steam advance loop `for (const p of this._steamPuffs)`."
     cap_clamp = re.search(
         r"if\s*\(\s*this\._nextSteamAt\s*<\s*0\s*\)\s*"
         r"this\._nextSteamAt\s*=\s*0\s*;",
         executable,
     )
     assert cap_clamp, (
-        "qs-water-boiler-card.js: missing the cap-recovery clamp "
-        "`if (this._nextSteamAt < 0) this._nextSteamAt = 0;`."
+        "qs-water-boiler-card.js: missing the cap-recovery clamp `if (this._nextSteamAt < 0) this._nextSteamAt = 0;`."
     )
     # The advance loop must come AFTER the cap-clamp line (which is the
     # last statement inside the `if (boiling)` block), proving the
@@ -2804,23 +2654,16 @@ def test_water_boiler_card_steam_retire_both_branches():
     is already 0, so the remove is invisible."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     advance_start = executable.find("for (const p of this._steamPuffs)")
-    assert advance_start != -1, (
-        "qs-water-boiler-card.js: missing steam advance loop."
-    )
+    assert advance_start != -1, "qs-water-boiler-card.js: missing steam advance loop."
     advance_block = executable[advance_start : advance_start + 1500]
     # Per-puff geometry (unchanged).
     assert re.search(
         r"const\s+dx\s*=\s*p\.cx\s*-\s*CENTER_CX",
         advance_block,
-    ), (
-        "qs-water-boiler-card.js: the per-puff geometry must derive "
-        "`dx = p.cx - CENTER_CX` inside the advance loop."
-    )
+    ), "qs-water-boiler-card.js: the per-puff geometry must derive `dx = p.cx - CENTER_CX` inside the advance loop."
     assert re.search(
         r"const\s+localChordHalf\s*=\s*Math\.sqrt\(\s*Math\.max\(\s*0\s*,\s*"
         r"CLIP_R\s*\*\s*CLIP_R\s*-\s*dx\s*\*\s*dx\s*\)\s*\)",
@@ -2854,9 +2697,7 @@ def test_water_boiler_card_steam_retire_both_branches():
     # Negative guard: the pin-at-rim assignment must NOT appear (it
     # caused the "stuck above the surface" perception and has been
     # superseded by the rim-fade design).
-    assert not re.search(
-        r"p\.cy\s*=\s*localTopY", advance_block
-    ), (
+    assert not re.search(r"p\.cy\s*=\s*localTopY", advance_block), (
         "qs-water-boiler-card.js: the pin-at-rim assignment "
         "`p.cy = localTopY` must NOT appear — it was reverted in "
         "favour of the rim-fade approach."
@@ -2876,9 +2717,7 @@ def test_water_boiler_card_steam_spawn_cx_narrowed_to_central_band():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     assert re.search(
         r"const\s+STEAM_SPAWN_CX_HALF_PX\s*=\s*\d+",
@@ -2919,9 +2758,7 @@ def test_water_boiler_card_render_preserves_steam_puffs_across_innerhtml():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Pre-innerHTML snapshot.
@@ -3010,9 +2847,7 @@ def test_water_boiler_card_render_preserves_bubbles_across_innerhtml():
     a per-push DOM-thrash spike."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
 
     assert re.search(
@@ -3042,17 +2877,11 @@ def test_water_boiler_card_render_preserves_bubbles_across_innerhtml():
     assert re.search(
         r"this\._bubbles\s*=\s*preservedBubbles",
         executable,
-    ), (
-        "qs-water-boiler-card.js: `_render()` must restore "
-        "`this._bubbles = preservedBubbles` after _resetDomRefs()."
-    )
+    ), "qs-water-boiler-card.js: `_render()` must restore `this._bubbles = preservedBubbles` after _resetDomRefs()."
     assert re.search(
         r"this\._nextBubbleAt\s*=\s*preservedNextBubbleAt",
         executable,
-    ), (
-        "qs-water-boiler-card.js: `_render()` must restore "
-        "`this._nextBubbleAt = preservedNextBubbleAt`."
-    )
+    ), "qs-water-boiler-card.js: `_render()` must restore `this._nextBubbleAt = preservedNextBubbleAt`."
     # Truthy-branch filter for symmetry with the steam path.
     assert re.search(
         r"this\._bubbles\s*=\s*preservedBubbles\.filter\(\s*b\s*=>\s*b\?\.el\s*\)",
@@ -3096,9 +2925,7 @@ def test_climate_card_render_preserves_snowflakes_across_innerhtml():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Pre-innerHTML snapshot.
@@ -3187,17 +3014,10 @@ def test_climate_card_render_preserves_snowflakes_across_innerhtml():
     snap_idx = executable.find("const preservedSnowflakes")
     next_idx = executable.find("const preservedNextSnowflakeAt")
     innerhtml_idx = executable.find("this._root.innerHTML")
-    assert snap_idx >= 0, (
-        "qs-climate-card.js: file must contain "
-        "`const preservedSnowflakes` (review fix #01 S1)."
-    )
-    assert next_idx >= 0, (
-        "qs-climate-card.js: file must contain "
-        "`const preservedNextSnowflakeAt` (review fix #01 S1)."
-    )
+    assert snap_idx >= 0, "qs-climate-card.js: file must contain `const preservedSnowflakes` (review fix #01 S1)."
+    assert next_idx >= 0, "qs-climate-card.js: file must contain `const preservedNextSnowflakeAt` (review fix #01 S1)."
     assert innerhtml_idx >= 0, (
-        "qs-climate-card.js: file must contain "
-        "`this._root.innerHTML` rewrite (review fix #01 S1)."
+        "qs-climate-card.js: file must contain `this._root.innerHTML` rewrite (review fix #01 S1)."
     )
     # All `_invalidate*Cache()` and `newSnowLayer.appendChild` lookups
     # start AT `snap_idx` to skip the pre-_render() declaration and
@@ -3207,16 +3027,13 @@ def test_climate_card_render_preserves_snowflakes_across_innerhtml():
     inv_wind_idx = executable.find("_invalidateWindCache()", snap_idx)
     attach_idx = executable.find("newSnowLayer.appendChild(b.el)", snap_idx)
     assert inv_flame_idx >= 0, (
-        "qs-climate-card.js: `_render()` (after the snapshot) must "
-        "call `_invalidateFlameCache()` (review fix #01 S1)."
+        "qs-climate-card.js: `_render()` (after the snapshot) must call `_invalidateFlameCache()` (review fix #01 S1)."
     )
     assert inv_snow_idx >= 0, (
-        "qs-climate-card.js: `_render()` (after the snapshot) must "
-        "call `_invalidateSnowCache()` (review fix #01 S1)."
+        "qs-climate-card.js: `_render()` (after the snapshot) must call `_invalidateSnowCache()` (review fix #01 S1)."
     )
     assert inv_wind_idx >= 0, (
-        "qs-climate-card.js: `_render()` (after the snapshot) must "
-        "call `_invalidateWindCache()` (review fix #01 S1)."
+        "qs-climate-card.js: `_render()` (after the snapshot) must call `_invalidateWindCache()` (review fix #01 S1)."
     )
     assert attach_idx >= 0, (
         "qs-climate-card.js: `_render()` (after the snapshot) must "
@@ -3271,13 +3088,9 @@ def test_invalidate_snow_cache_does_not_null_el():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
     executable = _strip_js_comments(source)
-    body = _extract_js_function_body(
-        executable, r"_invalidateSnowCache\s*\(\s*\)"
-    )
+    body = _extract_js_function_body(executable, r"_invalidateSnowCache\s*\(\s*\)")
     assert body is not None, (
         "qs-climate-card.js: `_invalidateSnowCache()` body must be "
         "extractable for the AC-3 invariant pin (review fix #01 S2)."
@@ -3286,9 +3099,7 @@ def test_invalidate_snow_cache_does_not_null_el():
     # must be present so the disconnect path still tears down DOM.
     # `(?:\?\.)?` permits the JS optional-chained call syntax
     # `remove?.()` as well as the plain `remove()` form.
-    assert re.search(
-        r"b\??\.el\??\.remove(?:\?\.)?\(\s*\)", body
-    ), (
+    assert re.search(r"b\??\.el\??\.remove(?:\?\.)?\(\s*\)", body), (
         "qs-climate-card.js: AC-3 invariant — `_invalidateSnowCache()` "
         "must call `.remove()` on each flake's `el` (e.g. "
         "`b?.el?.remove?.()`) so the disconnectedCallback / real "
@@ -3328,24 +3139,17 @@ def test_water_boiler_card_steam_spawn_defers_on_zero_budget():
     next attempt waits a full slot."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     # Locate the steam spawn while-loop.
     spawn_idx = executable.find("while (this._nextSteamAt <= 0")
-    assert spawn_idx != -1, (
-        "qs-water-boiler-card.js: missing the steam spawn while loop."
-    )
+    assert spawn_idx != -1, "qs-water-boiler-card.js: missing the steam spawn while loop."
     spawn_block = executable[spawn_idx : spawn_idx + 3000]
     # Pin the riseBudget guard exists in the spawn loop.
     assert re.search(
         r"if\s*\(\s*riseBudget\s*<=\s*0\s*\)",
         spawn_block,
-    ), (
-        "qs-water-boiler-card.js: missing the `if (riseBudget <= 0)` "
-        "guard in the steam spawn loop."
-    )
+    ), "qs-water-boiler-card.js: missing the `if (riseBudget <= 0)` guard in the steam spawn loop."
     # Pin the proper cadence advance.
     assert re.search(
         r"this\._nextSteamAt\s*\+=\s*1\s*/\s*STEAM_SPAWN_RATE_HZ",
@@ -3393,9 +3197,7 @@ def test_water_boiler_card_steam_opacity_formula():
     `STEAM_FILL_COLOR = 'rgba(195,215,235,0.45)'`."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     assert re.search(
         r"STEAM_FILL_COLOR\s*=\s*['\"]rgba\(195,\s*215,\s*235,\s*0\.45\)['\"]",
@@ -3446,34 +3248,25 @@ def test_water_boiler_card_steam_opacity_formula():
     )
     # Find the steam advance block and assert per-puff fade derivations.
     advance_start = executable.find("for (const p of this._steamPuffs)")
-    assert advance_start != -1, (
-        "qs-water-boiler-card.js: missing steam advance loop."
-    )
+    assert advance_start != -1, "qs-water-boiler-card.js: missing steam advance loop."
     advance_block = executable[advance_start : advance_start + 1500]
     assert "0.15" in advance_block, (
-        "qs-water-boiler-card.js: missing the `0.15` fade-in breakpoint "
-        "in the steam life-curve."
+        "qs-water-boiler-card.js: missing the `0.15` fade-in breakpoint in the steam life-curve."
     )
     assert re.search(r"lifeT\s*<\s*0\.85\b", advance_block), (
         "qs-water-boiler-card.js: missing the `lifeT < 0.85` fade-out "
         "guard in the steam life-curve (safety branch for puffs that "
         "stall via maxLife rather than geometric retire)."
     )
-    assert re.search(
-        r"\(\s*lifeT\s*-\s*0\.85\s*\)\s*/\s*0\.15", advance_block
-    ), (
-        "qs-water-boiler-card.js: missing the `(lifeT - 0.85) / 0.15` "
-        "fade-out ramp in the steam life-curve."
+    assert re.search(r"\(\s*lifeT\s*-\s*0\.85\s*\)\s*/\s*0\.15", advance_block), (
+        "qs-water-boiler-card.js: missing the `(lifeT - 0.85) / 0.15` fade-out ramp in the steam life-curve."
     )
     # Per-puff rim-fade derivation: rimDistance from p.cy to localTopY,
     # divided by the STORED p.fadeBand (set at spawn).
     assert re.search(
         r"const\s+rimDistance\s*=\s*p\.cy\s*-\s*localTopY",
         advance_block,
-    ), (
-        "qs-water-boiler-card.js: missing `rimDistance = p.cy - "
-        "localTopY` derivation in the advance loop."
-    )
+    ), "qs-water-boiler-card.js: missing `rimDistance = p.cy - localTopY` derivation in the advance loop."
     assert re.search(
         r"const\s+rimOpacity\s*=\s*Math\.max\(\s*0\s*,\s*Math\.min\(\s*1\s*,"
         r"\s*rimDistance\s*/\s*p\.fadeBand\s*\)\s*\)",
@@ -3520,24 +3313,16 @@ def test_water_boiler_card_steam_ids_derive_from_next_clip_id():
     `wb_steamLayer_${uid}` / `wb_steamFilter_${uid}`."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     assert re.search(
         r"this\._steamLayerId\s*=\s*`wb_steamLayer_\$\{uid\}`",
         executable,
-    ), (
-        "qs-water-boiler-card.js: missing "
-        "`this._steamLayerId = \\`wb_steamLayer_${uid}\\`` assignment."
-    )
+    ), "qs-water-boiler-card.js: missing `this._steamLayerId = \\`wb_steamLayer_${uid}\\`` assignment."
     assert re.search(
         r"this\._steamFilterId\s*=\s*`wb_steamFilter_\$\{uid\}`",
         executable,
-    ), (
-        "qs-water-boiler-card.js: missing "
-        "`this._steamFilterId = \\`wb_steamFilter_${uid}\\`` assignment."
-    )
+    ), "qs-water-boiler-card.js: missing `this._steamFilterId = \\`wb_steamFilter_${uid}\\`` assignment."
     # Both must live inside the per-instance ID guard, i.e. after the
     # `_nextClipId` bump and before the next consumer (`const waterClipId
     # = this._waterClipId;`).
@@ -3545,17 +3330,13 @@ def test_water_boiler_card_steam_ids_derive_from_next_clip_id():
         r"if\s*\(\s*!this\._waterClipId\s*\)\s*\{",
         executable,
     )
-    assert guard_open, (
-        "qs-water-boiler-card.js: missing the "
-        "`if (!this._waterClipId) { ... }` per-instance ID guard."
-    )
+    assert guard_open, "qs-water-boiler-card.js: missing the `if (!this._waterClipId) { ... }` per-instance ID guard."
     consumer = executable.find(
         "const waterClipId = this._waterClipId;",
         guard_open.end(),
     )
     assert consumer != -1, (
-        "qs-water-boiler-card.js: missing the "
-        "`const waterClipId = this._waterClipId;` consumer line."
+        "qs-water-boiler-card.js: missing the `const waterClipId = this._waterClipId;` consumer line."
     )
     steam_layer_idx = executable.find("this._steamLayerId", guard_open.end())
     steam_filter_idx = executable.find("this._steamFilterId", guard_open.end())
@@ -3578,14 +3359,10 @@ def test_water_boiler_card_reset_dom_refs_includes_steam():
     automatically — no per-site duplication."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     body = _extract_js_function_body(executable, r"_resetDomRefs\s*\(\s*\)")
-    assert body is not None, (
-        "qs-water-boiler-card.js: missing `_resetDomRefs()` method."
-    )
+    assert body is not None, "qs-water-boiler-card.js: missing `_resetDomRefs()` method."
     assert re.search(r"this\._steamLayerEl\s*=\s*null", body), (
         "qs-water-boiler-card.js: `_resetDomRefs()` must null "
         "`this._steamLayerEl` so a stale ref doesn't survive into the "
@@ -3605,9 +3382,7 @@ def test_water_boiler_card_steam_cap_hit_clamps_next_steam_at():
     burst. Mirrors the QS-200 bubble pattern (line 347)."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
     assert re.search(
         r"if\s*\(\s*this\._nextSteamAt\s*<\s*0\s*\)\s*"
@@ -3626,16 +3401,10 @@ def test_water_boiler_card_disconnected_callback_clears_steam():
     bubble teardown shape (line ~426)."""
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(source)
-    body = _extract_js_function_body(
-        executable, r"disconnectedCallback\s*\(\s*\)"
-    )
-    assert body is not None, (
-        "qs-water-boiler-card.js: missing `disconnectedCallback()`."
-    )
+    body = _extract_js_function_body(executable, r"disconnectedCallback\s*\(\s*\)")
+    assert body is not None, "qs-water-boiler-card.js: missing `disconnectedCallback()`."
     assert re.search(
         r"this\._steamPuffs\?\.forEach\s*\(\s*p\s*=>\s*p\.el\?\.remove\?\.\(\)\s*\)",
         body,
@@ -3645,8 +3414,7 @@ def test_water_boiler_card_disconnected_callback_clears_steam():
         "`this._steamPuffs?.forEach(p => p.el?.remove?.())`."
     )
     assert re.search(r"this\._steamPuffs\s*=\s*\[\s*\]", body), (
-        "qs-water-boiler-card.js: `disconnectedCallback` must clear "
-        "`this._steamPuffs = []` after removing nodes."
+        "qs-water-boiler-card.js: `disconnectedCallback` must clear `this._steamPuffs = []` after removing nodes."
     )
 
 
@@ -3655,23 +3423,15 @@ def test_water_boiler_card_steam_filter_region_attributes():
     the safe-region attributes (`x="-50%" y="-50%" width="200%"
     height="200%"`) so the Gaussian blur isn't clipped at the puff
     bounding box. Mirrors the surface_glow filter precedent."""
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
-    filter_decl = (
-        '<filter id="${steamFilterId}" x="-50%" y="-50%" '
-        'width="200%" height="200%">'
-    )
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
+    filter_decl = '<filter id="${steamFilterId}" x="-50%" y="-50%" width="200%" height="200%">'
     assert filter_decl in source, (
         "qs-water-boiler-card.js: steam filter declaration must include "
         "the safe-region attributes — expected literal substring "
         f"`{filter_decl}` (mirrors the surface_glow filter precedent)."
     )
-    assert (
-        '<feGaussianBlur stdDeviation="${STEAM_BLUR_STDDEV}" />' in source
-    ), (
-        "qs-water-boiler-card.js: steam filter must contain "
-        "`<feGaussianBlur stdDeviation=\"${STEAM_BLUR_STDDEV}\" />`."
+    assert '<feGaussianBlur stdDeviation="${STEAM_BLUR_STDDEV}" />' in source, (
+        'qs-water-boiler-card.js: steam filter must contain `<feGaussianBlur stdDeviation="${STEAM_BLUR_STDDEV}" />`.'
     )
 
 
@@ -3704,39 +3464,26 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Grain filter in <defs> declares feTurbulence type="fractalNoise".
-    assert re.search(
-        r'<filter\s+id="\$\{grainFilterId\}"', source
-    ), (
-        "qs-car-card.js: missing `<filter id=\"${grainFilterId}\">` "
-        "declaration in <defs>."
+    assert re.search(r'<filter\s+id="\$\{grainFilterId\}"', source), (
+        'qs-car-card.js: missing `<filter id="${grainFilterId}">` declaration in <defs>.'
     )
-    assert (
-        '<feTurbulence type="fractalNoise"' in source
-    ), (
-        "qs-car-card.js: grain filter must use "
-        "`<feTurbulence type=\"fractalNoise\" …>` (AC-1 #1)."
+    assert '<feTurbulence type="fractalNoise"' in source, (
+        'qs-car-card.js: grain filter must use `<feTurbulence type="fractalNoise" …>` (AC-1 #1).'
     )
 
     # The two wave paths share the clip group anchor.
     clip_g_anchor = '<g clip-path="url(#${electronClipId})"'
     assert clip_g_anchor in source, (
-        "qs-car-card.js: missing the electron-soup clipped group "
-        f"`{clip_g_anchor}…>` (AC-1)."
+        f"qs-car-card.js: missing the electron-soup clipped group `{clip_g_anchor}…>` (AC-1)."
     )
 
-    assert 'id="electron_wave_idle"' in source, (
-        "qs-car-card.js: missing `<path id=\"electron_wave_idle\">` "
-        "(AC-1 #2)."
-    )
+    assert 'id="electron_wave_idle"' in source, 'qs-car-card.js: missing `<path id="electron_wave_idle">` (AC-1 #2).'
     assert 'id="electron_wave_charge"' in source, (
-        "qs-car-card.js: missing `<path id=\"electron_wave_charge\">` "
-        "(AC-1 #2)."
+        'qs-car-card.js: missing `<path id="electron_wave_charge">` (AC-1 #2).'
     )
 
     # Both waves share the same `d` placeholder (initialWavePath) and
@@ -3750,9 +3497,9 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
     )
     assert idle_wave_re.search(source), (
         "qs-car-card.js: `electron_wave_idle` <path> must carry "
-        "`d=\"${initialWavePath}\" fill=\"${IDLE_SOUP_COLOR}\" "
-        "opacity=\"${initialIdleOpacity}\" "
-        "filter=\"url(#${grainFilterId})\"` (AC-1 #2/#3)."
+        '`d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" '
+        'opacity="${initialIdleOpacity}" '
+        'filter="url(#${grainFilterId})"` (AC-1 #2/#3).'
     )
     charge_wave_re = re.compile(
         r'<path\s+id="electron_wave_charge"\s+'
@@ -3763,9 +3510,9 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
     )
     assert charge_wave_re.search(source), (
         "qs-car-card.js: `electron_wave_charge` <path> must carry "
-        "`d=\"${initialWavePath}\" fill=\"${CHARGE_SOUP_COLOR}\" "
-        "opacity=\"${initialChargeOpacity}\" "
-        "filter=\"url(#${grainFilterId})\"` (AC-1 #2/#3)."
+        '`d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" '
+        'opacity="${initialChargeOpacity}" '
+        'filter="url(#${grainFilterId})"` (AC-1 #2/#3).'
     )
 
     # Sparkle layer follows waves; lightning layer follows sparkles.
@@ -3773,16 +3520,10 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
     charge_idx = source.find('id="electron_wave_charge"')
     sparkle_idx = source.find('id="${sparkleLayerId}"')
     lightning_idx = source.find('id="${lightningLayerId}"')
-    assert idle_idx != -1 and charge_idx != -1, (
-        "qs-car-card.js: missing wave anchors for source-order check."
-    )
-    assert sparkle_idx != -1, (
-        "qs-car-card.js: missing `<g id=\"${sparkleLayerId}\">` after "
-        "the waves (AC-1 #4)."
-    )
+    assert idle_idx != -1 and charge_idx != -1, "qs-car-card.js: missing wave anchors for source-order check."
+    assert sparkle_idx != -1, 'qs-car-card.js: missing `<g id="${sparkleLayerId}">` after the waves (AC-1 #4).'
     assert lightning_idx != -1, (
-        "qs-car-card.js: missing `<g id=\"${lightningLayerId}\" …>` "
-        "after the sparkle layer (AC-1 #5)."
+        'qs-car-card.js: missing `<g id="${lightningLayerId}" …>` after the sparkle layer (AC-1 #5).'
     )
     assert idle_idx < charge_idx < sparkle_idx < lightning_idx, (
         "qs-car-card.js: source order must be wave_idle → wave_charge "
@@ -3795,7 +3536,7 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
     for forbidden in ("wave1_idle", "wave1_charge", "wave2_idle", "wave2_charge"):
         assert forbidden not in executable, (
             f"qs-car-card.js: forbidden id `{forbidden}` present — the "
-            "issue explicitly says \"do not superpose 3 layer of sin\" "
+            'issue explicitly says "do not superpose 3 layer of sin" '
             "(AC-1 #6)."
         )
 
@@ -3810,9 +3551,7 @@ def test_car_card_cross_fade_lerp_is_binary_idle_charge():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # `targetColorMix = charging ? 1 : 0` (the car-card analogue of
@@ -3820,10 +3559,7 @@ def test_car_card_cross_fade_lerp_is_binary_idle_charge():
     assert re.search(
         r"targetColorMix\s*=\s*charging\s*\?\s*1\s*:\s*0",
         executable,
-    ), (
-        "qs-car-card.js (AC-2): missing `targetColorMix = charging "
-        "? 1 : 0` lerp target (mirrors boiler precedent)."
-    )
+    ), "qs-car-card.js (AC-2): missing `targetColorMix = charging ? 1 : 0` lerp target (mirrors boiler precedent)."
 
     # Per-frame opacity: `(1 - <colorMix>).toFixed(3)` and
     # `<colorMix>.toFixed(3)`. The `<colorMix>` token may be either
@@ -3864,8 +3600,7 @@ def test_car_card_cross_fade_lerp_is_binary_idle_charge():
 
     # LERP_RATE constant.
     assert re.search(r"const\s+LERP_RATE\s*=\s*2\b", executable), (
-        "qs-car-card.js (AC-2): missing `const LERP_RATE = 2;` "
-        "(mirror boiler envelope)."
+        "qs-car-card.js (AC-2): missing `const LERP_RATE = 2;` (mirror boiler envelope)."
     )
 
     # Negative: `_currentColorMix` is NOT mutated under a `degraded`
@@ -3892,9 +3627,7 @@ def test_car_card_sparkle_power_scaling_constants():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     expected = {
@@ -3907,10 +3640,7 @@ def test_car_card_sparkle_power_scaling_constants():
     }
     for name, value in expected.items():
         pat = re.compile(rf"const\s+{name}\s*=\s*{re.escape(value)}\b")
-        assert pat.search(executable), (
-            f"qs-car-card.js (AC-3): expected module-level "
-            f"`const {name} = {value};`"
-        )
+        assert pat.search(executable), f"qs-car-card.js (AC-3): expected module-level `const {name} = {value};`"
 
     # Clamping formula.
     assert re.search(
@@ -3944,9 +3674,7 @@ def test_car_card_sparkle_color_decided_at_spawn():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Palette constants. `SPARKLE_IDLE_COLOR` is an `hsla(...)`
@@ -3965,14 +3693,13 @@ def test_car_card_sparkle_color_decided_at_spawn():
     )
     idle_color_m = idle_color_re.search(executable)
     assert idle_color_m is not None, (
-        "qs-car-card.js (AC-4): expected `const SPARKLE_IDLE_COLOR = "
-        "'hsla(<hue>, …, …, …)';` — value user-tunable."
+        "qs-car-card.js (AC-4): expected `const SPARKLE_IDLE_COLOR = 'hsla(<hue>, …, …, …)';` — value user-tunable."
     )
     idle_hue = int(idle_color_m.group(1))
     assert 60 <= idle_hue <= 160, (
         f"qs-car-card.js (AC-4): `SPARKLE_IDLE_COLOR` hue must be in "
         f"the yellow-green-to-green family `[60, 160]` so the idle "
-        f"palette reads as \"electron green / yellow\". Got hue "
+        f'palette reads as "electron green / yellow". Got hue '
         f"{idle_hue}."
     )
     # SPARKLE_CHARGE_COLOR — pinned by name only (value is the
@@ -4008,29 +3735,18 @@ def test_car_card_lightning_gated_and_spawn_interval():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Constants.
-    assert re.search(
-        r"const\s+LIGHTNING_SPAWN_MIN_S\s*=\s*1\.5\b", executable
-    ), (
-        "qs-car-card.js (AC-5): missing `const LIGHTNING_SPAWN_MIN_S "
-        "= 1.5;`"
+    assert re.search(r"const\s+LIGHTNING_SPAWN_MIN_S\s*=\s*1\.5\b", executable), (
+        "qs-car-card.js (AC-5): missing `const LIGHTNING_SPAWN_MIN_S = 1.5;`"
     )
-    assert re.search(
-        r"const\s+LIGHTNING_SPAWN_MAX_S\s*=\s*3(\.0)?\b", executable
-    ), (
-        "qs-car-card.js (AC-5): missing `const LIGHTNING_SPAWN_MAX_S "
-        "= 3.0;`"
+    assert re.search(r"const\s+LIGHTNING_SPAWN_MAX_S\s*=\s*3(\.0)?\b", executable), (
+        "qs-car-card.js (AC-5): missing `const LIGHTNING_SPAWN_MAX_S = 3.0;`"
     )
-    assert re.search(
-        r"const\s+MAX_CONCURRENT_LIGHTNING\s*=\s*3\b", executable
-    ), (
-        "qs-car-card.js (AC-5): missing `const MAX_CONCURRENT_LIGHTNING "
-        "= 3;`"
+    assert re.search(r"const\s+MAX_CONCURRENT_LIGHTNING\s*=\s*3\b", executable), (
+        "qs-car-card.js (AC-5): missing `const MAX_CONCURRENT_LIGHTNING = 3;`"
     )
 
     # Spawn gate: `if (charging && !degraded)`.
@@ -4038,8 +3754,7 @@ def test_car_card_lightning_gated_and_spawn_interval():
         r"if\s*\(\s*charging\s*&&\s*!\s*degraded\s*\)",
     )
     assert gate_re.search(executable), (
-        "qs-car-card.js (AC-5): missing the lightning spawn gate "
-        "`if (charging && !degraded) { … }`."
+        "qs-car-card.js (AC-5): missing the lightning spawn gate `if (charging && !degraded) { … }`."
     )
 
     # Re-arm formula uses MIN_S + Math.random() * (MAX_S - MIN_S).
@@ -4068,34 +3783,23 @@ def test_car_card_lightning_life_and_glow_filter():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Life constant.
-    assert re.search(
-        r"const\s+LIGHTNING_LIFE_S\s*=\s*0\.25\b", executable
-    ), (
-        "qs-car-card.js (AC-6): missing `const LIGHTNING_LIFE_S = "
-        "0.25;`"
+    assert re.search(r"const\s+LIGHTNING_LIFE_S\s*=\s*0\.25\b", executable), (
+        "qs-car-card.js (AC-6): missing `const LIGHTNING_LIFE_S = 0.25;`"
     )
     # Three-phase opacity breakpoints. Review-fix #01 #10: scope the
     # `0.10` check to the `lifeT < …` lightning-fade context so a
     # regression on the actual breakpoint can't be masked by an
     # unrelated `0.1` literal elsewhere in the file (e.g.,
     # `LERP_DT_CEIL = 0.1`).
-    assert re.search(
-        r"lifeT\s*<\s*0\.10\b", executable
-    ), (
-        "qs-car-card.js (AC-6): missing fade-in breakpoint "
-        "`lifeT < 0.10` in the lightning advance loop."
+    assert re.search(r"lifeT\s*<\s*0\.10\b", executable), (
+        "qs-car-card.js (AC-6): missing fade-in breakpoint `lifeT < 0.10` in the lightning advance loop."
     )
-    assert re.search(
-        r"lifeT\s*<\s*0\.70\b", executable
-    ), (
-        "qs-car-card.js (AC-6): missing fade-out breakpoint "
-        "`lifeT < 0.70` in the lightning advance loop."
+    assert re.search(r"lifeT\s*<\s*0\.70\b", executable), (
+        "qs-car-card.js (AC-6): missing fade-out breakpoint `lifeT < 0.70` in the lightning advance loop."
     )
 
     # Review-fix #02 user follow-up #2: the Gaussian-blur glow filter
@@ -4110,8 +3814,8 @@ def test_car_card_lightning_life_and_glow_filter():
     assert "${lightningFilterId}" not in executable, (
         "qs-car-card.js (AC-6): the lightning Gaussian-blur glow "
         "filter has been removed; no `${lightningFilterId}` "
-        "reference should remain in executable code. User: \"no need "
-        "of the glow effect for the lightning bolts\"."
+        'reference should remain in executable code. User: "no need '
+        'of the glow effect for the lightning bolts".'
     )
     assert "LIGHTNING_GLOW_STDDEV" not in executable, (
         "qs-car-card.js (AC-6): the `LIGHTNING_GLOW_STDDEV` "
@@ -4151,10 +3855,7 @@ def test_car_card_lightning_life_and_glow_filter():
     assert re.search(
         r"const\s+LIGHTNING_STROKE_COLOR\s*=\s*['\"]#[0-9A-Fa-f]{3,8}['\"]",
         executable,
-    ), (
-        "qs-car-card.js (AC-6): expected `const LIGHTNING_STROKE_COLOR "
-        "= '#<hex>';` — value user-tunable."
-    )
+    ), "qs-car-card.js (AC-6): expected `const LIGHTNING_STROKE_COLOR = '#<hex>';` — value user-tunable."
     # `LIGHTNING_TOP_WIDTH` is the width at the top of the tapered
     # bolt outline (pixel value user-tunable; pinned by NAME only).
     # The previous `LIGHTNING_STROKE_WIDTH` was removed when the
@@ -4180,29 +3881,21 @@ def test_car_card_grain_filter_uses_feturbulence_on_wave_fill():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Grain filter declaration substring.
-    assert (
-        '<feTurbulence type="fractalNoise" baseFrequency="0.9" '
-        'numOctaves="2"'
-    ) in source, (
+    assert ('<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2"') in source, (
         "qs-car-card.js (AC-7): grain filter must declare "
-        "`<feTurbulence type=\"fractalNoise\" baseFrequency=\"0.9\" "
-        "numOctaves=\"2\" …>` (substring assert; `seed`/`result` not "
+        '`<feTurbulence type="fractalNoise" baseFrequency="0.9" '
+        'numOctaves="2" …>` (substring assert; `seed`/`result` not '
         "pinned)."
     )
 
     # The composite step that masks turbulence to the wave fill.
-    assert (
-        '<feComposite' in source
-        and 'operator="in"' in source
-    ), (
+    assert "<feComposite" in source and 'operator="in"' in source, (
         "qs-car-card.js (AC-7): grain filter must contain a "
-        "`<feComposite … operator=\"in\" …>` step so the grain is "
+        '`<feComposite … operator="in" …>` step so the grain is '
         "masked to the wave's filled shape (water region only)."
     )
 
@@ -4216,12 +3909,10 @@ def test_car_card_grain_filter_uses_feturbulence_on_wave_fill():
         re.DOTALL,
     )
     assert idle_filter.search(source), (
-        "qs-car-card.js (AC-7): `electron_wave_idle` must carry "
-        "`filter=\"url(#${grainFilterId})\"`."
+        'qs-car-card.js (AC-7): `electron_wave_idle` must carry `filter="url(#${grainFilterId})"`.'
     )
     assert charge_filter.search(source), (
-        "qs-car-card.js (AC-7): `electron_wave_charge` must carry "
-        "`filter=\"url(#${grainFilterId})\"`."
+        'qs-car-card.js (AC-7): `electron_wave_charge` must carry `filter="url(#${grainFilterId})"`.'
     )
 
     # Negative: no <rect> immediately preceding the sparkle layer
@@ -4234,7 +3925,7 @@ def test_car_card_grain_filter_uses_feturbulence_on_wave_fill():
     assert not forbidden.search(source), (
         "qs-car-card.js (AC-7): no separate `<rect>` overlay should "
         "carry the grain filter — grain composites within the wave "
-        "shape via `feComposite operator=\"in\"` (D7)."
+        'shape via `feComposite operator="in"` (D7).'
     )
 
 
@@ -4248,9 +3939,7 @@ def test_car_card_degraded_state_css_filter_and_lightning_suppression():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # `degraded` boolean.
@@ -4259,10 +3948,7 @@ def test_car_card_degraded_state_css_filter_and_lightning_suppression():
         r"isFaulted\s*\|\|\s*isStale\b",
     )
     m = degraded_re.search(executable)
-    assert m, (
-        "qs-car-card.js (AC-8): missing `const degraded = isDisconnected "
-        "|| isFaulted || isStale;`"
-    )
+    assert m, "qs-car-card.js (AC-8): missing `const degraded = isDisconnected || isFaulted || isStale;`"
     # Negative: `isOffGrid` is NOT part of `degraded`.
     matched_line = m.group(0)
     assert "isOffGrid" not in matched_line, (
@@ -4272,10 +3958,7 @@ def test_car_card_degraded_state_css_filter_and_lightning_suppression():
     )
 
     # Inline style ternary on the clip group.
-    assert (
-        "${degraded ? 'filter: saturate(0.3) brightness(0.7);' : ''}"
-        in source
-    ), (
+    assert "${degraded ? 'filter: saturate(0.3) brightness(0.7);' : ''}" in source, (
         "qs-car-card.js (AC-8): the clipped `<g>` must carry the "
         "inline style ternary "
         "`style=\"${degraded ? 'filter: saturate(0.3) "
@@ -4284,11 +3967,8 @@ def test_car_card_degraded_state_css_filter_and_lightning_suppression():
 
     # Lightning gate already pinned in AC-5 — re-assert here for
     # locality.
-    assert re.search(
-        r"if\s*\(\s*charging\s*&&\s*!\s*degraded\s*\)", executable
-    ), (
-        "qs-car-card.js (AC-8): lightning spawn must be gated on "
-        "`charging && !degraded`."
+    assert re.search(r"if\s*\(\s*charging\s*&&\s*!\s*degraded\s*\)", executable), (
+        "qs-car-card.js (AC-8): lightning spawn must be gated on `charging && !degraded`."
     )
 
 
@@ -4304,21 +3984,14 @@ def test_car_card_continuous_raf_from_connected_callback():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # connectedCallback calls _startAnimation directly, no `if` gate.
-    cb_body = _extract_js_function_body(
-        executable, r"connectedCallback\s*\(\s*\)\s*"
-    )
-    assert cb_body is not None, (
-        "qs-car-card.js (AC-9): `connectedCallback()` not found."
-    )
+    cb_body = _extract_js_function_body(executable, r"connectedCallback\s*\(\s*\)\s*")
+    assert cb_body is not None, "qs-car-card.js (AC-9): `connectedCallback()` not found."
     assert re.search(r"this\._startAnimation\s*\(\s*\)", cb_body), (
-        "qs-car-card.js (AC-9): `connectedCallback` must call "
-        "`this._startAnimation()` directly (continuous-RAF model)."
+        "qs-car-card.js (AC-9): `connectedCallback` must call `this._startAnimation()` directly (continuous-RAF model)."
     )
     # Review-fix #01 #13: the contract is "`_startAnimation()` is
     # unconditional", not "no `if` at all". Future harmless guards
@@ -4343,12 +4016,8 @@ def test_car_card_continuous_raf_from_connected_callback():
     # (not the various `this._render()` CALL sites in
     # `connectedCallback` / `setConfig` / event handlers, which
     # appear before the definition in source order).
-    render_body = _extract_js_function_body(
-        executable, r"_render\s*\(\s*\)\s*\{"
-    )
-    assert render_body is not None, (
-        "qs-car-card.js (AC-9): `_render()` body not found."
-    )
+    render_body = _extract_js_function_body(executable, r"_render\s*\(\s*\)\s*\{")
+    assert render_body is not None, "qs-car-card.js (AC-9): `_render()` body not found."
     assert "_stopAnimation" not in render_body, (
         "qs-car-card.js (AC-9): `_render()` must not call "
         "`_stopAnimation()` — the only call site is "
@@ -4380,8 +4049,7 @@ def test_car_card_continuous_raf_from_connected_callback():
         re.DOTALL,
     )
     assert idle_gated_block is not None, (
-        "AC-9: `test_card_raf_idle_gated` parametrize decorator not "
-        "found — the test file structure has drifted."
+        "AC-9: `test_card_raf_idle_gated` parametrize decorator not found — the test file structure has drifted."
     )
     block_text = idle_gated_block.group(0)
     assert "qs-car-card.js" not in block_text, (
@@ -4422,17 +4090,11 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    body = _extract_js_function_body(
-        executable, r"_resetDomRefs\s*\(\s*\)\s*"
-    )
-    assert body is not None, (
-        "qs-car-card.js (AC-10): `_resetDomRefs()` method not found."
-    )
+    body = _extract_js_function_body(executable, r"_resetDomRefs\s*\(\s*\)\s*")
+    assert body is not None, "qs-car-card.js (AC-10): `_resetDomRefs()` method not found."
 
     # Review-fix #01 #14: `_grainFilterEl` was a dead field — no
     # code path ever read or lazily-resolved it. Removed from
@@ -4451,9 +4113,7 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
         )
 
     # ≥ 2 `this._resetDomRefs()` call sites in the file.
-    call_sites = re.findall(
-        r"this\._resetDomRefs\s*\(\s*\)", executable
-    )
+    call_sites = re.findall(r"this\._resetDomRefs\s*\(\s*\)", executable)
     assert len(call_sites) >= 2, (
         f"qs-car-card.js (AC-10): expected ≥ 2 `this._resetDomRefs()` "
         f"call sites (one from `_invalidateAnimCache`, one post-"
@@ -4461,25 +4121,15 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
     )
 
     # `_invalidateAnimCache` exists and calls `_resetDomRefs`.
-    inv_body = _extract_js_function_body(
-        executable, r"_invalidateAnimCache\s*\(\s*\)\s*"
-    )
-    assert inv_body is not None, (
-        "qs-car-card.js (AC-10): missing `_invalidateAnimCache()` "
-        "method."
-    )
+    inv_body = _extract_js_function_body(executable, r"_invalidateAnimCache\s*\(\s*\)\s*")
+    assert inv_body is not None, "qs-car-card.js (AC-10): missing `_invalidateAnimCache()` method."
     assert "this._resetDomRefs()" in inv_body, (
-        "qs-car-card.js (AC-10): `_invalidateAnimCache()` must call "
-        "`this._resetDomRefs()`."
+        "qs-car-card.js (AC-10): `_invalidateAnimCache()` must call `this._resetDomRefs()`."
     )
 
     # disconnectedCallback teardown.
-    dc_body = _extract_js_function_body(
-        executable, r"disconnectedCallback\s*\(\s*\)\s*"
-    )
-    assert dc_body is not None, (
-        "qs-car-card.js (AC-10): `disconnectedCallback()` not found."
-    )
+    dc_body = _extract_js_function_body(executable, r"disconnectedCallback\s*\(\s*\)\s*")
+    assert dc_body is not None, "qs-car-card.js (AC-10): `disconnectedCallback()` not found."
     assert re.search(
         r"this\._sparkles\?\.forEach\s*\(\s*s\s*=>\s*s\.el\?\.remove\?\.\(\)\s*\)",
         dc_body,
@@ -4489,8 +4139,7 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
         "`this._sparkles?.forEach(s => s.el?.remove?.())`."
     )
     assert re.search(r"this\._sparkles\s*=\s*\[\s*\]", dc_body), (
-        "qs-car-card.js (AC-10): `disconnectedCallback` must clear "
-        "`this._sparkles = []` after the teardown."
+        "qs-car-card.js (AC-10): `disconnectedCallback` must clear `this._sparkles = []` after the teardown."
     )
     assert re.search(
         r"this\._lightningBolts\?\.forEach\s*\(\s*b\s*=>\s*b\.el\?\.remove\?\.\(\)\s*\)",
@@ -4501,8 +4150,7 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
         "`this._lightningBolts?.forEach(b => b.el?.remove?.())`."
     )
     assert re.search(r"this\._lightningBolts\s*=\s*\[\s*\]", dc_body), (
-        "qs-car-card.js (AC-10): `disconnectedCallback` must clear "
-        "`this._lightningBolts = []` after the teardown."
+        "qs-car-card.js (AC-10): `disconnectedCallback` must clear `this._lightningBolts = []` after the teardown."
     )
 
 
@@ -4520,9 +4168,7 @@ def test_car_card_per_instance_unique_svg_ids():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Static counter bump.
@@ -4534,9 +4180,7 @@ def test_car_card_per_instance_unique_svg_ids():
         "= (QsCarCard._nextClipId || 0) + 1` static-counter bump."
     )
     # Guard.
-    assert re.search(
-        r"if\s*\(\s*!\s*this\._electronClipId\s*\)", executable
-    ), (
+    assert re.search(r"if\s*\(\s*!\s*this\._electronClipId\s*\)", executable), (
         "qs-car-card.js (AC-11): the counter bump must be wrapped in "
         "`if (!this._electronClipId) { … }` so the IDs are assigned "
         "once."
@@ -4546,19 +4190,16 @@ def test_car_card_per_instance_unique_svg_ids():
     # `_lightningFilterId` was removed in review-fix #02 follow-up
     # alongside the lightning glow filter.
     id_assignments = {
-        "_electronClipId":   "car_eClip_",
-        "_sparkleLayerId":   "car_sparkLayer_",
+        "_electronClipId": "car_eClip_",
+        "_sparkleLayerId": "car_sparkLayer_",
         "_lightningLayerId": "car_lightningLayer_",
-        "_grainFilterId":    "car_grainFilter_",
+        "_grainFilterId": "car_grainFilter_",
     }
     for field, prefix in id_assignments.items():
         pat = re.compile(
             rf"this\.{field}\s*=\s*`{re.escape(prefix)}\$\{{uid\}}`",
         )
-        assert pat.search(executable), (
-            f"qs-car-card.js (AC-11): expected "
-            f"`this.{field} = \\`{prefix}${{uid}}\\``"
-        )
+        assert pat.search(executable), f"qs-car-card.js (AC-11): expected `this.{field} = \\`{prefix}${{uid}}\\``"
 
 
 def test_car_card_caps_raf_dt_at_lerp_dt_ceil():
@@ -4570,24 +4211,16 @@ def test_car_card_caps_raf_dt_at_lerp_dt_ceil():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    assert re.search(
-        r"const\s+LERP_DT_CEIL\s*=\s*0\.1\b", executable
-    ), (
-        "qs-car-card.js (AC-12): missing `const LERP_DT_CEIL = 0.1;` "
-        "module constant."
+    assert re.search(r"const\s+LERP_DT_CEIL\s*=\s*0\.1\b", executable), (
+        "qs-car-card.js (AC-12): missing `const LERP_DT_CEIL = 0.1;` module constant."
     )
     assert re.search(
         r"dt\s*=\s*Math\.min\s*\(\s*dt\s*,\s*LERP_DT_CEIL\s*\)",
         executable,
-    ), (
-        "qs-car-card.js (AC-12): expected `dt = Math.min(dt, "
-        "LERP_DT_CEIL);` at the top of the RAF step closure."
-    )
+    ), "qs-car-card.js (AC-12): expected `dt = Math.min(dt, LERP_DT_CEIL);` at the top of the RAF step closure."
 
 
 def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
@@ -4602,31 +4235,18 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
     CSS filter, continuous RAF, three carve covers (D17). The
     `last_verified` field is present and well-formed.
     """
-    doc_path = (
-        Path(__file__).parent.parent
-        / "docs"
-        / "agents"
-        / "concepts"
-        / "dashboard-and-cards.md"
-    )
+    doc_path = Path(__file__).parent.parent / "docs" / "agents" / "concepts" / "dashboard-and-cards.md"
     doc = doc_path.read_text(encoding="utf-8")
 
     headline = "### QS-232 — Car-card electron-soup animation"
     headline_idx = doc.find(headline)
-    assert headline_idx != -1, (
-        f"dashboard-and-cards.md: missing the literal QS-232 H3 "
-        f"headline `{headline}` (AC-13)."
-    )
+    assert headline_idx != -1, f"dashboard-and-cards.md: missing the literal QS-232 H3 headline `{headline}` (AC-13)."
 
     qs217_idx = doc.find("### QS-217")
-    assert qs217_idx != -1, (
-        "dashboard-and-cards.md: missing `### QS-217` headline — "
-        "AC-13 anchors QS-232 AFTER it."
-    )
+    assert qs217_idx != -1, "dashboard-and-cards.md: missing `### QS-217` headline — AC-13 anchors QS-232 AFTER it."
     hardened_idx = doc.find("## Hardened JS-card patterns")
     assert hardened_idx != -1, (
-        "dashboard-and-cards.md: missing `## Hardened JS-card "
-        "patterns` H2 — AC-13 anchors QS-232 BEFORE it."
+        "dashboard-and-cards.md: missing `## Hardened JS-card patterns` H2 — AC-13 anchors QS-232 BEFORE it."
     )
     assert qs217_idx < headline_idx < hardened_idx, (
         f"dashboard-and-cards.md: QS-232 headline must appear AFTER "
@@ -4642,8 +4262,7 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
         re.MULTILINE,
     )
     assert front_matter_match, (
-        "dashboard-and-cards.md: front-matter must contain a "
-        "`last_verified: YYYY-MM-DD` field (AC-13)."
+        "dashboard-and-cards.md: front-matter must contain a `last_verified: YYYY-MM-DD` field (AC-13)."
     )
 
     # Slice the section body — from the QS-232 headline to the next
@@ -4673,8 +4292,7 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
     ]
     for token, description in expected_substrings:
         assert token in section_lower, (
-            f"dashboard-and-cards.md (QS-232 section): missing "
-            f"`{token}` — {description} (AC-13)."
+            f"dashboard-and-cards.md (QS-232 section): missing `{token}` — {description} (AC-13)."
         )
 
     # All three carve-cover element ids named in the section.
@@ -4684,8 +4302,7 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
         "time_btn_cover",
     ):
         assert cover_id in section, (
-            f"dashboard-and-cards.md (QS-232 section): missing the "
-            f"carve-cover element id `{cover_id}` (AC-13/AC-14)."
+            f"dashboard-and-cards.md (QS-232 section): missing the carve-cover element id `{cover_id}` (AC-13/AC-14)."
         )
 
 
@@ -4703,9 +4320,7 @@ def test_car_card_inside_disc_button_carve_covers():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Nine constants — NAMES only (values are user-tunable).
@@ -4720,9 +4335,7 @@ def test_car_card_inside_disc_button_carve_covers():
         "TIME_BTN_CARVE_CY",
         "TIME_BTN_CARVE_R",
     ):
-        assert re.search(
-            rf"const\s+{const_name}\s*=\s*\d+\b", executable
-        ), (
+        assert re.search(rf"const\s+{const_name}\s*=\s*\d+\b", executable), (
             f"qs-car-card.js (AC-14): missing module-level "
             f"`const {const_name} = <integer>;` declaration. Values "
             f"are user-tunable per QS-217 precedent — only the NAME "
@@ -4740,8 +4353,7 @@ def test_car_card_inside_disc_button_carve_covers():
         r'pointer-events="none"\s*/>',
     )
     assert sun_cover_re.search(source), (
-        "qs-car-card.js (AC-14): missing the `sun_btn_cover` "
-        "<circle> element gated on `swPriority`."
+        "qs-car-card.js (AC-14): missing the `sun_btn_cover` <circle> element gated on `swPriority`."
     )
     rabbit_cover_re = re.compile(
         r"e\.force_now\s*\?\s*`?\s*"
@@ -4753,8 +4365,7 @@ def test_car_card_inside_disc_button_carve_covers():
         r'pointer-events="none"\s*/>',
     )
     assert rabbit_cover_re.search(source), (
-        "qs-car-card.js (AC-14): missing the `rabbit_btn_cover` "
-        "<circle> element gated on `e.force_now`."
+        "qs-car-card.js (AC-14): missing the `rabbit_btn_cover` <circle> element gated on `e.force_now`."
     )
     time_cover_re = re.compile(
         r"\(\s*tNext\s*&&\s*e\.schedule\s*\)\s*\?\s*`?\s*"
@@ -4766,8 +4377,7 @@ def test_car_card_inside_disc_button_carve_covers():
         r'pointer-events="none"\s*/>',
     )
     assert time_cover_re.search(source), (
-        "qs-car-card.js (AC-14): missing the `time_btn_cover` "
-        "<circle> element gated on `(tNext && e.schedule)`."
+        "qs-car-card.js (AC-14): missing the `time_btn_cover` <circle> element gated on `(tNext && e.schedule)`."
     )
 
     # Source order: covers must appear AFTER the clipped </g> AND
@@ -4784,10 +4394,7 @@ def test_car_card_inside_disc_button_carve_covers():
     # satisfy the ordering check. Use `rfind` scoped to the
     # [clip_g_idx, bg_idx] window to locate the OUTER close.
     clip_g_idx = source.find('<g clip-path="url(#${electronClipId})"')
-    assert clip_g_idx != -1, (
-        "qs-car-card.js (AC-14): missing the electron-soup clipped "
-        "group anchor."
-    )
+    assert clip_g_idx != -1, "qs-car-card.js (AC-14): missing the electron-soup clipped group anchor."
     clip_g_close_idx = source.rfind("</g>", clip_g_idx, bg_idx)
     assert clip_g_close_idx != -1, (
         "qs-car-card.js (AC-14): cannot find the outer closing "
@@ -4800,14 +4407,11 @@ def test_car_card_inside_disc_button_carve_covers():
         ("rabbit_btn_cover", rabbit_idx),
         ("time_btn_cover", time_idx),
     ):
-        assert cover_idx != -1, (
-            f"qs-car-card.js (AC-14): missing the `{cover_name}` "
-            f"element in source."
-        )
+        assert cover_idx != -1, f"qs-car-card.js (AC-14): missing the `{cover_name}` element in source."
         assert clip_g_close_idx < cover_idx < bg_idx, (
             f"qs-car-card.js (AC-14): `{cover_name}` must appear "
             f"AFTER the clipped `</g>` (idx {clip_g_close_idx}) AND "
-            f"BEFORE the `<path d=\"${{bgPath}}\"` line "
+            f'BEFORE the `<path d="${{bgPath}}"` line '
             f"(idx {bg_idx}). Got cover idx {cover_idx}."
         )
 
@@ -4832,9 +4436,7 @@ def test_car_card_render_guards_water_base_y_against_nan():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # The `_waterBaseY` assignment must be preceded by (or wrap with)
@@ -4866,9 +4468,7 @@ def test_car_card_initial_wave_path_skips_nan_water_base_y():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # The `initialWavePath = ...` line must use a ternary on
@@ -4901,14 +4501,10 @@ def test_car_card_setConfig_primes_animation_state():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    set_config_body = _extract_js_function_body(
-        executable, r"setConfig\s*\(\s*config\s*\)\s*"
-    )
+    set_config_body = _extract_js_function_body(executable, r"setConfig\s*\(\s*config\s*\)\s*")
     assert set_config_body is not None, (
         "qs-car-card.js (review-fix #01 #4): `setConfig(config)` "
         "method not found — the test file structure has drifted."
@@ -4935,9 +4531,7 @@ def test_car_card_time_btn_render_and_cover_gates_match():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
 
     # Extract the time_btn render gate. The fix gates the button on
     # the same `(tNext && e.schedule)` predicate as the cover.
@@ -4950,7 +4544,7 @@ def test_car_card_time_btn_render_and_cover_gates_match():
     btn_m = btn_gate_re.search(source)
     assert btn_m is not None, (
         "qs-car-card.js (review-fix #01 #6): the `time_btn` <div> "
-        "must now be wrapped in a `(predicate) ? `<div id=\"time_btn\""
+        'must now be wrapped in a `(predicate) ? `<div id="time_btn"'
         " …>` : ''` ternary so its render gate aligns with the "
         "`time_btn_cover` gate."
     )
@@ -4960,8 +4554,7 @@ def test_car_card_time_btn_render_and_cover_gates_match():
     )
     cover_m = cover_gate_re.search(source)
     assert cover_m is not None, (
-        "qs-car-card.js (review-fix #01 #6): missing the "
-        "`time_btn_cover` <circle> element with a gating ternary."
+        "qs-car-card.js (review-fix #01 #6): missing the `time_btn_cover` <circle> element with a gating ternary."
     )
 
     # Whitespace-normalise both predicates and compare.
@@ -4992,18 +4585,11 @@ def test_car_card_connectedCallback_reprimes_on_state_flip():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    cb_body = _extract_js_function_body(
-        executable, r"connectedCallback\s*\(\s*\)\s*"
-    )
-    assert cb_body is not None, (
-        "qs-car-card.js (review-fix #01 #7): `connectedCallback()` "
-        "not found."
-    )
+    cb_body = _extract_js_function_body(executable, r"connectedCallback\s*\(\s*\)\s*")
+    assert cb_body is not None, "qs-car-card.js (review-fix #01 #7): `connectedCallback()` not found."
     # The re-prime guard must reference `this._charging` AND
     # `this._currentColorMix` (the implied state derivation).
     assert re.search(r"this\._charging", cb_body), (
@@ -5038,9 +4624,7 @@ def test_car_card_last_amplitude_uses_finite_guard_not_nullish():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Positive pin: the explicit finite-check form.
@@ -5077,9 +4661,7 @@ def test_car_card_lightning_segments_constant_removed():
     EXECUTABLE code (comments stripped) so a `// removed …`
     historical comment is allowed.
     """
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
     assert "LIGHTNING_SEGMENTS" not in executable, (
         "qs-car-card.js (review-fix #01 #16): `LIGHTNING_SEGMENTS` "
@@ -5099,9 +4681,7 @@ def test_car_card_dashed_arc_comment_no_stale_m4_reference():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
 
     # Find the dashed-arc comment block (it precedes the
     # `_animOffset = ...` / `charge_anim` block).
@@ -5111,7 +4691,7 @@ def test_car_card_dashed_arc_comment_no_stale_m4_reference():
     )
     assert dashed_arc_re.search(source) is None, (
         "qs-car-card.js (review-fix #01 #17): the stale "
-        "\"PRESERVED from M4\" comment in the dashed-arc block "
+        '"PRESERVED from M4" comment in the dashed-arc block '
         "must be rewritten to reflect the QS-232 continuous-RAF "
         "model. The M4 milestone is no longer the controlling "
         "lifecycle anchor."
@@ -5146,28 +4726,21 @@ def test_car_card_first_raf_tick_initialises_wave_phase_unconditionally():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    body = _extract_js_function_body(
-        executable, r"_startAnimation\s*\(\s*\)\s*"
-    )
-    assert body is not None, (
-        "qs-car-card.js (review-fix #02 #1): `_startAnimation()` "
-        "body not found."
-    )
+    body = _extract_js_function_body(executable, r"_startAnimation\s*\(\s*\)\s*")
+    assert body is not None, "qs-car-card.js (review-fix #02 #1): `_startAnimation()` body not found."
 
     # The five RAF-state fields must each have their OWN
     # `if (this.X == null) this.X = ...` guard so that consumption
     # of `_currentAmplitude` by the prime block doesn't strand them.
     for field, default_pattern in [
-        ("_wavePhase",       r"=\s*0"),
-        ("_nextSparkleAt",   r"=\s*0"),
+        ("_wavePhase", r"=\s*0"),
+        ("_nextSparkleAt", r"=\s*0"),
         ("_nextLightningAt", r"=\s*LIGHTNING_SPAWN_MIN_S"),
-        ("_sparkles",        r"=\s*\[\s*\]"),
-        ("_lightningBolts",  r"=\s*\[\s*\]"),
+        ("_sparkles", r"=\s*\[\s*\]"),
+        ("_lightningBolts", r"=\s*\[\s*\]"),
     ]:
         per_field_guard = re.compile(
             rf"if\s*\(\s*this\.{field}\s*==\s*null\s*\)\s*"
@@ -5191,9 +4764,7 @@ def test_car_card_initial_paint_uses_finite_guards_not_nullish():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Positive: explicit finite check for initialAmp.
@@ -5244,18 +4815,11 @@ def test_car_card_setConfig_restarts_animation_when_connected():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    set_config_body = _extract_js_function_body(
-        executable, r"setConfig\s*\(\s*config\s*\)\s*"
-    )
-    assert set_config_body is not None, (
-        "qs-car-card.js (review-fix #02 #3): `setConfig(config)` "
-        "method not found."
-    )
+    set_config_body = _extract_js_function_body(executable, r"setConfig\s*\(\s*config\s*\)\s*")
+    assert set_config_body is not None, "qs-car-card.js (review-fix #02 #3): `setConfig(config)` method not found."
     # Re-entry guard: must reference both `isConnected` and call
     # `_startAnimation()` inside a guarded block.
     reentry_re = re.compile(
@@ -5283,18 +4847,11 @@ def test_car_card_connectedCallback_reprime_calls_render():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    cb_body = _extract_js_function_body(
-        executable, r"connectedCallback\s*\(\s*\)\s*"
-    )
-    assert cb_body is not None, (
-        "qs-car-card.js (review-fix #02 #4): `connectedCallback()` "
-        "not found."
-    )
+    cb_body = _extract_js_function_body(executable, r"connectedCallback\s*\(\s*\)\s*")
+    assert cb_body is not None, "qs-car-card.js (review-fix #02 #4): `connectedCallback()` not found."
     # The reprime block must contain BOTH the flag set AND the
     # `_render()` call, adjacent or with whitespace between them.
     # NB: we don't use an `if (... _charging ...)` regex anchor here
@@ -5326,18 +4883,11 @@ def test_car_card_last_amplitude_in_raf_uses_finite_guard():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    raf_body = _extract_js_function_body(
-        executable, r"_startAnimation\s*\(\s*\)\s*"
-    )
-    assert raf_body is not None, (
-        "qs-car-card.js (review-fix #02 #5): `_startAnimation()` "
-        "body not found."
-    )
+    raf_body = _extract_js_function_body(executable, r"_startAnimation\s*\(\s*\)\s*")
+    assert raf_body is not None, "qs-car-card.js (review-fix #02 #5): `_startAnimation()` body not found."
 
     # In-RAF read: the `ampDelta = ...` ternary must treat both null
     # AND non-finite as "first frame". The source uses a parenthesised
@@ -5385,9 +4935,7 @@ def test_car_card_initial_paint_opacity_is_clamped():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # Either form is acceptable:
@@ -5429,9 +4977,7 @@ def test_car_card_rabbit_btn_render_and_cover_gates_match():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
 
     # Extract each ternary's predicate by:
     # 1. Locating the target element (`<div id="rabbit_btn"` /
@@ -5458,16 +5004,13 @@ def test_car_card_rabbit_btn_render_and_cover_gates_match():
     btn_predicate = _extract_template_predicate('<div id="rabbit_btn"')
     assert btn_predicate is not None, (
         "qs-car-card.js (review-fix #02 #7): the `rabbit_btn` <div> "
-        "must be wrapped in a `${predicate ? `<div id=\"rabbit_btn\""
+        'must be wrapped in a `${predicate ? `<div id="rabbit_btn"'
         " …>` : ''}` ternary so its render gate aligns with the "
         "`rabbit_btn_cover` gate."
     )
-    cover_predicate = _extract_template_predicate(
-        '<circle id="rabbit_btn_cover"'
-    )
+    cover_predicate = _extract_template_predicate('<circle id="rabbit_btn_cover"')
     assert cover_predicate is not None, (
-        "qs-car-card.js (review-fix #02 #7): missing the "
-        "`rabbit_btn_cover` <circle> with a gating ternary."
+        "qs-car-card.js (review-fix #02 #7): missing the `rabbit_btn_cover` <circle> with a gating ternary."
     )
 
     def _normalise(s: str) -> str:
@@ -5488,9 +5031,7 @@ def test_car_card_mix_clamp_traps_nan():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     mix_finite_re = re.compile(
@@ -5515,9 +5056,7 @@ def test_car_card_wave_els_retry_on_null():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     retry_re = re.compile(
@@ -5544,9 +5083,7 @@ def test_car_card_has_valid_base_uses_number_is_finite():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     finite_re = re.compile(
@@ -5574,9 +5111,7 @@ def test_car_card_render_snapshot_defensively_coerces_undefined_sparkles():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     sparkle_snap_re = re.compile(
@@ -5609,9 +5144,7 @@ def test_car_card_restore_drops_sparkles_above_new_water_base_y():
     """
     import re
 
-    source = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
-    ).read_text()
+    source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
     # The restore loop must filter sparkles whose `cy` is above
@@ -5683,21 +5216,22 @@ def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None
     uses ``CENTER_CY`` for both axes; water-boiler uses ``CENTER_CX``;
     climate uses ``CENTER_X``).
     """
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / card_filename
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
 
     # (a) clipPath has the simple outer disc (no carve, no cancel). The
     # SVG markup uses the `<path clip-rule="evenodd" d="${clipPathD}">`
     # form for backward-compatibility with other tests, but `clipPathD`
     # is just an outer-disc circle path now.
-    assert re.search(
-        r"<clipPath\s+id=\"\$\{[^}]+\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
-        content,
-        re.DOTALL,
-    ) is not None, (
+    assert (
+        re.search(
+            r"<clipPath\s+id=\"\$\{[^}]+\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
+            content,
+            re.DOTALL,
+        )
+        is not None
+    ), (
         f"{card_filename}: missing `<clipPath …><path "
-        f"clip-rule=\"evenodd\" d=\"${{clipPathD}}\" /></clipPath>` "
+        f'clip-rule="evenodd" d="${{clipPathD}}" /></clipPath>` '
         f"form. The clipPath wraps the simple outer-disc circle now "
         f"(review-fix #03 dropped the carve+cancel subpaths)."
     )
@@ -5705,18 +5239,24 @@ def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None
     # (b) The two module-level constants are declared. CY pinned by
     # value (geometry-fixed, derives from CSS button position). R
     # pinned by NAME only — visual-iteration friendly.
-    assert re.search(
-        r"const\s+OVERRIDE_BTN_CARVE_CY\s*=\s*277\b",
-        content,
-    ) is not None, (
+    assert (
+        re.search(
+            r"const\s+OVERRIDE_BTN_CARVE_CY\s*=\s*277\b",
+            content,
+        )
+        is not None
+    ), (
         f"{card_filename}: missing module-level `const "
         f"OVERRIDE_BTN_CARVE_CY = 277;` declaration (button-centre y "
         f"in SVG units, derived from CSS .override-btn position)."
     )
-    assert re.search(
-        r"const\s+OVERRIDE_BTN_CARVE_R\s*=\s*\d+\b",
-        content,
-    ) is not None, (
+    assert (
+        re.search(
+            r"const\s+OVERRIDE_BTN_CARVE_R\s*=\s*\d+\b",
+            content,
+        )
+        is not None
+    ), (
         f"{card_filename}: missing module-level `const "
         f"OVERRIDE_BTN_CARVE_R = <integer>;` declaration. The integer "
         f"value is user-tunable; tests pin the NAME only so visual-"
@@ -5736,22 +5276,22 @@ def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None
     )
     assert cover_re.search(content) is not None, (
         f"{card_filename}: missing the override-button cover element "
-        f"`<circle id=\"override_btn_cover\" cx=\"${{{x_center_name}}}\" "
-        f"cy=\"${{OVERRIDE_BTN_CARVE_CY}}\" r=\"${{OVERRIDE_BTN_CARVE_R}}\" "
-        f"fill=\"var(--card-background-color)\" pointer-events=\"none\" />` "
+        f'`<circle id="override_btn_cover" cx="${{{x_center_name}}}" '
+        f'cy="${{OVERRIDE_BTN_CARVE_CY}}" r="${{OVERRIDE_BTN_CARVE_R}}" '
+        f'fill="var(--card-background-color)" pointer-events="none" />` '
         f"gated on `e.override_reset`. Review-fix #03 replaces the "
         f"clipPath carve approach with a simple cover overlay drawn on "
         f"top of the animation."
     )
 
     # (d) `<g clip-path="url(#${…ClipId})">` wrapper unchanged.
-    assert re.search(
-        r'<g\s+clip-path="url\(#\$\{[a-zA-Z]+ClipId\}\)">',
-        content,
-    ) is not None, (
-        f"{card_filename}: expected unchanged "
-        f"`<g clip-path=\"url(#${{…ClipId}})\">` wrapper."
-    )
+    assert (
+        re.search(
+            r'<g\s+clip-path="url\(#\$\{[a-zA-Z]+ClipId\}\)">',
+            content,
+        )
+        is not None
+    ), f'{card_filename}: expected unchanged `<g clip-path="url(#${{…ClipId}})">` wrapper.'
 
     # (e) Negative pins — the obsolete carve+cancel artifacts MUST be
     # absent so a regression cannot silently reintroduce the lens-
@@ -5856,13 +5396,7 @@ def test_dashboard_and_cards_doc_pins_qs_217_carve_paragraph():
     `var(--card-background-color)`, the two new identifiers for
     the cover-overlay approach.
     """
-    doc_path = (
-        Path(__file__).parent.parent
-        / "docs"
-        / "agents"
-        / "concepts"
-        / "dashboard-and-cards.md"
-    )
+    doc_path = Path(__file__).parent.parent / "docs" / "agents" / "concepts" / "dashboard-and-cards.md"
     doc = doc_path.read_text(encoding="utf-8")
 
     headline = "### QS-217 — Override-button cover overlay"
@@ -5905,8 +5439,7 @@ def test_dashboard_and_cards_doc_pins_qs_217_carve_paragraph():
         re.MULTILINE,
     )
     assert front_matter_match, (
-        "dashboard-and-cards.md: front-matter must contain a "
-        "`last_verified: YYYY-MM-DD` field per AC-8."
+        "dashboard-and-cards.md: front-matter must contain a `last_verified: YYYY-MM-DD` field per AC-8."
     )
 
     # Slice the section body — from the QS-217 headline to the next H2
@@ -6022,13 +5555,7 @@ def test_dashboard_and_cards_doc_pins_qs_211_steam_paragraph():
     """
     import re
 
-    doc_path = (
-        Path(__file__).parent.parent
-        / "docs"
-        / "agents"
-        / "concepts"
-        / "dashboard-and-cards.md"
-    )
+    doc_path = Path(__file__).parent.parent / "docs" / "agents" / "concepts" / "dashboard-and-cards.md"
     doc = doc_path.read_text(encoding="utf-8")
 
     headline = "**QS-211 — boiling steam puffs.**"
@@ -6066,8 +5593,7 @@ def test_dashboard_and_cards_doc_pins_qs_211_steam_paragraph():
         re.MULTILINE,
     )
     assert front_matter_match, (
-        "dashboard-and-cards.md: front-matter must contain a "
-        "`last_verified: YYYY-MM-DD` field per AC-10."
+        "dashboard-and-cards.md: front-matter must contain a `last_verified: YYYY-MM-DD` field per AC-10."
     )
 
     # Body content guards: a future doc rewrite that strips these
@@ -6153,9 +5679,7 @@ def test_water_boiler_card_running_at_stop_consume_is_flag_gated():
     """
     import re
 
-    content = (
-        COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js"
-    ).read_text()
+    content = (COMPONENT_ROOT / "ui" / "resources" / "qs-water-boiler-card.js").read_text()
     executable = _strip_js_comments(content)
     # The flag must be set somewhere — typically in connectedCallback
     # after `_startAnimation()`.
@@ -6173,9 +5697,7 @@ def test_water_boiler_card_running_at_stop_consume_is_flag_gated():
     # the inner guard, the stash clear, AND the flag's own clear.
     # Use a balanced-brace walk (not a regex) so the inner `if (...)`
     # nested block doesn't truncate the captured body at the inner `}`.
-    body = _extract_js_function_body(
-        executable, r"if\s*\(\s*this\._pendingReattachCheck\s*\)\s*"
-    )
+    body = _extract_js_function_body(executable, r"if\s*\(\s*this\._pendingReattachCheck\s*\)\s*")
     assert body is not None, (
         "qs-water-boiler-card.js (review-fix #04 M1): missing "
         "`if (this._pendingReattachCheck) { ... }` block in "
@@ -6204,9 +5726,7 @@ def test_water_boiler_card_running_at_stop_consume_is_flag_gated():
     )
     # Negative: `_runningAtStop = undefined` must NOT appear outside
     # the flag-gated block — exactly ONE total occurrence in the file.
-    clear_count = len(
-        re.findall(r"this\._runningAtStop\s*=\s*undefined", executable)
-    )
+    clear_count = len(re.findall(r"this\._runningAtStop\s*=\s*undefined", executable))
     assert clear_count == 1, (
         f"qs-water-boiler-card.js (review-fix #04 M1): expected "
         f"exactly ONE `this._runningAtStop = undefined` clear "
@@ -6275,10 +5795,7 @@ async def test_water_boiler_card_input_contract_keys(hass):
 
     # Every template-emitted key must be a key the JS card reads.
     unconsumed = tpl_keys - js_keys
-    assert not unconsumed, (
-        f"Template emits keys not consumed by qs-water-boiler-card.js: "
-        f"{sorted(unconsumed)}"
-    )
+    assert not unconsumed, f"Template emits keys not consumed by qs-water-boiler-card.js: {sorted(unconsumed)}"
 
 
 @pytest.mark.asyncio
@@ -6329,9 +5846,7 @@ async def test_water_boiler_card_input_contract_emits_temperature_sensor_key(has
     ],
 )
 @pytest.mark.asyncio
-async def test_water_boiler_temperature_sensor_row_absent_when_unset(
-    hass, template_name
-):
+async def test_water_boiler_temperature_sensor_row_absent_when_unset(hass, template_name):
     """When no temp sensor is configured, the configured entity id is NOT rendered.
 
     Structural check using the configured entity id (not a prefix
@@ -6350,8 +5865,7 @@ async def test_water_boiler_temperature_sensor_row_absent_when_unset(
     assert parsed is not None
     entity_ids = _collect_water_boiler_entity_rows(parsed)
     assert expected_temp_id not in entity_ids, (
-        f"Configured temp sensor {expected_temp_id!r} leaked into the "
-        f"no-temp boiler card; got rows: {entity_ids}"
+        f"Configured temp sensor {expected_temp_id!r} leaked into the no-temp boiler card; got rows: {entity_ids}"
     )
 
 
@@ -6372,32 +5886,30 @@ class TestClimateCardBackdropDerivation:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # 'heat' literal must drive a return-of-'flame' branch.
         # Accept either `climateStateOn === 'heat'` directly or via the
         # `deriveBackdrop` helper.
-        assert re.search(
-            r"===\s*'heat'.{0,200}return\s+'flame'",
-            executable,
-            re.DOTALL,
-        ) is not None, (
-            "QS-210 AC1: HEAT branch must short-circuit to "
-            "`return 'flame'` when the climate-state-on string is 'heat'."
-        )
+        assert (
+            re.search(
+                r"===\s*'heat'.{0,200}return\s+'flame'",
+                executable,
+                re.DOTALL,
+            )
+            is not None
+        ), "QS-210 AC1: HEAT branch must short-circuit to `return 'flame'` when the climate-state-on string is 'heat'."
 
         # 'cool' literal must drive a return-of-'snow' branch.
-        assert re.search(
-            r"===\s*'cool'.{0,200}return\s+'snow'",
-            executable,
-            re.DOTALL,
-        ) is not None, (
-            "QS-210 AC1: COOL branch must short-circuit to "
-            "`return 'snow'` when the climate-state-on string is 'cool'."
-        )
+        assert (
+            re.search(
+                r"===\s*'cool'.{0,200}return\s+'snow'",
+                executable,
+                re.DOTALL,
+            )
+            is not None
+        ), "QS-210 AC1: COOL branch must short-circuit to `return 'snow'` when the climate-state-on string is 'cool'."
 
     def test_climate_card_backdrop_auto_resolves_single_target(self):
         """AUTO / HEAT_COOL must read `temperature`, `target_temp_low`,
@@ -6407,9 +5919,7 @@ class TestClimateCardBackdropDerivation:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # All four climate attributes must be read.
@@ -6419,47 +5929,42 @@ class TestClimateCardBackdropDerivation:
             "target_temp_low",
             "target_temp_high",
         ):
-            assert re.search(
-                rf"attrs\??\.{attr}\b", executable
-            ) is not None, (
-                f"QS-210 AC1: AUTO branch must read climate entity "
-                f"attribute `{attr}`."
+            assert re.search(rf"attrs\??\.{attr}\b", executable) is not None, (
+                f"QS-210 AC1: AUTO branch must read climate entity attribute `{attr}`."
             )
 
         # Midpoint blend for dual setpoints: (low + high) / 2.
         # Accept identifier names (`lowTarget`, `highTarget`, `low`, `high`, `L`, `H`).
-        assert re.search(
-            r"\(\s*\w+Target\s*\+\s*\w+Target\s*\)\s*/\s*2",
-            executable,
-        ) is not None, (
+        assert (
+            re.search(
+                r"\(\s*\w+Target\s*\+\s*\w+Target\s*\)\s*/\s*2",
+                executable,
+            )
+            is not None
+        ), (
             "QS-210 AC1: AUTO branch must blend `target_temp_low` and "
             "`target_temp_high` via a midpoint expression `(low + high) / 2`."
         )
 
         # 'auto' or 'heat_cool' literal entering the resolve branch.
-        assert (
-            "'auto'" in executable or "'heat_cool'" in executable
-        ), (
-            "QS-210 AC1: AUTO branch must trigger on `climate_state_on` "
-            "equalling 'auto' or 'heat_cool'."
+        assert "'auto'" in executable or "'heat_cool'" in executable, (
+            "QS-210 AC1: AUTO branch must trigger on `climate_state_on` equalling 'auto' or 'heat_cool'."
         )
 
         # 'wind' fallback gated on `running`.
-        assert re.search(
-            r"running\s*\?\s*'wind'\s*:\s*'none'",
-            executable,
-        ) is not None, (
-            "QS-210 AC1: AUTO branch must fall through to "
-            "`running ? 'wind' : 'none'` when no setpoint resolves."
-        )
+        assert (
+            re.search(
+                r"running\s*\?\s*'wind'\s*:\s*'none'",
+                executable,
+            )
+            is not None
+        ), "QS-210 AC1: AUTO branch must fall through to `running ? 'wind' : 'none'` when no setpoint resolves."
 
         # Review-fix S11: the `'wind'` literal must pair with `'none'`
         # inside the SAME `running ? … : …` ternary so off-with-no-
         # setpoint deterministically maps to `'none'`, not `'wind'`.
         # Pin the ternary as a single semantic unit via a strict regex.
-        wind_none_pair = re.compile(
-            r"return\s+running\s*\?\s*'wind'\s*:\s*'none'\s*;"
-        )
+        wind_none_pair = re.compile(r"return\s+running\s*\?\s*'wind'\s*:\s*'none'\s*;")
         assert wind_none_pair.search(executable) is not None, (
             "QS-210 AC1 / review-fix S11: the `'wind'` literal must "
             "appear in a `return running ? 'wind' : 'none';` ternary so "
@@ -6477,9 +5982,7 @@ class TestClimateCardFlameBackdrop:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # The peaked-teeth path generator.
@@ -6490,30 +5993,29 @@ class TestClimateCardFlameBackdrop:
 
         # Per-layer flame template-literal id pattern.
         assert 'id="flame${i}"' in content, (
-            "QS-210 AC2: per-layer flame path id must be emitted as "
-            "the template literal `id=\"flame${i}\"`."
+            'QS-210 AC2: per-layer flame path id must be emitted as the template literal `id="flame${i}"`.'
         )
 
         # Running ? FLAME_FILLS : FLAME_GREY_FILLS branch.
-        assert re.search(
-            r"running\s*\?\s*FLAME_FILLS\s*:\s*FLAME_GREY_FILLS",
-            executable,
-        ) is not None, (
-            "QS-210 AC2: flame fill must branch on `running ? "
-            "FLAME_FILLS : FLAME_GREY_FILLS` (mirror radiator card)."
-        )
+        assert (
+            re.search(
+                r"running\s*\?\s*FLAME_FILLS\s*:\s*FLAME_GREY_FILLS",
+                executable,
+            )
+            is not None
+        ), "QS-210 AC2: flame fill must branch on `running ? FLAME_FILLS : FLAME_GREY_FILLS` (mirror radiator card)."
 
         # The full flameBaseY formula matching the radiator's envelope.
-        assert re.search(
-            r"flameBaseY\s*=\s*CENTER_CY\s*\+\s*CLIP_R\s*-\s*\(\s*"
-            r"FLAME_BASE_MIN_PCT\s*\+\s*progressRatio\s*\*\s*\(\s*"
-            r"FLAME_BASE_MAX_PCT\s*-\s*FLAME_BASE_MIN_PCT\s*\)\s*\)\s*"
-            r"\*\s*2\s*\*\s*CLIP_R",
-            executable,
-        ) is not None, (
-            "QS-210 AC2: flameBaseY formula must mirror the radiator's "
-            "progress envelope verbatim."
-        )
+        assert (
+            re.search(
+                r"flameBaseY\s*=\s*CENTER_CY\s*\+\s*CLIP_R\s*-\s*\(\s*"
+                r"FLAME_BASE_MIN_PCT\s*\+\s*progressRatio\s*\*\s*\(\s*"
+                r"FLAME_BASE_MAX_PCT\s*-\s*FLAME_BASE_MIN_PCT\s*\)\s*\)\s*"
+                r"\*\s*2\s*\*\s*CLIP_R",
+                executable,
+            )
+            is not None
+        ), "QS-210 AC2: flameBaseY formula must mirror the radiator's progress envelope verbatim."
 
 
 class TestClimateCardSnowBackdrop:
@@ -6525,20 +6027,15 @@ class TestClimateCardSnowBackdrop:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # 3 wave paths — either template-literal (`id="snowWave${i}"`)
         # or three explicit ids. Accept both.
         if 'id="snowWave${i}"' not in content:
             for i in range(3):
-                assert re.search(
-                    rf'id="snowWave{i}"', executable
-                ) is not None, (
-                    f"QS-210 AC3: missing snow-pile wave path "
-                    f"`id=\"snowWave{i}\"`."
+                assert re.search(rf'id="snowWave{i}"', executable) is not None, (
+                    f'QS-210 AC3: missing snow-pile wave path `id="snowWave{i}"`.'
                 )
 
         # QS-220 AC-2: the front layer is no longer pure white.
@@ -6552,20 +6049,17 @@ class TestClimateCardSnowBackdrop:
         assert re.search(
             r"const\s+SNOW_FRONT_COLOR\s*=\s*'hsla\([^']+\)'",
             executable,
-        ), (
-            "QS-220 AC-2: SNOW_FRONT_COLOR must remain a module-level "
-            "const assigned to an hsla literal."
-        )
+        ), "QS-220 AC-2: SNOW_FRONT_COLOR must remain a module-level const assigned to an hsla literal."
 
         # At least one blue-ish layer (hue around 200-230) — after
         # QS-220 the front layer also matches; back/mid still do.
-        assert re.search(
-            r"hsla\(\s*2[0-3]\d\s*,",
-            executable,
-        ) is not None, (
-            "QS-210 AC3: ≥1 blue-ish pile layer (back/mid/front) must "
-            "use a blue-ish hue (regex on `hsla(2[0-3]X, …)`)."
-        )
+        assert (
+            re.search(
+                r"hsla\(\s*2[0-3]\d\s*,",
+                executable,
+            )
+            is not None
+        ), "QS-210 AC3: ≥1 blue-ish pile layer (back/mid/front) must use a blue-ish hue (regex on `hsla(2[0-3]X, …)`)."
 
     def test_climate_card_snowflakes_fall_down(self):
         """Snowflake particle loop INVERTS the boiler-bubble system:
@@ -6573,9 +6067,7 @@ class TestClimateCardSnowBackdrop:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # The fall direction: cy += b.vy * dt (or equivalent positive
@@ -6583,9 +6075,7 @@ class TestClimateCardSnowBackdrop:
         # `b.cy = b.cy + b.vy * dt`.
         cy_increments = bool(
             re.search(r"b\.cy\s*\+=\s*b\.vy\s*\*\s*dt", executable)
-            or re.search(
-                r"b\.cy\s*=\s*b\.cy\s*\+\s*b\.vy\s*\*\s*dt", executable
-            )
+            or re.search(r"b\.cy\s*=\s*b\.cy\s*\+\s*b\.vy\s*\*\s*dt", executable)
         )
         assert cy_increments, (
             "QS-210 AC3: snowflake fall must INCREMENT `cy` per frame "
@@ -6594,10 +6084,13 @@ class TestClimateCardSnowBackdrop:
 
         # Top-of-clip spawn — `CENTER_CY - CLIP_R + …` (contrast with
         # the boiler's bottom-of-clip `CENTER_CY + CLIP_R - 8`).
-        assert re.search(
-            r"CENTER_CY\s*-\s*CLIP_R",
-            executable,
-        ) is not None, (
+        assert (
+            re.search(
+                r"CENTER_CY\s*-\s*CLIP_R",
+                executable,
+            )
+            is not None
+        ), (
             "QS-210 AC3: snowflake spawn `cy` must use "
             "`CENTER_CY - CLIP_R` (top of clip) — contrasts with the "
             "boiler's bottom-of-clip spawn formula."
@@ -6613,48 +6106,43 @@ class TestClimateCardWindBackdrop:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # 3 wind wisp paths — template-literal or three explicit ids.
         if 'id="windWisp${i}"' not in content:
             for i in range(3):
-                assert re.search(
-                    rf'id="windWisp{i}"', executable
-                ) is not None, (
-                    f"QS-210 AC4: missing wisp path "
-                    f"`id=\"windWisp{i}\"`."
+                assert re.search(rf'id="windWisp{i}"', executable) is not None, (
+                    f'QS-210 AC4: missing wisp path `id="windWisp{i}"`.'
                 )
 
         # `stroke=` attribute on a wisp path.
         # Accept stroke="..." or stroke="${...}".
-        assert re.search(
-            r'<path[^>]*id="windWisp[^"]*"[^>]*stroke=',
-            content,
-            re.DOTALL,
-        ) is not None, (
-            "QS-210 AC4: each wisp path must carry a `stroke=` attribute "
-            "(open sinusoidal line, not a filled polygon)."
-        )
+        assert (
+            re.search(
+                r'<path[^>]*id="windWisp[^"]*"[^>]*stroke=',
+                content,
+                re.DOTALL,
+            )
+            is not None
+        ), "QS-210 AC4: each wisp path must carry a `stroke=` attribute (open sinusoidal line, not a filled polygon)."
 
         # `fill="none"` on the wisp path.
-        assert re.search(
-            r'<path[^>]*id="windWisp[^"]*"[^>]*fill="none"',
-            content,
-            re.DOTALL,
-        ) is not None, (
-            "QS-210 AC4: each wisp path must carry `fill=\"none\"` so it "
+        assert (
+            re.search(
+                r'<path[^>]*id="windWisp[^"]*"[^>]*fill="none"',
+                content,
+                re.DOTALL,
+            )
+            is not None
+        ), (
+            'QS-210 AC4: each wisp path must carry `fill="none"` so it '
             "renders as a stroked open line, not a filled wave polygon."
         )
 
         # WIND_SPEED_PX_PER_S constant.
-        assert re.search(
-            r"const\s+WIND_SPEED_PX_PER_S\s*=", executable
-        ) is not None, (
-            "QS-210 AC4: `WIND_SPEED_PX_PER_S` constant must drive the "
-            "linear-scroll translateX accumulator."
+        assert re.search(r"const\s+WIND_SPEED_PX_PER_S\s*=", executable) is not None, (
+            "QS-210 AC4: `WIND_SPEED_PX_PER_S` constant must drive the linear-scroll translateX accumulator."
         )
 
         # Review-fix S10: `_generateWispPath` must emit an OPEN
@@ -6667,8 +6155,7 @@ class TestClimateCardWindBackdrop:
             r"_generateWispPath\s*\([^)]*\)\s*",
         )
         assert wisp_body is not None, (
-            "Review-fix S10: `_generateWispPath` method must be defined "
-            "in qs-climate-card.js."
+            "Review-fix S10: `_generateWispPath` method must be defined in qs-climate-card.js."
         )
         assert "WAVE_BOTTOM_Y" not in wisp_body, (
             "Review-fix S10: `_generateWispPath` must NOT reference "
@@ -6694,11 +6181,8 @@ class TestClimateCardNoneBackdrop:
         exists inside the `deriveBackdrop` function body, at the
         function's tail (catch-all branch).
         """
-        import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
 
         # Find the deriveBackdrop function body (handle balanced braces).
         deriveBody = _extract_js_function_body(
@@ -6715,8 +6199,7 @@ class TestClimateCardNoneBackdrop:
 
         # 'none' is returned somewhere in the body.
         assert "return 'none'" in executable_body, (
-            "QS-210 AC5: `deriveBackdrop` body must contain a "
-            "`return 'none'` branch for the everything-else case."
+            "QS-210 AC5: `deriveBackdrop` body must contain a `return 'none'` branch for the everything-else case."
         )
 
         # The catch-all `return 'none'` is at the tail of the body — i.e.
@@ -6744,9 +6227,7 @@ class TestClimateCardAutoTempComparison:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # Forbidden: no `_safeAttr` helper.
@@ -6766,9 +6247,7 @@ class TestClimateCardAutoTempComparison:
         ]
         positions = []
         for attr in attrs_in_order:
-            pattern = re.compile(
-                rf"_safeNumber\s*\(\s*\{{\s*state\s*:\s*attrs\??\.{attr}\s*\}}\s*,\s*null\s*\)"
-            )
+            pattern = re.compile(rf"_safeNumber\s*\(\s*\{{\s*state\s*:\s*attrs\??\.{attr}\s*\}}\s*,\s*null\s*\)")
             m = pattern.search(executable)
             assert m is not None, (
                 f"QS-210 AC6: missing `_safeNumber({{state: attrs?.{attr}}}, null)` "
@@ -6790,9 +6269,7 @@ class TestClimateCardJinjaClimateEntity:
     """QS-210 AC7 — dashboard jinja exposes the backing climate entity id."""
 
     @pytest.mark.asyncio
-    async def test_dashboard_template_emits_climate_entity_for_climate_device(
-        self, hass, full_dashboard_home
-    ):
+    async def test_dashboard_template_emits_climate_entity_for_climate_device(self, hass, full_dashboard_home):
         """The climate device block in the custom-card dashboard must
         emit a `climate_entity: climate.X` mapping inside the
         `qs-climate-card`'s `entities:` block. Regex `climate\\.\\w+`
@@ -6801,19 +6278,13 @@ class TestClimateCardJinjaClimateEntity:
         import re
 
         home = full_dashboard_home
-        template_path = (
-            COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
-        )
-        template_content = await hass.async_add_executor_job(
-            template_path.read_text
-        )
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        template_content = await hass.async_add_executor_job(template_path.read_text)
 
         tpl = Template(template_content, hass)
         rendered = tpl.async_render(variables={"home": home})
 
-        assert re.search(
-            r"climate_entity:\s*climate\.\w+", rendered
-        ) is not None, (
+        assert re.search(r"climate_entity:\s*climate\.\w+", rendered) is not None, (
             "QS-210 AC7: the rendered dashboard YAML must contain a "
             "`climate_entity: climate.<id>` line inside the climate "
             "device's `entities:` mapping (mirror of `backing_entity` "
@@ -6821,9 +6292,7 @@ class TestClimateCardJinjaClimateEntity:
         )
 
     @pytest.mark.asyncio
-    async def test_dashboard_template_omits_climate_entity_when_device_attr_missing(
-        self, hass
-    ):
+    async def test_dashboard_template_omits_climate_entity_when_device_attr_missing(self, hass):
         """Review-fix S9 — the `{% if device.climate_entity %}` guard
         must omit the line entirely when the underlying device has no
         backing climate entity (defensive AC7 path). Renders the climate
@@ -6861,12 +6330,8 @@ class TestClimateCardJinjaClimateEntity:
             def get_devices_for_dashboard_section(self, name):
                 return [_StubDevice()]
 
-        template_path = (
-            COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
-        )
-        template_content = await hass.async_add_executor_job(
-            template_path.read_text
-        )
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        template_content = await hass.async_add_executor_job(template_path.read_text)
 
         tpl = Template(template_content, hass)
         rendered = tpl.async_render(variables={"home": _StubHome()})
@@ -6896,9 +6361,7 @@ class TestClimateCardReviewFix01Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # Locate the innerHTML assignment.
@@ -6907,8 +6370,7 @@ class TestClimateCardReviewFix01Hardening:
             executable,
         )
         assert innerhtml_match is not None, (
-            "Review-fix M1: `this._root.innerHTML = `…`` template "
-            "assignment must exist in qs-climate-card.js."
+            "Review-fix M1: `this._root.innerHTML = `…`` template assignment must exist in qs-climate-card.js."
         )
         # The outer template literal contains nested `${... `…` ...}`
         # template literals (e.g. for the power-btn fragment), so a
@@ -6920,7 +6382,7 @@ class TestClimateCardReviewFix01Hardening:
         # whole file to find it.
         outer_close = re.search(
             r"^\s*`\s*;\s*$",
-            executable[innerhtml_match.end():],
+            executable[innerhtml_match.end() :],
             re.MULTILINE,
         )
         assert outer_close is not None, (
@@ -6958,9 +6420,7 @@ class TestClimateCardReviewFix01Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # The initialiser pattern: any `_needsFlamePrime = true` or
@@ -6969,9 +6429,7 @@ class TestClimateCardReviewFix01Hardening:
         # We approximate "in _render" by scanning for ALL occurrences
         # and asserting that at least TWO exist (one in _startAnimation
         # already; one new in _render).
-        occurrences = list(re.finditer(
-            r"_needsFlamePrime\s*(?:==|=)\s*(?:null|true)", executable
-        ))
+        occurrences = list(re.finditer(r"_needsFlamePrime\s*(?:==|=)\s*(?:null|true)", executable))
         assert len(occurrences) >= 2, (
             "Review-fix S1: `_needsFlamePrime` must be initialised in "
             "`_render()` (in addition to the lazy-init inside "
@@ -6982,9 +6440,7 @@ class TestClimateCardReviewFix01Hardening:
 
         # The render-side initialiser uses `== null` (so the prime fires
         # exactly once on first paint).
-        assert re.search(
-            r"this\._needsFlamePrime\s*==\s*null", executable
-        ) is not None, (
+        assert re.search(r"this\._needsFlamePrime\s*==\s*null", executable) is not None, (
             "Review-fix S1: the render-side `_needsFlamePrime` "
             "initialiser must use `== null` so the prime fires exactly "
             "once on first paint."
@@ -6996,10 +6452,13 @@ class TestClimateCardReviewFix01Hardening:
         # snow / wind / none (no visible bug today since flame state
         # is unused for those, but semantically wrong — a regression
         # that drops the gate could mask future flame-mode bugs).
-        assert re.search(
-            r"this\._backdrop\s*===\s*'flame'\s*&&\s*this\._needsFlamePrime",
-            executable,
-        ) is not None, (
+        assert (
+            re.search(
+                r"this\._backdrop\s*===\s*'flame'\s*&&\s*this\._needsFlamePrime",
+                executable,
+            )
+            is not None
+        ), (
             "Pass-#2 S4: the `_needsFlamePrime` consumer must be gated "
             "on `this._backdrop === 'flame' && this._needsFlamePrime` "
             "so the prime only fires when the active backdrop is flame."
@@ -7012,15 +6471,11 @@ class TestClimateCardReviewFix01Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # Constant declaration.
-        assert re.search(
-            r"const\s+BACKDROP_DEADBAND_C\s*=", executable
-        ) is not None, (
+        assert re.search(r"const\s+BACKDROP_DEADBAND_C\s*=", executable) is not None, (
             "Review-fix S4: `BACKDROP_DEADBAND_C` constant must be "
             "declared at the file top (alongside other tuning constants)."
         )
@@ -7028,11 +6483,14 @@ class TestClimateCardReviewFix01Hardening:
         # The deadband comparison must appear inside the AUTO/HEAT_COOL
         # branch — match `Math.abs(target - currentTemp) <
         # BACKDROP_DEADBAND_C`.
-        assert re.search(
-            r"Math\.abs\(\s*target\s*-\s*currentTemp\s*\)\s*<\s*"
-            r"BACKDROP_DEADBAND_C",
-            executable,
-        ) is not None, (
+        assert (
+            re.search(
+                r"Math\.abs\(\s*target\s*-\s*currentTemp\s*\)\s*<\s*"
+                r"BACKDROP_DEADBAND_C",
+                executable,
+            )
+            is not None
+        ), (
             "Review-fix S4: the AUTO/HEAT_COOL branch must guard the "
             "flame/snow flip with "
             "`Math.abs(target - currentTemp) < BACKDROP_DEADBAND_C`."
@@ -7045,19 +6503,20 @@ class TestClimateCardReviewFix01Hardening:
         #     (`target > currentTemp ? 'flame' : 'snow'`), NOT an
         #     unconditional `return 'flame'`. The "fallback to flame"
         #     of pass-#1 was too aggressive — pass-#2 N5 refines.
-        derive_body = _extract_js_function_body(
-            executable, r"const\s+deriveBackdrop\s*=\s*\(\s*\)\s*=>\s*(?=\{)"
-        )
+        derive_body = _extract_js_function_body(executable, r"const\s+deriveBackdrop\s*=\s*\(\s*\)\s*=>\s*(?=\{)")
         assert derive_body is not None, (
             "Pass-#2 S5: `deriveBackdrop` arrow-function body must be "
             "extractable to inspect the deadband two-arm structure."
         )
         # (a) hold-previous arm.
-        assert re.search(
-            r"this\._lastBackdrop\s*===\s*'flame'\s*\|\|\s*"
-            r"this\._lastBackdrop\s*===\s*'snow'",
-            derive_body,
-        ) is not None, (
+        assert (
+            re.search(
+                r"this\._lastBackdrop\s*===\s*'flame'\s*\|\|\s*"
+                r"this\._lastBackdrop\s*===\s*'snow'",
+                derive_body,
+            )
+            is not None
+        ), (
             "Pass-#2 S5: deadband block must check "
             "`_lastBackdrop === 'flame' || _lastBackdrop === 'snow'` "
             "before holding the previous resolved backdrop."
@@ -7106,9 +6565,7 @@ class TestClimateCardReviewFix01Hardening:
         # the deadband block — in the early HEAT branch and the
         # non-deadband sign-based site, both of which sit outside this
         # extracted sub-block).
-        assert not re.search(
-            r"return\s+'flame'\s*;", deadband_body
-        ), (
+        assert not re.search(r"return\s+'flame'\s*;", deadband_body), (
             "Pass-#2 N5: the deadband block must NOT contain an "
             "unconditional `return 'flame';` — use the sign-based "
             "ternary / helper instead so wind/none → deadband-AUTO "
@@ -7122,24 +6579,18 @@ class TestClimateCardReviewFix01Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # `CENTER_X` constant introduced alongside `CENTER_CY`.
-        assert re.search(
-            r"const\s+CENTER_X\s*=\s*160", executable
-        ) is not None, (
+        assert re.search(r"const\s+CENTER_X\s*=\s*160", executable) is not None, (
             "Review-fix S5: `CENTER_X = 160` must be declared so the "
             "snowflake spawn `cx` and clip `<circle cx=...>` use a "
             "semantically-correct X-centre constant (not `CENTER_CY`)."
         )
 
         # The halfChord-bounded spawn formula.
-        assert re.search(
-            r"halfChord\s*=\s*Math\.sqrt", executable
-        ) is not None, (
+        assert re.search(r"halfChord\s*=\s*Math\.sqrt", executable) is not None, (
             "Review-fix S5: snowflake spawn `cx` must compute "
             "`halfChord = Math.sqrt(…)` so it stays inside the visible "
             "chord at the spawn-y."
@@ -7162,15 +6613,17 @@ class TestClimateCardReviewFix01Hardening:
             content,
         )
         assert builder_match is not None, (
-            "`clipPathD` builder declaration missing — must be "
-            "present above the innerHTML template literal."
+            "`clipPathD` builder declaration missing — must be present above the innerHTML template literal."
         )
         builder_block = builder_match.group(1)
         # Outer disc subpath uses `CENTER_X - CLIP_R`.
-        assert re.search(
-            r"\$\{\s*CENTER_X\s*-\s*CLIP_R\s*\}",
-            builder_block,
-        ) is not None, (
+        assert (
+            re.search(
+                r"\$\{\s*CENTER_X\s*-\s*CLIP_R\s*\}",
+                builder_block,
+            )
+            is not None
+        ), (
             "Pass-#2 S1: the climate card's clipPathD outer-disc "
             "subpath must use `${CENTER_X - CLIP_R}` (not "
             "`${CENTER_CY - CLIP_R}`) so the `CENTER_X` constant's "
@@ -7192,7 +6645,6 @@ class TestClimateCardReviewFix01Hardening:
         QS-199 — `_safeNumber` moved to `shared/qs-card-base.js`. Uses
         `card_source_union` to find the (now-shared) hardened body.
         """
-        import re
 
         from tests.utils.card_sources import card_source_union
 
@@ -7202,18 +6654,13 @@ class TestClimateCardReviewFix01Hardening:
         # Locate the _safeNumber body. The lookahead `(?=\{)` ensures
         # we match the method DEFINITION, not the various call sites
         # which are followed by `;` or `,`.
-        body = _extract_js_function_body(
-            executable, r"_safeNumber\s*\([^)]*\)\s*(?=\{)"
-        )
-        assert body is not None, (
-            "Review-fix S6/S7: `_safeNumber` method body must be "
-            "extractable for inspection."
-        )
+        body = _extract_js_function_body(executable, r"_safeNumber\s*\([^)]*\)\s*(?=\{)")
+        assert body is not None, "Review-fix S6/S7: `_safeNumber` method body must be extractable for inspection."
 
         # Trim of string state.
         assert ".trim()" in body, (
             "Review-fix S6: `_safeNumber` must call `.trim()` on the "
-            "raw string state so a whitespace-only state (e.g. \" \") "
+            'raw string state so a whitespace-only state (e.g. " ") '
             "doesn't coerce to 0."
         )
 
@@ -7232,18 +6679,19 @@ class TestClimateCardReviewFix01Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # `needsTemps` guard declared.
-        assert re.search(
-            r"const\s+needsTemps\s*=\s*"
-            r"climateStateOn\s*===\s*'auto'\s*\|\|\s*"
-            r"climateStateOn\s*===\s*'heat_cool'",
-            executable,
-        ) is not None, (
+        assert (
+            re.search(
+                r"const\s+needsTemps\s*=\s*"
+                r"climateStateOn\s*===\s*'auto'\s*\|\|\s*"
+                r"climateStateOn\s*===\s*'heat_cool'",
+                executable,
+            )
+            is not None
+        ), (
             "Review-fix S8: `const needsTemps = climateStateOn === "
             "'auto' || climateStateOn === 'heat_cool';` must gate the "
             "four climate-entity attribute reads."
@@ -7277,9 +6725,7 @@ class TestClimateCardReviewFix01Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # Extract _stepSnow body via balanced-brace walk. The signature
@@ -7288,13 +6734,8 @@ class TestClimateCardReviewFix01Hardening:
         # `_startAnimation`'s switch — `_stepSnow(ts, dt);` (semicolon)
         # would otherwise hit first and the walker would pick up the
         # wrong body.
-        snow_body = _extract_js_function_body(
-            executable, r"_stepSnow\s*\([^)]*\)\s*(?=\{)"
-        )
-        assert snow_body is not None, (
-            "Review-fix S12: `_stepSnow(ts, dt) { … }` method body must "
-            "be extractable."
-        )
+        snow_body = _extract_js_function_body(executable, r"_stepSnow\s*\([^)]*\)\s*(?=\{)")
+        assert snow_body is not None, "Review-fix S12: `_stepSnow(ts, dt) { … }` method body must be extractable."
 
         # The per-layer translateX scroll loop must live OUTSIDE the
         # `if (snowing)` guard. Locate the first
@@ -7312,8 +6753,7 @@ class TestClimateCardReviewFix01Hardening:
         # The `if (snowing)` guard exists.
         snowing_guard = re.search(r"if\s*\(\s*snowing\s*\)", snow_body)
         assert snowing_guard is not None, (
-            "Review-fix S12: `_stepSnow` must contain an "
-            "`if (snowing)` guard for the spawn block."
+            "Review-fix S12: `_stepSnow` must contain an `if (snowing)` guard for the spawn block."
         )
 
         # The scroll site must appear BEFORE the `if (snowing)` guard
@@ -7327,11 +6767,8 @@ class TestClimateCardReviewFix01Hardening:
 
         # Also sanity-check the for-loop driving the scroll is the
         # canonical `for (let i = 0; i < 3; i++)`.
-        assert re.search(
-            r"for\s*\(\s*let\s+i\s*=\s*0\s*;\s*i\s*<\s*3\s*;", snow_body
-        ) is not None, (
-            "Review-fix S12: snow scroll loop must iterate over the 3 "
-            "wave layers via `for (let i = 0; i < 3; i++)`."
+        assert re.search(r"for\s*\(\s*let\s+i\s*=\s*0\s*;\s*i\s*<\s*3\s*;", snow_body) is not None, (
+            "Review-fix S12: snow scroll loop must iterate over the 3 wave layers via `for (let i = 0; i < 3; i++)`."
         )
 
 
@@ -7357,9 +6794,7 @@ class TestClimateCardReviewFix02Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # The N5 transition block: `if (this._backdrop === 'snow' &&
@@ -7379,20 +6814,15 @@ class TestClimateCardReviewFix02Hardening:
         # The N5 block must reset amp/speed AND defensively initialise
         # the three array/scalar fields the snow RAF step depends on.
         assert "this._currentSnowAmp = CALM_SNOW_AMP" in n5_body, (
-            "Pass-#2 M1: the N5 block must reset "
-            "`this._currentSnowAmp = CALM_SNOW_AMP`."
+            "Pass-#2 M1: the N5 block must reset `this._currentSnowAmp = CALM_SNOW_AMP`."
         )
         assert "this._currentSnowSpeed = CALM_SNOW_SPEED" in n5_body, (
-            "Pass-#2 M1: the N5 block must reset "
-            "`this._currentSnowSpeed = CALM_SNOW_SPEED`."
+            "Pass-#2 M1: the N5 block must reset `this._currentSnowSpeed = CALM_SNOW_SPEED`."
         )
         for guard, field, init in (
-            ("this._snowWavePhase == null", "_snowWavePhase",
-             "this._snowWavePhase = 0"),
-            ("this._snowflakes == null", "_snowflakes",
-             "this._snowflakes = []"),
-            ("this._nextSnowflakeAt == null", "_nextSnowflakeAt",
-             "this._nextSnowflakeAt = 0"),
+            ("this._snowWavePhase == null", "_snowWavePhase", "this._snowWavePhase = 0"),
+            ("this._snowflakes == null", "_snowflakes", "this._snowflakes = []"),
+            ("this._nextSnowflakeAt == null", "_nextSnowflakeAt", "this._nextSnowflakeAt = 0"),
         ):
             assert guard in n5_body and init in n5_body, (
                 f"Pass-#2 M1: the N5 block must defensively initialise "
@@ -7405,12 +6835,8 @@ class TestClimateCardReviewFix02Hardening:
         # single-guard `if (this._currentSnowAmp == null) { ... all
         # five fields ... }` is fragile: any earlier write to
         # `_currentSnowAmp` skips ALL five inits.
-        start_body = _extract_js_function_body(
-            executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)"
-        )
-        assert start_body is not None, (
-            "Pass-#2 M1: `_startAnimation()` body must be extractable."
-        )
+        start_body = _extract_js_function_body(executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)")
+        assert start_body is not None, "Pass-#2 M1: `_startAnimation()` body must be extractable."
         for field, init in (
             ("_currentSnowAmp", "this._currentSnowAmp = CALM_SNOW_AMP"),
             ("_currentSnowSpeed", "this._currentSnowSpeed = CALM_SNOW_SPEED"),
@@ -7441,9 +6867,7 @@ class TestClimateCardReviewFix02Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # Each of the three initial-paths variables must be ASSIGNED
@@ -7476,7 +6900,7 @@ class TestClimateCardReviewFix02Hardening:
                 elif executable[i] == "}":
                     depth -= 1
                 i += 1
-            guard_body = executable[guard_match.end():i - 1]
+            guard_body = executable[guard_match.end() : i - 1]
             assert var_name in guard_body, (
                 f"Pass-#2 S3: `{var_name}` must be assigned INSIDE the "
                 f"`if (this._backdrop === '{backdrop}') {{ ... }}` "
@@ -7492,11 +6916,8 @@ class TestClimateCardReviewFix02Hardening:
         CPU work. Only the N5 accumulator reset has unique work; that
         stays.
         """
-        import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
         # Locate the backdrop-change block:
@@ -7515,9 +6936,7 @@ class TestClimateCardReviewFix02Hardening:
             "_invalidateSnowCache",
             "_invalidateWindCache",
         ):
-            assert (
-                f"this.{invalidator}()" not in bc_body
-            ), (
+            assert f"this.{invalidator}()" not in bc_body, (
                 f"Pass-#2 N1: the backdrop-change block must NOT call "
                 f"`this.{invalidator}()` — the post-innerHTML M1 block "
                 f"now runs the same invalidator unconditionally, so the "
@@ -7532,25 +6951,18 @@ class TestClimateCardReviewFix02Hardening:
         `.remove()` was also detaching live nodes that the imminent
         rewrite was about to replace anyway.
         """
-        import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
-        start_body = _extract_js_function_body(
-            executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)"
-        )
+        start_body = _extract_js_function_body(executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)")
         assert start_body is not None
         for invalidator in (
             "_invalidateFlameCache",
             "_invalidateSnowCache",
             "_invalidateWindCache",
         ):
-            assert (
-                f"this.{invalidator}()" not in start_body
-            ), (
+            assert f"this.{invalidator}()" not in start_body, (
                 f"Pass-#2 N2: `_startAnimation` must NOT call "
                 f"`this.{invalidator}()` — the post-innerHTML M1 block "
                 f"already handles invalidation."
@@ -7563,14 +6975,10 @@ class TestClimateCardReviewFix02Hardening:
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js").read_text()
         executable = _strip_js_comments(content)
 
-        start_body = _extract_js_function_body(
-            executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)"
-        )
+        start_body = _extract_js_function_body(executable, r"_startAnimation\s*\(\s*\)\s*(?=\{)")
         assert start_body is not None
 
         early_return = re.search(
@@ -7578,8 +6986,7 @@ class TestClimateCardReviewFix02Hardening:
             start_body,
         )
         assert early_return is not None, (
-            "Pass-#2 N4: `_startAnimation` must contain the "
-            "`if (this._animRaf != null) return;` early-return guard."
+            "Pass-#2 N4: `_startAnimation` must contain the `if (this._animRaf != null) return;` early-return guard."
         )
 
         # The lazy-init for at least one of the snow / wind / flame
@@ -7589,10 +6996,7 @@ class TestClimateCardReviewFix02Hardening:
                 rf"if\s*\(\s*this\.{field}\s*==\s*null\s*\)",
                 start_body,
             )
-            assert lazy_init is not None, (
-                f"Pass-#2 N4: `_startAnimation` must lazy-init "
-                f"`{field}`."
-            )
+            assert lazy_init is not None, f"Pass-#2 N4: `_startAnimation` must lazy-init `{field}`."
             assert lazy_init.start() > early_return.end(), (
                 f"Pass-#2 N4: the lazy-init guard for `{field}` must "
                 f"appear AFTER the `if (this._animRaf != null) "
@@ -7656,20 +7060,14 @@ def test_no_duplicate_card_method_definitions():
     cards_dir = COMPONENT_ROOT / "ui" / "resources"
 
     shared_text = _strip_js_comments(
-        "\n".join(
-            shared_path.read_text(encoding="utf-8")
-            for shared_path in shared_dir.glob("*.js")
-        )
+        "\n".join(shared_path.read_text(encoding="utf-8") for shared_path in shared_dir.glob("*.js"))
     )
     cards_text_per_file = {
-        card_path.name: _strip_js_comments(
-            card_path.read_text(encoding="utf-8")
-        )
+        card_path.name: _strip_js_comments(card_path.read_text(encoding="utf-8"))
         for card_path in cards_dir.glob("qs-*-card.js")
     }
     assert len(cards_text_per_file) == 6, (
-        f"Expected exactly 6 top-level qs-*-card.js files; got "
-        f"{sorted(cards_text_per_file.keys())}"
+        f"Expected exactly 6 top-level qs-*-card.js files; got {sorted(cards_text_per_file.keys())}"
     )
 
     duplicates: list[str] = []
@@ -7677,26 +7075,16 @@ def test_no_duplicate_card_method_definitions():
         # Match a method DEFINITION: `<method>(...) {` at line start
         # (modulo indentation). Excludes call sites (which end in `;`
         # or `,`) and closure assignments (which are preceded by `const`).
-        pat = re.compile(
-            rf"^\s*{re.escape(method)}\s*\([^)]*\)\s*\{{", re.MULTILINE
-        )
+        pat = re.compile(rf"^\s*{re.escape(method)}\s*\([^)]*\)\s*\{{", re.MULTILINE)
         shared_hits = len(pat.findall(shared_text))
         if shared_hits != 1:
-            duplicates.append(
-                f"shared/* defines `{method}` {shared_hits} times (expected 1)"
-            )
+            duplicates.append(f"shared/* defines `{method}` {shared_hits} times (expected 1)")
         for card_name, card_text in cards_text_per_file.items():
             card_hits = len(pat.findall(card_text))
             if card_hits > 0:
-                duplicates.append(
-                    f"{card_name} still defines `{method}` "
-                    f"({card_hits} times); AC1 requires zero"
-                )
+                duplicates.append(f"{card_name} still defines `{method}` ({card_hits} times); AC1 requires zero")
 
-    assert not duplicates, (
-        "QS-199 AC1 violation — duplicated method definitions found:\n  "
-        + "\n  ".join(duplicates)
-    )
+    assert not duplicates, "QS-199 AC1 violation — duplicated method definitions found:\n  " + "\n  ".join(duplicates)
 
 
 @pytest.mark.asyncio
@@ -7705,10 +7093,10 @@ async def test_shared_modules_are_not_lovelace_registered(tmp_path):
     `www/quiet_solar/shared/` but are NOT registered as Lovelace
     resources. Only top-level `qs-*-card.js` files register.
     """
-    from tests.test_ui_dashboard import MockResourceStorageCollection
     from custom_components.quiet_solar.ui.dashboard import (
         _async_copy_and_register_resources,
     )
+    from tests.test_ui_dashboard import MockResourceStorageCollection
 
     src = COMPONENT_ROOT / "ui" / "resources"
     dst = tmp_path / "dst"
@@ -7716,17 +7104,16 @@ async def test_shared_modules_are_not_lovelace_registered(tmp_path):
     resources = MockResourceStorageCollection()
 
     await _async_copy_and_register_resources(
-        str(src), str(dst), "/local/quiet_solar", "TESTTAG", resources,
+        str(src),
+        str(dst),
+        "/local/quiet_solar",
+        "TESTTAG",
+        resources,
     )
 
     # No Lovelace registration whose URL contains `/shared/`.
-    shared_urls = [
-        item["url"] for item in resources.created_items if "/shared/" in item["url"]
-    ]
-    assert not shared_urls, (
-        "QS-199 AC3 violation — shared modules registered as Lovelace "
-        f"resources: {shared_urls}"
-    )
+    shared_urls = [item["url"] for item in resources.created_items if "/shared/" in item["url"]]
+    assert not shared_urls, f"QS-199 AC3 violation — shared modules registered as Lovelace resources: {shared_urls}"
 
     # But the shared files WERE copied to the destination.
     for shared_name in (
@@ -7737,19 +7124,13 @@ async def test_shared_modules_are_not_lovelace_registered(tmp_path):
         "qs-anim-wave.js",
     ):
         assert (dst / "shared" / shared_name).exists(), (
-            f"QS-199 AC3 violation — shared module `shared/{shared_name}` "
-            f"was not copied to destination"
+            f"QS-199 AC3 violation — shared module `shared/{shared_name}` was not copied to destination"
         )
 
     # And every top-level qs-*-card.js IS registered.
-    top_level_urls = [
-        item["url"]
-        for item in resources.created_items
-        if "/shared/" not in item["url"]
-    ]
+    top_level_urls = [item["url"] for item in resources.created_items if "/shared/" not in item["url"]]
     assert len(top_level_urls) == 6, (
-        f"Expected exactly 6 top-level card registrations; got "
-        f"{len(top_level_urls)}: {top_level_urls}"
+        f"Expected exactly 6 top-level card registrations; got {len(top_level_urls)}: {top_level_urls}"
     )
 
 
@@ -7761,10 +7142,10 @@ async def test_card_imports_use_cache_busted_url(tmp_path):
     """
     import re
 
-    from tests.test_ui_dashboard import MockResourceStorageCollection
     from custom_components.quiet_solar.ui.dashboard import (
         _async_copy_and_register_resources,
     )
+    from tests.test_ui_dashboard import MockResourceStorageCollection
 
     src = COMPONENT_ROOT / "ui" / "resources"
     dst = tmp_path / "dst"
@@ -7772,15 +7153,17 @@ async def test_card_imports_use_cache_busted_url(tmp_path):
     resources = MockResourceStorageCollection()
 
     await _async_copy_and_register_resources(
-        str(src), str(dst), "/local/quiet_solar", "STAMPED", resources,
+        str(src),
+        str(dst),
+        "/local/quiet_solar",
+        "STAMPED",
+        resources,
     )
 
     # Every migrated card imports from `./shared/*.js` and the rewrite
     # must inject the same `qs_tag=STAMPED` cache-buster used for
     # the top-level Lovelace registration.
-    import_pat = re.compile(
-        r"""from\s+['"]\./shared/[^'"]+\.js\?qs_tag=STAMPED['"]"""
-    )
+    import_pat = re.compile(r"""from\s+['"]\./shared/[^'"]+\.js\?qs_tag=STAMPED['"]""")
 
     cards_with_imports = (
         "qs-on-off-duration-card.js",
@@ -7806,3 +7189,131 @@ async def test_card_imports_use_cache_busted_url(tmp_path):
             f"cache-buster"
         )
 
+
+def test_no_closure_form_duplicate_helpers_in_cards():
+    """QS-199 review-fix N4 — closure-form duplicates of the shared
+    helpers must not reappear in any top-level card.
+
+    The original `test_no_duplicate_card_method_definitions` only catches
+    method-FORM definitions (`_foo(...) {`), so the closure-FORM
+    duplicates (`const showDialog = (...) => {...}`,
+    `const arcPath = (...) => {...}`) that M3 fixed slipped through. This
+    second pass greps for `const <name> =` assignments of the canonical
+    helper names and asserts zero across all 6 cards.
+
+    Allowed exception: a one-line delegating alias
+    `const _registerKeyActivation = (el, action) => this._registerKeyActivation(...)`
+    is NOT allowed either — M3/N3 removed those too.
+    """
+    import re
+
+    cards_dir = COMPONENT_ROOT / "ui" / "resources"
+    forbidden_names = (
+        "showDialog",
+        "_showDialog",
+        "_registerKeyActivation",
+        "deg2rad",
+        "rad2deg",
+        "polar",
+        "arcPath",
+        "pctToDeg",
+    )
+    pat = re.compile(
+        r"const\s+(" + "|".join(re.escape(n) for n in forbidden_names) + r")\s*=",
+    )
+
+    offenders: list[str] = []
+    for card_path in cards_dir.glob("qs-*-card.js"):
+        executable = _strip_js_comments(card_path.read_text(encoding="utf-8"))
+        for m in pat.finditer(executable):
+            offenders.append(f"{card_path.name}: `const {m.group(1)} =`")
+
+    assert not offenders, (
+        "QS-199 review-fix N4 violation — closure-form duplicate helpers "
+        "found (should use the inherited shared method / imported helper):\n  " + "\n  ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    "card_filename",
+    [
+        "qs-on-off-duration-card.js",
+        "qs-radiator-card.js",
+        "qs-pool-card.js",
+        "qs-water-boiler-card.js",
+        "qs-climate-card.js",
+        "qs-car-card.js",
+    ],
+)
+def test_all_cards_inherit_hardened_dialog(card_filename):
+    """QS-199 review-fix S6 — every card's dialog path exposes the
+    N12 (close-fallback) / N13 (try-finally around onClick) / S16
+    (keyboard activation) guarantees.
+
+    After M3/M5 all six cards route through the shared `_showDialog` in
+    `shared/qs-card-base.js`, so the union of the card + its shared
+    modules must contain the hardened implementation. This pins the AC5
+    "automatic inheritance" contract across the whole set (previously
+    only the radiator card was pinned, which is why the car/climate
+    inline-dialog regressions went uncaught).
+    """
+    from tests.utils.card_sources import card_source_union
+
+    union = card_source_union(card_filename)
+
+    # N12 — empty `buttons` falls back to a "Close" button.
+    assert "[{ text: 'Close' }]" in union or "[{text: 'Close'}]" in union, (
+        f"{card_filename}: dialog path missing N12 close-fallback (empty buttons → undismissable modal)"
+    )
+    # N13 — onClick wrapped in try/finally that resets `_modalOpen`.
+    assert "_modalOpen = false" in union, (
+        f"{card_filename}: dialog path missing N13 `_modalOpen = false` reset in a finally block"
+    )
+    # S16 — dialog buttons get keyboard activation.
+    assert "_registerKeyActivation" in union, f"{card_filename}: dialog/buttons missing S16 keyboard activation"
+
+
+def test_card_does_not_reach_into_flame_engine_privates():
+    """QS-199 review-fix M2 — the radiator (and climate) card must NOT
+    dot into `QsFlameEngine`'s `_`-prefixed private fields/methods.
+    Public accessors (`getCurrentAmp`, `getInitialPaths`, `generatePaths`,
+    `step`, `invalidate`, `reset`, `primeForCurrentState`) are the only
+    sanctioned surface.
+    """
+    import re
+
+    cards_dir = COMPONENT_ROOT / "ui" / "resources"
+    private_access = re.compile(r"_flameEngine\._[A-Za-z]")
+
+    offenders: list[str] = []
+    for card_name in ("qs-radiator-card.js", "qs-climate-card.js"):
+        executable = _strip_js_comments((cards_dir / card_name).read_text(encoding="utf-8"))
+        if private_access.search(executable):
+            offenders.append(card_name)
+
+    assert not offenders, (
+        "QS-199 review-fix M2 violation — card reaches into "
+        f"`_flameEngine._<private>`: {offenders}. Use the public accessors."
+    )
+
+
+def test_card_source_union_entries_all_exist():
+    """QS-199 review-fix N7 — every shared file referenced by
+    `CARD_TO_SHARED_FILES` must resolve to an existing file, so a
+    rename/typo fails loudly instead of silently dropping that file's
+    patterns from the cross-cutting tests.
+    """
+    from tests.utils.card_sources import CARD_TO_SHARED_FILES
+
+    resources = COMPONENT_ROOT / "ui" / "resources"
+    missing: list[str] = []
+    for card_name, shared_files in CARD_TO_SHARED_FILES.items():
+        if not (resources / card_name).exists():
+            missing.append(card_name)
+        for shared_name in shared_files:
+            if not (resources / "shared" / shared_name).exists():
+                missing.append(f"shared/{shared_name} (for {card_name})")
+
+    assert not missing, (
+        f"QS-199 review-fix N7 violation — CARD_TO_SHARED_FILES references files that don't exist: {missing}"
+    )

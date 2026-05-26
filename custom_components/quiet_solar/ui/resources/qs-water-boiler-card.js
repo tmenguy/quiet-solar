@@ -157,10 +157,9 @@ const SURFACE_GLOW_BLUR_STDDEV = 6;
 import { baseCardCSS } from './shared/qs-card-styles.js';
 import { QsRingDurationCardBase } from './shared/qs-ring-duration-base.js';
 import { arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
-import { WAVE_CONSTANTS, generateWavePath } from './shared/qs-anim-wave.js';
-
-void WAVE_CONSTANTS; // referenced for cross-cutting smoke tests
-void generateWavePath;
+// QS-199 review-fix S1 — water-boiler keeps its own `_generateWavePath`
+// (2× width for the GPU scroll, same as pool), so it does NOT import the
+// shared single-period `generateWavePath`.
 
 class QsWaterBoilerCard extends QsRingDurationCardBase {
 
@@ -636,15 +635,9 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
   }
 
   disconnectedCallback() {
-    this._stopAnimation();
-    // S7: reset interaction flags so a re-attach after mid-interaction
-    // (e.g. dragging the ring or processing a mode change when the
-    // dashboard rearranges) doesn't silently short-circuit `set hass`
-    // on stale flags.
-    this._isInteractingMode = false;
-    this._isInteractingTarget = false;
-    this._isProcessingModeChange = false;
-    this._modalOpen = false;
+    // QS-199 review-fix S13: chain to the base so its flag-reset +
+    // _stopAnimation + any future base teardown always runs.
+    super.disconnectedCallback();
     // QS-200: eagerly tear down bubble DOM nodes. Without this they
     // would be GC'd along with the shadow root, but explicit cleanup is
     // cheap and avoids dangling SVG nodes during a rapid detach/attach.
@@ -753,16 +746,9 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
       // Determine if we should show from/to times
       const showFromTo = !isDefaultMode || isOverridden;
       
-      // Helper to check if state is valid
-      const isValidState = (state) => {
-        if (!state) return false;
-        const stateLower = String(state).toLowerCase();
-        return !['unavailable', 'unknown', 'none', ''].includes(stateLower);
-      };
-      
-      // Get from/to times — _isValidState inherited from QsCardBase, but
-      // referenced via the local closure below for the legacy template.
-      void isValidState; // kept above for paragraph-locality
+      // Get from/to times — `_isValidState` is inherited from QsCardBase
+      // (QS-199 review-fix S2: the unused local `isValidState` closure
+      // was deleted).
       const startTime = (sStartTime && this._isValidState(sStartTime.state)) ? sStartTime.state : '--:--';
       const endTime = (sEndTime && this._isValidState(sEndTime.state)) ? sEndTime.state : '--:--';
       
@@ -992,36 +978,14 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
         overrideBtnClickable = true;
       }
 
-      // Format time for display (remove seconds if present)
-      const formatTime = (timeStr) => {
-        if (!timeStr || timeStr === '--:--') return '--:--';
-        const stateLower = String(timeStr).toLowerCase();
-        if (['unavailable', 'unknown', 'none'].includes(stateLower)) return '--:--';
-        const parts = String(timeStr).split(':');
-        if (parts.length < 2) return '--:--';
-        return `${parts[0]}:${parts[1]}`;
-      };
+      // QS-199 — _formatTime / _parseTimeToMinutes / _formatHm inherited
+      // from QsCardBase. Local closures deleted (S1: no duplicated logic).
 
       // Determine if we can drag the handle (only in default mode, enabled, and not overridden)
       const canDragHandle = isEnabled && isDefaultMode && !isOverridden && displayTargetHours > 0;
 
-      // Parse time to minutes for time picker
-      const parseTimeToMinutes = (txt) => {
-          if (!txt) return 420; // 07:00
-          const parts = String(txt).split(':').map(Number);
-          const h = parts[0] || 0, m = parts[1] || 0;
-          return h * 60 + m;
-      };
-      
-      const formatHm = (mins) => {
-          if (mins == null) return '';
-          const h = String(Math.floor(mins / 60)).padStart(2, '0');
-          const m = String(mins % 60).padStart(2, '0');
-          return `${h}:${m}`;
-      };
-
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
-      const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
+      const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : this._parseTimeToMinutes(finishTimeStr);
 
       // QS-194: precompute temperature row when sensor is configured
       // and currently reporting a valid numeric value. Falsy / `unknown` /
@@ -1176,18 +1140,18 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
                 <div class="from-to-row">
                   <div class="from-to-item">
                     <div class="from-to-label">From:</div>
-                    <div class="from-to-value">${isDefaultMode && !isOverridden ? '--:--' : formatTime(startTime)}</div>
+                    <div class="from-to-value">${isDefaultMode && !isOverridden ? '--:--' : this._formatTime(startTime)}</div>
                   </div>
                   <div class="from-to-item">
                     <div class="from-to-label">To:</div>
-                    <div class="from-to-value">${isDefaultMode && !isOverridden ? (sDefaultOnFinishTime ? formatTime(finishTimeStr) : '--:--') : formatTime(endTime)}</div>
+                    <div class="from-to-value">${isDefaultMode && !isOverridden ? (sDefaultOnFinishTime ? this._formatTime(finishTimeStr) : '--:--') : this._formatTime(endTime)}</div>
                   </div>
                 </div>
                 ` : ''}
                 ${isDefaultMode && !isOverridden && sDefaultOnFinishTime ? `
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div style="color: var(--secondary-text-color); font-weight:700; font-size: .75rem;">Change Finish Time</div>
-                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}">${formatTime(finishTimeStr)}</div>
+                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}">${this._formatTime(finishTimeStr)}</div>
                 </div>
                 ` : ''}
               </div>
@@ -1294,364 +1258,75 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
       const root = this._root;
       const ids = (k) => root.getElementById(k);
 
-      // QS-199 — showDialog closure replaced with `this._showDialog(opts)`
-      // method on QsCardBase. The legacy `showDialog(...)` callsites below
-      // route through this alias so the diff stays small; AC1 still
-      // satisfied because the method lives only in the shared base.
-      const showDialog = (opts) => this._showDialog(opts);
+      // QS-199 review-fix M3/S5 — all wiring routes through the shared
+      // wire-helpers on QsCardBase / QsRingDurationCardBase. The inline
+      // toggle/override/time/reset/drag closures (and the showDialog /
+      // _registerKeyActivation aliases) were deleted; the shared
+      // `_showDialog` carries the N12/N13/S16 hardening automatically.
 
-      // Bistate mode selector
       if (selBistateMode) {
-          const modeSel = ids('bistate_mode');
-          const startM = () => {
-              this._isInteractingMode = true;
-          };
-          const endM = () => {
-              // Don't clear flag on blur during change processing
-              if (!this._isProcessingModeChange) {
-                  this._isInteractingMode = false;
-                  this._render();
-              }
-          };
-          modeSel?.addEventListener('focus', startM);
-          modeSel?.addEventListener('blur', endM);
-          modeSel?.addEventListener('change', async (ev) => {
-              const option = ev.target.value;
-              if (!option) return;
-
-              this._isProcessingModeChange = true;
-              // M2: wrap in try/finally so the cleanup setTimeout ALWAYS
-              // runs — otherwise a rejected `_select` (HA service failure,
-              // network drop) would leave `_isProcessingModeChange = true`
-              // forever and silently lock out subsequent re-renders.
-              try {
-                  // Call the service and wait for it to complete
-                  await this._select(e.bistate_mode, option);
-              } catch (_) {
-                  // swallow — HA state will resync on the next push
-              } finally {
-                  // Wait a bit for HA state to propagate, then allow re-render
-                  setTimeout(() => {
-                      this._isProcessingModeChange = false;
-                      this._isInteractingMode = false;
-                      this._render();
-                  }, 300);
-              }
+          this._wireBistateMode({
+              selectEl: ids('bistate_mode'),
+              entityId: e.bistate_mode,
+              translationNamespace: 'water_boiler_mode',
           });
-          const modePill = modeSel?.closest('.pill');
-          if (modePill && modeSel) {
-              modePill.addEventListener('click', (ev) => {
-                  if (ev.target.tagName === 'SELECT') return;
-                  try { modeSel.showPicker(); } catch (_) { modeSel.focus(); }
-              });
-          }
       }
 
-      // Mobile touch fix: every button below uses a dual click + touchend pattern.
-      // On mobile, the browser synthesizes "click" from touchstart/touchend with up to a
-      // 300ms delay. If a hass re-render (innerHTML replacement) occurs in that window, the
-      // DOM node is destroyed before the synthetic click fires, so the tap is lost. The
-      // touchend handler fires immediately, calls preventDefault() to suppress the delayed
-      // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
-
-      // QS-199 — _registerKeyActivation lives on QsCardBase. Alias for the
-      // existing call sites below so the per-wire-block diff stays small.
-      const _registerKeyActivation = (el, action) => this._registerKeyActivation(el, action);
-
-      // Green-only toggle button
       if (swGreenOnly) {
-          const toggleGreen = async () => {
-              const btn = ids('green_btn');
-              try {
-                  if (swGreenOnly.state === 'on') {
-                      await this._turnOff(e.green_only);
-                      btn?.classList.remove('on');
-                  } else {
-                      await this._turnOn(e.green_only);
-                      btn?.classList.add('on');
-                  }
-              } catch (_) {
-                  // ignore errors; HA state will resync UI on next render
-              }
-          };
-          const gbtn = ids('green_btn');
-          if (gbtn) {
-              gbtn.style.pointerEvents = 'auto';
-              gbtn.addEventListener('click', toggleGreen);
-              gbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
-              _registerKeyActivation(gbtn, toggleGreen);
-          }
+          this._wireGreenButton({
+              buttonEl: ids('green_btn'),
+              swEntity: swGreenOnly,
+              entityId: e.green_only,
+          });
       }
 
-      // Power/Enable device toggle button
       if (swEnableDevice) {
-          const togglePower = async () => {
-              const btn = ids('power_btn');
-              try {
-                  if (swEnableDevice.state === 'on') {
-                      await this._turnOff(e.enable_device);
-                      btn?.classList.remove('on');
-                  } else {
-                      await this._turnOn(e.enable_device);
-                      btn?.classList.add('on');
-                  }
-              } catch (_) {
-                  // ignore errors; HA state will resync UI on next render
-              }
-          };
-          const pbtn = ids('power_btn');
-          if (pbtn) {
-              pbtn.style.pointerEvents = 'auto';
-              pbtn.addEventListener('click', togglePower);
-              pbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
-              _registerKeyActivation(pbtn, togglePower);
-          }
+          this._wirePowerButton({
+              buttonEl: ids('power_btn'),
+              swEntity: swEnableDevice,
+              entityId: e.enable_device,
+          });
       }
 
-      // Override button
-      if (e.override_reset && overrideBtnClickable) {
-          const obtn = ids('override_btn');
-          if (obtn) {
-              obtn.style.pointerEvents = 'auto';
-              const obtnAction = async () => {
-                  showDialog({
-                      title: 'Reset override',
-                      message: 'This will reset the manual override and return to automatic mode.\nProceed?',
-                      buttons: [
-                          {text: 'Cancel', variant: 'secondary'},
-                          {
-                              text: 'Reset', variant: 'primary', onClick: async () => {
-                                  await this._press(e.override_reset);
-                              }
-                          },
-                      ]
-                  });
-              };
-              obtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); obtnAction(); });
-              obtn.addEventListener('touchend', (ev) => { ev.preventDefault(); obtnAction(); });
-              _registerKeyActivation(obtn, obtnAction);
-          }
+      if (e.override_reset) {
+          this._wireOverrideButton({
+              buttonEl: ids('override_btn'),
+              entityId: e.override_reset,
+              overrideBtnClickable,
+          });
       }
 
-      // Time button for finish time (default mode only, hidden during override)
       if (isDefaultMode && !isOverridden && sDefaultOnFinishTime) {
-          const timeAction = async () => {
-              const defaultHour = Math.floor(finishTimeMins / 60);
-              const defaultMin = finishTimeMins % 60;
-
-              const customContent = `
-            <p>Select the time the device should finish by:</p>
-            <div class="time-picker">
-              <select id="dialog_hour_select">
-                ${Array.from({length: 24}, (_, h) => `<option value="${h}" ${defaultHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}</option>`).join('')}
-              </select>
-              <span>:</span>
-              <select id="dialog_minute_select">
-                ${[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => `<option value="${m}" ${defaultMin === m ? 'selected' : ''}>${String(m).padStart(2, '0')}</option>`).join('')}
-              </select>
-            </div>
-          `;
-
-              const dialog = showDialog({
-                  title: 'Finish Time',
-                  customContent: customContent,
-                  buttons: [
-                      {text: 'Cancel', variant: 'secondary'},
-                      {
-                          text: 'Apply',
-                          variant: 'primary',
-                          onClick: async () => {
-                              const dialogRoot = dialog.querySelector('.dialog');
-                              const hourSel = dialogRoot?.querySelector('#dialog_hour_select');
-                              const minSel = dialogRoot?.querySelector('#dialog_minute_select');
-                              const h = Number(hourSel?.value ?? 0);
-                              const m = Number(minSel?.value ?? 0);
-                              const mins = h * 60 + m;
-                              const hm = formatHm(mins);
-                              const val = hm + ':00';
-                              this._localFinishTimeMins = mins;
-                              // S9: clear the local override after a
-                              // grace period so out-of-band backend
-                              // updates aren't masked indefinitely.
-                              // Mirrors the _localTargetPct timeout.
-                              if (this._localFinishTimeClearTimer) {
-                                  clearTimeout(this._localFinishTimeClearTimer);
-                              }
-                              this._localFinishTimeClearTimer = setTimeout(() => {
-                                  this._localFinishTimeMins = null;
-                                  this._render();
-                              }, 5000);
-                              await this._setTime(e.default_on_finish_time, val);
-                          }
-                      },
-                  ]
-              });
-          };
-
-          const tbtn = ids('time_btn');
-          if (tbtn) {
-              tbtn.style.pointerEvents = 'auto';
-              tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); timeAction(); });
-              tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); timeAction(); });
-              _registerKeyActivation(tbtn, timeAction);
-          }
+          this._wireTimePicker({
+              buttonEl: ids('time_btn'),
+              entityId: e.default_on_finish_time,
+              currentMins: finishTimeMins,
+              localStateKey: '_localFinishTimeMins',
+              clearTimerKey: '_localFinishTimeClearTimer',
+          });
       }
 
-      // Reset button
       if (e.reset) {
-          const resetBtn = ids('reset');
-          const resetAction = async () => {
-              showDialog({
-                  title: 'Reset device state',
-                  message: 'This will reset internal state for the device and cannot be undone.\nProceed?',
-                  buttons: [
-                      {text: 'Cancel', variant: 'secondary'},
-                      {
-                          text: 'Reset', variant: 'danger', onClick: async () => {
-                              await this._press(e.reset);
-                          }
-                      },
-                  ]
-              });
-          };
-          resetBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); resetAction(); });
-          resetBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); resetAction(); });
+          this._wireResetButton({
+              buttonEl: ids('reset'),
+              entityId: e.reset,
+          });
       }
 
-      // Drag target handle on ring (only in default mode)
       if (canDragHandle) {
-          const svg = this._root.querySelector('.ring svg');
-          const handle = this._root.getElementById('target_handle');
-          if (svg && handle) {
-              const pt = svg.createSVGPoint();
-              
-              // Allowed hours (snap points) - 0.5 hour increments from 0 to 12
-              const allowedHours = [];
-              for (let i = 0; i <= 12; i += 0.5) {
-                  allowedHours.push(i);
-              }
-              
-              const onMove = (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
-                  const e2 = ev.touches ? ev.touches[0] : ev;
-                  pt.x = e2.clientX;
-                  pt.y = e2.clientY;
-                  const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
-                  const dx = cursor.x - center.cx;
-                  const dy = cursor.y - center.cy;
-                  let ang = rad2deg(Math.atan2(-dy, dx));
-                  let a = ang;
-                  if (a < startDeg) a = startDeg;
-                  if (a > endDeg) a = endDeg;
-                  const rawPct = ((a - startDeg) / rangeDeg) * 100;
-                  const rawHours = pctToHours(rawPct);
-                  
-                  // Snap to nearest allowed hour
-                  const snapHours = allowedHours.reduce((best, v) => 
-                      Math.abs(v - rawHours) < Math.abs(best - rawHours) ? v : best, 
-                      allowedHours[0]
-                  );
+          const allowedHours = [];
+          for (let i = 0; i <= 12; i += 0.5) allowedHours.push(i);
 
-                  const displayPct = hoursToPct(snapHours);
-                  this._targetDragPct = displayPct;
-                  this._targetDragValue = snapHours;
-                  this._isInteractingTarget = true;
-
-                  const angSnap = startDeg + (displayPct / 100) * rangeDeg;
-                  const pos = polar(center.cx, center.cy, ringCirc, angSnap);
-                  handle.setAttribute('cx', pos.x.toFixed(2));
-                  handle.setAttribute('cy', pos.y.toFixed(2));
-                  const handleText = this._root.getElementById('target_handle_text');
-                  if (handleText) {
-                      handleText.setAttribute('x', pos.x.toFixed(2));
-                      handleText.setAttribute('y', pos.y.toFixed(2));
-                      handleText.textContent = this._fmt(snapHours, false);
-                  }
-                  const tv = this._root.querySelector('.target-value');
-                  if (tv) {
-                      tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: ${colors.primary};">${this._fmt(snapHours, false)}h</span>`;
-                  }
-              };
-              
-              const onUp = async (ev) => {
-                  if (this._upInProgress) return;
-                  this._upInProgress = true;
-
-                  if (ev) {
-                      ev.stopPropagation();
-                      ev.preventDefault();
-                  }
-
-                  const dragPct = this._targetDragPct;
-                  const dragValue = this._targetDragValue;
-
-                  // S17 — wrap the service call so the drag-release
-                  // guards always clear, even if `_setNumber` throws.
-                  try {
-                      if (dragValue != null && e.default_on_duration) {
-                          await this._setNumber(e.default_on_duration, dragValue);
-                          this._localTargetPct = dragPct;
-                          this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
-                          this._pendingClearLocalTarget = setTimeout(() => {
-                              this._localTargetPct = null;
-                              this._pendingClearLocalTarget = null;
-                              this._render();
-                          }, 5000);
-                      }
-                  } catch (_) {
-                      // swallow — HA state will resync on the next push
-                  } finally {
-                      this._targetDragPct = null;
-                      this._targetDragValue = null;
-                      this._isInteractingTarget = false;
-                      this._upInProgress = false;
-                      handle.style.cursor = 'grab';
-                  }
-              };
-
-              if (window.PointerEvent) {
-                  const onPointerMove = (ev) => onMove(ev);
-                  const onPointerUp = async (ev) => {
-                      try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
-                      handle.removeEventListener('pointermove', onPointerMove);
-                      handle.removeEventListener('pointerup', onPointerUp);
-                      handle.removeEventListener('pointercancel', onPointerUp);
-                      await onUp(ev);
-                  };
-                  const onPointerDown = (ev) => {
-                      ev.stopPropagation();
-                      ev.preventDefault();
-                      this._isInteractingTarget = true;
-                      try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
-                      handle.addEventListener('pointermove', onPointerMove);
-                      handle.addEventListener('pointerup', onPointerUp);
-                      handle.addEventListener('pointercancel', onPointerUp);
-                      handle.style.cursor = 'grabbing';
-                  };
-                  handle.addEventListener('pointerdown', onPointerDown);
-              } else {
-                  const onDown = (ev) => {
-                      ev.stopPropagation();
-                      ev.preventDefault();
-                      this._isInteractingTarget = true;
-                      document.addEventListener('mousemove', onMove);
-                      document.addEventListener('touchmove', onMove, {passive: false});
-                      document.addEventListener('mouseup', onUpLegacy);
-                      document.addEventListener('touchend', onUpLegacy);
-                      handle.style.cursor = 'grabbing';
-                  };
-                  const onUpLegacy = async (ev) => {
-                      document.removeEventListener('mousemove', onMove);
-                      document.removeEventListener('touchmove', onMove);
-                      document.removeEventListener('mouseup', onUpLegacy);
-                      document.removeEventListener('touchend', onUpLegacy);
-                      await onUp(ev);
-                  };
-                  handle.addEventListener('mousedown', onDown);
-                  handle.addEventListener('touchstart', onDown, {passive: false});
-              }
-          }
+          this._wireTargetHandle({
+              ringSvg: this._root.querySelector('.ring svg'),
+              handle: this._root.getElementById('target_handle'),
+              center, ringCirc,
+              startDeg, endDeg, rangeDeg,
+              hoursToPct, pctToHours, allowedHours,
+              entityId: e.default_on_duration,
+              getHoursRun: () => hoursRun,
+              colors,
+          });
       }
   }
 }

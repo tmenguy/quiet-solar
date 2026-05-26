@@ -225,9 +225,35 @@ file:
    URL and the rewritten import URLs so a browser reload invalidates
    everything atomically.
 
+The import-URL rewrite (review-fix #01 hardening) matches **both**
+`from './shared/x.js'` in top-level cards **and** sibling
+`from './x.js'` imports *between* files inside `shared/` (so the
+inheritance chain `card → qs-ring-duration-base.js → qs-card-base.js`
+is fully cache-busted), tolerates the no-whitespace `from'./x.js'`
+and dynamic `import('./x.js')` forms, preserves any pre-existing
+non-`qs_tag` query params, and uses a literal (callable) replacement
+so a tag value is never mis-parsed as a regex backreference. The tag
+itself is `time.time_ns()` (nanosecond resolution) so two restarts in
+the same wall-clock second still differ. Subdirectories are copied
+*before* the top-level cards that import them (dependency order), each
+file is written via a temp-file + `os.replace()` atomic swap, and a
+non-UTF-8 `.js` file is byte-copied (no rewrite) rather than aborting
+the recursion.
+
 Dashboard **content** is NOT touched on startup — only the JS
 resources — so any manual edits TheAdmin made to the dashboards
 survive an upgrade.
+
+All six cards route through the shared base: lifecycle, service
+callers, defensive utilities, the modal dialog (`_showDialog`,
+N12/N13/S16-hardened), keyboard activation, the five wire-helpers,
+the ring HTML builder, the geometry helpers, and `baseCardCSS`. The
+flame engine (`QsFlameEngine`) is consumed only by the radiator card;
+the climate card keeps its own inline flame/snow/wind engines (the
+four-backdrop dispatch + snow-pile particle system don't fit the
+generic engine), and pool / water-boiler keep their own
+`_generateWavePath` (a 2×-width GPU-scroll variant). Those three cards
+therefore do not import the shared animation modules.
 
 ### Tracking storage (survives restart)
 

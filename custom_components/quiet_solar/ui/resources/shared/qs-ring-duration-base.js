@@ -59,6 +59,11 @@ export class QsRingDurationCardBase extends QsCardBase {
 
         const escapedHandleLabel = this._fmt(pctToHours(handlePct));
 
+        // QS-199 review-fix N6 — per-instance glow filter id (parity with
+        // gradGreenId / gradRunningId) so two cards on one page can't
+        // collide if shadow-DOM id scoping ever changes.
+        const glowId = this._instanceId('runningGlow');
+
         return `
               <defs>
                 <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
@@ -69,7 +74,7 @@ export class QsRingDurationCardBase extends QsCardBase {
                   <stop offset="0%" stop-color="${palette.animStart}"/>
                   <stop offset="100%" stop-color="${palette.animEnd}"/>
                 </linearGradient>
-                <filter id="runningGlow" x="-50%" y="-50%" width="200%" height="200%">
+                <filter id="${glowId}" x="-50%" y="-50%" width="200%" height="200%">
                   <feGaussianBlur stdDeviation="2" result="blur" />
                   <feMerge>
                     <feMergeNode in="blur" />
@@ -88,7 +93,7 @@ export class QsRingDurationCardBase extends QsCardBase {
                     stroke-linecap="round"
                     stroke-dasharray="${dashLen} ${gapLen}"
                     stroke-opacity="1"
-                    filter="url(#runningGlow)"
+                    filter="url(#${glowId})"
                     style="mix-blend-mode:screen; will-change: stroke-dashoffset"
               />
               ` : ''}

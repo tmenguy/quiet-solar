@@ -13,7 +13,9 @@
 import { baseCardCSS } from './shared/qs-card-styles.js';
 import { QsRingDurationCardBase } from './shared/qs-ring-duration-base.js';
 import { arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
-import { WAVE_CONSTANTS, generateWavePath } from './shared/qs-anim-wave.js';
+// QS-199 review-fix S1 — pool keeps its own `_generateWavePath` (emits
+// 2× width for the GPU translateX scroll), so it does NOT import the
+// shared single-period `generateWavePath`.
 
 // --- Geometry (must match the SVG <clipPath> circle attributes below) ---
 const CENTER_CY = 160;
@@ -50,10 +52,6 @@ const PHASE_TO_PX = 60;
 // --- Wave dynamics targets (calm vs pumping) ---
 const CALM_AMP = 2,  PUMP_AMP = 6;
 const CALM_SPEED = 0.3, PUMP_SPEED = 1.2;
-
-// Reference the shared WAVE_CONSTANTS so cross-cutting smoke tests
-// that grep its name find the symbol in the union.
-void WAVE_CONSTANTS;
 
 
 class QsPoolCard extends QsRingDurationCardBase {
@@ -147,11 +145,12 @@ class QsPoolCard extends QsRingDurationCardBase {
     }
 
     /*
-      _generateWavePath — pool-specific wrapper around the shared helper.
-      Pool emits TWO repetitions of the wave (path extent = [0, 2*width])
-      so the translated path always covers the clip region regardless
-      of scroll offset. The shared `generateWavePath` only emits one
-      period; the wrapper concatenates two by widening the integration.
+      _generateWavePath — pool-specific wave path. Pool emits TWO
+      repetitions of the wave (path extent = [0, 2*width]) so the
+      translated path always covers the clip region regardless of scroll
+      offset. The shared `shared/qs-anim-wave.js#generateWavePath` only
+      emits one period, so pool keeps its own widened version rather than
+      importing it (QS-199 review-fix M1/S1).
     */
     _generateWavePath(width, amplitude, frequency, phase, yOffset) {
         const points = [];
@@ -166,9 +165,6 @@ class QsPoolCard extends QsRingDurationCardBase {
         return `M ${points[0]} ` +
             points.slice(1).map((p) => `L ${p}`).join(' ') +
             ` L ${totalWidth.toFixed(2)} ${WAVE_BOTTOM_Y} L 0 ${WAVE_BOTTOM_Y} Z`;
-        // Reference the shared helper for tree-shaking analyzers / structural tests.
-        // eslint-disable-next-line no-unreachable
-        void generateWavePath;
     }
 
     // Map pool temperature (°C, finite number) to per-layer water HSL colors.

@@ -79,15 +79,17 @@ export class QsFlameEngine {
     }
 
     /*
-      step(dt, fireOn) — advance the lerp + tip phases.
+      step(dt, fireOn, baseY, ts) — advance the lerp + tip phases.
       Returns {shouldRegen} — whether the path should be regenerated.
 
-      ts is optional; if provided used for the time-throttle. Default to
-      performance.now() / 1000 ≈ epoch-ish for the throttle.
+      `ts` is the RAF timestamp in MILLISECONDS (the value the browser
+      passes to the requestAnimationFrame callback). It is optional; when
+      omitted it defaults to `performance.now()` (also ms). The throttle
+      computes elapsed seconds as `(tsMs - lastRegenTsMs) / 1000`.
     */
     step(dt, fireOn, baseY, ts) {
         const C = FLAME_CONSTANTS;
-        const tsSec = ts != null ? ts : performance.now();
+        const tsMs = ts != null ? ts : performance.now();
 
         const targetAmp = fireOn ? C.DANCE_AMP : C.STILL_AMP;
         const lerpDt = Math.min(dt, C.LERP_DT_CEIL);
@@ -119,16 +121,37 @@ export class QsFlameEngine {
             : Math.abs(this._currentFlameAmp - this._lastFlameAmp);
         const levelChanged = hasValidBase &&
             Math.abs(baseY - (this._lastFlameBaseY ?? Number.NEGATIVE_INFINITY)) > C.LEVEL_REGEN_THRESHOLD;
-        const sinceLastRegen = (tsSec - (this._lastRegenTs ?? -Infinity)) / 1000;
+        const sinceLastRegen = (tsMs - (this._lastRegenTs ?? -Infinity)) / 1000;
         const phaseChanged = fireOn && sinceLastRegen >= C.PHASE_REGEN_MIN_DT;
         const shouldRegen = hasValidBase && (phaseChanged || levelChanged || ampDelta > C.AMP_REGEN_THRESHOLD);
 
         if (shouldRegen) {
             this._lastFlameBaseY = baseY;
             this._lastFlameAmp = this._currentFlameAmp;
-            this._lastRegenTs = tsSec;
+            this._lastRegenTs = tsMs;
         }
         return { shouldRegen };
+    }
+
+    // ----- Public accessors (QS-199 review-fix M2) -----
+    // Cards must NOT reach into `_`-prefixed engine fields. These expose
+    // exactly what the radiator/climate cards need for their initial
+    // paint and any state introspection.
+
+    /* Current (lerped) flame amplitude. */
+    getCurrentAmp() {
+        return this._currentFlameAmp;
+    }
+
+    /*
+      getInitialPaths(baseY, isIdle) — the SVG `d` strings for the very
+      first paint after an innerHTML rewrite, generated from the engine's
+      surviving internal state (`_currentFlameAmp`, `_tipPhases`). Alias
+      for `generatePaths` with an intention-revealing name; both are
+      public.
+    */
+    getInitialPaths(baseY, isIdle) {
+        return this.generatePaths(baseY, isIdle);
     }
 
     /*

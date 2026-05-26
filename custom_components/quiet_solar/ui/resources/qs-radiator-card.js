@@ -233,23 +233,15 @@ class QsRadiatorCard extends QsRingDurationCardBase {
         if (!this._flameClipId) this._flameClipId = this._instanceId('fClip');
         const flameClipId = this._flameClipId;
 
-        // QS-204: pre-generate paths so the SVG renders with flames immediately.
-        const initialAmp = this._flameEngine._currentFlameAmp ?? FLAME_CONSTANTS.STILL_AMP;
+        // QS-204: pre-generate paths so the SVG renders with flames
+        // immediately, avoiding the empty-d="" flash between the
+        // innerHTML rewrite and the first RAF tick. The engine owns its
+        // amp + tip-phase state; we go through the public
+        // `getInitialPaths(baseY, isIdle)` accessor (QS-199 review-fix
+        // M2 — cards must not dot into engine private fields).
         const initialBaseY = this._flameBaseY ?? CENTER_CY;
         const initialFlameColors = this._flameColors ?? FLAME_GREY_FILLS;
-        // Use the engine's path generator so the initial paint exactly matches subsequent RAF frames.
-        const initialFlamePaths = Array.from(
-            { length: LAYER_TEETH_COUNTS.length },
-            (_, i) => this._flameEngine._generateFlameTeethPath(
-                FLAME_CONSTANTS.FLAME_WIDTH,
-                initialBaseY,
-                LAYER_BASE_HEIGHTS[i],
-                initialAmp * LAYER_TIP_AMP_MULTS[i],
-                LAYER_TEETH_COUNTS[i],
-                this._flameEngine._tipPhases[i],
-                !running,
-            ),
-        );
+        const initialFlamePaths = this._flameEngine.getInitialPaths(initialBaseY, !running);
 
         const css = baseCardCSS(colors);
 

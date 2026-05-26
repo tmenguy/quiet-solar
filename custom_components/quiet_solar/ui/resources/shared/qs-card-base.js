@@ -182,7 +182,11 @@ export class QsCardBase extends HTMLElement {
     }
 
     _parseTimeToMinutes(txt) {
-        if (!txt) return 420; // 07:00
+        // QS-199 review-fix S16 — fall back to the documented 07:00
+        // default for empty / `unavailable` / `unknown` / non-time
+        // states, instead of letting `Number('unavailable')` → NaN → 0
+        // map them to midnight.
+        if (!txt || !this._isValidState(txt)) return 420; // 07:00
         const parts = String(txt).split(':').map(Number);
         const h = parts[0] || 0;
         const m = parts[1] || 0;
@@ -271,12 +275,19 @@ export class QsCardBase extends HTMLElement {
             el.className = `btn ${b.variant || 'secondary'}`;
             el.textContent = b.text;
             let activated = false;
-            const activate = () => {
+            const activate = async () => {
                 if (activated) return;
                 activated = true;
-                // N13: try/finally so a synchronous throw can't leave the modal locked.
+                // N13: try/finally so a throw (sync OR async rejection)
+                // can't leave the modal locked.
+                // QS-199 review-fix N1: `await b.onClick()` so the dialog
+                // stays until the (almost always async) service call
+                // resolves and rejections are captured here rather than
+                // surfacing as unhandled promise rejections.
                 try {
-                    if (b.onClick) b.onClick();
+                    if (b.onClick) await b.onClick();
+                } catch (_) {
+                    // swallow — HA state resyncs on the next push
                 } finally {
                     wrap.remove();
                     this._modalOpen = false;
@@ -338,6 +349,10 @@ export class QsCardBase extends HTMLElement {
             entityId, onCommit, getHoursRun, colors,
         } = params;
         if (!ringSvg || !handle) return;
+        // QS-199 review-fix S15 — guard against an empty `allowedHours`
+        // list: the `reduce` below would otherwise seed `best = undefined`
+        // and `hoursToPct(undefined)` → NaN would break the handle.
+        if (!Array.isArray(allowedHours) || allowedHours.length === 0) return;
 
         const pt = ringSvg.createSVGPoint();
 
@@ -405,7 +420,8 @@ export class QsCardBase extends HTMLElement {
                     this._pendingClearLocalTarget = setTimeout(() => {
                         this._localTargetPct = null;
                         this._pendingClearLocalTarget = null;
-                        this._render();
+                        // QS-199 review-fix S14: don't render a detached card.
+                        if (this.isConnected && this._root) this._render();
                     }, 5000);
                     if (onCommit) onCommit(dragValue);
                 }
@@ -441,6 +457,16 @@ export class QsCardBase extends HTMLElement {
             };
             handle.addEventListener('pointerdown', onPointerDown);
         } else {
+            // QS-199 review-fix N2 — declare `onUpLegacy` BEFORE `onDown`
+            // so there's no forward reference (it worked via call-time
+            // closure lookup, but reads cleaner declared first).
+            const onUpLegacy = async (ev) => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('touchmove', onMove);
+                document.removeEventListener('mouseup', onUpLegacy);
+                document.removeEventListener('touchend', onUpLegacy);
+                await onUp(ev);
+            };
             const onDown = (ev) => {
                 ev.stopPropagation();
                 ev.preventDefault();
@@ -450,13 +476,6 @@ export class QsCardBase extends HTMLElement {
                 document.addEventListener('mouseup', onUpLegacy);
                 document.addEventListener('touchend', onUpLegacy);
                 handle.style.cursor = 'grabbing';
-            };
-            const onUpLegacy = async (ev) => {
-                document.removeEventListener('mousemove', onMove);
-                document.removeEventListener('touchmove', onMove);
-                document.removeEventListener('mouseup', onUpLegacy);
-                document.removeEventListener('touchend', onUpLegacy);
-                await onUp(ev);
             };
             handle.addEventListener('mousedown', onDown);
             handle.addEventListener('touchstart', onDown, { passive: false });
@@ -521,10 +540,14 @@ export class QsCardBase extends HTMLElement {
                             const val = hm + ':00';
                             this[localStateKey] = mins;
                             // S9: clear local override after 5s so out-of-band updates aren't masked indefinitely.
+                            // QS-199 review-fix S14: guard the deferred
+                            // _render against a card that was detached
+                            // (dashboard rearranged) after Apply — writing
+                            // to a torn-down shadow root throws.
                             if (this[clearTimerKey]) clearTimeout(this[clearTimerKey]);
                             this[clearTimerKey] = setTimeout(() => {
                                 this[localStateKey] = null;
-                                this._render();
+                                if (this.isConnected && this._root) this._render();
                             }, 5000);
                             await this._setTime(entityId, val);
                         },

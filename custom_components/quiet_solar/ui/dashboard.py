@@ -275,23 +275,81 @@ async def _async_register_or_update_dashboard(
 
 
 def _generate_qs_tag() -> str:
-    """Generate a cache-busting tag from the current epoch."""
+    """Generate a cache-busting tag from a high-resolution clock.
+
+    QS-199 review-fix S11 — `time.time_ns()` (nanoseconds) avoids the
+    identical-tag collision that `int(time.time())` would produce on two
+    restarts within the same wall-clock second (browsers would then serve
+    cached content despite changed files). Still a digit string.
+    """
     import time
 
-    return str(int(time.time()))
+    return str(time.time_ns())
 
 
-# QS-199 A1b: matches `from '<q>./shared/<path>.js[?<query>]<q>'` in card source.
-# The capture groups are (quote, path, optional-existing-query) — the optional
-# group is consumed (and discarded) so the rewrite always overwrites any prior
-# `?qs_tag=...` rather than concatenating. Plan-critic R1: never skip when a
-# query string is already present; always overwrite with the current tag.
-_IMPORT_REWRITE_RE = re.compile(r"""from(\s+)(['"])(\./shared/[^'"?\s]+\.js)(\?[^'"]*)?\2""")
+# QS-199 A1b / review-fix M6 + S8 + S9: matches a relative `.js` import URL in
+# either the static `from <q>./...<q>` form or the dynamic `import(<q>./...<q>)`
+# form. The path alternation is `\./[^'"?\s]+\.js`, which matches BOTH
+# `./shared/x.js` (top-level cards) AND `./x.js` (sibling imports inside the
+# `shared/` directory — M6). `\bfrom\s*` / `\bimport\s*\(\s*` tolerate the
+# no-whitespace minified form `from'./x.js'` (S9) and word-boundary-guard
+# against matching `transform`. The optional `(?P<query>\?...)` captures any
+# pre-existing query string so the replacement can merge rather than clobber
+# it (S10).
+_IMPORT_REWRITE_RE = re.compile(
+    r"""(?P<lead>\bfrom\s*|\bimport\s*\(\s*)"""
+    r"""(?P<q>['"])"""
+    r"""(?P<path>\./[^'"?\s]+\.js)"""
+    r"""(?P<query>\?[^'"]*)?"""
+    r"""(?P=q)"""
+)
+
+
+def _merge_qs_tag(existing_query: str, tag: str) -> str:
+    """Merge `qs_tag=<tag>` into an existing query string.
+
+    QS-199 review-fix S10 — preserves any pre-existing non-`qs_tag` params
+    (e.g. `?v=1&theme=dark`), replacing only the `qs_tag` value (or
+    appending it when absent). Always overwrites a stale `qs_tag` (R1
+    idempotency).
+    """
+    from urllib.parse import parse_qsl, urlencode
+
+    params = [(k, v) for (k, v) in parse_qsl(existing_query.lstrip("?"), keep_blank_values=True) if k != "qs_tag"]
+    params.append(("qs_tag", tag))
+    return "?" + urlencode(params)
 
 
 def _rewrite_shared_imports(content: str, tag: str) -> str:
-    """Inject `?qs_tag=<tag>` into every `./shared/*.js` import URL (always overwrites)."""
-    return _IMPORT_REWRITE_RE.sub(rf"from\1\2\3?qs_tag={tag}\2", content)
+    """Inject `?qs_tag=<tag>` into every relative `.js` import URL.
+
+    QS-199 review-fix S4 — uses a callable replacement so `tag` is treated
+    as a literal string (a tag containing a backslash can't be mis-parsed
+    as a regex backreference). Always overwrites a pre-existing `qs_tag`;
+    preserves other query params (S10).
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        new_query = _merge_qs_tag(m.group("query") or "", tag)
+        return f"{m.group('lead')}{m.group('q')}{m.group('path')}{new_query}{m.group('q')}"
+
+    return _IMPORT_REWRITE_RE.sub(_repl, content)
+
+
+def _maybe_rewrite_js_bytes(raw: bytes, tag: str, name: str) -> bytes:
+    """Decode + rewrite a `.js` file's import URLs, or byte-copy on failure.
+
+    QS-199 review-fix M7 — a `.js` file with non-UTF-8 bytes (Latin-1,
+    BOM mojibake) must NOT abort the whole copy. On `UnicodeDecodeError`
+    we fall back to returning the raw bytes unchanged so the destination
+    tree stays complete and every other resource still registers.
+    """
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        _LOGGER.warning("Non-UTF-8 JS resource %s copied without import rewrite", name)
+        return raw
+    return _rewrite_shared_imports(content, tag).encode("utf-8")
 
 
 def _resource_namespace() -> str:
@@ -326,22 +384,47 @@ def _get_resource_handler_from_hass(
     return resources
 
 
+def _url_path_without_query(url: str) -> str:
+    """Return the URL up to (but excluding) the `?` query string."""
+    return url.split("?", 1)[0]
+
+
 async def _async_update_resource(
     resources: ResourceStorageCollection,
     raw_name: str,
     url: str,
 ) -> None:
-    """Create or update a single lovelace resource entry."""
+    """Create or update a single lovelace resource entry.
+
+    QS-199 review-fix N9 — match on the resource URL's path-up-to-`?`
+    EXACTLY equal to `raw_name` instead of a bare `startswith` prefix.
+    The old prefix match would also match a user's manual backup URL
+    (e.g. `.../qs-car-card.js.backup`) and silently overwrite it.
+    """
     if not resources.loaded:
         await resources.async_load()
 
     for entry in resources.async_items():
-        if (entry_url := entry["url"]).startswith(raw_name):
-            if entry_url != url:
+        if _url_path_without_query(entry["url"]) == raw_name:
+            if entry["url"] != url:
                 await resources.async_update_item(entry["id"], {"url": url})
             return
 
     await resources.async_create_item({"res_type": "module", "url": url})
+
+
+async def _async_atomic_write_bytes(dst: str, data: bytes) -> None:
+    """Write `data` to `dst` atomically (temp file + os.replace).
+
+    QS-199 review-fix S12 — writing in place risks a truncated file if the
+    disk fills or HA is killed mid-write; the browser would then load a
+    JS syntax error. Writing to a `.qstmp` sibling and `os.replace`-ing it
+    into place makes the swap atomic on the same filesystem.
+    """
+    tmp = f"{dst}.qstmp"
+    async with aiofiles.open(tmp, "wb") as f_out:
+        await f_out.write(data)
+    await aiofiles.os.replace(tmp, dst)
 
 
 async def _async_copy_and_register_resources(
@@ -360,48 +443,63 @@ async def _async_copy_and_register_resources(
         subdirectory files (e.g. `shared/*.js`) are still copied but skip
         registration. Shared modules are ES-module dependencies imported
         by the top-level cards, not entry-point cards themselves.
-      * A1b — `.js` files have their `from './shared/<path>.js'` import URLs
-        regex-rewritten to inject `?qs_tag=<tag>`, using the same `tag`
-        value as the Lovelace registration URL. Always overwrites any
-        pre-existing query string (idempotent across HA restarts).
+      * A1b / M6 — `.js` files have their relative import URLs (both
+        `from './shared/<path>.js'` in top-level cards AND `./sibling.js`
+        between files inside `shared/`) regex-rewritten to inject
+        `?qs_tag=<tag>`, using the same `tag` value as the Lovelace
+        registration URL. Always overwrites a pre-existing `qs_tag`
+        (idempotent across HA restarts); preserves other query params.
+      * M7 — a non-UTF-8 `.js` file is byte-copied (no rewrite) instead
+        of aborting the recursion.
+      * S12 — files are written to a `.qstmp` sibling then atomically
+        `os.replace()`d into place so a disk-full / kill mid-write can't
+        leave a truncated JS file that the browser would choke on.
+      * N8 — subdirectories (e.g. `shared/`) are copied BEFORE the
+        top-level files that import them, so a browser fetching a card
+        mid-copy never resolves its inheritance chain through a
+        not-yet-rewritten shared module.
     """
     await aiofiles.os.makedirs(to_dir, exist_ok=True)
-    for entry in await aiofiles.os.listdir(from_dir):
+
+    entries = await aiofiles.os.listdir(from_dir)
+    files: list[str] = []
+    subdirs: list[str] = []
+    for entry in entries:
+        if await aiofiles.os.path.isfile(os.path.join(from_dir, entry)):
+            files.append(entry)
+        elif await aiofiles.os.path.isdir(os.path.join(from_dir, entry)):
+            subdirs.append(entry)
+
+    # N8: dependency order — recurse into subdirectories (shared modules)
+    # first, then copy the top-level files that import them.
+    for entry in subdirs:
+        await _async_copy_and_register_resources(
+            os.path.join(from_dir, entry),
+            os.path.join(to_dir, entry),
+            f"{namespace}/{entry}",
+            tag,
+            handler,
+            is_top_level=False,
+        )
+
+    for entry in files:
         src = os.path.join(from_dir, entry)
         dst = os.path.join(to_dir, entry)
-        if await aiofiles.os.path.isfile(src):
-            if entry.endswith(".js"):
-                # A1b: read text, rewrite shared imports, write text
-                async with aiofiles.open(src, "rb") as f_in:
-                    raw = await f_in.read()
-                content = raw.decode("utf-8")
-                content = _rewrite_shared_imports(content, tag)
-                async with aiofiles.open(dst, "wb") as f_out:
-                    await f_out.write(content.encode("utf-8"))
-            else:
-                async with (
-                    aiofiles.open(src, "rb") as f_in,
-                    aiofiles.open(dst, "wb") as f_out,
-                ):
-                    await f_out.write(await f_in.read())
-            # A1a: skip lovelace registration for files in subdirectories
-            if handler is not None and is_top_level:
-                await _async_update_resource(
-                    handler,
-                    f"{namespace}/{entry}",
-                    f"{namespace}/{entry}?qs_tag={tag}",
-                )
-            elif handler is not None and not is_top_level:
-                _LOGGER.debug("Skipped lovelace registration for shared module %s/%s", namespace, entry)
-        elif await aiofiles.os.path.isdir(src):
-            await _async_copy_and_register_resources(
-                src,
-                dst,
-                f"{namespace}/{entry}",
-                tag,
+        async with aiofiles.open(src, "rb") as f_in:
+            raw = await f_in.read()
+        # M7: only `.js` files are decoded/rewritten; the helper falls
+        # back to the raw bytes on a UnicodeDecodeError.
+        out_bytes = _maybe_rewrite_js_bytes(raw, tag, entry) if entry.endswith(".js") else raw
+        await _async_atomic_write_bytes(dst, out_bytes)
+        # A1a: skip lovelace registration for files in subdirectories
+        if handler is not None and is_top_level:
+            await _async_update_resource(
                 handler,
-                is_top_level=False,
+                f"{namespace}/{entry}",
+                f"{namespace}/{entry}?qs_tag={tag}",
             )
+        elif handler is not None and not is_top_level:
+            _LOGGER.debug("Skipped lovelace registration for shared module %s/%s", namespace, entry)
 
 
 async def async_update_resources(hass: HomeAssistant) -> None:

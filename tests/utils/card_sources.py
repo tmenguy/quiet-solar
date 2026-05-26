@@ -25,11 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 
 _RESOURCES_ROOT = (
-    Path(__file__).resolve().parent.parent.parent
-    / "custom_components"
-    / "quiet_solar"
-    / "ui"
-    / "resources"
+    Path(__file__).resolve().parent.parent.parent / "custom_components" / "quiet_solar" / "ui" / "resources"
 )
 
 # Each card filename maps to the list of shared filenames it consumes.
@@ -45,26 +41,28 @@ CARD_TO_SHARED_FILES: dict[str, list[str]] = {
         "qs-card-styles.js",
         "qs-card-base.js",
         "qs-ring-duration-base.js",
+        # Radiator is the only card that consumes the shared flame engine.
         "qs-anim-flame.js",
     ],
+    # QS-199 review-fix S1: pool / water-boiler / climate keep their OWN
+    # inline `_generateWavePath` (2×-width GPU-scroll variant) and inline
+    # flame/snow/wind engines — they do NOT import the shared
+    # qs-anim-wave.js / qs-anim-flame.js, so those files are not part of
+    # their source union.
     "qs-pool-card.js": [
         "qs-card-styles.js",
         "qs-card-base.js",
         "qs-ring-duration-base.js",
-        "qs-anim-wave.js",
     ],
     "qs-water-boiler-card.js": [
         "qs-card-styles.js",
         "qs-card-base.js",
         "qs-ring-duration-base.js",
-        "qs-anim-wave.js",
     ],
     "qs-climate-card.js": [
         "qs-card-styles.js",
         "qs-card-base.js",
         "qs-ring-duration-base.js",
-        "qs-anim-flame.js",
-        "qs-anim-wave.js",
     ],
     "qs-car-card.js": [
         "qs-card-styles.js",

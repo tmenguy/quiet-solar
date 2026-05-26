@@ -102,13 +102,12 @@ console.assert(
 import { baseCardCSS } from './shared/qs-card-styles.js';
 import { QsRingDurationCardBase } from './shared/qs-ring-duration-base.js';
 import { arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
-import { FLAME_CONSTANTS, QsFlameEngine } from './shared/qs-anim-flame.js';
-import { WAVE_CONSTANTS, generateWavePath } from './shared/qs-anim-wave.js';
 
-void FLAME_CONSTANTS;
-void QsFlameEngine;
-void WAVE_CONSTANTS;
-void generateWavePath;
+// QS-199 review-fix S1 — climate keeps its OWN inline flame/snow/wind
+// engines (the 4-backdrop dispatch + snow-pile particle system don't fit
+// the generic QsFlameEngine / generateWavePath), so it does NOT import
+// the shared animation modules. Only the lifecycle base, ring builder,
+// CSS template, and geometry helpers are shared.
 
 // --- Animation tuning (shared across flame / snow / wind) ---
 const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
@@ -591,7 +590,9 @@ class QsClimateCard extends QsRingDurationCardBase {
   }
 
   disconnectedCallback() {
-    this._stopAnimation();
+    // QS-199 review-fix S13: chain to the base so its _stopAnimation +
+    // standard flag-reset (and any future base teardown) always runs.
+    super.disconnectedCallback();
     // QS-210: clear backdrop DOM caches and tear down snowflake nodes.
     // Animation accumulators (`_currentFlameAmp`, `_currentSnowAmp`,
     // `_currentSnowSpeed`, `_snowWavePhase`, `_windPhase`, `_tipPhases`)
@@ -600,16 +601,9 @@ class QsClimateCard extends QsRingDurationCardBase {
     this._invalidateFlameCache();
     this._invalidateSnowCache();
     this._invalidateWindCache();
-    // S7: reset interaction flags so a re-attach after mid-interaction
-    // (e.g. dragging the ring or processing a mode change when the
-    // dashboard rearranges) doesn't silently short-circuit `set hass`
-    // on stale flags.
-    this._isInteractingMode = false;
+    // Climate-specific interaction flags not reset by the base.
     this._isInteractingStateOn = false;
-    this._isInteractingTarget = false;
-    this._isProcessingModeChange = false;
     this._isProcessingStateOnChange = false;
-    this._modalOpen = false;
   }
 
   static getStubConfig() {
@@ -720,16 +714,10 @@ class QsClimateCard extends QsRingDurationCardBase {
       // Determine if we should show from/to times
       const showFromTo = !isDefaultMode || isOverridden;
       
-      // Helper to check if state is valid
-      const isValidState = (state) => {
-        if (!state) return false;
-        const stateLower = String(state).toLowerCase();
-        return !['unavailable', 'unknown', 'none', ''].includes(stateLower);
-      };
-      
-      // Get from/to times
-      const startTime = (sStartTime && isValidState(sStartTime.state)) ? sStartTime.state : '--:--';
-      const endTime = (sEndTime && isValidState(sEndTime.state)) ? sEndTime.state : '--:--';
+      // Get from/to times — `_isValidState` inherited from QsCardBase
+      // (QS-199 review-fix S1/S2: local closure deleted).
+      const startTime = (sStartTime && this._isValidState(sStartTime.state)) ? sStartTime.state : '--:--';
+      const endTime = (sEndTime && this._isValidState(sEndTime.state)) ? sEndTime.state : '--:--';
       
       // Color schemes based on climate_state_on - MUST BE DEFINED BEFORE CSS
       // Review-fix N4 — default to `''` (not `'cool'`) so the boot
@@ -880,102 +868,11 @@ class QsClimateCard extends QsRingDurationCardBase {
       
       const colors = colorSchemes[climateStateOn] || colorSchemes.cool;
       
-      const css = `
-      :host { --pad: 18px; --ring-text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); display:block; }
-      .card { padding: var(--pad); position: relative; }
-      .card.off-grid { background: rgba(244, 67, 54, 0.08); }
-      .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
-      .top { display:flex; gap:12px; flex-wrap:wrap; }
-      .below { display:flex; align-items:center; justify-content:center; margin-top: 8px; width:260px; margin-left:auto; margin-right:auto; }
-      .below .pill { width:100%; }
-      .below-line { width:260px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
-      .below-line.full { display:block; }
-      .below-line.full > button { width: 100%; justify-content: center; position: relative; }
-      .pill { display:flex; align-items:center; gap:8px; border-radius: 28px; height:40px; min-height:40px; padding:0 12px; border:1px solid var(--divider-color);
-              background: var(--ha-card-background, var(--card-background-color)); box-sizing: border-box; cursor: pointer; touch-action: manipulation; }
-      .pill .dot { width:12px; height:12px; border-radius:50%; background: var(--divider-color); box-shadow: 0 0 8px rgba(0,0,0,.25) inset; }
-      .pill.on { background: rgba(56,142,60,0.15); border-color: rgba(56,142,60,.35); }
-      .pill.on .dot { background: #2ecc71; box-shadow: 0 0 12px #2ecc71aa; }
-      .pill { position: relative; }
-      .pill select { appearance:none; background: transparent; color: var(--primary-text-color); border: none; font-weight:700; position: absolute; left:0; top:0; width:100%; height:100%; text-align:center; text-align-last:center; padding: 0 12px 0 40px; border-radius: 28px; cursor: pointer; z-index:1; box-sizing: border-box; }
-
-      .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; gap: 12px; }
-      .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
-      /* Mobile touch fix: touch-action:none on the SVG (not the inner <circle>) prevents the
-         browser from initiating scroll/pan gestures when dragging the ring handle. SVG child
-         elements like <circle> don't reliably honor touch-action on iOS Safari / HA Companion. */
-      .ring svg { touch-action: none; }
-      /* Mobile touch fix: touch-action:manipulation removes the 300ms tap delay that mobile
-         browsers impose for double-tap detection, making button taps register immediately.
-         Without this, a hass re-render can destroy the DOM node before the synthetic click fires. */
-      .ring .green-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(97px, -137px); z-index: 10; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      .ring .green-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
-      .ring .green-btn.on { border-color: rgba(56,142,60,.45); background: rgba(46,204,113,.14); box-shadow: 0 0 0 3px rgba(46,204,113,.20), 0 0 16px #4CAF50; }
-      .ring .green-btn.on ha-icon { color: #4CAF50; }
-      .ring .power-btn { width: 40px; height: 40px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; left: 50%; top: 50%; transform: translate(-137px, -137px); z-index: 10; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      .ring .power-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
-      .ring .power-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
-      .ring .power-btn.on ha-icon { color: #2196F3; }
-      .card.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
-      .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
-      .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(-5px); }
-      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
-      .ring .target-value { font-weight:800; font-size: 2.5rem; line-height: 1.1; text-shadow: var(--ring-text-shadow); }
-      .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; text-align:center; width: 220px; margin: 0 auto; }
-      .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:6px; }
-      .ring .from-to-row { display:flex; justify-content:space-between; width:140px; margin-top: 8px; gap:20px; }
-      .ring .from-to-item { display:flex; flex-direction:column; align-items:center; gap:2px; }
-      .ring .from-to-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
-      .ring .from-to-value { color: var(--primary-text-color); font-weight:800; font-size: 1.4rem; text-shadow: var(--ring-text-shadow); }
-      .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
-      .ring .override-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      .ring .override-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; }
-      .ring .override-btn.disabled { cursor: not-allowed; opacity: 0.6; }
-      .ring .override-btn.active { border-color: rgba(255,152,0,.45); background: rgba(255,152,0,.14); box-shadow: 0 0 0 3px rgba(255,152,0,.20), 0 0 16px #FF9800; }
-      .ring .override-btn.active ha-icon { color: #FF9800; }
-      .ring .override-btn.resetting { border-color: rgba(76,175,80,.45); background: rgba(76,175,80,.14); }
-      .ring .override-btn.resetting ha-icon { color: #4CAF50; }
-      .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; line-height: 1; margin-top: 6px; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      .time-btn:hover { border-color: ${colors.primary}; background: rgba(255,255,255,.08); }
-      .time-btn { color: ${colors.primary}; }
-      .time-btn.on { border-color: ${colors.primary}; background: color-mix(in srgb, ${colors.primary} 14%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, ${colors.primary} 20%, transparent), 0 0 16px ${colors.primary}; color: ${colors.primary}; }
-
-      select {
-        background: var(--ha-card-background, var(--card-background-color));
-        color: var(--primary-text-color);
-        border:1px solid var(--divider-color);
-        border-radius:14px;
-        padding:10px 12px;
-        font-weight:700;
-        font-size: .95rem;
-        font-family: inherit;
-        -webkit-appearance: none;
-        appearance: none;
-        outline: none;
-        line-height: 1.2;
-      }
-      .below select { width: 100%; height: 40px; min-height: 40px; }
-      select:focus { border-color: var(--primary-color); box-shadow: 0 0 0 2px rgba(0,0,0,0), 0 0 0 3px color-mix(in srgb, var(--primary-color) 30%, transparent); }
-      button { border:none; border-radius:18px; padding:14px 16px; font-weight:700; cursor:pointer; font-size: .95rem; }
-      button.pill { height: 40px; min-height: 40px; display:flex; align-items:center; }
-      .danger { background: var(--error-color); color: #fff; }
-      button.outline { background: transparent !important; border-width: 2px; }
-      .danger.outline { color: var(--error-color) !important; border-color: var(--error-color) !important; }
-      
-      #target_handle { touch-action: none; }
-      .modal { position:absolute; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index: 50; touch-action: manipulation; }
-      .dialog { background: var(--card-background-color); color: var(--primary-text-color); border:1px solid var(--divider-color); border-radius: 16px; padding: 16px; width: min(92%, 360px); box-shadow: 0 10px 30px rgba(0,0,0,.3); }
-      .dialog h3 { margin: 0 0 8px; font-size: 1.1rem; font-weight:800; text-align:left; }
-      .dialog p { margin: 0 0 14px; line-height:1.4; color: var(--secondary-text-color); white-space: pre-line; }
-      .dialog .time-picker { display:flex; align-items:center; justify-content:center; gap:12px; margin: 16px 0; }
-      .dialog .time-picker select { width: auto; min-width: 64px; height: 40px; text-align: center; text-align-last: center; }
-      .dialog .time-picker span { font-weight:700; font-size: 1.2rem; }
-      .dialog .actions { display:flex; gap:10px; justify-content:flex-end; margin-top: 6px; }
-      .btn { border:none; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer; touch-action: manipulation; min-height: 44px; -webkit-tap-highlight-color: transparent; }
-      .btn.secondary { background: rgba(255,255,255,.06); color: var(--primary-text-color); border:1px solid var(--divider-color); }
-      .btn.primary { background: var(--primary-color); color:#fff; }
-      .btn.danger { background: var(--error-color); color:#fff; }
-    `;
+      // QS-199 — CSS comes entirely from the shared baseCardCSS(palette);
+      // the climate card has no card-specific CSS extras (its 4-backdrop
+      // visuals are SVG, not CSS). `colors` varies per climateStateOn
+      // (heat/cool/auto/fan_only/dry colour schemes above).
+      const css = baseCardCSS(colors);
 
       const ringCirc = 130;
       const gapDeg = 60;
@@ -983,45 +880,22 @@ class QsClimateCard extends QsRingDurationCardBase {
       const startDeg = gapDeg / 2;
       const endDeg = startDeg + rangeDeg;
 
-      const deg2rad = (d) => ((270 - d) * Math.PI) / 180;
-      const rad2deg = (r) => {
-          if (r < 0) r += 2 * Math.PI;
-          return (((270 - ((r * 180) / Math.PI)) + 360) % 360);
-      };
-      const polar = (cx, cy, r, deg) => ({x: cx + r * Math.cos(deg2rad(deg)), y: cy - r * Math.sin(deg2rad(deg))});
-      const arcPath = (cx, cy, r, a0, a1) => {
-          // BH defense-in-depth: a non-finite angle (NaN / Infinity)
-          // would render as `A 130 130 0 0 1 NaN NaN` in the SVG `d`
-          // attribute and trigger a browser "Configuration error".
-          // Return empty string so the consumer omits the <path> tag.
-          if (!Number.isFinite(a0) || !Number.isFinite(a1)) return '';
-          // N8: a zero-length arc (a0 == a1, e.g. progress == 0) would
-          // produce a single-point SVG path that renders as nothing or
-          // a stray dot. Return empty string so the consumer can decide
-          // to omit the <path> element entirely.
-          if (Math.abs(a1 - a0) < 0.01) return '';
-          const p0 = polar(cx, cy, r, a0);
-          const p1 = polar(cx, cy, r, a1);
-          let delta = a1 - a0;
-          if (delta < 0) delta += 360;
-          const laf = delta > 180 ? 1 : 0;
-          return `M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} A ${r} ${r} 0 ${laf} 1 ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`;
-      };
+      // QS-199 — geometry helpers (deg2rad / rad2deg / polar / arcPath /
+      // pctToDeg) imported from shared/qs-card-base.js. The shared
+      // `pctToDeg(p, startDeg, rangeDeg)` takes the range explicitly.
 
       // Convert hours to percentage for arc calculation
       const hoursToPct = (hours) => (hours / maxHours) * 100;
       const pctToHours = (pct) => (pct / 100) * maxHours;
-      
-      const pctToDeg = (p) => startDeg + (Math.max(0, Math.min(100, p)) / 100) * rangeDeg;
 
       // Progress: hours run as percentage of max hours
       const progressPct = hoursToPct(hoursRun);
-      const progressEndDeg = pctToDeg(progressPct);
-      
+      const progressEndDeg = pctToDeg(progressPct, startDeg, rangeDeg);
+
       // Handle: target hours (or default duration for default mode)
-      const handlePct = this._targetDragPct != null ? this._targetDragPct : 
+      const handlePct = this._targetDragPct != null ? this._targetDragPct :
                         (this._localTargetPct != null ? this._localTargetPct : hoursToPct(displayTargetHours));
-      const handleDeg = pctToDeg(handlePct);
+      const handleDeg = pctToDeg(handlePct, startDeg, rangeDeg);
       
       const center = {cx: 160, cy: 160};
       const arcLen = 2 * Math.PI * ringCirc * (rangeDeg / 360);
@@ -1268,36 +1142,14 @@ class QsClimateCard extends QsRingDurationCardBase {
         overrideBtnClickable = true;
       }
 
-      // Format time for display (remove seconds if present)
-      const formatTime = (timeStr) => {
-        if (!timeStr || timeStr === '--:--') return '--:--';
-        const stateLower = String(timeStr).toLowerCase();
-        if (['unavailable', 'unknown', 'none'].includes(stateLower)) return '--:--';
-        const parts = String(timeStr).split(':');
-        if (parts.length < 2) return '--:--';
-        return `${parts[0]}:${parts[1]}`;
-      };
+      // QS-199 — _formatTime / _parseTimeToMinutes / _formatHm inherited
+      // from QsCardBase. Local closures deleted (S1: no duplicated logic).
 
       // Determine if we can drag the handle (only in default mode, enabled, and not overridden)
       const canDragHandle = isEnabled && isDefaultMode && !isOverridden && displayTargetHours > 0;
 
-      // Parse time to minutes for time picker
-      const parseTimeToMinutes = (txt) => {
-          if (!txt) return 420; // 07:00
-          const parts = String(txt).split(':').map(Number);
-          const h = parts[0] || 0, m = parts[1] || 0;
-          return h * 60 + m;
-      };
-      
-      const formatHm = (mins) => {
-          if (mins == null) return '';
-          const h = String(Math.floor(mins / 60)).padStart(2, '0');
-          const m = String(mins % 60).padStart(2, '0');
-          return `${h}:${m}`;
-      };
-
       const finishTimeStr = sDefaultOnFinishTime?.state || '07:00:00';
-      const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : parseTimeToMinutes(finishTimeStr);
+      const finishTimeMins = this._localFinishTimeMins != null ? this._localFinishTimeMins : this._parseTimeToMinutes(finishTimeStr);
 
       // QS-216 AC-1 — snapshot in-flight snowflakes before the
       // innerHTML rewrite (mirror of QS-214 boiler precedent). Both
@@ -1402,18 +1254,18 @@ class QsClimateCard extends QsRingDurationCardBase {
                 <div class="from-to-row">
                   <div class="from-to-item">
                     <div class="from-to-label">From:</div>
-                    <div class="from-to-value">${isDefaultMode && !isOverridden ? '--:--' : formatTime(startTime)}</div>
+                    <div class="from-to-value">${isDefaultMode && !isOverridden ? '--:--' : this._formatTime(startTime)}</div>
                   </div>
                   <div class="from-to-item">
                     <div class="from-to-label">To:</div>
-                    <div class="from-to-value">${isDefaultMode && !isOverridden ? (sDefaultOnFinishTime ? formatTime(finishTimeStr) : '--:--') : formatTime(endTime)}</div>
+                    <div class="from-to-value">${isDefaultMode && !isOverridden ? (sDefaultOnFinishTime ? this._formatTime(finishTimeStr) : '--:--') : this._formatTime(endTime)}</div>
                   </div>
                 </div>
                 ` : ''}
                 ${isDefaultMode && !isOverridden && sDefaultOnFinishTime ? `
                 <div class="center-controls" style="flex-direction:column; gap:4px;">
                   <div style="color: var(--secondary-text-color); font-weight:700; font-size: .75rem;">Change Finish Time</div>
-                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}">${formatTime(finishTimeStr)}</div>
+                  <div id="time_btn" class="time-btn ${finishTimeStr && finishTimeStr !== '--:--' ? 'on' : ''}">${this._formatTime(finishTimeStr)}</div>
                 </div>
                 ` : ''}
               </div>
@@ -1498,108 +1350,28 @@ class QsClimateCard extends QsRingDurationCardBase {
       const root = this._root;
       const ids = (k) => root.getElementById(k);
 
-      const showDialog = (opts) => {
-          const {title, message, buttons, customContent} = opts;
-          // N12: an empty `buttons` array would render a modal with no
-          // dismiss path. Always append a "Close" fallback so the user
-          // can never get locked out (and `_modalOpen` doesn't wedge
-          // re-renders).
-          const safeButtons = (Array.isArray(buttons) && buttons.length > 0)
-              ? buttons
-              : [{ text: 'Close' }];
-          const wrap = document.createElement('div');
-          wrap.className = 'modal';
-          // S6: escape user-controlled `title` and `message`; customContent
-          // is provided by the caller as already-rendered HTML.
-          const contentHtml = customContent || `<p>${this._escapeHtml(message)}</p>`;
-          wrap.innerHTML = `<div class="dialog"><h3>${this._escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
-          const actions = wrap.querySelector('.actions');
-          this._modalOpen = true;
-          safeButtons.forEach(b => {
-              const el = document.createElement('button');
-              el.className = `btn ${b.variant || 'secondary'}`;
-              el.textContent = b.text;
-              let activated = false;
-              const activate = () => {
-                  if (activated) return;
-                  activated = true;
-                  // N13: wrap onClick in try/finally so a synchronous
-                  // throw doesn't leave the modal locked open with
-                  // `_modalOpen = true` blocking subsequent renders.
-                  try {
-                      if (b.onClick) b.onClick();
-                  } finally {
-                      wrap.remove();
-                      this._modalOpen = false;
-                      this._render();
-                  }
-              };
-              el.addEventListener('click', activate);
-              el.addEventListener('touchend', (ev) => {
-                  ev.preventDefault();
-                  activate();
-              });
-              actions.appendChild(el);
-          });
-          this._root.appendChild(wrap);
-          return wrap;
-      };
+      // QS-199 review-fix M3/M5/S5 — the inline `showDialog` /
+      // `_registerKeyActivation` closures and the per-button
+      // toggle/override/time/reset/drag closures were deleted. Standard
+      // controls route through the shared wire-helpers (which carry the
+      // N12/N13/S16/M2/S17 hardening); the bespoke `climate_state_on`
+      // selector keeps its own handler because it owns a second pair of
+      // interaction flags (`_isInteractingStateOn` /
+      // `_isProcessingStateOnChange`) the generic helper doesn't model.
 
-      // Climate mode selector
       if (selClimateMode) {
-          const modeSel = ids('climate_mode');
-          const startM = () => {
-              this._isInteractingMode = true;
-          };
-          const endM = () => {
-              // Don't clear flag on blur during change processing
-              if (!this._isProcessingModeChange) {
-                  this._isInteractingMode = false;
-                  this._render();
-              }
-          };
-          modeSel?.addEventListener('focus', startM);
-          modeSel?.addEventListener('blur', endM);
-          modeSel?.addEventListener('change', async (ev) => {
-              const option = ev.target.value;
-              if (!option) return;
-
-              this._isProcessingModeChange = true;
-              // M2: wrap in try/finally so the cleanup setTimeout ALWAYS
-              // runs — otherwise a rejected `_select` (HA service failure,
-              // network drop) would leave `_isProcessingModeChange = true`
-              // forever and silently lock out subsequent re-renders.
-              try {
-                  // Call the service and wait for it to complete
-                  await this._select(e.climate_mode, option);
-              } catch (_) {
-                  // swallow — HA state will resync on the next push
-              } finally {
-                  // Wait a bit for HA state to propagate, then allow re-render
-                  setTimeout(() => {
-                      this._isProcessingModeChange = false;
-                      this._isInteractingMode = false;
-                      this._render();
-                  }, 300);
-              }
+          this._wireBistateMode({
+              selectEl: ids('climate_mode'),
+              entityId: e.climate_mode,
+              translationNamespace: 'climate_mode',
           });
-          const modePill = modeSel?.closest('.pill');
-          if (modePill && modeSel) {
-              modePill.addEventListener('click', (ev) => {
-                  if (ev.target.tagName === 'SELECT') return;
-                  try { modeSel.showPicker(); } catch (_) { modeSel.focus(); }
-              });
-          }
       }
 
-      // Climate state on selector
+      // Climate state-on selector (bespoke — second interaction-flag pair).
       if (selClimateStateOn) {
           const stateOnSel = ids('climate_state_on');
-          const startS = () => {
-              this._isInteractingStateOn = true;
-          };
+          const startS = () => { this._isInteractingStateOn = true; };
           const endS = () => {
-              // Don't clear flag on blur during change processing
               if (!this._isProcessingStateOnChange) {
                   this._isInteractingStateOn = false;
                   this._render();
@@ -1610,14 +1382,13 @@ class QsClimateCard extends QsRingDurationCardBase {
           stateOnSel?.addEventListener('change', async (ev) => {
               const option = ev.target.value;
               if (!option) return;
-
               this._isProcessingStateOnChange = true;
-              // M2: see above comment in the mode-change handler.
+              // M2: try/finally so the cleanup setTimeout ALWAYS runs.
               try {
-                  // Call the service and wait for it to complete
                   await this._select(e.climate_state_on, option);
+              } catch (_) {
+                  // swallow — HA state will resync on the next push
               } finally {
-                  // Wait a bit for HA state to propagate, then allow re-render
                   setTimeout(() => {
                       this._isProcessingStateOnChange = false;
                       this._isInteractingStateOn = false;
@@ -1634,321 +1405,61 @@ class QsClimateCard extends QsRingDurationCardBase {
           }
       }
 
-      // Mobile touch fix: every button below uses a dual click + touchend pattern.
-      // On mobile, the browser synthesizes "click" from touchstart/touchend with up to a
-      // 300ms delay. If a hass re-render (innerHTML replacement) occurs in that window, the
-      // DOM node is destroyed before the synthetic click fires, so the tap is lost. The
-      // touchend handler fires immediately, calls preventDefault() to suppress the delayed
-      // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
-
-      // S16 — keyboard activation helper: registers Enter/Space handlers
-      // on a `role="button" tabindex="0"` div so keyboard-only users can
-      // trigger the same action as click/touchend. Stops the default
-      // Space-scroll behaviour and the synthetic click that would
-      // double-fire otherwise.
-      const _registerKeyActivation = (el, action) => {
-          if (!el) return;
-          el.addEventListener('keydown', (ev) => {
-              if (ev.key === 'Enter' || ev.key === ' ') {
-                  ev.preventDefault();
-                  action();
-              }
-          });
-      };
-
-      // Green-only toggle button
       if (swGreenOnly) {
-          const toggleGreen = async () => {
-              const btn = ids('green_btn');
-              try {
-                  if (swGreenOnly.state === 'on') {
-                      await this._turnOff(e.green_only);
-                      btn?.classList.remove('on');
-                  } else {
-                      await this._turnOn(e.green_only);
-                      btn?.classList.add('on');
-                  }
-              } catch (_) {
-                  // ignore errors; HA state will resync UI on next render
-              }
-          };
-          const gbtn = ids('green_btn');
-          if (gbtn) {
-              gbtn.style.pointerEvents = 'auto';
-              gbtn.addEventListener('click', toggleGreen);
-              gbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
-              _registerKeyActivation(gbtn, toggleGreen);
-          }
+          this._wireGreenButton({
+              buttonEl: ids('green_btn'),
+              swEntity: swGreenOnly,
+              entityId: e.green_only,
+          });
       }
 
-      // Power/Enable device toggle button
       if (swEnableDevice) {
-          const togglePower = async () => {
-              const btn = ids('power_btn');
-              try {
-                  if (swEnableDevice.state === 'on') {
-                      await this._turnOff(e.enable_device);
-                      btn?.classList.remove('on');
-                  } else {
-                      await this._turnOn(e.enable_device);
-                      btn?.classList.add('on');
-                  }
-              } catch (_) {
-                  // ignore errors; HA state will resync UI on next render
-              }
-          };
-          const pbtn = ids('power_btn');
-          if (pbtn) {
-              pbtn.style.pointerEvents = 'auto';
-              pbtn.addEventListener('click', togglePower);
-              pbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
-              _registerKeyActivation(pbtn, togglePower);
-          }
+          this._wirePowerButton({
+              buttonEl: ids('power_btn'),
+              swEntity: swEnableDevice,
+              entityId: e.enable_device,
+          });
       }
 
-      // Override button
-      if (e.override_reset && overrideBtnClickable) {
-          const obtn = ids('override_btn');
-          if (obtn) {
-              obtn.style.pointerEvents = 'auto';
-              const obtnAction = async () => {
-                  showDialog({
-                      title: 'Reset override',
-                      message: 'This will reset the manual override and return to automatic mode.\nProceed?',
-                      buttons: [
-                          {text: 'Cancel', variant: 'secondary'},
-                          {
-                              text: 'Reset', variant: 'primary', onClick: async () => {
-                                  await this._press(e.override_reset);
-                              }
-                          },
-                      ]
-                  });
-              };
-              obtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); obtnAction(); });
-              obtn.addEventListener('touchend', (ev) => { ev.preventDefault(); obtnAction(); });
-              _registerKeyActivation(obtn, obtnAction);
-          }
+      if (e.override_reset) {
+          this._wireOverrideButton({
+              buttonEl: ids('override_btn'),
+              entityId: e.override_reset,
+              overrideBtnClickable,
+          });
       }
 
-      // Time button for finish time (default mode only, hidden during override)
       if (isDefaultMode && !isOverridden && sDefaultOnFinishTime) {
-          const timeAction = async () => {
-              const defaultHour = Math.floor(finishTimeMins / 60);
-              const defaultMin = finishTimeMins % 60;
-
-              const customContent = `
-            <p>Select the time the climate should finish by:</p>
-            <div class="time-picker">
-              <select id="dialog_hour_select">
-                ${Array.from({length: 24}, (_, h) => `<option value="${h}" ${defaultHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}</option>`).join('')}
-              </select>
-              <span>:</span>
-              <select id="dialog_minute_select">
-                ${[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => `<option value="${m}" ${defaultMin === m ? 'selected' : ''}>${String(m).padStart(2, '0')}</option>`).join('')}
-              </select>
-            </div>
-          `;
-
-              const dialog = showDialog({
-                  title: 'Climate Finish Time',
-                  customContent: customContent,
-                  buttons: [
-                      {text: 'Cancel', variant: 'secondary'},
-                      {
-                          text: 'Apply',
-                          variant: 'primary',
-                          onClick: async () => {
-                              const dialogRoot = dialog.querySelector('.dialog');
-                              const hourSel = dialogRoot?.querySelector('#dialog_hour_select');
-                              const minSel = dialogRoot?.querySelector('#dialog_minute_select');
-                              const h = Number(hourSel?.value ?? 0);
-                              const m = Number(minSel?.value ?? 0);
-                              const mins = h * 60 + m;
-                              const hm = formatHm(mins);
-                              const val = hm + ':00';
-                              this._localFinishTimeMins = mins;
-                              // S9: clear the local override after a
-                              // grace period so out-of-band backend
-                              // updates aren't masked indefinitely.
-                              if (this._localFinishTimeClearTimer) {
-                                  clearTimeout(this._localFinishTimeClearTimer);
-                              }
-                              this._localFinishTimeClearTimer = setTimeout(() => {
-                                  this._localFinishTimeMins = null;
-                                  this._render();
-                              }, 5000);
-                              await this._setTime(e.default_on_finish_time, val);
-                          }
-                      },
-                  ]
-              });
-          };
-
-          const tbtn = ids('time_btn');
-          if (tbtn) {
-              tbtn.style.pointerEvents = 'auto';
-              tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); timeAction(); });
-              tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); timeAction(); });
-              _registerKeyActivation(tbtn, timeAction);
-          }
+          this._wireTimePicker({
+              buttonEl: ids('time_btn'),
+              entityId: e.default_on_finish_time,
+              currentMins: finishTimeMins,
+              localStateKey: '_localFinishTimeMins',
+              clearTimerKey: '_localFinishTimeClearTimer',
+          });
       }
 
-      // Reset button
       if (e.reset) {
-          const resetBtn = ids('reset');
-          const resetAction = async () => {
-              showDialog({
-                  title: 'Reset climate state',
-                  message: 'This will reset internal state for the climate and cannot be undone.\nProceed?',
-                  buttons: [
-                      {text: 'Cancel', variant: 'secondary'},
-                      {
-                          text: 'Reset', variant: 'danger', onClick: async () => {
-                              await this._press(e.reset);
-                          }
-                      },
-                  ]
-              });
-          };
-          resetBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); resetAction(); });
-          resetBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); resetAction(); });
+          this._wireResetButton({
+              buttonEl: ids('reset'),
+              entityId: e.reset,
+          });
       }
 
-      // Drag target handle on ring (only in default mode)
       if (canDragHandle) {
-          const svg = this._root.querySelector('.ring svg');
-          const handle = this._root.getElementById('target_handle');
-          if (svg && handle) {
-              const pt = svg.createSVGPoint();
-              
-              // Allowed hours (snap points) - 0.5 hour increments from 0 to 12
-              const allowedHours = [];
-              for (let i = 0; i <= 12; i += 0.5) {
-                  allowedHours.push(i);
-              }
-              
-              const onMove = (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
-                  const e2 = ev.touches ? ev.touches[0] : ev;
-                  pt.x = e2.clientX;
-                  pt.y = e2.clientY;
-                  const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
-                  const dx = cursor.x - center.cx;
-                  const dy = cursor.y - center.cy;
-                  let ang = rad2deg(Math.atan2(-dy, dx));
-                  let a = ang;
-                  if (a < startDeg) a = startDeg;
-                  if (a > endDeg) a = endDeg;
-                  const rawPct = ((a - startDeg) / rangeDeg) * 100;
-                  const rawHours = pctToHours(rawPct);
-                  
-                  // Snap to nearest allowed hour
-                  const snapHours = allowedHours.reduce((best, v) => 
-                      Math.abs(v - rawHours) < Math.abs(best - rawHours) ? v : best, 
-                      allowedHours[0]
-                  );
+          const allowedHours = [];
+          for (let i = 0; i <= 12; i += 0.5) allowedHours.push(i);
 
-                  const displayPct = hoursToPct(snapHours);
-                  this._targetDragPct = displayPct;
-                  this._targetDragValue = snapHours;
-                  this._isInteractingTarget = true;
-
-                  const angSnap = startDeg + (displayPct / 100) * rangeDeg;
-                  const pos = polar(center.cx, center.cy, ringCirc, angSnap);
-                  handle.setAttribute('cx', pos.x.toFixed(2));
-                  handle.setAttribute('cy', pos.y.toFixed(2));
-                  const handleText = this._root.getElementById('target_handle_text');
-                  if (handleText) {
-                      handleText.setAttribute('x', pos.x.toFixed(2));
-                      handleText.setAttribute('y', pos.y.toFixed(2));
-                      handleText.textContent = this._fmt(snapHours, false);
-                  }
-                  const tv = this._root.querySelector('.target-value');
-                  if (tv) {
-                      tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: ${colors.primary};">${this._fmt(snapHours, false)}h</span>`;
-                  }
-              };
-              
-              const onUp = async (ev) => {
-                  if (this._upInProgress) return;
-                  this._upInProgress = true;
-
-                  if (ev) {
-                      ev.stopPropagation();
-                      ev.preventDefault();
-                  }
-
-                  const dragPct = this._targetDragPct;
-                  const dragValue = this._targetDragValue;
-
-                  // S17 — wrap the service call so the drag-release
-                  // guards always clear, even if `_setNumber` throws.
-                  try {
-                      if (dragValue != null && e.default_on_duration) {
-                          await this._setNumber(e.default_on_duration, dragValue);
-                          this._localTargetPct = dragPct;
-                          this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
-                          this._pendingClearLocalTarget = setTimeout(() => {
-                              this._localTargetPct = null;
-                              this._pendingClearLocalTarget = null;
-                              this._render();
-                          }, 5000);
-                      }
-                  } catch (_) {
-                      // swallow — HA state will resync on the next push
-                  } finally {
-                      this._targetDragPct = null;
-                      this._targetDragValue = null;
-                      this._isInteractingTarget = false;
-                      this._upInProgress = false;
-                      handle.style.cursor = 'grab';
-                  }
-              };
-
-              if (window.PointerEvent) {
-                  const onPointerMove = (ev) => onMove(ev);
-                  const onPointerUp = async (ev) => {
-                      try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
-                      handle.removeEventListener('pointermove', onPointerMove);
-                      handle.removeEventListener('pointerup', onPointerUp);
-                      handle.removeEventListener('pointercancel', onPointerUp);
-                      await onUp(ev);
-                  };
-                  const onPointerDown = (ev) => {
-                      ev.stopPropagation();
-                      ev.preventDefault();
-                      this._isInteractingTarget = true;
-                      try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
-                      handle.addEventListener('pointermove', onPointerMove);
-                      handle.addEventListener('pointerup', onPointerUp);
-                      handle.addEventListener('pointercancel', onPointerUp);
-                      handle.style.cursor = 'grabbing';
-                  };
-                  handle.addEventListener('pointerdown', onPointerDown);
-              } else {
-                  const onDown = (ev) => {
-                      ev.stopPropagation();
-                      ev.preventDefault();
-                      this._isInteractingTarget = true;
-                      document.addEventListener('mousemove', onMove);
-                      document.addEventListener('touchmove', onMove, {passive: false});
-                      document.addEventListener('mouseup', onUpLegacy);
-                      document.addEventListener('touchend', onUpLegacy);
-                      handle.style.cursor = 'grabbing';
-                  };
-                  const onUpLegacy = async (ev) => {
-                      document.removeEventListener('mousemove', onMove);
-                      document.removeEventListener('touchmove', onMove);
-                      document.removeEventListener('mouseup', onUpLegacy);
-                      document.removeEventListener('touchend', onUpLegacy);
-                      await onUp(ev);
-                  };
-                  handle.addEventListener('mousedown', onDown);
-                  handle.addEventListener('touchstart', onDown, {passive: false});
-              }
-          }
+          this._wireTargetHandle({
+              ringSvg: this._root.querySelector('.ring svg'),
+              handle: this._root.getElementById('target_handle'),
+              center, ringCirc,
+              startDeg, endDeg, rangeDeg,
+              hoursToPct, pctToHours, allowedHours,
+              entityId: e.default_on_duration,
+              getHoursRun: () => hoursRun,
+              colors,
+          });
       }
   }
 }

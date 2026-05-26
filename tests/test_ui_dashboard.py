@@ -143,15 +143,20 @@ def test_generate_dashboard_resource_qs_tag_is_numeric():
 
 
 def test_generate_dashboard_resource_qs_tag_changes_over_time():
-    """Test that qs_tag changes between calls (with time mocking)."""
+    """Test that qs_tag changes between calls (with time mocking).
+
+    QS-199 review-fix S11 — the tag now uses `time.time_ns()` (nanosecond
+    resolution) so two restarts within the same wall-clock second yield
+    distinct tags. The test mocks `time.time_ns` accordingly.
+    """
     import time
 
     mock_home = create_minimal_home_model()
 
-    with patch.object(time, "time", return_value=1000):
+    with patch.object(time, "time_ns", return_value=1000):
         tag1 = generate_dashboard_resource_qs_tag(mock_home)
 
-    with patch.object(time, "time", return_value=2000):
+    with patch.object(time, "time_ns", return_value=2000):
         tag2 = generate_dashboard_resource_qs_tag(mock_home)
 
     assert tag1 == "1000"
@@ -623,8 +628,7 @@ async def test_copy_resources_rewrites_shared_imports_with_qs_tag():
 
         with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
             f.write(
-                "import { QsCardBase } from './shared/qs-card-base.js';\n"
-                "class QsRadiatorCard extends QsCardBase {}\n"
+                "import { QsCardBase } from './shared/qs-card-base.js';\nclass QsRadiatorCard extends QsCardBase {}\n"
             )
 
         await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "ABC", None)
@@ -709,6 +713,163 @@ async def test_copy_resources_tag_consistent_between_registration_and_imports():
         with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
             rewritten = f.read()
         assert "from './shared/qs-card-base.js?qs_tag=DEADBEEF'" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_shared_to_shared_sibling_imports():
+    """QS-199 review-fix M6 — sibling imports INSIDE `shared/` (no
+    `./shared/` prefix) are also cache-busted.
+
+    `shared/qs-ring-duration-base.js` imports `./qs-card-base.js` (a
+    sibling, no `./shared/` prefix). If that import isn't rewritten the
+    browser caches an untagged `qs-card-base.js` forever, so future
+    edits never propagate for cards extending `QsRingDurationCardBase`.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        subdir = os.path.join(from_dir, "shared")
+        os.makedirs(subdir)
+
+        with open(os.path.join(subdir, "qs-ring-duration-base.js"), "w") as f:
+            f.write("import { QsCardBase } from './qs-card-base.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "SIBTAG", None)
+
+        with open(os.path.join(to_dir, "shared", "qs-ring-duration-base.js")) as f:
+            rewritten = f.read()
+        assert "from './qs-card-base.js?qs_tag=SIBTAG'" in rewritten
+        assert "from './qs-card-base.js';" not in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_non_utf8_js_falls_back_to_byte_copy():
+    """QS-199 review-fix M7 — a non-UTF-8 `.js` file must NOT abort the
+    copy. It is byte-copied (no import rewrite) and the rest of the tree
+    still copies + registers.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        # Latin-1 byte 0xFF is invalid UTF-8.
+        bad = os.path.join(from_dir, "weird.js")
+        with open(bad, "wb") as f:
+            f.write(b"// \xff non-utf8 comment\nconsole.log('ok');\n")
+
+        good = os.path.join(from_dir, "qs-radiator-card.js")
+        with open(good, "w") as f:
+            f.write("import { QsCardBase } from './shared/qs-card-base.js';\n")
+
+        resources = MockResourceStorageCollection()
+
+        # Must not raise.
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "T", resources)
+
+        # The bad file was copied byte-for-byte.
+        with open(os.path.join(to_dir, "weird.js"), "rb") as f:
+            assert f.read() == b"// \xff non-utf8 comment\nconsole.log('ok');\n"
+        # The good file still got its import rewritten.
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            assert "?qs_tag=T" in f.read()
+        # Both top-level files registered.
+        assert len(resources.created_items) == 2
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_import_without_whitespace():
+    """QS-199 review-fix S9 — `from'./shared/x.js'` (no space) is matched."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import {QsCardBase} from'./shared/qs-card-base.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "WS", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "?qs_tag=WS" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_dynamic_import():
+    """QS-199 review-fix S8 — dynamic `import('./shared/x.js')` is matched."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("const m = import('./shared/qs-card-base.js');\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "DYN", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "import('./shared/qs-card-base.js?qs_tag=DYN')" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_preserves_existing_query_params():
+    """QS-199 review-fix S10 — pre-existing query params are preserved;
+    only `qs_tag` is replaced/added.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import { X } from './shared/qs-card-base.js?v=1&theme=dark';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "Q", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "v=1" in rewritten
+        assert "theme=dark" in rewritten
+        assert "qs_tag=Q" in rewritten
+
+
+def test_rewrite_shared_imports_handles_tag_with_backslash():
+    """QS-199 review-fix S4 — the replacement must treat `tag` literally,
+    so a tag containing a backslash isn't mis-parsed as a regex
+    backreference. The callable replacement + `urlencode` round-trips the
+    raw value (URL-encoded), never interpreting `\\1` as group 1.
+    """
+    import re
+    from urllib.parse import parse_qs, urlparse
+
+    from custom_components.quiet_solar.ui.dashboard import _rewrite_shared_imports
+
+    src = "import { X } from './shared/qs-card-base.js';\n"
+    # A pathological tag with backslash + digit (would be \1 backref if the
+    # replacement string were interpolated rather than literal).
+    out = _rewrite_shared_imports(src, r"a\1b")
+
+    # The import URL must still be well-formed and the qs_tag value must
+    # decode back to the exact original string (no backref expansion).
+    m = re.search(r"from '(\./shared/qs-card-base\.js\?[^']*)'", out)
+    assert m is not None, f"rewrite produced malformed import: {out!r}"
+    qs = parse_qs(urlparse(m.group(1)).query)
+    assert qs["qs_tag"] == [r"a\1b"]
+
+
+def test_generate_qs_tag_high_resolution_distinct_within_one_second():
+    """QS-199 review-fix S11 — two tags generated within the same
+    wall-clock second must differ (high-resolution time).
+    """
+    from custom_components.quiet_solar.ui.dashboard import _generate_qs_tag
+
+    tags = {_generate_qs_tag() for _ in range(50)}
+    # With nanosecond resolution, 50 rapid calls should yield >1 distinct value.
+    assert len(tags) > 1
+    # Still a digit string (callers/tests rely on `.isdigit()`).
+    assert all(t.isdigit() for t in tags)
 
 
 @pytest.mark.asyncio
