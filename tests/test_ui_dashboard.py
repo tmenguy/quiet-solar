@@ -560,23 +560,155 @@ async def test_copy_resources_no_register_when_handler_none():
 
 
 @pytest.mark.asyncio
-async def test_copy_resources_recursive_namespace():
-    """Test that namespace is updated correctly for subdirectories."""
+async def test_copy_resources_does_not_register_subdir_files():
+    """QS-199 A1a — subdir `.js` files are copied but NOT registered as Lovelace resources.
+
+    Renamed from `test_copy_resources_recursive_namespace`; assertion inverted.
+    Files under `shared/` (or any subdirectory) must NOT be registered with
+    Lovelace because they are ES-module dependencies imported by top-level
+    cards, not entry-point cards themselves.
+    """
     with tempfile.TemporaryDirectory() as tmp_dir:
         from_dir = os.path.join(tmp_dir, "source")
         to_dir = os.path.join(tmp_dir, "dest")
-        subdir = os.path.join(from_dir, "cards")
+        subdir = os.path.join(from_dir, "shared")
         os.makedirs(subdir)
 
-        with open(os.path.join(subdir, "card.js"), "w") as f:
-            f.write("card")
+        with open(os.path.join(subdir, "qs-card-base.js"), "w") as f:
+            f.write("export class QsCardBase {}")
 
         resources = MockResourceStorageCollection()
 
         await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", resources)
 
+        # File should still be copied to the destination
+        assert os.path.exists(os.path.join(to_dir, "shared", "qs-card-base.js"))
+        # But NOT registered as a Lovelace resource
+        assert len(resources.created_items) == 0
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_top_level_js_still_registers():
+    """QS-199 A1a — top-level `.js` files still register as Lovelace resources."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        # Mix of top-level files (should register) and subdir files (should NOT)
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("class QsRadiatorCard {}")
+
+        subdir = os.path.join(from_dir, "shared")
+        os.makedirs(subdir)
+        with open(os.path.join(subdir, "qs-card-base.js"), "w") as f:
+            f.write("export class QsCardBase {}")
+
+        resources = MockResourceStorageCollection()
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", resources)
+
+        # Exactly one Lovelace registration — the top-level card
         assert len(resources.created_items) == 1
-        assert resources.created_items[0]["url"] == "/local/test/cards/card.js?qs_tag=123"
+        assert resources.created_items[0]["url"] == "/local/test/qs-radiator-card.js?qs_tag=123"
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_shared_imports_with_qs_tag():
+    """QS-199 A1b — `from './shared/*.js'` imports get a `?qs_tag=<tag>` cache-buster."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write(
+                "import { QsCardBase } from './shared/qs-card-base.js';\n"
+                "class QsRadiatorCard extends QsCardBase {}\n"
+            )
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "ABC", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "from './shared/qs-card-base.js?qs_tag=ABC'" in rewritten
+        # The original (un-tagged) import must NOT survive verbatim
+        assert "from './shared/qs-card-base.js';" not in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrite_is_idempotent_across_tags():
+    """QS-199 A1b — rerunning the copy with a new tag overwrites the old tag.
+
+    Idempotency rule R1: ALWAYS overwrite the `?qs_tag=...` query string.
+    Never skip "because a query string is already present" — the in-place
+    rewrite must produce identical output regardless of the previous tag.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import { QsCardBase } from './shared/qs-card-base.js';\n")
+
+        # First copy with tag A
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "A", None)
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            after_a = f.read()
+        assert "?qs_tag=A" in after_a
+
+        # Second copy with tag B — should fully overwrite the dst from src
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "B", None)
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            after_b = f.read()
+        assert "?qs_tag=B" in after_b
+        # No double-tag, no stale A
+        assert "?qs_tag=A" not in after_b
+        assert "?qs_tag=A&qs_tag=B" not in after_b
+        assert "?qs_tag=A?qs_tag=B" not in after_b
+        # Exactly one occurrence of the cache-buster
+        assert after_b.count("?qs_tag=") == 1
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_tag_consistent_between_registration_and_imports():
+    """QS-199 A1a + A1b — same `tag` value flows to both Lovelace URL and import rewrite.
+
+    Plan-critic R2: the single `_generate_qs_tag()` call that flows into
+    `async_update_resources` must produce the same `tag` for both
+    (a) the Lovelace registration URL and (b) the rewritten in-file
+    import URL — otherwise the browser would request a card with one
+    cache-buster but the card's import statement would point at a stale
+    shared module URL with a different cache-buster.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import { QsCardBase } from './shared/qs-card-base.js';\n")
+
+        # Add the shared module too so the directory is realistic
+        subdir = os.path.join(from_dir, "shared")
+        os.makedirs(subdir)
+        with open(os.path.join(subdir, "qs-card-base.js"), "w") as f:
+            f.write("export class QsCardBase {}")
+
+        resources = MockResourceStorageCollection()
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "DEADBEEF", resources)
+
+        # Lovelace registration URL contains the tag
+        assert len(resources.created_items) == 1
+        registered_url = resources.created_items[0]["url"]
+        assert "?qs_tag=DEADBEEF" in registered_url
+
+        # Rewritten import URL inside the card contains the SAME tag
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "from './shared/qs-card-base.js?qs_tag=DEADBEEF'" in rewritten
 
 
 @pytest.mark.asyncio

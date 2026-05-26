@@ -197,7 +197,22 @@ const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
 const TIME_BTN_CARVE_CY = 206;
 const TIME_BTN_CARVE_R  = 32;
 
-class QsCarCard extends HTMLElement {
+// QS-199 — shared module imports. The car card extends `QsCardBase`
+// directly (NOT `QsRingDurationCardBase` — car uses a full-circle ring
+// with 3 inside-disc buttons instead of one override-btn at the
+// bottom). Inherits lifecycle, service callers, defensive utilities,
+// modal dialog, keyboard activation, and the 5 wire-helpers. Car
+// retains its own ring HTML (full-circle, sun/rabbit/time-btn carve
+// covers), sparkle system, lightning system, feTurbulence grain.
+import { baseCardCSS } from './shared/qs-card-styles.js';
+import { QsCardBase, arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
+
+void baseCardCSS;
+void arcPath;
+void polar;
+void pctToDeg;
+
+class QsCarCard extends QsCardBase {
   constructor() {
     super();
     this._chargePower = 0;
@@ -781,51 +796,25 @@ class QsCarCard extends HTMLElement {
     }
   }
 
-  // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
-  // strings interpolated into innerHTML.
-  _escapeHtml(s) {
-    if (s == null) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
+  // QS-199 — _escapeHtml, _entity, _call, _press, _turnOn, _turnOff,
+  // _select, _setNumber, _setTime, _fmt all inherited from QsCardBase
+  // (in shared/qs-card-base.js). Local definitions removed for AC1.
 
+  // Override `set hass` to add the car-specific `_isInteracting`,
+  // `_isInteractingCharger`, `_isInteractingPerson` guards.
   set hass(hass) {
     this._hass = hass;
     if (!this._root) return;
-    // Avoid re-rendering while user is interacting with selects or a modal is open
     if (this._isInteracting || this._isInteractingCharger || this._isInteractingPerson || this._modalOpen || this._isInteractingTarget) return;
     this._render();
   }
 
   getCardSize() { return 6; }
 
-  _entity(id) { return id ? this._hass?.states?.[id] : undefined; }
-
-  _call(domain, service, data) {
-    return this._hass.callService(domain, service, data);
-  }
-
-  _press(entity_id) { return this._call('button', 'press', { entity_id }); }
-  _turnOn(entity_id) { return this._call('switch', 'turn_on', { entity_id }); }
-  _turnOff(entity_id) { return this._call('switch', 'turn_off', { entity_id }); }
-  _select(entity_id, option) { return this._call('select', 'select_option', { entity_id, option }); }
-  _setTime(entity_id, value) { return this._call('time', 'set_value', { entity_id, time: value }); }
-
   _percent(num) {
     const n = Number(num);
     if (Number.isNaN(n)) return 0;
     return Math.max(0, Math.min(100, n));
-  }
-
-  // Format a number for display, replacing NaN/null/undefined with "--"
-  _fmt(num, round = true) {
-    const n = Number(num);
-    if (num == null || Number.isNaN(n)) return '--';
-    return round ? Math.round(n) : n;
   }
 
   _render() {

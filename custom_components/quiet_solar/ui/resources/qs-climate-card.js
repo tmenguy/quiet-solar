@@ -92,6 +92,24 @@ console.assert(
     "qs-climate-card: LAYER_* constants must be the same length"
 );
 
+// QS-199 — shared module imports. The card extends QsRingDurationCardBase
+// (which itself extends QsCardBase), inheriting lifecycle, service callers,
+// defensive utilities, the modal dialog system, keyboard activation, the
+// wire-helpers, and the ring HTML builder. Local flame/wave/wind state
+// machines stay in the card (they encode climate-specific 4-backdrop
+// dispatch and the snow-pile particle system that doesn't fit the
+// generic engines).
+import { baseCardCSS } from './shared/qs-card-styles.js';
+import { QsRingDurationCardBase } from './shared/qs-ring-duration-base.js';
+import { arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
+import { FLAME_CONSTANTS, QsFlameEngine } from './shared/qs-anim-flame.js';
+import { WAVE_CONSTANTS, generateWavePath } from './shared/qs-anim-wave.js';
+
+void FLAME_CONSTANTS;
+void QsFlameEngine;
+void WAVE_CONSTANTS;
+void generateWavePath;
+
 // --- Animation tuning (shared across flame / snow / wind) ---
 const LERP_RATE = 2;                // exp time-constant; ~95% of lerp in ~1.5s
 const LERP_DT_CEIL = 0.1;           // s; clamp lerp dt against hidden-tab return
@@ -151,7 +169,7 @@ const WIND_WAVE_FREQS = [2, 3, 4];          // cycles per WIND_WISP_WIDTH (integ
 // to 'flame' (heating is the more common AUTO use case).
 const BACKDROP_DEADBAND_C = 0.2;
 
-class QsClimateCard extends HTMLElement {
+class QsClimateCard extends QsRingDurationCardBase {
   // M4: gate the requestAnimationFrame loop on `showAnimation` (the
   // dashed-arc) OR `this._backdrop !== 'none'` (any backdrop visual
   // needs the loop). The loop is started lazily by `_render()` and
@@ -605,75 +623,22 @@ class QsClimateCard extends HTMLElement {
     this._render();
   }
 
-  // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
-  // strings interpolated into innerHTML (card title, entity unit, etc.).
-  // HA entity-id validation makes most paths unreachable in practice,
-  // but treat as untrusted.
-  _escapeHtml(s) {
-    if (s == null) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
+  // QS-199 — _escapeHtml, _safeNumber, _entity, _call, _press, _turnOn,
+  // _turnOff, _select, _setNumber, _setTime, _fmt all inherited from
+  // QsCardBase. The local definitions were removed as part of the AC1
+  // "each duplicated block in exactly one place" rule.
 
-  // S8: safe numeric coercion. `Number(s?.state || N)` short-circuits to
-  // the truthy string when `state === "unknown" | "unavailable"`, then
-  // `Number("unknown")` is `NaN` and propagates into SVG cx/cy/d
-  // attributes. Filter degenerate states BEFORE conversion.
-  //
-  // QS-210 review-fix S6 / S7:
-  //   - trim whitespace-only string state so `_safeNumber({state: " "})`
-  //     doesn't coerce via `Number(" ") === 0`;
-  //   - return-side `Number.isFinite(n)` guard so `±Infinity` (which
-  //     `Number.isNaN` does NOT catch) cannot propagate downstream into
-  //     the `target > currentTemp` ternary.
-  _safeNumber(sensor, defaultValue) {
-    if (!sensor || sensor.state == null) return defaultValue;
-    const raw = sensor.state;
-    // Pass-#3 N3 — `trimmed` can only be (a) an empty/whitespace
-    // string after `.trim()` collapses to `""`, or (b) the original
-    // non-null `raw` for non-string types (the outer guard already
-    // rejected null/undefined). So `trimmed == null` was dead code.
-    // Keep the empty-string check; the `Number.isFinite` final guard
-    // catches NaN / ±Infinity that survive the string filter.
-    const trimmed = (typeof raw === 'string') ? raw.trim() : raw;
-    if (trimmed === '') return defaultValue;
-    if (trimmed === 'unknown' || trimmed === 'unavailable') return defaultValue;
-    const n = Number(trimmed);
-    return Number.isFinite(n) ? n : defaultValue;
-  }
-
+  // Override `set hass` to add the climate-specific
+  // `_isInteractingStateOn` guard (the second bistate select for
+  // climate's heat/cool/auto/off state selector).
   set hass(hass) {
     this._hass = hass;
     if (!this._root) return;
-    // Avoid re-rendering while user is interacting with selects or a modal is open
     if (this._isInteractingMode || this._isInteractingStateOn || this._modalOpen || this._isInteractingTarget) return;
     this._render();
   }
 
   getCardSize() { return 5; }
-
-  _entity(id) { return id ? this._hass?.states?.[id] : undefined; }
-
-  _call(domain, service, data) {
-    return this._hass.callService(domain, service, data);
-  }
-
-  _press(entity_id) { return this._call('button', 'press', { entity_id }); }
-  _turnOn(entity_id) { return this._call('switch', 'turn_on', { entity_id }); }
-  _turnOff(entity_id) { return this._call('switch', 'turn_off', { entity_id }); }
-  _select(entity_id, option) { return this._call('select', 'select_option', { entity_id, option }); }
-  _setNumber(entity_id, value) { return this._call('number', 'set_value', { entity_id, value }); }
-  _setTime(entity_id, value) { return this._call('time', 'set_value', { entity_id, time: value }); }
-
-  _fmt(num, round = true) {
-    const n = Number(num);
-    if (num == null || Number.isNaN(n)) return '--';
-    return round ? Math.round(n) : n.toFixed(1);
-  }
 
   _render() {
       const cfg = this._config || {};

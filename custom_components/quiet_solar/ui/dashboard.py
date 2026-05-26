@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Any
 
 import aiofiles
@@ -280,6 +281,19 @@ def _generate_qs_tag() -> str:
     return str(int(time.time()))
 
 
+# QS-199 A1b: matches `from '<q>./shared/<path>.js[?<query>]<q>'` in card source.
+# The capture groups are (quote, path, optional-existing-query) — the optional
+# group is consumed (and discarded) so the rewrite always overwrites any prior
+# `?qs_tag=...` rather than concatenating. Plan-critic R1: never skip when a
+# query string is already present; always overwrite with the current tag.
+_IMPORT_REWRITE_RE = re.compile(r"""from(\s+)(['"])(\./shared/[^'"?\s]+\.js)(\?[^'"]*)?\2""")
+
+
+def _rewrite_shared_imports(content: str, tag: str) -> str:
+    """Inject `?qs_tag=<tag>` into every `./shared/*.js` import URL (always overwrites)."""
+    return _IMPORT_REWRITE_RE.sub(rf"from\1\2\3?qs_tag={tag}\2", content)
+
+
 def _resource_namespace() -> str:
     """Return the URL namespace for dashboard resources."""
     return f"/local/{DOMAIN}"
@@ -336,24 +350,49 @@ async def _async_copy_and_register_resources(
     namespace: str,
     tag: str,
     handler: ResourceStorageCollection | None,
+    *,
+    is_top_level: bool = True,
 ) -> None:
-    """Recursively copy resource files and register them with lovelace."""
+    """Recursively copy resource files and register them with lovelace.
+
+    QS-199:
+      * A1a — Only top-level files are registered as Lovelace resources;
+        subdirectory files (e.g. `shared/*.js`) are still copied but skip
+        registration. Shared modules are ES-module dependencies imported
+        by the top-level cards, not entry-point cards themselves.
+      * A1b — `.js` files have their `from './shared/<path>.js'` import URLs
+        regex-rewritten to inject `?qs_tag=<tag>`, using the same `tag`
+        value as the Lovelace registration URL. Always overwrites any
+        pre-existing query string (idempotent across HA restarts).
+    """
     await aiofiles.os.makedirs(to_dir, exist_ok=True)
     for entry in await aiofiles.os.listdir(from_dir):
         src = os.path.join(from_dir, entry)
         dst = os.path.join(to_dir, entry)
         if await aiofiles.os.path.isfile(src):
-            async with (
-                aiofiles.open(src, "rb") as f_in,
-                aiofiles.open(dst, "wb") as f_out,
-            ):
-                await f_out.write(await f_in.read())
-            if handler is not None:
+            if entry.endswith(".js"):
+                # A1b: read text, rewrite shared imports, write text
+                async with aiofiles.open(src, "rb") as f_in:
+                    raw = await f_in.read()
+                content = raw.decode("utf-8")
+                content = _rewrite_shared_imports(content, tag)
+                async with aiofiles.open(dst, "wb") as f_out:
+                    await f_out.write(content.encode("utf-8"))
+            else:
+                async with (
+                    aiofiles.open(src, "rb") as f_in,
+                    aiofiles.open(dst, "wb") as f_out,
+                ):
+                    await f_out.write(await f_in.read())
+            # A1a: skip lovelace registration for files in subdirectories
+            if handler is not None and is_top_level:
                 await _async_update_resource(
                     handler,
                     f"{namespace}/{entry}",
                     f"{namespace}/{entry}?qs_tag={tag}",
                 )
+            elif handler is not None and not is_top_level:
+                _LOGGER.debug("Skipped lovelace registration for shared module %s/%s", namespace, entry)
         elif await aiofiles.os.path.isdir(src):
             await _async_copy_and_register_resources(
                 src,
@@ -361,6 +400,7 @@ async def _async_copy_and_register_resources(
                 f"{namespace}/{entry}",
                 tag,
                 handler,
+                is_top_level=False,
             )
 
 

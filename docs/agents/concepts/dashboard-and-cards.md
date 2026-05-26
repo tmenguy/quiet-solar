@@ -12,7 +12,12 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-25
+  - custom_components/quiet_solar/ui/resources/shared/qs-card-styles.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-card-base.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
+last_verified: 2026-05-26
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -119,17 +124,110 @@ state" into "the JS card reads this entity". If a key is missing on
 the device, the template skips that line and the JS card simply
 doesn't render that row.
 
+### Shared base modules (QS-199)
+
+The six per-card JS files (~9,400 LOC pre-extraction) share a common
+foundation that lives under `ui/resources/shared/`. Each card
+imports from these modules; the Python copy step rewrites their
+`from './shared/*.js'` import URLs with the same `?qs_tag=<epoch>`
+cache-buster used for the top-level cards, so a component upgrade
+invalidates both the cards AND their dependencies atomically.
+
+Five shared modules:
+
+- **`shared/qs-card-styles.js`** — exports `baseCardCSS(palette,
+  options)`, the CSS string consumed by every card. Branded palette
+  flows through the `palette` argument
+  (`{primary, gradStart, gradEnd, animStart, animEnd}`); the shared
+  CSS contains no card-branded literals (only neutral
+  `rgba`/`var(--*)` and the three semantic-anchor colours —
+  power-blue `#2196F3`, solar-green `#4CAF50`, override-orange
+  `#FF9800`).
+- **`shared/qs-card-base.js`** — exports `class QsCardBase extends
+  HTMLElement` plus the geometry pure functions (`deg2rad`,
+  `rad2deg`, `polar`, `arcPath`, `pctToDeg`). The class owns
+  lifecycle, service callers (`_entity`, `_call`, `_press`,
+  `_turnOn`, `_turnOff`, `_select`, `_setNumber`, `_setTime`),
+  defensive utilities (`_escapeHtml`, `_safeNumber` —
+  climate-hardened with trim + `Number.isFinite`, `_fmt`,
+  `_isValidState`, `_formatTime`, `_parseTimeToMinutes`,
+  `_formatHm`), the modal dialog (`_showDialog`), keyboard
+  activation (`_registerKeyActivation`), a per-instance ID counter
+  (`_instanceId`), the dashed-arc RAF helpers
+  (`_startAnimation`/`_stopAnimation`), and **5 wire-helpers**
+  (`_wireTargetHandle`, `_wireTimePicker`, `_wireResetButton`,
+  `_wirePowerButton`, `_wireGreenButton`). Wire-helpers live on the
+  base (not the sub-base) because the car card uses several of them
+  too — it inherits `QsCardBase` directly.
+- **`shared/qs-ring-duration-base.js`** — exports `class
+  QsRingDurationCardBase extends QsCardBase`. Adds `_buildRingHTML`
+  (the ring SVG markup with linear-gradient defs, background +
+  progress arcs, override-btn cover circle, target-handle circle +
+  text, power-btn / green-btn / override-btn DOM nodes),
+  `_wireOverrideButton`, and `_wireBistateMode` (the latter wraps
+  `_select` in try/catch/finally + 300ms cleanup setTimeout — M2
+  hardening).
+- **`shared/qs-anim-flame.js`** — exports `FLAME_CONSTANTS` plus
+  `class QsFlameEngine`. The engine is a pure state machine + path
+  generator (`step(dt, fireOn, baseY, ts)` →
+  `{shouldRegen}`; `generatePaths(baseY, isIdle)` →
+  `string[layerCount]`). Per-card palette and per-layer constants
+  (`LAYER_TEETH_COUNTS`, `LAYER_BASE_HEIGHTS`, `FLAME_FILLS`,
+  `FLAME_GREY_FILLS`) flow through the constructor — both the
+  radiator and climate cards keep their own copies as the source of
+  truth.
+- **`shared/qs-anim-wave.js`** — exports `WAVE_CONSTANTS` plus
+  `generateWavePath(width, amplitude, frequency, phase, yOffset)`
+  (a pure ~15-LOC helper). Deliberately NOT a class: each consuming
+  card (pool, water-boiler, climate-cool, car) owns its RAF step
+  body because the per-card variations (palette, bubble/steam/glow
+  hooks, snow-pile particles, single-layer vs 3-layer) would turn
+  any "engine" class into mostly feature-flag scaffolding.
+
+**Inheritance hierarchy:**
+
+- `QsCardBase extends HTMLElement` — used directly by: **car**.
+- `QsRingDurationCardBase extends QsCardBase` — used by: **pool,
+  on-off-duration, radiator, water-boiler, climate**.
+
+**Decision rule going forward:** lifecycle + service callers +
+helpers that mutate `this.*` flags → inheritance; pure pipeline
+transforms (engines, geometry, CSS templates) → composition.
+
+**Why particle systems stay per-card:** each particle system
+(boiler bubbles/steam/surface glow, climate snow-pile + falling
+flakes, car sparkles, car lightning, pool temp-tint) is used by
+exactly one card and carries 5+ rounds of review-fix tuning baked
+into its constants and spawn/advance/retire algorithm. Extracting a
+generic `QsParticleEngine` would gain less than ~120 LOC of
+deduplication at very high regression risk — every tuning hint
+would ride into the engine as a constructor arg. The decision is
+explicit and documented; future readers should not redo the
+analysis without new evidence.
+
 ### JS resources lifecycle
 
 `async_update_resources(hass)` runs on **every** HA start. It walks
-the bundled `ui/resources/` directory, copies each JS file to
-`<config>/www/quiet_solar/<filename>`, and registers it as a
-Lovelace resource at URL
-`/local/quiet_solar/<filename>?qs_tag=<epoch>`. The `qs_tag` query
-parameter changes on each start (epoch-derived), so browsers reload
-the updated JS without a hard refresh. Dashboard **content** is NOT
-touched on startup — only the JS resources — so any manual edits
-TheAdmin made to the dashboards survive an upgrade.
+the bundled `ui/resources/` directory recursively. For each `.js`
+file:
+
+1. It reads the file, rewrites any `from './shared/*.js'` import URL
+   with a fresh `?qs_tag=<epoch>` cache-buster (regex always
+   overwrites — never skips for an existing query string), and
+   writes the rewritten content to `<config>/www/quiet_solar/<...>`.
+2. **Top-level cards** (no parent directory under `ui/resources/`)
+   are registered as Lovelace resources at URL
+   `/local/quiet_solar/<filename>?qs_tag=<epoch>`.
+3. **Files under `shared/`** are copied to
+   `<config>/www/quiet_solar/shared/<filename>` but **not** registered
+   with Lovelace — they are imported by the top-level cards as ES
+   modules. The same `tag` value flows into both the registration
+   URL and the rewritten import URLs so a browser reload invalidates
+   everything atomically.
+
+Dashboard **content** is NOT touched on startup — only the JS
+resources — so any manual edits TheAdmin made to the dashboards
+survive an upgrade.
 
 ### Tracking storage (survives restart)
 

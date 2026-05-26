@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.utils.card_sources import card_source_union
+
 CARD_PATH = (
     Path(__file__).resolve().parent.parent
     / "custom_components"
@@ -45,8 +47,22 @@ CARD_PATH = (
 
 @pytest.fixture(scope="module")
 def card_source() -> str:
-    """Read the radiator-card source once for the module."""
-    return CARD_PATH.read_text(encoding="utf-8")
+    """QS-199 — radiator-card source unioned with its shared modules.
+
+    After QS-199 the flame engine (`_generateFlameTeethPath`,
+    `PHASE_REGEN_MIN_DT`, `sinceLastRegen`, `isIdle` gates, the
+    length-equality `console.assert`) lives in
+    ``shared/qs-anim-flame.js``. `card_source_union` returns the
+    concatenated card text + every shared module the card imports, so
+    the existing `string in card_source` assertions keep working without
+    per-test rewrites.
+
+    Per-card palette / per-card layer constants (`LAYER_BASE_HEIGHTS`,
+    `FLAME_FILLS`, `FLAME_GREY_FILLS`) still live in the card file —
+    those test assertions are satisfied by the card section of the
+    union directly.
+    """
+    return card_source_union("qs-radiator-card.js")
 
 
 def test_radiator_card_declares_flame_teeth_path_generator(card_source: str) -> None:
@@ -90,15 +106,21 @@ def test_radiator_card_idle_silhouette_motionless(card_source: str) -> None:
     declares a ``STATIC_PEAK_HEIGHT`` constant ≥ 30 px that gives the
     idle silhouette visible peaks without animation. Either resolution
     satisfies the AC.
+
+    QS-199 — the constants moved to ``FLAME_CONSTANTS`` in
+    ``shared/qs-anim-flame.js``. Accepts both the legacy ``= N`` form
+    (top-level `const`) and the new ``: N`` form (inside the
+    ``FLAME_CONSTANTS`` object literal).
     """
-    still_match = re.search(r"STILL_AMP\s*=\s*([0-9]*\.?[0-9]+)", card_source)
+    still_match = re.search(r"STILL_AMP\s*[=:]\s*([0-9]*\.?[0-9]+)", card_source)
     assert still_match is not None, (
-        "Could not find `STILL_AMP = ...` constant in qs-radiator-card.js"
+        "Could not find `STILL_AMP = N` or `STILL_AMP: N` constant in the "
+        "card+shared union"
     )
     still_amp = float(still_match.group(1))
 
     static_peak_match = re.search(
-        r"STATIC_PEAK_HEIGHT\s*=\s*([0-9]*\.?[0-9]+)", card_source
+        r"STATIC_PEAK_HEIGHT\s*[=:]\s*([0-9]*\.?[0-9]+)", card_source
     )
     has_static_peak_ge_30 = (
         static_peak_match is not None and float(static_peak_match.group(1)) >= 30

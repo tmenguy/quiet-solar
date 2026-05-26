@@ -365,8 +365,17 @@ class TestDashboardTemplateRendering:
     def test_radiator_card_s16_keyboard_accessibility(self):  # CR2 — sync (no hass)
         """A2 — pin S16 via regex: each primary action div has
         `role="button"`, `tabindex="0"`, AND a keyboard activation hook.
+
+        QS-199 — the `role/tabindex` attributes remain in the card's HTML
+        template; the `_registerKeyActivation` helper moved to
+        `shared/qs-card-base.js` and is now called from each wire-helper
+        inside `shared/qs-card-base.js` and `shared/qs-ring-duration-base.js`.
+        Uses `card_source_union` for the count assertion (which now spans
+        the union of the card + every shared module).
         """
         import re
+
+        from tests.utils.card_sources import card_source_union
 
         content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
 
@@ -379,10 +388,12 @@ class TestDashboardTemplateRendering:
                 f"Missing role/tabindex on `{button_id}`"
             )
 
-        # The keyboard helper exists and is wired into every action.
-        assert "_registerKeyActivation(" in content
-        # At least four calls (one per action div).
-        assert content.count("_registerKeyActivation(") >= 4
+        # The keyboard helper exists across the card + shared modules,
+        # and is wired into every action via the shared wire-helpers.
+        union = card_source_union("qs-radiator-card.js")
+        assert "_registerKeyActivation(" in union
+        # At least four calls (one per action div) across the union.
+        assert union.count("_registerKeyActivation(") >= 4
 
     def test_radiator_card_s17_async_calls_wrapped_in_try_finally(self):  # CR2 — sync (no hass)
         """A2 — pin S17: each `_select` / `_setNumber` await is wrapped.
@@ -396,8 +407,15 @@ class TestDashboardTemplateRendering:
 
         Without this, a transient service-call failure would leak
         interaction guards and the card would get stuck.
+
+        QS-199 — both awaits moved to shared modules
+        (`shared/qs-ring-duration-base.js` for `_select`,
+        `shared/qs-card-base.js` for `_setNumber`). Uses
+        `card_source_union` so the assertion still finds them.
         """
-        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        from tests.utils.card_sources import card_source_union
+
+        content = card_source_union("qs-radiator-card.js")
 
         def _try_finally_brackets(call_signature: str) -> bool:
             lines = content.splitlines()
@@ -425,25 +443,39 @@ class TestDashboardTemplateRendering:
         )
 
     def test_radiator_card_b5_show_dialog_escapes_interpolations(self):  # CR2 — sync (no hass)
-        """AA1 — pin B5: every interpolation inside `showDialog` is escaped.
+        """AA1 — pin B5: every interpolation inside `_showDialog` is escaped.
 
-        Verifies that the `showDialog` function body does NOT contain
+        Verifies that the showDialog implementation body does NOT contain
         raw `${title}` / `${message}` interpolations against innerHTML
         — they must all route through `_escapeHtml(...)`. Without this
         a future entity-derived title/message would silently
         reintroduce the S15 injection vector.
+
+        QS-199 — the closure `const showDialog = (opts) => {...}` was
+        lifted to a method `_showDialog(opts) {...}` on `QsCardBase`
+        (in `shared/qs-card-base.js`). Uses `card_source_union` and
+        extracts the new method body via brace-counting from the
+        method-declaration token (after stripping JS comments to avoid
+        matching the doc-string examples).
         """
         import re
 
-        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        from tests.utils.card_sources import card_source_union
 
-        # Extract `showDialog` body via brace-counting.
-        start = content.find("const showDialog")
-        assert start != -1, "Missing `showDialog` declaration"
-        # Find the `=>` then the opening `{`.
-        arrow = content.find("=>", start)
-        assert arrow != -1
-        body_start = content.find("{", arrow)
+        raw = card_source_union("qs-radiator-card.js")
+        content = _strip_js_comments(raw)
+
+        # Locate either the legacy closure (`const showDialog = ...`)
+        # or the post-QS-199 method form (`_showDialog(opts) {`).
+        m = re.search(r"_showDialog\s*\(", content)
+        legacy = content.find("const showDialog")
+        assert m is not None or legacy != -1, (
+            "Missing `_showDialog(...)` method (or legacy `const showDialog`) "
+            "declaration"
+        )
+        start = m.start() if m is not None else legacy
+        # Find the opening `{` after the parameter list.
+        body_start = content.find("{", start)
         assert body_start != -1
         # Brace-count to the matching `}`.
         depth = 0
@@ -456,7 +488,7 @@ class TestDashboardTemplateRendering:
                 if depth == 0:
                     body_end = i
                     break
-        assert body_end != -1, "Could not find closing brace of `showDialog`"
+        assert body_end != -1, "Could not find closing brace of `_showDialog`"
 
         body = content[body_start : body_end + 1]
 
@@ -683,12 +715,27 @@ class TestDashboardTemplateRendering:
 
         # AC-8: <path id="running_anim"> emission is gated on ringDashActive,
         # not the umbrella showAnimation.
-        assert re.search(
+        #
+        # QS-199 — the running_anim path is now emitted by the shared
+        # `_buildRingHTML` template (in shared/qs-ring-duration-base.js)
+        # which gates on its `showAnimation` parameter. The radiator
+        # card MUST pass `showAnimation: ringDashActive` (NOT the OR
+        # umbrella `showAnimation`) so the dash animation only renders
+        # when there's enough progress to dash through. Accepts either
+        # the legacy literal template form OR the new call-site form.
+        legacy_form = re.search(
             r"\$\{\s*ringDashActive\s*\?\s*`[^`]*?id=\"running_anim\"",
             content,
             re.DOTALL,
-        ) is not None, (
-            "<path id=\"running_anim\"> must be gated on ringDashActive, not showAnimation"
+        )
+        call_form = re.search(
+            r"showAnimation:\s*ringDashActive\b",
+            content,
+        )
+        assert legacy_form is not None or call_form is not None, (
+            "`<path id=\"running_anim\">` must be gated on `ringDashActive` "
+            "(either via legacy `${ringDashActive ? ...}` inline template "
+            "or via `showAnimation: ringDashActive` call to `_buildRingHTML`)."
         )
 
     def test_radiator_card_flame_off_grey(self):  # CR2 — sync (no hass)
@@ -723,10 +770,16 @@ class TestDashboardTemplateRendering:
         Without the text-shadow, the centre text collapses in contrast over the
         warm orange flame backdrop. AC-9 is required-for-correctness — pin it
         so a CSS-only regression that drops the shadow can't slip past review.
+
+        QS-199 — the shared CSS template (`shared/qs-card-styles.js`)
+        owns these rules now. Uses `card_source_union` so the assertion
+        searches the union.
         """
         import re
 
-        content = (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text()
+        from tests.utils.card_sources import card_source_union
+
+        content = card_source_union("qs-radiator-card.js")
 
         # CSS variable declaration on :host (whitespace-tolerant).
         assert re.search(
@@ -802,13 +855,16 @@ class TestDashboardTemplateRendering:
         `test_radiator_card_text_shadow_for_flame_readability` idiom
         verbatim — the radiator test is kept intact and the two tests
         overlap on radiator by design (AC-9's own pin is its contract).
+
+        QS-199 — uses ``card_source_union`` so the shared CSS in
+        ``shared/qs-card-styles.js`` is searched alongside each card.
         """
         import re
 
+        from tests.utils.card_sources import card_source_union
+
         for card_filename, classes in self.CARDS_TO_RING_TEXT_CLASSES.items():
-            content = (
-                COMPONENT_ROOT / "ui" / "resources" / card_filename
-            ).read_text()
+            content = card_source_union(card_filename)
 
             # AC-1: --ring-text-shadow declared on :host (whitespace-tolerant).
             assert re.search(
@@ -1432,24 +1488,36 @@ class TestDashboardSectionMapping:
         reaches the rendered SVG attribute. Without this guard, the
         browser shows ``Error: <path> attribute d: Expected number,
         "...A 130 130 0 0 1 NaN NaN"``.
+
+        QS-199 — ``arcPath`` is a named export in
+        ``shared/qs-card-base.js`` (`export function arcPath(...) {...}`).
+        Accepts both the legacy arrow form and the new function-declaration
+        form via the union.
         """
         import re
 
+        from tests.utils.card_sources import card_source_union
+
         for card_filename in ("qs-radiator-card.js", "qs-water-boiler-card.js"):
-            content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
+            content = card_source_union(card_filename)
             executable = _strip_js_comments(content)
 
             # The arcPath helper definition must include a finiteness
-            # check on its angle inputs. Accept either `Number.isFinite`
-            # OR `Number.isNaN` (negative form).
-            arc_pat = re.compile(
+            # check on its angle inputs. Accept either:
+            #   - Legacy form: `arcPath = (...) => { ... };`
+            #   - QS-199 form: `function arcPath(...) { ... }` (named export)
+            arc_pat_arrow = re.compile(
                 r"arcPath\s*=\s*\([^)]*\)\s*=>\s*\{(?P<body>[^}]*(?:\}[^}]*)*?)\};",
                 re.DOTALL,
             )
-            m = arc_pat.search(executable)
+            arc_pat_fn = re.compile(
+                r"function\s+arcPath\s*\([^)]*\)\s*\{(?P<body>[^}]*(?:\}[^}]*)*?)\}",
+                re.DOTALL,
+            )
+            m = arc_pat_arrow.search(executable) or arc_pat_fn.search(executable)
             assert m is not None, (
-                f"{card_filename}: could not find an `arcPath = (...) => "
-                f"{{...}};` arrow definition — check the helper layout."
+                f"{card_filename}: could not find an `arcPath` arrow OR function "
+                f"declaration in the card+shared union — check the helper layout."
             )
             body = m.group("body")
             has_finite = "Number.isFinite" in body or "Number.isNaN" in body
@@ -1777,11 +1845,16 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
     structures (the radiator card uses the latter — a defensive
     `catch` swallows the error before falling through to the
     `finally` cleanup, which the other cards now share).
+
+    QS-199 — uses ``card_source_union`` so the shared
+    ``_wireBistateMode`` implementation in
+    ``shared/qs-ring-duration-base.js`` is included in the search.
     """
     import re
 
-    js_path = COMPONENT_ROOT / "ui" / "resources" / card_filename
-    content = js_path.read_text(encoding="utf-8")
+    from tests.utils.card_sources import card_source_union
+
+    content = card_source_union(card_filename)
     # Must find at least one `_isProcessing... = true` set followed by
     # a `try { ... await this._select(... } [catch (...) { ... }] finally { ... }`
     # block. The `(?:catch\b[^{}]*\{[^{}]*\}\s*)?` group permits the
@@ -1837,11 +1910,16 @@ def test_card_raf_idle_gated(card_filename, gate):
     presence-of-helper check below. QS-200 moved
     `qs-water-boiler-card.js` to the same continuous-RAF model, also
     covered separately.
+
+    QS-199 — ``_startAnimation`` / ``_stopAnimation`` now live in
+    ``shared/qs-card-base.js``. Uses ``card_source_union`` so the
+    helpers are seen by the presence assertion.
     """
     import re
 
-    js_path = COMPONENT_ROOT / "ui" / "resources" / card_filename
-    content = js_path.read_text(encoding="utf-8")
+    from tests.utils.card_sources import card_source_union
+
+    content = card_source_union(card_filename)
     assert "_startAnimation" in content and "_stopAnimation" in content, (
         f"M4: {card_filename} must define both _startAnimation and "
         f"_stopAnimation helpers."
@@ -1861,12 +1939,16 @@ def test_pool_card_has_start_stop_helpers():
     """M4 pool-variant: pool's RAF is intrinsically continuous, but the
     `_startAnimation` / `_stopAnimation` helper-naming is still present
     for cross-card consistency.
+
+    QS-199 — the helpers now live in `shared/qs-card-base.js`. Uses
+    `card_source_union` so the assertion still finds them.
     """
-    js_path = COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
-    content = js_path.read_text(encoding="utf-8")
+    from tests.utils.card_sources import card_source_union
+
+    content = card_source_union("qs-pool-card.js")
     assert "_startAnimation" in content and "_stopAnimation" in content, (
-        "M4: qs-pool-card.js must define _startAnimation/_stopAnimation "
-        "helpers for cross-card consistency."
+        "M4: qs-pool-card.js (or its shared base) must define "
+        "_startAnimation/_stopAnimation helpers for cross-card consistency."
     )
 
 
@@ -7106,12 +7188,15 @@ class TestClimateCardReviewFix01Hardening:
     def test_climate_card_safe_number_filters_whitespace_and_infinity(self):
         """Review-fix S6 + S7 — `_safeNumber` must trim string state
         and use `Number.isFinite(n)` (which also excludes ±Infinity).
+
+        QS-199 — `_safeNumber` moved to `shared/qs-card-base.js`. Uses
+        `card_source_union` to find the (now-shared) hardened body.
         """
         import re
 
-        content = (
-            COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
-        ).read_text()
+        from tests.utils.card_sources import card_source_union
+
+        content = card_source_union("qs-climate-card.js")
         executable = _strip_js_comments(content)
 
         # Locate the _safeNumber body. The lookahead `(?=\{)` ensures
@@ -7515,4 +7600,209 @@ class TestClimateCardReviewFix02Hardening:
                 f"a fresh RAF loop."
             )
 
+
+# =============================================================================
+# QS-199 — Structural tests pinning the shared-base extraction (Phase D2).
+# =============================================================================
+
+
+# Canonical list of methods that — after QS-199 — must appear EXACTLY ONCE
+# in the union of `ui/resources/shared/*.js` files and ZERO TIMES in any
+# `ui/resources/qs-*-card.js` top-level card file. The single-definition
+# rule is what AC1 actually pins (the original LOC-threshold AC was
+# replaced per scope-guardian finding #4).
+_QS_199_CANONICAL_SHARED_METHODS = (
+    "_escapeHtml",
+    "_safeNumber",
+    "_fmt",
+    "_entity",
+    "_call",
+    "_press",
+    "_turnOn",
+    "_turnOff",
+    "_select",
+    "_setNumber",
+    "_setTime",
+    "_showDialog",
+    "_registerKeyActivation",
+    "_wireTargetHandle",
+    "_wireTimePicker",
+    "_wireResetButton",
+    "_wirePowerButton",
+    "_wireGreenButton",
+    "_wireOverrideButton",
+    "_wireBistateMode",
+    "_buildRingHTML",
+)
+
+
+def test_no_duplicate_card_method_definitions():
+    """QS-199 AC1 — each previously-duplicated block appears in exactly one place.
+
+    For every method in `_QS_199_CANONICAL_SHARED_METHODS`, the grep
+    pattern `^\\s*<method>\\s*\\([^)]*\\)\\s*\\{` (a method definition,
+    NOT a call site or closure-assignment) should match exactly ONCE
+    across all files under `ui/resources/shared/` and ZERO times across
+    all `ui/resources/qs-*-card.js` top-level files. Card-side
+    `const _foo = (...) => this._foo(...)` aliases are NOT counted
+    as definitions (they delegate to the inherited method).
+
+    JS comments are stripped before matching so a doc-comment example
+    of the method signature can't accidentally count as a definition.
+    """
+    import re
+
+    shared_dir = COMPONENT_ROOT / "ui" / "resources" / "shared"
+    cards_dir = COMPONENT_ROOT / "ui" / "resources"
+
+    shared_text = _strip_js_comments(
+        "\n".join(
+            shared_path.read_text(encoding="utf-8")
+            for shared_path in shared_dir.glob("*.js")
+        )
+    )
+    cards_text_per_file = {
+        card_path.name: _strip_js_comments(
+            card_path.read_text(encoding="utf-8")
+        )
+        for card_path in cards_dir.glob("qs-*-card.js")
+    }
+    assert len(cards_text_per_file) == 6, (
+        f"Expected exactly 6 top-level qs-*-card.js files; got "
+        f"{sorted(cards_text_per_file.keys())}"
+    )
+
+    duplicates: list[str] = []
+    for method in _QS_199_CANONICAL_SHARED_METHODS:
+        # Match a method DEFINITION: `<method>(...) {` at line start
+        # (modulo indentation). Excludes call sites (which end in `;`
+        # or `,`) and closure assignments (which are preceded by `const`).
+        pat = re.compile(
+            rf"^\s*{re.escape(method)}\s*\([^)]*\)\s*\{{", re.MULTILINE
+        )
+        shared_hits = len(pat.findall(shared_text))
+        if shared_hits != 1:
+            duplicates.append(
+                f"shared/* defines `{method}` {shared_hits} times (expected 1)"
+            )
+        for card_name, card_text in cards_text_per_file.items():
+            card_hits = len(pat.findall(card_text))
+            if card_hits > 0:
+                duplicates.append(
+                    f"{card_name} still defines `{method}` "
+                    f"({card_hits} times); AC1 requires zero"
+                )
+
+    assert not duplicates, (
+        "QS-199 AC1 violation — duplicated method definitions found:\n  "
+        + "\n  ".join(duplicates)
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_modules_are_not_lovelace_registered(tmp_path):
+    """QS-199 AC3 — files under `ui/resources/shared/` are copied to
+    `www/quiet_solar/shared/` but are NOT registered as Lovelace
+    resources. Only top-level `qs-*-card.js` files register.
+    """
+    from tests.test_ui_dashboard import MockResourceStorageCollection
+    from custom_components.quiet_solar.ui.dashboard import (
+        _async_copy_and_register_resources,
+    )
+
+    src = COMPONENT_ROOT / "ui" / "resources"
+    dst = tmp_path / "dst"
+
+    resources = MockResourceStorageCollection()
+
+    await _async_copy_and_register_resources(
+        str(src), str(dst), "/local/quiet_solar", "TESTTAG", resources,
+    )
+
+    # No Lovelace registration whose URL contains `/shared/`.
+    shared_urls = [
+        item["url"] for item in resources.created_items if "/shared/" in item["url"]
+    ]
+    assert not shared_urls, (
+        "QS-199 AC3 violation — shared modules registered as Lovelace "
+        f"resources: {shared_urls}"
+    )
+
+    # But the shared files WERE copied to the destination.
+    for shared_name in (
+        "qs-card-styles.js",
+        "qs-card-base.js",
+        "qs-ring-duration-base.js",
+        "qs-anim-flame.js",
+        "qs-anim-wave.js",
+    ):
+        assert (dst / "shared" / shared_name).exists(), (
+            f"QS-199 AC3 violation — shared module `shared/{shared_name}` "
+            f"was not copied to destination"
+        )
+
+    # And every top-level qs-*-card.js IS registered.
+    top_level_urls = [
+        item["url"]
+        for item in resources.created_items
+        if "/shared/" not in item["url"]
+    ]
+    assert len(top_level_urls) == 6, (
+        f"Expected exactly 6 top-level card registrations; got "
+        f"{len(top_level_urls)}: {top_level_urls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_card_imports_use_cache_busted_url(tmp_path):
+    """QS-199 AC2a / AC8 — every copied card file's `from './shared/*.js'`
+    imports are rewritten with a `?qs_tag=<tag>` cache-buster, using
+    the same `tag` value as the Lovelace registration URL.
+    """
+    import re
+
+    from tests.test_ui_dashboard import MockResourceStorageCollection
+    from custom_components.quiet_solar.ui.dashboard import (
+        _async_copy_and_register_resources,
+    )
+
+    src = COMPONENT_ROOT / "ui" / "resources"
+    dst = tmp_path / "dst"
+
+    resources = MockResourceStorageCollection()
+
+    await _async_copy_and_register_resources(
+        str(src), str(dst), "/local/quiet_solar", "STAMPED", resources,
+    )
+
+    # Every migrated card imports from `./shared/*.js` and the rewrite
+    # must inject the same `qs_tag=STAMPED` cache-buster used for
+    # the top-level Lovelace registration.
+    import_pat = re.compile(
+        r"""from\s+['"]\./shared/[^'"]+\.js\?qs_tag=STAMPED['"]"""
+    )
+
+    cards_with_imports = (
+        "qs-on-off-duration-card.js",
+        "qs-radiator-card.js",
+        "qs-pool-card.js",
+        "qs-water-boiler-card.js",
+        "qs-climate-card.js",
+        "qs-car-card.js",
+    )
+    for card_name in cards_with_imports:
+        dst_text = (dst / card_name).read_text(encoding="utf-8")
+        matches = import_pat.findall(dst_text)
+        assert matches, (
+            f"QS-199 AC2a violation — `{card_name}` has no rewritten "
+            f"`from './shared/*.js?qs_tag=STAMPED'` imports after copy"
+        )
+
+    # Top-level Lovelace URLs also carry the same tag.
+    for item in resources.created_items:
+        assert "?qs_tag=STAMPED" in item["url"], (
+            f"QS-199 AC8 violation — Lovelace registration URL "
+            f"{item['url']!r} does not carry the expected `qs_tag=STAMPED` "
+            f"cache-buster"
+        )
 
