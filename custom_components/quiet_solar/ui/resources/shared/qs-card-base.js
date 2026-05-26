@@ -342,7 +342,9 @@ export class QsCardBase extends HTMLElement {
           startDeg, endDeg, rangeDeg,
           hoursToPct, pctToHours, allowedHours,
           entityId,                // service target for _setNumber
-          onCommit,                // optional callback(snapValue) after commit
+          onBeforeCommit,          // optional async hook AWAITED before _setNumber
+                                   //   (e.g. pool selects default mode first)
+          onCommit,                // optional async callback(snapValue) AWAITED after commit
           getHoursRun,             // optional () => current hours for inline label update
           colors,                  // optional palette {primary} for inline label update
       }
@@ -352,7 +354,7 @@ export class QsCardBase extends HTMLElement {
             ringSvg, handle, center, ringCirc,
             startDeg, endDeg, rangeDeg,
             hoursToPct, pctToHours, allowedHours,
-            entityId, onCommit, getHoursRun, colors,
+            entityId, onBeforeCommit, onCommit, getHoursRun, colors,
         } = params;
         if (!ringSvg || !handle) return;
         // QS-199 review-fix S15 — guard against an empty `allowedHours`
@@ -420,6 +422,13 @@ export class QsCardBase extends HTMLElement {
             // S17 — try/finally: drag-release guards always clear.
             try {
                 if (dragValue != null && entityId) {
+                    // QS-199 review-fix #03 S1/S2 — await an optional
+                    // pre-commit hook BEFORE the duration write (the pool
+                    // selects default mode first; writing the duration
+                    // while not yet in default mode can be rejected
+                    // backend-side). Both hooks are awaited so neither
+                    // races the local-target timeout / next render.
+                    if (onBeforeCommit) await onBeforeCommit(dragValue);
                     await this._setNumber(entityId, dragValue);
                     this._localTargetPct = dragPct;
                     if (this._pendingClearLocalTarget) clearTimeout(this._pendingClearLocalTarget);
@@ -429,7 +438,7 @@ export class QsCardBase extends HTMLElement {
                         // QS-199 review-fix S14: don't render a detached card.
                         if (this.isConnected && this._root) this._render();
                     }, 5000);
-                    if (onCommit) onCommit(dragValue);
+                    if (onCommit) await onCommit(dragValue);
                 }
             } catch (_) {
                 // swallow — HA state will resync on the next push
@@ -571,6 +580,12 @@ export class QsCardBase extends HTMLElement {
     /*
       _wireResetButton — confirmation dialog → _press(entityId).
       params: {buttonEl, entityId}
+
+      QS-199 review-fix #03 N6 — intentionally does NOT call
+      `_registerKeyActivation`: the reset control is a native
+      `<button id="reset">` in every card (keyboard-native — Enter/Space
+      already activate it), unlike the other controls which are custom
+      `div`s. No `role`/`tabindex` needed.
     */
     _wireResetButton(params) {
         const { buttonEl, entityId } = params;

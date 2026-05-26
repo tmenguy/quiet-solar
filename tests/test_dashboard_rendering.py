@@ -645,7 +645,12 @@ class TestDashboardTemplateRendering:
         # AC-2: <g clip-path="url(#${flameClipId})"> wraps the three paths.
         assert 'clip-path="url(#${flameClipId})"' in content
 
-        # AC-7: _invalidateFlameCache body whitelist — EXACTLY three fields cleared.
+        # AC-7: _invalidateFlameCache clears the card's DOM ref cache and
+        # delegates the memo-key reset to the engine.
+        # QS-199 review-fix #03 N5 — the card no longer mirrors
+        # `_lastFlameBaseY` / `_lastFlameAmp` (dead state owned by the
+        # engine). The method now clears `_flameEls` and calls
+        # `this._flameEngine.invalidate()`.
         inv_match = re.search(
             r"_invalidateFlameCache\s*\(\s*\)\s*\{([^}]+)\}",
             content,
@@ -653,14 +658,17 @@ class TestDashboardTemplateRendering:
         )
         assert inv_match is not None, "Missing _invalidateFlameCache method"
         body = inv_match.group(1)
-        # Required positive whitelist.
-        for required in ("_flameEls", "_lastFlameBaseY", "_lastFlameAmp"):
-            assert required in body, f"_invalidateFlameCache must clear `this.{required}`"
-        # Forbidden: fields that must SURVIVE disconnect.
-        for forbidden in ("_currentFlameAmp", "_currentFlameSpeed", "_flamePhase"):
+        assert "_flameEls" in body, "_invalidateFlameCache must clear `this._flameEls`"
+        assert "_flameEngine.invalidate()" in body, (
+            "_invalidateFlameCache must delegate memo-key reset to "
+            "`this._flameEngine.invalidate()` (N5: engine owns the memo keys)"
+        )
+        # Forbidden: animation state that must SURVIVE disconnect, AND the
+        # removed dead card mirrors (N5).
+        for forbidden in ("_currentFlameAmp", "_currentFlameSpeed", "_flamePhase", "_lastFlameBaseY", "_lastFlameAmp"):
             assert forbidden not in body, (
                 f"_invalidateFlameCache must NOT touch `this.{forbidden}` "
-                f"(animation state survives disconnect — mirror pool)"
+                f"(animation state survives disconnect; dead mirrors removed in N5)"
             )
 
         # AC-7: disconnectedCallback calls _invalidateFlameCache.
@@ -7500,3 +7508,73 @@ def test_flame_engine_keeps_raf_until_idle():
     assert "this._flameEngine.isIdle()" in radiator, (
         "qs-radiator-card.js must gate RAF teardown on `_flameEngine.isIdle()` (S7)."
     )
+
+
+def test_allowed_half_hours_is_bounded_against_non_finite_max():
+    """QS-199 review-fix #03 M1 + N1 — `_allowedHalfHours` must NOT loop
+    forever for a non-finite / huge `max_default_hours`.
+
+    The round-2 S8 change used `Number(maxHours) > 0 ? Number(maxHours)
+    : 12`, which is `Infinity` for `max_default_hours: Infinity` /
+    `1e999` (`Number("1e999") === Infinity`), so `for (i=0; i<=Infinity;
+    i+=0.5)` hangs the tab — synchronously inside `_render()` whenever
+    `canDragHandle` is true. The fix guards with `Number.isFinite` AND
+    clamps to a sane upper bound (`Math.min(n, 168)`).
+    """
+    import re
+
+    src = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-ring-duration-base.js").read_text(encoding="utf-8")
+    )
+    m = re.search(r"_allowedHalfHours\s*\([^)]*\)\s*\{(?P<body>.*?)\n    \}", src, re.DOTALL)
+    assert m is not None, "could not locate _allowedHalfHours body"
+    body = m.group("body")
+    assert "Number.isFinite" in body, (
+        "M1: `_allowedHalfHours` must guard the cap with `Number.isFinite` "
+        "so a non-finite max can't make the loop run forever."
+    )
+    assert "Math.min(" in body, (
+        "N1: `_allowedHalfHours` must clamp the cap (e.g. `Math.min(n, 168)`) "
+        "so a huge finite max doesn't build a giant array every render."
+    )
+
+
+def test_wire_target_handle_awaits_commit_hooks_in_order():
+    """QS-199 review-fix #03 S1 + S2 — the shared `_wireTargetHandle` must:
+
+    - run an optional `onBeforeCommit` hook (awaited) BEFORE the
+      `_setNumber` duration write, so the pool's
+      `_select(pool_mode, 'bistate_mode_default')` lands first (the old
+      pre-migration ordering — writing the duration before default mode
+      is active can be rejected/clamped backend-side); and
+    - `await` the optional `onCommit` hook (pool passes an async one;
+      fire-and-forget raced the local-target timeout + next render).
+    """
+    src = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-base.js").read_text(encoding="utf-8")
+    )
+    # Both hooks are awaited.
+    assert "await onBeforeCommit(" in src, (
+        "S1: `_wireTargetHandle` must `await onBeforeCommit(...)` (pool mode-select)."
+    )
+    assert "await onCommit(" in src, "S2: `_wireTargetHandle` must `await onCommit(...)`."
+    # Ordering: onBeforeCommit fires before the _setNumber write.
+    before_idx = src.index("await onBeforeCommit(")
+    setnum_idx = src.index("await this._setNumber(")
+    assert before_idx < setnum_idx, (
+        "S1: `onBeforeCommit` (mode-select) must run BEFORE the `_setNumber` "
+        "duration write to preserve the pool's service-call ordering."
+    )
+
+
+def test_pool_drag_commit_selects_mode_before_duration():
+    """QS-199 review-fix #03 S1 — the pool card wires the mode-select into
+    the `onBeforeCommit` (pre-duration) hook, not the post-write
+    `onCommit`, so default-mode is active before the duration write.
+    """
+    pool = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8"))
+    assert "onBeforeCommit:" in pool, (
+        "qs-pool-card.js: the drag-commit mode-select must be wired via "
+        "`onBeforeCommit:` so it runs before the duration write (S1)."
+    )
+    assert "bistate_mode_default" in pool, "pool drag-commit must still select default mode"

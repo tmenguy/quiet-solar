@@ -104,17 +104,17 @@ class QsRadiatorCard extends QsRingDurationCardBase {
         this._invalidateFlameCache();
     }
 
-    // QS-204 — clear memoization keys + cached DOM refs after each
-    // _render() innerHTML rewrite. Does NOT touch `_currentFlameAmp`
-    // or `_tipPhases` (those live on the engine and survive disconnect
-    // so re-attach resumes the dance without a visible jump).
+    // QS-204 — clear cached flame DOM refs after each _render() innerHTML
+    // rewrite, and delegate the engine memo-key reset to the engine.
+    // QS-199 review-fix #03 N5 — the card no longer mirrors
+    // `_lastFlameBaseY` / `_lastFlameAmp`; they were dead state
+    // (`_onAnimationTick` reads `shouldRegen` straight off
+    // `_flameEngine.step(...)` and never consults card mirrors — the
+    // engine owns them). The engine's `_currentFlameAmp` / `_tipPhases`
+    // deliberately survive disconnect so re-attach resumes the dance
+    // without a visible jump.
     _invalidateFlameCache() {
         this._flameEls = null;
-        // The engine owns `_lastFlameBaseY`, `_lastFlameAmp`, `_lastRegenTs`
-        // — but mirror the radiator-card's pre-extraction API by holding
-        // them here too so structural tests can pin the whitelist by name.
-        this._lastFlameBaseY = null;
-        this._lastFlameAmp = null;
         this._flameEngine.invalidate();
     }
 
@@ -219,7 +219,11 @@ class QsRadiatorCard extends QsRingDurationCardBase {
             : 0;
         const flameBaseY = CENTER_CY + CLIP_R - (FLAME_BASE_MIN_PCT + progressRatio * (FLAME_BASE_MAX_PCT - FLAME_BASE_MIN_PCT)) * 2 * CLIP_R;
         this._fireRunning = running;
-        this._flameBaseY = Number.isNaN(flameBaseY) ? null : flameBaseY;
+        // QS-199 review-fix #03 N3 — `Number.isFinite` (not `!isNaN`) so an
+        // Infinity baseY can't reach `getInitialPaths(...)` →
+        // `baseY.toFixed(2)` → `"Infinity"` in the SVG `d` (consistent with
+        // the engine's S11 regen gate). Latent today (inputs are finite).
+        this._flameBaseY = Number.isFinite(flameBaseY) ? flameBaseY : null;
         this._flameColors = running ? FLAME_FILLS : FLAME_GREY_FILLS;
 
         // Honor first-connect prime: skip the 1.5s boot lerp.

@@ -938,6 +938,43 @@ async def test_atomic_write_cleans_up_temp_on_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_remove_orphan_temps_recursive():
+    """QS-199 review-fix #03 N2 — a recursive sweep reclaims orphan
+    `*.qstmp` files left by a hard kill (SIGKILL/OOM between write and
+    os.replace), which the unique-temp-name scheme would otherwise leak
+    forever. Real resource files are untouched.
+    """
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "shared"))
+        open(os.path.join(tmp, "qs-card.js"), "w").close()
+        open(os.path.join(tmp, "qs-card.js.4321.7.qstmp"), "w").close()
+        open(os.path.join(tmp, "shared", "qs-card-base.js"), "w").close()
+        open(os.path.join(tmp, "shared", "qs-card-base.js.4321.8.qstmp"), "w").close()
+
+        await dash._async_remove_orphan_temps(tmp)
+
+        # Real files survive.
+        assert os.path.exists(os.path.join(tmp, "qs-card.js"))
+        assert os.path.exists(os.path.join(tmp, "shared", "qs-card-base.js"))
+        # Orphan temps (top-level + nested) are gone.
+        assert not os.path.exists(os.path.join(tmp, "qs-card.js.4321.7.qstmp"))
+        assert not os.path.exists(os.path.join(tmp, "shared", "qs-card-base.js.4321.8.qstmp"))
+
+
+@pytest.mark.asyncio
+async def test_remove_orphan_temps_missing_root_is_noop():
+    """QS-199 review-fix #03 N2 — sweeping a non-existent root is a no-op
+    (first-ever install: www/quiet_solar/ may not exist yet)."""
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Should not raise.
+        await dash._async_remove_orphan_temps(os.path.join(tmp, "does-not-exist"))
+
+
+@pytest.mark.asyncio
 async def test_copy_resources_rewrites_bare_side_effect_import():
     """QS-199 review-fix #02 N1 — a bare side-effect import
     `import './shared/x.js';` (no `from`, no `import(...)`) is also

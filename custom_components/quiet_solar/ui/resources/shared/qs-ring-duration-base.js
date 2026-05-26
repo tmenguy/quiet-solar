@@ -110,10 +110,20 @@ export class QsRingDurationCardBase extends QsCardBase {
       derived from the card's configured `max_default_hours` (passed in as
       `maxHours`) instead of a hard-coded 0..12, so targets above 12h are
       selectable from the drag ring (the gauge already renders the larger
-      range). Falls back to 12 for a missing / non-positive value.
+      range).
+
+      QS-199 review-fix #03 M1 + N1 — the cap MUST be finite-guarded AND
+      clamped: `Number("1e999") === Infinity` (and `Number("Infinity") > 0`
+      is true), so the old `Number(maxHours) > 0 ? … : 12` made
+      `for (i=0; i<=Infinity; i+=0.5)` hang the tab synchronously inside
+      `_render()`. `Number.isFinite` rejects ±Infinity/NaN; `Math.min(n,
+      168)` (one week of hours) bounds a huge-but-finite config so the
+      per-render array build + the O(n) snap-reduce stay cheap. Falls back
+      to 12 for a missing / non-finite / non-positive value.
     */
     _allowedHalfHours(maxHours) {
-        const cap = Number(maxHours) > 0 ? Number(maxHours) : 12;
+        const n = Number(maxHours);
+        const cap = Number.isFinite(n) && n > 0 ? Math.min(n, 168) : 12;
         const out = [];
         for (let i = 0; i <= cap; i += 0.5) out.push(i);
         return out;

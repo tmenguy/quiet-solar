@@ -452,9 +452,14 @@ class QsPoolCard extends QsRingDurationCardBase {
                 entityId: e.default_on_duration,
                 getHoursRun: () => hoursRun,
                 colors,
-                onCommit: async () => {
-                    // Pool's commit pipeline also sets the bistate mode to default
-                    // so the drag ALWAYS lands the device in default-mode operation.
+                // QS-199 review-fix #03 S1/S2 — select default mode FIRST
+                // (awaited), THEN write the duration. Pre-migration the pool
+                // did `_select(pool_mode, default)` before `_setNumber(...)`;
+                // writing the duration while not yet in default mode can be
+                // rejected/clamped backend-side. `onBeforeCommit` runs
+                // (awaited) before the `_setNumber` write inside the base
+                // wire-helper.
+                onBeforeCommit: async () => {
                     if (e.pool_mode) {
                         try { await this._select(e.pool_mode, 'bistate_mode_default'); } catch (_) { /* ignore */ }
                     }

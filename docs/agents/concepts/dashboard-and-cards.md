@@ -140,9 +140,10 @@ Five shared modules:
   flows through the `palette` argument
   (`{primary, gradStart, gradEnd, animStart, animEnd}`); the shared
   CSS contains no card-branded literals (only neutral
-  `rgba`/`var(--*)` and the three semantic-anchor colours —
+  `rgba`/`var(--*)` and the four semantic-anchor colours —
   power-blue `#2196F3`, solar-green `#4CAF50`, override-orange
-  `#FF9800`).
+  `#FF9800`, and pill-on green `#2ecc71`/`#2ecc71aa` — pinned by
+  `test_shared_css_has_no_branded_colour_literals`).
 - **`shared/qs-card-base.js`** — exports `class QsCardBase extends
   HTMLElement` plus the geometry pure functions (`deg2rad`,
   `rad2deg`, `polar`, `arcPath`, `pctToDeg`). The class owns

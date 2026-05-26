@@ -440,6 +440,30 @@ async def _async_update_resource(
 # Monotonic per-process counter feeding the unique atomic-write temp name (S1).
 _QSTMP_COUNTER = itertools.count()
 
+# Suffix of the atomic-write temp files (S1) — also the orphan-sweep glob (N2).
+_QSTMP_SUFFIX = ".qstmp"
+
+
+async def _async_remove_orphan_temps(root: str) -> None:
+    """Reclaim orphan ``*.qstmp`` temp files under ``root`` (recursively).
+
+    QS-199 review-fix #03 N2 — with the unique per-write temp name (S1) a
+    hard kill (SIGKILL / OOM / power loss) between the write and the
+    ``os.replace`` leaves a uniquely-named orphan that the in-process
+    ``OSError`` cleanup can't reach, so they accumulate across crashes.
+    A one-time sweep at the top of ``async_update_resources`` reclaims
+    them. Best-effort: individual removal failures are suppressed.
+    """
+    if not await aiofiles.os.path.isdir(root):
+        return
+    for entry in await aiofiles.os.listdir(root):
+        path = os.path.join(root, entry)
+        if await aiofiles.os.path.isdir(path):
+            await _async_remove_orphan_temps(path)
+        elif entry.endswith(_QSTMP_SUFFIX):
+            with contextlib.suppress(OSError):
+                await aiofiles.os.remove(path)
+
 
 async def _async_atomic_write_bytes(dst: str, data: bytes) -> None:
     """Write `data` to `dst` atomically (temp file + os.replace).
@@ -460,7 +484,7 @@ async def _async_atomic_write_bytes(dst: str, data: bytes) -> None:
     race) the partial temp is unlinked so orphans don't accumulate; `dst`
     keeps its old content (atomicity holds).
     """
-    tmp = f"{dst}.{os.getpid()}.{next(_QSTMP_COUNTER)}.qstmp"
+    tmp = f"{dst}.{os.getpid()}.{next(_QSTMP_COUNTER)}{_QSTMP_SUFFIX}"
     try:
         async with aiofiles.open(tmp, "wb") as f_out:
             await f_out.write(data)
@@ -556,6 +580,10 @@ async def async_update_resources(hass: HomeAssistant) -> None:
     """
     resources_dst = os.path.join(hass.config.path(), "www", DOMAIN)
     await aiofiles.os.makedirs(resources_dst, exist_ok=True)
+
+    # QS-199 review-fix #03 N2 — reclaim any orphan *.qstmp temp files left
+    # behind by a prior hard kill before copying fresh resources.
+    await _async_remove_orphan_temps(resources_dst)
 
     # QS-199 review-fix #02 S1 — check the SOURCE tree up front instead of
     # catching `FileNotFoundError` around the whole copy. A per-file
