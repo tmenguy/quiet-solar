@@ -209,7 +209,7 @@ class QsRadiatorCard extends QsRingDurationCardBase {
             maxHours = this._clampMaxHours(cfg.max_default_hours);
             displayTargetHours = defaultDuration;
         } else {
-            maxHours = targetHours > 0 ? targetHours : this._clampMaxHours(cfg.max_default_hours);
+            maxHours = this._clampMaxHours(targetHours > 0 ? targetHours : cfg.max_default_hours);
             displayTargetHours = targetHours;
         }
 

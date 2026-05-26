@@ -276,12 +276,17 @@ edge-case cycle:
   (startup-restore and the Generate-Dashboard button) can't interleave
   their temp-file writes. The unique per-write temp name
   (`<pid>.<counter>.qstmp`) + the orphan sweep stay as defense-in-depth.
-- **Drag-range vs gauge** — each card derives `maxHours` from
-  `cfg.max_default_hours` through the single `_clampMaxHours` helper
-  (`Number.isFinite` guard + `Math.min(n, 168)`), and BOTH the gauge
-  math and `_allowedHalfHours(maxHours)` consume that one clamped value,
-  so the draggable snap range can never desync from the rendered scale
-  (and a non-finite config can't hang the render loop).
+- **Drag-range vs gauge** — each card derives `maxHours` through the
+  single `_clampMaxHours` helper on EVERY branch (default
+  `max_default_hours` AND non-default runtime `targetHours`), and BOTH
+  the gauge math and `_allowedHalfHours(maxHours)` consume that one
+  value. `_clampMaxHours` rejects non-finite/non-positive input
+  (`MAX_HOURS_DEFAULT` = 12), grid-aligns to the 0.5 snap step
+  (`SNAP_STEP_HOURS`), floors at one step, and ceilings at
+  `MAX_HOURS_CEILING` = 168. Because the gauge's 100% is itself a
+  0.5-multiple, `gauge max == max(snap_list)` holds BY CONSTRUCTION —
+  no top-of-ring dead zone for fractional configs, no huge-array tail,
+  no Infinity hang. (Closed across rounds S8 → M1 → ES1 → #05 S1.)
 
 ### Tracking storage (survives restart)
 

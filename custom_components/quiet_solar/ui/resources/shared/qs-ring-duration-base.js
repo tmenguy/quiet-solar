@@ -20,6 +20,14 @@
 
 import { QsCardBase, arcPath, polar } from './qs-card-base.js';
 
+// QS-199 review-fix #05 N1 — single source for the drag-range constants
+// shared by `_clampMaxHours` + `_allowedHalfHours`, so the gauge max and
+// the snap-list max stay equal by construction and the `12` default can't
+// drift between the two helpers.
+const MAX_HOURS_DEFAULT = 12;   // fallback for missing / non-finite / non-positive config
+const SNAP_STEP_HOURS = 0.5;    // draggable snap granularity (gauge max grid-aligns to this)
+const MAX_HOURS_CEILING = 168;  // one week — bounds the gauge scale AND the snap-list loop
+
 export class QsRingDurationCardBase extends QsCardBase {
     /*
       _buildRingHTML — returns an HTML string for the outer .ring SVG
@@ -105,42 +113,54 @@ export class QsRingDurationCardBase extends QsCardBase {
     }
 
     /*
-      _clampMaxHours(raw) — the SINGLE source-of-truth clamp for a card's
-      `max_default_hours` config. QS-199 review-fix #04 ES1 (root-cause):
-      every duration card derives its `maxHours` through this helper, so
-      the SAME bounded value feeds BOTH the gauge math (`hoursToPct` /
-      arcs / handle position) AND the snap list (`_allowedHalfHours`).
-      Clamping in only one of those two places (round-3 M1 put the
-      `Math.min(n, 168)` solely in `_allowedHalfHours`) made the snap
-      range cap at 168 while the gauge still drew the full 0..200 scale —
-      a dead zone at the top of the ring.
+      _clampMaxHours(raw) — the SINGLE source-of-truth normalizer for a
+      card's draggable-range maximum. QS-199 review-fix #04 ES1 + #05 S1
+      (root-cause): every duration card derives `maxHours` through this
+      helper on EVERY branch (default `max_default_hours` AND non-default
+      runtime `targetHours`), so the SAME value feeds BOTH the gauge math
+      (`hoursToPct` / arcs / handle) AND the snap list
+      (`_allowedHalfHours`). They are then equal BY CONSTRUCTION.
 
-      `Number.isFinite` rejects ±Infinity / NaN (`Number("1e999") ===
-      Infinity` — the M1 hang); `Math.min(n, 168)` (one week of hours)
-      bounds a huge-but-finite config; falls back to 12 for a missing /
-      non-finite / non-positive value.
+      The historical edge cases this closes (one class, four rounds):
+        - S8/M1: a non-finite config (`Number("1e999") === Infinity`)
+          hung the snap loop → `Number.isFinite` guard.
+        - ES1: clamping in only ONE place (gauge vs snap) desynced them
+          for `>168` → bound BOTH via this single source.
+        - #05 S1: a fractional cap (13.3) left the snap list ending at
+          13.0 while the gauge drew 13.3 → a ~0.5h top-of-ring dead zone.
+          Grid-aligning to the 0.5 snap step makes the gauge's 100% land
+          EXACTLY on a draggable value.
+
+      Normalization (in order): reject non-finite / non-positive → default
+      (`MAX_HOURS_DEFAULT`); grid-align to the `SNAP_STEP_HOURS` (0.5) grid
+      via `Math.round`; floor at one step (so the list is never just
+      `[0]`); ceiling at `MAX_HOURS_CEILING` (168 = one week — bounds the
+      gauge scale AND the snap-list loop on every branch). 168 is itself a
+      0.5-multiple, so the final clamp stays grid-aligned.
     */
     _clampMaxHours(raw) {
         const n = Number(raw);
-        return Number.isFinite(n) && n > 0 ? Math.min(n, 168) : 12;
+        if (!Number.isFinite(n) || n <= 0) return MAX_HOURS_DEFAULT;
+        const aligned = Math.round(n / SNAP_STEP_HOURS) * SNAP_STEP_HOURS;
+        return Math.min(Math.max(aligned, SNAP_STEP_HOURS), MAX_HOURS_CEILING);
     }
 
     /*
-      _allowedHalfHours(maxHours) — the drag-ring snap points: 0 .. maxHours
-      in 0.5-hour steps. QS-199 review-fix #02 S8 — the snap range is
-      derived from the card's configured (and already source-clamped via
-      `_clampMaxHours`) `maxHours`, so targets above 12h are selectable.
+      _allowedHalfHours(maxHours) — the drag-ring snap points: 0 ..
+      maxHours in `SNAP_STEP_HOURS` (0.5) steps. Callers pass the
+      `_clampMaxHours` output (grid-aligned + bounded), so the last
+      element equals `maxHours` exactly → snap-max == gauge-max.
 
-      QS-199 review-fix #04 ES1 — this helper does NOT apply its own
-      `Math.min` clamp anymore (that's what desynced it from the gauge).
-      It keeps only the `Number.isFinite` Infinity defense so a future
-      un-clamped caller still can't hang the loop.
+      QS-199 review-fix #04 ES1 — no own `Math.min` clamp (that desynced
+      it from the gauge); keeps only the `Number.isFinite` Infinity
+      defense (+ the shared `MAX_HOURS_DEFAULT` fallback, #05 N1) so a
+      future un-clamped caller still can't hang the loop.
     */
     _allowedHalfHours(maxHours) {
         const n = Number(maxHours);
-        const cap = Number.isFinite(n) && n > 0 ? n : 12;
+        const cap = Number.isFinite(n) && n > 0 ? n : MAX_HOURS_DEFAULT;
         const out = [];
-        for (let i = 0; i <= cap; i += 0.5) out.push(i);
+        for (let i = 0; i <= cap; i += SNAP_STEP_HOURS) out.push(i);
         return out;
     }
 

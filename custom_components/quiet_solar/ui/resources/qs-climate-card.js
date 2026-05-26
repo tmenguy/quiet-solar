@@ -700,7 +700,7 @@ class QsClimateCard extends QsRingDurationCardBase {
         // `hoursToPct` divide by zero and propagate NaN into the SVG
         // arc path (`A 130 130 0 0 1 NaN NaN`). Clamp to a sensible
         // positive fallback so the ring always renders.
-        maxHours = targetHours > 0 ? targetHours : this._clampMaxHours(cfg.max_default_hours);
+        maxHours = this._clampMaxHours(targetHours > 0 ? targetHours : cfg.max_default_hours);
         displayTargetHours = targetHours;
       }
 

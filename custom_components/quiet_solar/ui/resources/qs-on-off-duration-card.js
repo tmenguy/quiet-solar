@@ -73,7 +73,7 @@ class QsOnOffDurationCard extends QsRingDurationCardBase {
             displayTargetHours = defaultDuration;
         } else {
             // BH: zero-clamp against div-by-zero in hoursToPct.
-            maxHours = targetHours > 0 ? targetHours : this._clampMaxHours(cfg.max_default_hours);
+            maxHours = this._clampMaxHours(targetHours > 0 ? targetHours : cfg.max_default_hours);
             displayTargetHours = targetHours;
         }
 

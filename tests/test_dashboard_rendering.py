@@ -7551,16 +7551,21 @@ def test_flame_engine_keeps_raf_until_idle():
 
 
 def test_max_hours_clamp_helper_bounds_at_source():
-    """QS-199 review-fix #03 M1/N1 + #04 ES1 (root-cause) — the clamp lives
-    at the SOURCE (`_clampMaxHours`) so the gauge and the snap list consume
-    the SAME bounded value and can never diverge.
+    """QS-199 review-fix #03 M1/N1 + #04 ES1 + #05 S1/N1 (root-cause) — the
+    clamp lives at the SOURCE (`_clampMaxHours`) so the gauge and the snap
+    list consume the SAME normalized value and can never diverge.
 
-    `_clampMaxHours` must guard with `Number.isFinite` (prevents the
-    Infinity hang: `Number("1e999") === Infinity`) AND clamp finite values
-    to a sane upper bound (`Math.min(n, 168)`). `_allowedHalfHours` keeps
-    only the `Number.isFinite` defense (no second `Math.min` — the
-    snap-only clamp is what made the range desync from the gauge in #04
-    ES1).
+    `_clampMaxHours` must:
+      - guard with `Number.isFinite` (prevents the Infinity hang:
+        `Number("1e999") === Infinity`),
+      - grid-align to the 0.5 snap step (`Math.round(...)`) so the gauge's
+        100% lands EXACTLY on a draggable snap value (#05 S1 — no
+        top-of-ring dead zone for fractional configs),
+      - bound to the shared ceiling (168).
+    `_allowedHalfHours` keeps only the `Number.isFinite` defense (no second
+    `Math.min` — the snap-only clamp is what desynced it from the gauge in
+    #04 ES1; the source value is already grid-aligned + bounded). The `12`
+    default (#05 N1) is a single shared module constant.
     """
     import re
 
@@ -7572,8 +7577,9 @@ def test_max_hours_clamp_helper_bounds_at_source():
     assert clamp is not None, "ES1: `_clampMaxHours` source-clamp helper must exist"
     cbody = clamp.group("body")
     assert "Number.isFinite" in cbody, "ES1: `_clampMaxHours` must guard with Number.isFinite"
-    assert "Math.min(" in cbody and "168" in cbody, (
-        "ES1: `_clampMaxHours` must clamp finite values to a sane bound (Math.min(n, 168))"
+    assert "Math.round(" in cbody, (
+        "#05 S1: `_clampMaxHours` must grid-align (Math.round to the 0.5 step) "
+        "so the gauge max lands on a draggable snap value."
     )
 
     snap = re.search(r"_allowedHalfHours\s*\([^)]*\)\s*\{(?P<body>.*?)\n    \}", src, re.DOTALL)
@@ -7586,6 +7592,67 @@ def test_max_hours_clamp_helper_bounds_at_source():
         "can't diverge from the (also-clamped) gauge."
     )
 
+    # #05 N1 — the `12` default is a single shared constant referenced by
+    # both helpers, not two independent magic literals.
+    assert re.search(r"const\s+MAX_HOURS_DEFAULT\s*=\s*12\b", src), (
+        "#05 N1: define the `12` default once as `MAX_HOURS_DEFAULT`."
+    )
+    assert "MAX_HOURS_DEFAULT" in cbody and "MAX_HOURS_DEFAULT" in sbody, (
+        "#05 N1: both `_clampMaxHours` and `_allowedHalfHours` must reference the shared `MAX_HOURS_DEFAULT` constant."
+    )
+
+
+def test_gauge_max_equals_snap_max_by_construction():
+    """QS-199 review-fix #05 S1 — `gauge max == max(snap_list)` BY
+    CONSTRUCTION for the representative configs called out in the plan
+    (`13.3`, `167.8`, `0.3`, `1e6`, `Infinity`, `12`, `24`, `168`), plus
+    non-positive / non-finite fallbacks. The gauge's 100% is `maxHours =
+    _clampMaxHours(raw)`; the max draggable target is the last element of
+    `_allowedHalfHours(maxHours)`. They must be EQUAL, the snap list must
+    never be just `[0]`, and the gauge max must be bounded (≤168).
+
+    Behavioral check via node (the helpers are pure — no `this`). Skipped
+    if node isn't installed; the structural pins above guarantee the shape
+    regardless.
+    """
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available — structural pins cover the shape")
+
+    module_path = COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-ring-duration-base.js"
+    harness = f"""
+        globalThis.HTMLElement = class {{}};
+        const mod = await import({json.dumps(module_path.as_uri())});
+        const proto = mod.QsRingDurationCardBase.prototype;
+        const cases = [13.3, 167.8, 0.3, 1e6, Infinity, 12, 24, 168, "1e999", 0, -5, "abc"];
+        const out = [];
+        for (const v of cases) {{
+            const gaugeMax = proto._clampMaxHours(v);
+            const list = proto._allowedHalfHours(gaugeMax);
+            out.push({{ v: String(v), gaugeMax, snapMax: list[list.length - 1], len: list.length }});
+        }}
+        console.log(JSON.stringify(out));
+    """
+    proc = subprocess.run(
+        [node, "--input-type=module", "-e", harness],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert proc.returncode == 0, f"node harness failed: {proc.stderr}"
+    results = json.loads(proc.stdout.strip().splitlines()[-1])
+    for r in results:
+        assert r["gaugeMax"] == r["snapMax"], (
+            f"#05 S1: gauge/snap divergence for max_default_hours={r['v']}: "
+            f"gauge={r['gaugeMax']} snapMax={r['snapMax']}"
+        )
+        assert r["len"] >= 2, f"#05 S1: snap list degenerate ([0]) for {r['v']}"
+        assert r["gaugeMax"] <= 168, f"#05 S1: gauge max unbounded for {r['v']}"
+
 
 @pytest.mark.parametrize(
     "card_filename",
@@ -7597,12 +7664,14 @@ def test_max_hours_clamp_helper_bounds_at_source():
     ],
 )
 def test_card_derives_max_hours_via_clamp_helper(card_filename):
-    """QS-199 review-fix #04 ES1 — each duration card derives `maxHours`
-    from `cfg.max_default_hours` via the shared `this._clampMaxHours(...)`
-    so the SAME clamped value feeds both the gauge math (hoursToPct /
-    arcs / handle) and the snap list (`_allowedHalfHours(maxHours)`). The
-    stale bare `Number(cfg.max_default_hours) || 12` (gauge-side, unclamped)
-    must be gone.
+    """QS-199 review-fix #04 ES1 + #05 S1 — each duration card derives
+    `maxHours` via the shared `this._clampMaxHours(...)` on BOTH the
+    default-mode AND the non-default `targetHours` branch, so the SAME
+    normalized value feeds the gauge math (hoursToPct / arcs / handle) and
+    the snap list (`_allowedHalfHours(maxHours)`). The stale bare
+    `Number(cfg.max_default_hours) || 12` (gauge-side, unclamped) must be
+    gone, and the raw runtime `targetHours` sensor must NOT feed `maxHours`
+    unclamped (#05 S1 face 2: fractional / pathological sensor values).
     """
     import re
 
@@ -7617,6 +7686,14 @@ def test_card_derives_max_hours_via_clamp_helper(card_filename):
     assert "this._allowedHalfHours(maxHours)" in src, (
         f"{card_filename}: snap list must be `_allowedHalfHours(maxHours)` so it "
         f"shares the clamped source value with the gauge (ES1)."
+    )
+    # #05 S1 — the non-default branch must NOT assign the raw `targetHours`
+    # straight to `maxHours`; it must route through `_clampMaxHours`
+    # (grid-align + bound) so a fractional/huge runtime sensor can't
+    # desync the snap range or balloon the gauge scale.
+    assert not re.search(r"maxHours\s*=\s*targetHours\s*>\s*0\s*\?\s*targetHours\s*:", src), (
+        f"{card_filename}: the non-default branch assigns raw `targetHours` to "
+        f"`maxHours` unclamped — wrap it in `this._clampMaxHours(...)` (#05 S1)."
     )
 
 

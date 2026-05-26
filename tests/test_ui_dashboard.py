@@ -1987,15 +1987,24 @@ async def test_async_update_resources_generic_exception():
 
 @pytest.mark.asyncio
 async def test_async_update_resources_serialized_by_lock():
-    """QS-199 review-fix #04 ES2 — `async_update_resources` is serialized
-    by a module-level `asyncio.Lock`, so two overlapping invocations
-    (startup-restore racing the Generate-Dashboard button, or two rapid
-    button presses) never run the sweep+copy concurrently. This kills the
-    whole concurrency-race class (round-2 S1 temp race + round-3/#04 ES2
-    sweep race) at the root rather than patching each instance.
+    """QS-199 review-fix #04 ES2 + #05 N2 — `async_update_resources` is
+    serialized by a module-level `asyncio.Lock`, so two overlapping
+    invocations (startup-restore racing the Generate-Dashboard button, or
+    two rapid button presses) never run the sweep+copy concurrently. This
+    kills the whole concurrency-race class (round-2 S1 temp race +
+    round-3/#04 ES2 sweep race) at the root.
+
+    #05 N2 — the SWEEP (not just the copy) participates in the
+    serialization assertion: a fake `_async_remove_orphan_temps` also
+    bumps the shared `active` counter, so we prove the lock spans the
+    whole sweep→copy→register critical section (every prior regression
+    was "the fix moved the bug just outside what the test covered"). The
+    test also asserts the lock is released after each invocation, so a
+    future leaked lock fails fast here instead of hanging.
     """
     import asyncio
 
+    from custom_components.quiet_solar.ui import dashboard as dash
 
     mock_hass_a, _ = create_mock_hass()
     mock_hass_b, _ = create_mock_hass()
@@ -2003,7 +2012,7 @@ async def test_async_update_resources_serialized_by_lock():
     active = 0
     max_active = 0
 
-    async def fake_copy(*_args, **_kwargs):
+    async def _observe_section(*_args, **_kwargs):
         nonlocal active, max_active
         active += 1
         max_active = max(max_active, active)
@@ -2014,7 +2023,11 @@ async def test_async_update_resources_serialized_by_lock():
 
     with (
         patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock),
-        patch("custom_components.quiet_solar.ui.dashboard._async_remove_orphan_temps", new_callable=AsyncMock),
+        # #05 N2 — the sweep is part of the asserted critical section.
+        patch(
+            "custom_components.quiet_solar.ui.dashboard._async_remove_orphan_temps",
+            side_effect=_observe_section,
+        ),
         patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler_from_hass", return_value=None),
         patch("custom_components.quiet_solar.ui.dashboard._generate_qs_tag", return_value="T"),
         patch(
@@ -2024,7 +2037,7 @@ async def test_async_update_resources_serialized_by_lock():
         ),
         patch(
             "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
-            side_effect=fake_copy,
+            side_effect=_observe_section,
         ),
     ):
         await asyncio.gather(
@@ -2033,6 +2046,11 @@ async def test_async_update_resources_serialized_by_lock():
         )
 
     assert max_active == 1, (
-        f"ES2: async_update_resources must be serialized by the lock — "
-        f"observed {max_active} concurrent copy invocations"
+        f"ES2/N2: async_update_resources (sweep + copy) must be serialized "
+        f"by the lock — observed {max_active} concurrent critical sections"
+    )
+    # #05 N2 — the lock is released after both invocations complete, so a
+    # leaked lock can't silently hang a later test.
+    assert not dash._RESOURCE_UPDATE_LOCK.locked(), (
+        "N2: _RESOURCE_UPDATE_LOCK must be released after async_update_resources"
     )
