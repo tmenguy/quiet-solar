@@ -547,6 +547,121 @@ overlay sidesteps the issue entirely — the patch is a `<circle>`
 by construction, so the user sees a circle on screen. No lens
 shape possible.
 
+### QS-232 — Car-card electron-soup animation
+
+QS-232 transplants the QS-200 / QS-211 / QS-214 boiler architecture
+onto `qs-car-card.js`. The car's SOC reads as a translucent
+"electron soup" inside the ring's clip circle: one slowly-moving
+sine layer, lightning-blue sparkle particles popping inside the
+soup ("electrons popping in the water"), and lightning bolts
+flashing from the top of the clip circle to the soup surface when
+the car is charging. The animation tracks the existing already-
+mode-normalised `soc` variable (0–100), and the wave-level
+mapping `0.2 + ratio × 0.6` matches the boiler envelope so the
+visual character is consistent across the two water-style cards.
+
+**Single-layer wave with dual-opacity cross-fade.** The issue
+explicitly asks "do not superpose 3 layer of sin". The clipped
+`<g clip-path="url(#${electronClipId})">` group contains ONE
+`_generateWavePath(...)`-derived `d` string applied to TWO stacked
+`<path>` siblings (`electron_wave_idle` and `electron_wave_charge`)
+that share geometry but differ in `fill` (`IDLE_SOUP_COLOR`
+`hsla(140, 80%, 50%, 0.12)` vs `CHARGE_SOUP_COLOR`
+`hsla(180, 90%, 55%, 0.25)`) and `opacity`. The cross-fade is
+binary: `_currentColorMix` lerps toward `_charging ? 1 : 0` with
+`LERP_RATE = 2` (≈ 0.5 s time constant). Idle opacity =
+`1 - colorMix`; charge opacity = `colorMix`. This is the same
+dual-opacity idiom as the boiler's cool/boil cross-fade, adapted
+to a single layer (boiler renders 6 paths; car renders 2).
+
+**Sparkle palette switch + power-scaling.** Sparkles are always
+visible. Idle: green (`SPARKLE_IDLE_COLOR` `hsla(140, 90%, 70%, 0.9)`),
+very few (max 4), very small (radius 0.8–1.6 px), fixed spawn
+rate `SPARKLE_IDLE_RATE_HZ = 0.6`. Charging: lightning blue
+(`SPARKLE_CHARGE_COLOR` `#00E5FF`), with density, spawn-rate and
+radius all scaling LINEARLY with charge power on the range
+`[SPARKLE_POWER_MIN_W, SPARKLE_POWER_MAX_W] = [1500, 22000]` W —
+12–28 max concurrent, 3–10 Hz spawn rate, 1.2–3.5 px radius. Below
+1500 W (but still `_charging`) the values clamp to the
+1500 W MIN endpoint per user intent (1500 W = MIN charging
+density, NOT a ramp from 0 W). The idle→charging boundary at 50 W
+is therefore a deliberate visible step in density and colour. Each
+sparkle's `fill` attribute is decided ONCE at spawn from the
+then-current `_charging` value and never re-assigned in the
+advance loop — when `_charging` flips, new sparkles spawn with
+the new colour while in-flight sparkles complete their natural
+~0.45 s fade (a brief mixed-palette tail).
+
+**Lightning bolts.** Only spawn when `charging && !degraded`. Each
+bolt is a 3-segment jagged `<path d="M start L mid L end">`
+(NOT polyline — `<path>` is consistent with the boiler precedent
+and lets tests pin the `d=` attribute), starting near the top of
+the clip circle, kinking laterally at the midpoint, and ending on
+the water surface within the chord. Life is
+`LIGHTNING_LIFE_S = 0.25` s with a three-phase opacity curve
+(fade-in `[0, 0.10]`, hold `[0.10, 0.70]`, fade-out `[0.70, 1.0]`).
+Spawn interval is randomised on
+`[LIGHTNING_SPAWN_MIN_S, LIGHTNING_SPAWN_MAX_S] = [1.5, 3.0]` s, capped at
+`MAX_CONCURRENT_LIGHTNING = 3` simultaneous bolts. The advance /
+retire loop sits OUTSIDE the spawn gate so in-flight bolts
+complete their fade naturally when charging stops. Glow is provided
+by a single `<filter id="${lightningFilterId}">` with
+`<feGaussianBlur stdDeviation="${LIGHTNING_GLOW_STDDEV}">` plus
+`mix-blend-mode: screen` on the layer `<g>`.
+
+**feTurbulence grain on wave fill.** The fuzzy granularity comes
+from a single `<filter id="${grainFilterId}">` declaring
+`<feTurbulence type="fractalNoise" baseFrequency="0.9"
+numOctaves="2" …>`, composited against `SourceGraphic` via
+`<feComposite operator="in">` so the grain is masked to the
+wave's filled shape (water region only). Both wave `<path>`
+elements carry `filter="url(#${grainFilterId})"`. There is NO
+separate overlay `<rect>` — the grain naturally ends at the wave
+surface and is automatically clipped to the soup boundary.
+
+**Degraded state CSS filter.** When `degraded === true` (computed
+as `isDisconnected || isFaulted || isStale` — `isOffGrid` is
+explicitly excluded; the card-level pinkish `.off-grid` CSS class
+already covers it), the clipped `<g>` carries the inline style
+`filter: saturate(0.3) brightness(0.7);`. This is a runtime CSS
+filter swap, NOT a third entry in the `_currentColorMix` lerp —
+the lerp stays binary idle↔charge. Sparkles still spawn at idle
+rate with idle-green colour (the CSS filter desaturates them);
+lightning is suppressed entirely (`if (charging && !degraded)`
+spawn gate), and in-flight bolts complete their natural fade.
+
+**Continuous-RAF model.** The car card was migrated out of the
+`_charging`-gated `test_card_raf_idle_gated` parametrize list
+(previously gated on `charging`) and into the
+`test_card_caps_raf_dt_against_hidden_tab` list (joining the
+pool and water-boiler cards). `connectedCallback()` now calls
+`this._startAnimation()` directly. The dt cap
+`LERP_DT_CEIL = 0.1` clamps the first frame after a hidden-tab
+return so phase advance and sparkle / lightning life increments
+don't burst. The existing dashed-arc animation
+(`<path id="charge_anim">`) is preserved verbatim, and
+`showAnimation` remains its render-time switch.
+
+**D17 — three carve-cover overlays.** Unlike the
+boiler / radiator / climate cards which carry only one
+`override_reset` button cover (QS-217), the car card has THREE
+buttons sitting inside the clip disc: the `sun-btn`
+(`<div id="sun_btn">`, Solar priority, bottom-center stack), the
+`rabbit-btn` (`<div id="rabbit_btn">`, Force now, left column of
+the mini-grid), and the `time-btn` (`<div id="time_btn">`,
+Finish time, right column of the mini-grid). Each gets a
+QS-217-style `<circle id="…_cover" fill="var(--card-background-color)"
+pointer-events="none" />` drawn AFTER the closing `</g>` of the
+clipped animation group and BEFORE the `<path d="${bgPath}"`
+outer-ring stroke, gated on its corresponding render predicate —
+`swPriority` for `sun_btn_cover`, `e.force_now` for
+`rabbit_btn_cover`, `(tNext && e.schedule)` for `time_btn_cover`.
+The CY/CX integer values are user-tunable; tests pin the constant
+NAMES only (mirrors the QS-217 R-tuning iteration). The
+`target_handle` circle (already on the ring stroke at radius
+`ringCirc = 130`) does NOT need a carve — it sits outside the
+clip disc by construction.
+
 ## Hardened JS-card patterns (QS-194 review-fix #03)
 
 Every JS card in `ui/resources/` follows the same defensive
@@ -555,10 +670,14 @@ patterns after the cross-card audit:
 - **RAF idle-gating (M4).** Each card defines `_startAnimation()` and
   `_stopAnimation()` helpers. The render path starts/stops the
   animation conditionally — on `showAnimation` for the
-  duration-based cards, on `_charging` for the car card, and
-  continuously while connected for the pool wave (intrinsically
-  visible). `connectedCallback` no longer kicks off RAF
-  unconditionally; `disconnectedCallback` always stops it.
+  duration-based cards (`qs-on-off-duration-card`, `qs-radiator-card`,
+  `qs-climate-card`) — and continuously while connected for the
+  three water-style cards (`qs-pool-card`, `qs-water-boiler-card`,
+  and `qs-car-card` per QS-232) whose wave is intrinsically visible.
+  `disconnectedCallback` always stops the loop. The
+  `_charging`-gated form previously used by `qs-car-card.js` was
+  retired by QS-232 — see "QS-232 — Car-card electron-soup
+  animation" above.
 - **try/finally around service calls (M2).** Every
   `_isProcessing*` flag setter is wrapped in `try { await
   this._select(...) } finally { setTimeout(() => _isProcessing... =

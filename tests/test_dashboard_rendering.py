@@ -1812,12 +1812,19 @@ def test_card_mode_change_wrapped_in_try_finally(card_filename):
 # list) means a future reviewer scanning the parametrize entries can
 # read them as a clean enumeration without losing the removed-card
 # rationale.
+#
+# QS-232 (this commit): `qs-car-card.js` was previously in this list
+# with gate `charging`. The car card now mirrors the continuous-RAF
+# model adopted by the pool and (per QS-200) the water-boiler cards
+# — RAF runs continuously while connected because the electron-soup
+# wave is intrinsically visible (idle green or degraded grey).
+# Covered separately by the new
+# `test_car_card_continuous_raf_from_connected_callback` below.
 @pytest.mark.parametrize(
     "card_filename,gate",
     [
         ("qs-on-off-duration-card.js", "showAnimation"),
         ("qs-climate-card.js", "showAnimation"),
-        ("qs-car-card.js", "charging"),
         ("qs-radiator-card.js", "showAnimation"),
     ],
 )
@@ -1891,6 +1898,7 @@ def test_water_boiler_card_uses_safe_number_helper():
     [
         "qs-water-boiler-card.js",
         "qs-pool-card.js",
+        "qs-car-card.js",
     ],
 )
 def test_card_caps_raf_dt_against_hidden_tab(card_filename):
@@ -3582,6 +3590,1966 @@ def test_water_boiler_card_steam_filter_region_attributes():
     ), (
         "qs-water-boiler-card.js: steam filter must contain "
         "`<feGaussianBlur stdDeviation=\"${STEAM_BLUR_STDDEV}\" />`."
+    )
+
+
+# ============================================================================
+# === QS-232 car-card electron-soup tests ===
+# QS-232 transplants the QS-200 / QS-211 boiler architecture onto
+# `qs-car-card.js`: a single sine wave inside a circular clipPath
+# (idle vs charging cross-fade), lightning-blue "electron" sparkles
+# that pop randomly inside the soup, lightning bolts flashing from the
+# top of the clip circle to the soup surface only while charging, and
+# a feTurbulence grain filter applied to the wave fill for fuzzy
+# granularity. Degraded states (disconnected / faulted / stale)
+# desaturate the entire clipped group via a CSS filter and suppress
+# lightning. Three inside-disc buttons (sun / rabbit / time) get
+# QS-217-style `<circle>` cover overlays. RAF is continuous while
+# connected (no more `_charging`-gated start/stop).
+# ============================================================================
+
+
+def test_car_card_electron_soup_clip_group_and_two_waves():
+    """QS-232 AC-1: the clipped `<g clip-path="url(#${electronClipId})">`
+    group contains exactly two wave `<path>` elements sharing one `d`
+    placeholder, differing only in fill (IDLE_SOUP_COLOR vs
+    CHARGE_SOUP_COLOR) and opacity. Sparkle and lightning layers
+    follow the waves in source order. The grain filter is declared in
+    `<defs>` with `<feTurbulence type="fractalNoise" …>` and BOTH
+    waves carry `filter="url(#${grainFilterId})"`. The issue's
+    "do not superpose 3 layer of sin" is pinned negatively: NO
+    `wave1_*` / `wave2_*` ids.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Grain filter in <defs> declares feTurbulence type="fractalNoise".
+    assert re.search(
+        r'<filter\s+id="\$\{grainFilterId\}"', source
+    ), (
+        "qs-car-card.js: missing `<filter id=\"${grainFilterId}\">` "
+        "declaration in <defs>."
+    )
+    assert (
+        '<feTurbulence type="fractalNoise"' in source
+    ), (
+        "qs-car-card.js: grain filter must use "
+        "`<feTurbulence type=\"fractalNoise\" …>` (AC-1 #1)."
+    )
+
+    # The two wave paths share the clip group anchor.
+    clip_g_anchor = '<g clip-path="url(#${electronClipId})"'
+    assert clip_g_anchor in source, (
+        "qs-car-card.js: missing the electron-soup clipped group "
+        f"`{clip_g_anchor}…>` (AC-1)."
+    )
+
+    assert 'id="electron_wave_idle"' in source, (
+        "qs-car-card.js: missing `<path id=\"electron_wave_idle\">` "
+        "(AC-1 #2)."
+    )
+    assert 'id="electron_wave_charge"' in source, (
+        "qs-car-card.js: missing `<path id=\"electron_wave_charge\">` "
+        "(AC-1 #2)."
+    )
+
+    # Both waves share the same `d` placeholder (initialWavePath) and
+    # carry filter="url(#${grainFilterId})".
+    idle_wave_re = re.compile(
+        r'<path\s+id="electron_wave_idle"\s+'
+        r'd="\$\{initialWavePath\}"\s+'
+        r'fill="\$\{IDLE_SOUP_COLOR\}"\s+'
+        r'opacity="\$\{initialIdleOpacity\}"\s+'
+        r'filter="url\(#\$\{grainFilterId\}\)"',
+    )
+    assert idle_wave_re.search(source), (
+        "qs-car-card.js: `electron_wave_idle` <path> must carry "
+        "`d=\"${initialWavePath}\" fill=\"${IDLE_SOUP_COLOR}\" "
+        "opacity=\"${initialIdleOpacity}\" "
+        "filter=\"url(#${grainFilterId})\"` (AC-1 #2/#3)."
+    )
+    charge_wave_re = re.compile(
+        r'<path\s+id="electron_wave_charge"\s+'
+        r'd="\$\{initialWavePath\}"\s+'
+        r'fill="\$\{CHARGE_SOUP_COLOR\}"\s+'
+        r'opacity="\$\{initialChargeOpacity\}"\s+'
+        r'filter="url\(#\$\{grainFilterId\}\)"',
+    )
+    assert charge_wave_re.search(source), (
+        "qs-car-card.js: `electron_wave_charge` <path> must carry "
+        "`d=\"${initialWavePath}\" fill=\"${CHARGE_SOUP_COLOR}\" "
+        "opacity=\"${initialChargeOpacity}\" "
+        "filter=\"url(#${grainFilterId})\"` (AC-1 #2/#3)."
+    )
+
+    # Sparkle layer follows waves; lightning layer follows sparkles.
+    idle_idx = source.find('id="electron_wave_idle"')
+    charge_idx = source.find('id="electron_wave_charge"')
+    sparkle_idx = source.find('id="${sparkleLayerId}"')
+    lightning_idx = source.find('id="${lightningLayerId}"')
+    assert idle_idx != -1 and charge_idx != -1, (
+        "qs-car-card.js: missing wave anchors for source-order check."
+    )
+    assert sparkle_idx != -1, (
+        "qs-car-card.js: missing `<g id=\"${sparkleLayerId}\">` after "
+        "the waves (AC-1 #4)."
+    )
+    assert lightning_idx != -1, (
+        "qs-car-card.js: missing `<g id=\"${lightningLayerId}\" …>` "
+        "after the sparkle layer (AC-1 #5)."
+    )
+    assert idle_idx < charge_idx < sparkle_idx < lightning_idx, (
+        "qs-car-card.js: source order must be wave_idle → wave_charge "
+        f"→ sparkleLayer → lightningLayer. Got idle={idle_idx}, "
+        f"charge={charge_idx}, sparkle={sparkle_idx}, "
+        f"lightning={lightning_idx}."
+    )
+
+    # Negative pins — single sine, not three layers.
+    for forbidden in ("wave1_idle", "wave1_charge", "wave2_idle", "wave2_charge"):
+        assert forbidden not in executable, (
+            f"qs-car-card.js: forbidden id `{forbidden}` present — the "
+            "issue explicitly says \"do not superpose 3 layer of sin\" "
+            "(AC-1 #6)."
+        )
+
+
+def test_car_card_cross_fade_lerp_is_binary_idle_charge():
+    """QS-232 AC-2: the wave cross-fade is a binary idle↔charge lerp.
+    `targetColorMix = charging ? 1 : 0` exists; per-frame opacity uses
+    `(1 - _currentColorMix)` and `_currentColorMix` with `.toFixed(3)`.
+    Critically, `_currentColorMix` is NEVER mutated inside the
+    `degraded` branch — the third (degraded) palette is handled via a
+    CSS filter on the clip group, not via the lerp envelope.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # `targetColorMix = charging ? 1 : 0` (the car-card analogue of
+    # boiler `boiling ? 1 : 0`).
+    assert re.search(
+        r"targetColorMix\s*=\s*charging\s*\?\s*1\s*:\s*0",
+        executable,
+    ), (
+        "qs-car-card.js (AC-2): missing `targetColorMix = charging "
+        "? 1 : 0` lerp target (mirrors boiler precedent)."
+    )
+
+    # Per-frame opacity: `(1 - <colorMix>).toFixed(3)` and
+    # `<colorMix>.toFixed(3)`. The `<colorMix>` token may be either
+    # `this._currentColorMix` directly OR a clamped local derived
+    # from it (review-fix #01 #18 introduced a `mix = Math.max(0,
+    # Math.min(1, this._currentColorMix))` clamp). Either form
+    # satisfies the semantic AC-2 contract.
+    idle_re = re.compile(
+        r"\(\s*1\s*-\s*(?:this\._currentColorMix|mix)\s*\)"
+        r"\s*\.toFixed\s*\(\s*3\s*\)",
+    )
+    assert idle_re.search(executable), (
+        "qs-car-card.js (AC-2): missing idle-opacity expression "
+        "`(1 - <colorMix>).toFixed(3)` where <colorMix> is either "
+        "`this._currentColorMix` or a clamped local derived from it."
+    )
+    charge_re = re.compile(
+        r"(?:this\._currentColorMix|mix)\s*\.toFixed\s*\(\s*3\s*\)",
+    )
+    assert charge_re.search(executable), (
+        "qs-car-card.js (AC-2): missing charge-opacity expression "
+        "`<colorMix>.toFixed(3)` where <colorMix> is either "
+        "`this._currentColorMix` or a clamped local derived from it."
+    )
+    # If a `mix` local is used for opacity, it must be derived from
+    # `this._currentColorMix` (NOT a fresh independent variable
+    # that bypasses the binary lerp).
+    if re.search(r"\(\s*1\s*-\s*mix\s*\)\s*\.toFixed", executable):
+        assert re.search(
+            r"const\s+mix\s*=\s*[^;]*this\._currentColorMix",
+            executable,
+        ), (
+            "qs-car-card.js (AC-2): the local `mix` used for opacity "
+            "must be derived from `this._currentColorMix` "
+            "(typically `const mix = Math.max(0, Math.min(1, "
+            "this._currentColorMix));`)."
+        )
+
+    # LERP_RATE constant.
+    assert re.search(r"const\s+LERP_RATE\s*=\s*2\b", executable), (
+        "qs-car-card.js (AC-2): missing `const LERP_RATE = 2;` "
+        "(mirror boiler envelope)."
+    )
+
+    # Negative: `_currentColorMix` is NOT mutated under a `degraded`
+    # branch. Pin: no `if (degraded)` block that touches
+    # `_currentColorMix`.
+    forbidden = re.compile(
+        r"if\s*\(\s*degraded\s*\)\s*\{[^}]*_currentColorMix",
+        re.DOTALL,
+    )
+    assert not forbidden.search(executable), (
+        "qs-car-card.js (AC-2): `_currentColorMix` must not be mutated "
+        "inside a `if (degraded)` branch — the degraded palette is a "
+        "runtime CSS filter on the clip group (D8), independent of "
+        "the binary idle↔charge lerp."
+    )
+
+
+def test_car_card_sparkle_power_scaling_constants():
+    """QS-232 AC-3: sparkle density / spawn-rate / radius scale
+    linearly with charge power on `[SPARKLE_POWER_MIN_W,
+    SPARKLE_POWER_MAX_W] = [1500W, 22000W]`. Below MIN, values clamp
+    to the MIN-power endpoint. Pin all six scaling constants + the
+    clamping + linear-interp formula.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    expected = {
+        "SPARKLE_POWER_MIN_W": "1500",
+        "SPARKLE_POWER_MAX_W": "22000",
+        "SPARKLE_CHARGE_MAX_AT_MIN_POWER": "12",
+        "SPARKLE_CHARGE_MAX_AT_MAX_POWER": "28",
+        "SPARKLE_CHARGE_RATE_HZ_AT_MIN_POWER": "3",
+        "SPARKLE_CHARGE_RATE_HZ_AT_MAX_POWER": "10",
+    }
+    for name, value in expected.items():
+        pat = re.compile(rf"const\s+{name}\s*=\s*{re.escape(value)}\b")
+        assert pat.search(executable), (
+            f"qs-car-card.js (AC-3): expected module-level "
+            f"`const {name} = {value};`"
+        )
+
+    # Clamping formula.
+    assert re.search(
+        r"Math\.max\s*\(\s*SPARKLE_POWER_MIN_W\s*,\s*"
+        r"Math\.min\s*\(\s*SPARKLE_POWER_MAX_W\s*,",
+        executable,
+    ), (
+        "qs-car-card.js (AC-3): missing the clamping expression "
+        "`Math.max(SPARKLE_POWER_MIN_W, Math.min(SPARKLE_POWER_MAX_W, "
+        "power))`."
+    )
+
+    # Linear interp denominator.
+    assert re.search(
+        r"\(\s*SPARKLE_POWER_MAX_W\s*-\s*SPARKLE_POWER_MIN_W\s*\)",
+        executable,
+    ), (
+        "qs-car-card.js (AC-3): missing the linear-interp denominator "
+        "`(SPARKLE_POWER_MAX_W - SPARKLE_POWER_MIN_W)` in the "
+        "power-scaling formula."
+    )
+
+
+def test_car_card_sparkle_color_decided_at_spawn():
+    """QS-232 AC-4: each sparkle's `fill` attribute is decided at
+    spawn time via a ternary on `_charging`, resolving to
+    `SPARKLE_IDLE_COLOR` (greenish) or `SPARKLE_CHARGE_COLOR`
+    (electric lightning blue, `#00E5FF`). The fill is set on the
+    `<circle>` element only at spawn — it is not re-assigned per
+    frame in the advance loop.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Palette constants. `SPARKLE_IDLE_COLOR` is an `hsla(...)`
+    # expression with a hue in the yellow-green-to-green family
+    # `[60, 160]`. The exact hue is user-tunable per the QS-217
+    # visual-iteration precedent:
+    # - QS-232 initial:   hue 140 (pure green, light)
+    # - Review-fix #03:   hue 140, near-white mint (saturation drop)
+    # - Review-fix #02
+    #   user follow-up:   hue 80 (vivid yellow-green / lime) — user
+    #                     said "they have to be green/yellow … not a
+    #                     disc … little explosion".
+    idle_color_re = re.compile(
+        r"const\s+SPARKLE_IDLE_COLOR\s*=\s*"
+        r"['\"]hsla\(\s*(\d+)\s*,",
+    )
+    idle_color_m = idle_color_re.search(executable)
+    assert idle_color_m is not None, (
+        "qs-car-card.js (AC-4): expected `const SPARKLE_IDLE_COLOR = "
+        "'hsla(<hue>, …, …, …)';` — value user-tunable."
+    )
+    idle_hue = int(idle_color_m.group(1))
+    assert 60 <= idle_hue <= 160, (
+        f"qs-car-card.js (AC-4): `SPARKLE_IDLE_COLOR` hue must be in "
+        f"the yellow-green-to-green family `[60, 160]` so the idle "
+        f"palette reads as \"electron green / yellow\". Got hue "
+        f"{idle_hue}."
+    )
+    # SPARKLE_CHARGE_COLOR — pinned by name only (value is the
+    # electric-blue family but the user is free to retune the exact
+    # hex code).
+    assert re.search(
+        r"const\s+SPARKLE_CHARGE_COLOR\s*=\s*['\"]#[0-9A-Fa-f]{3,8}['\"]",
+        executable,
+    ), (
+        "qs-car-card.js (AC-4): expected `const SPARKLE_CHARGE_COLOR = "
+        "'#<hex>';` (electric lightning blue — value user-tunable)."
+    )
+
+    # Ternary selecting fill at spawn (mention both constants in a
+    # ternary on `_charging` or `charging`).
+    spawn_fill_re = re.compile(
+        r"(?:this\._charging|charging)\s*\?\s*"
+        r"SPARKLE_CHARGE_COLOR\s*:\s*SPARKLE_IDLE_COLOR",
+    )
+    assert spawn_fill_re.search(executable), (
+        "qs-car-card.js (AC-4): expected a `_charging ? "
+        "SPARKLE_CHARGE_COLOR : SPARKLE_IDLE_COLOR` ternary at the "
+        "spawn site so the fill is decided once and never re-assigned."
+    )
+
+
+def test_car_card_lightning_gated_and_spawn_interval():
+    """QS-232 AC-5: lightning bolts only spawn when `charging &&
+    !degraded`. Spawn interval is randomised on
+    `[LIGHTNING_SPAWN_MIN_S, LIGHTNING_SPAWN_MAX_S] = [1.5, 3.0]`s.
+    `MAX_CONCURRENT_LIGHTNING = 3`. The advance/retire loop runs
+    OUTSIDE the gate (graceful exit for in-flight bolts).
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Constants.
+    assert re.search(
+        r"const\s+LIGHTNING_SPAWN_MIN_S\s*=\s*1\.5\b", executable
+    ), (
+        "qs-car-card.js (AC-5): missing `const LIGHTNING_SPAWN_MIN_S "
+        "= 1.5;`"
+    )
+    assert re.search(
+        r"const\s+LIGHTNING_SPAWN_MAX_S\s*=\s*3(\.0)?\b", executable
+    ), (
+        "qs-car-card.js (AC-5): missing `const LIGHTNING_SPAWN_MAX_S "
+        "= 3.0;`"
+    )
+    assert re.search(
+        r"const\s+MAX_CONCURRENT_LIGHTNING\s*=\s*3\b", executable
+    ), (
+        "qs-car-card.js (AC-5): missing `const MAX_CONCURRENT_LIGHTNING "
+        "= 3;`"
+    )
+
+    # Spawn gate: `if (charging && !degraded)`.
+    gate_re = re.compile(
+        r"if\s*\(\s*charging\s*&&\s*!\s*degraded\s*\)",
+    )
+    assert gate_re.search(executable), (
+        "qs-car-card.js (AC-5): missing the lightning spawn gate "
+        "`if (charging && !degraded) { … }`."
+    )
+
+    # Re-arm formula uses MIN_S + Math.random() * (MAX_S - MIN_S).
+    rearm_re = re.compile(
+        r"this\._nextLightningAt\s*=\s*LIGHTNING_SPAWN_MIN_S\s*\+\s*"
+        r"Math\.random\s*\(\s*\)\s*\*\s*"
+        r"\(\s*LIGHTNING_SPAWN_MAX_S\s*-\s*LIGHTNING_SPAWN_MIN_S\s*\)",
+    )
+    assert rearm_re.search(executable), (
+        "qs-car-card.js (AC-5): missing the lightning re-arm formula "
+        "`this._nextLightningAt = LIGHTNING_SPAWN_MIN_S + "
+        "Math.random() * (LIGHTNING_SPAWN_MAX_S - "
+        "LIGHTNING_SPAWN_MIN_S);`"
+    )
+
+
+def test_car_card_lightning_life_and_glow_filter():
+    """QS-232 AC-6: lightning life is `LIGHTNING_LIFE_S = 0.25`s.
+    Three-phase opacity curve breakpoints `0.10` and `0.70` appear in
+    the advance loop. The `<filter id="${lightningFilterId}" …>`
+    carries safe-region attributes and a `<feGaussianBlur
+    stdDeviation="${LIGHTNING_GLOW_STDDEV}" />`. The lightning layer
+    `<g>` carries `filter="url(#${lightningFilterId})"` AND
+    `mix-blend-mode: screen`. Lightning elements are `<path>`s, not
+    `<polyline>`s.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Life constant.
+    assert re.search(
+        r"const\s+LIGHTNING_LIFE_S\s*=\s*0\.25\b", executable
+    ), (
+        "qs-car-card.js (AC-6): missing `const LIGHTNING_LIFE_S = "
+        "0.25;`"
+    )
+    # Three-phase opacity breakpoints. Review-fix #01 #10: scope the
+    # `0.10` check to the `lifeT < …` lightning-fade context so a
+    # regression on the actual breakpoint can't be masked by an
+    # unrelated `0.1` literal elsewhere in the file (e.g.,
+    # `LERP_DT_CEIL = 0.1`).
+    assert re.search(
+        r"lifeT\s*<\s*0\.10\b", executable
+    ), (
+        "qs-car-card.js (AC-6): missing fade-in breakpoint "
+        "`lifeT < 0.10` in the lightning advance loop."
+    )
+    assert re.search(
+        r"lifeT\s*<\s*0\.70\b", executable
+    ), (
+        "qs-car-card.js (AC-6): missing fade-out breakpoint "
+        "`lifeT < 0.70` in the lightning advance loop."
+    )
+
+    # Review-fix #02 user follow-up #2: the Gaussian-blur glow filter
+    # was removed per user "no need of the glow effect for the
+    # lightning bolts". Both the filter declaration AND its
+    # application on the lightning layer must now be absent. The
+    # `mix-blend-mode: screen` is kept for the electric "Screen"
+    # composite against the soup.
+    # Scope these "must-not-exist" checks to EXECUTABLE code only —
+    # historical comments referencing the removed identifiers are
+    # allowed (helpful for `git log` archaeology).
+    assert "${lightningFilterId}" not in executable, (
+        "qs-car-card.js (AC-6): the lightning Gaussian-blur glow "
+        "filter has been removed; no `${lightningFilterId}` "
+        "reference should remain in executable code. User: \"no need "
+        "of the glow effect for the lightning bolts\"."
+    )
+    assert "LIGHTNING_GLOW_STDDEV" not in executable, (
+        "qs-car-card.js (AC-6): the `LIGHTNING_GLOW_STDDEV` "
+        "constant was removed alongside the glow filter — "
+        "no reference should remain in executable code."
+    )
+    # Layer keeps `mix-blend-mode: screen` (composite, not blur).
+    assert "mix-blend-mode: screen" in source, (
+        "qs-car-card.js (AC-6): lightning layer must still use "
+        "`mix-blend-mode: screen` so the bolt composites brightly "
+        "against the soup even without the glow filter."
+    )
+
+    # Lightning element type: <path>, not <polyline>. Pin negatively:
+    # the spawn code must construct a `path` SVG element (not
+    # `polyline`).
+    assert re.search(
+        r"createElementNS\(\s*['\"]http://www\.w3\.org/2000/svg['\"]"
+        r"\s*,\s*['\"]path['\"]",
+        source,
+    ), (
+        "qs-car-card.js (AC-6): lightning bolts must be `<path>` "
+        "elements created via `createElementNS(SVG_NS, 'path')` — "
+        "not `polyline`."
+    )
+    assert "createElementNS('http://www.w3.org/2000/svg', 'polyline'" not in source, (
+        "qs-car-card.js (AC-6): forbidden `<polyline>` creation — "
+        "lightning must be `<path>` per boiler-precedent shape."
+    )
+
+    # Lightning palette + shape constants.
+    # `LIGHTNING_STROKE_COLOR` is the bolt's fill colour. The value
+    # is user-tunable per the QS-217 visual-iteration precedent
+    # (initial `#E0F7FF` pale-white → review-fix #02 user follow-up
+    # `#33B5FF` electric blue, per user "they should be light and
+    # bright blue, like Zeus thunderbolts").
+    assert re.search(
+        r"const\s+LIGHTNING_STROKE_COLOR\s*=\s*['\"]#[0-9A-Fa-f]{3,8}['\"]",
+        executable,
+    ), (
+        "qs-car-card.js (AC-6): expected `const LIGHTNING_STROKE_COLOR "
+        "= '#<hex>';` — value user-tunable."
+    )
+    # `LIGHTNING_TOP_WIDTH` is the width at the top of the tapered
+    # bolt outline (pixel value user-tunable; pinned by NAME only).
+    # The previous `LIGHTNING_STROKE_WIDTH` was removed when the
+    # shape changed from uniform-stroke polyline to filled-polygon
+    # taper (user feedback: "wider from the top and reducing to the
+    # bottom").
+    assert re.search(
+        r"const\s+LIGHTNING_TOP_WIDTH\s*=\s*\d+(?:\.\d+)?\b",
+        executable,
+    ), (
+        "qs-car-card.js (AC-6): expected `const LIGHTNING_TOP_WIDTH "
+        "= <number>;` (value user-tunable; pinned by NAME only)."
+    )
+
+
+def test_car_card_grain_filter_uses_feturbulence_on_wave_fill():
+    """QS-232 AC-7: the grain filter declares `<feTurbulence
+    type="fractalNoise" baseFrequency="0.9" numOctaves="2" …>` in
+    `<defs>` and BOTH wave `<path>` elements carry
+    `filter="url(#${grainFilterId})"`. No separate overlay `<rect>`
+    carries the grain filter — the grain composites within the wave
+    shape via `feComposite operator="in"`.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Grain filter declaration substring.
+    assert (
+        '<feTurbulence type="fractalNoise" baseFrequency="0.9" '
+        'numOctaves="2"'
+    ) in source, (
+        "qs-car-card.js (AC-7): grain filter must declare "
+        "`<feTurbulence type=\"fractalNoise\" baseFrequency=\"0.9\" "
+        "numOctaves=\"2\" …>` (substring assert; `seed`/`result` not "
+        "pinned)."
+    )
+
+    # The composite step that masks turbulence to the wave fill.
+    assert (
+        '<feComposite' in source
+        and 'operator="in"' in source
+    ), (
+        "qs-car-card.js (AC-7): grain filter must contain a "
+        "`<feComposite … operator=\"in\" …>` step so the grain is "
+        "masked to the wave's filled shape (water region only)."
+    )
+
+    # Both waves reference filter="url(#${grainFilterId})".
+    idle_filter = re.compile(
+        r'id="electron_wave_idle"[^>]*filter="url\(#\$\{grainFilterId\}\)"',
+        re.DOTALL,
+    )
+    charge_filter = re.compile(
+        r'id="electron_wave_charge"[^>]*filter="url\(#\$\{grainFilterId\}\)"',
+        re.DOTALL,
+    )
+    assert idle_filter.search(source), (
+        "qs-car-card.js (AC-7): `electron_wave_idle` must carry "
+        "`filter=\"url(#${grainFilterId})\"`."
+    )
+    assert charge_filter.search(source), (
+        "qs-car-card.js (AC-7): `electron_wave_charge` must carry "
+        "`filter=\"url(#${grainFilterId})\"`."
+    )
+
+    # Negative: no <rect> immediately preceding the sparkle layer
+    # carries the grain filter.
+    forbidden = re.compile(
+        r'<rect[^>]*filter="url\(#\$\{grainFilterId\}\)"[^>]*/?>\s*'
+        r'<g\s+id="\$\{sparkleLayerId\}"',
+        re.DOTALL,
+    )
+    assert not forbidden.search(source), (
+        "qs-car-card.js (AC-7): no separate `<rect>` overlay should "
+        "carry the grain filter — grain composites within the wave "
+        "shape via `feComposite operator=\"in\"` (D7)."
+    )
+
+
+def test_car_card_degraded_state_css_filter_and_lightning_suppression():
+    """QS-232 AC-8: `degraded = isDisconnected || isFaulted ||
+    isStale` is computed in `_render()`. The clipped `<g>` carries a
+    conditional inline style `style="${degraded ? 'filter:
+    saturate(0.3) brightness(0.7);' : ''}"`. Lightning is suppressed
+    via the `if (charging && !degraded)` gate. `isOffGrid` is
+    explicitly NOT part of `degraded`.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # `degraded` boolean.
+    degraded_re = re.compile(
+        r"const\s+degraded\s*=\s*isDisconnected\s*\|\|\s*"
+        r"isFaulted\s*\|\|\s*isStale\b",
+    )
+    m = degraded_re.search(executable)
+    assert m, (
+        "qs-car-card.js (AC-8): missing `const degraded = isDisconnected "
+        "|| isFaulted || isStale;`"
+    )
+    # Negative: `isOffGrid` is NOT part of `degraded`.
+    matched_line = m.group(0)
+    assert "isOffGrid" not in matched_line, (
+        "qs-car-card.js (AC-8): the `degraded =` expression must NOT "
+        "mention `isOffGrid` — off-grid keeps the card-level tint via "
+        "the `.off-grid` CSS class; the soup is unaffected (D8)."
+    )
+
+    # Inline style ternary on the clip group.
+    assert (
+        "${degraded ? 'filter: saturate(0.3) brightness(0.7);' : ''}"
+        in source
+    ), (
+        "qs-car-card.js (AC-8): the clipped `<g>` must carry the "
+        "inline style ternary "
+        "`style=\"${degraded ? 'filter: saturate(0.3) "
+        "brightness(0.7);' : ''}\"`."
+    )
+
+    # Lightning gate already pinned in AC-5 — re-assert here for
+    # locality.
+    assert re.search(
+        r"if\s*\(\s*charging\s*&&\s*!\s*degraded\s*\)", executable
+    ), (
+        "qs-car-card.js (AC-8): lightning spawn must be gated on "
+        "`charging && !degraded`."
+    )
+
+
+def test_car_card_continuous_raf_from_connected_callback():
+    """QS-232 AC-9: `connectedCallback()` calls `this._startAnimation()`
+    directly (continuous-RAF model). `_render()` does NOT contain a
+    conditional `_startAnimation()` gated on `charging`, nor any
+    `_stopAnimation()` call (the only `_stopAnimation` call site is
+    `disconnectedCallback`). The car card has been removed from the
+    `test_card_raf_idle_gated` parametrize list (and added to the
+    `test_card_caps_raf_dt_against_hidden_tab` list) — both side-
+    effects are pinned here by re-reading this test file.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # connectedCallback calls _startAnimation directly, no `if` gate.
+    cb_body = _extract_js_function_body(
+        executable, r"connectedCallback\s*\(\s*\)\s*"
+    )
+    assert cb_body is not None, (
+        "qs-car-card.js (AC-9): `connectedCallback()` not found."
+    )
+    assert re.search(r"this\._startAnimation\s*\(\s*\)", cb_body), (
+        "qs-car-card.js (AC-9): `connectedCallback` must call "
+        "`this._startAnimation()` directly (continuous-RAF model)."
+    )
+    # Review-fix #01 #13: the contract is "`_startAnimation()` is
+    # unconditional", not "no `if` at all". Future harmless guards
+    # unrelated to RAF startup (e.g., the QS-232 #7 fix that
+    # re-primes on state-flip after reconnect) are legitimate. Pin
+    # only `if`-blocks that wrap or precede `_startAnimation`.
+    raf_gate_re = re.compile(
+        r"if\s*\([^)]*\)\s*\{[^}]*this\._startAnimation",
+        re.DOTALL,
+    )
+    assert raf_gate_re.search(cb_body) is None, (
+        "qs-car-card.js (AC-9): `connectedCallback` must call "
+        "`_startAnimation()` unconditionally — no `if (...)` block "
+        "wrapping or preceding the `_startAnimation` call "
+        "(continuous-RAF model, mirror boiler/pool)."
+    )
+
+    # `_render()` body must NOT contain `_stopAnimation` or a
+    # conditional `_startAnimation` gated on charging.
+    # NB: the signature regex includes the opening `{` so that
+    # `_extract_js_function_body` matches the METHOD DEFINITION
+    # (not the various `this._render()` CALL sites in
+    # `connectedCallback` / `setConfig` / event handlers, which
+    # appear before the definition in source order).
+    render_body = _extract_js_function_body(
+        executable, r"_render\s*\(\s*\)\s*\{"
+    )
+    assert render_body is not None, (
+        "qs-car-card.js (AC-9): `_render()` body not found."
+    )
+    assert "_stopAnimation" not in render_body, (
+        "qs-car-card.js (AC-9): `_render()` must not call "
+        "`_stopAnimation()` — the only call site is "
+        "`disconnectedCallback` (continuous-RAF model)."
+    )
+    forbidden_gated = re.compile(
+        r"if\s*\(\s*(?:this\._)?charging\s*\)\s*\{[^}]*_startAnimation",
+        re.DOTALL,
+    )
+    assert not forbidden_gated.search(render_body), (
+        "qs-car-card.js (AC-9): `_render()` must not start RAF "
+        "conditionally on `charging` — `connectedCallback` starts it "
+        "continuously."
+    )
+
+    # Verify the parametrize migration by inspecting the parametrize
+    # decorator of `test_card_raf_idle_gated` — the car-card tuple
+    # must be absent from its list.
+    #
+    # NB: we deliberately avoid hard-coding the forbidden tuple as a
+    # bare literal in this file (that would itself be a substring
+    # match and trip the assertion). Instead we extract the parametrize
+    # body via regex and inspect its contents structurally.
+    test_file = Path(__file__).read_text(encoding="utf-8")
+    idle_gated_block = re.search(
+        r"@pytest\.mark\.parametrize\s*\(\s*\"card_filename\s*,\s*gate\""
+        r".*?def\s+test_card_raf_idle_gated",
+        test_file,
+        re.DOTALL,
+    )
+    assert idle_gated_block is not None, (
+        "AC-9: `test_card_raf_idle_gated` parametrize decorator not "
+        "found — the test file structure has drifted."
+    )
+    block_text = idle_gated_block.group(0)
+    assert "qs-car-card.js" not in block_text, (
+        "tests/test_dashboard_rendering.py (AC-9): the car-card entry "
+        "must be removed from the `test_card_raf_idle_gated` "
+        "parametrize list — the car card now uses continuous RAF."
+    )
+    # The dt-cap list must include qs-car-card.js (AC-12 side-effect).
+    cap_list_block = re.search(
+        r"@pytest\.mark\.parametrize\s*\(\s*\"card_filename\"\s*,\s*\["
+        r"(.*?)\]\s*,?\s*\)\s*def\s+test_card_caps_raf_dt_against_hidden_tab",
+        test_file,
+        re.DOTALL,
+    )
+    assert cap_list_block is not None, (
+        "AC-9: `test_card_caps_raf_dt_against_hidden_tab` parametrize "
+        "decorator not found — the test file structure has drifted."
+    )
+    assert "qs-car-card.js" in cap_list_block.group(1), (
+        "AC-9 side-effect: `qs-car-card.js` must be present in the "
+        "`test_card_caps_raf_dt_against_hidden_tab` parametrize list."
+    )
+    # We can't easily check the parametrize list contents from inside
+    # one of its tests without circular complexity; this test merely
+    # pins the removal from the idle-gated list. The dt-cap test
+    # itself (test_car_card_caps_raf_dt_at_lerp_dt_ceil below) covers
+    # the additive side.
+
+
+def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
+    """QS-232 AC-10: `_resetDomRefs()` instance method exists. It
+    nulls `_waveEls`, `_grainFilterEl`, `_sparkleLayerEl`,
+    `_lightningLayerEl` AND clears `_sparkles = []` and
+    `_lightningBolts = []`. It is called from `_invalidateAnimCache()`
+    AND from the post-`innerHTML` cleanup in `_render()` (≥ 2 call
+    sites). `disconnectedCallback()` tears down sparkle AND lightning
+    DOM with optional-chaining shape.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    body = _extract_js_function_body(
+        executable, r"_resetDomRefs\s*\(\s*\)\s*"
+    )
+    assert body is not None, (
+        "qs-car-card.js (AC-10): `_resetDomRefs()` method not found."
+    )
+
+    # Review-fix #01 #14: `_grainFilterEl` was a dead field — no
+    # code path ever read or lazily-resolved it. Removed from
+    # `_resetDomRefs()` to match the actual DOM-ref surface area.
+    for assignment_re in (
+        r"this\._waveEls\s*=\s*null",
+        r"this\._sparkleLayerEl\s*=\s*null",
+        r"this\._lightningLayerEl\s*=\s*null",
+        r"this\._sparkles\s*=\s*\[\s*\]",
+        r"this\._lightningBolts\s*=\s*\[\s*\]",
+    ):
+        assert re.search(assignment_re, body), (
+            f"qs-car-card.js (AC-10): `_resetDomRefs()` must assign "
+            f"`{assignment_re}` so all DOM-ref memos and particle "
+            f"arrays reset together."
+        )
+
+    # ≥ 2 `this._resetDomRefs()` call sites in the file.
+    call_sites = re.findall(
+        r"this\._resetDomRefs\s*\(\s*\)", executable
+    )
+    assert len(call_sites) >= 2, (
+        f"qs-car-card.js (AC-10): expected ≥ 2 `this._resetDomRefs()` "
+        f"call sites (one from `_invalidateAnimCache`, one post-"
+        f"`innerHTML` in `_render`). Found {len(call_sites)}."
+    )
+
+    # `_invalidateAnimCache` exists and calls `_resetDomRefs`.
+    inv_body = _extract_js_function_body(
+        executable, r"_invalidateAnimCache\s*\(\s*\)\s*"
+    )
+    assert inv_body is not None, (
+        "qs-car-card.js (AC-10): missing `_invalidateAnimCache()` "
+        "method."
+    )
+    assert "this._resetDomRefs()" in inv_body, (
+        "qs-car-card.js (AC-10): `_invalidateAnimCache()` must call "
+        "`this._resetDomRefs()`."
+    )
+
+    # disconnectedCallback teardown.
+    dc_body = _extract_js_function_body(
+        executable, r"disconnectedCallback\s*\(\s*\)\s*"
+    )
+    assert dc_body is not None, (
+        "qs-car-card.js (AC-10): `disconnectedCallback()` not found."
+    )
+    assert re.search(
+        r"this\._sparkles\?\.forEach\s*\(\s*s\s*=>\s*s\.el\?\.remove\?\.\(\)\s*\)",
+        dc_body,
+    ), (
+        "qs-car-card.js (AC-10): `disconnectedCallback` must eagerly "
+        "tear down sparkle DOM with "
+        "`this._sparkles?.forEach(s => s.el?.remove?.())`."
+    )
+    assert re.search(r"this\._sparkles\s*=\s*\[\s*\]", dc_body), (
+        "qs-car-card.js (AC-10): `disconnectedCallback` must clear "
+        "`this._sparkles = []` after the teardown."
+    )
+    assert re.search(
+        r"this\._lightningBolts\?\.forEach\s*\(\s*b\s*=>\s*b\.el\?\.remove\?\.\(\)\s*\)",
+        dc_body,
+    ), (
+        "qs-car-card.js (AC-10): `disconnectedCallback` must eagerly "
+        "tear down lightning DOM with "
+        "`this._lightningBolts?.forEach(b => b.el?.remove?.())`."
+    )
+    assert re.search(r"this\._lightningBolts\s*=\s*\[\s*\]", dc_body), (
+        "qs-car-card.js (AC-10): `disconnectedCallback` must clear "
+        "`this._lightningBolts = []` after the teardown."
+    )
+
+
+def test_car_card_per_instance_unique_svg_ids():
+    """QS-232 AC-11: `QsCarCard._nextClipId` static counter is bumped
+    inside `if (!this._electronClipId)`. Four per-instance ID fields
+    are derived from the same `uid`: `_electronClipId`,
+    `_sparkleLayerId`, `_lightningLayerId`, `_grainFilterId`. All
+    follow the `car_<role>_${uid}` naming convention.
+
+    Review-fix #02 user follow-up #2: `_lightningFilterId` was
+    removed alongside the lightning glow filter — the new sharp
+    purple bolt has no `<filter>` element, so the per-instance
+    filter ID is unused.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Static counter bump.
+    assert re.search(
+        r"QsCarCard\._nextClipId\s*=\s*\(\s*QsCarCard\._nextClipId\s*\|\|\s*0\s*\)\s*\+\s*1",
+        executable,
+    ), (
+        "qs-car-card.js (AC-11): missing the `QsCarCard._nextClipId "
+        "= (QsCarCard._nextClipId || 0) + 1` static-counter bump."
+    )
+    # Guard.
+    assert re.search(
+        r"if\s*\(\s*!\s*this\._electronClipId\s*\)", executable
+    ), (
+        "qs-car-card.js (AC-11): the counter bump must be wrapped in "
+        "`if (!this._electronClipId) { … }` so the IDs are assigned "
+        "once."
+    )
+
+    # Four ID fields, all `car_<role>_${uid}`-shaped. The
+    # `_lightningFilterId` was removed in review-fix #02 follow-up
+    # alongside the lightning glow filter.
+    id_assignments = {
+        "_electronClipId":   "car_eClip_",
+        "_sparkleLayerId":   "car_sparkLayer_",
+        "_lightningLayerId": "car_lightningLayer_",
+        "_grainFilterId":    "car_grainFilter_",
+    }
+    for field, prefix in id_assignments.items():
+        pat = re.compile(
+            rf"this\.{field}\s*=\s*`{re.escape(prefix)}\$\{{uid\}}`",
+        )
+        assert pat.search(executable), (
+            f"qs-car-card.js (AC-11): expected "
+            f"`this.{field} = \\`{prefix}${{uid}}\\``"
+        )
+
+
+def test_car_card_caps_raf_dt_at_lerp_dt_ceil():
+    """QS-232 AC-12: module constant `const LERP_DT_CEIL = 0.1;` and
+    the RAF step closure clamps `dt = Math.min(dt, LERP_DT_CEIL)` at
+    the top. The car card joins
+    `test_card_caps_raf_dt_against_hidden_tab` for the same hidden-
+    tab guard the boiler / pool cards carry.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    assert re.search(
+        r"const\s+LERP_DT_CEIL\s*=\s*0\.1\b", executable
+    ), (
+        "qs-car-card.js (AC-12): missing `const LERP_DT_CEIL = 0.1;` "
+        "module constant."
+    )
+    assert re.search(
+        r"dt\s*=\s*Math\.min\s*\(\s*dt\s*,\s*LERP_DT_CEIL\s*\)",
+        executable,
+    ), (
+        "qs-car-card.js (AC-12): expected `dt = Math.min(dt, "
+        "LERP_DT_CEIL);` at the top of the RAF step closure."
+    )
+
+
+def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
+    """QS-232 AC-13: a new H3 section
+    `### QS-232 — Car-card electron-soup animation` exists in
+    `docs/agents/concepts/dashboard-and-cards.md` AFTER the existing
+    `### QS-217` section and BEFORE the `## Hardened JS-card patterns`
+    H2 header. The section body mentions the key concepts:
+    single-layer wave, dual-opacity cross-fade, sparkle palette switch
+    + [1500W, 22000W] power-scaling, lightning bolt 3-segment path +
+    glow + spawn interval, feTurbulence grain on wave fill, degraded
+    CSS filter, continuous RAF, three carve covers (D17). The
+    `last_verified` field is present and well-formed.
+    """
+    doc_path = (
+        Path(__file__).parent.parent
+        / "docs"
+        / "agents"
+        / "concepts"
+        / "dashboard-and-cards.md"
+    )
+    doc = doc_path.read_text(encoding="utf-8")
+
+    headline = "### QS-232 — Car-card electron-soup animation"
+    headline_idx = doc.find(headline)
+    assert headline_idx != -1, (
+        f"dashboard-and-cards.md: missing the literal QS-232 H3 "
+        f"headline `{headline}` (AC-13)."
+    )
+
+    qs217_idx = doc.find("### QS-217")
+    assert qs217_idx != -1, (
+        "dashboard-and-cards.md: missing `### QS-217` headline — "
+        "AC-13 anchors QS-232 AFTER it."
+    )
+    hardened_idx = doc.find("## Hardened JS-card patterns")
+    assert hardened_idx != -1, (
+        "dashboard-and-cards.md: missing `## Hardened JS-card "
+        "patterns` H2 — AC-13 anchors QS-232 BEFORE it."
+    )
+    assert qs217_idx < headline_idx < hardened_idx, (
+        f"dashboard-and-cards.md: QS-232 headline must appear AFTER "
+        f"`### QS-217` AND BEFORE `## Hardened JS-card patterns`. "
+        f"Current order: QS-217 at {qs217_idx}, QS-232 at "
+        f"{headline_idx}, Hardened at {hardened_idx}."
+    )
+
+    # Front-matter `last_verified` field shape.
+    front_matter_match = re.search(
+        r"^last_verified:\s*(\d{4}-\d{2}-\d{2})\s*$",
+        doc,
+        re.MULTILINE,
+    )
+    assert front_matter_match, (
+        "dashboard-and-cards.md: front-matter must contain a "
+        "`last_verified: YYYY-MM-DD` field (AC-13)."
+    )
+
+    # Slice the section body — from the QS-232 headline to the next
+    # H2 (or H3) boundary.
+    section = doc[headline_idx:hardened_idx]
+    section_lower = section.lower()
+
+    # AC-13 key-concept pins.
+    expected_substrings = [
+        ("electron", "soup electron-soup concept"),
+        ("sparkle", "sparkle palette switch"),
+        ("lightning", "lightning bolt subsystem"),
+        ("feturbulence", "feTurbulence grain filter"),
+        ("grain", "grain on wave fill"),
+        ("degraded", "degraded CSS filter"),
+        ("continuous", "continuous-RAF model"),
+        ("1500", "[1500W, 22000W] power-scaling range (lower)"),
+        ("22000", "[1500W, 22000W] power-scaling range (upper)"),
+        ("3-segment", "3-segment lightning path"),
+        ("0.25", "lightning life 0.25 s"),
+        ("[1.5", "lightning spawn interval lower bound"),
+        ("3.0", "lightning spawn interval upper bound"),
+        ("d17", "D17 explicit reference"),
+        ("sun-btn", "sun-btn carve cover"),
+        ("rabbit-btn", "rabbit-btn carve cover"),
+        ("time-btn", "time-btn carve cover"),
+    ]
+    for token, description in expected_substrings:
+        assert token in section_lower, (
+            f"dashboard-and-cards.md (QS-232 section): missing "
+            f"`{token}` — {description} (AC-13)."
+        )
+
+    # All three carve-cover element ids named in the section.
+    for cover_id in (
+        "sun_btn_cover",
+        "rabbit_btn_cover",
+        "time_btn_cover",
+    ):
+        assert cover_id in section, (
+            f"dashboard-and-cards.md (QS-232 section): missing the "
+            f"carve-cover element id `{cover_id}` (AC-13/AC-14)."
+        )
+
+
+def test_car_card_inside_disc_button_carve_covers():
+    """QS-232 AC-14: three inside-disc button carve-out covers
+    (sun-btn, rabbit-btn, time-btn) extend QS-217's `<circle>` cover
+    pattern from one button to three on the car card. Nine module-
+    level constants (3 × {CX, CY, R}) are present (NAMES pinned, not
+    values — user-tunable per QS-217 precedent). Three `<circle
+    id="…_cover" fill="var(--card-background-color)"
+    pointer-events="none" />` elements appear in source AFTER the
+    clipped `</g>` AND BEFORE the `<path d="${bgPath}"` line. Each is
+    gated on its corresponding render predicate (`swPriority`,
+    `e.force_now`, `(tNext && e.schedule)`).
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Nine constants — NAMES only (values are user-tunable).
+    for const_name in (
+        "SUN_BTN_CARVE_CX",
+        "SUN_BTN_CARVE_CY",
+        "SUN_BTN_CARVE_R",
+        "RABBIT_BTN_CARVE_CX",
+        "RABBIT_BTN_CARVE_CY",
+        "RABBIT_BTN_CARVE_R",
+        "TIME_BTN_CARVE_CX",
+        "TIME_BTN_CARVE_CY",
+        "TIME_BTN_CARVE_R",
+    ):
+        assert re.search(
+            rf"const\s+{const_name}\s*=\s*\d+\b", executable
+        ), (
+            f"qs-car-card.js (AC-14): missing module-level "
+            f"`const {const_name} = <integer>;` declaration. Values "
+            f"are user-tunable per QS-217 precedent — only the NAME "
+            f"is pinned."
+        )
+
+    # The three cover circles, each gated on its render predicate.
+    sun_cover_re = re.compile(
+        r"swPriority\s*\?\s*`?\s*"
+        r'<circle\s+id="sun_btn_cover"\s+'
+        r'cx="\$\{SUN_BTN_CARVE_CX\}"\s+'
+        r'cy="\$\{SUN_BTN_CARVE_CY\}"\s+'
+        r'r="\$\{SUN_BTN_CARVE_R\}"\s+'
+        r'fill="var\(--card-background-color\)"\s+'
+        r'pointer-events="none"\s*/>',
+    )
+    assert sun_cover_re.search(source), (
+        "qs-car-card.js (AC-14): missing the `sun_btn_cover` "
+        "<circle> element gated on `swPriority`."
+    )
+    rabbit_cover_re = re.compile(
+        r"e\.force_now\s*\?\s*`?\s*"
+        r'<circle\s+id="rabbit_btn_cover"\s+'
+        r'cx="\$\{RABBIT_BTN_CARVE_CX\}"\s+'
+        r'cy="\$\{RABBIT_BTN_CARVE_CY\}"\s+'
+        r'r="\$\{RABBIT_BTN_CARVE_R\}"\s+'
+        r'fill="var\(--card-background-color\)"\s+'
+        r'pointer-events="none"\s*/>',
+    )
+    assert rabbit_cover_re.search(source), (
+        "qs-car-card.js (AC-14): missing the `rabbit_btn_cover` "
+        "<circle> element gated on `e.force_now`."
+    )
+    time_cover_re = re.compile(
+        r"\(\s*tNext\s*&&\s*e\.schedule\s*\)\s*\?\s*`?\s*"
+        r'<circle\s+id="time_btn_cover"\s+'
+        r'cx="\$\{TIME_BTN_CARVE_CX\}"\s+'
+        r'cy="\$\{TIME_BTN_CARVE_CY\}"\s+'
+        r'r="\$\{TIME_BTN_CARVE_R\}"\s+'
+        r'fill="var\(--card-background-color\)"\s+'
+        r'pointer-events="none"\s*/>',
+    )
+    assert time_cover_re.search(source), (
+        "qs-car-card.js (AC-14): missing the `time_btn_cover` "
+        "<circle> element gated on `(tNext && e.schedule)`."
+    )
+
+    # Source order: covers must appear AFTER the clipped </g> AND
+    # BEFORE `<path d="${bgPath}"` so they paint on top of the soup
+    # and under the outer ring.
+    sun_idx = source.find('id="sun_btn_cover"')
+    rabbit_idx = source.find('id="rabbit_btn_cover"')
+    time_idx = source.find('id="time_btn_cover"')
+    bg_idx = source.find('<path d="${bgPath}"')
+    # Find the OUTER closing </g> of the clipped group. Review-fix
+    # #01 #11: the original `find("</g>", clip_g_idx)` returned the
+    # FIRST nested `</g>` (sparkle layer or lightning layer), so a
+    # misplaced cover inserted between inner layers would falsely
+    # satisfy the ordering check. Use `rfind` scoped to the
+    # [clip_g_idx, bg_idx] window to locate the OUTER close.
+    clip_g_idx = source.find('<g clip-path="url(#${electronClipId})"')
+    assert clip_g_idx != -1, (
+        "qs-car-card.js (AC-14): missing the electron-soup clipped "
+        "group anchor."
+    )
+    clip_g_close_idx = source.rfind("</g>", clip_g_idx, bg_idx)
+    assert clip_g_close_idx != -1, (
+        "qs-car-card.js (AC-14): cannot find the outer closing "
+        "`</g>` of the electron-soup clipped group within the "
+        "expected [clip_g_idx, bg_idx] window."
+    )
+
+    for cover_name, cover_idx in (
+        ("sun_btn_cover", sun_idx),
+        ("rabbit_btn_cover", rabbit_idx),
+        ("time_btn_cover", time_idx),
+    ):
+        assert cover_idx != -1, (
+            f"qs-car-card.js (AC-14): missing the `{cover_name}` "
+            f"element in source."
+        )
+        assert clip_g_close_idx < cover_idx < bg_idx, (
+            f"qs-car-card.js (AC-14): `{cover_name}` must appear "
+            f"AFTER the clipped `</g>` (idx {clip_g_close_idx}) AND "
+            f"BEFORE the `<path d=\"${{bgPath}}\"` line "
+            f"(idx {bg_idx}). Got cover idx {cover_idx}."
+        )
+
+
+# ============================================================================
+# === QS-232 review-fix #01 tests ===
+# Additional regression pins from the post-PR review pass. Each
+# guards a specific edge case or bugfix from
+# `docs/stories/QS-232.story_review_fix_#01.md`.
+# ============================================================================
+
+
+def test_car_card_render_guards_water_base_y_against_nan():
+    """QS-232 review-fix #01 #3: `_waterBaseY` must NOT become NaN
+    if `soc` is NaN (a non-numeric `current_inputed_energy` state
+    in `useEnergyMode`, or a corrupted percent reading). Without a
+    guard, the initial `_generateWavePath()` call at `_render()` time
+    emits literal `"NaN"` tokens in the `d` attribute and no soup
+    paints until the next valid hass push. Pinned via a structural
+    `Number.isFinite` check on either `soc` or `progressRatio`
+    before the `_waterBaseY` assignment.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # The `_waterBaseY` assignment must be preceded by (or wrap with)
+    # a `Number.isFinite` guard against NaN soc. Accept either:
+    # - `Number.isFinite(soc)` ternary in the progressRatio
+    #   computation, OR
+    # - `Number.isFinite(progressRatio)` guard, OR
+    # - `Number.isFinite(this._waterBaseY)` post-assignment guard.
+    waterbase_guard_re = re.compile(
+        r"Number\.isFinite\s*\(\s*"
+        r"(?:soc|progressRatio|this\._waterBaseY|rawWaterBaseY)\s*\)",
+    )
+    assert waterbase_guard_re.search(executable), (
+        "qs-car-card.js (review-fix #01 #3): `_waterBaseY` "
+        "assignment must be guarded by `Number.isFinite(...)` against "
+        "NaN `soc`. Without this, a non-numeric energy/percent state "
+        "poisons the initial wave path's `d` attribute with literal "
+        "`NaN` tokens."
+    )
+
+
+def test_car_card_initial_wave_path_skips_nan_water_base_y():
+    """QS-232 review-fix #01 #5: belt-and-braces guard at the
+    `initialWavePath` call site. Even with the upstream
+    `_waterBaseY` guard, the call-site itself must check
+    `Number.isFinite(this._waterBaseY)` before invoking
+    `_generateWavePath(...)`, so a future regression to the upstream
+    guard can't silently poison the emitted SVG `d` attribute.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # The `initialWavePath = ...` line must use a ternary on
+    # `Number.isFinite(this._waterBaseY)` so the empty-string
+    # fallback path exists.
+    call_site_guard_re = re.compile(
+        r"const\s+initialWavePath\s*=\s*"
+        r"Number\.isFinite\s*\(\s*this\._waterBaseY\s*\)\s*\?\s*"
+        r"this\._generateWavePath\s*\(",
+        re.DOTALL,
+    )
+    assert call_site_guard_re.search(executable), (
+        "qs-car-card.js (review-fix #01 #5): the `initialWavePath` "
+        "call site must wrap `_generateWavePath(...)` in "
+        "`Number.isFinite(this._waterBaseY) ? ... : ''` so the "
+        "emitted `d` attribute is never poisoned by a regression "
+        "upstream."
+    )
+
+
+def test_car_card_setConfig_primes_animation_state():
+    """QS-232 review-fix #01 #4: `_needsAnimationPrime` must be set
+    in `setConfig()` so the FIRST `_render()` (which runs from
+    `setConfig`, BEFORE `connectedCallback`) primes
+    `_currentAmplitude` / `_currentSpeed` / `_currentColorMix`
+    against the current `_charging` state. Without this, the first
+    paint always uses the idle palette regardless of `_charging`,
+    and a subsequent RAF lerp visibly transitions over ~1.5 s
+    (the boot-transient avoidance is moot).
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    set_config_body = _extract_js_function_body(
+        executable, r"setConfig\s*\(\s*config\s*\)\s*"
+    )
+    assert set_config_body is not None, (
+        "qs-car-card.js (review-fix #01 #4): `setConfig(config)` "
+        "method not found — the test file structure has drifted."
+    )
+    assert re.search(
+        r"this\._needsAnimationPrime\s*=\s*true",
+        set_config_body,
+    ), (
+        "qs-car-card.js (review-fix #01 #4): `setConfig()` must set "
+        "`this._needsAnimationPrime = true` so the first render "
+        "(which fires from `setConfig` BEFORE `connectedCallback`) "
+        "primes the wave animation state against `_charging`."
+    )
+
+
+def test_car_card_time_btn_render_and_cover_gates_match():
+    """QS-232 review-fix #01 #6: `time_btn` and `time_btn_cover`
+    must share the same render gate. The original implementation
+    had the button render unconditionally inside the mini-grid while
+    the cover was gated on `(tNext && e.schedule)` — when
+    `chargeTime` was set but `e.schedule` wasn't, the button face
+    drew over un-carved soup. This pin extracts both predicates
+    and asserts string equality.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+
+    # Extract the time_btn render gate. The fix gates the button on
+    # the same `(tNext && e.schedule)` predicate as the cover.
+    # Accept either form:
+    # - `(tNext && e.schedule) ? \`<div id="time_btn"…>\` : ''`
+    # - or any equivalent predicate that matches the cover's gate.
+    btn_gate_re = re.compile(
+        r"(\([^)]*\))\s*\?\s*`?\s*<div\s+id=\"time_btn\"",
+    )
+    btn_m = btn_gate_re.search(source)
+    assert btn_m is not None, (
+        "qs-car-card.js (review-fix #01 #6): the `time_btn` <div> "
+        "must now be wrapped in a `(predicate) ? `<div id=\"time_btn\""
+        " …>` : ''` ternary so its render gate aligns with the "
+        "`time_btn_cover` gate."
+    )
+
+    cover_gate_re = re.compile(
+        r"(\([^)]*\))\s*\?\s*`?\s*<circle\s+id=\"time_btn_cover\"",
+    )
+    cover_m = cover_gate_re.search(source)
+    assert cover_m is not None, (
+        "qs-car-card.js (review-fix #01 #6): missing the "
+        "`time_btn_cover` <circle> element with a gating ternary."
+    )
+
+    # Whitespace-normalise both predicates and compare.
+    def _normalise(s: str) -> str:
+        return re.sub(r"\s+", "", s)
+
+    btn_predicate = _normalise(btn_m.group(1))
+    cover_predicate = _normalise(cover_m.group(1))
+    assert btn_predicate == cover_predicate, (
+        f"qs-car-card.js (review-fix #01 #6): the `time_btn` render "
+        f"gate `{btn_m.group(1)}` and the `time_btn_cover` gate "
+        f"`{cover_m.group(1)}` must be equal (whitespace-normalised). "
+        f"Asymmetric gates allow the button face to draw over "
+        f"un-covered soup."
+    )
+
+
+def test_car_card_connectedCallback_reprimes_on_state_flip():
+    """QS-232 review-fix #01 #7: `connectedCallback()` must
+    re-prime `_needsAnimationPrime` when the `_charging` state
+    flipped during a detached interval. Otherwise, the
+    lazy-init guard in `_startAnimation()` (which preserves
+    `_currentAmplitude` etc. across detach/re-attach) skips the
+    prime block and the soup visibly lerps on reconnect rather
+    than snapping. Pinned structurally: the `connectedCallback`
+    body must reference both `_charging` and `_currentColorMix`
+    inside a re-prime guard.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    cb_body = _extract_js_function_body(
+        executable, r"connectedCallback\s*\(\s*\)\s*"
+    )
+    assert cb_body is not None, (
+        "qs-car-card.js (review-fix #01 #7): `connectedCallback()` "
+        "not found."
+    )
+    # The re-prime guard must reference `this._charging` AND
+    # `this._currentColorMix` (the implied state derivation).
+    assert re.search(r"this\._charging", cb_body), (
+        "qs-car-card.js (review-fix #01 #7): `connectedCallback` "
+        "must reference `this._charging` to compute the implied "
+        "state for re-prime."
+    )
+    assert re.search(r"this\._currentColorMix", cb_body), (
+        "qs-car-card.js (review-fix #01 #7): `connectedCallback` "
+        "must reference `this._currentColorMix` to detect a "
+        "state-flip during the detached interval."
+    )
+    assert re.search(
+        r"this\._needsAnimationPrime\s*=\s*true",
+        cb_body,
+    ), (
+        "qs-car-card.js (review-fix #01 #7): `connectedCallback` "
+        "must conditionally set `this._needsAnimationPrime = true` "
+        "when `_charging` flipped during detach."
+    )
+
+
+def test_car_card_last_amplitude_uses_finite_guard_not_nullish():
+    """QS-232 review-fix #01 #8: `this._lastAmplitude` must be
+    assigned via `Number.isFinite(this._currentAmplitude) ? ... :
+    CALM_AMP` instead of `this._currentAmplitude ?? CALM_AMP`. The
+    nullish coalescing operator does NOT trap NaN: if
+    `_currentAmplitude` ever becomes NaN, `_lastAmplitude` becomes
+    NaN, the regen check `ampDelta = Math.abs(_ - NaN) = NaN` is
+    always `< threshold`, and the wave-path attribute is never
+    regenerated for the lifetime of the card.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Positive pin: the explicit finite-check form.
+    finite_form_re = re.compile(
+        r"this\._lastAmplitude\s*=\s*"
+        r"Number\.isFinite\s*\(\s*this\._currentAmplitude\s*\)\s*\?\s*"
+        r"this\._currentAmplitude\s*:\s*CALM_AMP",
+    )
+    assert finite_form_re.search(executable), (
+        "qs-car-card.js (review-fix #01 #8): `_lastAmplitude` must "
+        "be assigned via `Number.isFinite(this._currentAmplitude) ? "
+        "this._currentAmplitude : CALM_AMP` so a NaN amplitude can't "
+        "permanently freeze the wave-path regen."
+    )
+
+    # Negative pin: the old `??` form must not be present for
+    # `_lastAmplitude`. Pinned narrowly so unrelated `??` usages
+    # (e.g., `_currentColorMix ?? 0`) are not flagged.
+    forbidden_re = re.compile(
+        r"this\._lastAmplitude\s*=\s*this\._currentAmplitude\s*\?\?",
+    )
+    assert not forbidden_re.search(executable), (
+        "qs-car-card.js (review-fix #01 #8): the old "
+        "`this._lastAmplitude = this._currentAmplitude ?? CALM_AMP` "
+        "form must be replaced — `??` does not trap NaN."
+    )
+
+
+def test_car_card_lightning_segments_constant_removed():
+    """QS-232 review-fix #01 #16: `LIGHTNING_SEGMENTS = 3` was
+    declared at module scope but never referenced; the lightning
+    path hardcoded 3 `L` segments rather than looping driven by
+    the constant. Dead code; removed. The pin is scoped to
+    EXECUTABLE code (comments stripped) so a `// removed …`
+    historical comment is allowed.
+    """
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+    assert "LIGHTNING_SEGMENTS" not in executable, (
+        "qs-car-card.js (review-fix #01 #16): `LIGHTNING_SEGMENTS` "
+        "must be removed from EXECUTABLE code — declared at module "
+        "scope but never referenced (the lightning path hardcodes "
+        "its 3 `L` segments). Historical references in comments "
+        "are allowed."
+    )
+
+
+def test_car_card_dashed_arc_comment_no_stale_m4_reference():
+    """QS-232 review-fix #01 #17: the dashed-arc inline comment
+    used to reference "M4" (the deleted `_charging`-gated
+    milestone). Should be updated to reflect the QS-232
+    continuous-RAF model. Pinned narrowly to the dashed-arc block,
+    not to all M4 references in the file.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+
+    # Find the dashed-arc comment block (it precedes the
+    # `_animOffset = ...` / `charge_anim` block).
+    dashed_arc_re = re.compile(
+        r"^\s*//[^\n]*PRESERVED\s+from\s+M4[^\n]*$",
+        re.MULTILINE,
+    )
+    assert dashed_arc_re.search(source) is None, (
+        "qs-car-card.js (review-fix #01 #17): the stale "
+        "\"PRESERVED from M4\" comment in the dashed-arc block "
+        "must be rewritten to reflect the QS-232 continuous-RAF "
+        "model. The M4 milestone is no longer the controlling "
+        "lifecycle anchor."
+    )
+
+
+# ============================================================================
+# === QS-232 review-fix #02 tests ===
+# Round-2 follow-ups. The headline regression: review-fix #01 #4 armed
+# `_needsAnimationPrime = true` in `setConfig`, then `_render`
+# consumed the flag (setting `_currentAmplitude`/`_currentSpeed`/
+# `_currentColorMix`) BEFORE `connectedCallback` fired. The lazy-init
+# guard in `_startAnimation()` is `if (this._currentAmplitude == null)`
+# — which is now FALSE — so the rest of the lazy-init block
+# (`_wavePhase`, `_nextSparkleAt`, `_nextLightningAt`, `_sparkles`,
+# `_lightningBolts`) is skipped, leaving them undefined. First RAF
+# tick poisons `_wavePhase` with NaN; the sparkle / lightning spawn
+# loops never enter. User-visible symptom: "no sparkles at all".
+# Fix: each RAF-state field guards itself individually.
+# ============================================================================
+
+
+def test_car_card_first_raf_tick_initialises_wave_phase_unconditionally():
+    """QS-232 review-fix #02 #1: `_wavePhase`, `_nextSparkleAt`,
+    `_nextLightningAt`, `_sparkles`, `_lightningBolts` must each be
+    seeded by `_startAnimation()` regardless of whether
+    `_currentAmplitude` has already been primed by `_render()`.
+    The previous form bundled all five inside
+    `if (this._currentAmplitude == null) { ... }`, which the
+    prime-block-in-`_render` consumed — leaving the other five
+    undefined and poisoning the first RAF tick with NaN.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    body = _extract_js_function_body(
+        executable, r"_startAnimation\s*\(\s*\)\s*"
+    )
+    assert body is not None, (
+        "qs-car-card.js (review-fix #02 #1): `_startAnimation()` "
+        "body not found."
+    )
+
+    # The five RAF-state fields must each have their OWN
+    # `if (this.X == null) this.X = ...` guard so that consumption
+    # of `_currentAmplitude` by the prime block doesn't strand them.
+    for field, default_pattern in [
+        ("_wavePhase",       r"=\s*0"),
+        ("_nextSparkleAt",   r"=\s*0"),
+        ("_nextLightningAt", r"=\s*LIGHTNING_SPAWN_MIN_S"),
+        ("_sparkles",        r"=\s*\[\s*\]"),
+        ("_lightningBolts",  r"=\s*\[\s*\]"),
+    ]:
+        per_field_guard = re.compile(
+            rf"if\s*\(\s*this\.{field}\s*==\s*null\s*\)\s*"
+            rf"this\.{field}\s*{default_pattern}",
+        )
+        assert per_field_guard.search(body), (
+            f"qs-car-card.js (review-fix #02 #1): `_startAnimation` "
+            f"must seed `this.{field}` under its OWN `== null` guard "
+            f"(not bundled inside the `_currentAmplitude == null` "
+            f"block) so the prime path can't strand it."
+        )
+
+
+def test_car_card_initial_paint_uses_finite_guards_not_nullish():
+    """QS-232 review-fix #02 #2: `initialAmp` / `initialColorMix`
+    must be derived via `Number.isFinite(...)` checks rather than
+    `??`. `??` only traps null/undefined, so a runtime NaN (from a
+    poisoned lerp accumulator) propagates into the initial wave path
+    `d` attribute and opacity attribute strings. Mirrors the fix-#01-#8
+    finite-guard shape for `_lastAmplitude`.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Positive: explicit finite check for initialAmp.
+    initial_amp_re = re.compile(
+        r"const\s+initialAmp\s*=\s*"
+        r"Number\.isFinite\s*\(\s*this\._currentAmplitude\s*\)\s*\?\s*"
+        r"this\._currentAmplitude\s*:\s*CALM_AMP",
+    )
+    assert initial_amp_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #2): `initialAmp` must be "
+        "computed via `Number.isFinite(this._currentAmplitude) ? "
+        "this._currentAmplitude : CALM_AMP` — `??` does not trap "
+        "NaN."
+    )
+
+    # Positive: explicit finite check for initialColorMix.
+    initial_mix_re = re.compile(
+        r"const\s+initialColorMix\s*=\s*"
+        r"Number\.isFinite\s*\(\s*this\._currentColorMix\s*\)\s*\?\s*"
+        r"this\._currentColorMix\s*:\s*0",
+    )
+    assert initial_mix_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #2): `initialColorMix` must "
+        "be computed via `Number.isFinite(this._currentColorMix) ? "
+        "this._currentColorMix : 0` — `??` does not trap NaN."
+    )
+
+    # Negative pins: the old `??` shapes for the same identifiers
+    # must not be present.
+    for old_form in (
+        r"const\s+initialAmp\s*=\s*this\._currentAmplitude\s*\?\?",
+        r"const\s+initialColorMix\s*=\s*this\._currentColorMix\s*\?\?",
+    ):
+        assert not re.search(old_form, executable), (
+            "qs-car-card.js (review-fix #02 #2): the old `??` form "
+            f"matching /{old_form}/ must be replaced with a "
+            "`Number.isFinite(...)` ternary."
+        )
+
+
+def test_car_card_setConfig_restarts_animation_when_connected():
+    """QS-232 review-fix #02 #3: `setConfig()` must re-invoke
+    `_startAnimation()` at its tail if the element is already
+    connected and RAF hasn't started yet. Otherwise — in the
+    (uncommon) lifecycle where `connectedCallback` fires before
+    `setConfig` — RAF never starts because `_startAnimation` bails
+    early on `!_root` and nothing re-calls it once `_root` is set.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    set_config_body = _extract_js_function_body(
+        executable, r"setConfig\s*\(\s*config\s*\)\s*"
+    )
+    assert set_config_body is not None, (
+        "qs-car-card.js (review-fix #02 #3): `setConfig(config)` "
+        "method not found."
+    )
+    # Re-entry guard: must reference both `isConnected` and call
+    # `_startAnimation()` inside a guarded block.
+    reentry_re = re.compile(
+        r"if\s*\(\s*this\.isConnected[^)]*_animRaf[^)]*\)\s*\{[^}]*"
+        r"this\._startAnimation\s*\(\s*\)",
+        re.DOTALL,
+    )
+    assert reentry_re.search(set_config_body), (
+        "qs-car-card.js (review-fix #02 #3): `setConfig` must "
+        "contain a tail guard "
+        "`if (this.isConnected && this._animRaf == null) "
+        "this._startAnimation();` so RAF starts even when "
+        "`connectedCallback` fired before `setConfig`."
+    )
+
+
+def test_car_card_connectedCallback_reprime_calls_render():
+    """QS-232 review-fix #02 #4: the reprime branch in
+    `connectedCallback()` (which sets `_needsAnimationPrime = true`
+    when `_charging` flipped during a detached interval) must also
+    call `this._render()` so the flag is consumed immediately. The
+    previous form left the flag set until the next `set hass` push,
+    during which the RAF lerps visibly from the stale `_currentColorMix`
+    toward the new target.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    cb_body = _extract_js_function_body(
+        executable, r"connectedCallback\s*\(\s*\)\s*"
+    )
+    assert cb_body is not None, (
+        "qs-car-card.js (review-fix #02 #4): `connectedCallback()` "
+        "not found."
+    )
+    # The reprime block must contain BOTH the flag set AND the
+    # `_render()` call, adjacent or with whitespace between them.
+    # NB: we don't use an `if (... _charging ...)` regex anchor here
+    # because `_charging` may live in a `const targetMix = ...`
+    # statement BEFORE the `if`, not inside the `if` predicate.
+    # Adjacency check is sufficient: prime + render in the same
+    # block.
+    adjacent_re = re.compile(
+        r"this\._needsAnimationPrime\s*=\s*true\s*;\s*"
+        r"this\._render\s*\(\s*\)",
+    )
+    assert adjacent_re.search(cb_body), (
+        "qs-car-card.js (review-fix #02 #4): `connectedCallback` "
+        "must call `this._render()` immediately after setting "
+        "`this._needsAnimationPrime = true` (adjacent statements) "
+        "so the flag is consumed on the next paint, not on the "
+        "next hass push."
+    )
+
+
+def test_car_card_last_amplitude_in_raf_uses_finite_guard():
+    """QS-232 review-fix #02 #5: review-fix #01 #8 patched only the
+    POST-innerHTML write to `_lastAmplitude` (at the end of
+    `_render`). The IN-RAF write at the wave-regen block was left
+    unguarded — if `_currentAmplitude` ever becomes NaN mid-frame,
+    NaN propagates into `_lastAmplitude`, the regen check freezes,
+    and the wave path is never regenerated. Both the in-RAF read
+    AND the in-RAF write must guard against NaN.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    raf_body = _extract_js_function_body(
+        executable, r"_startAnimation\s*\(\s*\)\s*"
+    )
+    assert raf_body is not None, (
+        "qs-car-card.js (review-fix #02 #5): `_startAnimation()` "
+        "body not found."
+    )
+
+    # In-RAF read: the `ampDelta = ...` ternary must treat both null
+    # AND non-finite as "first frame". The source uses a parenthesised
+    # disjunction `(this._lastAmplitude == null || !Number.isFinite(
+    # this._lastAmplitude))` so the regex allows an optional leading
+    # `(`.
+    ampdelta_finite_re = re.compile(
+        r"ampDelta\s*=\s*\(?\s*"
+        r"(?:!?\s*Number\.isFinite\s*\(\s*this\._lastAmplitude\s*\)"
+        r"|this\._lastAmplitude\s*==\s*null\s*\|\|\s*!\s*Number\.isFinite)",
+    )
+    assert ampdelta_finite_re.search(raf_body), (
+        "qs-car-card.js (review-fix #02 #5): the in-RAF "
+        "`ampDelta = …` computation must guard against non-finite "
+        "`_lastAmplitude` (use `Number.isFinite(...)` rather than "
+        "`== null` alone, since NaN can be stored)."
+    )
+
+    # In-RAF write: count `_lastAmplitude = ` occurrences. The shape
+    # with the finite guard must appear AT LEAST TWICE (in-RAF write
+    # at line ~345, post-innerHTML write at the end of _render).
+    finite_writes = re.findall(
+        r"this\._lastAmplitude\s*=\s*"
+        r"Number\.isFinite\s*\(\s*this\._currentAmplitude\s*\)\s*\?\s*"
+        r"this\._currentAmplitude\s*:\s*CALM_AMP",
+        executable,
+    )
+    assert len(finite_writes) >= 2, (
+        f"qs-car-card.js (review-fix #02 #5): expected at least 2 "
+        f"`_lastAmplitude = Number.isFinite(this._currentAmplitude) ? "
+        f"this._currentAmplitude : CALM_AMP` assignments (one in-RAF "
+        f"at the wave-regen block, one post-innerHTML in `_render`). "
+        f"Found {len(finite_writes)}."
+    )
+
+
+def test_car_card_initial_paint_opacity_is_clamped():
+    """QS-232 review-fix #02 #6: review-fix #01 #18 clamped the
+    RAF-step opacity emission via a local `mix` variable, but the
+    INITIAL-PAINT opacity emission (`initialIdleOpacity` /
+    `initialChargeOpacity`) was left unclamped. After RAF has run
+    long enough for `_currentColorMix` to drift slightly outside
+    `[0, 1]`, the next `_render` emits `"-0.000"` opacity tokens.
+    The initial-paint sites must clamp too.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # Either form is acceptable:
+    # (a) a local `mix` / `initialMix` = `Math.max(0, Math.min(1,
+    #     initialColorMix))` used in both opacity emissions, OR
+    # (b) the Math.max/min inline at both emission sites.
+    has_local_clamp = re.search(
+        r"const\s+(?:mix|initialMix)\s*=\s*Math\.max\s*\(\s*0\s*,\s*"
+        r"Math\.min\s*\(\s*1\s*,\s*initialColorMix",
+        executable,
+    )
+    has_inline_clamp_idle = re.search(
+        r"const\s+initialIdleOpacity\s*=\s*"
+        r"\(\s*1\s*-\s*Math\.max\s*\(\s*0\s*,\s*Math\.min\s*\(\s*1\s*,\s*initialColorMix",
+        executable,
+    )
+    has_inline_clamp_charge = re.search(
+        r"const\s+initialChargeOpacity\s*=\s*"
+        r"Math\.max\s*\(\s*0\s*,\s*Math\.min\s*\(\s*1\s*,\s*initialColorMix",
+        executable,
+    )
+    assert has_local_clamp or (has_inline_clamp_idle and has_inline_clamp_charge), (
+        "qs-car-card.js (review-fix #02 #6): the initial-paint "
+        "opacity emission must clamp `initialColorMix` to `[0, 1]` "
+        "before `.toFixed(3)` — either via a `const mix = "
+        "Math.max(0, Math.min(1, initialColorMix));` (or `initialMix`) "
+        "local OR via the Math.max/min inline at both "
+        "`initialIdleOpacity` and `initialChargeOpacity` sites."
+    )
+
+
+def test_car_card_rabbit_btn_render_and_cover_gates_match():
+    """QS-232 review-fix #02 #7: `rabbit_btn` and `rabbit_btn_cover`
+    must share the same render gate. Symmetric to the fix-#01-#6
+    treatment for `time_btn`. Currently `<div id="rabbit_btn">`
+    renders unconditionally while the cover is gated on `e.force_now`
+    — when `force_now` is undefined, the button draws over un-carved
+    soup and sparkles bleed behind it.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+
+    # Extract each ternary's predicate by:
+    # 1. Locating the target element (`<div id="rabbit_btn"` /
+    #    `<circle id="rabbit_btn_cover"`).
+    # 2. Walking BACKWARD via `rfind` to the immediately preceding
+    #    `${` template substitution opener.
+    # 3. Reading the predicate text between `${` and the next `?`.
+    # This avoids the cross-template greedy-match pathology of
+    # using `\$\{[^?]+?\?` directly (which can match across
+    # unrelated `${...}` substitutions appearing earlier in the
+    # same source).
+    def _extract_template_predicate(target_marker: str) -> str | None:
+        target_idx = source.find(target_marker)
+        if target_idx == -1:
+            return None
+        dollar_idx = source.rfind("${", 0, target_idx)
+        if dollar_idx == -1:
+            return None
+        question_idx = source.find("?", dollar_idx, target_idx)
+        if question_idx == -1:
+            return None
+        return source[dollar_idx + 2 : question_idx].strip()
+
+    btn_predicate = _extract_template_predicate('<div id="rabbit_btn"')
+    assert btn_predicate is not None, (
+        "qs-car-card.js (review-fix #02 #7): the `rabbit_btn` <div> "
+        "must be wrapped in a `${predicate ? `<div id=\"rabbit_btn\""
+        " …>` : ''}` ternary so its render gate aligns with the "
+        "`rabbit_btn_cover` gate."
+    )
+    cover_predicate = _extract_template_predicate(
+        '<circle id="rabbit_btn_cover"'
+    )
+    assert cover_predicate is not None, (
+        "qs-car-card.js (review-fix #02 #7): missing the "
+        "`rabbit_btn_cover` <circle> with a gating ternary."
+    )
+
+    def _normalise(s: str) -> str:
+        return re.sub(r"\s+", "", s)
+
+    assert _normalise(btn_predicate) == _normalise(cover_predicate), (
+        f"qs-car-card.js (review-fix #02 #7): `rabbit_btn` render "
+        f"gate `{btn_predicate}` and `rabbit_btn_cover` gate "
+        f"`{cover_predicate}` must be equal (whitespace-normalised)."
+    )
+
+
+def test_car_card_mix_clamp_traps_nan():
+    """QS-232 review-fix #02 #9: the RAF-step `const mix = Math.max(0,
+    Math.min(1, this._currentColorMix));` clamp doesn't trap NaN
+    (since `Math.max(0, Math.min(1, NaN)) === NaN`). Wrap with a
+    `Number.isFinite` ternary so NaN falls back to 0.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    mix_finite_re = re.compile(
+        r"const\s+mix\s*=\s*"
+        r"Number\.isFinite\s*\(\s*this\._currentColorMix\s*\)\s*\?\s*"
+        r"Math\.max\s*\(\s*0\s*,\s*Math\.min\s*\(\s*1\s*,\s*this\._currentColorMix\s*\)\s*\)\s*:\s*0",
+    )
+    assert mix_finite_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #9): the RAF-step "
+        "`const mix = ...` clamp must be wrapped in a "
+        "`Number.isFinite(this._currentColorMix)` ternary so NaN "
+        "falls back to 0 (Math.max/min don't trap NaN)."
+    )
+
+
+def test_car_card_wave_els_retry_on_null():
+    """QS-232 review-fix #02 #10: the `_waveEls` lazy-resolve must
+    retry if EITHER slot is null. The previous form
+    `if (!this._waveEls) { this._waveEls = [idle, charge]; }` caches
+    `[null, null]` (which is truthy) permanently if both lookups
+    miss during a transient detach.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    retry_re = re.compile(
+        r"if\s*\(\s*"
+        r"!\s*this\._waveEls"
+        r"\s*\|\|\s*!\s*this\._waveEls\s*\[\s*0\s*\]"
+        r"\s*\|\|\s*!\s*this\._waveEls\s*\[\s*1\s*\]"
+        r"\s*\)",
+    )
+    assert retry_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #10): the `_waveEls` "
+        "lazy-resolve guard must be "
+        "`if (!this._waveEls || !this._waveEls[0] || "
+        "!this._waveEls[1])` so a transient `[null, null]` cache is "
+        "retried on subsequent ticks."
+    )
+
+
+def test_car_card_has_valid_base_uses_number_is_finite():
+    """QS-232 review-fix #02 #11: `hasValidBase` must use
+    `Number.isFinite(waterBaseY)` (not `!Number.isNaN(...)`), so a
+    spurious `Infinity` doesn't slip through the guard. Asymmetric
+    with fix-#01-#3 / fix-#01-#5 which already use `Number.isFinite`.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    finite_re = re.compile(
+        r"const\s+hasValidBase\s*=\s*"
+        r"waterBaseY\s*!=\s*null\s*&&\s*"
+        r"Number\.isFinite\s*\(\s*waterBaseY\s*\)",
+    )
+    assert finite_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #11): `const hasValidBase = "
+        "waterBaseY != null && Number.isFinite(waterBaseY);` — "
+        "`!Number.isNaN(...)` is asymmetric with the other guards "
+        "in the file and lets `Infinity` through."
+    )
+
+
+def test_car_card_render_snapshot_defensively_coerces_undefined_sparkles():
+    """QS-232 review-fix #02 #18: the `_render` snapshot block at the
+    start of `_render` reads `this._sparkles` / `this._lightningBolts`
+    BEFORE the first call to `_startAnimation` (which lazy-inits
+    them). On the very first `_render` (from `setConfig`), both are
+    `undefined`. Currently safe because the snapshot just captures
+    `undefined` and the restore branches skip. But if a downstream
+    consumer ever dereferences `.length`, this becomes a runtime
+    crash. Defensive `?? []` coercion eliminates the coupling.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    sparkle_snap_re = re.compile(
+        r"const\s+preservedSparkles\s*=\s*"
+        r"this\._sparkles\s*\?\?\s*\[\s*\]",
+    )
+    lightning_snap_re = re.compile(
+        r"const\s+preservedLightningBolts\s*=\s*"
+        r"this\._lightningBolts\s*\?\?\s*\[\s*\]",
+    )
+    assert sparkle_snap_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #18): the `preservedSparkles` "
+        "snapshot must defensively coerce undefined to `[]` via "
+        "`this._sparkles ?? []`."
+    )
+    assert lightning_snap_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #18): the "
+        "`preservedLightningBolts` snapshot must defensively coerce "
+        "undefined to `[]` via `this._lightningBolts ?? []`."
+    )
+
+
+def test_car_card_restore_drops_sparkles_above_new_water_base_y():
+    """QS-232 review-fix #02 #16: a sparkle spawned at
+    `cy ≈ _waterBaseY + 2` is preserved across `_render`; if the SOC
+    changed enough that the new `_waterBaseY` is now BELOW the
+    sparkle's frozen `cy` (i.e., new water surface is HIGHER on the
+    SVG, meaning lower y value), the sparkle would visually appear
+    in the air ABOVE the soup. Drop those sparkles at restore time.
+    """
+    import re
+
+    source = (
+        COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+    ).read_text()
+    executable = _strip_js_comments(source)
+
+    # The restore loop must filter sparkles whose `cy` is above
+    # (less than) the new `_waterBaseY`. Accept either an inline
+    # filter on the preserved array OR an explicit `if (s.cy < ...)`
+    # branch inside the restore loop.
+    inline_filter_re = re.compile(
+        r"preservedSparkles\s*\.\s*filter\s*\([^)]*"
+        r"\.cy\s*>=\s*this\._waterBaseY",
+        re.DOTALL,
+    )
+    body_filter_re = re.compile(
+        r"if\s*\(\s*[a-zA-Z_]+\.cy\s*<\s*this\._waterBaseY\s*\)",
+    )
+    assert inline_filter_re.search(executable) or body_filter_re.search(executable), (
+        "qs-car-card.js (review-fix #02 #16): the sparkle restore "
+        "block must drop preserved sparkles whose `cy` is above the "
+        "NEW `_waterBaseY` (i.e., `cy < this._waterBaseY`) — "
+        "otherwise they appear floating above the soup after a "
+        "large SOC change."
     )
 
 
