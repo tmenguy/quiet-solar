@@ -1983,3 +1983,56 @@ async def test_async_update_resources_generic_exception():
                 ):
                     # Should not raise
                     await async_update_resources(mock_hass)
+
+
+@pytest.mark.asyncio
+async def test_async_update_resources_serialized_by_lock():
+    """QS-199 review-fix #04 ES2 — `async_update_resources` is serialized
+    by a module-level `asyncio.Lock`, so two overlapping invocations
+    (startup-restore racing the Generate-Dashboard button, or two rapid
+    button presses) never run the sweep+copy concurrently. This kills the
+    whole concurrency-race class (round-2 S1 temp race + round-3/#04 ES2
+    sweep race) at the root rather than patching each instance.
+    """
+    import asyncio
+
+
+    mock_hass_a, _ = create_mock_hass()
+    mock_hass_b, _ = create_mock_hass()
+
+    active = 0
+    max_active = 0
+
+    async def fake_copy(*_args, **_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        # Yield so the other invocation gets a chance to enter the
+        # critical section if it isn't actually serialized.
+        await asyncio.sleep(0.02)
+        active -= 1
+
+    with (
+        patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock),
+        patch("custom_components.quiet_solar.ui.dashboard._async_remove_orphan_temps", new_callable=AsyncMock),
+        patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler_from_hass", return_value=None),
+        patch("custom_components.quiet_solar.ui.dashboard._generate_qs_tag", return_value="T"),
+        patch(
+            "custom_components.quiet_solar.ui.dashboard.aiofiles.os.path.isdir",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
+            side_effect=fake_copy,
+        ),
+    ):
+        await asyncio.gather(
+            async_update_resources(mock_hass_a),
+            async_update_resources(mock_hass_b),
+        )
+
+    assert max_active == 1, (
+        f"ES2: async_update_resources must be serialized by the lock — "
+        f"observed {max_active} concurrent copy invocations"
+    )

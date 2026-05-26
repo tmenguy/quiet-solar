@@ -382,7 +382,7 @@ class QsPoolCard extends QsRingDurationCardBase {
                 </div>
               </div>
             </div>
-            <div id="green_btn" class="green-btn ${swGreenOnly?.state === 'on' ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle solar-only mode"><ha-icon icon="mdi:leaf"></ha-icon></div>
+            ${swGreenOnly ? `<div id="green_btn" class="green-btn ${swGreenOnly.state === 'on' ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle solar-only mode"><ha-icon icon="mdi:leaf"></ha-icon></div>` : ''}
           </div>
         </div>
 
@@ -459,6 +459,16 @@ class QsPoolCard extends QsRingDurationCardBase {
                 // rejected/clamped backend-side. `onBeforeCommit` runs
                 // (awaited) before the `_setNumber` write inside the base
                 // wire-helper.
+                //
+                // QS-199 review-fix #04 NH2 — intentional guard-semantics
+                // change: pre-migration the pool committed only when
+                // `dragValue != null && default_on_duration && pool_mode`
+                // (all three). The base now guards on `default_on_duration`
+                // and this hook self-guards `if (e.pool_mode)`. So if
+                // `pool_mode` is somehow absent the duration is still
+                // written (mode-select skipped) rather than the whole drag
+                // being a no-op — more robust, and `pool_mode` is always
+                // configured for pool cards in practice.
                 onBeforeCommit: async () => {
                     if (e.pool_mode) {
                         try { await this._select(e.pool_mode, 'bistate_mode_default'); } catch (_) { /* ignore */ }

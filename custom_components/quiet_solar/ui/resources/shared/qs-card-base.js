@@ -344,17 +344,20 @@ export class QsCardBase extends HTMLElement {
           entityId,                // service target for _setNumber
           onBeforeCommit,          // optional async hook AWAITED before _setNumber
                                    //   (e.g. pool selects default mode first)
-          onCommit,                // optional async callback(snapValue) AWAITED after commit
           getHoursRun,             // optional () => current hours for inline label update
           colors,                  // optional palette {primary} for inline label update
       }
+      QS-199 review-fix #04 NH1 — the post-write `onCommit` param was
+      removed (no card used it; scheduling the local-target clear timer
+      before a dead awaited `onCommit` was a latent footgun). Cards that
+      need a pre-duration side effect use `onBeforeCommit`.
     */
     _wireTargetHandle(params) {
         const {
             ringSvg, handle, center, ringCirc,
             startDeg, endDeg, rangeDeg,
             hoursToPct, pctToHours, allowedHours,
-            entityId, onBeforeCommit, onCommit, getHoursRun, colors,
+            entityId, onBeforeCommit, getHoursRun, colors,
         } = params;
         if (!ringSvg || !handle) return;
         // QS-199 review-fix S15 — guard against an empty `allowedHours`
@@ -438,7 +441,6 @@ export class QsCardBase extends HTMLElement {
                         // QS-199 review-fix S14: don't render a detached card.
                         if (this.isConnected && this._root) this._render();
                     }, 5000);
-                    if (onCommit) await onCommit(dragValue);
                 }
             } catch (_) {
                 // swallow — HA state will resync on the next push

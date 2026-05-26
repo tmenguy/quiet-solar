@@ -1,5 +1,6 @@
 """Dashboard generation and programmatic registration for Quiet Solar."""
 
+import asyncio
 import contextlib
 import itertools
 import logging
@@ -572,17 +573,38 @@ async def _async_copy_and_register_resources(
             _LOGGER.debug("Skipped lovelace registration for shared module %s/%s", namespace, entry)
 
 
+# QS-199 review-fix #04 ES2 — serialize the whole resource update. The two
+# entry points (startup restore in `async_restore_dashboards_and_update_resources`
+# and the "Generate Dashboard" button via `generate_dashboard_yaml`) are
+# otherwise unlocked and can interleave their sweep + copy + register steps,
+# which re-introduced the temp-file race classes (round-2 S1, round-3 N2/#04
+# ES2). One module-level lock kills the entire class at the root; the unique
+# temp name (S1) stays as defense-in-depth.
+_RESOURCE_UPDATE_LOCK = asyncio.Lock()
+
+
 async def async_update_resources(hass: HomeAssistant) -> None:
     """Copy JS card resources to ``www/`` and register them with lovelace.
 
     This runs on *every* startup so that updated JS files from a component
     update are picked up immediately.  It does NOT touch dashboard content.
+
+    QS-199 review-fix #04 ES2 — the body runs under `_RESOURCE_UPDATE_LOCK`
+    so a concurrent invocation can't sweep away (or os.replace over) a temp
+    file the other invocation is mid-write on.
     """
+    async with _RESOURCE_UPDATE_LOCK:
+        await _async_update_resources_locked(hass)
+
+
+async def _async_update_resources_locked(hass: HomeAssistant) -> None:
+    """Body of `async_update_resources`, run while holding the update lock."""
     resources_dst = os.path.join(hass.config.path(), "www", DOMAIN)
     await aiofiles.os.makedirs(resources_dst, exist_ok=True)
 
     # QS-199 review-fix #03 N2 — reclaim any orphan *.qstmp temp files left
-    # behind by a prior hard kill before copying fresh resources.
+    # behind by a prior hard kill before copying fresh resources. Safe under
+    # the update lock: no concurrent invocation can be mid-write (#04 ES2).
     await _async_remove_orphan_temps(resources_dst)
 
     # QS-199 review-fix #02 S1 — check the SOURCE tree up front instead of

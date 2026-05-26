@@ -105,25 +105,40 @@ export class QsRingDurationCardBase extends QsCardBase {
     }
 
     /*
+      _clampMaxHours(raw) — the SINGLE source-of-truth clamp for a card's
+      `max_default_hours` config. QS-199 review-fix #04 ES1 (root-cause):
+      every duration card derives its `maxHours` through this helper, so
+      the SAME bounded value feeds BOTH the gauge math (`hoursToPct` /
+      arcs / handle position) AND the snap list (`_allowedHalfHours`).
+      Clamping in only one of those two places (round-3 M1 put the
+      `Math.min(n, 168)` solely in `_allowedHalfHours`) made the snap
+      range cap at 168 while the gauge still drew the full 0..200 scale —
+      a dead zone at the top of the ring.
+
+      `Number.isFinite` rejects ±Infinity / NaN (`Number("1e999") ===
+      Infinity` — the M1 hang); `Math.min(n, 168)` (one week of hours)
+      bounds a huge-but-finite config; falls back to 12 for a missing /
+      non-finite / non-positive value.
+    */
+    _clampMaxHours(raw) {
+        const n = Number(raw);
+        return Number.isFinite(n) && n > 0 ? Math.min(n, 168) : 12;
+    }
+
+    /*
       _allowedHalfHours(maxHours) — the drag-ring snap points: 0 .. maxHours
       in 0.5-hour steps. QS-199 review-fix #02 S8 — the snap range is
-      derived from the card's configured `max_default_hours` (passed in as
-      `maxHours`) instead of a hard-coded 0..12, so targets above 12h are
-      selectable from the drag ring (the gauge already renders the larger
-      range).
+      derived from the card's configured (and already source-clamped via
+      `_clampMaxHours`) `maxHours`, so targets above 12h are selectable.
 
-      QS-199 review-fix #03 M1 + N1 — the cap MUST be finite-guarded AND
-      clamped: `Number("1e999") === Infinity` (and `Number("Infinity") > 0`
-      is true), so the old `Number(maxHours) > 0 ? … : 12` made
-      `for (i=0; i<=Infinity; i+=0.5)` hang the tab synchronously inside
-      `_render()`. `Number.isFinite` rejects ±Infinity/NaN; `Math.min(n,
-      168)` (one week of hours) bounds a huge-but-finite config so the
-      per-render array build + the O(n) snap-reduce stay cheap. Falls back
-      to 12 for a missing / non-finite / non-positive value.
+      QS-199 review-fix #04 ES1 — this helper does NOT apply its own
+      `Math.min` clamp anymore (that's what desynced it from the gauge).
+      It keeps only the `Number.isFinite` Infinity defense so a future
+      un-clamped caller still can't hang the loop.
     */
     _allowedHalfHours(maxHours) {
         const n = Number(maxHours);
-        const cap = Number.isFinite(n) && n > 0 ? Math.min(n, 168) : 12;
+        const cap = Number.isFinite(n) && n > 0 ? n : 12;
         const out = [];
         for (let i = 0; i <= cap; i += 0.5) out.push(i);
         return out;

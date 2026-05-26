@@ -1192,6 +1192,14 @@ class QsCarCard extends QsCardBase {
       // card-level pinkish tint already applied via the `.off-grid`
       // CSS class; the soup is unaffected.
       const degraded = isDisconnected || isFaulted || isStale;
+      // QS-199 review-fix #04 CR1 — when disconnected the card is
+      // pointer-disabled (`.disabled` CSS sets `pointer-events: none`),
+      // so the custom `div role="button"` controls (sun / rabbit / time)
+      // must ALSO drop out of the keyboard tab order and report
+      // `aria-disabled`, otherwise they're dead keyboard tab stops whose
+      // action just bails. Native `<button>`s (reset) handle this
+      // themselves; only the custom divs need the explicit attrs.
+      const ctrlTabAttrs = isDisconnected ? 'tabindex="-1" aria-disabled="true"' : 'tabindex="0"';
       // Stash on the instance so the RAF step closure can read it
       // without re-deriving (and so degraded-state lightning
       // suppression has a consistent value across the frame).
@@ -1360,12 +1368,12 @@ class QsCarCard extends QsCardBase {
                   <div class="mini-title">${useEnergyMode ? 'Target Energy' : 'Target SOC'}</div>
                   <div class="mini-title">${chargeTimeLabel}</div>
 
-                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}" role="button" tabindex="0" aria-label="Charge as fast as possible"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
+                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Charge as fast as possible"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
                   <div class="target-cell">
                     <div id="target_value" class="target-value">${displayTargetValue}</div>
                     ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
                   </div>
-                  ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}" role="button" tabindex="0" aria-label="Set next charge time">${this._escapeHtml(chargeTime)}</div>` : ''}
+                  ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Set next charge time">${this._escapeHtml(chargeTime)}</div>` : ''}
                 </div>
                 </div>
                 <!-- QS-232 review-fix #04: invisible spacer preserves .stack's vertical balance
@@ -1377,7 +1385,7 @@ class QsCarCard extends QsCardBase {
             <!-- QS-232 review-fix #03: sun-btn moved out of .center > .stack > .center-controls
                  to a direct child of .ring, matching the override-btn placement pattern in
                  boiler/radiator/climate cards (position: absolute; bottom: 15px;). -->
-            ${swPriority ? `<div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle solar priority"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>` : ''}
+            ${swPriority ? `<div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Toggle solar priority"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>` : ''}
           </div>
         </div>
 

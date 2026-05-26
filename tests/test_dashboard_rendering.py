@@ -7402,6 +7402,41 @@ def test_shared_css_has_no_branded_colour_literals():
     )
 
 
+def test_base_card_css_merges_palette_defaults_per_key():
+    """QS-199 review-fix #04 CR3 — `baseCardCSS` must merge palette
+    defaults PER KEY (`{ ...PALETTE_DEFAULTS, ...(palette || {}) }`), not
+    only substitute when `palette` is entirely falsy. A partial palette
+    like `{ primary: '#FF5722' }` would otherwise emit `undefined` into
+    the generated CSS (breaking gradients / `color-mix`). The defaults
+    must stay AC6-compliant (all five keys → `var(--primary-color)`).
+    """
+    import re
+
+    src = (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-styles.js").read_text(encoding="utf-8")
+
+    # Per-key merge (spread defaults first, then the caller's palette).
+    assert re.search(
+        r"\{\s*\.\.\.\s*PALETTE_DEFAULTS\s*,\s*\.\.\.\s*\(\s*palette\s*\|\|\s*\{\}\s*\)\s*\}",
+        src,
+    ), "CR3: `baseCardCSS` must merge per key — `const colors = { ...PALETTE_DEFAULTS, ...(palette || {}) }`."
+    # The old whole-object fallback (`palette || { ... }`) must be gone.
+    assert "const colors = palette ||" not in src, (
+        "CR3: the whole-object `const colors = palette || {…}` fallback "
+        "(which leaves a partial palette's missing keys undefined) must "
+        "be replaced by the per-key merge."
+    )
+    # Defaults block declares all five palette keys, AC6-compliant.
+    defaults = re.search(r"PALETTE_DEFAULTS\s*=\s*\{(?P<body>[^}]*)\}", src)
+    assert defaults is not None, "CR3: PALETTE_DEFAULTS const must exist"
+    dbody = defaults.group("body")
+    for key in ("primary", "gradStart", "gradEnd", "animStart", "animEnd"):
+        assert key in dbody, f"CR3: PALETTE_DEFAULTS missing `{key}`"
+    # No branded hex in the defaults (AC6).
+    assert not re.search(r"#[0-9a-fA-F]{3,8}", dbody), (
+        "CR3: PALETTE_DEFAULTS must use `var(--*)` only — no branded hexes (AC6)."
+    )
+
+
 def test_car_uses_inherited_parse_time_helper():
     """QS-199 review-fix #02 S2 — the car card must use the inherited,
     hardened `this._parseTimeToMinutes` (07:00 fallback for invalid
@@ -7443,26 +7478,31 @@ def test_cards_escape_entity_derived_option_text():
 def test_in_ring_controls_are_keyboard_reachable():
     """QS-199 review-fix #02 S5/S6 — custom `div` controls that carry
     click/keyboard handlers must be focusable: `role="button"` +
-    `tabindex="0"`. Pins the car's sun/rabbit/time controls and the
-    pool's power/green toggles.
+    `tabindex`. Pins the car's sun/rabbit/time controls and the pool's
+    power/green toggles.
+
+    QS-199 review-fix #04 CR1 — the car's controls now set tabindex
+    CONDITIONALLY (`${ctrlTabAttrs}` → `tabindex="0"` when connected,
+    `tabindex="-1" aria-disabled="true"` when disconnected), so the car
+    side accepts the interpolated form; the pool toggles keep the literal
+    `tabindex="0"`.
     """
     import re
 
+    # Pool: literal tabindex="0"; Car: conditional ${ctrlTabAttrs}.
     checks = {
-        "qs-car-card.js": ("sun_btn", "rabbit_btn", "time_btn"),
-        "qs-pool-card.js": ("power_btn", "green_btn"),
+        "qs-pool-card.js": (("power_btn", "green_btn"), r'role="button"[^>]*tabindex="0"'),
+        "qs-car-card.js": (("sun_btn", "rabbit_btn", "time_btn"), r'role="button"[^>]*\$\{ctrlTabAttrs\}'),
     }
     failures: list[str] = []
-    for card_name, ids in checks.items():
+    for card_name, (ids, attr_pat) in checks.items():
         src = (COMPONENT_ROOT / "ui" / "resources" / card_name).read_text(encoding="utf-8")
         for el_id in ids:
-            pat = re.compile(rf'id="{el_id}"[^>]*role="button"[^>]*tabindex="0"', re.DOTALL)
+            pat = re.compile(rf'id="{el_id}"[^>]*{attr_pat}', re.DOTALL)
             if not pat.search(src):
                 failures.append(f"{card_name}:#{el_id}")
 
-    assert not failures, (
-        f'QS-199 review-fix #02 S5/S6 — in-ring controls missing role="button"/tabindex="0": {failures}'
-    )
+    assert not failures, f"QS-199 review-fix #02 S5/S6 — in-ring controls not keyboard-focusable: {failures}"
 
 
 @pytest.mark.parametrize(
@@ -7510,54 +7550,99 @@ def test_flame_engine_keeps_raf_until_idle():
     )
 
 
-def test_allowed_half_hours_is_bounded_against_non_finite_max():
-    """QS-199 review-fix #03 M1 + N1 — `_allowedHalfHours` must NOT loop
-    forever for a non-finite / huge `max_default_hours`.
+def test_max_hours_clamp_helper_bounds_at_source():
+    """QS-199 review-fix #03 M1/N1 + #04 ES1 (root-cause) — the clamp lives
+    at the SOURCE (`_clampMaxHours`) so the gauge and the snap list consume
+    the SAME bounded value and can never diverge.
 
-    The round-2 S8 change used `Number(maxHours) > 0 ? Number(maxHours)
-    : 12`, which is `Infinity` for `max_default_hours: Infinity` /
-    `1e999` (`Number("1e999") === Infinity`), so `for (i=0; i<=Infinity;
-    i+=0.5)` hangs the tab — synchronously inside `_render()` whenever
-    `canDragHandle` is true. The fix guards with `Number.isFinite` AND
-    clamps to a sane upper bound (`Math.min(n, 168)`).
+    `_clampMaxHours` must guard with `Number.isFinite` (prevents the
+    Infinity hang: `Number("1e999") === Infinity`) AND clamp finite values
+    to a sane upper bound (`Math.min(n, 168)`). `_allowedHalfHours` keeps
+    only the `Number.isFinite` defense (no second `Math.min` — the
+    snap-only clamp is what made the range desync from the gauge in #04
+    ES1).
     """
     import re
 
     src = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-ring-duration-base.js").read_text(encoding="utf-8")
     )
-    m = re.search(r"_allowedHalfHours\s*\([^)]*\)\s*\{(?P<body>.*?)\n    \}", src, re.DOTALL)
-    assert m is not None, "could not locate _allowedHalfHours body"
-    body = m.group("body")
-    assert "Number.isFinite" in body, (
-        "M1: `_allowedHalfHours` must guard the cap with `Number.isFinite` "
-        "so a non-finite max can't make the loop run forever."
-    )
-    assert "Math.min(" in body, (
-        "N1: `_allowedHalfHours` must clamp the cap (e.g. `Math.min(n, 168)`) "
-        "so a huge finite max doesn't build a giant array every render."
+
+    clamp = re.search(r"_clampMaxHours\s*\([^)]*\)\s*\{(?P<body>.*?)\n    \}", src, re.DOTALL)
+    assert clamp is not None, "ES1: `_clampMaxHours` source-clamp helper must exist"
+    cbody = clamp.group("body")
+    assert "Number.isFinite" in cbody, "ES1: `_clampMaxHours` must guard with Number.isFinite"
+    assert "Math.min(" in cbody and "168" in cbody, (
+        "ES1: `_clampMaxHours` must clamp finite values to a sane bound (Math.min(n, 168))"
     )
 
+    snap = re.search(r"_allowedHalfHours\s*\([^)]*\)\s*\{(?P<body>.*?)\n    \}", src, re.DOTALL)
+    assert snap is not None, "could not locate _allowedHalfHours body"
+    sbody = snap.group("body")
+    assert "Number.isFinite" in sbody, "M1: `_allowedHalfHours` keeps the `Number.isFinite` Infinity defense."
+    assert "Math.min(" not in sbody, (
+        "ES1: `_allowedHalfHours` must NOT apply its own `Math.min` clamp — "
+        "the clamp moved to `_clampMaxHours` at the source so the snap list "
+        "can't diverge from the (also-clamped) gauge."
+    )
 
-def test_wire_target_handle_awaits_commit_hooks_in_order():
-    """QS-199 review-fix #03 S1 + S2 — the shared `_wireTargetHandle` must:
 
-    - run an optional `onBeforeCommit` hook (awaited) BEFORE the
-      `_setNumber` duration write, so the pool's
-      `_select(pool_mode, 'bistate_mode_default')` lands first (the old
-      pre-migration ordering — writing the duration before default mode
-      is active can be rejected/clamped backend-side); and
-    - `await` the optional `onCommit` hook (pool passes an async one;
-      fire-and-forget raced the local-target timeout + next render).
+@pytest.mark.parametrize(
+    "card_filename",
+    [
+        "qs-on-off-duration-card.js",
+        "qs-radiator-card.js",
+        "qs-climate-card.js",
+        "qs-water-boiler-card.js",
+    ],
+)
+def test_card_derives_max_hours_via_clamp_helper(card_filename):
+    """QS-199 review-fix #04 ES1 — each duration card derives `maxHours`
+    from `cfg.max_default_hours` via the shared `this._clampMaxHours(...)`
+    so the SAME clamped value feeds both the gauge math (hoursToPct /
+    arcs / handle) and the snap list (`_allowedHalfHours(maxHours)`). The
+    stale bare `Number(cfg.max_default_hours) || 12` (gauge-side, unclamped)
+    must be gone.
+    """
+    import re
+
+    src = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text(encoding="utf-8"))
+    assert "this._clampMaxHours(" in src, f"{card_filename}: must derive maxHours via `this._clampMaxHours(...)` (ES1)."
+    assert not re.search(r"Number\(cfg\.max_default_hours\)\s*\|\|\s*12", src), (
+        f"{card_filename}: stale unclamped `Number(cfg.max_default_hours) || 12` "
+        f"(gauge-side) — route it through `this._clampMaxHours` so the gauge and "
+        f"snap range agree (ES1)."
+    )
+    # The snap list consumes the same `maxHours` the gauge uses.
+    assert "this._allowedHalfHours(maxHours)" in src, (
+        f"{card_filename}: snap list must be `_allowedHalfHours(maxHours)` so it "
+        f"shares the clamped source value with the gauge (ES1)."
+    )
+
+
+def test_wire_target_handle_awaits_commit_hook_before_setnumber():
+    """QS-199 review-fix #03 S1 + S2 / #04 NH1 — the shared
+    `_wireTargetHandle` must run an optional `onBeforeCommit` hook
+    (awaited) BEFORE the `_setNumber` duration write, so the pool's
+    `_select(pool_mode, 'bistate_mode_default')` lands first (the old
+    pre-migration ordering — writing the duration before default mode is
+    active can be rejected/clamped backend-side).
+
+    #04 NH1 — the unused post-write `onCommit` param was dropped (no card
+    passed it; scheduling the local-target clear timer before a dead
+    awaited `onCommit` was a latent footgun).
     """
     src = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-base.js").read_text(encoding="utf-8")
     )
-    # Both hooks are awaited.
     assert "await onBeforeCommit(" in src, (
         "S1: `_wireTargetHandle` must `await onBeforeCommit(...)` (pool mode-select)."
     )
-    assert "await onCommit(" in src, "S2: `_wireTargetHandle` must `await onCommit(...)`."
+    # NH1 — the dead `onCommit` param is gone.
+    assert "onCommit" not in src, (
+        "NH1: the unused `onCommit` param/branch must be removed from "
+        "`_wireTargetHandle` (only `onBeforeCommit` is used by any card)."
+    )
     # Ordering: onBeforeCommit fires before the _setNumber write.
     before_idx = src.index("await onBeforeCommit(")
     setnum_idx = src.index("await this._setNumber(")
@@ -7578,3 +7663,34 @@ def test_pool_drag_commit_selects_mode_before_duration():
         "`onBeforeCommit:` so it runs before the duration write (S1)."
     )
     assert "bistate_mode_default" in pool, "pool drag-commit must still select default mode"
+
+
+def test_pool_green_btn_guarded_on_backing_entity():
+    """QS-199 review-fix #04 CR2 — the pool green toggle only RENDERS when
+    its `green_only` backing entity exists (wiring was already guarded on
+    `swGreenOnly`); otherwise it was a visible non-functional control.
+    """
+    import re
+
+    pool = (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    # The green_btn markup is gated on `swGreenOnly` (mirrors the wiring).
+    assert re.search(r"\$\{swGreenOnly\s*\?\s*`<div id=\"green_btn\"", pool), (
+        "CR2: pool `green_btn` must render only when `swGreenOnly` is present."
+    )
+
+
+def test_car_disconnected_controls_leave_tab_order():
+    """QS-199 review-fix #04 CR1 — when the car is disconnected the
+    pointer-disabled custom controls (sun/rabbit/time) must drop out of
+    the keyboard tab order (`tabindex="-1"` + `aria-disabled="true"`)
+    instead of being dead tab stops whose action just bails.
+    """
+    car = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8"))
+    assert 'isDisconnected ? \'tabindex="-1" aria-disabled="true"\' : \'tabindex="0"\'' in car, (
+        "CR1: car must compute a conditional `ctrlTabAttrs` so disconnected controls leave the tab order."
+    )
+    # The three in-ring custom controls use the conditional attrs.
+    for el_id in ("sun_btn", "rabbit_btn", "time_btn"):
+        assert re.search(rf'id="{el_id}"[^>]*\$\{{ctrlTabAttrs\}}', car), (
+            f"CR1: car `{el_id}` must use `${{ctrlTabAttrs}}` (conditional tab order)."
+        )

@@ -731,7 +731,7 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
         // Boilers with significant thermal storage may legitimately
         // need >12h runs; set `max_default_hours: 24` (or similar)
         // on the card config to expand the visual range.
-        maxHours = Number(cfg.max_default_hours) || 12;
+        maxHours = this._clampMaxHours(cfg.max_default_hours);
         displayTargetHours = defaultDuration;
       } else {
         // BH (user-reported NaN bug): a brand-new water boiler with no
@@ -739,7 +739,7 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
         // `hoursToPct` divide by zero and propagate NaN into the SVG
         // arc path (`A 130 130 0 0 1 NaN NaN`). Clamp to a sensible
         // positive fallback so the ring always renders.
-        maxHours = targetHours > 0 ? targetHours : (Number(cfg.max_default_hours) || 12);
+        maxHours = targetHours > 0 ? targetHours : this._clampMaxHours(cfg.max_default_hours);
         displayTargetHours = targetHours;
       }
       

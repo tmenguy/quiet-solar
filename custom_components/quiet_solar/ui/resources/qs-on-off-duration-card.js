@@ -69,11 +69,11 @@ class QsOnOffDurationCard extends QsRingDurationCardBase {
         let displayTargetHours;
         if (isDefaultMode) {
             // N3: configurable upper bound for the default-mode ring.
-            maxHours = Number(cfg.max_default_hours) || 12;
+            maxHours = this._clampMaxHours(cfg.max_default_hours);
             displayTargetHours = defaultDuration;
         } else {
             // BH: zero-clamp against div-by-zero in hoursToPct.
-            maxHours = targetHours > 0 ? targetHours : (Number(cfg.max_default_hours) || 12);
+            maxHours = targetHours > 0 ? targetHours : this._clampMaxHours(cfg.max_default_hours);
             displayTargetHours = targetHours;
         }
 

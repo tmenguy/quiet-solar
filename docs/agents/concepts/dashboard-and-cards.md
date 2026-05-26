@@ -259,15 +259,29 @@ therefore do not import the shared animation modules.
 Cross-card hardening invariants worth knowing (review-fix #02): every
 entity-derived string interpolated into `innerHTML` is escaped via
 `_escapeHtml`; every custom `div` control that carries handlers is
-focusable (`role="button"` + `tabindex="0"` + `_registerKeyActivation`);
-the drag-ring snap points come from `_allowedHalfHours(maxHours)` (so
-targets above 12 h are selectable); time parsing goes through the
+focusable (`role="button"` + `tabindex` + `_registerKeyActivation`),
+and a disconnected card drops its custom controls out of the tab order
+(`tabindex="-1"` + `aria-disabled`); time parsing goes through the
 hardened `_parseTimeToMinutes` (07:00 fallback for `unavailable`/
 `unknown`); and the radiator keeps its RAF loop alive until
 `QsFlameEngine.isIdle()` so an on→off transition settles to a clean
-still silhouette instead of freezing mid-flicker. The atomic-write
-temp name is unique per call (`<pid>.<counter>`) so the unlocked,
-dual-entry `async_update_resources` can't race on a shared temp.
+still silhouette instead of freezing mid-flicker.
+
+Two subsystems were root-caused in review-fix #04 to stop a recurring
+edge-case cycle:
+
+- **Resource-update concurrency** — `async_update_resources` runs its
+  whole sweep + copy + register under a module-level
+  `_RESOURCE_UPDATE_LOCK`, so the two unlocked entry points
+  (startup-restore and the Generate-Dashboard button) can't interleave
+  their temp-file writes. The unique per-write temp name
+  (`<pid>.<counter>.qstmp`) + the orphan sweep stay as defense-in-depth.
+- **Drag-range vs gauge** — each card derives `maxHours` from
+  `cfg.max_default_hours` through the single `_clampMaxHours` helper
+  (`Number.isFinite` guard + `Math.min(n, 168)`), and BOTH the gauge
+  math and `_allowedHalfHours(maxHours)` consume that one clamped value,
+  so the draggable snap range can never desync from the rendered scale
+  (and a non-finite config can't hang the render loop).
 
 ### Tracking storage (survives restart)
 

@@ -22,18 +22,24 @@
         (pinned by test_shared_css_has_no_branded_colour_literals).
 */
 
+// QS-199 review-fix #02 S10 — neutral, AC6-compliant palette defaults
+// (theme variables only — zero branded colour literals). Pinned by
+// test_shared_css_has_no_branded_colour_literals.
+const PALETTE_DEFAULTS = {
+    primary: 'var(--primary-color)',
+    gradStart: 'var(--primary-color)',
+    gradEnd: 'var(--primary-color)',
+    animStart: 'var(--primary-color)',
+    animEnd: 'var(--primary-color)',
+};
+
 export function baseCardCSS(palette, _options) {
-    // QS-199 review-fix #02 S10 — no branded colour literals in the
-    // shared module (AC6 policy). The neutral fallback uses theme
-    // variables only; all 6 cards pass a real palette, so the fallback
-    // is just a defensive default for a missing/empty argument.
-    const colors = palette || {
-        primary: 'var(--primary-color)',
-        gradStart: 'var(--primary-color)',
-        gradEnd: 'var(--primary-color)',
-        animStart: 'var(--primary-color)',
-        animEnd: 'var(--primary-color)',
-    };
+    // QS-199 review-fix #04 CR3 — merge defaults PER KEY, not only when
+    // `palette` is entirely falsy. The old `palette || {…}` emitted
+    // `undefined` into the generated CSS (breaking gradients / color-mix)
+    // for a partial palette like `{ primary: '#FF5722' }`. Spreading the
+    // defaults first guarantees every key resolves to a real value.
+    const colors = { ...PALETTE_DEFAULTS, ...(palette || {}) };
 
     return `
       :host { --pad: 18px; --ring-text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); display:block; }
