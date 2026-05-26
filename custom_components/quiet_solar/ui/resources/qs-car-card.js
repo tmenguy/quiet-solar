@@ -127,12 +127,13 @@ const LIGHTNING_LIFE_S = 0.25;
 // constant NAME); semantically it's now a fill colour.
 // Iteration history:
 // - Initial:                 `#E0F7FF` near-white (read as grey through glow)
-// - Review-fix #02 user #1:  `#33B5FF` electric blue (user: "too blue")
-// - Review-fix #02 user #2:  `#E580FF` very bright purple — matches
-//                            real lightning (white-violet plasma core)
-//                            and reads as "Zeus thunderbolt" rather
-//                            than a neon arc.
-const LIGHTNING_STROKE_COLOR = '#E580FF';
+// - Review-fix #02 user #1:  `#33B5FF` electric blue ("too blue")
+// - Review-fix #02 user #2:  `#E580FF` very bright purple ("purple is ugly")
+// - Review-fix #02 user #3:  `#00E5FF` — same `SPARKLE_CHARGE_COLOR`
+//                            electric-cyan as the charging sparkles,
+//                            so bolts + sparkles share one bright-
+//                            blue palette during charging discharge.
+const LIGHTNING_STROKE_COLOR = '#00E5FF';
 const LIGHTNING_TOP_MARGIN_PX = 4;
 const LIGHTNING_LATERAL_JITTER_PX = 18;
 // Tapering widths for the thunderbolt outline (in SVG units).
