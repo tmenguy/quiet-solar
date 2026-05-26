@@ -4016,36 +4016,31 @@ def test_car_card_lightning_life_and_glow_filter():
         "`lifeT < 0.70` in the lightning advance loop."
     )
 
-    # Glow filter with safe-region attrs.
-    filter_decl = (
-        '<filter id="${lightningFilterId}" x="-50%" y="-50%" '
-        'width="200%" height="200%">'
+    # Review-fix #02 user follow-up #2: the Gaussian-blur glow filter
+    # was removed per user "no need of the glow effect for the
+    # lightning bolts". Both the filter declaration AND its
+    # application on the lightning layer must now be absent. The
+    # `mix-blend-mode: screen` is kept for the electric "Screen"
+    # composite against the soup.
+    # Scope these "must-not-exist" checks to EXECUTABLE code only —
+    # historical comments referencing the removed identifiers are
+    # allowed (helpful for `git log` archaeology).
+    assert "${lightningFilterId}" not in executable, (
+        "qs-car-card.js (AC-6): the lightning Gaussian-blur glow "
+        "filter has been removed; no `${lightningFilterId}` "
+        "reference should remain in executable code. User: \"no need "
+        "of the glow effect for the lightning bolts\"."
     )
-    assert filter_decl in source, (
-        "qs-car-card.js (AC-6): lightning filter declaration must "
-        f"include safe-region attributes — expected `{filter_decl}`."
+    assert "LIGHTNING_GLOW_STDDEV" not in executable, (
+        "qs-car-card.js (AC-6): the `LIGHTNING_GLOW_STDDEV` "
+        "constant was removed alongside the glow filter — "
+        "no reference should remain in executable code."
     )
-    assert (
-        '<feGaussianBlur stdDeviation="${LIGHTNING_GLOW_STDDEV}" />'
-        in source
-    ), (
-        "qs-car-card.js (AC-6): lightning filter must contain "
-        "`<feGaussianBlur stdDeviation=\"${LIGHTNING_GLOW_STDDEV}\" />`."
-    )
-
-    # Layer carries filter + mix-blend-mode.
-    layer_re = re.compile(
-        r'<g\s+id="\$\{lightningLayerId\}"\s+'
-        r'filter="url\(#\$\{lightningFilterId\}\)"',
-    )
-    assert layer_re.search(source), (
-        "qs-car-card.js (AC-6): `<g id=\"${lightningLayerId}\">` must "
-        "carry `filter=\"url(#${lightningFilterId})\"`."
-    )
+    # Layer keeps `mix-blend-mode: screen` (composite, not blur).
     assert "mix-blend-mode: screen" in source, (
-        "qs-car-card.js (AC-6): lightning layer must use "
-        "`mix-blend-mode: screen` so the glow composites against the "
-        "soup."
+        "qs-car-card.js (AC-6): lightning layer must still use "
+        "`mix-blend-mode: screen` so the bolt composites brightly "
+        "against the soup even without the glow filter."
     )
 
     # Lightning element type: <path>, not <polyline>. Pin negatively:
@@ -4431,11 +4426,15 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
 
 def test_car_card_per_instance_unique_svg_ids():
     """QS-232 AC-11: `QsCarCard._nextClipId` static counter is bumped
-    inside `if (!this._electronClipId)`. Five per-instance ID fields
+    inside `if (!this._electronClipId)`. Four per-instance ID fields
     are derived from the same `uid`: `_electronClipId`,
-    `_sparkleLayerId`, `_lightningLayerId`, `_grainFilterId`,
-    `_lightningFilterId`. All follow the `car_<role>_${uid}` naming
-    convention.
+    `_sparkleLayerId`, `_lightningLayerId`, `_grainFilterId`. All
+    follow the `car_<role>_${uid}` naming convention.
+
+    Review-fix #02 user follow-up #2: `_lightningFilterId` was
+    removed alongside the lightning glow filter — the new sharp
+    purple bolt has no `<filter>` element, so the per-instance
+    filter ID is unused.
     """
     import re
 
@@ -4461,13 +4460,14 @@ def test_car_card_per_instance_unique_svg_ids():
         "once."
     )
 
-    # Five ID fields, all `car_<role>_${uid}`-shaped.
+    # Four ID fields, all `car_<role>_${uid}`-shaped. The
+    # `_lightningFilterId` was removed in review-fix #02 follow-up
+    # alongside the lightning glow filter.
     id_assignments = {
-        "_electronClipId":    "car_eClip_",
-        "_sparkleLayerId":    "car_sparkLayer_",
-        "_lightningLayerId":  "car_lightningLayer_",
-        "_grainFilterId":     "car_grainFilter_",
-        "_lightningFilterId": "car_lightningFilter_",
+        "_electronClipId":   "car_eClip_",
+        "_sparkleLayerId":   "car_sparkLayer_",
+        "_lightningLayerId": "car_lightningLayer_",
+        "_grainFilterId":    "car_grainFilter_",
     }
     for field, prefix in id_assignments.items():
         pat = re.compile(

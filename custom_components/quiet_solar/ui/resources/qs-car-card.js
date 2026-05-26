@@ -124,11 +124,15 @@ const LIGHTNING_SPAWN_MAX_S = 3.0;
 const LIGHTNING_LIFE_S = 0.25;
 // Fill colour for the bolt polygon. The name `LIGHTNING_STROKE_COLOR`
 // is retained for backward-compat with the AC-6 test (which pins the
-// constant NAME); semantically it's now a fill colour. Value is the
-// "Light Blue A400" Material Design tone — saturated enough to read
-// as electric blue even after the Gaussian-blur glow softens edges.
-const LIGHTNING_STROKE_COLOR = '#33B5FF';
-const LIGHTNING_GLOW_STDDEV = 2.5;
+// constant NAME); semantically it's now a fill colour.
+// Iteration history:
+// - Initial:                 `#E0F7FF` near-white (read as grey through glow)
+// - Review-fix #02 user #1:  `#33B5FF` electric blue (user: "too blue")
+// - Review-fix #02 user #2:  `#E580FF` very bright purple — matches
+//                            real lightning (white-violet plasma core)
+//                            and reads as "Zeus thunderbolt" rather
+//                            than a neon arc.
+const LIGHTNING_STROKE_COLOR = '#E580FF';
 const LIGHTNING_TOP_MARGIN_PX = 4;
 const LIGHTNING_LATERAL_JITTER_PX = 18;
 // Tapering widths for the thunderbolt outline (in SVG units).
@@ -136,13 +140,22 @@ const LIGHTNING_LATERAL_JITTER_PX = 18;
 // path then narrows to a point at the soup surface via two
 // intermediate widths (~55% and ~25% of the top, computed inline).
 const LIGHTNING_TOP_WIDTH = 9;
+// Branch (ramification) count per bolt. Real lightning has many
+// smaller forks off the main channel — these short tapered branches
+// give the bolt the characteristic "lightning tree" look.
+const LIGHTNING_BRANCH_MIN_COUNT = 3;
+const LIGHTNING_BRANCH_MAX_COUNT = 6;
+const LIGHTNING_BRANCH_MIN_LEN = 8;
+const LIGHTNING_BRANCH_MAX_LEN = 22;
 // Review-fix #01 #16: removed unused `LIGHTNING_SEGMENTS = 3` —
 // the lightning path hardcodes its skeleton inline rather than
 // driving an emission loop, so the constant served no purpose.
 // Review-fix #02 user follow-up: removed `LIGHTNING_STROKE_WIDTH`
-// — the new tapered-polygon shape has no uniform stroke; widths
-// vary along the skeleton via `LIGHTNING_TOP_WIDTH` and its
-// inline percentages.
+// — the new tapered-polygon shape has no uniform stroke.
+// Review-fix #02 user follow-up #2: removed `LIGHTNING_GLOW_STDDEV`
+// and the associated `<filter>` in `<defs>` — user said "no need of
+// the glow effect for the lightning bolts". The sharp filled
+// polygon now reads as bright-edged plasma without the soft blur.
 
 // --- Inside-disc button carve-out covers (QS-232 D17) ---
 // Mirror of QS-217 for THREE buttons that sit inside the clip disc.
@@ -539,11 +552,12 @@ class QsCarCard extends HTMLElement {
         if (charging && !degraded) {
           this._nextLightningAt -= dt;
           while (this._nextLightningAt <= 0 && this._lightningBolts.length < MAX_CONCURRENT_LIGHTNING) {
-            // Tapered Zeus-thunderbolt path. 4-node skeleton from
-            // top (wide) to soup tip (point), with lateral jitter at
-            // the two midpoints for the zig-zag. The outline is a
-            // closed polygon: left side top→bottom, tip, right side
-            // bottom→top.
+            // Tapered Zeus-thunderbolt with branching ramifications.
+            // 4-node main skeleton from top (wide) to soup tip
+            // (point), with lateral jitter at the two midpoints for
+            // the zig-zag. Plus N small tapered branches forking off
+            // the main spine — gives the bolt the characteristic
+            // "lightning tree" look of a real discharge.
             const topY = CENTER_CY - CLIP_R + LIGHTNING_TOP_MARGIN_PX;
             const startCx = CENTER_CX + (Math.random() * 2 - 1) * (CLIP_R * 0.4);
             const dy = this._waterBaseY - CENTER_CY;
@@ -555,33 +569,87 @@ class QsCarCard extends HTMLElement {
             }
             const endCx = CENTER_CX + (Math.random() * 2 - 1) * chordHalf * 0.7;
             const totalLen = this._waterBaseY - topY;
-            // Two lateral jitters at 33% and 67% down the bolt —
-            // smaller than the original mid-kink so the overall
-            // shape still reads as "going down" rather than
-            // "sideways squiggle".
             const j1 = (Math.random() * 2 - 1) * LIGHTNING_LATERAL_JITTER_PX * 0.5;
             const j2 = (Math.random() * 2 - 1) * LIGHTNING_LATERAL_JITTER_PX * 0.5;
             const x1 = startCx + (endCx - startCx) * 0.33 + j1;
             const x2 = startCx + (endCx - startCx) * 0.67 + j2;
             const y1 = topY + totalLen * 0.33;
             const y2 = topY + totalLen * 0.67;
-            // Half-widths along the skeleton. Top is the widest; the
-            // path narrows to a point at the tip (water surface).
+            // Half-widths along the main skeleton (50/30/15/0 of top).
             const h0 = LIGHTNING_TOP_WIDTH * 0.50;
             const h1 = LIGHTNING_TOP_WIDTH * 0.30;
             const h2 = LIGHTNING_TOP_WIDTH * 0.15;
-            const d = `M ${(startCx - h0).toFixed(2)},${topY.toFixed(2)}`
-                    + ` L ${(x1 - h1).toFixed(2)},${y1.toFixed(2)}`
-                    + ` L ${(x2 - h2).toFixed(2)},${y2.toFixed(2)}`
-                    + ` L ${endCx.toFixed(2)},${this._waterBaseY.toFixed(2)}`
-                    + ` L ${(x2 + h2).toFixed(2)},${y2.toFixed(2)}`
-                    + ` L ${(x1 + h1).toFixed(2)},${y1.toFixed(2)}`
-                    + ` L ${(startCx + h0).toFixed(2)},${topY.toFixed(2)}`
-                    + ` Z`;
+            // Main bolt outline — left edge top→bottom, tip, right
+            // edge bottom→top, closed.
+            let d = `M ${(startCx - h0).toFixed(2)},${topY.toFixed(2)}`
+                  + ` L ${(x1 - h1).toFixed(2)},${y1.toFixed(2)}`
+                  + ` L ${(x2 - h2).toFixed(2)},${y2.toFixed(2)}`
+                  + ` L ${endCx.toFixed(2)},${this._waterBaseY.toFixed(2)}`
+                  + ` L ${(x2 + h2).toFixed(2)},${y2.toFixed(2)}`
+                  + ` L ${(x1 + h1).toFixed(2)},${y1.toFixed(2)}`
+                  + ` L ${(startCx + h0).toFixed(2)},${topY.toFixed(2)}`
+                  + ` Z`;
+            // Branches: short tapered triangles forking from random
+            // positions along the main spine. Each branch is a
+            // separate sub-path appended to the compound `d`.
+            const branchCount = LIGHTNING_BRANCH_MIN_COUNT +
+              Math.floor(Math.random() * (LIGHTNING_BRANCH_MAX_COUNT - LIGHTNING_BRANCH_MIN_COUNT + 1));
+            for (let bi = 0; bi < branchCount; bi++) {
+              // Origin along the main spine — `t` in [0.15, 0.85].
+              const t = 0.15 + Math.random() * 0.70;
+              // Linear interp through the 4-node skeleton to find
+              // origin point + local main-bolt half-width.
+              let ox, oy, originHalfWidth;
+              if (t < 0.33) {
+                const u = t / 0.33;
+                ox = startCx + (x1 - startCx) * u;
+                oy = topY + (y1 - topY) * u;
+                originHalfWidth = h0 + (h1 - h0) * u;
+              } else if (t < 0.67) {
+                const u = (t - 0.33) / 0.34;
+                ox = x1 + (x2 - x1) * u;
+                oy = y1 + (y2 - y1) * u;
+                originHalfWidth = h1 + (h2 - h1) * u;
+              } else {
+                const u = (t - 0.67) / 0.33;
+                ox = x2 + (endCx - x2) * u;
+                oy = y2 + (this._waterBaseY - y2) * u;
+                originHalfWidth = h2 * (1 - u);
+              }
+              // Branch direction — biased outward+downward.
+              // dirAngle = 90° is straight down. Range covers down ±
+              // ~70° to give some near-horizontal forks too.
+              const angleDeg = -70 + Math.random() * 140;
+              const dirAngle = (90 + angleDeg) * Math.PI / 180;
+              const branchLen = LIGHTNING_BRANCH_MIN_LEN +
+                Math.random() * (LIGHTNING_BRANCH_MAX_LEN - LIGHTNING_BRANCH_MIN_LEN);
+              const tipX = ox + Math.cos(dirAngle) * branchLen;
+              const tipY = oy + Math.sin(dirAngle) * branchLen;
+              // Branch origin width — ~70% of the main bolt's local
+              // half-width, perpendicular to the branch direction.
+              const branchHalfW = Math.max(0.6, originHalfWidth * 0.7);
+              const blen = Math.sqrt(
+                (tipX - ox) * (tipX - ox) + (tipY - oy) * (tipY - oy)
+              );
+              if (blen < 0.5) continue;
+              // Perpendicular unit vector to the branch direction.
+              const px = -(tipY - oy) / blen;
+              const py = (tipX - ox) / blen;
+              const lx = ox + px * branchHalfW;
+              const ly = oy + py * branchHalfW;
+              const rx = ox - px * branchHalfW;
+              const ry = oy - py * branchHalfW;
+              // Tapered triangular branch: origin-left, tip, origin-right.
+              d += ` M ${lx.toFixed(2)},${ly.toFixed(2)}`
+                +  ` L ${tipX.toFixed(2)},${tipY.toFixed(2)}`
+                +  ` L ${rx.toFixed(2)},${ry.toFixed(2)}`
+                +  ` Z`;
+            }
             const el = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             el.setAttribute('d', d);
             el.setAttribute('fill', LIGHTNING_STROKE_COLOR);
             el.setAttribute('stroke', 'none');
+            el.setAttribute('fill-rule', 'nonzero');
             el.setAttribute('pointer-events', 'none');
             el.setAttribute('opacity', '0');
             lightningLayer.appendChild(el);
@@ -800,17 +868,18 @@ class QsCarCard extends HTMLElement {
       if (!this._electronClipId) {
         QsCarCard._nextClipId = (QsCarCard._nextClipId || 0) + 1;
         const uid = QsCarCard._nextClipId;
-        this._electronClipId    = `car_eClip_${uid}`;
-        this._sparkleLayerId    = `car_sparkLayer_${uid}`;
-        this._lightningLayerId  = `car_lightningLayer_${uid}`;
-        this._grainFilterId     = `car_grainFilter_${uid}`;
-        this._lightningFilterId = `car_lightningFilter_${uid}`;
+        this._electronClipId   = `car_eClip_${uid}`;
+        this._sparkleLayerId   = `car_sparkLayer_${uid}`;
+        this._lightningLayerId = `car_lightningLayer_${uid}`;
+        this._grainFilterId    = `car_grainFilter_${uid}`;
+        // Review-fix #02 user follow-up #2: `_lightningFilterId`
+        // removed alongside the lightning glow filter — the new
+        // sharp purple bolt doesn't use a `<filter>`.
       }
-      const electronClipId    = this._electronClipId;
-      const sparkleLayerId    = this._sparkleLayerId;
-      const lightningLayerId  = this._lightningLayerId;
-      const grainFilterId     = this._grainFilterId;
-      const lightningFilterId = this._lightningFilterId;
+      const electronClipId   = this._electronClipId;
+      const sparkleLayerId   = this._sparkleLayerId;
+      const lightningLayerId = this._lightningLayerId;
+      const grainFilterId    = this._grainFilterId;
       const carChargeTypeIcons = {
           "Unknown": "mdi:help-circle-outline",
           "Not Plugged": "mdi:power-plug-off",
@@ -1342,9 +1411,6 @@ class QsCarCard extends HTMLElement {
                     <feMergeNode in="grain" />
                   </feMerge>
                 </filter>
-                <filter id="${lightningFilterId}" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="${LIGHTNING_GLOW_STDDEV}" />
-                </filter>
                 <clipPath id="${electronClipId}">
                   <circle cx="${CENTER_CX}" cy="${CENTER_CY}" r="${CLIP_R}" />
                 </clipPath>
@@ -1353,7 +1419,7 @@ class QsCarCard extends HTMLElement {
                 <path id="electron_wave_idle" d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" opacity="${initialIdleOpacity}" filter="url(#${grainFilterId})" pointer-events="none" style="will-change: transform;" />
                 <path id="electron_wave_charge" d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" opacity="${initialChargeOpacity}" filter="url(#${grainFilterId})" pointer-events="none" style="will-change: transform;" />
                 <g id="${sparkleLayerId}" pointer-events="none"></g>
-                <g id="${lightningLayerId}" filter="url(#${lightningFilterId})" pointer-events="none" style="mix-blend-mode: screen; will-change: opacity;"></g>
+                <g id="${lightningLayerId}" pointer-events="none" style="mix-blend-mode: screen; will-change: opacity;"></g>
               </g>
               ${swPriority ? `<circle id="sun_btn_cover" cx="${SUN_BTN_CARVE_CX}" cy="${SUN_BTN_CARVE_CY}" r="${SUN_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
               ${e.force_now ? `<circle id="rabbit_btn_cover" cx="${RABBIT_BTN_CARVE_CX}" cy="${RABBIT_BTN_CARVE_CY}" r="${RABBIT_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
