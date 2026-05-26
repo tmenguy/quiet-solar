@@ -105,6 +105,21 @@ export class QsRingDurationCardBase extends QsCardBase {
     }
 
     /*
+      _allowedHalfHours(maxHours) — the drag-ring snap points: 0 .. maxHours
+      in 0.5-hour steps. QS-199 review-fix #02 S8 — the snap range is
+      derived from the card's configured `max_default_hours` (passed in as
+      `maxHours`) instead of a hard-coded 0..12, so targets above 12h are
+      selectable from the drag ring (the gauge already renders the larger
+      range). Falls back to 12 for a missing / non-positive value.
+    */
+    _allowedHalfHours(maxHours) {
+        const cap = Number(maxHours) > 0 ? Number(maxHours) : 12;
+        const out = [];
+        for (let i = 0; i <= cap; i += 0.5) out.push(i);
+        return out;
+    }
+
+    /*
       _wireOverrideButton — wires the override-btn DOM node:
         - confirmation dialog → _press(entityId)
         - state-aware class assignment (active / resetting / disabled)

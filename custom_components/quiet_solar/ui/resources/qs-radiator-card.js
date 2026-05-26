@@ -145,6 +145,17 @@ class QsRadiatorCard extends QsRingDurationCardBase {
                 }
             }
         }
+
+        // QS-199 review-fix #02 S7 — once the radiator is off AND the
+        // flame has fully decayed to its still amplitude, stop the RAF.
+        // (When `!fireOn` the dashed-arc isn't running either, so this is
+        // safe.) The base step honours the null `_animRaf` and won't
+        // reschedule. The last regen above already painted the settled
+        // idle silhouette, so the final frame is a clean still flame
+        // rather than a frozen mid-flicker shape.
+        if (!fireOn && this._flameEngine.isIdle()) {
+            this._stopAnimation();
+        }
     }
 
     _render() {
@@ -287,9 +298,15 @@ class QsRadiatorCard extends QsRingDurationCardBase {
         // there is enough progress to dash through. The flame backdrop
         // wants RAF as soon as the radiator is running. The umbrella
         // showAnimation is the OR.
+        // QS-199 review-fix #02 S7 — also keep the loop alive while the
+        // flame is still decaying to idle after an on→off transition, so
+        // it settles to a clean still silhouette instead of freezing
+        // mid-flicker. `_onAnimationTick` stops the loop once the engine
+        // reports `isIdle()`.
         const ringDashActive = running && segLen > 6;
         const fireActive = running;
-        const showAnimation = ringDashActive || fireActive;
+        const flameSettling = !this._flameEngine.isIdle();
+        const showAnimation = ringDashActive || fireActive || flameSettling;
 
         if (showAnimation) {
             this._startAnimation();
@@ -488,8 +505,8 @@ class QsRadiatorCard extends QsRingDurationCardBase {
         }
 
         if (canDragHandle) {
-            const allowedHours = [];
-            for (let i = 0; i <= 12; i += 0.5) allowedHours.push(i);
+            // S8: snap points derived from the configured max (default 12).
+            const allowedHours = this._allowedHalfHours(maxHours);
 
             this._wireTargetHandle({
                 ringSvg: this._root.querySelector('.ring svg'),

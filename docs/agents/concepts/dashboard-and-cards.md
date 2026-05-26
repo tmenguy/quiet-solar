@@ -255,6 +255,19 @@ generic engine), and pool / water-boiler keep their own
 `_generateWavePath` (a 2×-width GPU-scroll variant). Those three cards
 therefore do not import the shared animation modules.
 
+Cross-card hardening invariants worth knowing (review-fix #02): every
+entity-derived string interpolated into `innerHTML` is escaped via
+`_escapeHtml`; every custom `div` control that carries handlers is
+focusable (`role="button"` + `tabindex="0"` + `_registerKeyActivation`);
+the drag-ring snap points come from `_allowedHalfHours(maxHours)` (so
+targets above 12 h are selectable); time parsing goes through the
+hardened `_parseTimeToMinutes` (07:00 fallback for `unavailable`/
+`unknown`); and the radiator keeps its RAF loop alive until
+`QsFlameEngine.isIdle()` so an on→off transition settles to a clean
+still silhouette instead of freezing mid-flicker. The atomic-write
+temp name is unique per call (`<pid>.<counter>`) so the unlocked,
+dual-entry `async_update_resources` can't race on a shared temp.
+
 ### Tracking storage (survives restart)
 
 `QS_DASHBOARDS_STORAGE_KEY` (`quiet_solar_dashboards`) records which

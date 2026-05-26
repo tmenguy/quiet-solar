@@ -325,8 +325,10 @@ class QsPoolCard extends QsRingDurationCardBase {
             const translated = this._hass?.localize?.(key);
             return (translated && translated !== key) ? translated : value;
         };
+        // S4: escape the entity-derived option value + label before
+        // interpolating into innerHTML (matches the radiator pattern).
         const modeOptionsHtml = modeOptions.map((o) =>
-            `<option value="${o}" ${o === modeState ? 'selected' : ''}>${translatePoolMode(o)}</option>`,
+            `<option value="${this._escapeHtml(o)}" ${o === modeState ? 'selected' : ''}>${this._escapeHtml(translatePoolMode(o))}</option>`,
         ).join('');
 
         // Build the ring SVG markup via the sub-base helper (NOTE: pool's
@@ -351,7 +353,7 @@ class QsPoolCard extends QsRingDurationCardBase {
 
         <div class="hero">
           <div class="ring">
-            ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
+            ${swEnableDevice ? `<div id="power_btn" class="power-btn ${isEnabled ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle device"><ha-icon icon="mdi:power"></ha-icon></div>` : ''}
             <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
               <defs>
                 <clipPath id="${waterClipId}">
@@ -380,7 +382,7 @@ class QsPoolCard extends QsRingDurationCardBase {
                 </div>
               </div>
             </div>
-            <div id="green_btn" class="green-btn ${swGreenOnly?.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:leaf"></ha-icon></div>
+            <div id="green_btn" class="green-btn ${swGreenOnly?.state === 'on' ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle solar-only mode"><ha-icon icon="mdi:leaf"></ha-icon></div>
           </div>
         </div>
 

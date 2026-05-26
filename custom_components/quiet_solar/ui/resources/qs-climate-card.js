@@ -1447,8 +1447,8 @@ class QsClimateCard extends QsRingDurationCardBase {
       }
 
       if (canDragHandle) {
-          const allowedHours = [];
-          for (let i = 0; i <= 12; i += 0.5) allowedHours.push(i);
+          // S8: snap points derived from the configured max (default 12).
+          const allowedHours = this._allowedHalfHours(maxHours);
 
           this._wireTargetHandle({
               ringSvg: this._root.querySelector('.ring svg'),

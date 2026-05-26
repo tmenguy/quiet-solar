@@ -388,8 +388,19 @@ class TestDashboardTemplateRendering:
         # and is wired into every action via the shared wire-helpers.
         union = card_source_union("qs-radiator-card.js")
         assert "_registerKeyActivation(" in union
-        # At least four calls (one per action div) across the union.
-        assert union.count("_registerKeyActivation(") >= 4
+        # QS-199 review-fix #02 S12 — count CALL-SITES only. The method
+        # DEFINITION `_registerKeyActivation(el, action) {` in
+        # qs-card-base.js would otherwise inflate the count, letting the
+        # test pass with fewer wired actions than expected. `this.` and
+        # bare-call forms are call-sites; the `(el, action)` signature is
+        # the definition.
+        call_sites = re.findall(r"_registerKeyActivation\(", union)
+        definitions = re.findall(r"_registerKeyActivation\(el,\s*action\)", union)
+        wired = len(call_sites) - len(definitions)
+        assert wired >= 4, (
+            f"expected ≥4 _registerKeyActivation call-sites across the union, "
+            f"got {wired} (calls={len(call_sites)}, defs={len(definitions)})"
+        )
 
     def test_radiator_card_s17_async_calls_wrapped_in_try_finally(self):  # CR2 — sync (no hass)
         """A2 — pin S17: each `_select` / `_setNumber` await is wrapped.
@@ -7127,10 +7138,24 @@ async def test_shared_modules_are_not_lovelace_registered(tmp_path):
             f"QS-199 AC3 violation — shared module `shared/{shared_name}` was not copied to destination"
         )
 
-    # And every top-level qs-*-card.js IS registered.
+    # QS-199 review-fix #02 S9 — assert the EXACT set of registered card
+    # URLs (the six qs-*-card.js), not just the count. A count-only check
+    # would still pass if a card URL disappeared and an unrelated
+    # top-level JS file took its place, so AC3 wouldn't actually be pinned.
     top_level_urls = [item["url"] for item in resources.created_items if "/shared/" not in item["url"]]
-    assert len(top_level_urls) == 6, (
-        f"Expected exactly 6 top-level card registrations; got {len(top_level_urls)}: {top_level_urls}"
+    registered_paths = {url.split("?", 1)[0] for url in top_level_urls}
+    expected_paths = {
+        "/local/quiet_solar/qs-car-card.js",
+        "/local/quiet_solar/qs-climate-card.js",
+        "/local/quiet_solar/qs-on-off-duration-card.js",
+        "/local/quiet_solar/qs-pool-card.js",
+        "/local/quiet_solar/qs-radiator-card.js",
+        "/local/quiet_solar/qs-water-boiler-card.js",
+    }
+    assert registered_paths == expected_paths, (
+        f"QS-199 AC3 — registered card set mismatch.\n"
+        f"  expected: {sorted(expected_paths)}\n"
+        f"  got:      {sorted(registered_paths)}"
     )
 
 
@@ -7272,6 +7297,23 @@ def test_all_cards_inherit_hardened_dialog(card_filename):
     # S16 — dialog buttons get keyboard activation.
     assert "_registerKeyActivation" in union, f"{card_filename}: dialog/buttons missing S16 keyboard activation"
 
+    # QS-199 review-fix #02 N6 — POSITIVE assertion that the card actually
+    # routes its dialogs through the shared base. The single-definition
+    # tests prove no inline `_showDialog`/`showDialog` closure exists, but
+    # a future regression that builds modal DOM inline (no closure, no
+    # method def) would slip past them — so require the card to either
+    # call `this._showDialog(` directly OR go through a wire-helper that
+    # does (override/reset/time pickers all open dialogs via the base).
+    card_text = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text(encoding="utf-8"))
+    routes_through_base = "this._showDialog(" in card_text or any(
+        f"this.{w}(" in card_text for w in ("_wireOverrideButton", "_wireResetButton", "_wireTimePicker")
+    )
+    assert routes_through_base, (
+        f"{card_filename}: no `this._showDialog(` call and no dialog-opening "
+        f"wire-helper — the card may be building modal DOM inline, bypassing "
+        f"the hardened base dialog (N6)."
+    )
+
 
 def test_card_does_not_reach_into_flame_engine_privates():
     """QS-199 review-fix M2 — the radiator (and climate) card must NOT
@@ -7316,4 +7358,145 @@ def test_card_source_union_entries_all_exist():
 
     assert not missing, (
         f"QS-199 review-fix N7 violation — CARD_TO_SHARED_FILES references files that don't exist: {missing}"
+    )
+
+
+def test_shared_css_has_no_branded_colour_literals():
+    """QS-199 review-fix #02 S10 — the shared CSS module must contain ZERO
+    branded colour hex literals (AC6 policy). Only neutral
+    `rgba(0,0,0,*)` / `rgba(255,255,255,*)`, `var(--*)` theme variables,
+    and the four documented semantic-anchor colours (power-blue #2196F3,
+    solar-green #4CAF50, override-orange #FF9800, pill-on green #2ecc71)
+    are allowed. The `palette || {…}` fallback must use only
+    `var(--primary-color)` — no pre-refactor branded palette hexes.
+    """
+    import re
+
+    css_src = (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-styles.js").read_text(encoding="utf-8")
+    # Strip JS comments so the policy doc-comment (which names the
+    # allowed anchors) doesn't count as a violation.
+    executable = _strip_js_comments(css_src)
+
+    # Semantic anchors (not card-branded) + their alpha (8-digit) variants.
+    allowed_anchors = {"#2196F3", "#4CAF50", "#FF9800", "#2ecc71", "#2ecc71aa"}
+    # Neutral white / black hexes are allowed (equivalent to the neutral
+    # rgba(255,255,255,*) / rgba(0,0,0,*) the policy already permits).
+    neutral_hexes = {"#fff", "#ffffff", "#000", "#000000"}
+    allowed = {h.lower() for h in (allowed_anchors | neutral_hexes)}
+    hexes = set(re.findall(r"#[0-9a-fA-F]{3,8}\b", executable))
+    branded = {h for h in hexes if h.lower() not in allowed}
+
+    assert not branded, (
+        "QS-199 review-fix #02 S10 — shared/qs-card-styles.js contains "
+        f"non-anchor branded colour hex literal(s): {sorted(branded)}. "
+        "Branded colours must flow through the `palette` argument; the "
+        "fallback must use var(--primary-color)."
+    )
+
+
+def test_car_uses_inherited_parse_time_helper():
+    """QS-199 review-fix #02 S2 — the car card must use the inherited,
+    hardened `this._parseTimeToMinutes` (07:00 fallback for invalid
+    states) rather than a local closure that maps `unavailable`/`unknown`
+    to midnight.
+    """
+    import re
+
+    src = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8"))
+    assert not re.search(r"const\s+parseTimeToMinutes\s*=", src), (
+        "qs-car-card.js still defines a local `parseTimeToMinutes` closure; "
+        "use the inherited `this._parseTimeToMinutes` (S2)."
+    )
+    assert "this._parseTimeToMinutes(" in src, "qs-car-card.js must call the inherited `this._parseTimeToMinutes` (S2)."
+
+
+def test_cards_escape_entity_derived_option_text():
+    """QS-199 review-fix #02 S3/S4 — entity-derived strings interpolated
+    into innerHTML (car charger/person options + forecast, pool mode
+    options) must route through `this._escapeHtml(...)`.
+    """
+    import re
+
+    car = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8"))
+    # Car option maps must escape the option value.
+    assert "this._escapeHtml(o)" in car, "qs-car-card.js: charger/person `<option>` text must be escaped (S3)."
+    assert "this._escapeHtml(personForecastStr)" in car, "qs-car-card.js: person forecast string must be escaped (S3)."
+    # A raw `<option>${o}</option>` (no escape) must NOT remain.
+    assert not re.search(r"<option[^>]*>\$\{o\}</option>", car), (
+        "qs-car-card.js: found an unescaped `<option>${o}</option>` (S3)."
+    )
+
+    pool = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8"))
+    assert "this._escapeHtml(o)" in pool and "this._escapeHtml(translatePoolMode(o))" in pool, (
+        "qs-pool-card.js: pool-mode option value + label must be escaped (S4)."
+    )
+
+
+def test_in_ring_controls_are_keyboard_reachable():
+    """QS-199 review-fix #02 S5/S6 — custom `div` controls that carry
+    click/keyboard handlers must be focusable: `role="button"` +
+    `tabindex="0"`. Pins the car's sun/rabbit/time controls and the
+    pool's power/green toggles.
+    """
+    import re
+
+    checks = {
+        "qs-car-card.js": ("sun_btn", "rabbit_btn", "time_btn"),
+        "qs-pool-card.js": ("power_btn", "green_btn"),
+    }
+    failures: list[str] = []
+    for card_name, ids in checks.items():
+        src = (COMPONENT_ROOT / "ui" / "resources" / card_name).read_text(encoding="utf-8")
+        for el_id in ids:
+            pat = re.compile(rf'id="{el_id}"[^>]*role="button"[^>]*tabindex="0"', re.DOTALL)
+            if not pat.search(src):
+                failures.append(f"{card_name}:#{el_id}")
+
+    assert not failures, (
+        f'QS-199 review-fix #02 S5/S6 — in-ring controls missing role="button"/tabindex="0": {failures}'
+    )
+
+
+@pytest.mark.parametrize(
+    "card_filename",
+    [
+        "qs-on-off-duration-card.js",
+        "qs-radiator-card.js",
+        "qs-climate-card.js",
+        "qs-water-boiler-card.js",
+    ],
+)
+def test_drag_snap_range_derived_from_max_hours(card_filename):
+    """QS-199 review-fix #02 S8 — the drag snap points are derived from
+    the configured max (`this._allowedHalfHours(maxHours)`) rather than a
+    hard-coded `for (let i = 0; i <= 12; ...)` loop, so targets above 12h
+    are selectable.
+    """
+    import re
+
+    src = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text(encoding="utf-8"))
+    assert "this._allowedHalfHours(" in src, (
+        f"{card_filename}: must derive drag snap points via `this._allowedHalfHours(maxHours)` (S8)."
+    )
+    assert not re.search(r"for\s*\(\s*let\s+i\s*=\s*0;\s*i\s*<=\s*12;\s*i\s*\+=\s*0\.5\s*\)", src), (
+        f"{card_filename}: stale hard-coded `0..12` half-hour loop for the "
+        f"drag snap range (S8) — use `_allowedHalfHours`."
+    )
+
+
+def test_flame_engine_keeps_raf_until_idle():
+    """QS-199 review-fix #02 S7 — the radiator keeps its RAF loop alive
+    until the flame engine reports `isIdle()` (so an on→off transition
+    settles to a clean still silhouette), and the engine exposes the
+    `isIdle()` accessor.
+    """
+    from tests.utils.card_sources import card_source_union
+
+    union = card_source_union("qs-radiator-card.js")
+    assert "isIdle()" in union, "QsFlameEngine must expose isIdle() (S7)"
+    radiator = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-radiator-card.js").read_text(encoding="utf-8")
+    )
+    assert "this._flameEngine.isIdle()" in radiator, (
+        "qs-radiator-card.js must gate RAF teardown on `_flameEngine.isIdle()` (S7)."
     )

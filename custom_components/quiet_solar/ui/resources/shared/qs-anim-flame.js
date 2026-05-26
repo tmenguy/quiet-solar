@@ -115,7 +115,10 @@ export class QsFlameEngine {
             }
         }
 
-        const hasValidBase = baseY != null && !Number.isNaN(baseY);
+        // QS-199 review-fix #02 S11 — `Number.isFinite` rejects ±Infinity
+        // too (which `!Number.isNaN` would admit), so an infinite baseY
+        // can't leak into path generation.
+        const hasValidBase = baseY != null && Number.isFinite(baseY);
         const ampDelta = this._lastFlameAmp == null
             ? Infinity
             : Math.abs(this._currentFlameAmp - this._lastFlameAmp);
@@ -141,6 +144,17 @@ export class QsFlameEngine {
     /* Current (lerped) flame amplitude. */
     getCurrentAmp() {
         return this._currentFlameAmp;
+    }
+
+    /*
+      isIdle() — true once the flame has decayed to its still amplitude
+      (within the same epsilon the step() snap-to-target uses). QS-199
+      review-fix #02 S7 — the card keeps its RAF loop alive until this
+      returns true so an on→off transition settles to a clean still
+      silhouette instead of freezing mid-flicker.
+    */
+    isIdle() {
+        return Math.abs(this._currentFlameAmp - FLAME_CONSTANTS.STILL_AMP) < 0.05;
     }
 
     /*

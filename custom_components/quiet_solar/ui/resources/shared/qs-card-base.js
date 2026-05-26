@@ -234,6 +234,12 @@ export class QsCardBase extends HTMLElement {
             }
             // Subclass hook for additional RAF work (e.g. flame/wave engines).
             this._onAnimationTick?.(ts, dt);
+            // QS-199 review-fix #02 S7 — a subclass tick may call
+            // `_stopAnimation()` (e.g. radiator stopping once the flame
+            // settles to idle), which nulls `_animRaf`. Respect that and
+            // don't reschedule, otherwise the final line would restart the
+            // loop the tick just asked to stop.
+            if (this._animRaf == null) return;
             this._animRaf = requestAnimationFrame(step);
         };
         this._animRaf = requestAnimationFrame(step);

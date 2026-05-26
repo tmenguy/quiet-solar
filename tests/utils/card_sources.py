@@ -86,13 +86,17 @@ def card_source_union(card_filename: str) -> str:
 
     If ``card_filename`` is not in ``CARD_TO_SHARED_FILES``, only the
     card text is returned (lets the helper work on unmigrated cards).
+
+    QS-199 review-fix #02 S13 — a mapped shared file that doesn't exist
+    raises ``FileNotFoundError`` (via ``read_text``) rather than being
+    silently skipped, so ``CARD_TO_SHARED_FILES`` drift fails loudly
+    instead of masking a missing pattern in the union-based tests.
     """
     card_path = _RESOURCES_ROOT / card_filename
     parts: list[str] = [card_path.read_text(encoding="utf-8")]
 
     for shared_name in CARD_TO_SHARED_FILES.get(card_filename, []):
         shared_path = _RESOURCES_ROOT / "shared" / shared_name
-        if shared_path.exists():
-            parts.append(shared_path.read_text(encoding="utf-8"))
+        parts.append(shared_path.read_text(encoding="utf-8"))
 
     return "\n\n".join(parts)

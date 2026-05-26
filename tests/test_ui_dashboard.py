@@ -859,17 +859,122 @@ def test_rewrite_shared_imports_handles_tag_with_backslash():
     assert qs["qs_tag"] == [r"a\1b"]
 
 
-def test_generate_qs_tag_high_resolution_distinct_within_one_second():
+def test_generate_qs_tag_high_resolution_distinct_within_one_second(monkeypatch):
     """QS-199 review-fix S11 — two tags generated within the same
     wall-clock second must differ (high-resolution time).
+
+    QS-199 review-fix #02 S14 — do NOT depend on the real clock's
+    granularity (coarse on some Windows builds → flaky). Monkeypatch
+    `time.time_ns` to return a controlled increasing sequence so the
+    test deterministically yields multiple distinct tags.
     """
+    import time
+
     from custom_components.quiet_solar.ui.dashboard import _generate_qs_tag
 
+    seq = iter(range(1000, 1050))
+    monkeypatch.setattr(time, "time_ns", lambda: next(seq))
+
     tags = {_generate_qs_tag() for _ in range(50)}
-    # With nanosecond resolution, 50 rapid calls should yield >1 distinct value.
-    assert len(tags) > 1
+    # Controlled increasing sequence → 50 distinct tags.
+    assert len(tags) == 50
     # Still a digit string (callers/tests rely on `.isdigit()`).
     assert all(t.isdigit() for t in tags)
+
+
+@pytest.mark.asyncio
+async def test_atomic_write_uses_unique_temp_name_per_call(monkeypatch):
+    """QS-199 review-fix #02 S1 — the atomic-write temp name is unique per
+    call so two interleaved `async_update_resources` invocations (startup +
+    Generate-Dashboard button, no lock) can't corrupt a shared `.qstmp` or
+    have writer A's `os.replace` race against writer B renaming the same
+    temp away.
+    """
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    captured_tmps: list[str] = []
+    real_replace = dash.aiofiles.os.replace
+
+    async def _capture_replace(src, dst):
+        captured_tmps.append(src)
+        await real_replace(src, dst)
+
+    monkeypatch.setattr(dash.aiofiles.os, "replace", _capture_replace)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dst = os.path.join(tmp_dir, "card.js")
+        await dash._async_atomic_write_bytes(dst, b"a")
+        await dash._async_atomic_write_bytes(dst, b"b")
+
+        assert len(captured_tmps) == 2
+        assert captured_tmps[0] != captured_tmps[1], "temp names must be unique per write"
+        # Final content is the last write.
+        with open(dst, "rb") as f:
+            assert f.read() == b"b"
+
+
+@pytest.mark.asyncio
+async def test_atomic_write_cleans_up_temp_on_failure(monkeypatch):
+    """QS-199 review-fix #02 N3 — a mid-write failure must not leak an
+    orphan `.qstmp`; `dst` keeps its old content (atomicity holds).
+    """
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dst = os.path.join(tmp_dir, "card.js")
+
+        async def _boom(src, _dst):
+            # Simulate a replace failure after the temp file was written.
+            raise OSError("disk full")
+
+        monkeypatch.setattr(dash.aiofiles.os, "replace", _boom)
+
+        with pytest.raises(OSError):
+            await dash._async_atomic_write_bytes(dst, b"data")
+
+        # No orphan *.qstmp left behind.
+        leftovers = [n for n in os.listdir(tmp_dir) if ".qstmp" in n]
+        assert leftovers == [], f"orphan temp files leaked: {leftovers}"
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_bare_side_effect_import():
+    """QS-199 review-fix #02 N1 — a bare side-effect import
+    `import './shared/x.js';` (no `from`, no `import(...)`) is also
+    cache-busted.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import './shared/side-effect.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "BARE", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "import './shared/side-effect.js?qs_tag=BARE'" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_mjs_module_imports():
+    """QS-199 review-fix #02 N2 — `.mjs` module files are decoded + their
+    imports rewritten (not byte-copied past the gate).
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-card.mjs"), "w") as f:
+            f.write("import { X } from './shared/qs-card-base.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "MJS", None)
+
+        with open(os.path.join(to_dir, "qs-card.mjs")) as f:
+            assert "?qs_tag=MJS" in f.read()
 
 
 @pytest.mark.asyncio

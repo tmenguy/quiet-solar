@@ -4,25 +4,35 @@
   their own card-specific extras (e.g. car's .sun-btn / .rabbit-btn,
   water-boiler's .temp-row, climate's nothing-card-specific).
 
-  Colour literal policy (plan-critic CL3):
+  Colour literal policy (plan-critic CL3 / review-fix #02 S10):
     Allowed in this shared template:
       - neutral rgba(0,0,0,*) / rgba(255,255,255,*)
       - HA theme variables (var(--*-color))
       - semantic-anchor colours that are identical across all 6 cards
-        today (power-blue #2196F3, solar-green #4CAF50, override-orange
-        #FF9800)
+        today and are NOT card-branded:
+          * power-blue    #2196F3 (.power-btn.on)
+          * solar-green   #4CAF50 (.green-btn.on icon)
+          * override-orange #FF9800 (.override-btn.active)
+          * pill-on green #2ecc71 / #2ecc71aa (.pill.on .dot)
     NOT allowed:
       - branded palette literals — flow through `palette` argument
-        ({primary, gradStart, gradEnd, animStart, animEnd}).
+        ({primary, gradStart, gradEnd, animStart, animEnd}). The
+        `palette || {…}` fallback uses ONLY var(--primary-color) so the
+        shared module contains zero branded hexes
+        (pinned by test_shared_css_has_no_branded_colour_literals).
 */
 
 export function baseCardCSS(palette, _options) {
+    // QS-199 review-fix #02 S10 — no branded colour literals in the
+    // shared module (AC6 policy). The neutral fallback uses theme
+    // variables only; all 6 cards pass a real palette, so the fallback
+    // is just a defensive default for a missing/empty argument.
     const colors = palette || {
-        primary: '#2196F3',
-        gradStart: '#00bcd4',
-        gradEnd: '#8bc34a',
-        animStart: '#00e1ff',
-        animEnd: '#0066ff',
+        primary: 'var(--primary-color)',
+        gradStart: 'var(--primary-color)',
+        gradEnd: 'var(--primary-color)',
+        animStart: 'var(--primary-color)',
+        animEnd: 'var(--primary-color)',
     };
 
     return `

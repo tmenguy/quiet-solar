@@ -972,21 +972,14 @@ class QsCarCard extends QsCardBase {
           displaySocValue = `${this._fmt(soc)}%`;
       }
 
-      const formatHm = (mins) => {
-          if (mins == null) return '';
-          const h = String(Math.floor(mins / 60)).padStart(2, '0');
-          const m = String(mins % 60).padStart(2, '0');
-          return `${h}:${m}`;
-      };
-
-      const parseTimeToMinutes = (txt) => {
-          if (!txt) return 420; // 07:00
-          const parts = String(txt).split(':').map(Number);
-          const h = parts[0] || 0, m = parts[1] || 0;
-          return h * 60 + m;
-      };
+      // QS-199 review-fix #02 S2 — use the inherited hardened
+      // `_parseTimeToMinutes` / `_formatHm` (QsCardBase). The car's old
+      // local `parseTimeToMinutes` only guarded `if (!txt)`, so an
+      // `unavailable`/`unknown` next-charge time (truthy) coerced via
+      // `Number('unavailable')` → NaN → 0 → midnight. The base version
+      // falls back to the documented 07:00 for invalid states (S16).
       const nextTimeStr = tNext?.state || '07:00:00';
-      const nextTimeMins = this._localNextTimeMins != null ? this._localNextTimeMins : parseTimeToMinutes(nextTimeStr);
+      const nextTimeMins = this._localNextTimeMins != null ? this._localNextTimeMins : this._parseTimeToMinutes(nextTimeStr);
 
       // QS-199 review-fix M3 — common rules come from the shared
       // baseCardCSS(palette); the car appends its bespoke layout
@@ -1163,9 +1156,10 @@ class QsCarCard extends QsCardBase {
       const stateLc = chargerState.toLowerCase();
       const invalidStates = ['unavailable', 'unknown', 'none', 'not plugged', 'not_plugged', 'not connected', 'not_connected'];
       const shouldShowPlaceholder = isDisconnected || !chargerState || invalidStates.includes(stateLc) || !chargerOptions.includes(chargerState);
+      // S3: escape entity-derived option values before innerHTML interpolation.
       const chargerOptionsHtml = shouldShowPlaceholder
-          ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${o}</option>`)].join('')
-          : chargerOptions.map(o => `<option ${o === chargerState ? 'selected' : ''}>${o}</option>`).join('');
+          ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${this._escapeHtml(o)}</option>`)].join('')
+          : chargerOptions.map(o => `<option ${o === chargerState ? 'selected' : ''}>${this._escapeHtml(o)}</option>`).join('');
 
       // Person selector options
       const personOptions = selPerson?.attributes?.options || [];
@@ -1173,14 +1167,16 @@ class QsCarCard extends QsCardBase {
       const personStateLc = personState.toLowerCase();
       const personInvalidStates = INVALID_STATES;
       const shouldShowPersonPlaceholder = !personState || personInvalidStates.includes(personStateLc) || !personOptions.includes(personState);
+      // S3: escape entity-derived option values before innerHTML interpolation.
       const personOptionsHtml = shouldShowPersonPlaceholder
-          ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${o}</option>`)].join('')
-          : personOptions.map(o => `<option ${o === personState ? 'selected' : ''}>${o}</option>`).join('');
+          ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${this._escapeHtml(o)}</option>`)].join('')
+          : personOptions.map(o => `<option ${o === personState ? 'selected' : ''}>${this._escapeHtml(o)}</option>`).join('');
 
       // Person forecast string
       const personForecastStr = sPersonForecast?.state || '';
       const validPersonForecast = personForecastStr && personForecastStr.toLowerCase() !== 'none' && personForecastStr.toLowerCase() !== 'unknown' && personForecastStr.toLowerCase() !== 'unavailable' && personForecastStr.trim() !== '';
-      const forecastDisplay = validPersonForecast ? personForecastStr : 'None';
+      // S3: escape — `forecastDisplay` is interpolated into the .forecast-row innerHTML.
+      const forecastDisplay = validPersonForecast ? this._escapeHtml(personForecastStr) : 'None';
 
       const activeGradId = isFaulted ? gradFaultId : (isStale ? gradStaleId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId)));
       // In stale-percent mode, show animation whenever charging regardless of arc size
@@ -1364,12 +1360,12 @@ class QsCarCard extends QsCardBase {
                   <div class="mini-title">${useEnergyMode ? 'Target Energy' : 'Target SOC'}</div>
                   <div class="mini-title">${chargeTimeLabel}</div>
 
-                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
+                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}" role="button" tabindex="0" aria-label="Charge as fast as possible"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
                   <div class="target-cell">
                     <div id="target_value" class="target-value">${displayTargetValue}</div>
                     ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
                   </div>
-                  ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}">${chargeTime}</div>` : ''}
+                  ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}" role="button" tabindex="0" aria-label="Set next charge time">${this._escapeHtml(chargeTime)}</div>` : ''}
                 </div>
                 </div>
                 <!-- QS-232 review-fix #04: invisible spacer preserves .stack's vertical balance
@@ -1381,7 +1377,7 @@ class QsCarCard extends QsCardBase {
             <!-- QS-232 review-fix #03: sun-btn moved out of .center > .stack > .center-controls
                  to a direct child of .ring, matching the override-btn placement pattern in
                  boiler/radiator/climate cards (position: absolute; bottom: 15px;). -->
-            ${swPriority ? `<div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>` : ''}
+            ${swPriority ? `<div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}" role="button" tabindex="0" aria-label="Toggle solar priority"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>` : ''}
           </div>
         </div>
 
@@ -1586,7 +1582,7 @@ class QsCarCard extends QsCardBase {
               const h = Number(hourSel?.value ?? 0);
               const m = Number(minSel?.value ?? 0);
               const mins = h * 60 + m;
-              const hm = formatHm(mins);
+              const hm = this._formatHm(mins);
               const val = hm + ':00';
               this._localNextTimeMins = mins; // keep local until HA push comes back to avoid select jumping
               // S9: clear the local override after a grace period.
@@ -1641,6 +1637,8 @@ class QsCarCard extends QsCardBase {
               sbtn.style.pointerEvents = 'auto';
               sbtn.addEventListener('click', togglePriority);
               sbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePriority(); });
+              // S5: keyboard activation (Enter/Space) for the focusable div.
+              this._registerKeyActivation(sbtn, togglePriority);
           }
       }
 
@@ -1685,6 +1683,8 @@ class QsCarCard extends QsCardBase {
               };
               rbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); rbtnAction(); });
               rbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); rbtnAction(); });
+              // S5: keyboard activation for the focusable div.
+              this._registerKeyActivation(rbtn, rbtnAction);
           }
       }
 
@@ -1698,7 +1698,7 @@ class QsCarCard extends QsCardBase {
 
                   let defaultHour, defaultMin;
                   if (chargeTime && chargeTime !== '--:--' && chargeTime.includes(':')) {
-                      const chargeMins = parseTimeToMinutes(chargeTime);
+                      const chargeMins = this._parseTimeToMinutes(chargeTime);
                       defaultHour = Math.floor(chargeMins / 60);
                       defaultMin = chargeMins % 60;
                       defaultMin = Math.ceil(defaultMin / 5) * 5;
@@ -1751,7 +1751,7 @@ class QsCarCard extends QsCardBase {
                                   const h = Number(hourSel?.value ?? 0);
                                   const m = Number(minSel?.value ?? 0);
                                   const mins = h * 60 + m;
-                                  const hm = formatHm(mins);
+                                  const hm = this._formatHm(mins);
                                   const val = hm + ':00';
                                   this._localNextTimeMins = mins;
                                   // S9: clear the local override after a
@@ -1773,6 +1773,8 @@ class QsCarCard extends QsCardBase {
               };
               tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); tbtnAction(); });
               tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); tbtnAction(); });
+              // S5: keyboard activation for the focusable div.
+              this._registerKeyActivation(tbtn, tbtnAction);
           }
       }
       // QS-199 review-fix M3/M5 — the inline `showDialog` closure (which
