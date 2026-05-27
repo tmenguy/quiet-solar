@@ -5,6 +5,11 @@ Quiet Solar's development pipeline. Read
 [docs/workflow/project-context.md](docs/workflow/project-context.md)
 before doing substantive work.
 
+**Single source of truth — no auto-memory.** Do not use or write Claude
+Code auto-memory for this project. `CLAUDE.md` and `docs/` are the only
+source of truth; all durable context must live in the repo, not in
+per-machine memory stores.
+
 ## Commands
 
 Each phase runs as an interactive `claude --agent qs-<phase>` session
