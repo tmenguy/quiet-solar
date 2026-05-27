@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-05-26
+last_verified: 2026-05-27
 ---
 
 # Dashboard generation and JS Lovelace cards

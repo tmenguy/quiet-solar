@@ -65,6 +65,20 @@ export class QsRingDurationCardBase extends QsCardBase {
             pctToHours,
         } = params;
 
+        // QS-199 review-fix #07 N1 — the handle's TEXT LABEL round-trips
+        // the target back from `handlePct`: `pctToHours(handlePct)`. On the
+        // non-default branch each card sets
+        // `handlePct = hoursToPct(displayTargetHours)` with
+        // `displayTargetHours = targetHours` left UNCLAMPED on purpose, so
+        // this label shows the TRUE target even when it exceeds `maxHours`.
+        // Only the handle POSITION is clamped (the card's `pctToDeg`
+        // clamps to [0,100] → the handle pins at the ring top for an
+        // out-of-range target while the number stays correct).
+        // DO NOT "fix" the >100% `handlePct` by clamping `handlePct` or
+        // `displayTargetHours` — that would make this label render
+        // `maxHours` instead of the real value (a regression across all
+        // duration cards). The pin-at-top-but-number-correct behaviour is
+        // intentional and graceful.
         const escapedHandleLabel = this._fmt(pctToHours(handlePct));
 
         // QS-199 review-fix N6 — per-instance glow filter id (parity with
