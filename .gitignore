@@ -175,13 +175,13 @@ custom_components/netatmo
 custom_components/ocpp/
 custom_components/renault
 custom_components/solcast_solar/
-custom_components/volkswagencarnet/
+custom_components/volkswagencarnet
 /custom_components/hacs/
 /custom_components/netatmo
 /custom_components/ocpp/
 /custom_components/renault
 /custom_components/solcast_solar/
-/custom_components/volkswagencarnet/
+/custom_components/volkswagencarnet
 
 # Per-task OpenCode agent files (rendered dynamically, not tracked)
 .opencode/agents/qs-*-QS-*.md
