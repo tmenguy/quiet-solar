@@ -143,15 +143,20 @@ def test_generate_dashboard_resource_qs_tag_is_numeric():
 
 
 def test_generate_dashboard_resource_qs_tag_changes_over_time():
-    """Test that qs_tag changes between calls (with time mocking)."""
+    """Test that qs_tag changes between calls (with time mocking).
+
+    QS-199 review-fix S11 — the tag now uses `time.time_ns()` (nanosecond
+    resolution) so two restarts within the same wall-clock second yield
+    distinct tags. The test mocks `time.time_ns` accordingly.
+    """
     import time
 
     mock_home = create_minimal_home_model()
 
-    with patch.object(time, "time", return_value=1000):
+    with patch.object(time, "time_ns", return_value=1000):
         tag1 = generate_dashboard_resource_qs_tag(mock_home)
 
-    with patch.object(time, "time", return_value=2000):
+    with patch.object(time, "time_ns", return_value=2000):
         tag2 = generate_dashboard_resource_qs_tag(mock_home)
 
     assert tag1 == "1000"
@@ -560,23 +565,463 @@ async def test_copy_resources_no_register_when_handler_none():
 
 
 @pytest.mark.asyncio
-async def test_copy_resources_recursive_namespace():
-    """Test that namespace is updated correctly for subdirectories."""
+async def test_copy_resources_does_not_register_subdir_files():
+    """QS-199 A1a — subdir `.js` files are copied but NOT registered as Lovelace resources.
+
+    Renamed from `test_copy_resources_recursive_namespace`; assertion inverted.
+    Files under `shared/` (or any subdirectory) must NOT be registered with
+    Lovelace because they are ES-module dependencies imported by top-level
+    cards, not entry-point cards themselves.
+    """
     with tempfile.TemporaryDirectory() as tmp_dir:
         from_dir = os.path.join(tmp_dir, "source")
         to_dir = os.path.join(tmp_dir, "dest")
-        subdir = os.path.join(from_dir, "cards")
+        subdir = os.path.join(from_dir, "shared")
         os.makedirs(subdir)
 
-        with open(os.path.join(subdir, "card.js"), "w") as f:
-            f.write("card")
+        with open(os.path.join(subdir, "qs-card-base.js"), "w") as f:
+            f.write("export class QsCardBase {}")
 
         resources = MockResourceStorageCollection()
 
         await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", resources)
 
+        # File should still be copied to the destination
+        assert os.path.exists(os.path.join(to_dir, "shared", "qs-card-base.js"))
+        # But NOT registered as a Lovelace resource
+        assert len(resources.created_items) == 0
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_top_level_js_still_registers():
+    """QS-199 A1a — top-level `.js` files still register as Lovelace resources."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        # Mix of top-level files (should register) and subdir files (should NOT)
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("class QsRadiatorCard {}")
+
+        subdir = os.path.join(from_dir, "shared")
+        os.makedirs(subdir)
+        with open(os.path.join(subdir, "qs-card-base.js"), "w") as f:
+            f.write("export class QsCardBase {}")
+
+        resources = MockResourceStorageCollection()
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "123", resources)
+
+        # Exactly one Lovelace registration — the top-level card
         assert len(resources.created_items) == 1
-        assert resources.created_items[0]["url"] == "/local/test/cards/card.js?qs_tag=123"
+        assert resources.created_items[0]["url"] == "/local/test/qs-radiator-card.js?qs_tag=123"
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_shared_imports_with_qs_tag():
+    """QS-199 A1b — `from './shared/*.js'` imports get a `?qs_tag=<tag>` cache-buster."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write(
+                "import { QsCardBase } from './shared/qs-card-base.js';\nclass QsRadiatorCard extends QsCardBase {}\n"
+            )
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "ABC", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "from './shared/qs-card-base.js?qs_tag=ABC'" in rewritten
+        # The original (un-tagged) import must NOT survive verbatim
+        assert "from './shared/qs-card-base.js';" not in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrite_is_idempotent_across_tags():
+    """QS-199 A1b — rerunning the copy with a new tag overwrites the old tag.
+
+    Idempotency rule R1: ALWAYS overwrite the `?qs_tag=...` query string.
+    Never skip "because a query string is already present" — the in-place
+    rewrite must produce identical output regardless of the previous tag.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import { QsCardBase } from './shared/qs-card-base.js';\n")
+
+        # First copy with tag A
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "A", None)
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            after_a = f.read()
+        assert "?qs_tag=A" in after_a
+
+        # Second copy with tag B — should fully overwrite the dst from src
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "B", None)
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            after_b = f.read()
+        assert "?qs_tag=B" in after_b
+        # No double-tag, no stale A
+        assert "?qs_tag=A" not in after_b
+        assert "?qs_tag=A&qs_tag=B" not in after_b
+        assert "?qs_tag=A?qs_tag=B" not in after_b
+        # Exactly one occurrence of the cache-buster
+        assert after_b.count("?qs_tag=") == 1
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_tag_consistent_between_registration_and_imports():
+    """QS-199 A1a + A1b — same `tag` value flows to both Lovelace URL and import rewrite.
+
+    Plan-critic R2: the single `_generate_qs_tag()` call that flows into
+    `async_update_resources` must produce the same `tag` for both
+    (a) the Lovelace registration URL and (b) the rewritten in-file
+    import URL — otherwise the browser would request a card with one
+    cache-buster but the card's import statement would point at a stale
+    shared module URL with a different cache-buster.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import { QsCardBase } from './shared/qs-card-base.js';\n")
+
+        # Add the shared module too so the directory is realistic
+        subdir = os.path.join(from_dir, "shared")
+        os.makedirs(subdir)
+        with open(os.path.join(subdir, "qs-card-base.js"), "w") as f:
+            f.write("export class QsCardBase {}")
+
+        resources = MockResourceStorageCollection()
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "DEADBEEF", resources)
+
+        # Lovelace registration URL contains the tag
+        assert len(resources.created_items) == 1
+        registered_url = resources.created_items[0]["url"]
+        assert "?qs_tag=DEADBEEF" in registered_url
+
+        # Rewritten import URL inside the card contains the SAME tag
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "from './shared/qs-card-base.js?qs_tag=DEADBEEF'" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_shared_to_shared_sibling_imports():
+    """QS-199 review-fix M6 — sibling imports INSIDE `shared/` (no
+    `./shared/` prefix) are also cache-busted.
+
+    `shared/qs-ring-duration-base.js` imports `./qs-card-base.js` (a
+    sibling, no `./shared/` prefix). If that import isn't rewritten the
+    browser caches an untagged `qs-card-base.js` forever, so future
+    edits never propagate for cards extending `QsRingDurationCardBase`.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        subdir = os.path.join(from_dir, "shared")
+        os.makedirs(subdir)
+
+        with open(os.path.join(subdir, "qs-ring-duration-base.js"), "w") as f:
+            f.write("import { QsCardBase } from './qs-card-base.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "SIBTAG", None)
+
+        with open(os.path.join(to_dir, "shared", "qs-ring-duration-base.js")) as f:
+            rewritten = f.read()
+        assert "from './qs-card-base.js?qs_tag=SIBTAG'" in rewritten
+        assert "from './qs-card-base.js';" not in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_non_utf8_js_falls_back_to_byte_copy():
+    """QS-199 review-fix M7 — a non-UTF-8 `.js` file must NOT abort the
+    copy. It is byte-copied (no import rewrite) and the rest of the tree
+    still copies + registers.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        # Latin-1 byte 0xFF is invalid UTF-8.
+        bad = os.path.join(from_dir, "weird.js")
+        with open(bad, "wb") as f:
+            f.write(b"// \xff non-utf8 comment\nconsole.log('ok');\n")
+
+        good = os.path.join(from_dir, "qs-radiator-card.js")
+        with open(good, "w") as f:
+            f.write("import { QsCardBase } from './shared/qs-card-base.js';\n")
+
+        resources = MockResourceStorageCollection()
+
+        # Must not raise.
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "T", resources)
+
+        # The bad file was copied byte-for-byte.
+        with open(os.path.join(to_dir, "weird.js"), "rb") as f:
+            assert f.read() == b"// \xff non-utf8 comment\nconsole.log('ok');\n"
+        # The good file still got its import rewritten.
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            assert "?qs_tag=T" in f.read()
+        # Both top-level files registered.
+        assert len(resources.created_items) == 2
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_import_without_whitespace():
+    """QS-199 review-fix S9 — `from'./shared/x.js'` (no space) is matched."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import {QsCardBase} from'./shared/qs-card-base.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "WS", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "?qs_tag=WS" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_dynamic_import():
+    """QS-199 review-fix S8 — dynamic `import('./shared/x.js')` is matched."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("const m = import('./shared/qs-card-base.js');\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "DYN", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "import('./shared/qs-card-base.js?qs_tag=DYN')" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_preserves_existing_query_params():
+    """QS-199 review-fix S10 — pre-existing query params are preserved;
+    only `qs_tag` is replaced/added.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import { X } from './shared/qs-card-base.js?v=1&theme=dark';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "Q", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "v=1" in rewritten
+        assert "theme=dark" in rewritten
+        assert "qs_tag=Q" in rewritten
+
+
+def test_rewrite_shared_imports_handles_tag_with_backslash():
+    """QS-199 review-fix S4 — the replacement must treat `tag` literally,
+    so a tag containing a backslash isn't mis-parsed as a regex
+    backreference. The callable replacement + `urlencode` round-trips the
+    raw value (URL-encoded), never interpreting `\\1` as group 1.
+    """
+    import re
+    from urllib.parse import parse_qs, urlparse
+
+    from custom_components.quiet_solar.ui.dashboard import _rewrite_shared_imports
+
+    src = "import { X } from './shared/qs-card-base.js';\n"
+    # A pathological tag with backslash + digit (would be \1 backref if the
+    # replacement string were interpolated rather than literal).
+    out = _rewrite_shared_imports(src, r"a\1b")
+
+    # The import URL must still be well-formed and the qs_tag value must
+    # decode back to the exact original string (no backref expansion).
+    m = re.search(r"from '(\./shared/qs-card-base\.js\?[^']*)'", out)
+    assert m is not None, f"rewrite produced malformed import: {out!r}"
+    qs = parse_qs(urlparse(m.group(1)).query)
+    assert qs["qs_tag"] == [r"a\1b"]
+
+
+def test_generate_qs_tag_high_resolution_distinct_within_one_second(monkeypatch):
+    """QS-199 review-fix S11 — two tags generated within the same
+    wall-clock second must differ (high-resolution time).
+
+    QS-199 review-fix #02 S14 — do NOT depend on the real clock's
+    granularity (coarse on some Windows builds → flaky). Monkeypatch
+    `time.time_ns` to return a controlled increasing sequence so the
+    test deterministically yields multiple distinct tags.
+
+    QS-199 review-fix #06 G1 — the patched clock MUST be inexhaustible.
+    A bounded `iter(range(1000, 1050))` (exactly 50 values, zero
+    headroom) leaked into a pending teardown coroutine from an earlier
+    test under full-suite ordering, where a stray 51st `time_ns()` call
+    raised `StopIteration` inside a coroutine → `RuntimeError` (PEP 479),
+    failing the gate with `errors=1` (only under full-suite ordering, so
+    targeted runs missed it). `itertools.count` never exhausts; 50 calls
+    still yield 50 distinct increasing values.
+    """
+    import itertools
+    import time
+
+    from custom_components.quiet_solar.ui.dashboard import _generate_qs_tag
+
+    seq = itertools.count(1000)
+    monkeypatch.setattr(time, "time_ns", lambda: next(seq))
+
+    tags = {_generate_qs_tag() for _ in range(50)}
+    # Controlled increasing sequence → 50 distinct tags.
+    assert len(tags) == 50
+    # Still a digit string (callers/tests rely on `.isdigit()`).
+    assert all(t.isdigit() for t in tags)
+
+
+@pytest.mark.asyncio
+async def test_atomic_write_uses_unique_temp_name_per_call(monkeypatch):
+    """QS-199 review-fix #02 S1 — the atomic-write temp name is unique per
+    call so two interleaved `async_update_resources` invocations (startup +
+    Generate-Dashboard button, no lock) can't corrupt a shared `.qstmp` or
+    have writer A's `os.replace` race against writer B renaming the same
+    temp away.
+    """
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    captured_tmps: list[str] = []
+    real_replace = dash.aiofiles.os.replace
+
+    async def _capture_replace(src, dst):
+        captured_tmps.append(src)
+        await real_replace(src, dst)
+
+    monkeypatch.setattr(dash.aiofiles.os, "replace", _capture_replace)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dst = os.path.join(tmp_dir, "card.js")
+        await dash._async_atomic_write_bytes(dst, b"a")
+        await dash._async_atomic_write_bytes(dst, b"b")
+
+        assert len(captured_tmps) == 2
+        assert captured_tmps[0] != captured_tmps[1], "temp names must be unique per write"
+        # Final content is the last write.
+        with open(dst, "rb") as f:
+            assert f.read() == b"b"
+
+
+@pytest.mark.asyncio
+async def test_atomic_write_cleans_up_temp_on_failure(monkeypatch):
+    """QS-199 review-fix #02 N3 — a mid-write failure must not leak an
+    orphan `.qstmp`; `dst` keeps its old content (atomicity holds).
+    """
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dst = os.path.join(tmp_dir, "card.js")
+
+        async def _boom(src, _dst):
+            # Simulate a replace failure after the temp file was written.
+            raise OSError("disk full")
+
+        monkeypatch.setattr(dash.aiofiles.os, "replace", _boom)
+
+        with pytest.raises(OSError):
+            await dash._async_atomic_write_bytes(dst, b"data")
+
+        # No orphan *.qstmp left behind.
+        leftovers = [n for n in os.listdir(tmp_dir) if ".qstmp" in n]
+        assert leftovers == [], f"orphan temp files leaked: {leftovers}"
+
+
+@pytest.mark.asyncio
+async def test_remove_orphan_temps_recursive():
+    """QS-199 review-fix #03 N2 — a recursive sweep reclaims orphan
+    `*.qstmp` files left by a hard kill (SIGKILL/OOM between write and
+    os.replace), which the unique-temp-name scheme would otherwise leak
+    forever. Real resource files are untouched.
+    """
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "shared"))
+        open(os.path.join(tmp, "qs-card.js"), "w").close()
+        open(os.path.join(tmp, "qs-card.js.4321.7.qstmp"), "w").close()
+        open(os.path.join(tmp, "shared", "qs-card-base.js"), "w").close()
+        open(os.path.join(tmp, "shared", "qs-card-base.js.4321.8.qstmp"), "w").close()
+
+        await dash._async_remove_orphan_temps(tmp)
+
+        # Real files survive.
+        assert os.path.exists(os.path.join(tmp, "qs-card.js"))
+        assert os.path.exists(os.path.join(tmp, "shared", "qs-card-base.js"))
+        # Orphan temps (top-level + nested) are gone.
+        assert not os.path.exists(os.path.join(tmp, "qs-card.js.4321.7.qstmp"))
+        assert not os.path.exists(os.path.join(tmp, "shared", "qs-card-base.js.4321.8.qstmp"))
+
+
+@pytest.mark.asyncio
+async def test_remove_orphan_temps_missing_root_is_noop():
+    """QS-199 review-fix #03 N2 — sweeping a non-existent root is a no-op
+    (first-ever install: www/quiet_solar/ may not exist yet)."""
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # Should not raise.
+        await dash._async_remove_orphan_temps(os.path.join(tmp, "does-not-exist"))
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_bare_side_effect_import():
+    """QS-199 review-fix #02 N1 — a bare side-effect import
+    `import './shared/x.js';` (no `from`, no `import(...)`) is also
+    cache-busted.
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-radiator-card.js"), "w") as f:
+            f.write("import './shared/side-effect.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "BARE", None)
+
+        with open(os.path.join(to_dir, "qs-radiator-card.js")) as f:
+            rewritten = f.read()
+        assert "import './shared/side-effect.js?qs_tag=BARE'" in rewritten
+
+
+@pytest.mark.asyncio
+async def test_copy_resources_rewrites_mjs_module_imports():
+    """QS-199 review-fix #02 N2 — `.mjs` module files are decoded + their
+    imports rewritten (not byte-copied past the gate).
+    """
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        from_dir = os.path.join(tmp_dir, "source")
+        to_dir = os.path.join(tmp_dir, "dest")
+        os.makedirs(from_dir)
+
+        with open(os.path.join(from_dir, "qs-card.mjs"), "w") as f:
+            f.write("import { X } from './shared/qs-card-base.js';\n")
+
+        await _async_copy_and_register_resources(from_dir, to_dir, "/local/test", "MJS", None)
+
+        with open(os.path.join(to_dir, "qs-card.mjs")) as f:
+            assert "?qs_tag=MJS" in f.read()
 
 
 @pytest.mark.asyncio
@@ -1548,3 +1993,105 @@ async def test_async_update_resources_generic_exception():
                 ):
                     # Should not raise
                     await async_update_resources(mock_hass)
+
+
+@pytest.mark.asyncio
+async def test_async_update_resources_skips_when_source_dir_missing():
+    """QS-199 review-fix #06 G2 — `_async_update_resources_locked` returns
+    early (without copying/registering) when the bundled `_RESOURCES_DIR`
+    source tree doesn't exist, logging "No bundled resources directory
+    found, skipping". Covers the `if not await isdir(_RESOURCES_DIR):`
+    branch (dashboard.py:617-618) — the production code is correct; this
+    test just exercises the branch so coverage reaches 100%.
+    """
+    mock_hass, _ = create_mock_hass()
+
+    with (
+        patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock),
+        patch("custom_components.quiet_solar.ui.dashboard._async_remove_orphan_temps", new_callable=AsyncMock),
+        # Drive the missing-source-dir branch.
+        patch(
+            "custom_components.quiet_solar.ui.dashboard.aiofiles.os.path.isdir",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+        patch(
+            "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
+            new_callable=AsyncMock,
+        ) as mock_copy,
+    ):
+        await async_update_resources(mock_hass)
+
+        # Early return → no copy/register attempted.
+        mock_copy.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_async_update_resources_serialized_by_lock():
+    """QS-199 review-fix #04 ES2 + #05 N2 — `async_update_resources` is
+    serialized by a module-level `asyncio.Lock`, so two overlapping
+    invocations (startup-restore racing the Generate-Dashboard button, or
+    two rapid button presses) never run the sweep+copy concurrently. This
+    kills the whole concurrency-race class (round-2 S1 temp race +
+    round-3/#04 ES2 sweep race) at the root.
+
+    #05 N2 — the SWEEP (not just the copy) participates in the
+    serialization assertion: a fake `_async_remove_orphan_temps` also
+    bumps the shared `active` counter, so we prove the lock spans the
+    whole sweep→copy→register critical section (every prior regression
+    was "the fix moved the bug just outside what the test covered"). The
+    test also asserts the lock is released after each invocation, so a
+    future leaked lock fails fast here instead of hanging.
+    """
+    import asyncio
+
+    from custom_components.quiet_solar.ui import dashboard as dash
+
+    mock_hass_a, _ = create_mock_hass()
+    mock_hass_b, _ = create_mock_hass()
+
+    active = 0
+    max_active = 0
+
+    async def _observe_section(*_args, **_kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        # Yield so the other invocation gets a chance to enter the
+        # critical section if it isn't actually serialized.
+        await asyncio.sleep(0.02)
+        active -= 1
+
+    with (
+        patch("custom_components.quiet_solar.ui.dashboard.aiofiles.os.makedirs", new_callable=AsyncMock),
+        # #05 N2 — the sweep is part of the asserted critical section.
+        patch(
+            "custom_components.quiet_solar.ui.dashboard._async_remove_orphan_temps",
+            side_effect=_observe_section,
+        ),
+        patch("custom_components.quiet_solar.ui.dashboard._get_resource_handler_from_hass", return_value=None),
+        patch("custom_components.quiet_solar.ui.dashboard._generate_qs_tag", return_value="T"),
+        patch(
+            "custom_components.quiet_solar.ui.dashboard.aiofiles.os.path.isdir",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "custom_components.quiet_solar.ui.dashboard._async_copy_and_register_resources",
+            side_effect=_observe_section,
+        ),
+    ):
+        await asyncio.gather(
+            async_update_resources(mock_hass_a),
+            async_update_resources(mock_hass_b),
+        )
+
+    assert max_active == 1, (
+        f"ES2/N2: async_update_resources (sweep + copy) must be serialized "
+        f"by the lock — observed {max_active} concurrent critical sections"
+    )
+    # #05 N2 — the lock is released after both invocations complete, so a
+    # leaked lock can't silently hang a later test.
+    assert not dash._RESOURCE_UPDATE_LOCK.locked(), (
+        "N2: _RESOURCE_UPDATE_LOCK must be released after async_update_resources"
+    )

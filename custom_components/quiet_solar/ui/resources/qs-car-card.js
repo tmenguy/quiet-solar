@@ -197,7 +197,17 @@ const TIME_BTN_CARVE_CX = 224;      // right column of mini-grid
 const TIME_BTN_CARVE_CY = 206;
 const TIME_BTN_CARVE_R  = 32;
 
-class QsCarCard extends HTMLElement {
+// QS-199 — shared module imports. The car card extends `QsCardBase`
+// directly (NOT `QsRingDurationCardBase` — car uses a full-circle ring
+// with 3 inside-disc buttons instead of one override-btn at the
+// bottom). Inherits lifecycle, service callers, defensive utilities,
+// modal dialog, keyboard activation, and the 5 wire-helpers. Car
+// retains its own ring HTML (full-circle, sun/rabbit/time-btn carve
+// covers), sparkle system, lightning system, feTurbulence grain.
+import { baseCardCSS } from './shared/qs-card-styles.js';
+import { QsCardBase, rad2deg, polar, arcPath, pctToDeg } from './shared/qs-card-base.js';
+
+class QsCarCard extends QsCardBase {
   constructor() {
     super();
     this._chargePower = 0;
@@ -735,14 +745,13 @@ class QsCarCard extends HTMLElement {
   }
 
   disconnectedCallback() {
-    this._stopAnimation();
-    // S7: reset interaction flags so a re-attach after mid-interaction
-    // doesn't silently short-circuit `set hass` on stale flags.
+    // QS-199 review-fix S13: chain to the base so its _stopAnimation +
+    // standard flag-reset (and any future base teardown) always runs.
+    super.disconnectedCallback();
+    // Car-specific interaction flags not reset by the base.
     this._isInteracting = false;
     this._isInteractingCharger = false;
     this._isInteractingPerson = false;
-    this._isInteractingTarget = false;
-    this._modalOpen = false;
     // QS-232: eagerly tear down sparkle and lightning DOM nodes.
     // Without this they would be GC'd along with the shadow root, but
     // explicit cleanup is cheap and avoids dangling SVG nodes during
@@ -781,51 +790,25 @@ class QsCarCard extends HTMLElement {
     }
   }
 
-  // S6: defence-in-depth HTML escaping for user-/3rd-party-controlled
-  // strings interpolated into innerHTML.
-  _escapeHtml(s) {
-    if (s == null) return '';
-    return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-  }
+  // QS-199 — _escapeHtml, _entity, _call, _press, _turnOn, _turnOff,
+  // _select, _setNumber, _setTime, _fmt all inherited from QsCardBase
+  // (in shared/qs-card-base.js). Local definitions removed for AC1.
 
+  // Override `set hass` to add the car-specific `_isInteracting`,
+  // `_isInteractingCharger`, `_isInteractingPerson` guards.
   set hass(hass) {
     this._hass = hass;
     if (!this._root) return;
-    // Avoid re-rendering while user is interacting with selects or a modal is open
     if (this._isInteracting || this._isInteractingCharger || this._isInteractingPerson || this._modalOpen || this._isInteractingTarget) return;
     this._render();
   }
 
   getCardSize() { return 6; }
 
-  _entity(id) { return id ? this._hass?.states?.[id] : undefined; }
-
-  _call(domain, service, data) {
-    return this._hass.callService(domain, service, data);
-  }
-
-  _press(entity_id) { return this._call('button', 'press', { entity_id }); }
-  _turnOn(entity_id) { return this._call('switch', 'turn_on', { entity_id }); }
-  _turnOff(entity_id) { return this._call('switch', 'turn_off', { entity_id }); }
-  _select(entity_id, option) { return this._call('select', 'select_option', { entity_id, option }); }
-  _setTime(entity_id, value) { return this._call('time', 'set_value', { entity_id, time: value }); }
-
   _percent(num) {
     const n = Number(num);
     if (Number.isNaN(n)) return 0;
     return Math.max(0, Math.min(100, n));
-  }
-
-  // Format a number for display, replacing NaN/null/undefined with "--"
-  _fmt(num, round = true) {
-    const n = Number(num);
-    if (num == null || Number.isNaN(n)) return '--';
-    return round ? Math.round(n) : n;
   }
 
   _render() {
@@ -989,63 +972,55 @@ class QsCarCard extends HTMLElement {
           displaySocValue = `${this._fmt(soc)}%`;
       }
 
-      const formatHm = (mins) => {
-          if (mins == null) return '';
-          const h = String(Math.floor(mins / 60)).padStart(2, '0');
-          const m = String(mins % 60).padStart(2, '0');
-          return `${h}:${m}`;
-      };
-
-      const parseTimeToMinutes = (txt) => {
-          if (!txt) return 420; // 07:00
-          const parts = String(txt).split(':').map(Number);
-          const h = parts[0] || 0, m = parts[1] || 0;
-          return h * 60 + m;
-      };
+      // QS-199 review-fix #02 S2 — use the inherited hardened
+      // `_parseTimeToMinutes` / `_formatHm` (QsCardBase). The car's old
+      // local `parseTimeToMinutes` only guarded `if (!txt)`, so an
+      // `unavailable`/`unknown` next-charge time (truthy) coerced via
+      // `Number('unavailable')` → NaN → 0 → midnight. The base version
+      // falls back to the documented 07:00 for invalid states (S16).
       const nextTimeStr = tNext?.state || '07:00:00';
-      const nextTimeMins = this._localNextTimeMins != null ? this._localNextTimeMins : parseTimeToMinutes(nextTimeStr);
+      const nextTimeMins = this._localNextTimeMins != null ? this._localNextTimeMins : this._parseTimeToMinutes(nextTimeStr);
 
-      const css = `
-      :host { --pad: 18px; --ring-text-shadow: 0 0 12px rgba(0,0,0,0.8), 0 2px 4px rgba(0,0,0,0.5); display:block; }
-      .card { padding: var(--pad); }
+      // QS-199 review-fix M3 — common rules come from the shared
+      // baseCardCSS(palette); the car appends its bespoke layout
+      // (sun/rabbit/time inside-disc buttons, mini-grid, soc-block,
+      // forecast-row, progress, sections, range sliders) plus a few
+      // cascade overrides of the common rules (`.below` margin-top,
+      // `.ring .center` translate, `.ring .target-value` colour) AFTER
+      // the base block so they win. Car uses the same blue/cyan palette
+      // family as on-off-duration.
+      const colors = {
+        primary: '#2196F3',
+        gradStart: '#00bcd4',
+        gradEnd: '#8bc34a',
+        animStart: '#00e1ff',
+        animEnd: '#0066ff',
+      };
+      const css = baseCardCSS(colors) + `
+      /* ----- car-specific cascade overrides of common rules ----- */
       .card.stale { border: 3px solid var(--error-color, #db4437); }
-      .card.off-grid { background: rgba(244, 67, 54, 0.08); }
-      .card-title { text-align:center; font-weight:800; font-size: 1.6rem; margin: 0px 0 0px; }
-      .top { display:flex; gap:12px; flex-wrap:wrap; }
-      .below { display:flex; align-items:center; justify-content:center; margin-top: 0px; width:260px; margin-left:auto; margin-right:auto; }
-      .below .pill { width:100%; }
+      .below { margin-top: 0px; }
+      .ring .center { transform: translateY(16px); }
+      .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; }
+
+      /* ----- car-specific extras ----- */
       .forecast-row { text-align:center; width:260px; margin: 4px auto 0; color: var(--secondary-text-color); font-weight:600; font-size: .85rem; }
-      .below-line { width:260px; margin: 8px auto 0; display:grid; grid-template-columns: 1fr auto; align-items:center; column-gap:12px; }
-      .below-line.full { display:block; }
-      .below-line.full > button { width: 100%; justify-content: center; position: relative; }
       .below-line.full > button.align-left { justify-content: flex-start; }
       .below-line.full > button .btn-center { position: absolute; left: 50%; transform: translateX(-50%); }
       .below-line .time-row { justify-self: end; margin-top: 0; }
       .btn-clock { display:flex; align-items:center; gap:8px; }
-      .pill { display:flex; align-items:center; gap:8px; border-radius: 28px; height:40px; min-height:40px; padding:0 12px; border:1px solid var(--divider-color);
-              background: var(--ha-card-background, var(--card-background-color)); box-sizing: border-box; cursor: pointer; touch-action: manipulation; }
-      .pill .dot { width:12px; height:12px; border-radius:50%; background: var(--divider-color); box-shadow: 0 0 8px rgba(0,0,0,.25) inset; }
-      .pill.on { background: rgba(56,142,60,0.15); border-color: rgba(56,142,60,.35); }
-      .pill.on .dot { background: #2ecc71; box-shadow: 0 0 12px #2ecc71aa; }
-      .pill { position: relative; }
-      .pill select { appearance:none; background: transparent; color: var(--primary-text-color); border: none; font-weight:700; position: absolute; left:0; top:0; width:100%; height:100%; text-align:center; text-align-last:center; padding: 0 12px 0 40px; border-radius: 28px; cursor: pointer; z-index:1; box-sizing: border-box; }
 
-      .hero { margin-top: 0px; display:flex; align-items:center; justify-content:center; }
       .hero .side { text-align:center; color: var(--secondary-text-color); font-weight:600; }
       .hero .side .value { display:block; font-size:1.2rem; color: var(--primary-text-color); }
-      .ring { position: relative; width:300px; height:300px; margin: 0 auto; }
-      .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(16px); }
       .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; text-shadow: var(--ring-text-shadow); }
       .ring ha-icon { --mdc-icon-size: 32px; color: var(--secondary-text-color); margin-bottom: 6px; }
-      .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
-      .ring .target-value { color: var(--primary-color); font-weight:800; font-size: 1.5rem; line-height: 1; text-shadow: var(--ring-text-shadow); }
-      .ring .stack { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:4px; text-align:center; width: 180px; margin: 0 auto; }
       .ring .soc-block { display:flex; flex-direction:column; align-items:center; gap:2px; margin-top:4px; margin-bottom:8px; }
       .ring .soc-block .charge-type-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); margin-bottom: 2px; }
+      .ring .stack { width: 180px; gap:4px; }
       .ring .stack > * { text-align:center; }
       .ring .mini-grid { display:grid; grid-template-columns: repeat(3, 60px); grid-auto-rows: auto; width:180px; margin: 0 auto; justify-items:center; align-items:center; row-gap:4px; column-gap:0; }
       .ring .mini-grid.extra { row-gap:0; margin-top:2px; margin-bottom:6px; }
-      .ring .target-block { display:flex; flex-direction:column; align-items:center; gap:0; }
+      .ring .target-block { gap:0; }
       .ring .target-cell { display:flex; flex-direction:column; align-items:center; gap:2px; }
       .ring .mini-title { color: var(--secondary-text-color); font-weight:700; font-size: .7rem; letter-spacing:.2px; white-space: nowrap; text-shadow: var(--ring-text-shadow); }
       .ring .mini-value { color: var(--primary-text-color); font-weight:800; font-size: .95rem; line-height: 1.1; white-space: pre-line; text-shadow: var(--ring-text-shadow); }
@@ -1055,60 +1030,32 @@ class QsCarCard extends HTMLElement {
       .ring .mini-range-target { color: var(--primary-color); font-weight:700; font-size: .95rem; line-height: 1; margin-top:0; margin-bottom:0; text-shadow: var(--ring-text-shadow); }
       .disabled .ring .mini-range-target { color: var(--secondary-text-color); }
       .ring .mini-range:empty, .ring .mini-range-now:empty, .ring .mini-range-target:empty { display:none; }
-      .ring .center-controls { display:flex; align-items:center; justify-content:center; margin-top: 6px; }
-      /* Mobile touch fix: touch-action:none on the SVG (not the inner <circle>) prevents the
-         browser from initiating scroll/pan gestures when dragging the ring handle. SVG child
-         elements like <circle> don't reliably honor touch-action on iOS Safari / HA Companion. */
-      .ring svg { touch-action: none; }
-      /* Mobile touch fix: touch-action:manipulation removes the 300ms tap delay that mobile
-         browsers impose for double-tap detection, making button taps register immediately.
-         Without this, a hass re-render can destroy the DOM node before the synthetic click fires. */
-      /* QS-232 review-fix #03: sun-btn now uses the same absolute
-         positioning as override-btn on boiler/radiator/climate cards.
-         Bottom: 15px from .ring bottom, centered horizontally. */
+      /* QS-232 review-fix #03: sun-btn uses the same absolute positioning
+         as override-btn on the duration cards (bottom: 15px, centered). */
       .ring .sun-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:flex; align-items:center; justify-content:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%); touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-      /* QS-232 review-fix #04: icon bumped 26 → 30 px so the sun
-         renders at the same visual size as the hand on the
-         override-btn in climate/radiator/boiler.
-         Review-fix #07: kept 'transform: translateY(3px)' on the icon
-         (same as the rabbit-btn icon) — the mdi:weather-sunny glyph
-         has rays extending upward more than downward, so its bounding-
-         box center sits above its visual center. The 3 px nudge
-         pushes the icon down so it reads as centered in the 50×50
-         button shell. */
+      /* QS-232 review-fix #04/#07: icon 30px + 3px down-nudge so the
+         mdi:weather-sunny glyph reads as centered in the 50×50 shell. */
       .ring .sun-btn ha-icon { --mdc-icon-size: 30px; color: var(--secondary-text-color); display:flex; align-items:center; justify-content:center; line-height:1; transform: translateY(3px); }
       .ring .sun-btn.on { border-color: rgba(255,202,40,.45); background: rgba(255,202,40,.14); box-shadow: 0 0 0 3px rgba(255,202,40,.20), 0 0 16px #FFCA28; }
       .ring .sun-btn.on ha-icon { color: #FFCA28; }
-      /* QS-232 review-fix #04: invisible spacer that preserves the
-         .stack's vertical balance after the sun-btn was moved out of
-         .center-controls to absolute positioning. Without this, the
-         shorter stack gets grid-centered higher in .center, pushing
-         the soc-block (89%, range) and the mini-grid buttons (rabbit,
-         time) visibly downward.
-         Review-fix #02 #17 — components of the 74 px height:
-           - 6 px margin-top on the original .center-controls block
-           - 14 px label ("Solar priority", font-size 0.7rem,
-             font-weight 700)
-           - 4 px gap between label and button (column-gap: 4)
-           - 50 px sun-btn button height
-         If any of those four numbers changes (icon-size, label
-         typography, button dimensions), this height MUST be updated
-         in lockstep, otherwise the layout drifts. */
+      /* QS-232 review-fix #04: invisible spacer preserving the .stack's
+         vertical balance after the sun-btn moved to absolute positioning.
+         74px = 6 margin + 14 label + 4 gap + 50 button. Update in lockstep
+         if any of those four change. */
       .ring .sun-btn-spacer { width: 50px; height: 74px; pointer-events: none; }
       .ring .rabbit-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .rabbit-btn ha-icon { --mdc-icon-size: 26px; color: var(--secondary-text-color); display:block; line-height:1; transform: translateY(3px); }
       .ring .rabbit-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
       .ring .rabbit-btn.on ha-icon { color: #2196F3; }
-      .ring .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; color: var(--primary-color); line-height: 1; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+      .ring .time-btn { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--divider-color); background: rgba(255,255,255,.04); display:grid; place-items:center; cursor:pointer; box-shadow: none; pointer-events: auto; box-sizing: border-box; font-size: 0.99rem; font-weight: 800; color: var(--primary-color); line-height: 1; margin-top: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
       .ring .time-btn:hover { border-color: var(--primary-color); background: rgba(255,255,255,.08); }
-      .ring .time-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
-      .ring .time-btn.on { color: #2196F3; }
+      .ring .time-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; color: #2196F3; }
 
       .grid { display:grid; grid-template-columns: repeat(2, minmax(280px, 1fr)); gap:16px; margin-top: 16px; }
       @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
       .section { border-radius: 20px; background: var(--card-background-color); padding:16px; border: 1px solid var(--divider-color); }
       .row { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:8px 0; }
-      select, input[type="time"] {
+      input[type="time"] {
         background: var(--ha-card-background, var(--card-background-color));
         color: var(--primary-text-color);
         border:1px solid var(--divider-color);
@@ -1122,26 +1069,14 @@ class QsCarCard extends HTMLElement {
         outline: none;
         line-height: 1.2;
       }
-      /* Charger select full width */
-      .below select { width: 100%; height: 40px; min-height: 40px; }
-      /* Hour/minute compact width */
       .below-line .time-row select { width: auto; min-width: 64px; height: 40px; min-height: 40px; text-align: center; text-align-last: center; }
-      /* Focus state for consistency */
-      select:focus { border-color: var(--primary-color); box-shadow: 0 0 0 2px rgba(0,0,0,0), 0 0 0 3px color-mix(in srgb, var(--primary-color) 30%, transparent); }
       .actions { display:grid; grid-template-columns: repeat(2,minmax(180px,1fr)); gap:12px; margin-top:8px; }
-      button { border:none; border-radius:18px; padding:14px 16px; font-weight:700; cursor:pointer; font-size: .95rem; }
-      button.pill { height: 40px; min-height: 40px; display:flex; align-items:center; }
       .primary { background: var(--primary-color); color: var(--text-primary-color, #fff); }
       .secondary { background: rgba(255,255,255,.06); color: var(--primary-text-color); border:1px solid var(--divider-color); }
-      .danger { background: var(--error-color); color: #fff; }
-      /* Outline style variant */
-      button.outline { background: transparent !important; border-width: 2px; }
-      .danger.outline { color: var(--error-color) !important; border-color: var(--error-color) !important; }
       /* Disconnected visual mode (greyscale) */
       .disabled .ring .target-value { color: var(--secondary-text-color); }
       .disabled .primary { background: var(--divider-color); color: var(--primary-text-color); }
       .disabled .secondary { background: rgba(255,255,255,.04); border-color: var(--divider-color); color: var(--secondary-text-color); }
-      /* Keep reset/danger buttons red even in disabled mode */
       .disabled .danger { background: var(--error-color); color: #fff; }
       .disabled .danger.outline { background: transparent !important; color: var(--error-color) !important; border-color: var(--error-color) !important; }
       .disabled .chip, .disabled .pill { border-color: var(--divider-color); }
@@ -1167,21 +1102,6 @@ class QsCarCard extends HTMLElement {
       .time-row { display:grid; grid-template-columns: auto auto auto; align-items:center; gap: 12px; margin-top: 6px; justify-content:center; }
       input[type="range"]{ width:100%; height:6px; border-radius:999px; background: var(--divider-color); outline:none; -webkit-appearance:none; appearance:none; }
       input[type="range"]::-webkit-slider-thumb{ -webkit-appearance:none; appearance:none; width:20px; height:20px; border-radius:50%; background: var(--accent-color); box-shadow: 0 0 0 4px rgba(0,0,0,.15); cursor:pointer; }
-
-      /* Themed confirm dialog */
-      #target_handle { touch-action: none; }
-      .modal { position:absolute; inset:0; background: rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; z-index: 50; touch-action: manipulation; }
-      .dialog { background: var(--card-background-color); color: var(--primary-text-color); border:1px solid var(--divider-color); border-radius: 16px; padding: 16px; width: min(92%, 360px); box-shadow: 0 10px 30px rgba(0,0,0,.3); }
-      .dialog h3 { margin: 0 0 8px; font-size: 1.1rem; font-weight:800; text-align:left; }
-      .dialog p { margin: 0 0 14px; line-height:1.4; color: var(--secondary-text-color); white-space: pre-line; }
-      .dialog .time-picker { display:flex; align-items:center; justify-content:center; gap:12px; margin: 16px 0; }
-      .dialog .time-picker select { width: auto; min-width: 64px; height: 40px; text-align: center; text-align-last: center; }
-      .dialog .time-picker span { font-weight:700; font-size: 1.2rem; }
-      .dialog .actions { display:flex; gap:10px; justify-content:flex-end; margin-top: 6px; }
-      .btn { border:none; border-radius:12px; padding:10px 14px; font-weight:700; cursor:pointer; touch-action: manipulation; min-height: 44px; -webkit-tap-highlight-color: transparent; }
-      .btn.secondary { background: rgba(255,255,255,.06); color: var(--primary-text-color); border:1px solid var(--divider-color); }
-      .btn.primary { background: var(--primary-color); color:#fff; }
-      .btn.danger { background: var(--error-color); color:#fff; }
     `;
 
       const ringCirc = 130; // bigger radius
@@ -1193,33 +1113,14 @@ class QsCarCard extends HTMLElement {
       const startDeg = gapDeg / 2;   // bottom-left
       const endDeg = startDeg + rangeDeg; // bottom-right (wraps past 360)
 
-      const deg2rad = (d) => ((270 - d) * Math.PI) / 180;
-      const rad2deg = (r) => {
-          if (r < 0) r += 2 * Math.PI;
-          return (((270 - ((r * 180) / Math.PI)) + 360) % 360);
-      };
-      const polar = (cx, cy, r, deg) => ({x: cx + r * Math.cos(deg2rad(deg)), y: cy - r * Math.sin(deg2rad(deg))});
-      const arcPath = (cx, cy, r, a0, a1) => {
-          // BH defense-in-depth: a non-finite angle (NaN / Infinity)
-          // would render as `A 130 130 0 0 1 NaN NaN` in the SVG `d`
-          // attribute and trigger a browser "Configuration error".
-          // Return empty string so the consumer omits the <path> tag.
-          if (!Number.isFinite(a0) || !Number.isFinite(a1)) return '';
-          const p0 = polar(cx, cy, r, a0);
-          const p1 = polar(cx, cy, r, a1);
-          let delta = a1 - a0;
-          if (delta < 0) delta += 360;
-          const laf = delta > 180 ? 1 : 0;
-          return `M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} A ${r} ${r} 0 ${laf} 1 ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`;
-      };
-
-      const pctToDeg = (p) => startDeg + (Math.max(0, Math.min(100, p)) / 100) * rangeDeg;
-
-      const socEndDeg = pctToDeg(soc);
+      // QS-199 — geometry helpers (deg2rad / rad2deg / polar / arcPath /
+      // pctToDeg) imported from shared/qs-card-base.js. The shared
+      // `pctToDeg(p, startDeg, rangeDeg)` takes the range explicitly.
+      const socEndDeg = pctToDeg(soc, startDeg, rangeDeg);
       const handlePct =
           this._targetDragPct != null ? this._targetDragPct :
               (this._localTargetPct != null ? this._localTargetPct : (targetPct ?? soc));
-      const handleDeg = pctToDeg(handlePct);
+      const handleDeg = pctToDeg(handlePct, startDeg, rangeDeg);
       // Enlarge gauge
       const center = {cx: 160, cy: 160};
       const arcLen = 2 * Math.PI * ringCirc * (rangeDeg / 360);
@@ -1255,9 +1156,10 @@ class QsCarCard extends HTMLElement {
       const stateLc = chargerState.toLowerCase();
       const invalidStates = ['unavailable', 'unknown', 'none', 'not plugged', 'not_plugged', 'not connected', 'not_connected'];
       const shouldShowPlaceholder = isDisconnected || !chargerState || invalidStates.includes(stateLc) || !chargerOptions.includes(chargerState);
+      // S3: escape entity-derived option values before innerHTML interpolation.
       const chargerOptionsHtml = shouldShowPlaceholder
-          ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${o}</option>`)].join('')
-          : chargerOptions.map(o => `<option ${o === chargerState ? 'selected' : ''}>${o}</option>`).join('');
+          ? [`<option value="" selected>No connected Charger</option>`, ...chargerOptions.map(o => `<option>${this._escapeHtml(o)}</option>`)].join('')
+          : chargerOptions.map(o => `<option ${o === chargerState ? 'selected' : ''}>${this._escapeHtml(o)}</option>`).join('');
 
       // Person selector options
       const personOptions = selPerson?.attributes?.options || [];
@@ -1265,14 +1167,16 @@ class QsCarCard extends HTMLElement {
       const personStateLc = personState.toLowerCase();
       const personInvalidStates = INVALID_STATES;
       const shouldShowPersonPlaceholder = !personState || personInvalidStates.includes(personStateLc) || !personOptions.includes(personState);
+      // S3: escape entity-derived option values before innerHTML interpolation.
       const personOptionsHtml = shouldShowPersonPlaceholder
-          ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${o}</option>`)].join('')
-          : personOptions.map(o => `<option ${o === personState ? 'selected' : ''}>${o}</option>`).join('');
+          ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${this._escapeHtml(o)}</option>`)].join('')
+          : personOptions.map(o => `<option ${o === personState ? 'selected' : ''}>${this._escapeHtml(o)}</option>`).join('');
 
       // Person forecast string
       const personForecastStr = sPersonForecast?.state || '';
       const validPersonForecast = personForecastStr && personForecastStr.toLowerCase() !== 'none' && personForecastStr.toLowerCase() !== 'unknown' && personForecastStr.toLowerCase() !== 'unavailable' && personForecastStr.trim() !== '';
-      const forecastDisplay = validPersonForecast ? personForecastStr : 'None';
+      // S3: escape — `forecastDisplay` is interpolated into the .forecast-row innerHTML.
+      const forecastDisplay = validPersonForecast ? this._escapeHtml(personForecastStr) : 'None';
 
       const activeGradId = isFaulted ? gradFaultId : (isStale ? gradStaleId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId)));
       // In stale-percent mode, show animation whenever charging regardless of arc size
@@ -1288,6 +1192,14 @@ class QsCarCard extends HTMLElement {
       // card-level pinkish tint already applied via the `.off-grid`
       // CSS class; the soup is unaffected.
       const degraded = isDisconnected || isFaulted || isStale;
+      // QS-199 review-fix #04 CR1 — when disconnected the card is
+      // pointer-disabled (`.disabled` CSS sets `pointer-events: none`),
+      // so the custom `div role="button"` controls (sun / rabbit / time)
+      // must ALSO drop out of the keyboard tab order and report
+      // `aria-disabled`, otherwise they're dead keyboard tab stops whose
+      // action just bails. Native `<button>`s (reset) handle this
+      // themselves; only the custom divs need the explicit attrs.
+      const ctrlTabAttrs = isDisconnected ? 'tabindex="-1" aria-disabled="true"' : 'tabindex="0"';
       // Stash on the instance so the RAF step closure can read it
       // without re-deriving (and so degraded-state lightning
       // suppression has a consistent value across the frame).
@@ -1456,12 +1368,12 @@ class QsCarCard extends HTMLElement {
                   <div class="mini-title">${useEnergyMode ? 'Target Energy' : 'Target SOC'}</div>
                   <div class="mini-title">${chargeTimeLabel}</div>
 
-                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
+                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Charge as fast as possible"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
                   <div class="target-cell">
                     <div id="target_value" class="target-value">${displayTargetValue}</div>
                     ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
                   </div>
-                  ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}">${chargeTime}</div>` : ''}
+                  ${(tNext && e.schedule) ? `<div id="time_btn" class="time-btn ${chargeTime && chargeTime !== '--:--' ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Set next charge time">${this._escapeHtml(chargeTime)}</div>` : ''}
                 </div>
                 </div>
                 <!-- QS-232 review-fix #04: invisible spacer preserves .stack's vertical balance
@@ -1473,7 +1385,7 @@ class QsCarCard extends HTMLElement {
             <!-- QS-232 review-fix #03: sun-btn moved out of .center > .stack > .center-controls
                  to a direct child of .ring, matching the override-btn placement pattern in
                  boiler/radiator/climate cards (position: absolute; bottom: 15px;). -->
-            ${swPriority ? `<div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>` : ''}
+            ${swPriority ? `<div id="sun_btn" class="sun-btn ${swPriority?.state === 'on' ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Toggle solar priority"><ha-icon icon="mdi:weather-sunny"></ha-icon></div>` : ''}
           </div>
         </div>
 
@@ -1678,7 +1590,7 @@ class QsCarCard extends HTMLElement {
               const h = Number(hourSel?.value ?? 0);
               const m = Number(minSel?.value ?? 0);
               const mins = h * 60 + m;
-              const hm = formatHm(mins);
+              const hm = this._formatHm(mins);
               const val = hm + ':00';
               this._localNextTimeMins = mins; // keep local until HA push comes back to avoid select jumping
               // S9: clear the local override after a grace period.
@@ -1733,6 +1645,8 @@ class QsCarCard extends HTMLElement {
               sbtn.style.pointerEvents = 'auto';
               sbtn.addEventListener('click', togglePriority);
               sbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePriority(); });
+              // S5: keyboard activation (Enter/Space) for the focusable div.
+              this._registerKeyActivation(sbtn, togglePriority);
           }
       }
 
@@ -1748,7 +1662,7 @@ class QsCarCard extends HTMLElement {
                   const isAlreadyForcing = sChargeType?.state === 'As Fast As Possible';
 
                   if (isAlreadyForcing && e.clean_constraints) {
-                      showDialog({
+                      this._showDialog({
                           title: 'Stop Force Charging',
                           message: 'This will stop the current charge.\nOk to proceed?',
                           buttons: [
@@ -1761,7 +1675,7 @@ class QsCarCard extends HTMLElement {
                           ]
                       });
                   } else {
-                      showDialog({
+                      this._showDialog({
                           title: 'Force charge now',
                           message: 'Start full-speed charge immediately?\nThis will use maximum available power.',
                           buttons: [
@@ -1777,6 +1691,8 @@ class QsCarCard extends HTMLElement {
               };
               rbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); rbtnAction(); });
               rbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); rbtnAction(); });
+              // S5: keyboard activation for the focusable div.
+              this._registerKeyActivation(rbtn, rbtnAction);
           }
       }
 
@@ -1790,7 +1706,7 @@ class QsCarCard extends HTMLElement {
 
                   let defaultHour, defaultMin;
                   if (chargeTime && chargeTime !== '--:--' && chargeTime.includes(':')) {
-                      const chargeMins = parseTimeToMinutes(chargeTime);
+                      const chargeMins = this._parseTimeToMinutes(chargeTime);
                       defaultHour = Math.floor(chargeMins / 60);
                       defaultMin = chargeMins % 60;
                       defaultMin = Math.ceil(defaultMin / 5) * 5;
@@ -1821,7 +1737,7 @@ class QsCarCard extends HTMLElement {
             </div>
           `;
 
-                  const dialog = showDialog({
+                  const dialog = this._showDialog({
                       title: 'Charge Finish Time',
                       customContent: customContent,
                       buttons: [
@@ -1843,7 +1759,7 @@ class QsCarCard extends HTMLElement {
                                   const h = Number(hourSel?.value ?? 0);
                                   const m = Number(minSel?.value ?? 0);
                                   const mins = h * 60 + m;
-                                  const hm = formatHm(mins);
+                                  const hm = this._formatHm(mins);
                                   const val = hm + ':00';
                                   this._localNextTimeMins = mins;
                                   // S9: clear the local override after a
@@ -1865,46 +1781,20 @@ class QsCarCard extends HTMLElement {
               };
               tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); tbtnAction(); });
               tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); tbtnAction(); });
+              // S5: keyboard activation for the focusable div.
+              this._registerKeyActivation(tbtn, tbtnAction);
           }
       }
-      const showDialog = (opts) => {
-          const {title, message, buttons, customContent} = opts;
-          const wrap = document.createElement('div');
-          wrap.className = 'modal';
-          // S6: escape user-controlled `title` and `message`.
-          const contentHtml = customContent || `<p>${this._escapeHtml(message)}</p>`;
-          wrap.innerHTML = `<div class="dialog"><h3>${this._escapeHtml(title)}</h3>${contentHtml}<div class="actions"></div></div>`;
-          const actions = wrap.querySelector('.actions');
-          this._modalOpen = true;
-          buttons.forEach(b => {
-              const el = document.createElement('button');
-              el.className = `btn ${b.variant || 'secondary'}`;
-              el.textContent = b.text;
-              let activated = false;
-              const activate = () => {
-                  if (activated) return;
-                  activated = true;
-                  if (b.onClick) b.onClick();
-                  wrap.remove();
-                  this._modalOpen = false;
-                  this._render();
-              };
-              el.addEventListener('click', activate);
-              el.addEventListener('touchend', (ev) => {
-                  ev.preventDefault();
-                  activate();
-              });
-              actions.appendChild(el);
-          });
-          this._root.appendChild(wrap);
-          return wrap;
-      };
+      // QS-199 review-fix M3/M5 — the inline `showDialog` closure (which
+      // lacked the N12 close-fallback, N13 try/finally, and S16 keyboard
+      // activation) was deleted. All dialogs now route through the
+      // hardened `this._showDialog(...)` on QsCardBase.
 
       if (e.force_now) {
           const forceBtn = ids('force');
           const forceAction = async () => {
               if (this._root?.querySelector('.disabled')) return;
-              showDialog({
+              this._showDialog({
                   title: 'Force charge now',
                   message: 'Start full-speed charge immediately?\nThis will use maximum available power.',
                   buttons: [
@@ -1927,7 +1817,7 @@ class QsCarCard extends HTMLElement {
               if (this._root?.querySelector('.disabled')) return;
               const limit = selLimit?.state || '';
               const time = tNext?.state || '';
-              showDialog({
+              this._showDialog({
                   title: 'Add scheduled charge',
                   message: `Schedule a charge for ${time} at target SOC: ${limit} .\nProceed?`,
                   buttons: [
@@ -1947,7 +1837,7 @@ class QsCarCard extends HTMLElement {
       if (e.reset) {
           const resetBtn = ids('reset');
           const resetAction = async () => {
-              showDialog({
+              this._showDialog({
                   title: 'Reset car state',
                   message: 'This will reset internal state for this car and cannot be undone.\nProceed?',
                   buttons: [

@@ -1,7 +1,11 @@
 """Dashboard generation and programmatic registration for Quiet Solar."""
 
+import asyncio
+import contextlib
+import itertools
 import logging
 import os
+import re
 from typing import TYPE_CHECKING, Any
 
 import aiofiles
@@ -274,10 +278,91 @@ async def _async_register_or_update_dashboard(
 
 
 def _generate_qs_tag() -> str:
-    """Generate a cache-busting tag from the current epoch."""
+    """Generate a cache-busting tag from a high-resolution clock.
+
+    QS-199 review-fix S11 — `time.time_ns()` (nanoseconds) avoids the
+    identical-tag collision that `int(time.time())` would produce on two
+    restarts within the same wall-clock second (browsers would then serve
+    cached content despite changed files). Still a digit string.
+    """
     import time
 
-    return str(int(time.time()))
+    return str(time.time_ns())
+
+
+# QS-199 A1b / review-fix M6 + S8 + S9 + #02 N1: matches a relative `.js`
+# import URL in any of three forms:
+#   - static:       `from <q>./...<q>`
+#   - dynamic:      `import(<q>./...<q>)`
+#   - bare side-fx: `import <q>./...<q>`  (no `from`, no `(`)  [#02 N1]
+# The path alternation `\./[^'"?\s]+\.js` matches BOTH `./shared/x.js`
+# (top-level cards) AND `./x.js` (sibling imports inside `shared/` — M6).
+# `\bfrom\s*` / `\bimport\s*\(\s*` tolerate the no-whitespace minified
+# form `from'./x.js'` (S9) and word-boundary-guard against `transform`.
+# The bare-import alternative `\bimport\s+(?=['"])` requires `import`
+# directly followed by a quote, so it can't swallow a named import
+# (`import {X} from ...`, where `import ` is followed by `{`). The
+# optional `(?P<query>\?...)` captures any pre-existing query string so
+# the replacement can merge rather than clobber it (S10).
+_IMPORT_REWRITE_RE = re.compile(
+    r"""(?P<lead>\bfrom\s*|\bimport\s*\(\s*|\bimport\s+(?=['"]))"""
+    r"""(?P<q>['"])"""
+    r"""(?P<path>\./[^'"?\s]+\.js)"""
+    r"""(?P<query>\?[^'"]*)?"""
+    r"""(?P=q)"""
+)
+
+
+def _merge_qs_tag(existing_query: str, tag: str) -> str:
+    """Merge `qs_tag=<tag>` into an existing query string.
+
+    QS-199 review-fix S10 — preserves any pre-existing non-`qs_tag` params
+    (e.g. `?v=1&theme=dark`), replacing only the `qs_tag` value (or
+    appending it when absent). Always overwrites a stale `qs_tag` (R1
+    idempotency).
+
+    QS-199 review-fix #02 N4 — a valueless param (`?flag`) is normalised
+    to `flag=` by `urlencode`. This is cosmetic and never occurs in the
+    dev-authored import URLs (they carry no query string at all), so it
+    is left as-is.
+    """
+    from urllib.parse import parse_qsl, urlencode
+
+    params = [(k, v) for (k, v) in parse_qsl(existing_query.lstrip("?"), keep_blank_values=True) if k != "qs_tag"]
+    params.append(("qs_tag", tag))
+    return "?" + urlencode(params)
+
+
+def _rewrite_shared_imports(content: str, tag: str) -> str:
+    """Inject `?qs_tag=<tag>` into every relative `.js` import URL.
+
+    QS-199 review-fix S4 — uses a callable replacement so `tag` is treated
+    as a literal string (a tag containing a backslash can't be mis-parsed
+    as a regex backreference). Always overwrites a pre-existing `qs_tag`;
+    preserves other query params (S10).
+    """
+
+    def _repl(m: re.Match[str]) -> str:
+        new_query = _merge_qs_tag(m.group("query") or "", tag)
+        return f"{m.group('lead')}{m.group('q')}{m.group('path')}{new_query}{m.group('q')}"
+
+    return _IMPORT_REWRITE_RE.sub(_repl, content)
+
+
+def _maybe_rewrite_js_bytes(raw: bytes, tag: str, name: str) -> bytes:
+    """Decode + rewrite a `.js` file's import URLs, or byte-copy on failure.
+
+    QS-199 review-fix M7 — a `.js` file with non-UTF-8 bytes (Latin-1,
+    BOM mojibake) must NOT abort the whole copy. On `UnicodeDecodeError`
+    we fall back to returning the raw bytes unchanged so the destination
+    tree stays complete and every other resource still registers.
+    """
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        _LOGGER.warning("Non-UTF-8 JS resource %s copied without import rewrite", name)
+        return raw
+    return _rewrite_shared_imports(content, tag).encode("utf-8")
 
 
 def _resource_namespace() -> str:
@@ -312,22 +397,103 @@ def _get_resource_handler_from_hass(
     return resources
 
 
+def _url_path_without_query(url: str) -> str:
+    """Return the URL up to (but excluding) the `?` query string.
+
+    QS-199 review-fix #02 N5 — `?` is the query delimiter for the
+    `/local/quiet_solar/...` resource URLs we generate (they never embed
+    a literal `?` in the path), so splitting on the first `?` cleanly
+    separates path from the `?qs_tag=...` cache-buster.
+    """
+    return url.split("?", 1)[0]
+
+
+# QS-199 review-fix #02 N2 — JS module extensions whose imports get the
+# cache-buster rewrite. `.mjs` is included for forward-compat even though
+# the bundled tree is `.js`-only today.
+_JS_MODULE_EXTENSIONS = (".js", ".mjs")
+
+
 async def _async_update_resource(
     resources: ResourceStorageCollection,
     raw_name: str,
     url: str,
 ) -> None:
-    """Create or update a single lovelace resource entry."""
+    """Create or update a single lovelace resource entry.
+
+    QS-199 review-fix N9 — match on the resource URL's path-up-to-`?`
+    EXACTLY equal to `raw_name` instead of a bare `startswith` prefix.
+    The old prefix match would also match a user's manual backup URL
+    (e.g. `.../qs-car-card.js.backup`) and silently overwrite it.
+    """
     if not resources.loaded:
         await resources.async_load()
 
     for entry in resources.async_items():
-        if (entry_url := entry["url"]).startswith(raw_name):
-            if entry_url != url:
+        if _url_path_without_query(entry["url"]) == raw_name:
+            if entry["url"] != url:
                 await resources.async_update_item(entry["id"], {"url": url})
             return
 
     await resources.async_create_item({"res_type": "module", "url": url})
+
+
+# Monotonic per-process counter feeding the unique atomic-write temp name (S1).
+_QSTMP_COUNTER = itertools.count()
+
+# Suffix of the atomic-write temp files (S1) — also the orphan-sweep glob (N2).
+_QSTMP_SUFFIX = ".qstmp"
+
+
+async def _async_remove_orphan_temps(root: str) -> None:
+    """Reclaim orphan ``*.qstmp`` temp files under ``root`` (recursively).
+
+    QS-199 review-fix #03 N2 — with the unique per-write temp name (S1) a
+    hard kill (SIGKILL / OOM / power loss) between the write and the
+    ``os.replace`` leaves a uniquely-named orphan that the in-process
+    ``OSError`` cleanup can't reach, so they accumulate across crashes.
+    A one-time sweep at the top of ``async_update_resources`` reclaims
+    them. Best-effort: individual removal failures are suppressed.
+    """
+    if not await aiofiles.os.path.isdir(root):
+        return
+    for entry in await aiofiles.os.listdir(root):
+        path = os.path.join(root, entry)
+        if await aiofiles.os.path.isdir(path):
+            await _async_remove_orphan_temps(path)
+        elif entry.endswith(_QSTMP_SUFFIX):
+            with contextlib.suppress(OSError):
+                await aiofiles.os.remove(path)
+
+
+async def _async_atomic_write_bytes(dst: str, data: bytes) -> None:
+    """Write `data` to `dst` atomically (temp file + os.replace).
+
+    QS-199 review-fix S12 — writing in place risks a truncated file if the
+    disk fills or HA is killed mid-write; the browser would then load a
+    JS syntax error. Writing to a temp sibling and `os.replace`-ing it
+    into place makes the swap atomic on the same filesystem.
+
+    QS-199 review-fix #02 S1 — the temp name is unique per call
+    (`<pid>.<counter>`). `async_update_resources` is awaited without a
+    lock from both startup and the "Generate Dashboard" button; a shared
+    `.qstmp` name would let two interleaved runs corrupt the temp or have
+    one run's `os.replace` race against the other renaming the same temp
+    away (surfacing as a spurious `FileNotFoundError`).
+
+    QS-199 review-fix #02 N3 — on a mid-write failure (disk full, replace
+    race) the partial temp is unlinked so orphans don't accumulate; `dst`
+    keeps its old content (atomicity holds).
+    """
+    tmp = f"{dst}.{os.getpid()}.{next(_QSTMP_COUNTER)}{_QSTMP_SUFFIX}"
+    try:
+        async with aiofiles.open(tmp, "wb") as f_out:
+            await f_out.write(data)
+        await aiofiles.os.replace(tmp, dst)
+    except OSError:
+        with contextlib.suppress(OSError):
+            await aiofiles.os.remove(tmp)
+        raise
 
 
 async def _async_copy_and_register_resources(
@@ -336,32 +502,85 @@ async def _async_copy_and_register_resources(
     namespace: str,
     tag: str,
     handler: ResourceStorageCollection | None,
+    *,
+    is_top_level: bool = True,
 ) -> None:
-    """Recursively copy resource files and register them with lovelace."""
+    """Recursively copy resource files and register them with lovelace.
+
+    QS-199:
+      * A1a — Only top-level files are registered as Lovelace resources;
+        subdirectory files (e.g. `shared/*.js`) are still copied but skip
+        registration. Shared modules are ES-module dependencies imported
+        by the top-level cards, not entry-point cards themselves.
+      * A1b / M6 — `.js` files have their relative import URLs (both
+        `from './shared/<path>.js'` in top-level cards AND `./sibling.js`
+        between files inside `shared/`) regex-rewritten to inject
+        `?qs_tag=<tag>`, using the same `tag` value as the Lovelace
+        registration URL. Always overwrites a pre-existing `qs_tag`
+        (idempotent across HA restarts); preserves other query params.
+      * M7 — a non-UTF-8 `.js` file is byte-copied (no rewrite) instead
+        of aborting the recursion.
+      * S12 — files are written to a `.qstmp` sibling then atomically
+        `os.replace()`d into place so a disk-full / kill mid-write can't
+        leave a truncated JS file that the browser would choke on.
+      * N8 — subdirectories (e.g. `shared/`) are copied BEFORE the
+        top-level files that import them, so a browser fetching a card
+        mid-copy never resolves its inheritance chain through a
+        not-yet-rewritten shared module.
+    """
     await aiofiles.os.makedirs(to_dir, exist_ok=True)
-    for entry in await aiofiles.os.listdir(from_dir):
+
+    entries = await aiofiles.os.listdir(from_dir)
+    files: list[str] = []
+    subdirs: list[str] = []
+    for entry in entries:
+        if await aiofiles.os.path.isfile(os.path.join(from_dir, entry)):
+            files.append(entry)
+        elif await aiofiles.os.path.isdir(os.path.join(from_dir, entry)):
+            subdirs.append(entry)
+
+    # N8: dependency order — recurse into subdirectories (shared modules)
+    # first, then copy the top-level files that import them.
+    for entry in subdirs:
+        await _async_copy_and_register_resources(
+            os.path.join(from_dir, entry),
+            os.path.join(to_dir, entry),
+            f"{namespace}/{entry}",
+            tag,
+            handler,
+            is_top_level=False,
+        )
+
+    for entry in files:
         src = os.path.join(from_dir, entry)
         dst = os.path.join(to_dir, entry)
-        if await aiofiles.os.path.isfile(src):
-            async with (
-                aiofiles.open(src, "rb") as f_in,
-                aiofiles.open(dst, "wb") as f_out,
-            ):
-                await f_out.write(await f_in.read())
-            if handler is not None:
-                await _async_update_resource(
-                    handler,
-                    f"{namespace}/{entry}",
-                    f"{namespace}/{entry}?qs_tag={tag}",
-                )
-        elif await aiofiles.os.path.isdir(src):
-            await _async_copy_and_register_resources(
-                src,
-                dst,
-                f"{namespace}/{entry}",
-                tag,
+        async with aiofiles.open(src, "rb") as f_in:
+            raw = await f_in.read()
+        # M7 / #02 N2: only JS-module files (.js / .mjs) are decoded +
+        # rewritten; the helper falls back to the raw bytes on a
+        # UnicodeDecodeError. Everything else is byte-copied verbatim.
+        is_js_module = entry.endswith(_JS_MODULE_EXTENSIONS)
+        out_bytes = _maybe_rewrite_js_bytes(raw, tag, entry) if is_js_module else raw
+        await _async_atomic_write_bytes(dst, out_bytes)
+        # A1a: skip lovelace registration for files in subdirectories
+        if handler is not None and is_top_level:
+            await _async_update_resource(
                 handler,
+                f"{namespace}/{entry}",
+                f"{namespace}/{entry}?qs_tag={tag}",
             )
+        elif handler is not None and not is_top_level:
+            _LOGGER.debug("Skipped lovelace registration for shared module %s/%s", namespace, entry)
+
+
+# QS-199 review-fix #04 ES2 — serialize the whole resource update. The two
+# entry points (startup restore in `async_restore_dashboards_and_update_resources`
+# and the "Generate Dashboard" button via `generate_dashboard_yaml`) are
+# otherwise unlocked and can interleave their sweep + copy + register steps,
+# which re-introduced the temp-file race classes (round-2 S1, round-3 N2/#04
+# ES2). One module-level lock kills the entire class at the root; the unique
+# temp name (S1) stays as defense-in-depth.
+_RESOURCE_UPDATE_LOCK = asyncio.Lock()
 
 
 async def async_update_resources(hass: HomeAssistant) -> None:
@@ -369,9 +588,34 @@ async def async_update_resources(hass: HomeAssistant) -> None:
 
     This runs on *every* startup so that updated JS files from a component
     update are picked up immediately.  It does NOT touch dashboard content.
+
+    QS-199 review-fix #04 ES2 — the body runs under `_RESOURCE_UPDATE_LOCK`
+    so a concurrent invocation can't sweep away (or os.replace over) a temp
+    file the other invocation is mid-write on.
     """
+    async with _RESOURCE_UPDATE_LOCK:
+        await _async_update_resources_locked(hass)
+
+
+async def _async_update_resources_locked(hass: HomeAssistant) -> None:
+    """Body of `async_update_resources`, run while holding the update lock."""
     resources_dst = os.path.join(hass.config.path(), "www", DOMAIN)
     await aiofiles.os.makedirs(resources_dst, exist_ok=True)
+
+    # QS-199 review-fix #03 N2 — reclaim any orphan *.qstmp temp files left
+    # behind by a prior hard kill before copying fresh resources. Safe under
+    # the update lock: no concurrent invocation can be mid-write (#04 ES2).
+    await _async_remove_orphan_temps(resources_dst)
+
+    # QS-199 review-fix #02 S1 — check the SOURCE tree up front instead of
+    # catching `FileNotFoundError` around the whole copy. A per-file
+    # `os.replace` race (now also mitigated by unique temp names) would
+    # otherwise raise `FileNotFoundError` mid-recursion and be mis-logged
+    # as "No bundled resources directory found", silently skipping the
+    # remaining files.
+    if not await aiofiles.os.path.isdir(_RESOURCES_DIR):
+        _LOGGER.debug("No bundled resources directory found, skipping")
+        return
 
     handler = _get_resource_handler_from_hass(hass)
     tag = _generate_qs_tag()
@@ -386,8 +630,6 @@ async def async_update_resources(hass: HomeAssistant) -> None:
             handler,
         )
         _LOGGER.debug("Dashboard JS resources updated")
-    except FileNotFoundError:
-        _LOGGER.debug("No bundled resources directory found, skipping")
     except Exception:
         _LOGGER.warning("Failed to update dashboard resources", exc_info=True)
 

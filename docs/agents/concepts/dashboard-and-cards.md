@@ -12,7 +12,12 @@ covers:
   - custom_components/quiet_solar/ui/resources/qs-on-off-duration-card.js
   - custom_components/quiet_solar/ui/resources/qs-radiator-card.js
   - custom_components/quiet_solar/ui/resources/qs-water-boiler-card.js
-last_verified: 2026-05-25
+  - custom_components/quiet_solar/ui/resources/shared/qs-card-styles.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-card-base.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
+  - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
+last_verified: 2026-05-27
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -119,17 +124,169 @@ state" into "the JS card reads this entity". If a key is missing on
 the device, the template skips that line and the JS card simply
 doesn't render that row.
 
+### Shared base modules (QS-199)
+
+The six per-card JS files (~9,400 LOC pre-extraction) share a common
+foundation that lives under `ui/resources/shared/`. Each card
+imports from these modules; the Python copy step rewrites their
+`from './shared/*.js'` import URLs with the same `?qs_tag=<epoch>`
+cache-buster used for the top-level cards, so a component upgrade
+invalidates both the cards AND their dependencies atomically.
+
+Five shared modules:
+
+- **`shared/qs-card-styles.js`** — exports `baseCardCSS(palette,
+  options)`, the CSS string consumed by every card. Branded palette
+  flows through the `palette` argument
+  (`{primary, gradStart, gradEnd, animStart, animEnd}`); the shared
+  CSS contains no card-branded literals (only neutral
+  `rgba`/`var(--*)` and the four semantic-anchor colours —
+  power-blue `#2196F3`, solar-green `#4CAF50`, override-orange
+  `#FF9800`, and pill-on green `#2ecc71`/`#2ecc71aa` — pinned by
+  `test_shared_css_has_no_branded_colour_literals`).
+- **`shared/qs-card-base.js`** — exports `class QsCardBase extends
+  HTMLElement` plus the geometry pure functions (`deg2rad`,
+  `rad2deg`, `polar`, `arcPath`, `pctToDeg`). The class owns
+  lifecycle, service callers (`_entity`, `_call`, `_press`,
+  `_turnOn`, `_turnOff`, `_select`, `_setNumber`, `_setTime`),
+  defensive utilities (`_escapeHtml`, `_safeNumber` —
+  climate-hardened with trim + `Number.isFinite`, `_fmt`,
+  `_isValidState`, `_formatTime`, `_parseTimeToMinutes`,
+  `_formatHm`), the modal dialog (`_showDialog`), keyboard
+  activation (`_registerKeyActivation`), a per-instance ID counter
+  (`_instanceId`), the dashed-arc RAF helpers
+  (`_startAnimation`/`_stopAnimation`), and **5 wire-helpers**
+  (`_wireTargetHandle`, `_wireTimePicker`, `_wireResetButton`,
+  `_wirePowerButton`, `_wireGreenButton`). Wire-helpers live on the
+  base (not the sub-base) because the car card uses several of them
+  too — it inherits `QsCardBase` directly.
+- **`shared/qs-ring-duration-base.js`** — exports `class
+  QsRingDurationCardBase extends QsCardBase`. Adds `_buildRingHTML`
+  (the ring SVG markup with linear-gradient defs, background +
+  progress arcs, override-btn cover circle, target-handle circle +
+  text, power-btn / green-btn / override-btn DOM nodes),
+  `_wireOverrideButton`, and `_wireBistateMode` (the latter wraps
+  `_select` in try/catch/finally + 300ms cleanup setTimeout — M2
+  hardening).
+- **`shared/qs-anim-flame.js`** — exports `FLAME_CONSTANTS` plus
+  `class QsFlameEngine`. The engine is a pure state machine + path
+  generator (`step(dt, fireOn, baseY, ts)` →
+  `{shouldRegen}`; `generatePaths(baseY, isIdle)` →
+  `string[layerCount]`). Per-card palette and per-layer constants
+  (`LAYER_TEETH_COUNTS`, `LAYER_BASE_HEIGHTS`, `FLAME_FILLS`,
+  `FLAME_GREY_FILLS`) flow through the constructor — both the
+  radiator and climate cards keep their own copies as the source of
+  truth.
+- **`shared/qs-anim-wave.js`** — exports `WAVE_CONSTANTS` plus
+  `generateWavePath(width, amplitude, frequency, phase, yOffset)`
+  (a pure ~15-LOC helper). Deliberately NOT a class: each consuming
+  card (pool, water-boiler, climate-cool, car) owns its RAF step
+  body because the per-card variations (palette, bubble/steam/glow
+  hooks, snow-pile particles, single-layer vs 3-layer) would turn
+  any "engine" class into mostly feature-flag scaffolding.
+
+**Inheritance hierarchy:**
+
+- `QsCardBase extends HTMLElement` — used directly by: **car**.
+- `QsRingDurationCardBase extends QsCardBase` — used by: **pool,
+  on-off-duration, radiator, water-boiler, climate**.
+
+**Decision rule going forward:** lifecycle + service callers +
+helpers that mutate `this.*` flags → inheritance; pure pipeline
+transforms (engines, geometry, CSS templates) → composition.
+
+**Why particle systems stay per-card:** each particle system
+(boiler bubbles/steam/surface glow, climate snow-pile + falling
+flakes, car sparkles, car lightning, pool temp-tint) is used by
+exactly one card and carries 5+ rounds of review-fix tuning baked
+into its constants and spawn/advance/retire algorithm. Extracting a
+generic `QsParticleEngine` would gain less than ~120 LOC of
+deduplication at very high regression risk — every tuning hint
+would ride into the engine as a constructor arg. The decision is
+explicit and documented; future readers should not redo the
+analysis without new evidence.
+
 ### JS resources lifecycle
 
 `async_update_resources(hass)` runs on **every** HA start. It walks
-the bundled `ui/resources/` directory, copies each JS file to
-`<config>/www/quiet_solar/<filename>`, and registers it as a
-Lovelace resource at URL
-`/local/quiet_solar/<filename>?qs_tag=<epoch>`. The `qs_tag` query
-parameter changes on each start (epoch-derived), so browsers reload
-the updated JS without a hard refresh. Dashboard **content** is NOT
-touched on startup — only the JS resources — so any manual edits
-TheAdmin made to the dashboards survive an upgrade.
+the bundled `ui/resources/` directory recursively. For each `.js`
+file:
+
+1. It reads the file, rewrites any `from './shared/*.js'` import URL
+   with a fresh `?qs_tag=<epoch>` cache-buster (regex always
+   overwrites — never skips for an existing query string), and
+   writes the rewritten content to `<config>/www/quiet_solar/<...>`.
+2. **Top-level cards** (no parent directory under `ui/resources/`)
+   are registered as Lovelace resources at URL
+   `/local/quiet_solar/<filename>?qs_tag=<epoch>`.
+3. **Files under `shared/`** are copied to
+   `<config>/www/quiet_solar/shared/<filename>` but **not** registered
+   with Lovelace — they are imported by the top-level cards as ES
+   modules. The same `tag` value flows into both the registration
+   URL and the rewritten import URLs so a browser reload invalidates
+   everything atomically.
+
+The import-URL rewrite (review-fix #01 hardening) matches **both**
+`from './shared/x.js'` in top-level cards **and** sibling
+`from './x.js'` imports *between* files inside `shared/` (so the
+inheritance chain `card → qs-ring-duration-base.js → qs-card-base.js`
+is fully cache-busted), tolerates the no-whitespace `from'./x.js'`
+and dynamic `import('./x.js')` forms, preserves any pre-existing
+non-`qs_tag` query params, and uses a literal (callable) replacement
+so a tag value is never mis-parsed as a regex backreference. The tag
+itself is `time.time_ns()` (nanosecond resolution) so two restarts in
+the same wall-clock second still differ. Subdirectories are copied
+*before* the top-level cards that import them (dependency order), each
+file is written via a temp-file + `os.replace()` atomic swap, and a
+non-UTF-8 `.js` file is byte-copied (no rewrite) rather than aborting
+the recursion.
+
+Dashboard **content** is NOT touched on startup — only the JS
+resources — so any manual edits TheAdmin made to the dashboards
+survive an upgrade.
+
+All six cards route through the shared base: lifecycle, service
+callers, defensive utilities, the modal dialog (`_showDialog`,
+N12/N13/S16-hardened), keyboard activation, the five wire-helpers,
+the ring HTML builder, the geometry helpers, and `baseCardCSS`. The
+flame engine (`QsFlameEngine`) is consumed only by the radiator card;
+the climate card keeps its own inline flame/snow/wind engines (the
+four-backdrop dispatch + snow-pile particle system don't fit the
+generic engine), and pool / water-boiler keep their own
+`_generateWavePath` (a 2×-width GPU-scroll variant). Those three cards
+therefore do not import the shared animation modules.
+
+Cross-card hardening invariants worth knowing (review-fix #02): every
+entity-derived string interpolated into `innerHTML` is escaped via
+`_escapeHtml`; every custom `div` control that carries handlers is
+focusable (`role="button"` + `tabindex` + `_registerKeyActivation`),
+and a disconnected card drops its custom controls out of the tab order
+(`tabindex="-1"` + `aria-disabled`); time parsing goes through the
+hardened `_parseTimeToMinutes` (07:00 fallback for `unavailable`/
+`unknown`); and the radiator keeps its RAF loop alive until
+`QsFlameEngine.isIdle()` so an on→off transition settles to a clean
+still silhouette instead of freezing mid-flicker.
+
+Two subsystems were root-caused in review-fix #04 to stop a recurring
+edge-case cycle:
+
+- **Resource-update concurrency** — `async_update_resources` runs its
+  whole sweep + copy + register under a module-level
+  `_RESOURCE_UPDATE_LOCK`, so the two unlocked entry points
+  (startup-restore and the Generate-Dashboard button) can't interleave
+  their temp-file writes. The unique per-write temp name
+  (`<pid>.<counter>.qstmp`) + the orphan sweep stay as defense-in-depth.
+- **Drag-range vs gauge** — each card derives `maxHours` through the
+  single `_clampMaxHours` helper on EVERY branch (default
+  `max_default_hours` AND non-default runtime `targetHours`), and BOTH
+  the gauge math and `_allowedHalfHours(maxHours)` consume that one
+  value. `_clampMaxHours` rejects non-finite/non-positive input
+  (`MAX_HOURS_DEFAULT` = 12), grid-aligns to the 0.5 snap step
+  (`SNAP_STEP_HOURS`), floors at one step, and ceilings at
+  `MAX_HOURS_CEILING` = 168. Because the gauge's 100% is itself a
+  0.5-multiple, `gauge max == max(snap_list)` holds BY CONSTRUCTION —
+  no top-of-ring dead zone for fractional configs, no huge-array tail,
+  no Infinity hang. (Closed across rounds S8 → M1 → ES1 → #05 S1.)
 
 ### Tracking storage (survives restart)
 
