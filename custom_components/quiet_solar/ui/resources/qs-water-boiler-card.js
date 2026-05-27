@@ -59,8 +59,9 @@ const WAVE_BOTTOM_Y = 400;          // closing rectangle y; clipped by circle
 // SVG units: (160, 277.33) → rounded to (CENTER_CX, 277).
 // Cover radius R = 35 SVG ≈ 33 CSS px ⇒ ~8 CSS px padding around
 // the 25 CSS-px-radius button outline. User-tunable.
-const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 35;
+// QS-235 — these values now live in the shared `RING_BOTTOM_CARVE_*`
+// constants (`shared/qs-card-base.js`, imported below) and the cover is
+// rendered via the shared `_ringCarveCover` helper.
 
 // --- Per-layer wave offsets ---
 const LAYER_SCROLL_OFFSET = 1.2;
@@ -156,7 +157,7 @@ const SURFACE_GLOW_BLUR_STDDEV = 6;
 // for the wrap-around scroll.
 import { baseCardCSS } from './shared/qs-card-styles.js';
 import { QsRingDurationCardBase } from './shared/qs-ring-duration-base.js';
-import { arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
+import { arcPath, polar, pctToDeg, RING_BOTTOM_CARVE_CX, RING_BOTTOM_CARVE_CY, RING_BOTTOM_CARVE_R } from './shared/qs-card-base.js';
 // QS-199 review-fix S1 — water-boiler keeps its own `_generateWavePath`
 // (2× width for the GPU scroll, same as pool), so it does NOT import the
 // shared single-period `generateWavePath`.
@@ -1105,7 +1106,7 @@ class QsWaterBoilerCard extends QsRingDurationCardBase {
                 <path id="surface_glow" d="${initialWavePaths[0]}" stroke="${SURFACE_GLOW_COLOR}" stroke-width="${SURFACE_GLOW_STROKE_WIDTH}" fill="none" filter="url(#${surfaceGlowFilterId})" opacity="${initialBoilOpacity}" pointer-events="none" style="mix-blend-mode: screen; will-change: transform, opacity, d;" />
                 <g id="${steamLayerId}" filter="url(#${steamFilterId})" pointer-events="none"></g>
               </g>
-              ${e.override_reset ? `<circle id="override_btn_cover" cx="${CENTER_CX}" cy="${OVERRIDE_BTN_CARVE_CY}" r="${OVERRIDE_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
+              ${this._ringCarveCover({ cx: RING_BOTTOM_CARVE_CX, cy: RING_BOTTOM_CARVE_CY, r: RING_BOTTOM_CARVE_R, id: 'override_btn_cover', show: e.override_reset })}
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
               ${showAnimation ? `

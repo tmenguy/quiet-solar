@@ -187,9 +187,11 @@ const LIGHTNING_BRANCH_MAX_LEN = 22;
 // - The sun-btn DOM was restructured to a direct child of the
 //   .ring container (out of `.center > .stack > .center-controls`)
 //   so its CSS layout matches override-btn exactly.
-const SUN_BTN_CARVE_CX = 160;       // bottom-center of ring
-const SUN_BTN_CARVE_CY = 277;       // matches OVERRIDE_BTN_CARVE_CY in other cards
-const SUN_BTN_CARVE_R  = 35;        // matches OVERRIDE_BTN_CARVE_R in other cards
+// QS-235 — the bottom-center sun-btn cover now uses the shared
+// `RING_BOTTOM_CARVE_CX/CY/R` constants (`shared/qs-card-base.js`,
+// imported above) — the same set the duration cards use for their
+// `override_btn_cover`. The per-card `SUN_BTN_CARVE_*` duplicate is
+// removed. The rabbit/time covers keep their own car-local geometry.
 const RABBIT_BTN_CARVE_CX = 96;     // left column of mini-grid
 const RABBIT_BTN_CARVE_CY = 206;
 const RABBIT_BTN_CARVE_R  = 32;
@@ -205,7 +207,7 @@ const TIME_BTN_CARVE_R  = 32;
 // retains its own ring HTML (full-circle, sun/rabbit/time-btn carve
 // covers), sparkle system, lightning system.
 import { baseCardCSS } from './shared/qs-card-styles.js';
-import { QsCardBase, rad2deg, polar, arcPath, pctToDeg } from './shared/qs-card-base.js';
+import { QsCardBase, polar, arcPath, pctToDeg, RING_BOTTOM_CARVE_CX, RING_BOTTOM_CARVE_CY, RING_BOTTOM_CARVE_R } from './shared/qs-card-base.js';
 
 class QsCarCard extends QsCardBase {
   constructor() {
@@ -836,10 +838,13 @@ class QsCarCard extends QsCardBase {
       // Check if car API data is stale
       const isStale = sCarIsStale?.state === 'on';
       let soc = this._percent(sSoc?.state);
-      const power = sPower?.state || "0";
-      this._chargePower = Number(power) || 0;
+      // QS-235 AC6 — guard-shaped sensor read via the shared `_safeNumber`
+      // (trims, rejects unknown/unavailable/±Infinity) instead of the raw
+      // `Number(sPower?.state || "0")` pattern.
+      const powerW = this._safeNumber(sPower, 0);
+      this._chargePower = powerW;
       const target = selLimit?.state || "";
-      const charging = (Number(power) > 50);
+      const charging = (powerW > 50);
       this._charging = charging;
       // QS-232: per-instance unique SVG IDs so two car cards on the
       // same dashboard don't collide (cheap insurance — households
@@ -944,7 +949,8 @@ class QsCarCard extends QsCardBase {
           }
 
           // Use current_inputed_energy for energy mode (value is in Wh, convert to kWh)
-          const energyValue = Number(sCurrentInputedEnergy?.state || 0);
+          // QS-235 AC6 — guard-shaped sensor read via `_safeNumber`.
+          const energyValue = this._safeNumber(sCurrentInputedEnergy, 0);
           const socKwhNum = Math.round(energyValue / 1000);
           const socKwh = this._fmt(socKwhNum);
 
@@ -1273,24 +1279,16 @@ class QsCarCard extends QsCardBase {
       const preservedLightningBolts  = this._lightningBolts ?? [];
       const preservedNextLightningAt = this._nextLightningAt;
 
-      this._root.innerHTML = `
-      <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''} ${isStale ? 'stale' : ''}">
-        <style>${css}</style>
-        <div class="card-title">${this._escapeHtml(displayTitle)}</div>
-        <div class="top"></div>
-
-        <div class="hero">
-          <div class="ring" title="${soc}%">
-            <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
-              <defs>
-                <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="#00bcd4"/>
-                  <stop offset="100%" stop-color="#8bc34a"/>
-                </linearGradient>
-                <linearGradient id="${gradChargeId}" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="#00e1ff"/>
-                  <stop offset="100%" stop-color="#0066ff"/>
-                </linearGradient>
+      // QS-235 AC2 — the bg-arc / progress-arc / dash-anim / handle are
+      // built by the shared `_buildRingHTML`. The builder emits its own
+      // <defs> for the green + charge gradients (via the standard
+      // gradGreenId / gradRunningId params) plus a per-instance glow; the
+      // car's disabled / fault / stale gradients + the soup clipPath are
+      // injected via `extraDefs` (forward-referenced by the clip <g>
+      // rendered just above ${ringMarkup} — valid SVG). The car follows
+      // the radiator composition pattern: clip backdrop <g> + carves
+      // first, then ${ringMarkup}.
+      const extraDefs = `
                 <linearGradient id="${gradDisabledId}" x1="0%" y1="0%" x2="100%" y2="0%">
                   <stop offset="0%" stop-color="#6b6b6b" stop-opacity="0.65"/>
                   <stop offset="100%" stop-color="#a0a0a0" stop-opacity="0.75"/>
@@ -1303,43 +1301,50 @@ class QsCarCard extends QsCardBase {
                   <stop offset="0%" stop-color="#ffa726"/>
                   <stop offset="100%" stop-color="#ff8f00"/>
                 </linearGradient>
-                <filter id="chargeGlow" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="2" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
                 <clipPath id="${electronClipId}">
                   <circle cx="${CENTER_CX}" cy="${CENTER_CY}" r="${CLIP_R}" />
-                </clipPath>
-              </defs>
+                </clipPath>`;
+      const ringMarkup = this._buildRingHTML({
+          palette: colors, ringCirc, center,
+          progressPath: socPath, bgPath,
+          handlePos, handlePct,
+          showAnimation, canDragHandle: true,
+          gradGreenId, gradRunningId: gradChargeId, activeGradId,
+          dashLen, gapLen,
+          // QS-235 — car-specific overrides over the duration defaults.
+          bgStroke: isFaulted ? 'rgba(244,67,54,0.35)' : 'var(--divider-color)',
+          handleFontSize: useEnergyMode ? '11' : '13',
+          handleStroke: isDisconnected ? 'var(--divider-color)' : 'var(--primary-color)',
+          handleFill: isDisconnected ? 'var(--secondary-text-color)' : 'var(--primary-color)',
+          // Handle TEXT shows the TRUE (unclamped) target — energy or
+          // percent — mirroring the duration-card round-trip invariant
+          // (position is clamped via pctToDeg, label is not).
+          handleLabel: useEnergyMode
+              ? this._fmt(parseTargetEnergy(target) ?? (this._safeNumber(sCurrentInputedEnergy, 0) / 1000))
+              : this._fmt(targetPct ?? soc),
+          animPathId: 'charge_anim',
+          extraDefs,
+      });
+
+      this._root.innerHTML = `
+      <ha-card class="card ${isDisconnected ? 'disabled' : ''} ${isFaulted ? 'fault' : ''} ${isOffGrid ? 'off-grid' : ''} ${isStale ? 'stale' : ''}">
+        <style>${css}</style>
+        <div class="card-title">${this._escapeHtml(displayTitle)}</div>
+        <div class="top"></div>
+
+        <div class="hero">
+          <div class="ring" title="${soc}%">
+            <svg viewBox="0 0 320 320" width="300" height="300" style="touch-action: none;" aria-hidden="true">
               <g clip-path="url(#${electronClipId})" style="${degraded ? 'filter: saturate(0.3) brightness(0.7);' : ''}">
                 <path id="electron_wave_idle" d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" opacity="${initialIdleOpacity}" pointer-events="none" style="will-change: transform;" />
                 <path id="electron_wave_charge" d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" opacity="${initialChargeOpacity}" pointer-events="none" style="will-change: transform;" />
                 <g id="${sparkleLayerId}" pointer-events="none"></g>
                 <g id="${lightningLayerId}" pointer-events="none" style="mix-blend-mode: screen; will-change: opacity;"></g>
               </g>
-              ${swPriority ? `<circle id="sun_btn_cover" cx="${SUN_BTN_CARVE_CX}" cy="${SUN_BTN_CARVE_CY}" r="${SUN_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
-              ${e.force_now ? `<circle id="rabbit_btn_cover" cx="${RABBIT_BTN_CARVE_CX}" cy="${RABBIT_BTN_CARVE_CY}" r="${RABBIT_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
-              ${(tNext && e.schedule) ? `<circle id="time_btn_cover" cx="${TIME_BTN_CARVE_CX}" cy="${TIME_BTN_CARVE_CY}" r="${TIME_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
-              <path d="${bgPath}" stroke="${isFaulted ? 'rgba(244,67,54,0.35)' : 'var(--divider-color)'}" stroke-width="14" fill="none" stroke-linecap="round" />
-              <path d="${socPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
-              ${showAnimation ? `
-              <path id="charge_anim"
-                    d="${socPath}"
-                    stroke="url(#${isFaulted ? gradFaultId : gradChargeId})"
-                    stroke-width="16"
-                    fill="none"
-                    stroke-linecap="round"
-                    stroke-dasharray="${dashLen} ${gapLen}"
-                    stroke-opacity="1"
-                    filter="url(#chargeGlow)"
-                    style="mix-blend-mode:screen; will-change: stroke-dashoffset"
-              />
-              ` : ''}
-              <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${isDisconnected ? 'var(--divider-color)' : 'var(--primary-color)'}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
-              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${isDisconnected ? 'var(--secondary-text-color)' : 'var(--primary-color)'}" font-size="${useEnergyMode ? '11' : '13'}" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${useEnergyMode ? this._fmt(parseTargetEnergy(target) ?? (Number(sCurrentInputedEnergy?.state || 0) / 1000)) : this._fmt(targetPct ?? soc)}</text>
+              ${this._ringCarveCover({ cx: RING_BOTTOM_CARVE_CX, cy: RING_BOTTOM_CARVE_CY, r: RING_BOTTOM_CARVE_R, id: 'sun_btn_cover', show: swPriority })}
+              ${this._ringCarveCover({ cx: RABBIT_BTN_CARVE_CX, cy: RABBIT_BTN_CARVE_CY, r: RABBIT_BTN_CARVE_R, id: 'rabbit_btn_cover', show: e.force_now })}
+              ${this._ringCarveCover({ cx: TIME_BTN_CARVE_CX, cy: TIME_BTN_CARVE_CY, r: TIME_BTN_CARVE_R, id: 'time_btn_cover', show: (tNext && e.schedule) })}
+              ${ringMarkup}
             </svg>
             <div class="center">
               <div class="stack">
@@ -1610,30 +1615,12 @@ class QsCarCard extends QsCardBase {
       // DOM node is destroyed before the synthetic click fires, so the tap is lost. The
       // touchend handler fires immediately, calls preventDefault() to suppress the delayed
       // synthetic click (avoiding double-fire on desktop), and invokes the action directly.
+      // QS-235 AC4 — the solar-priority (sun) button adopts the shared
+      // `_wireGreenButton` (toggle the `bump_priority` switch with the
+      // click + touchend + keyboard-activation plumbing). The dead
+      // `ids('priority')` listener (no matching DOM element) is dropped.
       if (swPriority) {
-          const togglePriority = async () => {
-              const btn = ids('sun_btn');
-              try {
-                  if (swPriority.state === 'on') {
-                      await this._turnOff(e.bump_priority);
-                      btn?.classList.remove('on');
-                  } else {
-                      await this._turnOn(e.bump_priority);
-                      btn?.classList.add('on');
-                  }
-              } catch (_) {
-                  // ignore errors; HA state will resync UI on next render
-              }
-          };
-          ids('priority')?.addEventListener('click', togglePriority);
-          const sbtn = ids('sun_btn');
-          if (sbtn) {
-              sbtn.style.pointerEvents = 'auto';
-              sbtn.addEventListener('click', togglePriority);
-              sbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePriority(); });
-              // S5: keyboard activation (Enter/Space) for the focusable div.
-              this._registerKeyActivation(sbtn, togglePriority);
-          }
+          this._wireGreenButton({ buttonEl: ids('sun_btn'), swEntity: swPriority, entityId: e.bump_priority });
       }
 
       // Rabbit button for force now
@@ -1682,94 +1669,42 @@ class QsCarCard extends QsCardBase {
           }
       }
 
-      // Time button for finish time
-      if (tNext && e.schedule) {
-          const tbtn = ids('time_btn');
-          if (tbtn) {
-              tbtn.style.pointerEvents = 'auto';
-              const tbtnAction = async () => {
-                  if (this._root?.querySelector('.disabled')) return;
-
-                  let defaultHour, defaultMin;
-                  if (chargeTime && chargeTime !== '--:--' && chargeTime.includes(':')) {
-                      const chargeMins = this._parseTimeToMinutes(chargeTime);
-                      defaultHour = Math.floor(chargeMins / 60);
-                      defaultMin = chargeMins % 60;
-                      defaultMin = Math.ceil(defaultMin / 5) * 5;
-                      if (defaultMin === 60) {
-                          defaultMin = 0;
-                          defaultHour = (defaultHour + 1) % 24;
-                      }
-                  } else {
-                      defaultHour = Math.floor(nextTimeMins / 60);
-                      defaultMin = nextTimeMins % 60;
-                      defaultMin = Math.ceil(defaultMin / 5) * 5;
-                      if (defaultMin === 60) {
-                          defaultMin = 0;
-                          defaultHour = (defaultHour + 1) % 24;
-                      }
-                  }
-
-                  const customContent = `
-            <p>Select the next time the charge of the car should end:</p>
-            <div class="time-picker">
-              <select id="dialog_hour_select">
-                ${Array.from({length: 24}, (_, h) => `<option value="${h}" ${defaultHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}</option>`).join('')}
-              </select>
-              <span>:</span>
-              <select id="dialog_minute_select">
-                ${[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => `<option value="${m}" ${defaultMin === m ? 'selected' : ''}>${String(m).padStart(2, '0')}</option>`).join('')}
-              </select>
-            </div>
-          `;
-
-                  const dialog = this._showDialog({
-                      title: 'Charge Finish Time',
-                      customContent: customContent,
-                      buttons: [
-                          {text: 'Cancel', variant: 'secondary'},
-                          {
-                              text: 'Reset',
-                              variant: 'danger',
-                              onClick: async () => {
-                                  if (e.clean_constraints) await this._press(e.clean_constraints);
-                              }
-                          },
-                          {
-                              text: 'Apply',
-                              variant: 'primary',
-                              onClick: async () => {
-                                  const dialogRoot = dialog.querySelector('.dialog');
-                                  const hourSel = dialogRoot?.querySelector('#dialog_hour_select');
-                                  const minSel = dialogRoot?.querySelector('#dialog_minute_select');
-                                  const h = Number(hourSel?.value ?? 0);
-                                  const m = Number(minSel?.value ?? 0);
-                                  const mins = h * 60 + m;
-                                  const hm = this._formatHm(mins);
-                                  const val = hm + ':00';
-                                  this._localNextTimeMins = mins;
-                                  // S9: clear the local override after a
-                                  // grace period so out-of-band backend
-                                  // updates aren't masked indefinitely.
-                                  if (this._localNextTimeClearTimer) {
-                                      clearTimeout(this._localNextTimeClearTimer);
-                                  }
-                                  this._localNextTimeClearTimer = setTimeout(() => {
-                                      this._localNextTimeMins = null;
-                                      this._render();
-                                  }, 5000);
-                                  await this._setTime(e.next_time, val);
-                                  await this._press(e.schedule);
-                              }
-                          },
-                      ]
-                  });
-              };
-              tbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); tbtnAction(); });
-              tbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); tbtnAction(); });
-              // S5: keyboard activation for the focusable div.
-              this._registerKeyActivation(tbtn, tbtnAction);
+      // QS-235 AC5 — the finish-time button adopts the generalized shared
+      // `_wireTimePicker`. The car-specific bits map onto its new optional
+      // params: `onAfterCommit` (await `_press(schedule)` after the
+      // `_setTime` write), `resetButton` (a 3rd dialog button → reset via
+      // `clean_constraints`), and the `title` / `bodyText` overrides. The
+      // dialog pre-selects the next charge-end time (preferring the live
+      // `chargeTime`, falling back to `nextTimeMins`), rounded UP to the
+      // nearest 5-minute select option — so the car PRE-rounds `currentMins`
+      // (the base picker computes `currentMins % 60` against the 5-minute
+      // option grid). Wiring is gated on `!isDisconnected`, preserving the
+      // old `.disabled` bail (an unplugged car can't schedule a charge).
+      if (tNext && e.schedule && !isDisconnected) {
+          const rawFinishMins = (chargeTime && chargeTime !== '--:--' && chargeTime.includes(':'))
+              ? this._parseTimeToMinutes(chargeTime)
+              : nextTimeMins;
+          let finishHour = Math.floor(rawFinishMins / 60);
+          let finishMin = Math.ceil((rawFinishMins % 60) / 5) * 5;
+          if (finishMin === 60) {
+              finishMin = 0;
+              finishHour = (finishHour + 1) % 24;
           }
+          this._wireTimePicker({
+              buttonEl: ids('time_btn'),
+              entityId: e.next_time,
+              currentMins: finishHour * 60 + finishMin,
+              localStateKey: '_localNextTimeMins',
+              clearTimerKey: '_localNextTimeClearTimer',
+              onAfterCommit: () => this._press(e.schedule),
+              resetButton: {
+                  text: 'Reset',
+                  variant: 'danger',
+                  onClick: async () => { if (e.clean_constraints) await this._press(e.clean_constraints); },
+              },
+              title: 'Charge Finish Time',
+              bodyText: 'Select the next time the charge of the car should end:',
+          });
       }
       // QS-199 review-fix M3/M5 — the inline `showDialog` closure (which
       // lacked the N12 close-fallback, N13 try/finally, and S16 keyboard
@@ -1820,24 +1755,12 @@ class QsCarCard extends QsCardBase {
           schedBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); schedAction(); });
       }
 
+      // QS-235 AC4 — the reset button adopts the shared `_wireResetButton`
+      // (confirmation dialog → `_press(reset)`). The native `<button
+      // id="reset">` is keyboard-native, so the helper intentionally
+      // does not register an extra Enter/Space hook.
       if (e.reset) {
-          const resetBtn = ids('reset');
-          const resetAction = async () => {
-              this._showDialog({
-                  title: 'Reset car state',
-                  message: 'This will reset internal state for this car and cannot be undone.\nProceed?',
-                  buttons: [
-                      {text: 'Cancel', variant: 'secondary'},
-                      {
-                          text: 'Reset', variant: 'danger', onClick: async () => {
-                              await this._press(e.reset);
-                          }
-                      },
-                  ]
-              });
-          };
-          resetBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); resetAction(); });
-          resetBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); resetAction(); });
+          this._wireResetButton({ buttonEl: ids('reset'), entityId: e.reset });
       }
 
       // Quick percent chips
@@ -1897,125 +1820,39 @@ class QsCarCard extends QsCardBase {
           });
       });
 
-      // Drag target handle on ring
+      // QS-235 AC1 — the ~120-LOC inline pointer-drag block is replaced by
+      // the shared `_wireTargetHandle` (byte-identical pointer/mouse/touch
+      // plumbing + the S17 try/finally the car previously lacked). The car
+      // layers four callbacks over that plumbing:
+      //   - pctToValue / valueToPct — the %↔kWh mapping (branch on
+      //     `useEnergyMode` against `maxCircleValue`),
+      //   - onDragMove — the live `#target_value` label update,
+      //   - onCommit — map the snapped value → a select option
+      //     (`findOptionByEnergy` / `findOptionByPercent`) then
+      //     `_select(next_limit, opt)`,
+      //   - fmtHandleText — keep the handle text rounded (the car shows
+      //     integers; the duration default shows one decimal).
       const svg = this._root.querySelector('.ring svg');
       const handle = this._root.getElementById('target_handle');
-      if (svg && handle) {
-          const pt = svg.createSVGPoint();
-          const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-          const onMove = (ev) => {
-              ev.stopPropagation();
-              ev.preventDefault();
-              const e2 = ev.touches ? ev.touches[0] : ev;
-              pt.x = e2.clientX;
-              pt.y = e2.clientY;
-              const cursor = pt.matrixTransform(svg.getScreenCTM().inverse());
-              const dx = cursor.x - center.cx;
-              const dy = cursor.y - center.cy;
-              // Convert to [0,360]
-              // -dy because svg y are downward
-              let ang = rad2deg(Math.atan2(-dy, dx));
-              // Map to arc domain [startDeg, endDeg] allowing values > 360
-              let a = ang;
-              if (a < startDeg) a = startDeg;
-              if (a > endDeg) a = endDeg;
-              // Snap to available select options
-              const rawPct = ((a - startDeg) / rangeDeg) * 100;
-              const list = allowedOrDefault;
-              const snapValue = list.reduce((best, v) => Math.abs(v - (useEnergyMode ? (rawPct / 100 * maxCircleValue) : rawPct)) < Math.abs(best - (useEnergyMode ? (rawPct / 100 * maxCircleValue) : rawPct)) ? v : best, list[0]);
-
-              // Store the percentage for the circle (0-100)
-              const displayPct = useEnergyMode ? (snapValue / maxCircleValue * 100) : snapValue;
-              this._targetDragPct = displayPct;
-              this._targetDragValue = snapValue; // Store actual value (percent or kWh)
-              this._isInteractingTarget = true;
-
-              // Update handle and target label without full render to keep it smooth
-              const angSnap = startDeg + (displayPct / 100) * rangeDeg;
-              const pos = polar(center.cx, center.cy, ringCirc, angSnap);
-              handle.setAttribute('cx', pos.x.toFixed(2));
-              handle.setAttribute('cy', pos.y.toFixed(2));
-              const handleText = this._root.getElementById('target_handle_text');
-              if (handleText) {
-                  handleText.setAttribute('x', pos.x.toFixed(2));
-                  handleText.setAttribute('y', pos.y.toFixed(2));
-                  handleText.textContent = this._fmt(snapValue);
-              }
+      this._wireTargetHandle({
+          ringSvg: svg,
+          handle,
+          center,
+          ringCirc,
+          startDeg, endDeg, rangeDeg,
+          allowedValues: allowedOrDefault,
+          pctToValue: (rawPct) => (useEnergyMode ? (rawPct / 100 * maxCircleValue) : rawPct),
+          valueToPct: (v) => (useEnergyMode ? (v / maxCircleValue * 100) : v),
+          fmtHandleText: (v) => this._fmt(v),
+          onDragMove: (v) => {
               const tv = this._root.getElementById('target_value');
-              if (tv) tv.innerHTML = useEnergyMode ? `${this._fmt(snapValue)}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>` : `${this._fmt(snapValue)}%`;
-          };
-          const onUp = async (ev) => {
-              if (this._upInProgress) return;
-              this._upInProgress = true;
-
-              if (ev) {
-                  ev.stopPropagation();
-                  ev.preventDefault();
-              }
-
-              const dragPct = this._targetDragPct;
-              const dragValue = this._targetDragValue;
-
-              if (dragValue != null) {
-                  const opt = useEnergyMode ? findOptionByEnergy(dragValue) : findOptionByPercent(dragValue);
-                  if (opt) await this._select(e.next_limit, opt);
-                  this._localTargetPct = dragPct;
-                  this._pendingClearLocalTarget && clearTimeout(this._pendingClearLocalTarget);
-                  this._pendingClearLocalTarget = setTimeout(() => {
-                      this._localTargetPct = null;
-                      this._pendingClearLocalTarget = null;
-                      this._render();
-                  }, 5000);
-              }
-              this._targetDragPct = null;
-              this._targetDragValue = null;
-              this._isInteractingTarget = false;
-              this._upInProgress = false;
-              handle.style.cursor = 'grab';
-          };
-
-          if (window.PointerEvent) {
-              const onPointerMove = (ev) => onMove(ev);
-              const onPointerUp = async (ev) => {
-                  try { handle.releasePointerCapture(ev.pointerId); } catch (_) {}
-                  handle.removeEventListener('pointermove', onPointerMove);
-                  handle.removeEventListener('pointerup', onPointerUp);
-                  handle.removeEventListener('pointercancel', onPointerUp);
-                  await onUp(ev);
-              };
-              const onPointerDown = (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
-                  this._isInteractingTarget = true;
-                  try { handle.setPointerCapture(ev.pointerId); } catch (_) {}
-                  handle.addEventListener('pointermove', onPointerMove);
-                  handle.addEventListener('pointerup', onPointerUp);
-                  handle.addEventListener('pointercancel', onPointerUp);
-                  handle.style.cursor = 'grabbing';
-              };
-              handle.addEventListener('pointerdown', onPointerDown);
-          } else {
-              const onDown = (ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
-                  this._isInteractingTarget = true;
-                  document.addEventListener('mousemove', onMove);
-                  document.addEventListener('touchmove', onMove, {passive: false});
-                  document.addEventListener('mouseup', onUpLegacy);
-                  document.addEventListener('touchend', onUpLegacy);
-                  handle.style.cursor = 'grabbing';
-              };
-              const onUpLegacy = async (ev) => {
-                  document.removeEventListener('mousemove', onMove);
-                  document.removeEventListener('touchmove', onMove);
-                  document.removeEventListener('mouseup', onUpLegacy);
-                  document.removeEventListener('touchend', onUpLegacy);
-                  await onUp(ev);
-              };
-              handle.addEventListener('mousedown', onDown);
-              handle.addEventListener('touchstart', onDown, {passive: false});
-          }
-      }
+              if (tv) tv.innerHTML = useEnergyMode ? `${this._fmt(v)}<span style="font-size: ${energyUnitFontSize}em;"> kWh</span>` : `${this._fmt(v)}%`;
+          },
+          onCommit: async (v) => {
+              const opt = useEnergyMode ? findOptionByEnergy(v) : findOptionByPercent(v);
+              if (opt) await this._select(e.next_limit, opt);
+          },
+      });
   }
 }
 

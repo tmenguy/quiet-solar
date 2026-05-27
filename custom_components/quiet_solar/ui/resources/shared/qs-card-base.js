@@ -18,6 +18,17 @@
       _wirePowerButton, _wireGreenButton) hoisted from the duration sub-base
       so the car card (which does NOT extend `QsRingDurationCardBase`) can
       consume them too.
+    - Ring builder (_buildRingHTML) — QS-235 moved it UP from
+      `QsRingDurationCardBase` so the car card (which extends `QsCardBase`
+      directly) consumes it too. The 5 duration cards inherit it unchanged.
+      Backward-compatible optional params (handleLabel / bgStroke /
+      handleFontSize / handleStroke / handleFill / animPathId / extraDefs)
+      default to the duration-card output; the car overrides them.
+    - Ring bottom-center carve cover (_ringCarveCover + shared
+      RING_BOTTOM_CARVE_* constants) — QS-235 unified the duplicated
+      bottom-center `<circle>` cover across the car (sun-btn) and the
+      duration cards (override-btn). The car reuses the helper for its
+      rabbit/time covers with car-local geometry.
     - Named exports of the geometry pure functions (deg2rad, rad2deg,
       polar, arcPath, pctToDeg) — concrete-planner finding R5.
 
@@ -69,6 +80,17 @@ export function arcPath(cx, cy, r, a0, a1) {
 export function pctToDeg(p, startDeg, rangeDeg) {
     return startDeg + (Math.max(0, Math.min(100, p)) / 100) * rangeDeg;
 }
+
+// QS-235 — shared bottom-center carve-cover geometry. The duration
+// cards (radiator / water-boiler / climate) draw an `override_btn_cover`
+// circle here; the car draws its `sun_btn_cover` at the same point. Both
+// erase a clean circular patch of the inside-disc animation so the
+// bottom-center button reads clearly (QS-217 motivation). Single source
+// of truth so the three duration `OVERRIDE_BTN_CARVE_*` duplicates and
+// the car's `SUN_BTN_CARVE_*` duplicate collapse to one constant set.
+export const RING_BOTTOM_CARVE_CX = 160;   // SVG x-centre of the ring
+export const RING_BOTTOM_CARVE_CY = 277;   // button-centre y (derived from CSS .*-btn position)
+export const RING_BOTTOM_CARVE_R = 35;     // cover radius (user-tunable)
 
 
 export class QsCardBase extends HTMLElement {
@@ -332,40 +354,70 @@ export class QsCardBase extends HTMLElement {
     // ----- Wire helpers -----
     /*
       _wireTargetHandle — wires pointer + mouse + touch drag on the ring
-      target handle (SVG <circle id="target_handle">). Snaps to allowedHours.
-      S17: try/finally around _setNumber so the drag-release guards always
-      clear, even on service failure.
+      target handle (SVG <circle id="target_handle">). Snaps the cursor
+      angle to the nearest allowed value. S17: try/finally around the
+      commit so the drag-release guards always clear, even on service
+      failure.
 
       params: {
           ringSvg, handle,        // DOM refs
           center, ringCirc,        // {cx, cy} and ring radius
           startDeg, endDeg, rangeDeg,
-          hoursToPct, pctToHours, allowedHours,
-          entityId,                // service target for _setNumber
-          onBeforeCommit,          // optional async hook AWAITED before _setNumber
+          hoursToPct, pctToHours,  // duration value↔pct mapping (defaults below)
+          allowedHours,            // duration snap list (alias of allowedValues)
+          entityId,                // service target for the default _setNumber commit
+          onBeforeCommit,          // optional async hook AWAITED before the commit
                                    //   (e.g. pool selects default mode first)
-          getHoursRun,             // optional () => current hours for inline label update
-          colors,                  // optional palette {primary} for inline label update
+          getHoursRun,             // optional () => current hours for the default label update
+          colors,                  // optional palette {primary} for the default label update
       }
-      QS-199 review-fix #04 NH1 — the post-write `onCommit` param was
-      removed (no card used it; scheduling the local-target clear timer
-      before a dead awaited `onCommit` was a latent footgun). Cards that
-      need a pre-duration side effect use `onBeforeCommit`.
+
+      QS-235 — generalized so the car card (which commits via
+      `_select`, maps %↔kWh, and updates a different live label) can
+      consume it. All NEW params default to the duration behaviour so a
+      caller that passes none of them is byte-equivalent:
+          allowedValues  — snap list (default `allowedHours`)
+          pctToValue     — pct → snap-domain value (default `pctToHours`)
+          valueToPct     — snap-domain value → pct (default `hoursToPct`)
+          onCommit       — async (value) => …; REPLACES the default
+                           `_setNumber(entityId, value)` write when provided
+                           (still AFTER `onBeforeCommit`). The car maps
+                           value → select option then `_select(...)`.
+          onDragMove     — (value) => …; REPLACES the default `.target-value`
+                           live-label update (car updates `#target_value`).
+          fmtHandleText  — (value) => string for the handle TEXT
+                           (default `this._fmt(value, false)`).
     */
     _wireTargetHandle(params) {
         const {
             ringSvg, handle, center, ringCirc,
             startDeg, endDeg, rangeDeg,
             hoursToPct, pctToHours, allowedHours,
+            allowedValues = allowedHours,
+            pctToValue = pctToHours,
+            valueToPct = hoursToPct,
             entityId, onBeforeCommit, getHoursRun, colors,
+            onCommit, onDragMove,
+            fmtHandleText = (v) => this._fmt(v, false),
         } = params;
         if (!ringSvg || !handle) return;
-        // QS-199 review-fix S15 — guard against an empty `allowedHours`
-        // list: the `reduce` below would otherwise seed `best = undefined`
-        // and `hoursToPct(undefined)` → NaN would break the handle.
-        if (!Array.isArray(allowedHours) || allowedHours.length === 0) return;
+        // QS-199 review-fix S15 — guard against an empty snap list: the
+        // `reduce` below would otherwise seed `best = undefined` and
+        // `valueToPct(undefined)` → NaN would break the handle.
+        if (!Array.isArray(allowedValues) || allowedValues.length === 0) return;
 
         const pt = ringSvg.createSVGPoint();
+
+        // QS-235 — default live `.target-value` updater reproduces the
+        // duration-card label byte-for-byte; the car overrides it via
+        // `onDragMove` to update its `#target_value` (energy/percent).
+        const dragMove = onDragMove || ((snapValue) => {
+            const tv = this._root.querySelector('.target-value');
+            if (tv && getHoursRun && colors) {
+                const hoursRun = getHoursRun();
+                tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: ${colors.primary};">${this._fmt(snapValue, false)}h</span>`;
+            }
+        });
 
         const onMove = (ev) => {
             ev.stopPropagation();
@@ -381,16 +433,16 @@ export class QsCardBase extends HTMLElement {
             if (a < startDeg) a = startDeg;
             if (a > endDeg) a = endDeg;
             const rawPct = ((a - startDeg) / rangeDeg) * 100;
-            const rawHours = pctToHours(rawPct);
+            const rawValue = pctToValue(rawPct);
 
-            const snapHours = allowedHours.reduce(
-                (best, v) => (Math.abs(v - rawHours) < Math.abs(best - rawHours) ? v : best),
-                allowedHours[0],
+            const snapValue = allowedValues.reduce(
+                (best, v) => (Math.abs(v - rawValue) < Math.abs(best - rawValue) ? v : best),
+                allowedValues[0],
             );
 
-            const displayPct = hoursToPct(snapHours);
+            const displayPct = valueToPct(snapValue);
             this._targetDragPct = displayPct;
-            this._targetDragValue = snapHours;
+            this._targetDragValue = snapValue;
             this._isInteractingTarget = true;
 
             const angSnap = startDeg + (displayPct / 100) * rangeDeg;
@@ -401,13 +453,9 @@ export class QsCardBase extends HTMLElement {
             if (handleText) {
                 handleText.setAttribute('x', pos.x.toFixed(2));
                 handleText.setAttribute('y', pos.y.toFixed(2));
-                handleText.textContent = this._fmt(snapHours, false);
+                handleText.textContent = fmtHandleText(snapValue);
             }
-            const tv = this._root.querySelector('.target-value');
-            if (tv && getHoursRun && colors) {
-                const hoursRun = getHoursRun();
-                tv.innerHTML = `<span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span><span style="color: var(--primary-text-color);"> / </span><span style="color: ${colors.primary};">${this._fmt(snapHours, false)}h</span>`;
-            }
+            dragMove(snapValue);
         };
 
         const onUp = async (ev) => {
@@ -424,15 +472,21 @@ export class QsCardBase extends HTMLElement {
 
             // S17 — try/finally: drag-release guards always clear.
             try {
-                if (dragValue != null && entityId) {
+                if (dragValue != null && (entityId || onCommit)) {
                     // QS-199 review-fix #03 S1/S2 — await an optional
-                    // pre-commit hook BEFORE the duration write (the pool
-                    // selects default mode first; writing the duration
-                    // while not yet in default mode can be rejected
-                    // backend-side). Both hooks are awaited so neither
-                    // races the local-target timeout / next render.
+                    // pre-commit hook BEFORE the commit (the pool selects
+                    // default mode first; writing while not yet in default
+                    // mode can be rejected backend-side). Both hooks are
+                    // awaited so neither races the local-target timeout /
+                    // next render.
                     if (onBeforeCommit) await onBeforeCommit(dragValue);
-                    await this._setNumber(entityId, dragValue);
+                    // QS-235 — `onCommit` (car: map value → option then
+                    // `_select`) replaces the default `_setNumber` write.
+                    if (onCommit) {
+                        await onCommit(dragValue);
+                    } else {
+                        await this._setNumber(entityId, dragValue);
+                    }
                     this._localTargetPct = dragPct;
                     if (this._pendingClearLocalTarget) clearTimeout(this._pendingClearLocalTarget);
                     this._pendingClearLocalTarget = setTimeout(() => {
@@ -512,12 +566,28 @@ export class QsCardBase extends HTMLElement {
           localStateKey,           — e.g. '_localFinishTimeMins'
           clearTimerKey,           — e.g. '_localFinishTimeClearTimer'
       }
+
+      QS-235 — generalized so the car card can adopt its bespoke
+      finish-time flow. NEW optional params default to the duration
+      2-button dialog so a caller that passes none of them is
+      byte-equivalent:
+          onAfterCommit  — async () => …; AWAITED after `_setTime`
+                           (car: `_press(schedule)`).
+          resetButton    — {text, variant, onClick}; inserted as a 3rd
+                           dialog button between Cancel and Apply
+                           (car: Reset → `_press(clean_constraints)`).
+          title          — dialog title (default `'Finish Time'`).
+          bodyText       — body prompt (default `'Select the time the
+                           device should finish by:'`).
     */
     _wireTimePicker(params) {
         const {
             buttonEl, entityId, currentMins,
             localStateKey = '_localFinishTimeMins',
             clearTimerKey = '_localFinishTimeClearTimer',
+            onAfterCommit, resetButton,
+            title = 'Finish Time',
+            bodyText = 'Select the time the device should finish by:',
         } = params;
         if (!buttonEl || !entityId) return;
 
@@ -526,7 +596,7 @@ export class QsCardBase extends HTMLElement {
             const defaultMin = currentMins % 60;
 
             const customContent = `
-            <p>Select the time the device should finish by:</p>
+            <p>${this._escapeHtml(bodyText)}</p>
             <div class="time-picker">
               <select id="dialog_hour_select">
                 ${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${defaultHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}</option>`).join('')}
@@ -539,10 +609,12 @@ export class QsCardBase extends HTMLElement {
           `;
 
             const dialog = this._showDialog({
-                title: 'Finish Time',
+                title,
                 customContent,
                 buttons: [
                     { text: 'Cancel', variant: 'secondary' },
+                    // QS-235 — optional reset button (car: clean_constraints).
+                    ...(resetButton ? [resetButton] : []),
                     {
                         text: 'Apply',
                         variant: 'primary',
@@ -567,6 +639,8 @@ export class QsCardBase extends HTMLElement {
                                 if (this.isConnected && this._root) this._render();
                             }, 5000);
                             await this._setTime(entityId, val);
+                            // QS-235 — car presses `schedule` after the write.
+                            if (onAfterCommit) await onAfterCommit();
                         },
                     },
                 ],
@@ -664,5 +738,151 @@ export class QsCardBase extends HTMLElement {
         buttonEl.addEventListener('click', toggleGreen);
         buttonEl.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
         this._registerKeyActivation(buttonEl, toggleGreen);
+    }
+
+    // ----- Ring builder -----
+    /*
+      _buildRingHTML — returns an HTML string for the outer .ring SVG
+      markup. Caller injects this string into innerHTML between any
+      card-specific backdrop SVG and the .center / override-btn /
+      green-btn DOM nodes.
+
+      QS-235 — moved UP here from `QsRingDurationCardBase` so the car
+      card (which extends `QsCardBase` directly) can consume it. The 5
+      duration cards inherit it unchanged: every NEW param defaults to
+      the duration-card behaviour, so a caller that passes none of them
+      gets byte-equivalent output (the empty `extraDefs` adds only
+      insignificant SVG whitespace).
+
+      params (long but mechanical — every duration card needs them):
+        palette                      — {primary, gradStart, gradEnd, animStart, animEnd}
+        ringCirc                     — ring radius in SVG units (typically 130)
+        center                       — {cx, cy} centre of the ring
+        startDeg, endDeg, rangeDeg, gapDeg
+        progressPath, bgPath         — pre-computed SVG `d` attribute strings
+        handlePos                    — {x, y} handle centre
+        handlePct                    — handle percentage (for label)
+        displayTargetHours           — value to display at the handle text
+        hoursRun                     — current run hours
+        showAnimation                — boolean — whether to render the dash anim path
+        canDragHandle                — boolean — whether to render handle circle
+        gradGreenId, gradRunningId, activeGradId
+        dashLen, gapLen              — stroke-dasharray
+        pctToHours                   — function used in the DEFAULT label render
+
+      QS-235 backward-compatible optional params (car overrides):
+        handleLabel                  — handle TEXT label (default
+                                       `this._fmt(pctToHours(handlePct))`)
+        bgStroke                     — background-arc stroke (default
+                                       `'var(--divider-color)'`)
+        handleFontSize               — handle text font-size (default `13`)
+        handleStroke                 — handle circle stroke (default `palette.primary`)
+        handleFill                   — handle text fill (default `palette.primary`)
+        animPathId                   — dash anim path id (default `'running_anim'`)
+        extraDefs                    — extra `<defs>` children (default `''`)
+      Returns string.
+    */
+    _buildRingHTML(params) {
+        const {
+            palette, ringCirc, center,
+            progressPath, bgPath,
+            handlePos, handlePct, displayTargetHours, hoursRun,
+            showAnimation, canDragHandle,
+            gradGreenId, gradRunningId, activeGradId,
+            dashLen, gapLen,
+            pctToHours,
+            bgStroke = 'var(--divider-color)',
+            handleFontSize = 13,
+            animPathId = 'running_anim',
+            extraDefs = '',
+        } = params;
+
+        // QS-199 review-fix #07 N1 — the handle's TEXT LABEL round-trips
+        // the target back from `handlePct`: `pctToHours(handlePct)`. On the
+        // non-default branch each card sets
+        // `handlePct = hoursToPct(displayTargetHours)` with
+        // `displayTargetHours = targetHours` left UNCLAMPED on purpose, so
+        // this label shows the TRUE target even when it exceeds `maxHours`.
+        // Only the handle POSITION is clamped (the card's `pctToDeg`
+        // clamps to [0,100] → the handle pins at the ring top for an
+        // out-of-range target while the number stays correct).
+        // DO NOT "fix" the >100% `handlePct` by clamping `handlePct` or
+        // `displayTargetHours` — that would make this label render
+        // `maxHours` instead of the real value (a regression across all
+        // duration cards). The pin-at-top-but-number-correct behaviour is
+        // intentional and graceful.
+        // QS-235 — `handleLabel` lets the car supply its own
+        // energy/percent TRUE-target string (still unclamped); the
+        // duration default reproduces the round-trip above byte-for-byte.
+        const escapedHandleLabel = params.handleLabel != null
+            ? params.handleLabel
+            : this._fmt(pctToHours(handlePct));
+        // QS-235 — handle stroke/fill default to `palette.primary` (the
+        // duration behaviour); the car passes connection-state colours.
+        const handleStroke = params.handleStroke != null ? params.handleStroke : palette.primary;
+        const handleFill = params.handleFill != null ? params.handleFill : palette.primary;
+
+        // QS-199 review-fix N6 — per-instance glow filter id (parity with
+        // gradGreenId / gradRunningId) so two cards on one page can't
+        // collide if shadow-DOM id scoping ever changes.
+        const glowId = this._instanceId('runningGlow');
+
+        return `
+              <defs>
+                <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="${palette.gradStart}"/>
+                  <stop offset="100%" stop-color="${palette.gradEnd}"/>
+                </linearGradient>
+                <linearGradient id="${gradRunningId}" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stop-color="${palette.animStart}"/>
+                  <stop offset="100%" stop-color="${palette.animEnd}"/>
+                </linearGradient>
+                <filter id="${glowId}" x="-50%" y="-50%" width="200%" height="200%">
+                  <feGaussianBlur stdDeviation="2" result="blur" />
+                  <feMerge>
+                    <feMergeNode in="blur" />
+                    <feMergeNode in="SourceGraphic" />
+                  </feMerge>
+                </filter>
+                ${extraDefs}
+              </defs>
+              <path d="${bgPath}" stroke="${bgStroke}" stroke-width="14" fill="none" stroke-linecap="round" />
+              <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
+              ${showAnimation ? `
+              <path id="${animPathId}"
+                    d="${progressPath}"
+                    stroke="url(#${gradRunningId})"
+                    stroke-width="16"
+                    fill="none"
+                    stroke-linecap="round"
+                    stroke-dasharray="${dashLen} ${gapLen}"
+                    stroke-opacity="1"
+                    filter="url(#${glowId})"
+                    style="mix-blend-mode:screen; will-change: stroke-dashoffset"
+              />
+              ` : ''}
+              ${canDragHandle ? `
+              <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${handleStroke}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
+              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${handleFill}" font-size="${handleFontSize}" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${escapedHandleLabel}</text>
+              ` : ''}
+        `;
+    }
+
+    // ----- Ring bottom-center carve cover -----
+    /*
+      _ringCarveCover({cx, cy, r, id, show}) — QS-235. Returns a single
+      `<circle>` cover overlay string (or '' when `show` is falsy) that
+      erases a clean circular patch of the inside-disc animation so a
+      button drawn there reads clearly. Replaces the per-card inline
+      `<circle id="…_cover" fill="var(--card-background-color)"
+      pointer-events="none" />` literals (QS-217 + QS-232). The shared
+      `RING_BOTTOM_CARVE_*` constants supply the bottom-center geometry;
+      the car passes its own car-local geometry for the rabbit/time
+      covers.
+    */
+    _ringCarveCover(params) {
+        const { cx, cy, r, id, show } = params;
+        if (!show) return '';
+        return `<circle id="${id}" cx="${cx}" cy="${cy}" r="${r}" fill="var(--card-background-color)" pointer-events="none" />`;
     }
 }

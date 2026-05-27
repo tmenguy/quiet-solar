@@ -159,15 +159,27 @@ Five shared modules:
   (`_wireTargetHandle`, `_wireTimePicker`, `_wireResetButton`,
   `_wirePowerButton`, `_wireGreenButton`). Wire-helpers live on the
   base (not the sub-base) because the car card uses several of them
-  too — it inherits `QsCardBase` directly.
+  too — it inherits `QsCardBase` directly. **QS-235** moved
+  `_buildRingHTML` (the ring SVG builder) UP here from the duration
+  sub-base — it is the single source of truth, with backward-compatible
+  optional params (`handleLabel` / `bgStroke` / `handleFontSize` /
+  `handleStroke` / `handleFill` / `animPathId` / `extraDefs`) that
+  default to the duration-card output so the car can override them.
+  QS-235 also added `_ringCarveCover({cx, cy, r, id, show})` + the
+  shared `RING_BOTTOM_CARVE_CX/CY/R` constants (the unified
+  bottom-center carve cover — see the QS-217 section), and generalized
+  `_wireTargetHandle` (added `onCommit` / `pctToValue` / `valueToPct` /
+  `onDragMove` / `fmtHandleText`) and `_wireTimePicker` (added
+  `onAfterCommit` / `resetButton` / `title` / `bodyText`) in place so
+  the car adopts them with no duration-card source change.
 - **`shared/qs-ring-duration-base.js`** — exports `class
-  QsRingDurationCardBase extends QsCardBase`. Adds `_buildRingHTML`
-  (the ring SVG markup with linear-gradient defs, background +
-  progress arcs, override-btn cover circle, target-handle circle +
-  text, power-btn / green-btn / override-btn DOM nodes),
+  QsRingDurationCardBase extends QsCardBase`. Adds `_clampMaxHours` /
+  `_allowedHalfHours` (the hours-specific drag-range helpers),
   `_wireOverrideButton`, and `_wireBistateMode` (the latter wraps
   `_select` in try/catch/finally + 300ms cleanup setTimeout — M2
-  hardening).
+  hardening). QS-235 moved `_buildRingHTML` UP to `QsCardBase` (the
+  five duration cards inherit it unchanged); the hours-/override-only
+  helpers stay here because the car needs none of them.
 - **`shared/qs-anim-flame.js`** — exports `FLAME_CONSTANTS` plus
   `class QsFlameEngine`. The engine is a pure state machine + path
   generator (`step(dt, fireOn, baseY, ts)` →
@@ -669,24 +681,30 @@ affected cards — `qs-radiator-card.js`, `qs-water-boiler-card.js`,
 and `qs-climate-card.js` — each render the cover element
 immediately after their `<g clip-path="url(#…ClipId)">` group and
 before the outer-ring stroke, gated on `e.override_reset` (the same
-truthy check that already controls the button DOM render):
+truthy check that already controls the button DOM render).
+
+**QS-235 unification.** The cover markup + geometry are now shared.
+The geometry lives in the `RING_BOTTOM_CARVE_CX / RING_BOTTOM_CARVE_CY
+/ RING_BOTTOM_CARVE_R` constants (`shared/qs-card-base.js`), and the
+markup is emitted by the shared `_ringCarveCover({cx, cy, r, id,
+show})` helper on `QsCardBase`. The car card reuses the SAME helper +
+constants for its bottom-center `sun_btn_cover` (and the helper again,
+with car-local geometry, for its `rabbit_btn_cover` / `time_btn_cover`).
+There is no per-card `OVERRIDE_BTN_CARVE_*` / `SUN_BTN_CARVE_*`
+duplication left:
 
 ```html
 <g clip-path="url(#…ClipId)"> … animation paths … </g>
-${e.override_reset ? `<circle id="override_btn_cover"
-  cx="${CENTER_*}"
-  cy="${OVERRIDE_BTN_CARVE_CY}"
-  r="${OVERRIDE_BTN_CARVE_R}"
-  fill="var(--card-background-color)"
-  pointer-events="none" />` : ''}
+${this._ringCarveCover({ cx: RING_BOTTOM_CARVE_CX,
+  cy: RING_BOTTOM_CARVE_CY, r: RING_BOTTOM_CARVE_R,
+  id: 'override_btn_cover', show: e.override_reset })}
 <path d="${bgPath}" … />  <!-- outer ring stroke -->
 ```
 
-Two module-level constants control the cover geometry:
-`OVERRIDE_BTN_CARVE_CY = 277` is the button centre y in SVG units
+`RING_BOTTOM_CARVE_CY = 277` is the button centre y in SVG units
 (derived from the CSS `.override-btn` position: button centre
 `(150, 260)` CSS px, scaled by the SVG viewBox factor `320/300` →
-`(160, 277.33)`, rounded to integer). `OVERRIDE_BTN_CARVE_R` is
+`(160, 277.33)`, rounded to integer). `RING_BOTTOM_CARVE_R` is
 the cover radius in SVG units; the integer is intentionally user-
 tunable for visual iteration (tests pin the constant NAME only,
 not the value). The cover applies uniformly across all backdrops

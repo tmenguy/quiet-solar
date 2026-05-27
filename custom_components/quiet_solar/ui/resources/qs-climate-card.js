@@ -54,8 +54,9 @@ const CLIP_R = 120;                 // backdrop clip circle radius
 // 25 CSS-px-radius button outline. User-tunable.
 // The cover applies uniformly across all backdrops (flame / snow /
 // wind / none) — same DN-3 rationale as the original carve.
-const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 35;
+// QS-235 — these values now live in the shared `RING_BOTTOM_CARVE_*`
+// constants (`shared/qs-card-base.js`, imported below) and the cover is
+// rendered via the shared `_ringCarveCover` helper.
 
 // --- Flame engine constants (QS-204 verbatim from qs-radiator-card.js) ---
 const FLAME_WIDTH = 480;            // single layer width in SVG px (2× clip diameter)
@@ -101,7 +102,7 @@ console.assert(
 // generic engines).
 import { baseCardCSS } from './shared/qs-card-styles.js';
 import { QsRingDurationCardBase } from './shared/qs-ring-duration-base.js';
-import { arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
+import { arcPath, polar, pctToDeg, RING_BOTTOM_CARVE_CX, RING_BOTTOM_CARVE_CY, RING_BOTTOM_CARVE_R } from './shared/qs-card-base.js';
 
 // QS-199 review-fix S1 — climate keeps its OWN inline flame/snow/wind
 // engines (the 4-backdrop dispatch + snow-pile particle system don't fit
@@ -1219,7 +1220,7 @@ class QsClimateCard extends QsRingDurationCardBase {
                 </g>
                 ` : ''}
               </g>
-              ${e.override_reset ? `<circle id="override_btn_cover" cx="${CENTER_X}" cy="${OVERRIDE_BTN_CARVE_CY}" r="${OVERRIDE_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
+              ${this._ringCarveCover({ cx: RING_BOTTOM_CARVE_CX, cy: RING_BOTTOM_CARVE_CY, r: RING_BOTTOM_CARVE_R, id: 'override_btn_cover', show: e.override_reset })}
               <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
               <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${ringDashActive ? 'stroke-opacity="0.35"' : ''} />
               ${ringDashActive ? `
