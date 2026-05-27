@@ -3899,7 +3899,15 @@ def test_car_card_grain_filter_removed():
     """
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
 
-    # AC7: every grain artifact — code AND stale comments — is gone.
+    # AC7: every concrete grain-filter artifact — the filter def, its
+    # `<feTurbulence>` / `<feComposite>` steps, both wave-fill
+    # references, and the per-instance id allocation — is gone.
+    #
+    # QS-235 review-fix #01 SF2 — scoped to these specific tokens rather
+    # than a blanket `"grain" not in source` ban: the blanket form would
+    # fail CI for any future unrelated identifier or comment that merely
+    # contains the letters "grain" (e.g. "granular", "fine-grained"),
+    # even with the grain filter correctly removed.
     for forbidden in (
         "feTurbulence",
         "fractalNoise",
@@ -3913,12 +3921,6 @@ def test_car_card_grain_filter_removed():
             f"along with the feTurbulence grain filter (def + both wave "
             f"refs + per-instance id allocation + stale comments)."
         )
-    # AC7 also mandates removing the stale grain comments, so the bare
-    # word `grain` no longer appears anywhere in the source.
-    assert "grain" not in source.lower(), (
-        "qs-car-card.js (QS-235 AC7): no mention of `grain` should "
-        "remain — the filter is gone and the stale comments are removed."
-    )
 
     # The two wave paths survive — just without the grain filter.
     assert 'id="electron_wave_idle"' in source, (
@@ -4509,6 +4511,64 @@ def test_car_card_adopts_shared_structural_helpers():
     )
 
 
+def test_car_card_ac6_leaves_non_sensor_reads_untouched():
+    """QS-235 review-fix #01 SF4 — AC6's NEGATIVE half. AC6 swaps ONLY
+    the guard-shaped sensor reads (`sPower`, `sCurrentInputedEnergy`) to
+    `_safeNumber`. The config read (`Number(e.car_battery_capacity_kwh)`),
+    the regex captures (`Number(m[1])`), and the DOM reads
+    (`Number(hourSel?.value …)`, `Number(el.getAttribute('data-pct'))`)
+    must survive as raw `Number(...)` coercions — `_safeNumber` expects a
+    sensor object `{state}`, so wrapping a scalar/regex/DOM read would be
+    a real bug (and silently coerce wrong). The positive half is pinned
+    by `test_car_card_adopts_shared_structural_helpers`.
+    """
+    import re
+
+    car = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8")
+    )
+
+    # The non-sensor reads survive as raw `Number(...)` coercions.
+    for survivor in (
+        "Number(e.car_battery_capacity_kwh)",  # config scalar
+        "Number(m[1])",                        # regex capture
+        "Number(hourSel?.value",               # DOM value read
+        "Number(el.getAttribute('data-pct'))",  # DOM attribute read
+    ):
+        assert survivor in car, (
+            f"qs-car-card.js (QS-235 AC6 negative half): the non-sensor "
+            f"read `{survivor}` must survive untouched — AC6 only swaps "
+            f"guard-shaped SENSOR reads to `_safeNumber`."
+        )
+
+    # And none of them is wrapped in `_safeNumber` (which takes a sensor
+    # object, not a scalar / regex match / DOM value).
+    for forbidden in (
+        "_safeNumber(e.car_battery_capacity_kwh",
+        "_safeNumber(configBatteryCapacity",
+        "_safeNumber(m[1]",
+        "_safeNumber(hourSel",
+        "_safeNumber(minSel",
+        "_safeNumber(el.getAttribute",
+    ):
+        assert forbidden not in car, (
+            f"qs-car-card.js (QS-235 AC6 negative half): `{forbidden}…)` "
+            f"must NOT exist — `_safeNumber` expects a sensor `{{state}}` "
+            f"object, not a scalar/regex/DOM read."
+        )
+
+    # Positive corroboration: every `_safeNumber` call in the car targets
+    # a sensor object (`sPower` / `sCurrentInputedEnergy`), nothing else.
+    safe_args = re.findall(r"_safeNumber\(\s*([A-Za-z_][\w.]*)", car)
+    assert safe_args, "qs-car-card.js (QS-235 AC6): expected `_safeNumber` calls in the car."
+    for arg in safe_args:
+        assert arg in ("sPower", "sCurrentInputedEnergy"), (
+            f"qs-car-card.js (QS-235 AC6): `_safeNumber` should only wrap "
+            f"sensor objects (`sPower` / `sCurrentInputedEnergy`); got "
+            f"`{arg}`."
+        )
+
+
 def test_car_card_handle_label_round_trip_invariant():
     """QS-235 AC9 — the car's ring handle shows the TRUE (unclamped)
     target via `_buildRingHTML`'s `handleLabel`, while the handle
@@ -4548,6 +4608,59 @@ def test_car_card_handle_label_round_trip_invariant():
     assert re.search(r"handlePos\s*=\s*polar\([^)]*handleDeg", car), (
         "qs-car-card.js (QS-235 AC9): `handlePos` must derive from the "
         "clamped `handleDeg` via `polar(…, handleDeg)`."
+    )
+
+
+def test_car_card_faulted_dash_uses_fault_gradient():
+    """QS-235 review-fix #01 SF1 — a car that is faulted WHILE still
+    drawing current must render the moving dashed arc with the SAME
+    fault gradient as the static progress arc (pre-refactor behavior:
+    `stroke="url(#${isFaulted ? gradFaultId : gradChargeId})"`).
+
+    The shared `_buildRingHTML` dash stroke is driven by an `animGradId`
+    param that defaults to `gradRunningId` (so the four duration callers
+    stay byte-identical). The car passes the fault-aware
+    `animGradId: isFaulted ? gradFaultId : gradChargeId`, which restores
+    the dash↔static-arc agreement AND keeps `gradFaultId` referenced by
+    a stroke (not just emitted as a dead `<linearGradient>` in
+    `extraDefs`).
+    """
+    import re
+
+    base = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-base.js").read_text(encoding="utf-8")
+    )
+    car = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8")
+    )
+
+    # The shared dash anim stroke is parameterised by `animGradId`,
+    # defaulting to `gradRunningId` (duration cards unchanged).
+    assert 'stroke="url(#${animGradId})"' in base, (
+        "qs-card-base.js (SF1): `_buildRingHTML`'s dash anim `<path>` "
+        'must use `stroke="url(#${animGradId})"` so the dash gradient '
+        "is caller-selectable."
+    )
+    assert re.search(r"animGradId\s*=\s*gradRunningId", base), (
+        "qs-card-base.js (SF1): `animGradId` must default to "
+        "`gradRunningId` so the duration callers stay byte-identical."
+    )
+
+    # The car drives `animGradId` off the fault state, matching the
+    # static arc's `activeGradId` selection (which also uses gradFaultId
+    # when faulted).
+    assert re.search(
+        r"animGradId:\s*isFaulted\s*\?\s*gradFaultId\s*:\s*gradChargeId",
+        car,
+    ), (
+        "qs-car-card.js (SF1): the `_buildRingHTML` call must pass "
+        "`animGradId: isFaulted ? gradFaultId : gradChargeId` so the "
+        "faulted-while-charging dash matches the static fault arc."
+    )
+    # `gradFaultId` is referenced by a stroke selector, not orphaned.
+    assert "gradFaultId" in car, (
+        "qs-car-card.js (SF1): `gradFaultId` must remain referenced "
+        "(static arc + fault-aware dash), not a dead gradient."
     )
 
 
@@ -7811,25 +7924,34 @@ def test_wire_target_handle_awaits_commit_hook_before_setnumber():
     src = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-base.js").read_text(encoding="utf-8")
     )
-    assert "await onBeforeCommit(" in src, (
+    # QS-235 review-fix #01 SF3 — scope the membership + ordering checks
+    # to the `_wireTargetHandle` BODY (not the whole file), so a matching
+    # token elsewhere in `qs-card-base.js` can't turn this into a false
+    # pass/fail and the ordering pin actually tracks this method.
+    body = _extract_js_function_body(src, r"_wireTargetHandle\s*\([^)]*\)\s*\{")
+    assert body is not None, (
+        "qs-card-base.js: `_wireTargetHandle` method body must be extractable for SF3 inspection."
+    )
+
+    assert "await onBeforeCommit(" in body, (
         "S1: `_wireTargetHandle` must `await onBeforeCommit(...)` (pool mode-select)."
     )
     # QS-235 AC1 — the commit-override hook is awaited.
-    assert "await onCommit(" in src, (
+    assert "await onCommit(" in body, (
         "QS-235 AC1: `_wireTargetHandle` must support an `await "
         "onCommit(...)` commit override (the car commits via `_select`)."
     )
     # The default `_setNumber` write survives for the duration cards.
-    assert "await this._setNumber(" in src, (
+    assert "await this._setNumber(" in body, (
         "QS-235 AC1: the default (no-`onCommit`) branch must still "
         "`await this._setNumber(entityId, ...)` so the duration cards "
         "are unchanged."
     )
     # Ordering: onBeforeCommit fires before BOTH the override commit and
     # the default `_setNumber` write.
-    before_idx = src.index("await onBeforeCommit(")
-    commit_idx = src.index("await onCommit(")
-    setnum_idx = src.index("await this._setNumber(")
+    before_idx = body.index("await onBeforeCommit(")
+    commit_idx = body.index("await onCommit(")
+    setnum_idx = body.index("await this._setNumber(")
     assert before_idx < commit_idx and before_idx < setnum_idx, (
         "S1: `onBeforeCommit` (mode-select) must run BEFORE the commit "
         "(override or the default `_setNumber` write) to preserve the "

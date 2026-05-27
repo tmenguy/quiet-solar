@@ -573,9 +573,11 @@ export class QsCardBase extends HTMLElement {
       byte-equivalent:
           onAfterCommit  — async () => …; AWAITED after `_setTime`
                            (car: `_press(schedule)`).
-          resetButton    — {text, variant, onClick}; inserted as a 3rd
+          resetButton    — {text, variant?, onClick}; inserted as a 3rd
                            dialog button between Cancel and Apply
                            (car: Reset → `_press(clean_constraints)`).
+                           Only spread when both `text` and `onClick` are
+                           present (NTH2 shape guard).
           title          — dialog title (default `'Finish Time'`).
           bodyText       — body prompt (default `'Select the time the
                            device should finish by:'`).
@@ -614,7 +616,10 @@ export class QsCardBase extends HTMLElement {
                 buttons: [
                     { text: 'Cancel', variant: 'secondary' },
                     // QS-235 — optional reset button (car: clean_constraints).
-                    ...(resetButton ? [resetButton] : []),
+                    // review-fix #01 NTH2 — only spread a well-shaped
+                    // `{text, onClick}` so a malformed object can't render a
+                    // silent broken button.
+                    ...(resetButton && resetButton.text && resetButton.onClick ? [resetButton] : []),
                     {
                         text: 'Apply',
                         variant: 'primary',
@@ -779,6 +784,9 @@ export class QsCardBase extends HTMLElement {
         handleStroke                 — handle circle stroke (default `palette.primary`)
         handleFill                   — handle text fill (default `palette.primary`)
         animPathId                   — dash anim path id (default `'running_anim'`)
+        animGradId                   — dash anim stroke gradient id
+                                       (default `gradRunningId`; SF1 — the car
+                                       passes a fault-aware gradient)
         extraDefs                    — extra `<defs>` children (default `''`)
       Returns string.
     */
@@ -794,6 +802,11 @@ export class QsCardBase extends HTMLElement {
             bgStroke = 'var(--divider-color)',
             handleFontSize = 13,
             animPathId = 'running_anim',
+            // QS-235 review-fix #01 SF1 — the dash anim stroke gradient,
+            // defaulting to `gradRunningId` (so the duration callers are
+            // byte-identical). The car passes a fault-aware gradient so
+            // the moving dash matches its static fault arc.
+            animGradId = gradRunningId,
             extraDefs = '',
         } = params;
 
@@ -814,7 +827,11 @@ export class QsCardBase extends HTMLElement {
         // QS-235 — `handleLabel` lets the car supply its own
         // energy/percent TRUE-target string (still unclamped); the
         // duration default reproduces the round-trip above byte-for-byte.
-        const escapedHandleLabel = params.handleLabel != null
+        // review-fix #01 NTH3 — named `handleLabelText` (NOT
+        // `escaped…`): a supplied `handleLabel` is used verbatim, with no
+        // escaping (SVG <text> content renders metacharacters as text, so
+        // this is safe; the old name wrongly implied sanitization).
+        const handleLabelText = params.handleLabel != null
             ? params.handleLabel
             : this._fmt(pctToHours(handlePct));
         // QS-235 — handle stroke/fill default to `palette.primary` (the
@@ -851,7 +868,7 @@ export class QsCardBase extends HTMLElement {
               ${showAnimation ? `
               <path id="${animPathId}"
                     d="${progressPath}"
-                    stroke="url(#${gradRunningId})"
+                    stroke="url(#${animGradId})"
                     stroke-width="16"
                     fill="none"
                     stroke-linecap="round"
@@ -863,7 +880,7 @@ export class QsCardBase extends HTMLElement {
               ` : ''}
               ${canDragHandle ? `
               <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${handleStroke}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
-              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${handleFill}" font-size="${handleFontSize}" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${escapedHandleLabel}</text>
+              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${handleFill}" font-size="${handleFontSize}" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${handleLabelText}</text>
               ` : ''}
         `;
     }

@@ -793,6 +793,18 @@ owner-authorized visual simplification isolated in its own commit
 for a clean Phase-F smoke read. There is no per-instance grain id
 or wave-fill `filter="url(#…)"` reference anymore.
 
+**Energy-mode SOC on sensor dropout (QS-235 AC6 / review-fix #01
+NTH1).** The `current_inputed_energy` read now goes through the
+shared `_safeNumber(sensor, 0)`, which returns `0` (not `NaN`) for an
+`unavailable` / `unknown` / missing sensor. In energy mode with no
+valid target limit, the SOC readout and ring handle therefore show
+`0` / `0 kWh` rather than the pre-QS-235 `--` / `-- kWh`. This is
+intentional: besides being arguably more correct, it **hardens the
+ring geometry** — the old `NaN` propagated through
+`socPct → handlePct → pctToDeg → polar`, emitting a `cx="NaN"` handle
+position; the `0` keeps the handle pinned at the bottom of the gauge.
+Confirm the `0`-on-dropout readout in the Phase-F smoke.
+
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is
 explicitly excluded; the card-level pinkish `.off-grid` CSS class

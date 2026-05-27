@@ -1312,6 +1312,13 @@ class QsCarCard extends QsCardBase {
           gradGreenId, gradRunningId: gradChargeId, activeGradId,
           dashLen, gapLen,
           // QS-235 — car-specific overrides over the duration defaults.
+          // SF1 — the moving dash matches the static arc when faulted:
+          // faulted-while-charging draws the dash with `gradFaultId`
+          // (red, defined in extraDefs), else `gradChargeId` (cyan/blue,
+          // defined by the builder via the `gradRunningId` param). This
+          // restores the pre-refactor `stroke="url(#${isFaulted ?
+          // gradFaultId : gradChargeId})"` exactly.
+          animGradId: isFaulted ? gradFaultId : gradChargeId,
           bgStroke: isFaulted ? 'rgba(244,67,54,0.35)' : 'var(--divider-color)',
           handleFontSize: useEnergyMode ? '11' : '13',
           handleStroke: isDisconnected ? 'var(--divider-color)' : 'var(--primary-color)',
