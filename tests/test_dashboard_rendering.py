@@ -3475,24 +3475,19 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
     group contains exactly two wave `<path>` elements sharing one `d`
     placeholder, differing only in fill (IDLE_SOUP_COLOR vs
     CHARGE_SOUP_COLOR) and opacity. Sparkle and lightning layers
-    follow the waves in source order. The grain filter is declared in
-    `<defs>` with `<feTurbulence type="fractalNoise" …>` and BOTH
-    waves carry `filter="url(#${grainFilterId})"`. The issue's
+    follow the waves in source order. The issue's
     "do not superpose 3 layer of sin" is pinned negatively: NO
     `wave1_*` / `wave2_*` ids.
+
+    QS-235 AC7: the `feTurbulence` grain filter that previously
+    decorated both wave fills has been removed; its dedicated negative
+    guard is `test_car_card_grain_filter_removed`. This test no longer
+    asserts the grain filter — only the surviving two-wave structure.
     """
     import re
 
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
-
-    # Grain filter in <defs> declares feTurbulence type="fractalNoise".
-    assert re.search(r'<filter\s+id="\$\{grainFilterId\}"', source), (
-        'qs-car-card.js: missing `<filter id="${grainFilterId}">` declaration in <defs>.'
-    )
-    assert '<feTurbulence type="fractalNoise"' in source, (
-        'qs-car-card.js: grain filter must use `<feTurbulence type="fractalNoise" …>` (AC-1 #1).'
-    )
 
     # The two wave paths share the clip group anchor.
     clip_g_anchor = '<g clip-path="url(#${electronClipId})"'
@@ -3505,33 +3500,34 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
         'qs-car-card.js: missing `<path id="electron_wave_charge">` (AC-1 #2).'
     )
 
-    # Both waves share the same `d` placeholder (initialWavePath) and
-    # carry filter="url(#${grainFilterId})".
+    # Both waves share the same `d` placeholder (initialWavePath),
+    # differing only in fill + opacity. QS-235 AC7 dropped the trailing
+    # `filter="url(#${grainFilterId})"` token from each.
     idle_wave_re = re.compile(
         r'<path\s+id="electron_wave_idle"\s+'
         r'd="\$\{initialWavePath\}"\s+'
         r'fill="\$\{IDLE_SOUP_COLOR\}"\s+'
         r'opacity="\$\{initialIdleOpacity\}"\s+'
-        r'filter="url\(#\$\{grainFilterId\}\)"',
+        r'pointer-events="none"',
     )
     assert idle_wave_re.search(source), (
         "qs-car-card.js: `electron_wave_idle` <path> must carry "
         '`d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" '
-        'opacity="${initialIdleOpacity}" '
-        'filter="url(#${grainFilterId})"` (AC-1 #2/#3).'
+        'opacity="${initialIdleOpacity}" pointer-events="none"` '
+        "(AC-1 #2; grain filter removed per QS-235 AC7)."
     )
     charge_wave_re = re.compile(
         r'<path\s+id="electron_wave_charge"\s+'
         r'd="\$\{initialWavePath\}"\s+'
         r'fill="\$\{CHARGE_SOUP_COLOR\}"\s+'
         r'opacity="\$\{initialChargeOpacity\}"\s+'
-        r'filter="url\(#\$\{grainFilterId\}\)"',
+        r'pointer-events="none"',
     )
     assert charge_wave_re.search(source), (
         "qs-car-card.js: `electron_wave_charge` <path> must carry "
         '`d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" '
-        'opacity="${initialChargeOpacity}" '
-        'filter="url(#${grainFilterId})"` (AC-1 #2/#3).'
+        'opacity="${initialChargeOpacity}" pointer-events="none"` '
+        "(AC-1 #2; grain filter removed per QS-235 AC7)."
     )
 
     # Sparkle layer follows waves; lightning layer follows sparkles.
@@ -3890,61 +3886,46 @@ def test_car_card_lightning_life_and_glow_filter():
     )
 
 
-def test_car_card_grain_filter_uses_feturbulence_on_wave_fill():
-    """QS-232 AC-7: the grain filter declares `<feTurbulence
-    type="fractalNoise" baseFrequency="0.9" numOctaves="2" …>` in
-    `<defs>` and BOTH wave `<path>` elements carry
-    `filter="url(#${grainFilterId})"`. No separate overlay `<rect>`
-    carries the grain filter — the grain composites within the wave
-    shape via `feComposite operator="in"`.
+def test_car_card_grain_filter_removed():
+    """QS-235 AC7 — the `feTurbulence` grain filter is removed from the
+    car card. The `<filter id="${grainFilterId}">` def, both
+    `filter="url(#${grainFilterId})"` wave references, the
+    `this._grainFilterId` allocation, AND the stale grain comments are
+    all gone. The negative guard is scoped to the car source ONLY
+    (no other card ever carried grain). The sparkle / lightning / wave
+    motion layers are untouched — those positive pins live in their own
+    tests (`test_car_card_electron_soup_clip_group_and_two_waves`,
+    `test_car_card_sparkle_*`, `test_car_card_lightning_*`).
     """
-    import re
-
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
-    executable = _strip_js_comments(source)
 
-    # Grain filter declaration substring.
-    assert ('<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2"') in source, (
-        "qs-car-card.js (AC-7): grain filter must declare "
-        '`<feTurbulence type="fractalNoise" baseFrequency="0.9" '
-        'numOctaves="2" …>` (substring assert; `seed`/`result` not '
-        "pinned)."
-    )
-
-    # The composite step that masks turbulence to the wave fill.
-    assert "<feComposite" in source and 'operator="in"' in source, (
-        "qs-car-card.js (AC-7): grain filter must contain a "
-        '`<feComposite … operator="in" …>` step so the grain is '
-        "masked to the wave's filled shape (water region only)."
-    )
-
-    # Both waves reference filter="url(#${grainFilterId})".
-    idle_filter = re.compile(
-        r'id="electron_wave_idle"[^>]*filter="url\(#\$\{grainFilterId\}\)"',
-        re.DOTALL,
-    )
-    charge_filter = re.compile(
-        r'id="electron_wave_charge"[^>]*filter="url\(#\$\{grainFilterId\}\)"',
-        re.DOTALL,
-    )
-    assert idle_filter.search(source), (
-        'qs-car-card.js (AC-7): `electron_wave_idle` must carry `filter="url(#${grainFilterId})"`.'
-    )
-    assert charge_filter.search(source), (
-        'qs-car-card.js (AC-7): `electron_wave_charge` must carry `filter="url(#${grainFilterId})"`.'
+    # AC7: every grain artifact — code AND stale comments — is gone.
+    for forbidden in (
+        "feTurbulence",
+        "fractalNoise",
+        "feComposite",
+        "grainFilterId",
+        "_grainFilterId",
+        "grainFilter",
+    ):
+        assert forbidden not in source, (
+            f"qs-car-card.js (QS-235 AC7): `{forbidden}` must be removed "
+            f"along with the feTurbulence grain filter (def + both wave "
+            f"refs + per-instance id allocation + stale comments)."
+        )
+    # AC7 also mandates removing the stale grain comments, so the bare
+    # word `grain` no longer appears anywhere in the source.
+    assert "grain" not in source.lower(), (
+        "qs-car-card.js (QS-235 AC7): no mention of `grain` should "
+        "remain — the filter is gone and the stale comments are removed."
     )
 
-    # Negative: no <rect> immediately preceding the sparkle layer
-    # carries the grain filter.
-    forbidden = re.compile(
-        r'<rect[^>]*filter="url\(#\$\{grainFilterId\}\)"[^>]*/?>\s*'
-        r'<g\s+id="\$\{sparkleLayerId\}"',
-        re.DOTALL,
+    # The two wave paths survive — just without the grain filter.
+    assert 'id="electron_wave_idle"' in source, (
+        "qs-car-card.js (QS-235 AC7): the idle wave must survive the grain removal."
     )
-    assert not forbidden.search(source), (
-        "qs-car-card.js (AC-7): no separate `<rect>` overlay should "
-        "carry the grain filter — grain composites within the wave "
-        'shape via `feComposite operator="in"` (D7).'
+    assert 'id="electron_wave_charge"' in source, (
+        "qs-car-card.js (QS-235 AC7): the charge wave must survive the grain removal."
     )
 
 
@@ -4100,12 +4081,11 @@ def test_car_card_continuous_raf_from_connected_callback():
 
 def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
     """QS-232 AC-10: `_resetDomRefs()` instance method exists. It
-    nulls `_waveEls`, `_grainFilterEl`, `_sparkleLayerEl`,
-    `_lightningLayerEl` AND clears `_sparkles = []` and
-    `_lightningBolts = []`. It is called from `_invalidateAnimCache()`
-    AND from the post-`innerHTML` cleanup in `_render()` (≥ 2 call
-    sites). `disconnectedCallback()` tears down sparkle AND lightning
-    DOM with optional-chaining shape.
+    nulls `_waveEls`, `_sparkleLayerEl`, `_lightningLayerEl` AND clears
+    `_sparkles = []` and `_lightningBolts = []`. It is called from
+    `_invalidateAnimCache()` AND from the post-`innerHTML` cleanup in
+    `_render()` (≥ 2 call sites). `disconnectedCallback()` tears down
+    sparkle AND lightning DOM with optional-chaining shape.
     """
     import re
 
@@ -4115,9 +4095,10 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
     body = _extract_js_function_body(executable, r"_resetDomRefs\s*\(\s*\)\s*")
     assert body is not None, "qs-car-card.js (AC-10): `_resetDomRefs()` method not found."
 
-    # Review-fix #01 #14: `_grainFilterEl` was a dead field — no
-    # code path ever read or lazily-resolved it. Removed from
-    # `_resetDomRefs()` to match the actual DOM-ref surface area.
+    # Review-fix #01 #14: `_grainFilterEl` was a dead field — no code
+    # path ever read or lazily-resolved it (and QS-235 AC7 removed the
+    # grain filter entirely). `_resetDomRefs()` tracks only the live
+    # DOM-ref surface area.
     for assignment_re in (
         r"this\._waveEls\s*=\s*null",
         r"this\._sparkleLayerEl\s*=\s*null",
@@ -4175,15 +4156,18 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
 
 def test_car_card_per_instance_unique_svg_ids():
     """QS-232 AC-11: `QsCarCard._nextClipId` static counter is bumped
-    inside `if (!this._electronClipId)`. Four per-instance ID fields
+    inside `if (!this._electronClipId)`. Three per-instance ID fields
     are derived from the same `uid`: `_electronClipId`,
-    `_sparkleLayerId`, `_lightningLayerId`, `_grainFilterId`. All
-    follow the `car_<role>_${uid}` naming convention.
+    `_sparkleLayerId`, `_lightningLayerId`. All follow the
+    `car_<role>_${uid}` naming convention.
 
     Review-fix #02 user follow-up #2: `_lightningFilterId` was
     removed alongside the lightning glow filter — the new sharp
     purple bolt has no `<filter>` element, so the per-instance
     filter ID is unused.
+
+    QS-235 AC7: `_grainFilterId` was removed alongside the
+    `feTurbulence` grain filter, dropping the field count from 4 → 3.
     """
     import re
 
@@ -4205,14 +4189,14 @@ def test_car_card_per_instance_unique_svg_ids():
         "once."
     )
 
-    # Four ID fields, all `car_<role>_${uid}`-shaped. The
+    # Three ID fields, all `car_<role>_${uid}`-shaped. The
     # `_lightningFilterId` was removed in review-fix #02 follow-up
-    # alongside the lightning glow filter.
+    # alongside the lightning glow filter; `_grainFilterId` was
+    # removed in QS-235 AC7 alongside the feTurbulence grain filter.
     id_assignments = {
         "_electronClipId": "car_eClip_",
         "_sparkleLayerId": "car_sparkLayer_",
         "_lightningLayerId": "car_lightningLayer_",
-        "_grainFilterId": "car_grainFilter_",
     }
     for field, prefix in id_assignments.items():
         pat = re.compile(
@@ -4250,9 +4234,13 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
     H2 header. The section body mentions the key concepts:
     single-layer wave, dual-opacity cross-fade, sparkle palette switch
     + [1500W, 22000W] power-scaling, lightning bolt 3-segment path +
-    glow + spawn interval, feTurbulence grain on wave fill, degraded
-    CSS filter, continuous RAF, three carve covers (D17). The
-    `last_verified` field is present and well-formed.
+    glow + spawn interval, degraded CSS filter, continuous RAF, three
+    carve covers (D17). The `last_verified` field is present and
+    well-formed.
+
+    QS-235 AC7: the `feTurbulence` grain filter was removed, so the
+    `feturbulence` / `grain` key-concept pins are dropped here (the
+    grain's absence is pinned by `test_car_card_grain_filter_removed`).
     """
     doc_path = Path(__file__).parent.parent / "docs" / "agents" / "concepts" / "dashboard-and-cards.md"
     doc = doc_path.read_text(encoding="utf-8")
@@ -4294,8 +4282,6 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
         ("electron", "soup electron-soup concept"),
         ("sparkle", "sparkle palette switch"),
         ("lightning", "lightning bolt subsystem"),
-        ("feturbulence", "feTurbulence grain filter"),
-        ("grain", "grain on wave fill"),
         ("degraded", "degraded CSS filter"),
         ("continuous", "continuous-RAF model"),
         ("1500", "[1500W, 22000W] power-scaling range (lower)"),

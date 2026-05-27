@@ -7,9 +7,9 @@
   mirroring the QS-200 / QS-211 / QS-214 boiler architecture. The
   high-level design — single-layer sine wave inside a clipPath,
   idle↔charge cross-fade, lightning-blue sparkle particles, lightning
-  bolts during charging, feTurbulence grain on the wave fill,
-  degraded-state CSS desaturate, continuous RAF, and QS-217 carve
-  covers extended to three inside-disc buttons — is documented in
+  bolts during charging, degraded-state CSS desaturate, continuous
+  RAF, and QS-217 carve covers extended to three inside-disc buttons
+  — is documented in
   `docs/agents/concepts/dashboard-and-cards.md` (search for
   "QS-232 — Car-card electron-soup animation"). Tuning constants
   (sparkle power-scaling range, lightning spawn interval, life
@@ -203,7 +203,7 @@ const TIME_BTN_CARVE_R  = 32;
 // bottom). Inherits lifecycle, service callers, defensive utilities,
 // modal dialog, keyboard activation, and the 5 wire-helpers. Car
 // retains its own ring HTML (full-circle, sun/rabbit/time-btn carve
-// covers), sparkle system, lightning system, feTurbulence grain.
+// covers), sparkle system, lightning system.
 import { baseCardCSS } from './shared/qs-card-styles.js';
 import { QsCardBase, rad2deg, polar, arcPath, pctToDeg } from './shared/qs-card-base.js';
 
@@ -245,10 +245,6 @@ class QsCarCard extends QsCardBase {
   // `test_water_boiler_card_factors_reset_dom_refs_helper`).
   _resetDomRefs() {
     this._waveEls = null;             // [idleWave, chargeWave]
-    // Review-fix #01 #14: removed `_grainFilterEl` — no code path
-    // ever read or lazily-resolved it. The grain filter is declared
-    // once in `<defs>` and referenced by the wave paths via
-    // `filter="url(#${grainFilterId})"`; no JS-side ref needed.
     this._sparkleLayerEl = null;
     this._lightningLayerEl = null;
     this._sparkles = [];
@@ -855,7 +851,6 @@ class QsCarCard extends QsCardBase {
         this._electronClipId   = `car_eClip_${uid}`;
         this._sparkleLayerId   = `car_sparkLayer_${uid}`;
         this._lightningLayerId = `car_lightningLayer_${uid}`;
-        this._grainFilterId    = `car_grainFilter_${uid}`;
         // Review-fix #02 user follow-up #2: `_lightningFilterId`
         // removed alongside the lightning glow filter — the new
         // sharp purple bolt doesn't use a `<filter>`.
@@ -863,7 +858,6 @@ class QsCarCard extends QsCardBase {
       const electronClipId   = this._electronClipId;
       const sparkleLayerId   = this._sparkleLayerId;
       const lightningLayerId = this._lightningLayerId;
-      const grainFilterId    = this._grainFilterId;
       const carChargeTypeIcons = {
           "Unknown": "mdi:help-circle-outline",
           "Not Plugged": "mdi:power-plug-off",
@@ -1316,21 +1310,13 @@ class QsCarCard extends QsCardBase {
                     <feMergeNode in="SourceGraphic" />
                   </feMerge>
                 </filter>
-                <filter id="${grainFilterId}" x="-20%" y="-20%" width="140%" height="140%">
-                  <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="3" result="noise" />
-                  <feComposite in="noise" in2="SourceGraphic" operator="in" result="grain" />
-                  <feMerge>
-                    <feMergeNode in="SourceGraphic" />
-                    <feMergeNode in="grain" />
-                  </feMerge>
-                </filter>
                 <clipPath id="${electronClipId}">
                   <circle cx="${CENTER_CX}" cy="${CENTER_CY}" r="${CLIP_R}" />
                 </clipPath>
               </defs>
               <g clip-path="url(#${electronClipId})" style="${degraded ? 'filter: saturate(0.3) brightness(0.7);' : ''}">
-                <path id="electron_wave_idle" d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" opacity="${initialIdleOpacity}" filter="url(#${grainFilterId})" pointer-events="none" style="will-change: transform;" />
-                <path id="electron_wave_charge" d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" opacity="${initialChargeOpacity}" filter="url(#${grainFilterId})" pointer-events="none" style="will-change: transform;" />
+                <path id="electron_wave_idle" d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" opacity="${initialIdleOpacity}" pointer-events="none" style="will-change: transform;" />
+                <path id="electron_wave_charge" d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" opacity="${initialChargeOpacity}" pointer-events="none" style="will-change: transform;" />
                 <g id="${sparkleLayerId}" pointer-events="none"></g>
                 <g id="${lightningLayerId}" pointer-events="none" style="mix-blend-mode: screen; will-change: opacity;"></g>
               </g>

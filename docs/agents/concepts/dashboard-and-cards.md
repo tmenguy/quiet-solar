@@ -766,15 +766,14 @@ by a single `<filter id="${lightningFilterId}">` with
 `<feGaussianBlur stdDeviation="${LIGHTNING_GLOW_STDDEV}">` plus
 `mix-blend-mode: screen` on the layer `<g>`.
 
-**feTurbulence grain on wave fill.** The fuzzy granularity comes
-from a single `<filter id="${grainFilterId}">` declaring
-`<feTurbulence type="fractalNoise" baseFrequency="0.9"
-numOctaves="2" …>`, composited against `SourceGraphic` via
-`<feComposite operator="in">` so the grain is masked to the
-wave's filled shape (water region only). Both wave `<path>`
-elements carry `filter="url(#${grainFilterId})"`. There is NO
-separate overlay `<rect>` — the grain naturally ends at the wave
-surface and is automatically clipped to the soup boundary.
+**Wave fill — grain removed (QS-235 AC7).** The two wave `<path>`
+elements now carry only `fill` (`IDLE_SOUP_COLOR` /
+`CHARGE_SOUP_COLOR`) and `opacity`. The earlier `feTurbulence`
+grain filter (a `<filter>` declaring `fractalNoise` composited
+against `SourceGraphic`) was removed in QS-235 — a deliberate,
+owner-authorized visual simplification isolated in its own commit
+for a clean Phase-F smoke read. There is no per-instance grain id
+or wave-fill `filter="url(#…)"` reference anymore.
 
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is
