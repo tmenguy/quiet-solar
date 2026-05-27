@@ -8,6 +8,13 @@ patterns; `card_source_union(card_filename)` returns the concatenated
 text of the card file and every shared module it transitively imports,
 so the existing grep-based tests keep working without per-test rewrite.
 
+QS-235 — `_buildRingHTML` moved UP from `qs-ring-duration-base.js` to
+`qs-card-base.js` (so the car card, which extends `QsCardBase`
+directly, can consume it). The `qs-car-card.js` union already includes
+`qs-card-base.js`, so the car now picks up `_buildRingHTML` (plus the
+shared `_ringCarveCover` carve helper) through its existing mapping —
+no `CARD_TO_SHARED_FILES` change is needed.
+
 The mapping is a **static dict** (`CARD_TO_SHARED_FILES`) rather than
 being parsed from `import` statements in the card source. This lets the
 Phase C migration land per-card incrementally — a card that has not yet

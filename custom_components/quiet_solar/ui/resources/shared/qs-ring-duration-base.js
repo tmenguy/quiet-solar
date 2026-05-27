@@ -6,16 +6,18 @@
   3 inside-disc buttons instead of one override-btn).
 
   Adds:
-    - _buildRingHTML({...}) — produces the outer .ring SVG markup
-      (linear-gradient defs, background-arc + progress-arc, override-btn
-      cover circle, target-handle circle + text, power-btn + green-btn +
-      override-btn DOM elements). Cards layer their backdrop-specific
-      SVG inside the returned template.
     - _wireOverrideButton({buttonEl, entityId, overrideBtnClickable}) —
       confirmation dialog + state-aware class assignment.
     - _wireBistateMode({selectEl, entityId, translationNamespace}) —
       focus/blur/change handlers; M2 try/finally + 300ms setTimeout
       cleanup.
+
+  QS-235 — `_buildRingHTML` was moved UP to `QsCardBase` (single source
+  of truth) so the car card, which extends `QsCardBase` directly, can
+  consume it too. The duration cards inherit it unchanged through this
+  sub-base. The hours-/override-specific helpers (`_clampMaxHours`,
+  `_allowedHalfHours`, `_wireOverrideButton`, `_wireBistateMode`) stay
+  here — the car needs none of them.
 */
 
 import { QsCardBase, arcPath, polar } from './qs-card-base.js';
@@ -29,103 +31,6 @@ const SNAP_STEP_HOURS = 0.5;    // draggable snap granularity (gauge max grid-al
 const MAX_HOURS_CEILING = 168;  // one week — bounds the gauge scale AND the snap-list loop
 
 export class QsRingDurationCardBase extends QsCardBase {
-    /*
-      _buildRingHTML — returns an HTML string for the outer .ring SVG
-      markup. Caller injects this string into innerHTML between any
-      card-specific backdrop SVG and the .center / override-btn /
-      green-btn DOM nodes.
-
-      params (long but mechanical — every duration card needs them):
-        palette                      — {primary, gradStart, gradEnd, animStart, animEnd}
-        ringCirc                     — ring radius in SVG units (typically 130)
-        center                       — {cx, cy} centre of the ring
-        startDeg, endDeg, rangeDeg, gapDeg
-        progressPath, bgPath         — pre-computed SVG `d` attribute strings
-        handlePos                    — {x, y} handle centre
-        handlePct                    — handle percentage (for label)
-        displayTargetHours           — value to display at the handle text
-        hoursRun                     — current run hours
-        showAnimation                — boolean — whether to render running_anim path
-        canDragHandle                — boolean — whether to render handle circle
-        gradGreenId, gradRunningId, activeGradId
-        dashLen, gapLen              — stroke-dasharray
-        title                        — escaped card title
-        running                      — boolean — for active-state colouring
-        pctToHours                   — function used in label render
-      Returns string.
-    */
-    _buildRingHTML(params) {
-        const {
-            palette, ringCirc, center,
-            progressPath, bgPath,
-            handlePos, handlePct, displayTargetHours, hoursRun,
-            showAnimation, canDragHandle,
-            gradGreenId, gradRunningId, activeGradId,
-            dashLen, gapLen,
-            pctToHours,
-        } = params;
-
-        // QS-199 review-fix #07 N1 — the handle's TEXT LABEL round-trips
-        // the target back from `handlePct`: `pctToHours(handlePct)`. On the
-        // non-default branch each card sets
-        // `handlePct = hoursToPct(displayTargetHours)` with
-        // `displayTargetHours = targetHours` left UNCLAMPED on purpose, so
-        // this label shows the TRUE target even when it exceeds `maxHours`.
-        // Only the handle POSITION is clamped (the card's `pctToDeg`
-        // clamps to [0,100] → the handle pins at the ring top for an
-        // out-of-range target while the number stays correct).
-        // DO NOT "fix" the >100% `handlePct` by clamping `handlePct` or
-        // `displayTargetHours` — that would make this label render
-        // `maxHours` instead of the real value (a regression across all
-        // duration cards). The pin-at-top-but-number-correct behaviour is
-        // intentional and graceful.
-        const escapedHandleLabel = this._fmt(pctToHours(handlePct));
-
-        // QS-199 review-fix N6 — per-instance glow filter id (parity with
-        // gradGreenId / gradRunningId) so two cards on one page can't
-        // collide if shadow-DOM id scoping ever changes.
-        const glowId = this._instanceId('runningGlow');
-
-        return `
-              <defs>
-                <linearGradient id="${gradGreenId}" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="${palette.gradStart}"/>
-                  <stop offset="100%" stop-color="${palette.gradEnd}"/>
-                </linearGradient>
-                <linearGradient id="${gradRunningId}" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="${palette.animStart}"/>
-                  <stop offset="100%" stop-color="${palette.animEnd}"/>
-                </linearGradient>
-                <filter id="${glowId}" x="-50%" y="-50%" width="200%" height="200%">
-                  <feGaussianBlur stdDeviation="2" result="blur" />
-                  <feMerge>
-                    <feMergeNode in="blur" />
-                    <feMergeNode in="SourceGraphic" />
-                  </feMerge>
-                </filter>
-              </defs>
-              <path d="${bgPath}" stroke="var(--divider-color)" stroke-width="14" fill="none" stroke-linecap="round" />
-              <path d="${progressPath}" stroke="url(#${activeGradId})" stroke-width="14" fill="none" stroke-linecap="round" ${showAnimation ? 'stroke-opacity="0.35"' : ''} />
-              ${showAnimation ? `
-              <path id="running_anim"
-                    d="${progressPath}"
-                    stroke="url(#${gradRunningId})"
-                    stroke-width="16"
-                    fill="none"
-                    stroke-linecap="round"
-                    stroke-dasharray="${dashLen} ${gapLen}"
-                    stroke-opacity="1"
-                    filter="url(#${glowId})"
-                    style="mix-blend-mode:screen; will-change: stroke-dashoffset"
-              />
-              ` : ''}
-              ${canDragHandle ? `
-              <circle id="target_handle" cx="${handlePos.x.toFixed(2)}" cy="${handlePos.y.toFixed(2)}" r="13" fill="var(--card-background-color)" stroke="${palette.primary}" stroke-width="3" style="cursor: grab; pointer-events: all;" />
-              <text id="target_handle_text" x="${handlePos.x.toFixed(2)}" y="${handlePos.y.toFixed(2)}" text-anchor="middle" dominant-baseline="middle" fill="${palette.primary}" font-size="13" font-weight="800" style="cursor: grab; pointer-events: none; user-select: none;">${escapedHandleLabel}</text>
-              ` : ''}
-        `;
-    }
-
     /*
       _clampMaxHours(raw) — the SINGLE source-of-truth normalizer for a
       card's draggable-range maximum. QS-199 review-fix #04 ES1 + #05 S1

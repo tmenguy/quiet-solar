@@ -26,7 +26,7 @@
 
 import { baseCardCSS } from './shared/qs-card-styles.js';
 import { QsRingDurationCardBase } from './shared/qs-ring-duration-base.js';
-import { arcPath, polar, pctToDeg } from './shared/qs-card-base.js';
+import { arcPath, polar, pctToDeg, RING_BOTTOM_CARVE_CX, RING_BOTTOM_CARVE_CY, RING_BOTTOM_CARVE_R } from './shared/qs-card-base.js';
 import { FLAME_CONSTANTS, QsFlameEngine } from './shared/qs-anim-flame.js';
 
 // Local aliases for the engine constants — keeps the radiator-card
@@ -38,9 +38,9 @@ const { FLAME_BASE_MIN_PCT, FLAME_BASE_MAX_PCT } = FLAME_CONSTANTS;
 const CENTER_CY = 160;              // SVG y-centre of the ring / clip circle
 const CLIP_R = 120;                 // flame clip circle radius
 
-// QS-217 — Override-button cover overlay geometry.
-const OVERRIDE_BTN_CARVE_CY = 277;
-const OVERRIDE_BTN_CARVE_R  = 35;
+// QS-235 — the override-button cover geometry moved to the shared
+// `RING_BOTTOM_CARVE_*` constants in `shared/qs-card-base.js` (imported
+// above) and is rendered via the shared `_ringCarveCover` helper.
 
 // --- Per-layer tuning ---
 // LAYER_BASE_HEIGHTS — back layer reaches ≈ half clip radius (~100 px)
@@ -395,7 +395,7 @@ class QsRadiatorCard extends QsRingDurationCardBase {
                     `<path id="flame${i}" d="${d}" fill="${initialFlameColors[i]}" opacity="1" pointer-events="none" style="will-change: transform;" />`,
                 ).join("\n                ")}
               </g>
-              ${e.override_reset ? `<circle id="override_btn_cover" cx="${CENTER_CY}" cy="${OVERRIDE_BTN_CARVE_CY}" r="${OVERRIDE_BTN_CARVE_R}" fill="var(--card-background-color)" pointer-events="none" />` : ''}
+              ${this._ringCarveCover({ cx: RING_BOTTOM_CARVE_CX, cy: RING_BOTTOM_CARVE_CY, r: RING_BOTTOM_CARVE_R, id: 'override_btn_cover', show: e.override_reset })}
               ${ringMarkup}
             </svg>
             <div class="center">

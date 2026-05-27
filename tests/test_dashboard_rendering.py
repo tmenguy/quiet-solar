@@ -3475,24 +3475,19 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
     group contains exactly two wave `<path>` elements sharing one `d`
     placeholder, differing only in fill (IDLE_SOUP_COLOR vs
     CHARGE_SOUP_COLOR) and opacity. Sparkle and lightning layers
-    follow the waves in source order. The grain filter is declared in
-    `<defs>` with `<feTurbulence type="fractalNoise" …>` and BOTH
-    waves carry `filter="url(#${grainFilterId})"`. The issue's
+    follow the waves in source order. The issue's
     "do not superpose 3 layer of sin" is pinned negatively: NO
     `wave1_*` / `wave2_*` ids.
+
+    QS-235 AC7: the `feTurbulence` grain filter that previously
+    decorated both wave fills has been removed; its dedicated negative
+    guard is `test_car_card_grain_filter_removed`. This test no longer
+    asserts the grain filter — only the surviving two-wave structure.
     """
     import re
 
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
-
-    # Grain filter in <defs> declares feTurbulence type="fractalNoise".
-    assert re.search(r'<filter\s+id="\$\{grainFilterId\}"', source), (
-        'qs-car-card.js: missing `<filter id="${grainFilterId}">` declaration in <defs>.'
-    )
-    assert '<feTurbulence type="fractalNoise"' in source, (
-        'qs-car-card.js: grain filter must use `<feTurbulence type="fractalNoise" …>` (AC-1 #1).'
-    )
 
     # The two wave paths share the clip group anchor.
     clip_g_anchor = '<g clip-path="url(#${electronClipId})"'
@@ -3505,33 +3500,34 @@ def test_car_card_electron_soup_clip_group_and_two_waves():
         'qs-car-card.js: missing `<path id="electron_wave_charge">` (AC-1 #2).'
     )
 
-    # Both waves share the same `d` placeholder (initialWavePath) and
-    # carry filter="url(#${grainFilterId})".
+    # Both waves share the same `d` placeholder (initialWavePath),
+    # differing only in fill + opacity. QS-235 AC7 dropped the trailing
+    # `filter="url(#${grainFilterId})"` token from each.
     idle_wave_re = re.compile(
         r'<path\s+id="electron_wave_idle"\s+'
         r'd="\$\{initialWavePath\}"\s+'
         r'fill="\$\{IDLE_SOUP_COLOR\}"\s+'
         r'opacity="\$\{initialIdleOpacity\}"\s+'
-        r'filter="url\(#\$\{grainFilterId\}\)"',
+        r'pointer-events="none"',
     )
     assert idle_wave_re.search(source), (
         "qs-car-card.js: `electron_wave_idle` <path> must carry "
         '`d="${initialWavePath}" fill="${IDLE_SOUP_COLOR}" '
-        'opacity="${initialIdleOpacity}" '
-        'filter="url(#${grainFilterId})"` (AC-1 #2/#3).'
+        'opacity="${initialIdleOpacity}" pointer-events="none"` '
+        "(AC-1 #2; grain filter removed per QS-235 AC7)."
     )
     charge_wave_re = re.compile(
         r'<path\s+id="electron_wave_charge"\s+'
         r'd="\$\{initialWavePath\}"\s+'
         r'fill="\$\{CHARGE_SOUP_COLOR\}"\s+'
         r'opacity="\$\{initialChargeOpacity\}"\s+'
-        r'filter="url\(#\$\{grainFilterId\}\)"',
+        r'pointer-events="none"',
     )
     assert charge_wave_re.search(source), (
         "qs-car-card.js: `electron_wave_charge` <path> must carry "
         '`d="${initialWavePath}" fill="${CHARGE_SOUP_COLOR}" '
-        'opacity="${initialChargeOpacity}" '
-        'filter="url(#${grainFilterId})"` (AC-1 #2/#3).'
+        'opacity="${initialChargeOpacity}" pointer-events="none"` '
+        "(AC-1 #2; grain filter removed per QS-235 AC7)."
     )
 
     # Sparkle layer follows waves; lightning layer follows sparkles.
@@ -3890,61 +3886,48 @@ def test_car_card_lightning_life_and_glow_filter():
     )
 
 
-def test_car_card_grain_filter_uses_feturbulence_on_wave_fill():
-    """QS-232 AC-7: the grain filter declares `<feTurbulence
-    type="fractalNoise" baseFrequency="0.9" numOctaves="2" …>` in
-    `<defs>` and BOTH wave `<path>` elements carry
-    `filter="url(#${grainFilterId})"`. No separate overlay `<rect>`
-    carries the grain filter — the grain composites within the wave
-    shape via `feComposite operator="in"`.
+def test_car_card_grain_filter_removed():
+    """QS-235 AC7 — the `feTurbulence` grain filter is removed from the
+    car card. The `<filter id="${grainFilterId}">` def, both
+    `filter="url(#${grainFilterId})"` wave references, the
+    `this._grainFilterId` allocation, AND the stale grain comments are
+    all gone. The negative guard is scoped to the car source ONLY
+    (no other card ever carried grain). The sparkle / lightning / wave
+    motion layers are untouched — those positive pins live in their own
+    tests (`test_car_card_electron_soup_clip_group_and_two_waves`,
+    `test_car_card_sparkle_*`, `test_car_card_lightning_*`).
     """
-    import re
-
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
-    executable = _strip_js_comments(source)
 
-    # Grain filter declaration substring.
-    assert ('<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2"') in source, (
-        "qs-car-card.js (AC-7): grain filter must declare "
-        '`<feTurbulence type="fractalNoise" baseFrequency="0.9" '
-        'numOctaves="2" …>` (substring assert; `seed`/`result` not '
-        "pinned)."
-    )
+    # AC7: every concrete grain-filter artifact — the filter def, its
+    # `<feTurbulence>` / `<feComposite>` steps, both wave-fill
+    # references, and the per-instance id allocation — is gone.
+    #
+    # QS-235 review-fix #01 SF2 — scoped to these specific tokens rather
+    # than a blanket `"grain" not in source` ban: the blanket form would
+    # fail CI for any future unrelated identifier or comment that merely
+    # contains the letters "grain" (e.g. "granular", "fine-grained"),
+    # even with the grain filter correctly removed.
+    for forbidden in (
+        "feTurbulence",
+        "fractalNoise",
+        "feComposite",
+        "grainFilterId",
+        "_grainFilterId",
+        "grainFilter",
+    ):
+        assert forbidden not in source, (
+            f"qs-car-card.js (QS-235 AC7): `{forbidden}` must be removed "
+            f"along with the feTurbulence grain filter (def + both wave "
+            f"refs + per-instance id allocation + stale comments)."
+        )
 
-    # The composite step that masks turbulence to the wave fill.
-    assert "<feComposite" in source and 'operator="in"' in source, (
-        "qs-car-card.js (AC-7): grain filter must contain a "
-        '`<feComposite … operator="in" …>` step so the grain is '
-        "masked to the wave's filled shape (water region only)."
+    # The two wave paths survive — just without the grain filter.
+    assert 'id="electron_wave_idle"' in source, (
+        "qs-car-card.js (QS-235 AC7): the idle wave must survive the grain removal."
     )
-
-    # Both waves reference filter="url(#${grainFilterId})".
-    idle_filter = re.compile(
-        r'id="electron_wave_idle"[^>]*filter="url\(#\$\{grainFilterId\}\)"',
-        re.DOTALL,
-    )
-    charge_filter = re.compile(
-        r'id="electron_wave_charge"[^>]*filter="url\(#\$\{grainFilterId\}\)"',
-        re.DOTALL,
-    )
-    assert idle_filter.search(source), (
-        'qs-car-card.js (AC-7): `electron_wave_idle` must carry `filter="url(#${grainFilterId})"`.'
-    )
-    assert charge_filter.search(source), (
-        'qs-car-card.js (AC-7): `electron_wave_charge` must carry `filter="url(#${grainFilterId})"`.'
-    )
-
-    # Negative: no <rect> immediately preceding the sparkle layer
-    # carries the grain filter.
-    forbidden = re.compile(
-        r'<rect[^>]*filter="url\(#\$\{grainFilterId\}\)"[^>]*/?>\s*'
-        r'<g\s+id="\$\{sparkleLayerId\}"',
-        re.DOTALL,
-    )
-    assert not forbidden.search(source), (
-        "qs-car-card.js (AC-7): no separate `<rect>` overlay should "
-        "carry the grain filter — grain composites within the wave "
-        'shape via `feComposite operator="in"` (D7).'
+    assert 'id="electron_wave_charge"' in source, (
+        "qs-car-card.js (QS-235 AC7): the charge wave must survive the grain removal."
     )
 
 
@@ -4100,12 +4083,11 @@ def test_car_card_continuous_raf_from_connected_callback():
 
 def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
     """QS-232 AC-10: `_resetDomRefs()` instance method exists. It
-    nulls `_waveEls`, `_grainFilterEl`, `_sparkleLayerEl`,
-    `_lightningLayerEl` AND clears `_sparkles = []` and
-    `_lightningBolts = []`. It is called from `_invalidateAnimCache()`
-    AND from the post-`innerHTML` cleanup in `_render()` (≥ 2 call
-    sites). `disconnectedCallback()` tears down sparkle AND lightning
-    DOM with optional-chaining shape.
+    nulls `_waveEls`, `_sparkleLayerEl`, `_lightningLayerEl` AND clears
+    `_sparkles = []` and `_lightningBolts = []`. It is called from
+    `_invalidateAnimCache()` AND from the post-`innerHTML` cleanup in
+    `_render()` (≥ 2 call sites). `disconnectedCallback()` tears down
+    sparkle AND lightning DOM with optional-chaining shape.
     """
     import re
 
@@ -4115,9 +4097,10 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
     body = _extract_js_function_body(executable, r"_resetDomRefs\s*\(\s*\)\s*")
     assert body is not None, "qs-car-card.js (AC-10): `_resetDomRefs()` method not found."
 
-    # Review-fix #01 #14: `_grainFilterEl` was a dead field — no
-    # code path ever read or lazily-resolved it. Removed from
-    # `_resetDomRefs()` to match the actual DOM-ref surface area.
+    # Review-fix #01 #14: `_grainFilterEl` was a dead field — no code
+    # path ever read or lazily-resolved it (and QS-235 AC7 removed the
+    # grain filter entirely). `_resetDomRefs()` tracks only the live
+    # DOM-ref surface area.
     for assignment_re in (
         r"this\._waveEls\s*=\s*null",
         r"this\._sparkleLayerEl\s*=\s*null",
@@ -4175,15 +4158,18 @@ def test_car_card_reset_dom_refs_helper_and_disconnect_teardown():
 
 def test_car_card_per_instance_unique_svg_ids():
     """QS-232 AC-11: `QsCarCard._nextClipId` static counter is bumped
-    inside `if (!this._electronClipId)`. Four per-instance ID fields
+    inside `if (!this._electronClipId)`. Three per-instance ID fields
     are derived from the same `uid`: `_electronClipId`,
-    `_sparkleLayerId`, `_lightningLayerId`, `_grainFilterId`. All
-    follow the `car_<role>_${uid}` naming convention.
+    `_sparkleLayerId`, `_lightningLayerId`. All follow the
+    `car_<role>_${uid}` naming convention.
 
     Review-fix #02 user follow-up #2: `_lightningFilterId` was
     removed alongside the lightning glow filter — the new sharp
     purple bolt has no `<filter>` element, so the per-instance
     filter ID is unused.
+
+    QS-235 AC7: `_grainFilterId` was removed alongside the
+    `feTurbulence` grain filter, dropping the field count from 4 → 3.
     """
     import re
 
@@ -4205,14 +4191,14 @@ def test_car_card_per_instance_unique_svg_ids():
         "once."
     )
 
-    # Four ID fields, all `car_<role>_${uid}`-shaped. The
+    # Three ID fields, all `car_<role>_${uid}`-shaped. The
     # `_lightningFilterId` was removed in review-fix #02 follow-up
-    # alongside the lightning glow filter.
+    # alongside the lightning glow filter; `_grainFilterId` was
+    # removed in QS-235 AC7 alongside the feTurbulence grain filter.
     id_assignments = {
         "_electronClipId": "car_eClip_",
         "_sparkleLayerId": "car_sparkLayer_",
         "_lightningLayerId": "car_lightningLayer_",
-        "_grainFilterId": "car_grainFilter_",
     }
     for field, prefix in id_assignments.items():
         pat = re.compile(
@@ -4250,9 +4236,13 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
     H2 header. The section body mentions the key concepts:
     single-layer wave, dual-opacity cross-fade, sparkle palette switch
     + [1500W, 22000W] power-scaling, lightning bolt 3-segment path +
-    glow + spawn interval, feTurbulence grain on wave fill, degraded
-    CSS filter, continuous RAF, three carve covers (D17). The
-    `last_verified` field is present and well-formed.
+    glow + spawn interval, degraded CSS filter, continuous RAF, three
+    carve covers (D17). The `last_verified` field is present and
+    well-formed.
+
+    QS-235 AC7: the `feTurbulence` grain filter was removed, so the
+    `feturbulence` / `grain` key-concept pins are dropped here (the
+    grain's absence is pinned by `test_car_card_grain_filter_removed`).
     """
     doc_path = Path(__file__).parent.parent / "docs" / "agents" / "concepts" / "dashboard-and-cards.md"
     doc = doc_path.read_text(encoding="utf-8")
@@ -4294,8 +4284,6 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
         ("electron", "soup electron-soup concept"),
         ("sparkle", "sparkle palette switch"),
         ("lightning", "lightning bolt subsystem"),
-        ("feturbulence", "feTurbulence grain filter"),
-        ("grain", "grain on wave fill"),
         ("degraded", "degraded CSS filter"),
         ("continuous", "continuous-RAF model"),
         ("1500", "[1500W, 22000W] power-scaling range (lower)"),
@@ -4326,27 +4314,53 @@ def test_dashboard_and_cards_doc_pins_qs_232_paragraph():
 
 
 def test_car_card_inside_disc_button_carve_covers():
-    """QS-232 AC-14: three inside-disc button carve-out covers
-    (sun-btn, rabbit-btn, time-btn) extend QS-217's `<circle>` cover
-    pattern from one button to three on the car card. Nine module-
-    level constants (3 × {CX, CY, R}) are present (NAMES pinned, not
-    values — user-tunable per QS-217 precedent). Three `<circle
-    id="…_cover" fill="var(--card-background-color)"
-    pointer-events="none" />` elements appear in source AFTER the
-    clipped `</g>` AND BEFORE the `<path d="${bgPath}"` line. Each is
-    gated on its corresponding render predicate (`swPriority`,
-    `e.force_now`, `(tNext && e.schedule)`).
+    """QS-235 AC3 — the car's three inside-disc carve covers (sun /
+    rabbit / time) are emitted via the shared `_ringCarveCover` helper
+    (replacing the QS-232 inline `<circle id="…_cover">` literals):
+
+    - the bottom-center `sun_btn_cover` uses the SHARED
+      `RING_BOTTOM_CARVE_CX/CY/R` constants (the same set the duration
+      cards use for `override_btn_cover`); the per-card `SUN_BTN_CARVE_*`
+      duplicate is REMOVED (negative pin);
+    - `rabbit_btn_cover` / `time_btn_cover` reuse the helper with the
+      car-local `RABBIT_BTN_CARVE_*` / `TIME_BTN_CARVE_*` geometry
+      (those constants survive — NAMES pinned, values user-tunable);
+    - each call carries its render predicate via `show:` (`swPriority`,
+      `e.force_now`, `(tNext && e.schedule)`), and the rendered cover
+      ids are preserved;
+    - the three calls appear AFTER the clipped `</g>` and BEFORE
+      `${ringMarkup}` (so the covers paint on top of the soup, under
+      the ring built by `_buildRingHTML`).
     """
     import re
 
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
     executable = _strip_js_comments(source)
 
-    # Nine constants — NAMES only (values are user-tunable).
+    # The car imports the shared bottom-center carve constants.
+    assert (
+        re.search(
+            r"import\s*\{[^}]*RING_BOTTOM_CARVE_CX[^}]*RING_BOTTOM_CARVE_CY[^}]*RING_BOTTOM_CARVE_R[^}]*\}\s*from\s*['\"]\./shared/qs-card-base\.js['\"]",
+            source,
+            re.DOTALL,
+        )
+        is not None
+    ), (
+        "qs-car-card.js (QS-235 AC3): must import `RING_BOTTOM_CARVE_CX, "
+        "RING_BOTTOM_CARVE_CY, RING_BOTTOM_CARVE_R` from "
+        "`./shared/qs-card-base.js` (shared bottom-center carve geometry)."
+    )
+
+    # The per-card SUN_BTN_CARVE_* duplicate is removed.
+    for legacy_const in ("SUN_BTN_CARVE_CX", "SUN_BTN_CARVE_CY", "SUN_BTN_CARVE_R"):
+        assert re.search(rf"const\s+{legacy_const}\s*=", executable) is None, (
+            f"qs-car-card.js (QS-235 AC3): the per-card `const "
+            f"{legacy_const} = …` must be removed — the bottom-center "
+            f"sun cover now uses the shared `RING_BOTTOM_CARVE_*` set."
+        )
+
+    # The car-local rabbit/time carve constants survive (NAMES only).
     for const_name in (
-        "SUN_BTN_CARVE_CX",
-        "SUN_BTN_CARVE_CY",
-        "SUN_BTN_CARVE_R",
         "RABBIT_BTN_CARVE_CX",
         "RABBIT_BTN_CARVE_CY",
         "RABBIT_BTN_CARVE_R",
@@ -4355,70 +4369,54 @@ def test_car_card_inside_disc_button_carve_covers():
         "TIME_BTN_CARVE_R",
     ):
         assert re.search(rf"const\s+{const_name}\s*=\s*\d+\b", executable), (
-            f"qs-car-card.js (AC-14): missing module-level "
-            f"`const {const_name} = <integer>;` declaration. Values "
-            f"are user-tunable per QS-217 precedent — only the NAME "
-            f"is pinned."
+            f"qs-car-card.js (QS-235 AC3): missing module-level "
+            f"`const {const_name} = <integer>;` (car-local rabbit/time "
+            f"carve geometry; only the NAME is pinned)."
         )
 
-    # The three cover circles, each gated on its render predicate.
-    sun_cover_re = re.compile(
-        r"swPriority\s*\?\s*`?\s*"
-        r'<circle\s+id="sun_btn_cover"\s+'
-        r'cx="\$\{SUN_BTN_CARVE_CX\}"\s+'
-        r'cy="\$\{SUN_BTN_CARVE_CY\}"\s+'
-        r'r="\$\{SUN_BTN_CARVE_R\}"\s+'
-        r'fill="var\(--card-background-color\)"\s+'
-        r'pointer-events="none"\s*/>',
-    )
-    assert sun_cover_re.search(source), (
-        "qs-car-card.js (AC-14): missing the `sun_btn_cover` <circle> element gated on `swPriority`."
-    )
-    rabbit_cover_re = re.compile(
-        r"e\.force_now\s*\?\s*`?\s*"
-        r'<circle\s+id="rabbit_btn_cover"\s+'
-        r'cx="\$\{RABBIT_BTN_CARVE_CX\}"\s+'
-        r'cy="\$\{RABBIT_BTN_CARVE_CY\}"\s+'
-        r'r="\$\{RABBIT_BTN_CARVE_R\}"\s+'
-        r'fill="var\(--card-background-color\)"\s+'
-        r'pointer-events="none"\s*/>',
-    )
-    assert rabbit_cover_re.search(source), (
-        "qs-car-card.js (AC-14): missing the `rabbit_btn_cover` <circle> element gated on `e.force_now`."
-    )
-    time_cover_re = re.compile(
-        r"\(\s*tNext\s*&&\s*e\.schedule\s*\)\s*\?\s*`?\s*"
-        r'<circle\s+id="time_btn_cover"\s+'
-        r'cx="\$\{TIME_BTN_CARVE_CX\}"\s+'
-        r'cy="\$\{TIME_BTN_CARVE_CY\}"\s+'
-        r'r="\$\{TIME_BTN_CARVE_R\}"\s+'
-        r'fill="var\(--card-background-color\)"\s+'
-        r'pointer-events="none"\s*/>',
-    )
-    assert time_cover_re.search(source), (
-        "qs-car-card.js (AC-14): missing the `time_btn_cover` <circle> element gated on `(tNext && e.schedule)`."
-    )
+    # Three `_ringCarveCover` calls, each with the right geometry + id +
+    # render predicate.
+    covers = {
+        "sun_btn_cover": ("RING_BOTTOM_CARVE_CX", "RING_BOTTOM_CARVE_CY", "RING_BOTTOM_CARVE_R", "swPriority"),
+        "rabbit_btn_cover": ("RABBIT_BTN_CARVE_CX", "RABBIT_BTN_CARVE_CY", "RABBIT_BTN_CARVE_R", "e.force_now"),
+        "time_btn_cover": ("TIME_BTN_CARVE_CX", "TIME_BTN_CARVE_CY", "TIME_BTN_CARVE_R", "(tNext && e.schedule)"),
+    }
+    for cover_id, (cx, cy, r, show) in covers.items():
+        call_m = re.search(
+            rf"this\._ringCarveCover\(\s*\{{([^}}]*id:\s*'{re.escape(cover_id)}'[^}}]*)\}}\s*\)",
+            source,
+        )
+        assert call_m is not None, (
+            f"qs-car-card.js (QS-235 AC3): missing a "
+            f"`this._ringCarveCover({{ … id: '{cover_id}' … }})` call."
+        )
+        norm = re.sub(r"\s+", " ", call_m.group(1))
+        for token in (f"cx: {cx}", f"cy: {cy}", f"r: {r}", f"show: {show}"):
+            assert token in norm, (
+                f"qs-car-card.js (QS-235 AC3): the `_ringCarveCover` "
+                f"call for `{cover_id}` must pass `{token}`. Got: {norm.strip()}"
+            )
 
-    # Source order: covers must appear AFTER the clipped </g> AND
-    # BEFORE `<path d="${bgPath}"` so they paint on top of the soup
-    # and under the outer ring.
-    sun_idx = source.find('id="sun_btn_cover"')
-    rabbit_idx = source.find('id="rabbit_btn_cover"')
-    time_idx = source.find('id="time_btn_cover"')
-    bg_idx = source.find('<path d="${bgPath}"')
-    # Find the OUTER closing </g> of the clipped group. Review-fix
-    # #01 #11: the original `find("</g>", clip_g_idx)` returned the
-    # FIRST nested `</g>` (sparkle layer or lightning layer), so a
-    # misplaced cover inserted between inner layers would falsely
-    # satisfy the ordering check. Use `rfind` scoped to the
-    # [clip_g_idx, bg_idx] window to locate the OUTER close.
+    # Source order: cover calls must appear AFTER the clipped </g> AND
+    # BEFORE `${ringMarkup}` (so they paint on top of the soup and under
+    # the ring emitted by `_buildRingHTML`).
+    sun_idx = source.find("id: 'sun_btn_cover'")
+    rabbit_idx = source.find("id: 'rabbit_btn_cover'")
+    time_idx = source.find("id: 'time_btn_cover'")
+    # `${ringMarkup}` also appears in a code comment above the template;
+    # `rfind` selects the actual SVG injection point (the last one).
+    ringmarkup_idx = source.rfind("${ringMarkup}")
+    assert ringmarkup_idx != -1, "qs-car-card.js (QS-235 AC2): missing the `${ringMarkup}` injection point."
+    # Locate the OUTER closing </g> of the clipped group via `rfind`
+    # scoped to the [clip_g_idx, ringmarkup_idx] window (so a nested
+    # sparkle/lightning `</g>` can't falsely satisfy the order check).
     clip_g_idx = source.find('<g clip-path="url(#${electronClipId})"')
-    assert clip_g_idx != -1, "qs-car-card.js (AC-14): missing the electron-soup clipped group anchor."
-    clip_g_close_idx = source.rfind("</g>", clip_g_idx, bg_idx)
+    assert clip_g_idx != -1, "qs-car-card.js (QS-235 AC2): missing the electron-soup clipped group anchor."
+    clip_g_close_idx = source.rfind("</g>", clip_g_idx, ringmarkup_idx)
     assert clip_g_close_idx != -1, (
-        "qs-car-card.js (AC-14): cannot find the outer closing "
-        "`</g>` of the electron-soup clipped group within the "
-        "expected [clip_g_idx, bg_idx] window."
+        "qs-car-card.js (QS-235): cannot find the outer closing `</g>` "
+        "of the electron-soup clipped group within the expected "
+        "[clip_g_idx, ringmarkup_idx] window."
     )
 
     for cover_name, cover_idx in (
@@ -4426,13 +4424,244 @@ def test_car_card_inside_disc_button_carve_covers():
         ("rabbit_btn_cover", rabbit_idx),
         ("time_btn_cover", time_idx),
     ):
-        assert cover_idx != -1, f"qs-car-card.js (AC-14): missing the `{cover_name}` element in source."
-        assert clip_g_close_idx < cover_idx < bg_idx, (
-            f"qs-car-card.js (AC-14): `{cover_name}` must appear "
-            f"AFTER the clipped `</g>` (idx {clip_g_close_idx}) AND "
-            f'BEFORE the `<path d="${{bgPath}}"` line '
-            f"(idx {bg_idx}). Got cover idx {cover_idx}."
+        assert cover_idx != -1, f"qs-car-card.js (QS-235 AC3): missing the `{cover_name}` cover call in source."
+        assert clip_g_close_idx < cover_idx < ringmarkup_idx, (
+            f"qs-car-card.js (QS-235 AC3): the `{cover_name}` cover call "
+            f"must appear AFTER the clipped `</g>` (idx {clip_g_close_idx}) "
+            f"AND BEFORE `${{ringMarkup}}` (idx {ringmarkup_idx}). Got "
+            f"cover idx {cover_idx}."
         )
+
+
+def test_car_card_adopts_shared_structural_helpers():
+    """QS-235 AC9 — the car card consumes the shared structural helpers
+    (the commonalization) instead of reimplementing them inline:
+
+    - `_buildRingHTML` (AC2 ring builder; car passes `animPathId:
+      'charge_anim'` + `extraDefs`),
+    - `_wireTargetHandle` (AC1 drag; car passes `onCommit` /
+      `pctToValue` / `valueToPct` / `onDragMove`),
+    - `_ringCarveCover` (AC3 covers; geometry pinned in
+      `test_car_card_inside_disc_button_carve_covers`),
+    - `_wireGreenButton` (AC4 solar-priority),
+    - `_wireResetButton` (AC4 reset),
+    - `_wireTimePicker` (AC5 finish-time; car passes `onAfterCommit` +
+      `resetButton`),
+    - `_safeNumber` (AC6 guard-shaped sensor reads).
+
+    The ~120-LOC inline pointer-drag block is gone — pinned negatively
+    by the absence of its `createSVGPoint()` / `_targetDragValue` (the
+    drag state now lives in the shared `_wireTargetHandle`). The
+    single-definition rule (`test_no_duplicate_card_method_definitions`)
+    proves none of the helpers are re-defined here.
+    """
+    car = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8")
+    )
+
+    for call in (
+        "this._buildRingHTML(",
+        "this._wireTargetHandle(",
+        "this._ringCarveCover(",
+        "this._wireGreenButton(",
+        "this._wireResetButton(",
+        "this._wireTimePicker(",
+        "this._safeNumber(",
+    ):
+        assert call in car, (
+            f"qs-car-card.js (QS-235 AC9): must call `{call}…)` — the car "
+            f"adopts the shared helper rather than reimplementing it inline."
+        )
+
+    # AC2 — car-specific wiring params on the `_buildRingHTML` call.
+    assert "animPathId: 'charge_anim'" in car, (
+        "qs-car-card.js (QS-235 AC2): `_buildRingHTML` call must pass "
+        "`animPathId: 'charge_anim'` (the car's dashed-arc id)."
+    )
+    assert "extraDefs" in car, (
+        "qs-car-card.js (QS-235 AC2): `_buildRingHTML` call must pass "
+        "`extraDefs` (the car's disabled/fault/stale gradients + clipPath)."
+    )
+
+    # AC1 — the four drag callbacks on the `_wireTargetHandle` call.
+    for param in ("onCommit:", "pctToValue:", "valueToPct:", "onDragMove:"):
+        assert param in car, (
+            f"qs-car-card.js (QS-235 AC1): `_wireTargetHandle` call must "
+            f"pass `{param}` (the car's select-commit / %↔kWh mapping / "
+            f"live-label callbacks)."
+        )
+
+    # AC5 — the finish-time generalization params.
+    for param in ("onAfterCommit:", "resetButton:"):
+        assert param in car, (
+            f"qs-car-card.js (QS-235 AC5): `_wireTimePicker` call must "
+            f"pass `{param}` (the car's schedule-press / reset-button)."
+        )
+
+    # AC1 — the inline pointer-drag block is gone (the helper owns it).
+    assert "createSVGPoint()" not in car, (
+        "qs-car-card.js (QS-235 AC1): the inline pointer-drag block must "
+        "be removed — `createSVGPoint()` belongs to the shared "
+        "`_wireTargetHandle` now."
+    )
+    assert "_targetDragValue" not in car, (
+        "qs-car-card.js (QS-235 AC1): the inline drag state "
+        "`_targetDragValue` must be gone — it lives in the shared "
+        "`_wireTargetHandle`."
+    )
+
+
+def test_car_card_ac6_leaves_non_sensor_reads_untouched():
+    """QS-235 review-fix #01 SF4 — AC6's NEGATIVE half. AC6 swaps ONLY
+    the guard-shaped sensor reads (`sPower`, `sCurrentInputedEnergy`) to
+    `_safeNumber`. The config read (`Number(e.car_battery_capacity_kwh)`),
+    the regex captures (`Number(m[1])`), and the DOM reads
+    (`Number(hourSel?.value …)`, `Number(el.getAttribute('data-pct'))`)
+    must survive as raw `Number(...)` coercions — `_safeNumber` expects a
+    sensor object `{state}`, so wrapping a scalar/regex/DOM read would be
+    a real bug (and silently coerce wrong). The positive half is pinned
+    by `test_car_card_adopts_shared_structural_helpers`.
+    """
+    import re
+
+    car = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8")
+    )
+
+    # The non-sensor reads survive as raw `Number(...)` coercions.
+    for survivor in (
+        "Number(e.car_battery_capacity_kwh)",  # config scalar
+        "Number(m[1])",                        # regex capture
+        "Number(hourSel?.value",               # DOM value read
+        "Number(el.getAttribute('data-pct'))",  # DOM attribute read
+    ):
+        assert survivor in car, (
+            f"qs-car-card.js (QS-235 AC6 negative half): the non-sensor "
+            f"read `{survivor}` must survive untouched — AC6 only swaps "
+            f"guard-shaped SENSOR reads to `_safeNumber`."
+        )
+
+    # And none of them is wrapped in `_safeNumber` (which takes a sensor
+    # object, not a scalar / regex match / DOM value).
+    for forbidden in (
+        "_safeNumber(e.car_battery_capacity_kwh",
+        "_safeNumber(configBatteryCapacity",
+        "_safeNumber(m[1]",
+        "_safeNumber(hourSel",
+        "_safeNumber(minSel",
+        "_safeNumber(el.getAttribute",
+    ):
+        assert forbidden not in car, (
+            f"qs-car-card.js (QS-235 AC6 negative half): `{forbidden}…)` "
+            f"must NOT exist — `_safeNumber` expects a sensor `{{state}}` "
+            f"object, not a scalar/regex/DOM read."
+        )
+
+    # Positive corroboration: every `_safeNumber` call in the car targets
+    # a sensor object (`sPower` / `sCurrentInputedEnergy`), nothing else.
+    safe_args = re.findall(r"_safeNumber\(\s*([A-Za-z_][\w.]*)", car)
+    assert safe_args, "qs-car-card.js (QS-235 AC6): expected `_safeNumber` calls in the car."
+    for arg in safe_args:
+        assert arg in ("sPower", "sCurrentInputedEnergy"), (
+            f"qs-car-card.js (QS-235 AC6): `_safeNumber` should only wrap "
+            f"sensor objects (`sPower` / `sCurrentInputedEnergy`); got "
+            f"`{arg}`."
+        )
+
+
+def test_car_card_handle_label_round_trip_invariant():
+    """QS-235 AC9 — the car's ring handle shows the TRUE (unclamped)
+    target via `_buildRingHTML`'s `handleLabel`, while the handle
+    POSITION is clamped via `pctToDeg`. So an out-of-range target pins
+    the handle at the ring top but the label still reads the real
+    number (the same pin-at-top-but-number-correct invariant the
+    duration cards get from `pctToHours(handlePct)`). The car supplies
+    energy-/percent-mode label text instead of hours.
+    """
+    import re
+
+    car = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8")
+    )
+
+    # The handle TEXT label is the true target (mode-switched), passed
+    # via `_buildRingHTML`'s `handleLabel` param — NOT a clamped %.
+    assert re.search(r"handleLabel:\s*useEnergyMode\s*\?", car), (
+        "qs-car-card.js (QS-235 AC9): `_buildRingHTML` must receive a "
+        "mode-switched `handleLabel: useEnergyMode ? … : …`."
+    )
+    assert "parseTargetEnergy(target)" in car, (
+        "qs-car-card.js (QS-235 AC9): the energy-mode handle label must "
+        "show the parsed true target energy (`parseTargetEnergy(target)`)."
+    )
+    assert "this._fmt(targetPct ?? soc)" in car, (
+        "qs-car-card.js (QS-235 AC9): the percent-mode handle label must "
+        "show the true target percent (`this._fmt(targetPct ?? soc)`)."
+    )
+
+    # The handle POSITION is clamped via `pctToDeg` (which clamps the
+    # percentage to [0,100]); the position derives from that angle.
+    assert re.search(r"handleDeg\s*=\s*pctToDeg\(\s*handlePct", car), (
+        "qs-car-card.js (QS-235 AC9): the handle angle must be "
+        "`handleDeg = pctToDeg(handlePct, …)` (position clamped to [0,100])."
+    )
+    assert re.search(r"handlePos\s*=\s*polar\([^)]*handleDeg", car), (
+        "qs-car-card.js (QS-235 AC9): `handlePos` must derive from the "
+        "clamped `handleDeg` via `polar(…, handleDeg)`."
+    )
+
+
+def test_car_card_faulted_dash_uses_fault_gradient():
+    """QS-235 review-fix #01 SF1 — a car that is faulted WHILE still
+    drawing current must render the moving dashed arc with the SAME
+    fault gradient as the static progress arc (pre-refactor behavior:
+    `stroke="url(#${isFaulted ? gradFaultId : gradChargeId})"`).
+
+    The shared `_buildRingHTML` dash stroke is driven by an `animGradId`
+    param that defaults to `gradRunningId` (so the four duration callers
+    stay byte-identical). The car passes the fault-aware
+    `animGradId: isFaulted ? gradFaultId : gradChargeId`, which restores
+    the dash↔static-arc agreement AND keeps `gradFaultId` referenced by
+    a stroke (not just emitted as a dead `<linearGradient>` in
+    `extraDefs`).
+    """
+    import re
+
+    base = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-base.js").read_text(encoding="utf-8")
+    )
+    car = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8")
+    )
+
+    # The shared dash anim stroke is parameterised by `animGradId`,
+    # defaulting to `gradRunningId` (duration cards unchanged).
+    assert 'stroke="url(#${animGradId})"' in base, (
+        "qs-card-base.js (SF1): `_buildRingHTML`'s dash anim `<path>` "
+        'must use `stroke="url(#${animGradId})"` so the dash gradient '
+        "is caller-selectable."
+    )
+    assert re.search(r"animGradId\s*=\s*gradRunningId", base), (
+        "qs-card-base.js (SF1): `animGradId` must default to "
+        "`gradRunningId` so the duration callers stay byte-identical."
+    )
+
+    # The car drives `animGradId` off the fault state, matching the
+    # static arc's `activeGradId` selection (which also uses gradFaultId
+    # when faulted).
+    assert re.search(
+        r"animGradId:\s*isFaulted\s*\?\s*gradFaultId\s*:\s*gradChargeId",
+        car,
+    ), (
+        "qs-car-card.js (SF1): the `_buildRingHTML` call must pass "
+        "`animGradId: isFaulted ? gradFaultId : gradChargeId` so the "
+        "faulted-while-charging dash matches the static fault arc."
+    )
+    # `gradFaultId` is referenced by a stroke selector, not orphaned.
+    assert "gradFaultId" in car, (
+        "qs-car-card.js (SF1): `gradFaultId` must remain referenced "
+        "(static arc + fault-aware dash), not a dead gradient."
+    )
 
 
 # ============================================================================
@@ -4540,43 +4769,37 @@ def test_car_card_setConfig_primes_animation_state():
 
 
 def test_car_card_time_btn_render_and_cover_gates_match():
-    """QS-232 review-fix #01 #6: `time_btn` and `time_btn_cover`
-    must share the same render gate. The original implementation
-    had the button render unconditionally inside the mini-grid while
-    the cover was gated on `(tNext && e.schedule)` — when
-    `chargeTime` was set but `e.schedule` wasn't, the button face
-    drew over un-carved soup. This pin extracts both predicates
-    and asserts string equality.
+    """QS-232 review-fix #01 #6 (QS-235 form): `time_btn` and
+    `time_btn_cover` must share the same render gate. If the button
+    rendered under a different predicate than its cover, the button
+    face could draw over un-carved soup. QS-235 moved the cover to a
+    `_ringCarveCover({ … show: <gate> })` call, so the cover gate is
+    now the `show:` value; this pin extracts the button ternary
+    predicate and the cover `show:` predicate and asserts equality.
     """
     import re
 
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
 
-    # Extract the time_btn render gate. The fix gates the button on
-    # the same `(tNext && e.schedule)` predicate as the cover.
-    # Accept either form:
-    # - `(tNext && e.schedule) ? \`<div id="time_btn"…>\` : ''`
-    # - or any equivalent predicate that matches the cover's gate.
-    btn_gate_re = re.compile(
-        r"(\([^)]*\))\s*\?\s*`?\s*<div\s+id=\"time_btn\"",
-    )
-    btn_m = btn_gate_re.search(source)
+    # The `time_btn` <div> render gate (the ternary predicate).
+    btn_m = re.search(r"(\([^)]*\))\s*\?\s*`?\s*<div\s+id=\"time_btn\"", source)
     assert btn_m is not None, (
         "qs-car-card.js (review-fix #01 #6): the `time_btn` <div> "
-        'must now be wrapped in a `(predicate) ? `<div id="time_btn"'
-        " …>` : ''` ternary so its render gate aligns with the "
-        "`time_btn_cover` gate."
+        'must be wrapped in a `(predicate) ? `<div id="time_btn" …>` '
+        ": ''` ternary so its render gate aligns with the "
+        "`time_btn_cover` carve gate."
     )
 
-    cover_gate_re = re.compile(
-        r"(\([^)]*\))\s*\?\s*`?\s*<circle\s+id=\"time_btn_cover\"",
+    # The `time_btn_cover` carve gate (the `_ringCarveCover` `show:`).
+    cover_m = re.search(
+        r"this\._ringCarveCover\(\s*\{[^}]*id:\s*'time_btn_cover'[^}]*show:\s*([^}]+?)\s*\}\s*\)",
+        source,
     )
-    cover_m = cover_gate_re.search(source)
     assert cover_m is not None, (
-        "qs-car-card.js (review-fix #01 #6): missing the `time_btn_cover` <circle> element with a gating ternary."
+        "qs-car-card.js (QS-235 AC3): missing the `time_btn_cover` "
+        "`_ringCarveCover({ … show: <gate> })` call."
     )
 
-    # Whitespace-normalise both predicates and compare.
     def _normalise(s: str) -> str:
         return re.sub(r"\s+", "", s)
 
@@ -4584,10 +4807,10 @@ def test_car_card_time_btn_render_and_cover_gates_match():
     cover_predicate = _normalise(cover_m.group(1))
     assert btn_predicate == cover_predicate, (
         f"qs-car-card.js (review-fix #01 #6): the `time_btn` render "
-        f"gate `{btn_m.group(1)}` and the `time_btn_cover` gate "
-        f"`{cover_m.group(1)}` must be equal (whitespace-normalised). "
-        f"Asymmetric gates allow the button face to draw over "
-        f"un-covered soup."
+        f"gate `{btn_m.group(1)}` and the `time_btn_cover` carve "
+        f"`show:` gate `{cover_m.group(1)}` must be equal "
+        f"(whitespace-normalised). Asymmetric gates allow the button "
+        f"face to draw over un-covered soup."
     )
 
 
@@ -4987,27 +5210,20 @@ def test_car_card_initial_paint_opacity_is_clamped():
 
 
 def test_car_card_rabbit_btn_render_and_cover_gates_match():
-    """QS-232 review-fix #02 #7: `rabbit_btn` and `rabbit_btn_cover`
-    must share the same render gate. Symmetric to the fix-#01-#6
-    treatment for `time_btn`. Currently `<div id="rabbit_btn">`
-    renders unconditionally while the cover is gated on `e.force_now`
-    — when `force_now` is undefined, the button draws over un-carved
-    soup and sparkles bleed behind it.
+    """QS-232 review-fix #02 #7 (QS-235 form): `rabbit_btn` and
+    `rabbit_btn_cover` must share the same render gate (symmetric to
+    the `time_btn` pin) — otherwise the button draws over un-carved
+    soup. QS-235 moved the cover to a `_ringCarveCover({ … show:
+    <gate> })` call, so the cover gate is the `show:` value.
     """
     import re
 
     source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
 
-    # Extract each ternary's predicate by:
-    # 1. Locating the target element (`<div id="rabbit_btn"` /
-    #    `<circle id="rabbit_btn_cover"`).
-    # 2. Walking BACKWARD via `rfind` to the immediately preceding
-    #    `${` template substitution opener.
-    # 3. Reading the predicate text between `${` and the next `?`.
-    # This avoids the cross-template greedy-match pathology of
-    # using `\$\{[^?]+?\?` directly (which can match across
-    # unrelated `${...}` substitutions appearing earlier in the
-    # same source).
+    # The `rabbit_btn` <div> render gate. Walk BACKWARD from the marker
+    # to the enclosing `${` template opener and read up to the `?` (the
+    # rabbit gate `e.force_now` has no parens, so a parens-only regex
+    # wouldn't match it).
     def _extract_template_predicate(target_marker: str) -> str | None:
         target_idx = source.find(target_marker)
         if target_idx == -1:
@@ -5023,22 +5239,28 @@ def test_car_card_rabbit_btn_render_and_cover_gates_match():
     btn_predicate = _extract_template_predicate('<div id="rabbit_btn"')
     assert btn_predicate is not None, (
         "qs-car-card.js (review-fix #02 #7): the `rabbit_btn` <div> "
-        'must be wrapped in a `${predicate ? `<div id="rabbit_btn"'
-        " …>` : ''}` ternary so its render gate aligns with the "
-        "`rabbit_btn_cover` gate."
+        'must be wrapped in a `${predicate ? `<div id="rabbit_btn" …>` '
+        ": ''}` ternary so its render gate aligns with the "
+        "`rabbit_btn_cover` carve gate."
     )
-    cover_predicate = _extract_template_predicate('<circle id="rabbit_btn_cover"')
-    assert cover_predicate is not None, (
-        "qs-car-card.js (review-fix #02 #7): missing the `rabbit_btn_cover` <circle> with a gating ternary."
+
+    # The `rabbit_btn_cover` carve gate (the `_ringCarveCover` `show:`).
+    cover_m = re.search(
+        r"this\._ringCarveCover\(\s*\{[^}]*id:\s*'rabbit_btn_cover'[^}]*show:\s*([^}]+?)\s*\}\s*\)",
+        source,
+    )
+    assert cover_m is not None, (
+        "qs-car-card.js (QS-235 AC3): missing the `rabbit_btn_cover` "
+        "`_ringCarveCover({ … show: <gate> })` call."
     )
 
     def _normalise(s: str) -> str:
         return re.sub(r"\s+", "", s)
 
-    assert _normalise(btn_predicate) == _normalise(cover_predicate), (
+    assert _normalise(btn_predicate) == _normalise(cover_m.group(1)), (
         f"qs-car-card.js (review-fix #02 #7): `rabbit_btn` render "
-        f"gate `{btn_predicate}` and `rabbit_btn_cover` gate "
-        f"`{cover_predicate}` must be equal (whitespace-normalised)."
+        f"gate `{btn_predicate}` and `rabbit_btn_cover` carve `show:` "
+        f"gate `{cover_m.group(1)}` must be equal (whitespace-normalised)."
     )
 
 
@@ -5198,49 +5420,41 @@ def test_car_card_restore_drops_sparkles_above_new_water_base_y():
 # ============================================================================
 
 
-def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None:
-    """Shared QS-217 invariant check used by the three carve-out tests.
+def _qs217_assert_card_carve_out(card_filename: str) -> None:
+    """Shared override-button carve-cover invariant check.
 
-    Review-fix #03 abandoned the original clipPath carve-out approach
-    (outer disc + carve disc + cancel subpath under evenodd, which
-    produced a geometric lens-shape hole that the user repeatedly
-    flagged) in favour of a much simpler COVER OVERLAY: a single
-    ``<circle>`` element with ``fill="var(--card-background-color)"``
-    drawn ON TOP of the clipped animation group. The cover IS a
-    circle by construction — no lens shape possible.
+    QS-217 introduced a per-card COVER OVERLAY (a single ``<circle>``
+    with ``fill="var(--card-background-color)"`` drawn ON TOP of the
+    clipped animation group) to keep the bottom-center override button
+    legible. QS-235 UNIFIED that cover across the car + the three
+    duration cards: the geometry now lives in the shared
+    ``RING_BOTTOM_CARVE_*`` constants (`shared/qs-card-base.js`) and
+    the markup is emitted by the shared ``_ringCarveCover({…})`` helper
+    — there is genuinely no per-card duplication left.
 
-    Pinned invariants (review-fix #03):
+    Pinned invariants (QS-235):
 
     - (a) the ``<clipPath>`` is just the outer disc (no carve, no
-      cancel subpath in ``clipPathD``).
-    - (b) the two module-level constants ``OVERRIDE_BTN_CARVE_CY = 277``
-      and ``OVERRIDE_BTN_CARVE_R`` (integer) are declared at file
-      scope. The radius value is intentionally NOT pinned by tests so
-      visual-iteration tweaks (e.g. 35 → 40 → 30) leave the suite
-      green — only the constant NAME is required.
-    - (c) the ``<circle id="override_btn_cover" …>`` cover element
-      is present in the SVG markup, gated on ``e.override_reset``
-      (same truthy check as the existing button render), and uses the
-      file-local x-centre constant for ``cx``, ``OVERRIDE_BTN_CARVE_CY``
-      for ``cy``, ``OVERRIDE_BTN_CARVE_R`` for ``r``, and
-      ``fill="var(--card-background-color)"`` so it visually erases
-      the animation in a clean circular patch.
-    - (d) ``<g clip-path="url(#${…ClipId})">`` wrapper unchanged.
-    - (e) the obsolete carve-out artifacts (carveSubpath, cancelSubpath,
+      cancel subpath in ``clipPathD``) — unchanged.
+    - (b) the per-card ``OVERRIDE_BTN_CARVE_*`` constants are GONE
+      (negative pin) — the geometry moved to the shared
+      ``RING_BOTTOM_CARVE_*`` constants.
+    - (c) the card imports the shared ``RING_BOTTOM_CARVE_CX/CY/R``
+      constants from ``./shared/qs-card-base.js``.
+    - (d) the card emits its bottom-center cover via
+      ``this._ringCarveCover({ cx: RING_BOTTOM_CARVE_CX, cy:
+      RING_BOTTOM_CARVE_CY, r: RING_BOTTOM_CARVE_R, id:
+      'override_btn_cover', show: e.override_reset })`` — same
+      ``override_btn_cover`` id + ``e.override_reset`` gate as before.
+    - (e) ``<g clip-path="url(#${…ClipId})">`` wrapper unchanged.
+    - (f) the obsolete carve-out artifacts (carveSubpath, cancelSubpath,
       OVERRIDE_BTN_CARVE_INT_X, OVERRIDE_BTN_CARVE_INT_Y) MUST be
       absent — pinned as negative assertions so a regression can't
       silently reintroduce the lens-shape approach.
-
-    ``x_center_name`` is the file-local x-centre constant name (radiator
-    uses ``CENTER_CY`` for both axes; water-boiler uses ``CENTER_CX``;
-    climate uses ``CENTER_X``).
     """
     content = (COMPONENT_ROOT / "ui" / "resources" / card_filename).read_text()
 
-    # (a) clipPath has the simple outer disc (no carve, no cancel). The
-    # SVG markup uses the `<path clip-rule="evenodd" d="${clipPathD}">`
-    # form for backward-compatibility with other tests, but `clipPathD`
-    # is just an outer-disc circle path now.
+    # (a) clipPath has the simple outer disc (no carve, no cancel).
     assert (
         re.search(
             r"<clipPath\s+id=\"\$\{[^}]+\}\">\s*<path\s+clip-rule=\"evenodd\"\s+d=\"\$\{clipPathD\}\"\s*/>\s*</clipPath>",
@@ -5251,59 +5465,63 @@ def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None
     ), (
         f"{card_filename}: missing `<clipPath …><path "
         f'clip-rule="evenodd" d="${{clipPathD}}" /></clipPath>` '
-        f"form. The clipPath wraps the simple outer-disc circle now "
-        f"(review-fix #03 dropped the carve+cancel subpaths)."
+        f"form. The clipPath wraps the simple outer-disc circle."
     )
 
-    # (b) The two module-level constants are declared. CY pinned by
-    # value (geometry-fixed, derives from CSS button position). R
-    # pinned by NAME only — visual-iteration friendly.
+    # (b) QS-235 — the per-card OVERRIDE_BTN_CARVE_* constants are gone.
+    for legacy_const in (
+        "OVERRIDE_BTN_CARVE_CX",
+        "OVERRIDE_BTN_CARVE_CY",
+        "OVERRIDE_BTN_CARVE_R",
+    ):
+        assert re.search(rf"const\s+{legacy_const}\s*=", content) is None, (
+            f"{card_filename} (QS-235 AC3): the per-card `const "
+            f"{legacy_const} = …` declaration must be removed — the "
+            f"geometry moved to the shared `RING_BOTTOM_CARVE_*` "
+            f"constants in `shared/qs-card-base.js`."
+        )
+
+    # (c) QS-235 — the card imports the shared carve constants.
     assert (
         re.search(
-            r"const\s+OVERRIDE_BTN_CARVE_CY\s*=\s*277\b",
+            r"import\s*\{[^}]*RING_BOTTOM_CARVE_CX[^}]*RING_BOTTOM_CARVE_CY[^}]*RING_BOTTOM_CARVE_R[^}]*\}\s*from\s*['\"]\./shared/qs-card-base\.js['\"]",
             content,
+            re.DOTALL,
         )
         is not None
     ), (
-        f"{card_filename}: missing module-level `const "
-        f"OVERRIDE_BTN_CARVE_CY = 277;` declaration (button-centre y "
-        f"in SVG units, derived from CSS .override-btn position)."
+        f"{card_filename} (QS-235 AC3): must import "
+        f"`RING_BOTTOM_CARVE_CX, RING_BOTTOM_CARVE_CY, "
+        f"RING_BOTTOM_CARVE_R` from `./shared/qs-card-base.js`."
     )
-    assert (
-        re.search(
-            r"const\s+OVERRIDE_BTN_CARVE_R\s*=\s*\d+\b",
-            content,
+
+    # (d) QS-235 — the cover is emitted via the shared `_ringCarveCover`
+    # helper with the shared constants + the `override_btn_cover` id +
+    # the `e.override_reset` gate.
+    call_re = re.compile(
+        r"this\._ringCarveCover\(\s*\{([^}]*id:\s*'override_btn_cover'[^}]*)\}\s*\)",
+        re.DOTALL,
+    )
+    call_m = call_re.search(content)
+    assert call_m is not None, (
+        f"{card_filename} (QS-235 AC3): missing a "
+        f"`this._ringCarveCover({{ … id: 'override_btn_cover' … }})` "
+        f"call. Review-fix #03's inline `<circle id=\"override_btn_cover\">` "
+        f"literal is replaced by the shared helper."
+    )
+    call_body = call_m.group(1)
+    for token_re, label in (
+        (r"cx:\s*RING_BOTTOM_CARVE_CX", "cx: RING_BOTTOM_CARVE_CX"),
+        (r"cy:\s*RING_BOTTOM_CARVE_CY", "cy: RING_BOTTOM_CARVE_CY"),
+        (r"r:\s*RING_BOTTOM_CARVE_R", "r: RING_BOTTOM_CARVE_R"),
+        (r"show:\s*e\.override_reset", "show: e.override_reset"),
+    ):
+        assert re.search(token_re, call_body) is not None, (
+            f"{card_filename} (QS-235 AC3): the `_ringCarveCover` call "
+            f"for `override_btn_cover` must pass `{label}`."
         )
-        is not None
-    ), (
-        f"{card_filename}: missing module-level `const "
-        f"OVERRIDE_BTN_CARVE_R = <integer>;` declaration. The integer "
-        f"value is user-tunable; tests pin the NAME only so visual-"
-        f"iteration tweaks leave the suite green."
-    )
 
-    # (c) The `<circle id="override_btn_cover" …>` cover element is
-    # present, gated on `e.override_reset`, and uses the correct
-    # constants for its geometry + the card-background-color fill.
-    cover_re = re.compile(
-        r"e\.override_reset\s*\?\s*`?\s*<circle\s+id=\"override_btn_cover\""
-        r"\s+cx=\"\$\{" + x_center_name + r"\}\""
-        r"\s+cy=\"\$\{OVERRIDE_BTN_CARVE_CY\}\""
-        r"\s+r=\"\$\{OVERRIDE_BTN_CARVE_R\}\""
-        r"\s+fill=\"var\(--card-background-color\)\""
-        r"\s+pointer-events=\"none\"\s*/>",
-    )
-    assert cover_re.search(content) is not None, (
-        f"{card_filename}: missing the override-button cover element "
-        f'`<circle id="override_btn_cover" cx="${{{x_center_name}}}" '
-        f'cy="${{OVERRIDE_BTN_CARVE_CY}}" r="${{OVERRIDE_BTN_CARVE_R}}" '
-        f'fill="var(--card-background-color)" pointer-events="none" />` '
-        f"gated on `e.override_reset`. Review-fix #03 replaces the "
-        f"clipPath carve approach with a simple cover overlay drawn on "
-        f"top of the animation."
-    )
-
-    # (d) `<g clip-path="url(#${…ClipId})">` wrapper unchanged.
+    # (e) `<g clip-path="url(#${…ClipId})">` wrapper unchanged.
     assert (
         re.search(
             r'<g\s+clip-path="url\(#\$\{[a-zA-Z]+ClipId\}\)">',
@@ -5312,7 +5530,7 @@ def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None
         is not None
     ), f'{card_filename}: expected unchanged `<g clip-path="url(#${{…ClipId}})">` wrapper.'
 
-    # (e) Negative pins — the obsolete carve+cancel artifacts MUST be
+    # (f) Negative pins — the obsolete carve+cancel artifacts MUST be
     # absent so a regression cannot silently reintroduce the lens-
     # shape approach.
     for artifact in (
@@ -5322,55 +5540,34 @@ def _qs217_assert_card_carve_out(card_filename: str, x_center_name: str) -> None
         "OVERRIDE_BTN_CARVE_INT_Y",
     ):
         assert artifact not in content, (
-            f"{card_filename}: review-fix #03 dropped the carve+cancel "
-            f"clipPath approach, but `{artifact}` is still present in "
-            f"the source. Removing the cover-overlay approach requires "
-            f"an explicit design discussion — don't silently reintroduce "
+            f"{card_filename}: the obsolete carve+cancel clipPath "
+            f"approach, but `{artifact}` is still present in the "
+            f"source. Removing the cover-overlay approach requires an "
+            f"explicit design discussion — don't silently reintroduce "
             f"the lens-shape geometry."
         )
 
 
 def test_radiator_card_override_btn_carve_out():
-    """QS-217 AC-7 — radiator card: clipPath swaps `<circle>` for
-    `<path clip-rule="evenodd" d="${clipPathD}" />`, adds the two
-    `OVERRIDE_BTN_CARVE_*` constants at module scope, and gates the
-    carve subpath on `e.override_reset`.
+    """QS-235 AC3 — radiator card: bottom-center override cover emitted
+    via the shared `_ringCarveCover` helper + the shared
+    `RING_BOTTOM_CARVE_*` constants (no per-card `OVERRIDE_BTN_CARVE_*`).
 
-    See the helper docstring for invariant (a)/(b)/(c) details.
+    See the helper docstring for invariant (a)–(f) details.
     """
-    _qs217_assert_card_carve_out(
-        "qs-radiator-card.js",
-        x_center_name="CENTER_CY",
-    )
+    _qs217_assert_card_carve_out("qs-radiator-card.js")
 
 
 def test_water_boiler_card_override_btn_carve_out():
-    """QS-217 AC-7 — water-boiler card carve-out invariants.
-
-    Same three pins as the radiator card (AC-7 helper), anchored to
-    `qs-water-boiler-card.js`. The water-boiler card uses `CENTER_CX`
-    (not `CENTER_CY`) for the x-centre — review-fix #01 N4 introduced
-    that explicit constant, and QS-217's `clipPathD` builder must
-    reference it.
-    """
-    _qs217_assert_card_carve_out(
-        "qs-water-boiler-card.js",
-        x_center_name="CENTER_CX",
-    )
+    """QS-235 AC3 — water-boiler card: shared `_ringCarveCover` +
+    `RING_BOTTOM_CARVE_*` carve cover (helper invariants (a)–(f))."""
+    _qs217_assert_card_carve_out("qs-water-boiler-card.js")
 
 
 def test_climate_card_override_btn_carve_out():
-    """QS-217 AC-7 — climate card carve-out invariants.
-
-    Same three pins as the radiator card (AC-7 helper), anchored to
-    `qs-climate-card.js`. The climate card uses `CENTER_X` (QS-210
-    review-fix S5 introduced that explicit x-centre constant), and
-    QS-217's `clipPathD` builder must reference it.
-    """
-    _qs217_assert_card_carve_out(
-        "qs-climate-card.js",
-        x_center_name="CENTER_X",
-    )
+    """QS-235 AC3 — climate card: shared `_ringCarveCover` +
+    `RING_BOTTOM_CARVE_*` carve cover (helper invariants (a)–(f))."""
+    _qs217_assert_card_carve_out("qs-climate-card.js")
 
 
 def test_dashboard_and_cards_doc_pins_qs_217_carve_paragraph():
@@ -5517,14 +5714,22 @@ def test_dashboard_and_cards_doc_pins_qs_217_carve_paragraph():
         "reproducible from the doc alone."
     )
 
-    # (d) Both constant names + a CSS-to-SVG scale reference.
-    for const_name in ("OVERRIDE_BTN_CARVE_CY", "OVERRIDE_BTN_CARVE_R"):
+    # (d) Both shared constant names + a CSS-to-SVG scale reference.
+    # QS-235 unified the per-card `OVERRIDE_BTN_CARVE_*` duplicates into
+    # the shared `RING_BOTTOM_CARVE_*` constants, so the doc now names
+    # those (and the `_ringCarveCover` helper).
+    for const_name in ("RING_BOTTOM_CARVE_CY", "RING_BOTTOM_CARVE_R"):
         assert const_name in section, (
             f"dashboard-and-cards.md (QS-217 section): missing "
-            f"`{const_name}` — AC-8 (d) requires both carve constants "
-            f"be named (so the doc reader can grep them back to the "
-            f"source)."
+            f"`{const_name}` — AC-8 (d) / QS-235 AC3 require both shared "
+            f"carve constants be named (so the doc reader can grep them "
+            f"back to the source)."
         )
+    assert "_ringCarveCover" in section, (
+        "dashboard-and-cards.md (QS-217 section): missing the shared "
+        "`_ringCarveCover` helper name — QS-235 AC3 unified the carve "
+        "cover into this helper, which the doc must name."
+    )
     scale_patterns = ("320/300", "320×320", "300×300", "1.0667")
     assert any(pat in section for pat in scale_patterns), (
         f"dashboard-and-cards.md (QS-217 section): missing a CSS-to-"
@@ -7056,6 +7261,9 @@ _QS_199_CANONICAL_SHARED_METHODS = (
     "_wireOverrideButton",
     "_wireBistateMode",
     "_buildRingHTML",
+    # QS-235 — the bottom-center carve cover helper, defined once on
+    # `QsCardBase` and consumed by the car + the three duration cards.
+    "_ringCarveCover",
 )
 
 
@@ -7698,34 +7906,56 @@ def test_card_derives_max_hours_via_clamp_helper(card_filename):
 
 
 def test_wire_target_handle_awaits_commit_hook_before_setnumber():
-    """QS-199 review-fix #03 S1 + S2 / #04 NH1 — the shared
-    `_wireTargetHandle` must run an optional `onBeforeCommit` hook
-    (awaited) BEFORE the `_setNumber` duration write, so the pool's
-    `_select(pool_mode, 'bistate_mode_default')` lands first (the old
-    pre-migration ordering — writing the duration before default mode is
-    active can be rejected/clamped backend-side).
+    """QS-199 review-fix #03 S1 + S2 — the shared `_wireTargetHandle`
+    must run an optional `onBeforeCommit` hook (awaited) BEFORE the
+    commit, so the pool's `_select(pool_mode, 'bistate_mode_default')`
+    lands first (the old pre-migration ordering — writing the duration
+    before default mode is active can be rejected/clamped backend-side).
 
-    #04 NH1 — the unused post-write `onCommit` param was dropped (no card
-    passed it; scheduling the local-target clear timer before a dead
-    awaited `onCommit` was a latent footgun).
+    QS-235 AC1 — re-introduces `onCommit` as a commit OVERRIDE (the car
+    maps the dragged value → a select option then `_select(...)` instead
+    of `_setNumber`). Unlike the QS-199-NH1 footgun (a dead post-write
+    `onCommit`), this `onCommit` REPLACES the `_setNumber` write and is
+    awaited in the same position, AFTER `onBeforeCommit`, BEFORE the
+    local-target clear timer is scheduled. The default branch (no
+    `onCommit`) still calls `_setNumber`, so the duration cards are
+    byte-equivalent.
     """
     src = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-base.js").read_text(encoding="utf-8")
     )
-    assert "await onBeforeCommit(" in src, (
+    # QS-235 review-fix #01 SF3 — scope the membership + ordering checks
+    # to the `_wireTargetHandle` BODY (not the whole file), so a matching
+    # token elsewhere in `qs-card-base.js` can't turn this into a false
+    # pass/fail and the ordering pin actually tracks this method.
+    body = _extract_js_function_body(src, r"_wireTargetHandle\s*\([^)]*\)\s*\{")
+    assert body is not None, (
+        "qs-card-base.js: `_wireTargetHandle` method body must be extractable for SF3 inspection."
+    )
+
+    assert "await onBeforeCommit(" in body, (
         "S1: `_wireTargetHandle` must `await onBeforeCommit(...)` (pool mode-select)."
     )
-    # NH1 — the dead `onCommit` param is gone.
-    assert "onCommit" not in src, (
-        "NH1: the unused `onCommit` param/branch must be removed from "
-        "`_wireTargetHandle` (only `onBeforeCommit` is used by any card)."
+    # QS-235 AC1 — the commit-override hook is awaited.
+    assert "await onCommit(" in body, (
+        "QS-235 AC1: `_wireTargetHandle` must support an `await "
+        "onCommit(...)` commit override (the car commits via `_select`)."
     )
-    # Ordering: onBeforeCommit fires before the _setNumber write.
-    before_idx = src.index("await onBeforeCommit(")
-    setnum_idx = src.index("await this._setNumber(")
-    assert before_idx < setnum_idx, (
-        "S1: `onBeforeCommit` (mode-select) must run BEFORE the `_setNumber` "
-        "duration write to preserve the pool's service-call ordering."
+    # The default `_setNumber` write survives for the duration cards.
+    assert "await this._setNumber(" in body, (
+        "QS-235 AC1: the default (no-`onCommit`) branch must still "
+        "`await this._setNumber(entityId, ...)` so the duration cards "
+        "are unchanged."
+    )
+    # Ordering: onBeforeCommit fires before BOTH the override commit and
+    # the default `_setNumber` write.
+    before_idx = body.index("await onBeforeCommit(")
+    commit_idx = body.index("await onCommit(")
+    setnum_idx = body.index("await this._setNumber(")
+    assert before_idx < commit_idx and before_idx < setnum_idx, (
+        "S1: `onBeforeCommit` (mode-select) must run BEFORE the commit "
+        "(override or the default `_setNumber` write) to preserve the "
+        "pool's service-call ordering."
     )
 
 
