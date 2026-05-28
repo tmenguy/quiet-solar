@@ -1062,7 +1062,7 @@
           "on_off_mode_off": "Force OFF",
           "bistate_mode_auto": "Auto from T°",
           "bistate_mode_exact_calendar": "Calendar: Exact Schedule",
-          "bistate_mode_default": "Default: End+Duration",
+          "bistate_mode_default": "Default: Duration",
           "on_off_mode_on": "Force ON",
           "pool_winter_mode": "Winter Mode"
         }

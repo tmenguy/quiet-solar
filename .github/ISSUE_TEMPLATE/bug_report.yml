@@ -6,35 +6,7 @@ body:
     id: description
     attributes:
       label: Description
-      description: What happened?
-    validations:
-      required: true
-
-  - type: textarea
-    id: steps
-    attributes:
-      label: Steps to Reproduce
-      description: How can we reproduce the issue?
-      placeholder: |
-        1. Configure ...
-        2. Wait for solver cycle ...
-        3. Observe ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected Behavior
-      description: What should have happened?
-    validations:
-      required: true
-
-  - type: textarea
-    id: actual
-    attributes:
-      label: Actual Behavior
-      description: What actually happened?
+      description: What happened? How can we reproduce the issue? What was expected to happen?
     validations:
       required: true
 
@@ -49,25 +21,13 @@ body:
         - Battery
         - Pool
         - Home / Solver
+        - Boiler
+        - Radiator
+        - Climate
         - Other
     validations:
       required: true
 
-  - type: input
-    id: ha_version
-    attributes:
-      label: Home Assistant Version
-      placeholder: "2026.2.1"
-    validations:
-      required: true
-
-  - type: input
-    id: qs_version
-    attributes:
-      label: Quiet Solar Version
-      placeholder: "2026.03.19.0"
-    validations:
-      required: true
 
   - type: textarea
     id: logs
