@@ -22,17 +22,6 @@ body:
     validations:
       required: true
 
-  - type: dropdown
-    id: scope
-    attributes:
-      label: Scope Tier
-      description: Is this part of the MVP or a future enhancement?
-      options:
-        - MVP
-        - Post-MVP
-    validations:
-      required: true
-
   - type: textarea
     id: solution
     attributes:
