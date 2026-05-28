@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -7959,17 +7961,367 @@ def test_wire_target_handle_awaits_commit_hook_before_setnumber():
     )
 
 
-def test_pool_drag_commit_selects_mode_before_duration():
-    """QS-199 review-fix #03 S1 — the pool card wires the mode-select into
-    the `onBeforeCommit` (pre-duration) hook, not the post-write
-    `onCommit`, so default-mode is active before the duration write.
+def test_pool_card_uses_displaytargethours_family_pattern():
+    """QS-237 AC-1 — pool joins the documented duration-card family by
+    deriving a single `displayTargetHours = isDefaultMode ? defaultDuration
+    : targetHours` value, used for BOTH the handle position and the big
+    "Actual / Target Hours" target span. Pre-QS-237 pool read raw
+    `duration_limit` for both — diverging the moment the user dragged
+    `default_on_duration`, since the constraint's `duration_limit` only
+    rebuilds on the next solver cycle.
+
+    Review-fix #01 N3 — positive assertions use whitespace-tolerant
+    regex so harmless formatting/reflow in `qs-pool-card.js` doesn't
+    produce noisy CI failures. The negative assertions stay strict
+    (their whole point is to catch regressions).
     """
-    pool = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8"))
-    assert "onBeforeCommit:" in pool, (
-        "qs-pool-card.js: the drag-commit mode-select must be wired via "
-        "`onBeforeCommit:` so it runs before the duration write (S1)."
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
     )
-    assert "bistate_mode_default" in pool, "pool drag-commit must still select default mode"
+    # Positive (regex, N3): the family-pattern symbols are present.
+    assert re.search(
+        r"isDefaultMode\s*=\s*poolMode\s*===\s*'bistate_mode_default'",
+        pool,
+    ), (
+        "AC-1: pool must derive `isDefaultMode` from the `bistate_mode_default` "
+        "select state (mirrors water-boiler / radiator / on_off_duration / climate)."
+    )
+    assert re.search(
+        r"displayTargetHours\s*=\s*isDefaultMode\s*\?\s*"
+        r"defaultDuration\s*:\s*targetHours",
+        pool,
+    ), (
+        "AC-1: pool must derive `displayTargetHours = isDefaultMode ? "
+        "defaultDuration : targetHours` (the family's single source of truth)."
+    )
+    # The new local is passed to `_buildRingHTML(...)` — the comma-trailing
+    # form is the unique anchor inside that call.
+    assert "displayTargetHours," in pool, (
+        "AC-1: `_buildRingHTML(...)` must receive the new `displayTargetHours` "
+        "local (comma-trailing form anchors the call site)."
+    )
+    # The big-text span renders `displayTargetHours` — regex tolerates
+    # either `_fmt(displayTargetHours)` (round=true) or
+    # `_fmt(displayTargetHours, false)` (un-rounded, post-#01 N6).
+    assert re.search(
+        r"this\._fmt\(\s*displayTargetHours\b",
+        pool,
+    ), (
+        "AC-1: the big-text target span must render "
+        "`this._fmt(displayTargetHours...)`."
+    )
+    # Negative (strict): the pre-QS-237 derived value and raw-targetHours
+    # big-text reference are gone.
+    assert "const handleTargetHours =" not in pool, (
+        "AC-1: pre-QS-237 `const handleTargetHours = ...` must be gone — "
+        "use `displayTargetHours` instead."
+    )
+    assert "${this._fmt(targetHours)}h" not in pool, (
+        "AC-1: pre-QS-237 big-text reference `${this._fmt(targetHours)}h` "
+        "must be gone — use `displayTargetHours` instead."
+    )
+
+
+def test_pool_card_target_value_uses_palette_color_not_theme_variable():
+    """QS-237 AC-2 — the `.target-value` big-text span color references
+    the `colors.primary` palette token (matching the inline color used
+    by `dragMove` and the family pattern in water-boiler / radiator).
+    The pre-QS-237 `var(--primary-color)` theme variable on that span
+    is gone; otherwise the rendered span shows a slightly different
+    blue than the dragged value, producing the "different shade of
+    blue" symptom on release.
+
+    Review-fix #01 N6 — pool diverges from the family `_fmt(...)`
+    default-rounded form: it passes `false` so the committed display
+    matches the un-rounded `dragMove` live-update preview on the
+    half-hour grid. The assertion below pins that explicit
+    `_fmt(displayTargetHours, false)` form (strict — this is the
+    behavioural contract).
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    # Pin the palette TOKEN (`colors.primary`) AND the explicit `false`
+    # round flag (#01 N6). Whitespace-tolerant per N3.
+    assert re.search(
+        r"\$\{colors\.primary\};\">\$\{this\._fmt\(\s*displayTargetHours\s*,\s*false\s*\)\s*\}h",
+        pool,
+    ), (
+        "AC-2 + #01 N6: the big-text target span must use "
+        "`style=\"color: ${colors.primary};\">${this._fmt(displayTargetHours, "
+        "false)}h` (palette token + un-rounded form so drag preview and "
+        "committed display agree on the half-hour grid)."
+    )
+    assert "var(--primary-color);\">${this._fmt(" not in pool, (
+        "AC-2: the pre-QS-237 `var(--primary-color);\">${this._fmt(...)}` "
+        "theme variable on the big-text target span must be gone."
+    )
+
+
+def test_pool_card_drag_gated_on_default_mode():
+    """QS-237 AC-3 — drag is gated on `isDefaultMode`. In any non-default
+    pool mode (`bistate_mode_auto`, `bistate_mode_exact_calendar`,
+    `pool_winter_mode`) the `<circle id="target_handle">` is NOT
+    rendered. The pre-QS-237 `hasValidTarget = isEnabled` permissive
+    gate (plus the `onBeforeCommit` silent mode-switch hack) is removed.
+
+    Review-fix #01 S1 — the gate dropped its `displayTargetHours > 0`
+    term to keep drag-recovery reachable after a drag-to-zero commit.
+
+    Review-fix #02 N3 — the gate adds a defensive `!!e.default_on_duration`
+    term so drag isn't wired up when the dashboard template omits the
+    `default_on_duration` entity key (which would otherwise produce a
+    silent `_setNumber(undefined, …)` no-op).
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    # Positive (regex): three-term gate
+    # `isEnabled && isDefaultMode && !!e.default_on_duration;`.
+    assert re.search(
+        r"canDragHandle\s*=\s*isEnabled\s*&&\s*isDefaultMode\s*&&\s*"
+        r"!!\s*e\.default_on_duration\s*;",
+        pool,
+    ), (
+        "AC-3 + #01 S1 + #02 N3: pool drag must be gated on `canDragHandle = "
+        "isEnabled && isDefaultMode && !!e.default_on_duration;` — three "
+        "terms; the second protects against non-default-mode drags, the "
+        "third against an undefined `e.default_on_duration` entity key."
+    )
+    assert "const hasValidTarget = isEnabled;" not in pool, (
+        "AC-3: the pre-QS-237 permissive `const hasValidTarget = isEnabled;` "
+        "gate must be gone."
+    )
+
+
+def test_pool_card_drag_remains_reachable_when_default_duration_is_zero():
+    """Review-fix #01 S1 — drag-to-zero self-lockout REGRESSION test.
+    The `_allowedHalfHours(24)` snap list includes `0`, so a user in
+    `bistate_mode_default` can commit `default_on_duration = 0`. The
+    drag gate must NOT contain `displayTargetHours > 0` (a three-term
+    gate including that clause would hide the handle on the next
+    render, locking the user out of drag-recovery).
+
+    Review-fix #02 N4 — refocused to be NEGATIVE-ONLY (no overlap with
+    `test_pool_card_drag_gated_on_default_mode`'s positive pin). The
+    positive form is owned by the other test; this one only guards
+    against the specific regression.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    # Match the canDragHandle assignment ending in `;` and inspect ONLY
+    # the right-hand side of that statement.
+    m = re.search(r"const\s+canDragHandle\s*=\s*[^;]+;", pool)
+    assert m, "canDragHandle must be assigned via `const ... ;` (anchor)."
+    assert "displayTargetHours > 0" not in m.group(0), (
+        "Review-fix #01 S1: the drag gate must NOT depend on "
+        "`displayTargetHours > 0` — that re-introduces the drag-to-zero "
+        "self-lockout regression."
+    )
+
+
+def test_pool_card_progress_ratio_gated_on_known_default_duration():
+    """Review-fix #02 N1 — `progressRatio` must zero out in default mode
+    when the `default_on_duration` sensor is still booting
+    (`unknown`/`unavailable`/missing). Without this gate, review-fix
+    #01 N5's `_safeNumber(sDefaultOnDuration, 1)` fallback combined
+    with `hoursRun > 1` would render a FULL water-fill during the
+    boot window (`progressRatio = min(1, hoursRun/1) = 1`).
+
+    The fix introduces a `defaultDurationKnown` flag that excludes the
+    raw fallback states from the progress ratio: the handle still uses
+    the `1h` fallback (cosmetic), but the water-fill stays at 0 until
+    the sensor delivers a real value.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    # The `defaultDurationKnown` flag must exist and check the raw
+    # sensor state (not the `_safeNumber` post-coerced value).
+    assert re.search(
+        r"const\s+defaultDurationKnown\s*=",
+        pool,
+    ), (
+        "#02 N1: a `defaultDurationKnown` flag must be derived from the "
+        "raw `sDefaultOnDuration` state."
+    )
+    # The progressRatio gate must reference `defaultDurationKnown` AND
+    # `isDefaultMode` (so the gate fires ONLY in default mode — other
+    # modes use `targetHours` directly and don't need the smoothing).
+    progress_match = re.search(
+        r"const\s+progressRatio\s*=[^;]+;",
+        pool,
+        re.DOTALL,
+    )
+    assert progress_match, (
+        "#02 N1: `progressRatio` must remain a single `const ... ;` statement."
+    )
+    progress_rhs = progress_match.group(0)
+    assert "isDefaultMode" in progress_rhs and "defaultDurationKnown" in progress_rhs, (
+        "#02 N1: `progressRatio` must gate on `!isDefaultMode || "
+        "defaultDurationKnown` (zero out the water-fill during boot "
+        "in default mode when `default_on_duration` is unknown)."
+    )
+
+
+def test_pool_card_uses_allowed_halfhours_snap():
+    """QS-237 AC-4 — pool's drag snap list is `_allowedHalfHours(maxHours)`,
+    matching radiator / water-boiler / on_off_duration / climate. The
+    pre-QS-237 integer-only `Array.from({ length: 25 }, ...)` is gone.
+
+    Review-fix #01 N3 — positive assertion is regex (whitespace-tolerant).
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    assert re.search(
+        r"this\._allowedHalfHours\(\s*maxHours\s*\)",
+        pool,
+    ), (
+        "AC-4: pool snap list must use `this._allowedHalfHours(maxHours)` "
+        "(half-hour grid, family-aligned)."
+    )
+    assert "Array.from({ length: 25 }" not in pool, (
+        "AC-4: the pre-QS-237 integer-only `Array.from({ length: 25 }, ...)` "
+        "snap list must be gone."
+    )
+
+
+def test_pool_card_pins_max_hours_literal_with_comment():
+    """Review-fix #01 S2 — AC-5 positive structural test. Pool keeps the
+    card-local `const maxHours = 24;` literal (NOT
+    `this._clampMaxHours(cfg.max_default_hours)` like the family).
+    Justification lives in the inline comment immediately above the
+    literal — the `user-authorized exemption` phrase uniquely anchors
+    that comment for future maintainers.
+
+    Without this test, the negative-only shield (pool's exclusion from
+    `test_card_derives_max_hours_via_clamp_helper`) only fires when
+    someone *adds* pool back to that parametrize list — it does NOT
+    fire when someone swaps `24` for `this._clampMaxHours(...)`, which
+    is exactly the QS-235-style regression we were guarding against.
+    """
+    pool_path = COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
+    raw = pool_path.read_text(encoding="utf-8")
+    stripped = _strip_js_comments(raw)
+    # The literal must survive in the executable source.
+    assert re.search(r"const\s+maxHours\s*=\s*24\s*;", stripped), (
+        "AC-5: pool must keep `const maxHours = 24;` literal (user-"
+        "authorized exemption from the family's `_clampMaxHours` chain)."
+    )
+    # The explanatory comment must survive in the unstripped source.
+    # `user-authorized exemption` uniquely anchors the AC-5 rationale.
+    assert "user-authorized exemption" in raw, (
+        "AC-5: the explanatory comment above `const maxHours = 24;` "
+        "must remain — the `user-authorized exemption` phrase anchors "
+        "the AC-5 rationale for future maintainers."
+    )
+
+
+def test_pool_card_uses_safenumber_for_sensor_reads():
+    """Review-fix #01 S3 — AC-6 dedicated test. Pool reads its three
+    sensor states via `this._safeNumber(sensor, default)` for
+    `targetHours`, `hoursRun`, and `defaultDuration`. This is the
+    hardened family pattern (`project-rules.md`, "Safe numeric coercion
+    (S8, water-boiler)") that guards against `NaN` propagation from
+    degenerate sensor states (`""` / `unknown` / `unavailable`).
+
+    The test asserts the `_safeNumber(` prefix per variable name but
+    does NOT pin the default value — that lets #01 N5 (changing
+    `defaultDuration`'s default from 0 to 1) compose with this test
+    without churn.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    for var_name in ("targetHours", "hoursRun", "defaultDuration"):
+        assert re.search(
+            rf"const\s+{var_name}\s*=\s*this\._safeNumber\(",
+            pool,
+        ), (
+            f"AC-6: `{var_name}` must be read via `this._safeNumber(...)` "
+            "(family pattern guards against unknown / unavailable states)."
+        )
+
+
+def test_pool_card_no_onbeforecommit_mode_switch():
+    """QS-237 AC-3 (precise negative) — the `onBeforeCommit:` silent
+    mode-switch hack on the drag-commit is gone. Drag is now gated on
+    `isDefaultMode` upstream, so the hack is no longer needed (and
+    actively wrong: it silently switched the pool to default mode on
+    every drag-commit, even from auto/winter/exact_calendar mode).
+
+    Pins the precise token `onBeforeCommit:` rather than the
+    `'bistate_mode_default'` literal — the literal intentionally
+    survives in the new `isDefaultMode = poolMode === 'bistate_mode_default'`
+    check at the top of `_render()`. Cross-check with
+    `test_wire_target_handle_awaits_commit_hook_before_setnumber` —
+    that test pins the shared helper's ordering invariant, which still
+    applies to the radiator card's `_wireTimePicker` and any future
+    card that uses `onBeforeCommit`.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    assert "onBeforeCommit:" not in pool, (
+        "AC-3: pool must NOT wire `onBeforeCommit:` — drag is gated on "
+        "`isDefaultMode` upstream, the silent mode-switch hack is removed."
+    )
+
+
+@pytest.mark.parametrize(
+    "card_filename",
+    [
+        "qs-car-card.js",
+        "qs-climate-card.js",
+        "qs-on-off-duration-card.js",
+        "qs-pool-card.js",
+        "qs-radiator-card.js",
+        "qs-water-boiler-card.js",
+    ],
+)
+def test_qs_card_js_syntax_is_valid(card_filename):
+    """Review-fix #02 M1 — JS syntax validation. The previous review-fix
+    introduced a SyntaxError by placing an HTML comment containing
+    literal backticks (`` ` ``) INSIDE a JS template literal — the JS
+    parser terminated the outer template literal at the first inner
+    backtick and then choked on the next token (`false`). The card
+    failed to load in HA with `Uncaught SyntaxError: Unexpected token
+    'false'`.
+
+    Our structural regex tests never `eval` or syntax-parse the JS,
+    so the entire quality gate passed despite a fatal runtime error.
+    This test closes the systemic hole by shelling out to
+    `node --check --input-type=module` for every shipped `qs-*.js`
+    card. Skipped (not failed) if `node` is not on `$PATH` (CI without
+    node still passes the rest of the suite).
+
+    Why `--input-type=module`? The cards use ES `import` statements
+    at the top — `node --check` without `--input-type=module` treats
+    `.js` files as CommonJS by default and produces noise rather than
+    catching real syntax errors. Piping the file content via stdin
+    with `--input-type=module` forces module parsing, which is how HA
+    actually loads these resources.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on $PATH — JS syntax check requires it")
+    card_path = COMPONENT_ROOT / "ui" / "resources" / card_filename
+    assert card_path.is_file(), f"{card_filename}: card source must exist"
+    source = card_path.read_text(encoding="utf-8")
+    proc = subprocess.run(  # noqa: S603 — controlled args, in-tree path
+        [node, "--check", "--input-type=module"],
+        input=source,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert proc.returncode == 0, (
+        f"{card_filename}: `node --check --input-type=module` failed — "
+        f"the card has a JS syntax error and will not load in HA.\n"
+        f"stderr:\n{proc.stderr}"
+    )
 
 
 def test_pool_green_btn_guarded_on_backing_entity():
