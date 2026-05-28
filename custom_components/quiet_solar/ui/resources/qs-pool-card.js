@@ -222,13 +222,20 @@ class QsPoolCard extends QsRingDurationCardBase {
         // lagging constraint `duration_limit` (rebuilt only on the
         // next solver cycle, tens of seconds away).
         //
-        // Review-fix #01 N1 — the `||` fallback to `'bistate_mode_default'`
-        // only triggers when the select entity is MISSING (state
-        // undefined / null / ''). Transient `'unknown'` / `'unavailable'`
-        // strings (typical HA boot states) are truthy and flow to the
+        // Review-fix (docs/stories/QS-237.story_review_fix_#01.md, item N1).
+        // The `||` fallback to `'bistate_mode_default'` only triggers
+        // when the select entity is MISSING (state undefined / null
+        // / ''). Transient `'unknown'` / `'unavailable'` strings
+        // (typical HA boot states) are truthy and flow to the
         // non-default branch, disabling drag — which is the
         // family-consistent behaviour (radiator / water-boiler match).
-        const poolMode = selPoolMode?.state || 'bistate_mode_default';
+        //
+        // Review-fix (docs/stories/QS-237.story_review_fix_#02.md, item N2).
+        // `.trim()` is defence-in-depth: a padded state string (e.g.
+        // `'bistate_mode_default '` from a custom integration variant)
+        // would otherwise flip `isDefaultMode` to `false` and silently
+        // disable drag.
+        const poolMode = (selPoolMode?.state || 'bistate_mode_default').trim();
         const isDefaultMode = poolMode === 'bistate_mode_default';
 
         const temp = sTemperature?.state;
@@ -248,18 +255,36 @@ class QsPoolCard extends QsRingDurationCardBase {
         // 0 in non-default mode if the constraint sensor is unknown;
         // `hoursRun → 0` for an unknown daily-run sensor.
         //
-        // Review-fix #01 N5 — `defaultDuration → 1` (was 0) matches the
-        // Python-side default in `bistate_duration.py:99` so the handle
-        // briefly shows `1h` during HA boot / integration reload (when
-        // the `default_on_duration` number entity is still
+        // Review-fix (docs/stories/QS-237.story_review_fix_#01.md, item N5).
+        // `defaultDuration → 1` (was 0) matches the Python-side default
+        // in `bistate_duration.py:99` so the handle briefly shows `1h`
+        // during HA boot / integration reload (when the
+        // `default_on_duration` number entity is still
         // `unknown`/`unavailable`) instead of `0h`. This is purely a
-        // visual smoothing — the gate is two-term now (#01 S1), so the
-        // handle is rendered regardless of the value; `1` is just a
-        // less jarring initial display than `0` while the number entity
-        // is still booting.
+        // visual smoothing for the HANDLE — the gate is multi-term
+        // now (#01 S1 + #02 N3), so the handle is rendered regardless
+        // of the value; `1` is just a less jarring initial display
+        // than `0` while the number entity is still booting.
+        //
+        // Review-fix (docs/stories/QS-237.story_review_fix_#02.md, item N1).
+        // The `1` fallback is COSMETIC ONLY — `progressRatio` below
+        // gates on the separate `defaultDurationKnown` flag (which
+        // looks at the raw sensor state, not the coerced number) so
+        // the water-fill stays at 0 during the boot window. Without
+        // that gate, a `hoursRun > 1` reading combined with the
+        // `defaultDuration = 1` fallback would render a FULL water
+        // bowl until the entity registers.
         const targetHours = this._safeNumber(sDurationLimit, 0);
         const hoursRun = this._safeNumber(sCurrentDailyRunDuration, 0);
         const defaultDuration = this._safeNumber(sDefaultOnDuration, 1);
+        // The raw sensor state — used by the `progressRatio` gate below
+        // to distinguish the post-coercion value from the boot-window
+        // fallback (`unknown` / `unavailable` / missing).
+        const defaultDurationKnown =
+            sDefaultOnDuration?.state != null
+            && sDefaultOnDuration.state !== ''
+            && sDefaultOnDuration.state !== 'unknown'
+            && sDefaultOnDuration.state !== 'unavailable';
 
         // QS-237 AC-1 — single source of truth for the displayed target.
         // Feeds BOTH the handle position and the big "Actual / Target
@@ -281,13 +306,21 @@ class QsPoolCard extends QsRingDurationCardBase {
             this._needsAnimationPrime = false;
         }
 
-        // Review-fix #01 N2 — `progressRatio` uses `displayTargetHours`
-        // (not raw `targetHours`) so the water-fill animation reflects
-        // the user's drag-committed `default_on_duration` immediately in
-        // default mode; in other modes `displayTargetHours` collapses
-        // to `targetHours`, preserving the existing constraint-driven
-        // behaviour.
-        const progressRatio = displayTargetHours > 0
+        // Review-fix (docs/stories/QS-237.story_review_fix_#01.md, item N2).
+        // `progressRatio` uses `displayTargetHours` (not raw `targetHours`)
+        // so the water-fill animation reflects the user's drag-committed
+        // `default_on_duration` immediately in default mode; in other modes
+        // `displayTargetHours` collapses to `targetHours`, preserving the
+        // existing constraint-driven behaviour.
+        //
+        // Review-fix (docs/stories/QS-237.story_review_fix_#02.md, item N1).
+        // Additional gate `!isDefaultMode || defaultDurationKnown`: in
+        // default mode, only show progress when the `default_on_duration`
+        // sensor has a real (non-fallback) value. The `1` fallback from
+        // `_safeNumber` is for HANDLE positioning only — using it as the
+        // denominator here would render a full water-fill during the
+        // boot window whenever `hoursRun > 1`.
+        const progressRatio = displayTargetHours > 0 && (!isDefaultMode || defaultDurationKnown)
             ? Math.max(0, Math.min(1, hoursRun / displayTargetHours))
             : 0;
         const waterBaseY = CENTER_CY + CLIP_R - (0.2 + progressRatio * 0.6) * 2 * CLIP_R;
@@ -347,15 +380,24 @@ class QsPoolCard extends QsRingDurationCardBase {
         // explicitly switch to default mode via the mode pill (matches
         // radiator / water-boiler / on_off_duration / climate).
         //
-        // Review-fix #01 S1 — deliberately TWO-TERM (no
-        // `&& displayTargetHours > 0`). The new `_allowedHalfHours(24)`
-        // snap list includes `0`, and a drag-to-zero commit writes
-        // `default_on_duration = 0`. With a three-term gate the next
-        // render would hide the handle, locking the user out of
-        // drag-recovery. In default mode the commit target is a
-        // user-editable number entity, so drag must stay reachable at
-        // 0 — the only way back up via the card.
-        const canDragHandle = isEnabled && isDefaultMode;
+        // Review-fix (docs/stories/QS-237.story_review_fix_#01.md, item S1).
+        // The gate does NOT include `&& displayTargetHours > 0`. The
+        // `_allowedHalfHours(24)` snap list includes `0`, and a
+        // drag-to-zero commit writes `default_on_duration = 0`. With
+        // that third term the next render would hide the handle,
+        // locking the user out of drag-recovery. In default mode the
+        // commit target is a user-editable number entity, so drag must
+        // stay reachable at 0 — the only way back up via the card.
+        //
+        // Review-fix (docs/stories/QS-237.story_review_fix_#02.md, item N3).
+        // The third term `!!e.default_on_duration` is a different kind
+        // of defensive guard — it asserts that the dashboard template
+        // actually passed the `default_on_duration` entity key. Without
+        // it, the drag handle would wire up and `_setNumber(undefined,
+        // …)` would silently no-op on release, snapping the handle
+        // back to the post-commit fallback value (visible to the user
+        // as a phantom revert).
+        const canDragHandle = isEnabled && isDefaultMode && !!e.default_on_duration;
         const handlePct = this._targetDragPct != null ? this._targetDragPct :
             (this._localTargetPct != null ? this._localTargetPct : hoursToPct(displayTargetHours));
         const handleDeg = pctToDeg(handlePct, startDeg, rangeDeg);
@@ -412,6 +454,27 @@ class QsPoolCard extends QsRingDurationCardBase {
             pctToHours,
         });
 
+        // Review-fix (docs/stories/QS-237.story_review_fix_#01.md, item N6;
+        // see also docs/stories/QS-237.story_review_fix_#02.md, item M1).
+        // The target-value span at the "Actual / Target Hours" block
+        // renders displayTargetHours via _fmt(displayTargetHours, false) —
+        // un-rounded — so the committed display matches the live drag
+        // preview (dragMove emits the half-hour snap value via
+        // _fmt(..., false)). Without that false flag, 8.5h would render
+        // as 9h on release while the drag handle still showed 8.5. The
+        // family (radiator, water-boiler, on_off_duration, climate)
+        // defaults to round=true and shares this minor mismatch; pool
+        // diverges because the half-hour grid is more visible on the 24h
+        // scale.
+        //
+        // Plain prose (no backticks, no dollar-brace patterns) — review-fix
+        // #02 M1 hard-rule: anything that lands in a JS source comment
+        // MUST be safe to relocate into a template literal without breaking
+        // the parser. The previous review-fix put this rationale inside an
+        // HTML comment within the template literal below; the literal
+        // backticks closed the outer template and produced a fatal
+        // SyntaxError at load time. Keep this rule for every comment in
+        // this file.
         this._root.innerHTML = `
       <ha-card class="card ${!isEnabled ? 'disabled' : ''} ${isOffGrid ? 'off-grid' : ''}">
         <style>${css}</style>
@@ -444,17 +507,6 @@ class QsPoolCard extends QsRingDurationCardBase {
                   <div class="target-value">
                     <span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span>
                     <span style="color: var(--primary-text-color);"> / </span>
-                    <!-- Review-fix #01 N6 — explicit `false` (un-rounded)
-                         so the committed display matches the live drag
-                         preview (`dragMove` emits the half-hour snap
-                         value via `_fmt(..., false)`). Without this,
-                         8.5h would render as "9h" on release while the
-                         drag handle still showed "8.5" — the family
-                         (radiator / water-boiler / on_off_duration /
-                         climate) defaults to round=true and shares this
-                         minor mismatch; pool diverges here because the
-                         half-hour grid is more visible to users on the
-                         24h scale. -->
                     <span style="color: ${colors.primary};">${this._fmt(displayTargetHours, false)}h</span>
                   </div>
                 </div>

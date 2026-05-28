@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-05-28
+last_verified: 2026-05-29
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -890,14 +890,21 @@ patterns after the cross-card audit:
   through HA's `default_on_duration` number-entity push, not via the
   lagging constraint `duration_limit`. Drag is gated on
   `isDefaultMode`; QS-237 brought pool into this pattern. Pool's
-  drag gate is deliberately two-term `isEnabled && isDefaultMode`
-  (no `displayTargetHours > 0` term — review-fix #01 S1) so a
-  drag-to-zero commit on the half-hour snap grid doesn't lock the
-  user out of drag-recovery; and pool's big-text renders
+  drag gate is `isEnabled && isDefaultMode && !!e.default_on_duration`
+  (review-fix #01 S1 + #02 N3): the `displayTargetHours > 0` term
+  was deliberately dropped to keep drag-recovery reachable after a
+  drag-to-zero commit on the half-hour snap grid, and the third
+  `e.default_on_duration` term protects against a dashboard
+  template that omits the number-entity key (which would silently
+  no-op `_setNumber`). Pool's big-text renders
   `_fmt(displayTargetHours, false)` (un-rounded) so the committed
   display matches the `dragMove` live preview on the half-hour
   grid (review-fix #01 N6) — a card-local divergence from the
-  family's default `round=true`.
+  family's default `round=true`. The water-fill `progressRatio` in
+  default mode is additionally gated on a `defaultDurationKnown`
+  flag (review-fix #02 N1) so the boot-window fallback
+  `_safeNumber(sDefaultOnDuration, 1)` doesn't render a full water
+  bowl when `hoursRun > 1`.
 - **Zero-`maxHours` clamp (post-QS-195 user bug).** Both the
   radiator and water-boiler cards clamp `maxHours = targetHours > 0 ?
   targetHours : <fallback>` in the non-default-mode branch. A
