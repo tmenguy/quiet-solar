@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-05-27
+last_verified: 2026-05-28
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -882,6 +882,14 @@ patterns after the cross-card audit:
   `Number(s?.state || N)` so degenerate states
   (`""` / `unknown` / `unavailable`) can't propagate `NaN` into SVG
   path attributes.
+- **Duration-card `displayTargetHours` pattern (QS-237).** All five
+  duration cards (pool, on_off_duration, radiator, water-boiler,
+  climate) read `displayTargetHours = isDefaultMode ? defaultDuration
+  : targetHours` and use that single value for both the handle and
+  the big target-value span — so a drag-commit propagates instantly
+  through HA's `default_on_duration` number-entity push, not via the
+  lagging constraint `duration_limit`. Drag is gated on
+  `isDefaultMode`; QS-237 brought pool into this pattern.
 - **Zero-`maxHours` clamp (post-QS-195 user bug).** Both the
   radiator and water-boiler cards clamp `maxHours = targetHours > 0 ?
   targetHours : <fallback>` in the non-default-mode branch. A

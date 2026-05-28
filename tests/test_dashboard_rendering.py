@@ -7959,17 +7959,135 @@ def test_wire_target_handle_awaits_commit_hook_before_setnumber():
     )
 
 
-def test_pool_drag_commit_selects_mode_before_duration():
-    """QS-199 review-fix #03 S1 — the pool card wires the mode-select into
-    the `onBeforeCommit` (pre-duration) hook, not the post-write
-    `onCommit`, so default-mode is active before the duration write.
+def test_pool_card_uses_displaytargethours_family_pattern():
+    """QS-237 AC-1 — pool joins the documented duration-card family by
+    deriving a single `displayTargetHours = isDefaultMode ? defaultDuration
+    : targetHours` value, used for BOTH the handle position and the big
+    "Actual / Target Hours" target span. Pre-QS-237 pool read raw
+    `duration_limit` for both — diverging the moment the user dragged
+    `default_on_duration`, since the constraint's `duration_limit` only
+    rebuilds on the next solver cycle.
     """
-    pool = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8"))
-    assert "onBeforeCommit:" in pool, (
-        "qs-pool-card.js: the drag-commit mode-select must be wired via "
-        "`onBeforeCommit:` so it runs before the duration write (S1)."
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
     )
-    assert "bistate_mode_default" in pool, "pool drag-commit must still select default mode"
+    # Positive: the family-pattern symbols are present.
+    assert "isDefaultMode = poolMode === 'bistate_mode_default'" in pool, (
+        "AC-1: pool must derive `isDefaultMode` from the `bistate_mode_default` "
+        "select state (mirrors water-boiler / radiator / on_off_duration / climate)."
+    )
+    assert "displayTargetHours = isDefaultMode ? defaultDuration : targetHours" in pool, (
+        "AC-1: pool must derive `displayTargetHours = isDefaultMode ? "
+        "defaultDuration : targetHours` (the family's single source of truth)."
+    )
+    # The new local is passed to `_buildRingHTML(...)` — the comma-trailing
+    # form is the unique anchor inside that call.
+    assert "displayTargetHours," in pool, (
+        "AC-1: `_buildRingHTML(...)` must receive the new `displayTargetHours` "
+        "local (comma-trailing form anchors the call site)."
+    )
+    # The big-text span renders `displayTargetHours`.
+    assert "this._fmt(displayTargetHours)" in pool, (
+        "AC-1: the big-text target span must render `this._fmt(displayTargetHours)`."
+    )
+    # Negative: the pre-QS-237 derived value and raw-targetHours big-text
+    # reference are gone.
+    assert "const handleTargetHours =" not in pool, (
+        "AC-1: pre-QS-237 `const handleTargetHours = ...` must be gone — "
+        "use `displayTargetHours` instead."
+    )
+    assert "${this._fmt(targetHours)}h" not in pool, (
+        "AC-1: pre-QS-237 big-text reference `${this._fmt(targetHours)}h` "
+        "must be gone — use `displayTargetHours` instead."
+    )
+
+
+def test_pool_card_target_value_uses_palette_color_not_theme_variable():
+    """QS-237 AC-2 — the `.target-value` big-text span color references
+    the `colors.primary` palette token (matching the inline color used
+    by `dragMove` and the family pattern in water-boiler / radiator).
+    The pre-QS-237 `var(--primary-color)` theme variable on that span
+    is gone; otherwise the rendered span shows a slightly different
+    blue than the dragged value, producing the "different shade of
+    blue" symptom on release.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    # Pin the palette TOKEN (`colors.primary`), not the hex literal `#2196F3`,
+    # so a future palette tweak doesn't break the test.
+    assert "${colors.primary};\">${this._fmt(displayTargetHours)}h" in pool, (
+        "AC-2: the big-text target span must use `style=\"color: "
+        "${colors.primary};\">${this._fmt(displayTargetHours)}h` (palette "
+        "token + new family-pattern source value)."
+    )
+    assert "var(--primary-color);\">${this._fmt(" not in pool, (
+        "AC-2: the pre-QS-237 `var(--primary-color);\">${this._fmt(...)}` "
+        "theme variable on the big-text target span must be gone."
+    )
+
+
+def test_pool_card_drag_gated_on_default_mode():
+    """QS-237 AC-3 — drag is gated on `isDefaultMode`. In any non-default
+    pool mode (`bistate_mode_auto`, `bistate_mode_exact_calendar`,
+    `pool_winter_mode`) the `<circle id="target_handle">` is NOT
+    rendered. The pre-QS-237 `hasValidTarget = isEnabled` permissive
+    gate (plus the `onBeforeCommit` silent mode-switch hack) is removed.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    assert "canDragHandle = isEnabled && isDefaultMode && displayTargetHours > 0" in pool, (
+        "AC-3: pool drag must be gated on `canDragHandle = isEnabled && "
+        "isDefaultMode && displayTargetHours > 0` (mirrors the family)."
+    )
+    assert "const hasValidTarget = isEnabled;" not in pool, (
+        "AC-3: the pre-QS-237 permissive `const hasValidTarget = isEnabled;` "
+        "gate must be gone."
+    )
+
+
+def test_pool_card_uses_allowed_halfhours_snap():
+    """QS-237 AC-4 — pool's drag snap list is `_allowedHalfHours(maxHours)`,
+    matching radiator / water-boiler / on_off_duration / climate. The
+    pre-QS-237 integer-only `Array.from({ length: 25 }, ...)` is gone.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    assert "this._allowedHalfHours(maxHours)" in pool, (
+        "AC-4: pool snap list must use `this._allowedHalfHours(maxHours)` "
+        "(half-hour grid, family-aligned)."
+    )
+    assert "Array.from({ length: 25 }" not in pool, (
+        "AC-4: the pre-QS-237 integer-only `Array.from({ length: 25 }, ...)` "
+        "snap list must be gone."
+    )
+
+
+def test_pool_card_no_onbeforecommit_mode_switch():
+    """QS-237 AC-3 (precise negative) — the `onBeforeCommit:` silent
+    mode-switch hack on the drag-commit is gone. Drag is now gated on
+    `isDefaultMode` upstream, so the hack is no longer needed (and
+    actively wrong: it silently switched the pool to default mode on
+    every drag-commit, even from auto/winter/exact_calendar mode).
+
+    Pins the precise token `onBeforeCommit:` rather than the
+    `'bistate_mode_default'` literal — the literal intentionally
+    survives in the new `isDefaultMode = poolMode === 'bistate_mode_default'`
+    check at the top of `_render()`. Cross-check with
+    `test_wire_target_handle_awaits_commit_hook_before_setnumber` —
+    that test pins the shared helper's ordering invariant, which still
+    applies to the radiator card's `_wireTimePicker` and any future
+    card that uses `onBeforeCommit`.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    assert "onBeforeCommit:" not in pool, (
+        "AC-3: pool must NOT wire `onBeforeCommit:` — drag is gated on "
+        "`isDefaultMode` upstream, the silent mode-switch hack is removed."
+    )
 
 
 def test_pool_green_btn_guarded_on_backing_entity():
