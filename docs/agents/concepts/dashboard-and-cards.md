@@ -889,7 +889,15 @@ patterns after the cross-card audit:
   the big target-value span — so a drag-commit propagates instantly
   through HA's `default_on_duration` number-entity push, not via the
   lagging constraint `duration_limit`. Drag is gated on
-  `isDefaultMode`; QS-237 brought pool into this pattern.
+  `isDefaultMode`; QS-237 brought pool into this pattern. Pool's
+  drag gate is deliberately two-term `isEnabled && isDefaultMode`
+  (no `displayTargetHours > 0` term — review-fix #01 S1) so a
+  drag-to-zero commit on the half-hour snap grid doesn't lock the
+  user out of drag-recovery; and pool's big-text renders
+  `_fmt(displayTargetHours, false)` (un-rounded) so the committed
+  display matches the `dragMove` live preview on the half-hour
+  grid (review-fix #01 N6) — a card-local divergence from the
+  family's default `round=true`.
 - **Zero-`maxHours` clamp (post-QS-195 user bug).** Both the
   radiator and water-boiler cards clamp `maxHours = targetHours > 0 ?
   targetHours : <fallback>` in the non-default-mode branch. A

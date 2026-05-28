@@ -221,6 +221,13 @@ class QsPoolCard extends QsRingDurationCardBase {
         // entity (HA pushes that state immediately), not via the
         // lagging constraint `duration_limit` (rebuilt only on the
         // next solver cycle, tens of seconds away).
+        //
+        // Review-fix #01 N1 — the `||` fallback to `'bistate_mode_default'`
+        // only triggers when the select entity is MISSING (state
+        // undefined / null / ''). Transient `'unknown'` / `'unavailable'`
+        // strings (typical HA boot states) are truthy and flow to the
+        // non-default branch, disabling drag — which is the
+        // family-consistent behaviour (radiator / water-boiler match).
         const poolMode = selPoolMode?.state || 'bistate_mode_default';
         const isDefaultMode = poolMode === 'bistate_mode_default';
 
@@ -238,18 +245,21 @@ class QsPoolCard extends QsRingDurationCardBase {
         const maxHours = 24;
         // QS-237 AC-6 — safe numeric coercion (S8, water-boiler pattern).
         // Defaults: `targetHours → 0` collapses `displayTargetHours` to
-        // 0 in non-default mode if the constraint sensor is unknown
-        // (safely disables drag); `hoursRun → 0` for an unknown daily-
-        // run sensor; `defaultDuration → 0` collapses `displayTargetHours`
-        // to 0 in default mode if the `default_on_duration` entity is
-        // unknown (safely disables drag). Pool defaults are tighter
-        // than water-boiler's (12/0/6) because pool has no
-        // `current_duration` / override / finish-time fallbacks; a
-        // "0 means we don't know" pattern is safer than a fictitious
-        // fallback.
+        // 0 in non-default mode if the constraint sensor is unknown;
+        // `hoursRun → 0` for an unknown daily-run sensor.
+        //
+        // Review-fix #01 N5 — `defaultDuration → 1` (was 0) matches the
+        // Python-side default in `bistate_duration.py:99` so the handle
+        // briefly shows `1h` during HA boot / integration reload (when
+        // the `default_on_duration` number entity is still
+        // `unknown`/`unavailable`) instead of `0h`. This is purely a
+        // visual smoothing — the gate is two-term now (#01 S1), so the
+        // handle is rendered regardless of the value; `1` is just a
+        // less jarring initial display than `0` while the number entity
+        // is still booting.
         const targetHours = this._safeNumber(sDurationLimit, 0);
         const hoursRun = this._safeNumber(sCurrentDailyRunDuration, 0);
-        const defaultDuration = this._safeNumber(sDefaultOnDuration, 0);
+        const defaultDuration = this._safeNumber(sDefaultOnDuration, 1);
 
         // QS-237 AC-1 — single source of truth for the displayed target.
         // Feeds BOTH the handle position and the big "Actual / Target
@@ -271,6 +281,12 @@ class QsPoolCard extends QsRingDurationCardBase {
             this._needsAnimationPrime = false;
         }
 
+        // Review-fix #01 N2 — `progressRatio` uses `displayTargetHours`
+        // (not raw `targetHours`) so the water-fill animation reflects
+        // the user's drag-committed `default_on_duration` immediately in
+        // default mode; in other modes `displayTargetHours` collapses
+        // to `targetHours`, preserving the existing constraint-driven
+        // behaviour.
         const progressRatio = displayTargetHours > 0
             ? Math.max(0, Math.min(1, hoursRun / displayTargetHours))
             : 0;
@@ -330,7 +346,16 @@ class QsPoolCard extends QsRingDurationCardBase {
         // `onBeforeCommit` silent mode-switch hack are gone — users must
         // explicitly switch to default mode via the mode pill (matches
         // radiator / water-boiler / on_off_duration / climate).
-        const canDragHandle = isEnabled && isDefaultMode && displayTargetHours > 0;
+        //
+        // Review-fix #01 S1 — deliberately TWO-TERM (no
+        // `&& displayTargetHours > 0`). The new `_allowedHalfHours(24)`
+        // snap list includes `0`, and a drag-to-zero commit writes
+        // `default_on_duration = 0`. With a three-term gate the next
+        // render would hide the handle, locking the user out of
+        // drag-recovery. In default mode the commit target is a
+        // user-editable number entity, so drag must stay reachable at
+        // 0 — the only way back up via the card.
+        const canDragHandle = isEnabled && isDefaultMode;
         const handlePct = this._targetDragPct != null ? this._targetDragPct :
             (this._localTargetPct != null ? this._localTargetPct : hoursToPct(displayTargetHours));
         const handleDeg = pctToDeg(handlePct, startDeg, rangeDeg);
@@ -419,7 +444,18 @@ class QsPoolCard extends QsRingDurationCardBase {
                   <div class="target-value">
                     <span style="color: var(--primary-text-color);">${this._fmt(hoursRun, false)}h</span>
                     <span style="color: var(--primary-text-color);"> / </span>
-                    <span style="color: ${colors.primary};">${this._fmt(displayTargetHours)}h</span>
+                    <!-- Review-fix #01 N6 — explicit `false` (un-rounded)
+                         so the committed display matches the live drag
+                         preview (`dragMove` emits the half-hour snap
+                         value via `_fmt(..., false)`). Without this,
+                         8.5h would render as "9h" on release while the
+                         drag handle still showed "8.5" — the family
+                         (radiator / water-boiler / on_off_duration /
+                         climate) defaults to round=true and shares this
+                         minor mismatch; pool diverges here because the
+                         half-hour grid is more visible to users on the
+                         24h scale. -->
+                    <span style="color: ${colors.primary};">${this._fmt(displayTargetHours, false)}h</span>
                   </div>
                 </div>
               </div>

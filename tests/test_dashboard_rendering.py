@@ -7967,16 +7967,28 @@ def test_pool_card_uses_displaytargethours_family_pattern():
     `duration_limit` for both — diverging the moment the user dragged
     `default_on_duration`, since the constraint's `duration_limit` only
     rebuilds on the next solver cycle.
+
+    Review-fix #01 N3 — positive assertions use whitespace-tolerant
+    regex so harmless formatting/reflow in `qs-pool-card.js` doesn't
+    produce noisy CI failures. The negative assertions stay strict
+    (their whole point is to catch regressions).
     """
     pool = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
     )
-    # Positive: the family-pattern symbols are present.
-    assert "isDefaultMode = poolMode === 'bistate_mode_default'" in pool, (
+    # Positive (regex, N3): the family-pattern symbols are present.
+    assert re.search(
+        r"isDefaultMode\s*=\s*poolMode\s*===\s*'bistate_mode_default'",
+        pool,
+    ), (
         "AC-1: pool must derive `isDefaultMode` from the `bistate_mode_default` "
         "select state (mirrors water-boiler / radiator / on_off_duration / climate)."
     )
-    assert "displayTargetHours = isDefaultMode ? defaultDuration : targetHours" in pool, (
+    assert re.search(
+        r"displayTargetHours\s*=\s*isDefaultMode\s*\?\s*"
+        r"defaultDuration\s*:\s*targetHours",
+        pool,
+    ), (
         "AC-1: pool must derive `displayTargetHours = isDefaultMode ? "
         "defaultDuration : targetHours` (the family's single source of truth)."
     )
@@ -7986,12 +7998,18 @@ def test_pool_card_uses_displaytargethours_family_pattern():
         "AC-1: `_buildRingHTML(...)` must receive the new `displayTargetHours` "
         "local (comma-trailing form anchors the call site)."
     )
-    # The big-text span renders `displayTargetHours`.
-    assert "this._fmt(displayTargetHours)" in pool, (
-        "AC-1: the big-text target span must render `this._fmt(displayTargetHours)`."
+    # The big-text span renders `displayTargetHours` — regex tolerates
+    # either `_fmt(displayTargetHours)` (round=true) or
+    # `_fmt(displayTargetHours, false)` (un-rounded, post-#01 N6).
+    assert re.search(
+        r"this\._fmt\(\s*displayTargetHours\b",
+        pool,
+    ), (
+        "AC-1: the big-text target span must render "
+        "`this._fmt(displayTargetHours...)`."
     )
-    # Negative: the pre-QS-237 derived value and raw-targetHours big-text
-    # reference are gone.
+    # Negative (strict): the pre-QS-237 derived value and raw-targetHours
+    # big-text reference are gone.
     assert "const handleTargetHours =" not in pool, (
         "AC-1: pre-QS-237 `const handleTargetHours = ...` must be gone — "
         "use `displayTargetHours` instead."
@@ -8010,16 +8028,27 @@ def test_pool_card_target_value_uses_palette_color_not_theme_variable():
     is gone; otherwise the rendered span shows a slightly different
     blue than the dragged value, producing the "different shade of
     blue" symptom on release.
+
+    Review-fix #01 N6 — pool diverges from the family `_fmt(...)`
+    default-rounded form: it passes `false` so the committed display
+    matches the un-rounded `dragMove` live-update preview on the
+    half-hour grid. The assertion below pins that explicit
+    `_fmt(displayTargetHours, false)` form (strict — this is the
+    behavioural contract).
     """
     pool = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
     )
-    # Pin the palette TOKEN (`colors.primary`), not the hex literal `#2196F3`,
-    # so a future palette tweak doesn't break the test.
-    assert "${colors.primary};\">${this._fmt(displayTargetHours)}h" in pool, (
-        "AC-2: the big-text target span must use `style=\"color: "
-        "${colors.primary};\">${this._fmt(displayTargetHours)}h` (palette "
-        "token + new family-pattern source value)."
+    # Pin the palette TOKEN (`colors.primary`) AND the explicit `false`
+    # round flag (#01 N6). Whitespace-tolerant per N3.
+    assert re.search(
+        r"\$\{colors\.primary\};\">\$\{this\._fmt\(\s*displayTargetHours\s*,\s*false\s*\)\s*\}h",
+        pool,
+    ), (
+        "AC-2 + #01 N6: the big-text target span must use "
+        "`style=\"color: ${colors.primary};\">${this._fmt(displayTargetHours, "
+        "false)}h` (palette token + un-rounded form so drag preview and "
+        "committed display agree on the half-hour grid)."
     )
     assert "var(--primary-color);\">${this._fmt(" not in pool, (
         "AC-2: the pre-QS-237 `var(--primary-color);\">${this._fmt(...)}` "
@@ -8033,13 +8062,27 @@ def test_pool_card_drag_gated_on_default_mode():
     `pool_winter_mode`) the `<circle id="target_handle">` is NOT
     rendered. The pre-QS-237 `hasValidTarget = isEnabled` permissive
     gate (plus the `onBeforeCommit` silent mode-switch hack) is removed.
+
+    Review-fix #01 S1 — the gate dropped its third `displayTargetHours
+    > 0` term. With the half-hour snap including `0`, that term
+    would lock the user out of drag-recovery after a drag-to-zero
+    commit (no handle → can't drag back up). In default mode the
+    commit writes `default_on_duration` (user-editable), so drag must
+    stay reachable at all positive AND zero handle values.
     """
     pool = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
     )
-    assert "canDragHandle = isEnabled && isDefaultMode && displayTargetHours > 0" in pool, (
-        "AC-3: pool drag must be gated on `canDragHandle = isEnabled && "
-        "isDefaultMode && displayTargetHours > 0` (mirrors the family)."
+    # Positive (regex, N3): two-term gate ending in `;` — the trailing
+    # semicolon excludes any `&& displayTargetHours > 0` re-append.
+    assert re.search(
+        r"canDragHandle\s*=\s*isEnabled\s*&&\s*isDefaultMode\s*;",
+        pool,
+    ), (
+        "AC-3 + #01 S1: pool drag must be gated on `canDragHandle = "
+        "isEnabled && isDefaultMode;` (two-term — the third "
+        "`displayTargetHours > 0` term is gone to keep drag-recovery "
+        "reachable at 0)."
     )
     assert "const hasValidTarget = isEnabled;" not in pool, (
         "AC-3: the pre-QS-237 permissive `const hasValidTarget = isEnabled;` "
@@ -8047,15 +8090,59 @@ def test_pool_card_drag_gated_on_default_mode():
     )
 
 
-def test_pool_card_uses_allowed_halfhours_snap():
-    """QS-237 AC-4 — pool's drag snap list is `_allowedHalfHours(maxHours)`,
-    matching radiator / water-boiler / on_off_duration / climate. The
-    pre-QS-237 integer-only `Array.from({ length: 25 }, ...)` is gone.
+def test_pool_card_drag_remains_reachable_when_default_duration_is_zero():
+    """Review-fix #01 S1 — regression test. The new `_allowedHalfHours(24)`
+    snap list includes `0`, so a user in `bistate_mode_default` can drag
+    the handle to the bottom and commit `default_on_duration = 0`. With
+    the pre-S1 gate `isEnabled && isDefaultMode && displayTargetHours > 0`,
+    the next render would flip `canDragHandle` to `false`, hide the
+    handle, and lock the user out of drag-recovery (the only way back
+    up would be the HA `default_on_duration` number entity directly).
+
+    The fix drops the `displayTargetHours > 0` term: drag-recovery
+    stays reachable even when the current default duration is 0.
+
+    Pins both the new two-term gate form AND a strict negative that
+    no third `&&` term has been re-appended.
     """
     pool = _strip_js_comments(
         (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
     )
-    assert "this._allowedHalfHours(maxHours)" in pool, (
+    # Positive: gate is exactly two terms (regex tolerates whitespace,
+    # but the trailing `;` is mandatory and anchors the statement end).
+    assert re.search(
+        r"canDragHandle\s*=\s*isEnabled\s*&&\s*isDefaultMode\s*;",
+        pool,
+    ), (
+        "#01 S1: drag gate must be two-term `isEnabled && isDefaultMode;` "
+        "so drag-recovery stays reachable at zero."
+    )
+    # Strict negative: no third `&&` term re-appended (the gate must NOT
+    # grow back to a three-term form).
+    assert not re.search(
+        r"canDragHandle\s*=\s*isEnabled\s*&&\s*isDefaultMode\s*&&",
+        pool,
+    ), (
+        "#01 S1: drag gate must NOT re-append a third term (e.g. "
+        "`&& displayTargetHours > 0`) — that would re-introduce the "
+        "drag-to-zero self-lockout regression."
+    )
+
+
+def test_pool_card_uses_allowed_halfhours_snap():
+    """QS-237 AC-4 — pool's drag snap list is `_allowedHalfHours(maxHours)`,
+    matching radiator / water-boiler / on_off_duration / climate. The
+    pre-QS-237 integer-only `Array.from({ length: 25 }, ...)` is gone.
+
+    Review-fix #01 N3 — positive assertion is regex (whitespace-tolerant).
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    assert re.search(
+        r"this\._allowedHalfHours\(\s*maxHours\s*\)",
+        pool,
+    ), (
         "AC-4: pool snap list must use `this._allowedHalfHours(maxHours)` "
         "(half-hour grid, family-aligned)."
     )
@@ -8063,6 +8150,63 @@ def test_pool_card_uses_allowed_halfhours_snap():
         "AC-4: the pre-QS-237 integer-only `Array.from({ length: 25 }, ...)` "
         "snap list must be gone."
     )
+
+
+def test_pool_card_pins_max_hours_literal_with_comment():
+    """Review-fix #01 S2 — AC-5 positive structural test. Pool keeps the
+    card-local `const maxHours = 24;` literal (NOT
+    `this._clampMaxHours(cfg.max_default_hours)` like the family).
+    Justification lives in the inline comment immediately above the
+    literal — the `user-authorized exemption` phrase uniquely anchors
+    that comment for future maintainers.
+
+    Without this test, the negative-only shield (pool's exclusion from
+    `test_card_derives_max_hours_via_clamp_helper`) only fires when
+    someone *adds* pool back to that parametrize list — it does NOT
+    fire when someone swaps `24` for `this._clampMaxHours(...)`, which
+    is exactly the QS-235-style regression we were guarding against.
+    """
+    pool_path = COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js"
+    raw = pool_path.read_text(encoding="utf-8")
+    stripped = _strip_js_comments(raw)
+    # The literal must survive in the executable source.
+    assert re.search(r"const\s+maxHours\s*=\s*24\s*;", stripped), (
+        "AC-5: pool must keep `const maxHours = 24;` literal (user-"
+        "authorized exemption from the family's `_clampMaxHours` chain)."
+    )
+    # The explanatory comment must survive in the unstripped source.
+    # `user-authorized exemption` uniquely anchors the AC-5 rationale.
+    assert "user-authorized exemption" in raw, (
+        "AC-5: the explanatory comment above `const maxHours = 24;` "
+        "must remain — the `user-authorized exemption` phrase anchors "
+        "the AC-5 rationale for future maintainers."
+    )
+
+
+def test_pool_card_uses_safenumber_for_sensor_reads():
+    """Review-fix #01 S3 — AC-6 dedicated test. Pool reads its three
+    sensor states via `this._safeNumber(sensor, default)` for
+    `targetHours`, `hoursRun`, and `defaultDuration`. This is the
+    hardened family pattern (`project-rules.md`, "Safe numeric coercion
+    (S8, water-boiler)") that guards against `NaN` propagation from
+    degenerate sensor states (`""` / `unknown` / `unavailable`).
+
+    The test asserts the `_safeNumber(` prefix per variable name but
+    does NOT pin the default value — that lets #01 N5 (changing
+    `defaultDuration`'s default from 0 to 1) compose with this test
+    without churn.
+    """
+    pool = _strip_js_comments(
+        (COMPONENT_ROOT / "ui" / "resources" / "qs-pool-card.js").read_text(encoding="utf-8")
+    )
+    for var_name in ("targetHours", "hoursRun", "defaultDuration"):
+        assert re.search(
+            rf"const\s+{var_name}\s*=\s*this\._safeNumber\(",
+            pool,
+        ), (
+            f"AC-6: `{var_name}` must be read via `this._safeNumber(...)` "
+            "(family pattern guards against unknown / unavailable states)."
+        )
 
 
 def test_pool_card_no_onbeforecommit_mode_switch():
