@@ -1480,8 +1480,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return self.get_car_estimated_range_km(from_soc=soc, to_soc=0.0, time=time)
 
     async def adapt_max_charge_limit(self, asked_percent):
+        # Precondition: this writes the car's native "max charge limit" entity and
+        # is only valid while the car is plugged into a QS-managed charger.
 
         if self.car_charge_percent_max_number is None:
+            return
+
+        # Only Quiet Solar should manage the car's native charge limit while the car
+        # is plugged into a QS-managed charger. When detached (charging away from
+        # home), leave the native limit untouched — the target is preserved and is
+        # reapplied automatically on reconnect (see setup_car_charge_target_if_needed
+        # callers in charger.py).
+        if self.charger is None:
+            _LOGGER.debug(
+                "Car %s not connected to a managed charger — skipping max charge limit write (target preserved, reapplied on reconnect)",
+                self.name,
+            )
             return
 
         percent = asked_percent

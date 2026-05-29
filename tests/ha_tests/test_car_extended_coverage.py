@@ -35,6 +35,7 @@ from custom_components.quiet_solar.const import (
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
     CONF_CAR_IS_INVITED,
+    CONF_DEFAULT_CAR_CHARGE,
     DATA_HANDLER,
     DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
@@ -1911,6 +1912,11 @@ async def test_adapt_max_charge_limit_with_steps(
         entry_id_suffix="lim_steps",
     )
 
+    # Attached to a QS-managed charger so the native-limit write is permitted
+    # (a bare SimpleNamespace suffices — adapt_max_charge_limit never calls a
+    # charger method).
+    car.charger = SimpleNamespace()
+
     # Reset mock after setup (setup may have already called the service)
     set_value_handler.reset_mock()
 
@@ -1932,6 +1938,94 @@ async def test_adapt_max_charge_limit_no_entity(
     car.car_charge_percent_max_number = None
     # Should not raise
     await car.adapt_max_charge_limit(asked_percent=80)
+
+
+async def test_adapt_max_charge_limit_skips_when_detached(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC1: a car not plugged into a QS charger must not have its native limit written.
+
+    The entity is configured (so execution passes the entity-None guard and
+    reaches the new charger guard), but ``car.charger`` is left at its ``None``
+    default, so ``adapt_max_charge_limit`` must early-return before any
+    ``number.set_value`` service call.
+    """
+    from homeassistant.components import number as number_mod
+
+    set_value_handler = AsyncMock()
+    hass.services.async_register(number_mod.DOMAIN, number_mod.SERVICE_SET_VALUE, set_value_handler)
+
+    entity = "number.car_max_charge_detached"
+    hass.states.async_set(entity, "50")
+
+    car, _ = await _create_car(
+        hass,
+        home_config_entry,
+        extra_config={CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: entity},
+        entry_id_suffix="lim_detached",
+    )
+
+    # Detached: no charger attached to the car.
+    assert car.charger is None
+    # Entity is configured, so the entity-None guard does not short-circuit us.
+    assert car.car_charge_percent_max_number is not None
+
+    set_value_handler.reset_mock()
+
+    await car.adapt_max_charge_limit(asked_percent=90)
+
+    set_value_handler.assert_not_awaited()
+
+
+async def test_charge_target_recorded_while_detached_reapplied_on_reconnect(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC4: a target set while detached is recorded (not written) then reapplied on reconnect.
+
+    While ``car.charger is None`` the user records a charge target — the native
+    limit must NOT be written. Once the car is plugged back into a QS charger
+    (``car.charger`` set), the plug-in funnel ``setup_car_charge_target_if_needed``
+    writes the recorded target to the native limit.
+    """
+    from homeassistant.components import number as number_mod
+
+    set_value_handler = AsyncMock()
+    hass.services.async_register(number_mod.DOMAIN, number_mod.SERVICE_SET_VALUE, set_value_handler)
+
+    entity = "number.car_max_charge_reconnect"
+    # Native limit currently at 50; the recorded target (90) differs, so a
+    # write is expected once reattached.
+    hass.states.async_set(entity, "50")
+
+    car, _ = await _create_car(
+        hass,
+        home_config_entry,
+        extra_config={
+            CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: entity,
+            # Low default so the asked 90% is not clamped up to the default.
+            CONF_DEFAULT_CAR_CHARGE: 50.0,
+        },
+        entry_id_suffix="lim_reconnect",
+    )
+
+    # Detached on entry.
+    assert car.charger is None
+    set_value_handler.reset_mock()
+
+    # Record a target while detached: it is stored but must not be written.
+    await car.set_next_charge_target_percent(90)
+    assert car._next_charge_target == 90
+    set_value_handler.assert_not_awaited()
+
+    # Plug back into a QS-managed charger and run the plug-in funnel.
+    car.charger = SimpleNamespace()
+    await car.setup_car_charge_target_if_needed()
+
+    set_value_handler.assert_awaited_once()
+    call = set_value_handler.call_args.args[0]
+    assert call.data[number_mod.ATTR_VALUE] == 90
 
 
 # ===========================================================================

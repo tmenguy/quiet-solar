@@ -1675,6 +1675,11 @@ async def test_car_charge_energy_and_charge_limit(
 
     assert car_device.get_max_charge_limit() == 90
 
+    # Attached to a QS-managed charger so the native-limit write is permitted
+    # (a bare SimpleNamespace suffices — adapt_max_charge_limit never calls a
+    # charger method).
+    car_device.charger = SimpleNamespace()
+
     set_value_handler.reset_mock()
     await car_device.adapt_max_charge_limit(asked_percent=50)
     set_value_handler.assert_awaited_once()
