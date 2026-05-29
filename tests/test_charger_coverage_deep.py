@@ -550,6 +550,38 @@ class TestCheckLoadActivityAndConstraints:
         assert car._user_base_soc_value == 55.0
 
     @pytest.mark.asyncio
+    async def test_seeding_uses_effective_estimate(self):
+        """QS-243 S3 / AC6 — a constraint on an estimating car seeds from the estimate."""
+        *_, charger, car, now = self._setup()
+        _plug_car(charger, car, now)  # already attached → no genuine-plug reset
+        charger.get_best_car = MagicMock(return_value=car)
+        car.car_api_stale_percent_mode = True  # estimating
+        car._last_valid_base_soc_value = 42.0
+        car._computed_added_delta_soc_percent = 0.0
+        car.car_default_charge = 100.0
+        car.do_force_next_charge = True
+        assert car.get_car_charge_percent(now) == 42.0
+        await charger.check_load_activity_and_constraints(now)
+        cts = [c for c in charger._constraints if c is not None]
+        assert cts, "expected a constraint to be created"
+        assert cts[0].initial_value == 42.0
+
+    @pytest.mark.asyncio
+    async def test_seeding_pure_delta_no_base_is_zero(self):
+        """QS-243 S3 / AC6 — with no base (pure-delta) the seed remains 0.0."""
+        *_, charger, car, now = self._setup()
+        _plug_car(charger, car, now)
+        charger.get_best_car = MagicMock(return_value=car)
+        car.car_api_stale_percent_mode = True  # estimating, but no base
+        car.car_default_charge = 100.0
+        car.do_force_next_charge = True
+        assert car.get_car_charge_percent(now) is None
+        await charger.check_load_activity_and_constraints(now)
+        cts = [c for c in charger._constraints if c is not None]
+        assert cts, "expected a constraint to be created"
+        assert cts[0].initial_value == 0.0
+
+    @pytest.mark.asyncio
     async def test_unplug_with_car_resets(self):
         *_, charger, car, now = self._setup()
         charger.is_not_plugged = MagicMock(return_value=True)

@@ -4,7 +4,7 @@ slug: car-soc-estimation
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-05-29
+last_verified: 2026-05-30
 ---
 
 # Car SOC estimation — the effective-SOC model
@@ -34,9 +34,15 @@ sensor reading always wins and clears the estimate.
   percent added during the current plugged session (a **float**).
 - `_user_base_soc_entry_sensor_value` — raw sensor value at the instant the
   user entered the manual value (recovery reference; may be `None`).
+- `_user_base_soc_entry_api_stale` — the stale-percent state at manual entry;
+  drives the 4-case recovery branch (`None` for pre-QS-243 blobs).
 - `_delta_soc_last_integration_time` — **not persisted**; the dedicated
   integration cursor, re-anchored on reboot so downtime energy is not
   counted.
+
+`user_set_manual_soc_percent` guards non-finite input (`math.isfinite`) and
+`round()`s before clamping — a raw `number.set_value` can bypass the card's
+finite/round guard.
 
 ## Accessors
 
@@ -46,25 +52,42 @@ sensor reading always wins and clears the estimate.
   base (pure-delta `+XX%`).
 - `is_in_soc_estimation_mode` — True for a no-sensor car, in stale-percent
   mode, or with a manual base on a healthy API.
+- `is_soc_sensor_distrusted` — True only in stale-percent mode or with no SOC
+  sensor. A manual override on a healthy sensor is **not** distrust — the
+  charger's zero-power hardware-fault check still runs (it is gated on distrust,
+  not on `is_in_soc_estimation_mode`).
 - `has_soc_estimate` — an absolute estimate exists (drives the `*` /
   `is_soc_estimated` sensor). Distinct from `is_in_soc_estimation_mode`:
   they diverge for the pure-delta case.
+- `soc_integration_cursor` (property) + `accumulate_soc_delta(inc, time)` — the
+  car's public accumulator API; the charger drives it through these instead of
+  reaching into the underscore-private fields. `accumulate_soc_delta` clamps the
+  pure-delta return to `[0, 100]`.
 
 ## Accumulator (charger callback is the sole writer)
 
 `constraint_update_value_callback_soc` advances the car-level float
 accumulator with its own cursor **every cycle** so sub-1%/cycle slices are
 never lost and never double-counted across solver / constraint churn. The
-first cycle (or post-reboot / post-base-set) only **anchors** the cursor.
+first cycle (or post-reboot / post-base-set) only **anchors** the cursor. The
+charger computes `inc` from `soc_integration_cursor` then calls
+`accumulate_soc_delta(inc, time)`.
 
 ## Recovery and orthogonality
 
-- **User-base recovery** (`_update_soc_estimation`, per cycle): a fresh
-  sensor value that differs from `_user_base_soc_entry_sensor_value` (exact
-  compare; a `None` reference also counts) clears everything.
-- **System-base recovery**: `_exit_stale_mode` clears the system base,
-  accumulator, and cursor on API recovery. The user base is never cleared
-  by stale-mode exit.
+- **User-base recovery** (`_update_soc_estimation`, per cycle) is a 4-case
+  state machine keyed on `_user_base_soc_entry_api_stale`:
+  - *Case 1* — entered while stale: clear once the car has exited stale mode
+    and a fresh valid value is available (live sensor wins).
+  - *Case 2* — entered not-stale with a valid value: clear only when a fresh
+    value *differs* from the entry reference (tolerant `round` compare); equal
+    → keep base **and** delta.
+  - *Case 3* — entered not-stale without a valid value: any valid value clears.
+- **System-base recovery**: `_exit_stale_mode` clears the system base. It also
+  clears the accumulator + cursor **only when no user override is active** — an
+  override owns its own accumulator lifecycle, so a transient stale blip must
+  not wipe its accumulated delta. The user base is never cleared by stale-mode
+  exit.
 - Estimation is **orthogonal** to `is_car_effectively_stale`: a manual
   override on a healthy API marks the car *estimated* (asterisk) but **not**
   API-stale.

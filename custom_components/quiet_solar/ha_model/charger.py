@@ -4666,23 +4666,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # Car-level float accumulator with a dedicated integration cursor:
                 # advances every cycle so sub-1%/cycle slices are never lost and
                 # never double-counted across solver / constraint churn. The car
-                # owns the running value; this callback is its sole writer.
-                if self.car._computed_added_delta_soc_percent is None:
-                    self.car._computed_added_delta_soc_percent = 0.0
-                if self.car._delta_soc_last_integration_time is None:
-                    # post-reboot / post-base-set: anchor only, do not integrate the gap
-                    self.car._delta_soc_last_integration_time = time
+                # owns the running value; this callback is its sole writer and
+                # drives it through the car's public accessors.
+                cursor = self.car.soc_integration_cursor
+                if cursor is None:
+                    # first cycle / post-reboot / post-base-set: anchor only.
+                    inc = None
                 else:
-                    inc = self._compute_added_charge_update(
-                        start_time=self.car._delta_soc_last_integration_time,
-                        end_time=time,
-                        is_target_percent=True,
-                    )
-                    if inc is not None:
-                        self.car._computed_added_delta_soc_percent += inc
-                        self.car._delta_soc_last_integration_time = time
-                est = self.car._estimated_soc_percent  # base+delta clamped, or None
-                result_calculus = est if est is not None else (self.car._computed_added_delta_soc_percent or 0.0)
+                    inc = self._compute_added_charge_update(start_time=cursor, end_time=time, is_target_percent=True)
+                result_calculus = self.car.accumulate_soc_delta(inc, time)
             else:
                 delta_added = self._compute_added_charge_update(
                     start_time=ct.last_value_change_update, end_time=time, is_target_percent=is_target_percent
@@ -4750,11 +4742,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # in case we do have a proper soc % and we expect a charge ongoing (ie "far" from the target)
         # we can check that the charger is really delivering power to the car
 
+        # The zero-power hardware-fault check needs a *trusted* SOC reference to
+        # decide growth, but it can also fall back to raw power measurement. It
+        # is therefore only skipped when the SOC sensor is genuinely distrusted
+        # (stale-percent mode / no sensor) — NOT for a plain manual override on a
+        # healthy, sensor-equipped car (S1).
         if (
             is_target_percent
             and result is not None
             and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
-            and not estimating
+            and not self.car.is_soc_sensor_distrusted()
         ):
             if (
                 self._expected_charge_state.value is True

@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-05-29
+last_verified: 2026-05-30
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -804,6 +804,11 @@ ring geometry** — the old `NaN` propagated through
 `socPct → handlePct → pctToDeg → polar`, emitting a `cx="NaN"` handle
 position; the `0` keeps the handle pinned at the bottom of the gauge.
 Confirm the `0`-on-dropout readout in the Phase-F smoke.
+
+**SOC popup dismissal (QS-243).** Save / Cancel / Reset all dismiss the popup
+via `_showDialog`'s per-button `activate()` `finally` block (it removes the
+modal after `onClick` resolves) — no explicit close call is needed in
+`openSocDialog`.
 
 **Estimated-SOC display + manual popup (QS-243).** The percent display is
 keyed on the `is_soc_estimated` binary sensor, not raw staleness: an

@@ -1808,6 +1808,9 @@ class QsCarCard extends QsCardBase {
                       }
                   });
               }
+              // `_showDialog`'s per-button `activate()` removes the modal in a
+              // finally block after `onClick` resolves, so Save / Cancel / Reset
+              // all dismiss the popup — no explicit close needed here (N6).
               this._showDialog({ title: 'Set charge percent', customContent: content, buttons });
           };
           socEl?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); openSocDialog(); });

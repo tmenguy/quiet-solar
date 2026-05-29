@@ -124,7 +124,6 @@ def _build_charger_and_car(no_sensor: bool):
     charger.on_device_state_change = AsyncMock()
     charger.possible_charge_error_start_time = None
     charger.charger_group.dyn_handle = AsyncMock()
-    car.setup_car_charge_target_if_needed = AsyncMock()
 
     return charger, car, now
 
@@ -205,3 +204,70 @@ async def test_real_sensor_path_not_estimating():
     assert car.is_in_soc_estimation_mode(now) is False
     result, _cont = await charger.constraint_update_value_callback_soc(_Ct(now), now, is_target_percent=True)
     assert result == 47.0
+
+
+async def test_pure_delta_result_calculus_clamped_to_100():
+    """N1 — the pure-delta accumulator value is clamped to <=100 before use."""
+    charger, car, now = _build_charger_and_car(no_sensor=True)
+    car._computed_added_delta_soc_percent = 130.0  # already over 100 (long session)
+    car._delta_soc_last_integration_time = now - timedelta(minutes=15)
+    charger._compute_added_charge_update = MagicMock(return_value=10.0)
+    result, _cont = await charger.constraint_update_value_callback_soc(
+        _Ct(now, target_value=100.0), now, is_target_percent=True
+    )
+    assert result == 100.0
+
+
+async def test_manual_override_on_healthy_car_does_not_suppress_fault_check():
+    """S1 — a manual override on a healthy, sensor-equipped car must NOT disable
+    the zero-power hardware-fault detection."""
+    charger, car, now = _build_charger_and_car(no_sensor=False)
+    # Healthy fresh sensor, but a manual override is active → estimating, yet the
+    # SOC sensor is NOT distrusted.
+    car._entity_probed_last_valid_state[car.car_charge_percent_sensor] = (now, 50.0, {})
+    car._user_base_soc_value = 10.0  # far below target → fault window applies
+    car._computed_added_delta_soc_percent = 0.0
+    assert car.is_in_soc_estimation_mode(now) is True
+    assert car.is_soc_sensor_distrusted() is False
+    charger._compute_added_charge_update = MagicMock(return_value=0.0)
+    charger._expected_charge_state.value = True
+    charger._expected_charge_state.last_ping_time_success = now - timedelta(seconds=3600)
+
+    t1 = now + timedelta(minutes=15)
+    await charger.constraint_update_value_callback_soc(_Ct(t1, target_value=80.0), t1, is_target_percent=True)
+    # power is zero (is_charging_power_zero mocked True) → fault reported
+    charger.on_device_state_change.assert_awaited()
+
+
+async def test_real_efficiency_integral_within_1pct():
+    """S2 / AC5 — the real efficiency-aware integral matches an independent
+    computation within ±1% SOC, with no double-count across N cycles."""
+    charger, car, now = _build_charger_and_car(no_sensor=True)
+    car.car_battery_capacity = 60000  # Wh
+    car._last_valid_base_soc_value = 50.0  # base B
+    car._computed_added_delta_soc_percent = 0.0
+    eff = charger.efficiency_factor  # the charger's real efficiency factor
+
+    # Drive the REAL _compute_added_charge_update via the energy source: a fixed
+    # 11 kW over each 15-minute slice → 2750 Wh/slice.
+    power_w = 11000.0
+    dt_s = 15 * 60
+    energy_per_slice_wh = power_w * dt_s / 3600.0
+    charger._can_use_group_power_sensor = MagicMock(return_value=False)
+    charger.get_device_real_energy = MagicMock(return_value=energy_per_slice_wh)
+
+    n_integrating_cycles = 4
+    t = now
+    await charger.constraint_update_value_callback_soc(_Ct(t), t, is_target_percent=True)  # anchor
+    for _ in range(n_integrating_cycles):
+        t = t + timedelta(seconds=dt_s)
+        result, _cont = await charger.constraint_update_value_callback_soc(_Ct(t), t, is_target_percent=True)
+
+    # Independent integral: B + sum(100 * (P*dt/e) / C)
+    expected_delta = n_integrating_cycles * 100.0 * (energy_per_slice_wh / eff) / 60000.0
+    expected = max(0.0, min(100.0, 50.0 + expected_delta))
+    assert abs(result - expected) <= 1.0
+    # no double-count: accumulator equals exactly the integrated delta
+    assert abs(car._computed_added_delta_soc_percent - expected_delta) <= 0.01
+
+

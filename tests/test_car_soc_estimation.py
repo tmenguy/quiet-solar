@@ -229,12 +229,14 @@ def test_user_reset_soc_estimate(est_car):
     est_car._last_valid_base_soc_value = 20.0
     est_car._computed_added_delta_soc_percent = 3.0
     est_car._user_base_soc_entry_sensor_value = 5.0
+    est_car._user_base_soc_entry_api_stale = True
     est_car._delta_soc_last_integration_time = "x"
     est_car.reset_soc_estimate()
     assert est_car._user_base_soc_value is None
     assert est_car._last_valid_base_soc_value is None
     assert est_car._computed_added_delta_soc_percent is None
     assert est_car._user_base_soc_entry_sensor_value is None
+    assert est_car._user_base_soc_entry_api_stale is None
     assert est_car._delta_soc_last_integration_time is None
 
 
@@ -294,14 +296,27 @@ def test_persistence_round_trip(est_car, fake_hass, mock_data_handler, current_t
     assert other._delta_soc_last_integration_time is None
 
 
+def test_persistence_entry_api_stale_round_trip(est_car, fake_hass, mock_data_handler):
+    est_car._user_base_soc_value = 40.0
+    est_car._user_base_soc_entry_api_stale = True
+    data: dict = {}
+    est_car.update_to_be_saved_extra_device_info(data)
+    assert data["user_base_soc_entry_api_stale"] is True
+    other = _make_car(fake_hass, mock_data_handler)
+    other.use_saved_extra_device_info(data)
+    assert other._user_base_soc_entry_api_stale is True
+
+
 def test_persistence_pre_qs243_blob(est_car):
     # A saved blob from before this story lacks the SOC keys.
     est_car._user_base_soc_value = 12.0
+    est_car._user_base_soc_entry_api_stale = True
     est_car.use_saved_extra_device_info({"current_forecasted_person_name_from_boot": None})
     assert est_car._user_base_soc_value is None
     assert est_car._last_valid_base_soc_value is None
     assert est_car._computed_added_delta_soc_percent is None
     assert est_car._user_base_soc_entry_sensor_value is None
+    assert est_car._user_base_soc_entry_api_stale is None
 
 
 # ── Recovery state machine: _update_soc_estimation ───────────────────────
@@ -350,6 +365,80 @@ def test_recovery_stale_sensor_skips(est_car, current_time):
     _set_soc(est_car, 51.0, stale_time)
     est_car._update_soc_estimation(current_time)
     assert est_car._user_base_soc_value == 70.0
+
+
+async def test_user_set_manual_records_entry_api_stale_true(est_car, current_time):
+    _set_soc(est_car, 30.0, current_time)
+    est_car.car_api_stale_percent_mode = True
+    est_car.charger = None
+    await est_car.user_set_manual_soc_percent(60)
+    assert est_car._user_base_soc_entry_api_stale is True
+
+
+async def test_manual_soc_finite_guard(est_car):
+    est_car.charger = None
+    await est_car.user_set_manual_soc_percent(float("nan"))
+    assert est_car._user_base_soc_value is None
+    await est_car.user_set_manual_soc_percent(float("inf"))
+    assert est_car._user_base_soc_value is None
+    await est_car.user_set_manual_soc_percent("not-a-number")
+    assert est_car._user_base_soc_value is None
+
+
+async def test_manual_soc_rounds_not_truncates(est_car):
+    est_car.charger = None
+    await est_car.user_set_manual_soc_percent(50.9)
+    assert est_car._user_base_soc_value == 51.0
+
+
+def test_is_soc_sensor_distrusted(est_car, est_car_no_sensor):
+    assert est_car.is_soc_sensor_distrusted() is False
+    est_car.car_api_stale_percent_mode = True
+    assert est_car.is_soc_sensor_distrusted() is True
+    # no-sensor car is always distrusted
+    assert est_car_no_sensor.is_soc_sensor_distrusted() is True
+
+
+# ── M1: 4-case override recovery keyed on entry API state ────────────────
+
+
+def test_recovery_case1_entered_during_stale_clears_on_exit(est_car, current_time):
+    # Case 1: override entered during stale mode → clear once stale exits.
+    est_car._user_base_soc_value = 70.0
+    est_car._user_base_soc_entry_api_stale = True
+    est_car._user_base_soc_entry_sensor_value = None
+    _set_soc(est_car, 55.0, current_time)
+
+    # Still stale → keep the override.
+    est_car.car_api_stale_percent_mode = True
+    est_car._update_soc_estimation(current_time)
+    assert est_car._user_base_soc_value == 70.0
+
+    # Exited stale + fresh valid sensor → live sensor wins.
+    est_car.car_api_stale_percent_mode = False
+    est_car._update_soc_estimation(current_time)
+    assert est_car._user_base_soc_value is None
+
+
+def test_recovery_case2_stale_blip_preserves_delta(est_car, current_time):
+    # Case 2 regression: a transient stale blip must not lose the delta.
+    est_car._user_base_soc_value = 60.0
+    est_car._user_base_soc_entry_api_stale = False
+    est_car._user_base_soc_entry_sensor_value = 50.0
+    est_car._computed_added_delta_soc_percent = 5.0
+    est_car._delta_soc_last_integration_time = current_time
+
+    # Stale blip recovers: accumulator preserved (user override owns it).
+    est_car.car_api_stale_percent_mode = True
+    est_car._exit_stale_mode()
+    assert est_car._computed_added_delta_soc_percent == 5.0
+
+    # Sensor still reads the entry value → keep base + delta.
+    _set_soc(est_car, 50.0, current_time)
+    est_car._update_soc_estimation(current_time)
+    assert est_car._user_base_soc_value == 60.0
+    assert est_car._computed_added_delta_soc_percent == 5.0
+    assert est_car._estimated_soc_percent == 65.0
 
 
 def test_recovery_raw_none_skips(est_car, current_time):
@@ -401,21 +490,83 @@ def test_enter_stale_for_init_no_capture(est_car, current_time):
     assert est_car._last_valid_base_soc_value is None
 
 
+# ── S4 / AC3: end-to-end fresh→stale→recover flow ────────────────────────
+
+
+def test_end_to_end_stale_capture_and_recovery(est_car, current_time):
+    """Drive `_update_car_api_staleness` across a full fresh→stale→recover cycle:
+    capture fires exactly once on the genuine edge, then recovery hands SOC back
+    to the live sensor."""
+    tracker = est_car.car_tracker
+    plugged = est_car.car_plugged
+    soc = est_car.car_charge_percent_sensor
+
+    def _fresh_non_soc(t):
+        est_car._entity_probed_last_valid_state[tracker] = (t, "home", {})
+        est_car._entity_probed_last_valid_state[plugged] = (t, "on", {})
+
+    # 1) Everything fresh, SOC = 60 → not stale.
+    _fresh_non_soc(current_time)
+    est_car._entity_probed_last_valid_state[soc] = (current_time, 60.0, {})
+    est_car._update_car_api_staleness(current_time)
+    assert est_car.car_api_stale_percent_mode is False
+    assert est_car.get_car_charge_percent(current_time) == 60.0
+
+    # 2) SOC sensor goes stale (others fresh) → SOC-only stale edge captures L=60.
+    stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+    est_car._entity_probed_last_valid_state[soc] = (stale_time, 60.0, {})
+    _fresh_non_soc(current_time)
+    est_car._update_car_api_staleness(current_time)
+    assert est_car.car_api_stale_percent_mode is True
+    assert est_car._last_valid_base_soc_value == 60.0
+    assert est_car._computed_added_delta_soc_percent == 0.0
+    assert est_car.get_car_charge_percent(current_time) == 60.0  # base + 0 delta
+
+    # 3) A second stale cycle must NOT re-capture (genuine-edge guard).
+    est_car._last_valid_base_soc_value = 999.0  # sentinel — must be left untouched
+    est_car._update_car_api_staleness(current_time)
+    assert est_car._last_valid_base_soc_value == 999.0
+    est_car._last_valid_base_soc_value = 60.0
+
+    # 4) API recovers: SOC fresh again with a new value → live sensor takes over.
+    recover_time = current_time + timedelta(seconds=10)
+    _fresh_non_soc(recover_time)
+    est_car._entity_probed_last_valid_state[soc] = (recover_time, 65.0, {})
+    est_car._update_car_api_staleness(recover_time)
+    assert est_car.car_api_stale_percent_mode is False
+    assert est_car._last_valid_base_soc_value is None
+    assert est_car.get_car_charge_percent(recover_time) == 65.0
+
+
 # ── _exit_stale_mode clears system base ──────────────────────────────────
 
 
-def test_exit_stale_clears_system_base(est_car):
+def test_exit_stale_clears_system_base_no_user_override(est_car):
+    # No user override: the system-base recovery clears base + accumulator.
+    est_car.car_api_stale_percent_mode = True
+    est_car._last_valid_base_soc_value = 40.0
+    est_car._computed_added_delta_soc_percent = 6.0
+    est_car._delta_soc_last_integration_time = "x"
+    est_car._exit_stale_mode()
+    assert est_car._last_valid_base_soc_value is None
+    assert est_car._computed_added_delta_soc_percent is None
+    assert est_car._delta_soc_last_integration_time is None
+
+
+def test_exit_stale_preserves_accumulator_with_user_override(est_car):
+    # M1 defect 2: a transient stale blip must NOT wipe an override's delta.
     est_car.car_api_stale_percent_mode = True
     est_car._last_valid_base_soc_value = 40.0
     est_car._computed_added_delta_soc_percent = 6.0
     est_car._delta_soc_last_integration_time = "x"
     est_car._user_base_soc_value = 88.0
     est_car._exit_stale_mode()
-    assert est_car._last_valid_base_soc_value is None
-    assert est_car._computed_added_delta_soc_percent is None
-    assert est_car._delta_soc_last_integration_time is None
-    # user base is NOT cleared by stale-mode exit
+    # the override owns its accumulator lifecycle → delta + cursor preserved
+    assert est_car._computed_added_delta_soc_percent == 6.0
+    assert est_car._delta_soc_last_integration_time == "x"
+    # user base untouched; system base cleared
     assert est_car._user_base_soc_value == 88.0
+    assert est_car._last_valid_base_soc_value is None
 
 
 # ── AC12: orthogonality ──────────────────────────────────────────────────

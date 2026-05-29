@@ -23,8 +23,11 @@ from homeassistant.helpers.template import Template
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
+    BUTTON_CAR_RESET_SOC_ESTIMATE,
     CONF_POOL_TEMPERATURE_SENSOR,
     CONF_POWER,
+    NUMBER_CAR_MANUAL_SOC_PERCENT,
     CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
@@ -326,9 +329,35 @@ class TestDashboardTemplateRendering:
 
         parsed = yaml.safe_load(rendered)
         assert parsed is not None
-        assert "is_soc_estimated:" in rendered
-        assert "manual_soc:" in rendered
-        assert "reset_soc:" in rendered
+
+        # Traverse to the real car's qs-car-card and inspect ITS entities mapping
+        # (not just "the key appears somewhere in the YAML"). The charger's
+        # invited default-generic car also renders a qs-car-card but without the
+        # SOC-estimate entities, so select the card that actually has them.
+        soc_car_cards = []
+        for view in parsed.get("views", []):
+            for section in view.get("sections", []):
+                for card in section.get("cards", []):
+                    if (
+                        isinstance(card, dict)
+                        and card.get("type") == "custom:qs-car-card"
+                        and isinstance(card.get("entities"), dict)
+                        and "is_soc_estimated" in card["entities"]
+                    ):
+                        soc_car_cards.append(card)
+        assert len(soc_car_cards) == 1, "expected exactly one estimating car card"
+        entities = soc_car_cards[0]["entities"]
+        # The card-config keys are wired to entities of the expected domains.
+        assert entities["is_soc_estimated"].startswith("binary_sensor.")
+        assert entities["manual_soc"].startswith("number.")
+        assert entities["reset_soc"].startswith("button.")
+
+        # N5 — the template resolves those entities via the const.py keys
+        # (never hardcoded ha.get("qs_car_...") string literals in the source).
+        template_src = template_content
+        assert f'ha.get("{BINARY_SENSOR_CAR_IS_SOC_ESTIMATED}")' in template_src
+        assert f'ha.get("{NUMBER_CAR_MANUAL_SOC_PERCENT}")' in template_src
+        assert f'ha.get("{BUTTON_CAR_RESET_SOC_ESTIMATE}")' in template_src
 
     def test_car_card_consumes_soc_estimate_keys(self):
         """QS-243 — the JS card reads the three estimated-SOC entity keys."""

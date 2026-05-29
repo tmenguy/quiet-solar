@@ -3342,6 +3342,8 @@ async def test_charger_check_load_activity_unplugged(
     assert await charger_device.check_load_activity_and_constraints(now) is True
     charger_device.reset.assert_called_once()
     charger_device.set_max_charging_current.assert_awaited()
+    # QS-243 S5 — the unplug edge cleared the car's SOC estimate.
+    assert car.reset_soc_estimate_call_count == 1
 
 
 async def test_charger_check_load_activity_plugged_best_car_none(

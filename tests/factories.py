@@ -717,6 +717,9 @@ class TestCarDouble:
         self.charger = None
         self._current_charge_percent = kwargs.get("current_soc", 50.0)
         self._user_originated: dict[str, Any] = {}
+        # QS-243 — observable so plug-in / full-reset tests can prove the
+        # SOC-estimate reset actually fired.
+        self.reset_soc_estimate_call_count = 0
 
         # Apply any additional kwargs as attributes
         for key, value in kwargs.items():
@@ -739,8 +742,8 @@ class TestCarDouble:
         self._user_originated.clear()
 
     def reset_soc_estimate(self) -> None:
-        """Mirror QSCar.reset_soc_estimate (QS-243) — no-op for the double."""
-        return None
+        """Mirror QSCar.reset_soc_estimate (QS-243); records that it fired."""
+        self.reset_soc_estimate_call_count += 1
 
     def get_charge_power_per_phase_A(
         self,
