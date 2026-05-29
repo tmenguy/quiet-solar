@@ -736,7 +736,7 @@ async def test_adapt_max_charge_limit_steps_overflow(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """When bisect_left returns index >= len(steps), uses last step (line 1091)."""
+    """When bisect_left returns index >= len(steps), uses last step (car.py:1508)."""
     from homeassistant.components import number as number_mod
 
     set_value_handler = AsyncMock()
@@ -774,6 +774,9 @@ async def test_adapt_max_charge_limit_steps_overflow(
     )
     set_value_handler.reset_mock()
 
+    # Attached to a QS-managed charger so the native-limit write is permitted.
+    car2.charger = SimpleNamespace()
+
     # Ask for 90 → percent becomes max(90, default_charge=80)=90
     # steps = [50,70,100], bisect_left(90) = 2, step=100
     await car2.adapt_max_charge_limit(asked_percent=90)
@@ -786,7 +789,7 @@ async def test_adapt_max_charge_limit_service_exception(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """Exception calling service is caught and logged (lines 1109-1110)."""
+    """Exception calling service is caught and logged (car.py:1522-1528)."""
     entity = "number.car_max_charge_exc"
     hass.states.async_set(entity, "50")
 
@@ -796,6 +799,9 @@ async def test_adapt_max_charge_limit_service_exception(
         extra_config={CONF_CAR_CHARGE_PERCENT_MAX_NUMBER: entity},
         entry_id_suffix="lim_exc",
     )
+    # Attached to a QS-managed charger so execution reaches the service call and
+    # keeps the try/except branch covered.
+    car.charger = SimpleNamespace()
     with patch(
         "homeassistant.core.ServiceRegistry.async_call",
         side_effect=RuntimeError("service fail"),
