@@ -46,7 +46,7 @@ Caller = Literal["setup_task", "next_step"]
 
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose
 # — users can override via env or by editing this constant.
-CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus --effort max"
+CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus"
 
 
 def _pycharm_bin() -> str | None:
