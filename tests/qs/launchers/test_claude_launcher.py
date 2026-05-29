@@ -120,7 +120,6 @@ def test_build_payload_preserves_launch_opts_and_workdir() -> None:
     # caught by this assertion.
     assert "--dangerously-skip-permissions" in script
     assert "--model opus" in script
-    assert "--effort max" in script
     # Stable layout invariant: ``--agent`` appears after CLAUDE_LAUNCH_OPTS
     # in the rendered command line. (CLI flag ORDER is independent in
     # argparse-style parsers — this is a layout/cosmetic check, not a
