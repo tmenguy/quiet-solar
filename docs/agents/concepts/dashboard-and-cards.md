@@ -805,6 +805,15 @@ ring geometry** — the old `NaN` propagated through
 position; the `0` keeps the handle pinned at the bottom of the gauge.
 Confirm the `0`-on-dropout readout in the Phase-F smoke.
 
+**CSS template-literal hazard (QS-243).** The car card's CSS block is a JS
+template literal (`baseCardCSS(colors) + ` + backtick … backtick). A stray
+backtick **anywhere inside it — including a comment** — closes the literal early
+and turns the trailing CSS into JS, which throws at render time and surfaces as
+a Lovelace "Configuration error" placeholder (`setConfig` calls `_render`).
+Never put backticks in that block; a regression test asserts there are none. The
+editable SOC `.pct.soc-editable` re-enables `pointer-events: auto` (its parent
+`.ring .center` is `pointer-events: none`), else the popup click never fires.
+
 **SOC popup dismissal (QS-243).** Save / Cancel / Reset all dismiss the popup
 via `_showDialog`'s per-button `activate()` `finally` block (it removes the
 modal after `onClick` resolves) — no explicit close call is needed in

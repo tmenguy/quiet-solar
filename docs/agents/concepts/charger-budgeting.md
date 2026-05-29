@@ -118,4 +118,6 @@ apply_budget_strategy()
   `accumulate_soc_delta` accessors (no underscore reach-in), and gates the
   zero-power hardware-fault check on `car.is_soc_sensor_distrusted()` (stale /
   no-sensor) — **not** on the broad estimation flag, so a manual override on a
-  healthy car still gets fault detection.
+  healthy car still gets fault detection. The estimate is reset on the
+  genuine-plug-in branch (`do_full_reset`) and the unplug edge; a boot re-attach
+  preserves it (reboot survival).

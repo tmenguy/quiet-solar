@@ -43,9 +43,9 @@ tomorrow's predicted trips with margin.
 
 - SOC tracking via HA entity (manufacturer-specific). The trip-prediction
   read goes through the unified effective-SOC accessor
-  `get_car_charge_percent`, which returns an **estimate** when the SOC API
-  is failed / inaccurate / absent — see
-  [car-soc-estimation.md](car-soc-estimation.md).
+  `get_car_charge_percent`, which returns an **estimate** (manual override or
+  charged-energy interpolation) when the SOC API is failed / inaccurate /
+  absent — see [car-soc-estimation.md](car-soc-estimation.md).
 - Charger assignment: which charger this car is plugged into.
 - Person allocation: which person owns this car (drives prediction
   targeting).

@@ -68,6 +68,11 @@ CAR_DEFAULT_CAPACITY = 100000  # 100 kWh
 CAR_MINIMUM_LEFT_RANGE_KM = 40.0
 
 
+def _round_half_up(value: float) -> int:
+    """Round half away-from-zero (avoids Python's banker's rounding at `.5`)."""
+    return int(math.floor(value + 0.5))
+
+
 class QSCar(HADeviceMixin, AbstractDevice):
     conf_type_name = CONF_TYPE_NAME_QSCar
 
@@ -1437,8 +1442,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return
         if self.car_charge_percent_sensor is None:
             return
-        # Every case is triggered by a fresh, valid raw reading.
-        if self._is_soc_sensor_stale(time):
+        # Every case is triggered by a valid raw reading. Normally we wait for a
+        # *fresh* one, but Force-Not-Stale means the user asserts the sensor is
+        # trusted even if it is time-stale (S2) — so recovery may proceed then.
+        forced_not_stale = self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE
+        if self._is_soc_sensor_stale(time) and not forced_not_stale:
             return
         raw = self.get_car_charge_percent_raw_sensor(time)
         if raw is None:
@@ -1455,8 +1463,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.reset_soc_estimate()
             return
 
-        # Case 2 — clear only on a value that differs from the entry reference.
-        if round(raw) != round(self._user_base_soc_entry_sensor_value):
+        # Case 2 — clear only on a value that differs from the entry reference
+        # (half-up rounding so an exact `.5` reading is not mis-binned — N3).
+        if _round_half_up(raw) != _round_half_up(self._user_base_soc_entry_sensor_value):
             self.reset_soc_estimate()
 
     def _capture_last_valid_base_soc(self, time: datetime) -> None:
@@ -1491,7 +1500,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if not math.isfinite(value):
             # Reject NaN / ±inf (e.g. a raw `number.set_value` bypassing the card).
             return
-        self._user_base_soc_value = float(max(0, min(100, round(value))))
+        self._user_base_soc_value = float(max(0, min(100, _round_half_up(value))))
         now = datetime.now(tz=pytz.UTC)
         self._user_base_soc_entry_sensor_value = self.get_car_charge_percent_raw_sensor(now)
         # Record the API state at entry so recovery can branch on it (M1).

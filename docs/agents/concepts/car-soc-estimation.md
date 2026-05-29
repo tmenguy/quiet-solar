@@ -41,8 +41,10 @@ sensor reading always wins and clears the estimate.
   counted.
 
 `user_set_manual_soc_percent` guards non-finite input (`math.isfinite`) and
-`round()`s before clamping — a raw `number.set_value` can bypass the card's
-finite/round guard.
+half-up-rounds before clamping — a raw `number.set_value` can bypass the card's
+finite/round guard. The manual-SOC **number entity** tracks
+`qs_car_manual_soc_percent` every update cycle (`qs_track_device_value`), so a
+runtime reset (plug-in / reset button / recovery) is reflected in the card.
 
 ## Accessors
 
@@ -83,6 +85,10 @@ charger computes `inc` from `soc_integration_cursor` then calls
     value *differs* from the entry reference (tolerant `round` compare); equal
     → keep base **and** delta.
   - *Case 3* — entered not-stale without a valid value: any valid value clears.
+  - Force-Not-Stale is treated as "sensor trusted": recovery may proceed even
+    when the SOC sensor is time-stale (the user has asserted it is reliable).
+  The tolerant compare uses half-away-from-zero rounding (`_round_half_up`), not
+  Python's banker's rounding, so an exact `.5` reading is not mis-binned.
 - **System-base recovery**: `_exit_stale_mode` clears the system base. It also
   clears the accumulator + cursor **only when no user override is active** — an
   override owns its own accumulator lifecycle, so a transient stale blip must

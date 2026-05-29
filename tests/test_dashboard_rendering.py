@@ -368,6 +368,41 @@ class TestDashboardTemplateRendering:
         # The asterisk gating must be present.
         assert "hasSocEstimate" in source
 
+    def test_car_card_soc_editable_pointer_events(self):
+        """QS-243 #02 M1 — the editable SOC re-enables pointer events (it sits
+        inside `.ring .center` which is pointer-events:none), else clicks pass
+        through to the gauge and the popup never opens."""
+        import re
+
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        # A `.soc-editable` CSS rule that sets pointer-events: auto.
+        assert re.search(r"\.soc-editable\s*\{[^}]*pointer-events:\s*auto", source), (
+            "qs-car-card.js: missing `.soc-editable { ... pointer-events: auto }` rule (M1)"
+        )
+
+    def test_car_card_soc_save_never_silently_discards(self):
+        """QS-243 #02 N1 — invalid SOC input falls back to the current value and
+        is still clamped + saved (no silent discard)."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        assert "if (!Number.isFinite(v)) v = cur;" in source
+
+    def test_car_card_css_template_literal_has_no_stray_backtick(self):
+        """QS-243 #02 — the CSS block is a template literal
+        (`baseCardCSS(colors) + ` + backtick ... backtick); a stray backtick
+        inside (e.g. in a comment) would prematurely close the literal and turn
+        CSS text into JS, throwing at render time → 'Configuration error'.
+        CSS legitimately contains no backticks, so assert there are none.
+        """
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        marker = "const css = baseCardCSS(colors) + `"
+        start = source.index(marker) + len(marker)
+        end = source.index("`;", start)  # the closing delimiter of the literal
+        css_body = source[start:end]
+        assert "`" not in css_body, (
+            "qs-car-card.js: stray backtick inside the CSS template literal — "
+            "it closes the literal early and breaks render (Configuration error)."
+        )
+
     def test_radiator_card_s14_safe_number_guards_against_nan(self):  # CR2 — sync (no hass)
         """A2 — pin S14 via regex, not a bare substring.
 

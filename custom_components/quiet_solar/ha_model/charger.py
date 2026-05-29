@@ -3193,8 +3193,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 self.car.clear_all_user_originated()
                 # Edge-triggered (plugged→unplugged): clear the estimated-SOC
-                # state. A manual value set while already unplugged survives a
-                # later plug-in because there is no intervening unplug edge here.
+                # state. The genuine plug-in path also clears it (the
+                # do_full_reset branch below), so the estimate is reset on every
+                # plug cycle; only an HA reboot (boot re-attach, with
+                # do_full_reset=False) preserves the persisted estimate.
                 self.car.reset_soc_estimate()
                 self.reset(keep_commands=True)  # will detach the car
                 self.clear_user_originated("car_name")  # physical unplug, reset the user selected car for charger

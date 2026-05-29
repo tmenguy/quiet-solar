@@ -1,12 +1,13 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTime
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
@@ -27,6 +28,10 @@ from .entity import QSDeviceEntity
 class QSNumberEntityDescription(NumberEntityDescription):
     qs_default_option: str | None = None
     async_set_fn: Callable[[AbstractDevice, float, bool], Any] | None = None
+    # When True, the entity's displayed value tracks `getattr(device, key)` every
+    # update cycle, so a runtime reset of the backing attribute is reflected in
+    # the card (QS-243 S1).
+    qs_track_device_value: bool = False
 
 
 def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
@@ -71,6 +76,7 @@ def create_ha_number_for_QSCar(device: QSCar):
             native_unit_of_measurement=PERCENTAGE,
             mode=NumberMode.BOX,
             async_set_fn=lambda device, value, for_init: device.user_set_manual_soc_percent(value, for_init),
+            qs_track_device_value=True,
         )
         entities.append(
             QSBaseNumber(data_handler=device.data_handler, device=device, description=manual_soc_description)
@@ -169,4 +175,14 @@ class QSBaseNumber(QSDeviceEntity, NumberEntity, RestoreEntity):
                     "can't set number %s on %s for %s: %s", value, self.device.name, self.entity_description.key, e
                 )
         self._set_availabiltiy()
+        self.async_write_ha_state()
+
+    @callback
+    def async_update_callback(self, time: datetime) -> None:
+        """Re-sync the displayed value from the device when tracking it (S1)."""
+        self._set_availabiltiy()
+        if self.entity_description.qs_track_device_value:
+            new_val = getattr(self.device, self.entity_description.key, None)
+            if new_val is not None and new_val != self._attr_native_value:
+                self._attr_native_value = new_val
         self.async_write_ha_state()

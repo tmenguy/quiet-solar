@@ -1026,6 +1026,12 @@ class QsCarCard extends QsCardBase {
       .hero .side { text-align:center; color: var(--secondary-text-color); font-weight:600; }
       .hero .side .value { display:block; font-size:1.2rem; color: var(--primary-text-color); }
       .ring .pct { font-size: 4rem; font-weight:800; letter-spacing:-1px; line-height:1; text-shadow: var(--ring-text-shadow); }
+      /* QS-243 M1 -- .ring .center is pointer-events:none (so the SVG gauge
+         stays interactive); the editable SOC variant must re-enable pointer
+         events or its click/tap handlers never fire. The non-editable SOC text
+         stays click-through. The .disabled guard still no-ops it when the car
+         is not plugged into a charger. */
+      .ring .pct.soc-editable { pointer-events: auto; cursor: pointer; }
       .ring ha-icon { --mdc-icon-size: 32px; color: var(--secondary-text-color); margin-bottom: 6px; }
       .ring .soc-block { display:flex; flex-direction:column; align-items:center; gap:2px; margin-top:4px; margin-bottom:8px; }
       .ring .soc-block .charge-type-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); margin-bottom: 2px; }
@@ -1794,7 +1800,11 @@ class QsCarCard extends QsCardBase {
                       text: 'Save', variant: 'primary', onClick: async () => {
                           const inp = this._root?.querySelector('#qs_soc_input');
                           let v = inp ? Number(inp.value) : NaN;
-                          if (!Number.isFinite(v)) return;
+                          // QS-243 N1 — never silently discard: invalid / non-finite
+                          // input falls back to the prefilled current value and is
+                          // still clamped + saved (the dialog always commits a sane
+                          // value rather than closing with no save).
+                          if (!Number.isFinite(v)) v = cur;
                           v = Math.max(0, Math.min(100, Math.round(v)));
                           await this._setNumber(e.manual_soc, v);
                       }

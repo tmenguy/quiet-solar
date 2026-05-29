@@ -8,10 +8,11 @@ estimation-vs-staleness orthogonality.
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytz
 
 from custom_components.quiet_solar.const import (
     BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
@@ -391,6 +392,13 @@ async def test_manual_soc_rounds_not_truncates(est_car):
     assert est_car._user_base_soc_value == 51.0
 
 
+async def test_manual_soc_half_up_rounding(est_car):
+    # N3 — half-up, not Python banker's rounding (round(2.5) == 2).
+    est_car.charger = None
+    await est_car.user_set_manual_soc_percent(2.5)
+    assert est_car._user_base_soc_value == 3.0
+
+
 def test_is_soc_sensor_distrusted(est_car, est_car_no_sensor):
     assert est_car.is_soc_sensor_distrusted() is False
     est_car.car_api_stale_percent_mode = True
@@ -418,6 +426,50 @@ def test_recovery_case1_entered_during_stale_clears_on_exit(est_car, current_tim
     est_car.car_api_stale_percent_mode = False
     est_car._update_soc_estimation(current_time)
     assert est_car._user_base_soc_value is None
+
+
+def test_recovery_case1_force_not_stale_clears_while_time_stale(est_car, current_time):
+    # S2 — override entered during stale; user sets Force-Not-Stale while the SOC
+    # sensor is still time-stale → the (force-trusted) live sensor takes over.
+    est_car._user_base_soc_value = 70.0
+    est_car._user_base_soc_entry_api_stale = True
+    est_car._user_base_soc_entry_sensor_value = None
+    stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+    _set_soc(est_car, 55.0, stale_time)  # genuinely time-stale value
+    est_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
+    est_car.car_api_stale_percent_mode = False  # forced not-stale → exited stale mode
+    est_car._update_soc_estimation(current_time)
+    assert est_car._user_base_soc_value is None
+
+
+def test_recovery_case1_time_stale_without_force_keeps(est_car, current_time):
+    # Without Force-Not-Stale, a time-stale sensor does not trigger recovery.
+    est_car._user_base_soc_value = 70.0
+    est_car._user_base_soc_entry_api_stale = True
+    est_car._user_base_soc_entry_sensor_value = None
+    stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+    _set_soc(est_car, 55.0, stale_time)
+    est_car.car_api_stale_percent_mode = False
+    est_car._update_soc_estimation(current_time)
+    assert est_car._user_base_soc_value == 70.0
+
+
+def test_number_entity_resyncs_on_runtime_reset(est_car):
+    # S1 — the manual-SOC number entity tracks the device value, so a runtime
+    # reset (e.g. plug-in / reset button / recovery) is reflected in the card.
+    from custom_components.quiet_solar.number import create_ha_number_for_QSCar
+
+    entity = create_ha_number_for_QSCar(est_car)[0]
+    entity.hass = est_car.hass
+    entity.async_write_ha_state = MagicMock()
+
+    est_car._user_base_soc_value = 80.0
+    entity.async_update_callback(datetime.now(tz=pytz.UTC))
+    assert entity._attr_native_value == 80.0
+
+    est_car.reset_soc_estimate()
+    entity.async_update_callback(datetime.now(tz=pytz.UTC))
+    assert entity._attr_native_value == 0.0
 
 
 def test_recovery_case2_stale_blip_preserves_delta(est_car, current_time):
