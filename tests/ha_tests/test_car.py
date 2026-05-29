@@ -1107,13 +1107,13 @@ async def test_car_efficiency_from_soc_and_odometer(
     car_device.car_estimated_range_sensor = None
 
     time1 = datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)
-    car_device.get_car_charge_percent = MagicMock(return_value=80.0)
+    car_device.get_car_charge_percent_raw_sensor = MagicMock(return_value=80.0)
     car_device.get_car_odometer_km = MagicMock(return_value=1000.0)
 
     car_device.car_efficiency_km_per_kwh_sensor_state_getter("sensor.car_efficiency", time1)
 
     time2 = datetime(2026, 1, 15, 18, 0, tzinfo=pytz.UTC)
-    car_device.get_car_charge_percent = MagicMock(return_value=70.0)
+    car_device.get_car_charge_percent_raw_sensor = MagicMock(return_value=70.0)
     car_device.get_car_odometer_km = MagicMock(return_value=1010.0)
 
     result = car_device.car_efficiency_km_per_kwh_sensor_state_getter("sensor.car_efficiency", time2)
@@ -1428,9 +1428,11 @@ async def test_car_charge_percent_constraints_flags(
     car_device.car_battery_capacity = None
     assert car_device.can_use_charge_percent_constraints() is False
 
+    # QS-243 — a no-sensor car with a true capacity now uses percent
+    # constraints (estimates SOC from charged energy).
     car_device.car_battery_capacity = 50000
     car_device.car_charge_percent_sensor = None
-    assert car_device.can_use_charge_percent_constraints() is False
+    assert car_device.can_use_charge_percent_constraints() is True
 
     car_device.car_charge_percent_sensor = "sensor.car_soc"
     assert car_device.can_use_charge_percent_constraints() is True
@@ -1663,6 +1665,11 @@ async def test_car_charge_energy_and_charge_limit(
 
     car_device = hass.data[DOMAIN].get(car_entry.entry_id)
     assert car_device is not None
+
+    # QS-243 — the car now registers the NUMBER platform (manual-SOC entity),
+    # which re-registers HA's real `number.set_value` during setup. Re-register
+    # the mock afterwards so it is the active handler.
+    hass.services.async_register(number.DOMAIN, number.SERVICE_SET_VALUE, set_value_handler)
 
     time_now = datetime(2026, 1, 20, 14, 0, tzinfo=pytz.UTC)
     soc_entity = car_device.car_charge_percent_sensor

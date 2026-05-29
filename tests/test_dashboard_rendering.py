@@ -308,6 +308,37 @@ class TestDashboardTemplateRendering:
         # Stub config also reads the renamed display name.
         assert "QS Radiator" in content
 
+    @pytest.mark.asyncio
+    async def test_car_card_wires_soc_estimate_entities(self, hass, full_dashboard_home):
+        """QS-243 AC11 — the car card wires the estimated-SOC entities.
+
+        With a SOC sensor + battery capacity the car exposes the
+        `is_soc_estimated` binary sensor, the `manual_soc` number, and the
+        `reset_soc` button; the custom template must feed all three into the
+        car card config.
+        """
+        home = full_dashboard_home
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        template_content = await hass.async_add_executor_job(template_path.read_text)
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        parsed = yaml.safe_load(rendered)
+        assert parsed is not None
+        assert "is_soc_estimated:" in rendered
+        assert "manual_soc:" in rendered
+        assert "reset_soc:" in rendered
+
+    def test_car_card_consumes_soc_estimate_keys(self):
+        """QS-243 — the JS card reads the three estimated-SOC entity keys."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        assert "e.is_soc_estimated" in source
+        assert "e.manual_soc" in source
+        assert "e.reset_soc" in source
+        # The asterisk gating must be present.
+        assert "hasSocEstimate" in source
+
     def test_radiator_card_s14_safe_number_guards_against_nan(self):  # CR2 — sync (no hass)
         """A2 — pin S14 via regex, not a bare substring.
 

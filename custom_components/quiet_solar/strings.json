@@ -851,6 +851,9 @@
       },
       "qs_car_is_stale": {
         "name": "Car API Stale"
+      },
+      "qs_car_is_soc_estimated": {
+        "name": "Car charge is estimated"
       }
     },
 
@@ -973,6 +976,9 @@
       },
       "qs_next_car_charge_add_default": {
         "name": "Add Charge"
+      },
+      "qs_car_reset_soc_estimate": {
+        "name": "Reset charge estimate"
       },
       "qs_home_recompute_people_historical_data": {
         "name": "Recompute People Historical Data"
@@ -1135,6 +1141,9 @@
       },
       "override_duration": {
         "name": "Reset user override duration (hours)"
+      },
+      "qs_car_manual_soc_percent": {
+        "name": "Manual charge percent"
       }
     },
     "time": {

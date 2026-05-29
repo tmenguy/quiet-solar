@@ -432,6 +432,9 @@
             "qs_car_api_ok": {
                 "name": "Car API OK"
             },
+            "qs_car_is_soc_estimated": {
+                "name": "Car charge is estimated"
+            },
             "qs_car_is_stale": {
                 "name": "Car API Stale"
             },
@@ -455,6 +458,9 @@
             }
         },
         "button": {
+            "qs_car_reset_soc_estimate": {
+                "name": "Reset charge estimate"
+            },
             "qs_device_clean_and_reset": {
                 "name": "BEWARE: Force Reset"
             },
@@ -507,6 +513,9 @@
             },
             "override_duration": {
                 "name": "Reset user override duration (hours)"
+            },
+            "qs_car_manual_soc_percent": {
+                "name": "Manual charge percent"
             }
         },
         "select": {

@@ -526,6 +526,30 @@ class TestCheckLoadActivityAndConstraints:
         assert charger._boot_time is None
 
     @pytest.mark.asyncio
+    async def test_genuine_plug_in_resets_soc_estimate(self):
+        """QS-243 — a genuine new plug-in clears the estimated-SOC state."""
+        *_, charger, car, now = self._setup()
+        charger.car = None
+        charger._boot_car = None  # genuine new plug, not a boot re-attach
+        charger.get_best_car = MagicMock(return_value=car)
+        car._user_base_soc_value = 55.0
+        car._computed_added_delta_soc_percent = 3.0
+        await charger.check_load_activity_and_constraints(now)
+        assert car._user_base_soc_value is None
+        assert car._computed_added_delta_soc_percent is None
+
+    @pytest.mark.asyncio
+    async def test_boot_reattach_preserves_soc_estimate(self):
+        """QS-243 — a boot re-attach preserves the persisted estimate (reboot survives)."""
+        *_, charger, car, now = self._setup()
+        charger.car = None
+        charger._boot_car = car  # boot re-attach for the same car
+        charger.get_best_car = MagicMock(return_value=car)
+        car._user_base_soc_value = 55.0
+        await charger.check_load_activity_and_constraints(now)
+        assert car._user_base_soc_value == 55.0
+
+    @pytest.mark.asyncio
     async def test_unplug_with_car_resets(self):
         *_, charger, car, now = self._setup()
         charger.is_not_plugged = MagicMock(return_value=True)
@@ -770,9 +794,15 @@ class TestCheckLoadActivityAndConstraints:
 
     @pytest.mark.asyncio
     async def test_non_percent_car(self):
-        """Car without SOC sensor uses energy-based constraints."""
+        """Car without SOC sensor AND without a battery capacity uses energy constraints.
+
+        QS-243 — a no-sensor car with a *true* capacity now uses percent
+        constraints, so the energy path requires no capacity here.
+        """
         hass, home, charger, _, now = self._setup()
         car_no_soc = _make_real_car(hass, home, name="NoSocCar", has_soc_sensor=False)
+        car_no_soc.car_battery_capacity = None
+        assert car_no_soc.can_use_charge_percent_constraints() is False
         _plug_car(charger, car_no_soc, now)
         charger.get_best_car = MagicMock(return_value=car_no_soc)
         car_no_soc.do_force_next_charge = True
@@ -6637,9 +6667,10 @@ class TestUpdateValueCallbackLines3967_3971:
         ct.target_value = 80.0
         ct.is_constraint_met = MagicMock(return_value=False)
 
-        # sensor_result is non-None (e.g. 52%)
-        car.get_car_charge_percent = MagicMock(return_value=52.0)
+        # sensor_result is non-None (e.g. 52%) — the callback reads the raw sensor (QS-243)
         car.car_charge_percent_sensor = "sensor.car_soc"
+        car.get_car_charge_percent_raw_sensor = MagicMock(return_value=52.0)
+        assert car.is_in_soc_estimation_mode(now) is False
 
         # _compute_added_charge_update: first call for delta_added, second for delta_begin, third for computed_change
         # delta_added => 6 (so result_calculus = 50 + 6 = 56)

@@ -5,15 +5,17 @@ from typing import Any
 
 from homeassistant.components.number import NumberEntity, NumberEntityDescription, NumberMode
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTime
+from homeassistant.const import PERCENTAGE, STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import (
     DOMAIN,
+    NUMBER_CAR_MANUAL_SOC_PERCENT,
 )
 from .ha_model.bistate_duration import QSBiStateDuration
+from .ha_model.car import QSCar
 from .home_model.load import AbstractDevice
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,11 +58,35 @@ def create_ha_number_for_QSBiStateDuration(device: QSBiStateDuration):
     return entities
 
 
+def create_ha_number_for_QSCar(device: QSCar):
+    entities = []
+
+    if device.can_use_charge_percent_constraints():
+        manual_soc_description = QSNumberEntityDescription(
+            key=NUMBER_CAR_MANUAL_SOC_PERCENT,
+            translation_key=NUMBER_CAR_MANUAL_SOC_PERCENT,
+            native_max_value=100,
+            native_min_value=0,
+            native_step=1,
+            native_unit_of_measurement=PERCENTAGE,
+            mode=NumberMode.BOX,
+            async_set_fn=lambda device, value, for_init: device.user_set_manual_soc_percent(value, for_init),
+        )
+        entities.append(
+            QSBaseNumber(data_handler=device.data_handler, device=device, description=manual_soc_description)
+        )
+
+    return entities
+
+
 def create_ha_number(device: AbstractDevice):
     ret = []
 
     if isinstance(device, QSBiStateDuration):
         ret.extend(create_ha_number_for_QSBiStateDuration(device))
+
+    if isinstance(device, QSCar):
+        ret.extend(create_ha_number_for_QSCar(device))
 
     return ret
 

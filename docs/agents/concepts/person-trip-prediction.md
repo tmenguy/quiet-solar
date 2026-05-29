@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-05-19
+last_verified: 2026-05-29
 ---
 
 # Person, Car, and trip prediction
@@ -41,7 +41,11 @@ tomorrow's predicted trips with margin.
 
 **Car side**:
 
-- SOC tracking via HA entity (manufacturer-specific).
+- SOC tracking via HA entity (manufacturer-specific). The trip-prediction
+  read goes through the unified effective-SOC accessor
+  `get_car_charge_percent`, which returns an **estimate** when the SOC API
+  is failed / inaccurate / absent — see
+  [car-soc-estimation.md](car-soc-estimation.md).
 - Charger assignment: which charger this car is plugged into.
 - Person allocation: which person owns this car (drives prediction
   targeting).

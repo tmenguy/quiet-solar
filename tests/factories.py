@@ -738,6 +738,10 @@ class TestCarDouble:
     def clear_all_user_originated(self) -> None:
         self._user_originated.clear()
 
+    def reset_soc_estimate(self) -> None:
+        """Mirror QSCar.reset_soc_estimate (QS-243) — no-op for the double."""
+        return None
+
     def get_charge_power_per_phase_A(
         self,
         target_amps: int,

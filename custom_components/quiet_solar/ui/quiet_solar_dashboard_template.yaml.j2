@@ -77,6 +77,12 @@ views:
               {% if e %}force_now: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("qs_next_car_charge_add_default") %}
               {% if e %}schedule: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_car_is_soc_estimated") %}
+              {% if e %}is_soc_estimated: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_car_manual_soc_percent") %}
+              {% if e %}manual_soc: {{ e.entity_id }}{% endif %}
+              {%- set e = ha.get("qs_car_reset_soc_estimate") %}
+              {% if e %}reset_soc: {{ e.entity_id }}{% endif %}
               {%- set e = ha.get("car_soc_percentage") %}
               {%- if e %}
               {%-    set badges_list.badges = badges_list.badges + [(e.entity_id, device.name)] %}

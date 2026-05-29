@@ -319,6 +319,9 @@ async def test_constraint_update_value_callback_soc_paths() -> None:
     charger.car = MagicMock()
     charger.car.name = "TestCar"
     charger.car.get_car_charge_percent.return_value = 50.0
+    # QS-243 — the callback reads the raw sensor and gates on estimation mode.
+    charger.car.get_car_charge_percent_raw_sensor.return_value = 50.0
+    charger.car.is_in_soc_estimation_mode.return_value = False
     charger.car.get_car_charge_energy.return_value = 20000.0
     charger.car.car_battery_capacity = 60000
     charger.car.efficiency_factor = 1.0

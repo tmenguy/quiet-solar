@@ -235,6 +235,16 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._car_not_home_since: datetime | None = None
         self._departure_auto_reset_done: bool = False
 
+        # ── Estimated-SOC model (Story QS-243) ───────────────────────────
+        # Persisted baselines + accumulator that back the effective-SOC
+        # accessor when the SOC API is failed, inaccurate, or absent.
+        self._user_base_soc_value: float | None = None
+        self._last_valid_base_soc_value: float | None = None
+        self._computed_added_delta_soc_percent: float | None = None
+        self._user_base_soc_entry_sensor_value: float | None = None
+        # Not persisted — re-anchored on reboot to avoid counting downtime energy.
+        self._delta_soc_last_integration_time: datetime | None = None
+
         self.attach_ha_state_to_probe(self.car_charge_percent_sensor, is_numerical=True, reload_from_history=True)
 
         self.attach_ha_state_to_probe(self.car_plugged, is_numerical=False, reload_from_history=True)
@@ -285,11 +295,28 @@ class QSCar(HADeviceMixin, AbstractDevice):
             forecasted_name = self.current_forecasted_person.name
         data_to_update["current_forecasted_person_name_from_boot"] = forecasted_name
 
+        # Estimated-SOC model (Story QS-243). The integration cursor is
+        # deliberately NOT persisted (re-anchored on reboot).
+        data_to_update["user_base_soc_value"] = self._user_base_soc_value
+        data_to_update["last_valid_base_soc_value"] = self._last_valid_base_soc_value
+        data_to_update["computed_added_delta_soc_percent"] = self._computed_added_delta_soc_percent
+        data_to_update["user_base_soc_entry_sensor_value"] = self._user_base_soc_entry_sensor_value
+
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
         self._current_forecasted_person_name_from_boot = stored_load_info.get(
             "current_forecasted_person_name_from_boot", None
         )
+
+        # Estimated-SOC model (Story QS-243). Pre-QS-243 saved blobs lack
+        # these keys and default to None (all-None defaults, no exception).
+        self._user_base_soc_value = stored_load_info.get("user_base_soc_value", None)
+        self._last_valid_base_soc_value = stored_load_info.get("last_valid_base_soc_value", None)
+        self._computed_added_delta_soc_percent = stored_load_info.get("computed_added_delta_soc_percent", None)
+        self._user_base_soc_entry_sensor_value = stored_load_info.get("user_base_soc_entry_sensor_value", None)
+        # Re-anchor the integration cursor so the next charge cycle does not
+        # integrate energy "delivered" during downtime.
+        self._delta_soc_last_integration_time = None
 
     def device_post_home_init(self, time: datetime):
         """Initialize person assignment from persisted state at startup."""
@@ -582,6 +609,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         """Update states and check car API staleness each cycle."""
         await super().update_states(time)
         self._update_car_api_staleness(time)
+        self._update_soc_estimation(time)
         await self._check_departure_auto_reset(time)
 
     async def _check_departure_auto_reset(self, time: datetime) -> None:
@@ -681,7 +709,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             and self.can_use_charge_percent_constraints()
             and self._is_soc_sensor_stale(time)
         ):
-            self.car_api_stale_percent_mode = True
+            self._enter_stale_percent_mode(time)
 
         # Periodic contradiction check for attached cars
         if (
@@ -722,7 +750,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 )
             # Activate stale-percent mode if car can use percent constraints
             if self.can_use_charge_percent_constraints():
-                self.car_api_stale_percent_mode = True
+                self._enter_stale_percent_mode(time)
 
         # Transition: stale -> not stale (from select change or non-percent recovery)
         elif not effectively_stale and self._was_car_api_stale:
@@ -762,12 +790,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return ", ".join(parts)
 
     def _exit_stale_mode(self) -> None:
-        """Clear all stale flags and exit stale-percent mode."""
+        """Clear all stale flags and exit stale-percent mode.
+
+        Also clears the system-captured SOC base and accumulator so the live
+        sensor takes over on API recovery. The user-entered base is left
+        untouched — only `_update_soc_estimation` / the user can clear it.
+        """
         self._car_api_stale = False
         self.car_api_stale_percent_mode = False
         self._car_api_inferred_home = False
         self._car_api_inferred_plugged = False
         self._car_api_stale_since = None
+        self._last_valid_base_soc_value = None
+        self._computed_added_delta_soc_percent = None
+        self._delta_soc_last_integration_time = None
 
     def check_manual_assignment_contradiction(self, charger_name: str, time: datetime) -> None:
         """Check if manual charger assignment contradicts API data (Feature B).
@@ -805,7 +841,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 self._car_api_stale_since = time
             # Activate stale-percent mode if possible
             if self.can_use_charge_percent_constraints():
-                self.car_api_stale_percent_mode = True
+                self._enter_stale_percent_mode(time)
             self._was_car_api_stale = True
             # Notify on contradiction (Feature B)
             self._schedule_person_notification(
@@ -824,9 +860,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_stale_mode_override = option
         if for_init and option == CAR_STALE_MODE_FORCE_STALE:
             # Restore stale-percent mode immediately so get_car_charge_percent()
-            # returns None before the first update_states cycle runs
+            # reflects the estimate before the first update_states cycle runs
             if self.can_use_charge_percent_constraints():
-                self.car_api_stale_percent_mode = True
+                self._enter_stale_percent_mode(None, for_init=True)
         if not for_init:
             time = datetime.now(tz=pytz.UTC)
             self._update_car_api_staleness(time)
@@ -885,7 +921,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.car_odometer_sensor is None or self.car_charge_percent_sensor is None:
             return None
 
-        soc = self.get_car_charge_percent(time)
+        soc = self.get_car_charge_percent_raw_sensor(time)
         odo = self.get_car_odometer_km(time)
         if soc is None or odo is None:
             return None
@@ -904,7 +940,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         sample_eff = None
         if self.car_estimated_range_sensor is not None:
-            current_soc = self.get_car_charge_percent(time)
+            current_soc = self.get_car_charge_percent_raw_sensor(time)
             car_estimate = self.get_car_estimated_range_km_from_sensor(time)
             if current_soc is not None and car_estimate is not None and current_soc > 0.0:
                 sample_eff = float(car_estimate) / (
@@ -975,7 +1011,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_platforms(self):
         parent = super().get_platforms()
         parent = set(parent)
-        parent.update([Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME])
+        parent.update(
+            [Platform.SENSOR, Platform.SELECT, Platform.SWITCH, Platform.BUTTON, Platform.TIME, Platform.NUMBER]
+        )
         return list(parent)
 
     def _add_soc_odo_value_to_segments(self, soc: float, odo: float, time: datetime):
@@ -1276,16 +1314,149 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
             return latest_state == "home"
 
+    def get_car_charge_percent_raw_sensor(
+        self, time: datetime | None = None, tolerance_seconds: float | None = None
+    ) -> float | None:
+        """Return the raw SOC sensor value, ignoring any estimate/override.
+
+        This is the trusted-sensor source used by efficiency learning and the
+        charge callback — it must never see the estimated value.
+        """
+        if self.car_charge_percent_sensor is None:
+            return None
+        return self.get_sensor_latest_possible_valid_value(
+            entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds
+        )
+
+    @property
+    def _estimated_soc_percent(self) -> float | None:
+        """Absolute estimated SOC (`base + accumulated delta`), clamped, or None.
+
+        Returns None when there is no base (the pure-delta `+XX%` case).
+        """
+        delta = self._computed_added_delta_soc_percent or 0.0
+        if self._user_base_soc_value is not None:
+            base = self._user_base_soc_value
+        elif self._last_valid_base_soc_value is not None:
+            base = self._last_valid_base_soc_value
+        else:
+            return None
+        return max(0.0, min(100.0, base + delta))
+
+    def is_in_soc_estimation_mode(self, time: datetime | None = None) -> bool:
+        """Return True when the effective SOC is estimated, not read from the sensor."""
+        if self.car_is_invited:
+            return False
+        if self.car_battery_capacity is None or self.car_battery_capacity <= 0:
+            return False
+        if self.car_charge_percent_sensor is None:
+            return True  # no-sensor car: always estimating
+        if self.car_api_stale_percent_mode:
+            return True  # API failure / SOC stale / force_stale
+        return self._user_base_soc_value is not None  # manual override on a healthy API
+
+    def has_soc_estimate(self) -> bool:
+        """Return True when an absolute SOC estimate exists (drives the asterisk)."""
+        return self._estimated_soc_percent is not None
+
     def get_car_charge_percent(
         self, time: datetime | None = None, tolerance_seconds: float | None = None
     ) -> float | None:
-        """Get car SOC percent. Returns None when in stale-percent mode (SOC sensor is poisoned)."""
-        if self.car_api_stale_percent_mode:
-            return None
-        ret = self.get_sensor_latest_possible_valid_value(
-            entity_id=self.car_charge_percent_sensor, time=time, tolerance_seconds=tolerance_seconds
-        )
-        return ret
+        """Get the effective car SOC percent.
+
+        Returns the estimate while estimating (may be None for the pure-delta
+        case), otherwise the live raw sensor value.
+        """
+        if self.is_in_soc_estimation_mode(time):
+            return self._estimated_soc_percent
+        return self.get_car_charge_percent_raw_sensor(time, tolerance_seconds)
+
+    def _update_soc_estimation(self, time: datetime) -> None:
+        """Per-cycle recovery for a user-base override on a healthy sensor.
+
+        When the real sensor reports a fresh value that differs from the value
+        captured at manual-entry time, the genuine reading wins and the whole
+        SOC estimate is cleared. System-base recovery is handled separately by
+        `_exit_stale_mode` on API recovery.
+        """
+        if self._user_base_soc_value is None:
+            return
+        if self.car_charge_percent_sensor is None:
+            return
+        if self._is_soc_sensor_stale(time):
+            return
+        raw = self.get_car_charge_percent_raw_sensor(time)
+        if raw is None:
+            return
+        if self._user_base_soc_entry_sensor_value is None or raw != self._user_base_soc_entry_sensor_value:
+            self.reset_soc_estimate()
+
+    def _capture_last_valid_base_soc(self, time: datetime) -> None:
+        """Capture the last valid sensor value as the system base at a fresh→stale edge."""
+        if self._user_base_soc_value is not None or self._last_valid_base_soc_value is not None:
+            return
+        raw = self.get_car_charge_percent_raw_sensor(time)
+        if raw is not None:
+            self._last_valid_base_soc_value = raw
+            self._computed_added_delta_soc_percent = 0.0
+            self._delta_soc_last_integration_time = None
+
+    def _enter_stale_percent_mode(self, time: datetime | None, for_init: bool = False) -> None:
+        """Set stale-percent mode and capture the last valid base on a genuine edge.
+
+        The `for_init` restore path must not capture — the persisted value is
+        the source of truth.
+        """
+        self.car_api_stale_percent_mode = True
+        if for_init or time is None:
+            return
+        self._capture_last_valid_base_soc(time)
+
+    async def user_set_manual_soc_percent(self, value: float, for_init: bool = False) -> None:
+        """Set a manual SOC baseline. `for_init` (entity restore) is a no-op."""
+        if for_init:
+            return
+        self._user_base_soc_value = float(max(0, min(100, int(value))))
+        now = datetime.now(tz=pytz.UTC)
+        self._user_base_soc_entry_sensor_value = self.get_car_charge_percent_raw_sensor(now)
+        self._computed_added_delta_soc_percent = 0.0
+        self._delta_soc_last_integration_time = None
+        if self.charger:
+            await self.charger.update_charger_for_user_change()
+
+    def reset_soc_estimate(self) -> None:
+        """Clear every SOC-estimate field and the integration cursor.
+
+        Called on `user_clean_and_reset`, the unplug edge, and a **genuine
+        plug-in** (charger.py, the `do_full_reset` branch). It is deliberately
+        NOT part of the low-level `reset()`: `attach_car` runs `reset()` on both
+        a genuine plug-in AND the boot re-attach, and only the charger can tell
+        them apart. Clearing on the genuine-plug branch gives "reset on plug-in"
+        while the boot re-attach (`do_full_reset=False`) leaves the persisted
+        estimate intact, so it survives an HA reboot.
+        """
+        self._user_base_soc_value = None
+        self._last_valid_base_soc_value = None
+        self._computed_added_delta_soc_percent = None
+        self._user_base_soc_entry_sensor_value = None
+        self._delta_soc_last_integration_time = None
+
+    async def user_button_reset_soc_estimate(self) -> None:
+        """Reset button action: clear the estimate and re-solve the charger."""
+        self.reset_soc_estimate()
+        if self.charger:
+            await self.charger.update_charger_for_user_change()
+
+    @property
+    def qs_car_manual_soc_percent(self) -> float:
+        """Current value for the manual-SOC number entity (0 when unset).
+
+        Named to match the number entity's description `key` so the entity's
+        restore path (`getattr(device, key)`) reads a numeric default.
+        """
+        if self._user_base_soc_value is None:
+            return 0.0
+        return float(self._user_base_soc_value)
 
     def get_car_charge_energy(self, time: datetime, tolerance_seconds: float | None = None) -> float | None:
         res = self.get_car_charge_percent(time, tolerance_seconds)
@@ -1322,7 +1493,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         )
 
     def is_car_charge_growing(self, num_seconds: float, time: datetime) -> bool | None:
-        if self.car_api_stale_percent_mode:
+        if self.is_in_soc_estimation_mode(time):
             return None
         return self.is_sensor_growing(entity_id=self.car_charge_percent_sensor, num_seconds=num_seconds, time=time)
 
@@ -2001,10 +2172,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def can_use_charge_percent_constraints(self):
         if self.car_is_invited:
             return False
-        if self.car_battery_capacity is None:
+        if self.car_battery_capacity is None or self.car_battery_capacity <= 0:
             return False
-        if self.car_charge_percent_sensor is None:
-            return False
+        # A SOC sensor is no longer required (Story QS-243): a non-invited car
+        # with a true battery capacity estimates SOC from charged energy.
         return True
 
     def _reset_charge_targets(self):
@@ -2274,6 +2445,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await super().user_clean_and_reset()
 
         self.current_forecasted_person = None
+        self.reset_soc_estimate()
 
         self.reset(keep_commands=True)  # will detach the car
 

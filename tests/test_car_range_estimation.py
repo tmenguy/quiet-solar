@@ -340,11 +340,11 @@ class TestCarRangeEstimation(unittest.TestCase):
                 return 70.0
             return None
 
-        # Replace methods
+        # Replace methods (efficiency learning reads the raw sensor — QS-243)
         original_get_odo = self.car.get_car_odometer_km
-        original_get_soc = self.car.get_car_charge_percent
+        original_get_soc = self.car.get_car_charge_percent_raw_sensor
         self.car.get_car_odometer_km = mock_get_odometer
-        self.car.get_car_charge_percent = mock_get_soc
+        self.car.get_car_charge_percent_raw_sensor = mock_get_soc
 
         # Add first value
         result = self.car.car_efficiency_km_per_kwh_sensor_state_getter(self.car.car_efficiency_km_per_kwh_sensor, time)
@@ -356,7 +356,7 @@ class TestCarRangeEstimation(unittest.TestCase):
 
         # Restore methods
         self.car.get_car_odometer_km = original_get_odo
-        self.car.get_car_charge_percent = original_get_soc
+        self.car.get_car_charge_percent_raw_sensor = original_get_soc
 
         # Check that _km_per_kwh was computed
         # 60km traveled, 10% SOC (6 kWh), so 60/6 = 10 km/kWh

@@ -3192,6 +3192,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.car.get_user_originated("person_name"),
                 )
                 self.car.clear_all_user_originated()
+                # Edge-triggered (plugged→unplugged): clear the estimated-SOC
+                # state. A manual value set while already unplugged survives a
+                # later plug-in because there is no intervening unplug edge here.
+                self.car.reset_soc_estimate()
                 self.reset(keep_commands=True)  # will detach the car
                 self.clear_user_originated("car_name")  # physical unplug, reset the user selected car for charger
                 do_force_solve = True
@@ -3268,6 +3272,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     do_full_reset = False
                 else:
                     do_full_reset = True
+                if do_full_reset:
+                    # QS-243 — a genuine new plug-in resets the estimated-SOC
+                    # state (fresh charge session). A boot re-attach has
+                    # do_full_reset=False, so the persisted estimate survives an
+                    # HA reboot.
+                    best_car.reset_soc_estimate()
                 if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(
                     time, load_param=best_car.name, for_full_reset=do_full_reset
                 ):
@@ -4631,6 +4641,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         result_calculus = None
         sensor_result = None
+        delta_added = None
+
+        estimating = is_target_percent and self.car.is_in_soc_estimation_mode(time)
 
         if self.current_command is None or self.current_command.is_off_or_idle():
             _LOGGER.info("update_value_callback (is %%:%s): %s no command or idle/off", is_target_percent, self.name)
@@ -4638,26 +4651,50 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             probe_charge_window = 30 * 60
             if is_target_percent:
-                if self.car.car_api_stale_percent_mode:
-                    sensor_result = None  # explicit bypass — SOC sensor is poisoned
+                if estimating:
+                    sensor_result = None  # explicit bypass — SOC sensor not trusted while estimating
                 else:
-                    sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
+                    sensor_result = self.car.get_car_charge_percent_raw_sensor(
+                        time, tolerance_seconds=probe_charge_window
+                    )
             else:
                 sensor_result = self.car.get_car_charge_energy(time, tolerance_seconds=probe_charge_window)
 
             total_charge_duration = (ct.last_value_update - ct.first_value_update).total_seconds()
 
-            delta_added = self._compute_added_charge_update(
-                start_time=ct.last_value_change_update, end_time=time, is_target_percent=is_target_percent
-            )
-
-            if delta_added is not None:
-                if is_target_percent:
-                    result_calculus = ct.current_value + int(
-                        delta_added
-                    )  # round it to int ... so stay the same for small updates
+            if estimating:
+                # Car-level float accumulator with a dedicated integration cursor:
+                # advances every cycle so sub-1%/cycle slices are never lost and
+                # never double-counted across solver / constraint churn. The car
+                # owns the running value; this callback is its sole writer.
+                if self.car._computed_added_delta_soc_percent is None:
+                    self.car._computed_added_delta_soc_percent = 0.0
+                if self.car._delta_soc_last_integration_time is None:
+                    # post-reboot / post-base-set: anchor only, do not integrate the gap
+                    self.car._delta_soc_last_integration_time = time
                 else:
-                    result_calculus = ct.current_value + delta_added
+                    inc = self._compute_added_charge_update(
+                        start_time=self.car._delta_soc_last_integration_time,
+                        end_time=time,
+                        is_target_percent=True,
+                    )
+                    if inc is not None:
+                        self.car._computed_added_delta_soc_percent += inc
+                        self.car._delta_soc_last_integration_time = time
+                est = self.car._estimated_soc_percent  # base+delta clamped, or None
+                result_calculus = est if est is not None else (self.car._computed_added_delta_soc_percent or 0.0)
+            else:
+                delta_added = self._compute_added_charge_update(
+                    start_time=ct.last_value_change_update, end_time=time, is_target_percent=is_target_percent
+                )
+
+                if delta_added is not None:
+                    if is_target_percent:
+                        result_calculus = ct.current_value + int(
+                            delta_added
+                        )  # round it to int ... so stay the same for small updates
+                    else:
+                        result_calculus = ct.current_value + delta_added
 
             result = sensor_result
 
@@ -4717,7 +4754,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             is_target_percent
             and result is not None
             and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
-            and not self.car.car_api_stale_percent_mode
+            and not estimating
         ):
             if (
                 self._expected_charge_state.value is True

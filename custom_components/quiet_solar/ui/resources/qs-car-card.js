@@ -830,6 +830,10 @@ class QsCarCard extends QsCardBase {
       const sUsePercentMode = this._entity(e.use_percent_mode);
       const sIsOffGrid = this._entity(e.is_off_grid);
       const sCarIsStale = this._entity(e.car_is_stale);
+      // QS-243 — estimated-SOC wiring: the asterisk flag, the manual-SOC
+      // number entity (popup prefill + write target), and the reset button.
+      const sIsSocEstimated = this._entity(e.is_soc_estimated);
+      const sManualSoc = this._entity(e.manual_soc);
 
       const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
 
@@ -908,8 +912,15 @@ class QsCarCard extends QsCardBase {
       // Font size for energy unit (kWh) relative to the number
       const energyUnitFontSize = 0.4; // 40% of the number size
 
-      // Get target value based on mode
-      const isStalePercentMode = isStale && !useEnergyMode;
+      // Get target value based on mode.
+      // QS-243 — display is keyed on the estimate state, not raw staleness:
+      //   - `hasSocEstimate` (absolute estimate) → `NN%*` via the percent
+      //     branch (the SOC sensor already returns the estimate);
+      //   - pure-delta (estimating, no base → SOC sensor unknown) → `+XX%`;
+      //   - a real fresh sensor → plain `NN%`.
+      const hasSocEstimate = sIsSocEstimated?.state === 'on';
+      const socNumeric = isNumberLike(sSoc?.state);
+      const isStalePercentMode = !useEnergyMode && !hasSocEstimate && !socNumeric;
       let targetPct, displayTargetValue, maxCircleValue, displaySocValue;
       if (isStalePercentMode) {
           // Stale-percent mode: show +XX% based on energy delivered
@@ -969,7 +980,9 @@ class QsCarCard extends QsCardBase {
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
           displayTargetValue = `${this._fmt(targetPct ?? soc)}%`;
-          displaySocValue = `${this._fmt(soc)}%`;
+          // QS-243 — append an asterisk when the SOC is estimated rather
+          // than read live from the car's sensor.
+          displaySocValue = `${this._fmt(soc)}%${hasSocEstimate ? '*' : ''}`;
       }
 
       // QS-199 review-fix #02 S2 — use the inherited hardened
@@ -1357,7 +1370,7 @@ class QsCarCard extends QsCardBase {
               <div class="stack">
                 <div class="soc-block">
                   ${chargeIcon ? `<ha-icon class="charge-type-icon" icon="${chargeIcon}"></ha-icon>` : ''}
-                  <div class="pct" style="margin-bottom:0;">${displaySocValue}</div>
+                  <div class="pct${(!useEnergyMode && e.manual_soc) ? ' soc-editable' : ''}" id="soc_pct"${(!useEnergyMode && e.manual_soc) ? ` role="button" ${ctrlTabAttrs} aria-label="Edit charge percent"` : ''} style="margin-bottom:0;${(!useEnergyMode && e.manual_soc) ? ' cursor: pointer;' : ''}">${displaySocValue}</div>
                   ${useEnergyMode ? '' : `<div class="mini-range-now" aria-label="current range">${rangeNowStr}</div>`}
                 </div>
                 <div class="target-block">
@@ -1760,6 +1773,46 @@ class QsCarCard extends QsCardBase {
           };
           schedBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); schedAction(); });
           schedBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); schedAction(); });
+      }
+
+      // QS-243 — the big SOC number opens a manual-charge popup with an
+      // integer 0–100 input and Save / Cancel / Reset actions. Save writes
+      // the manual-SOC number entity; Reset presses the reset button.
+      if (!useEnergyMode && e.manual_soc) {
+          const socEl = ids('soc_pct');
+          const openSocDialog = () => {
+              if (this._root?.querySelector('.disabled')) return;
+              const manualRaw = sManualSoc?.state;
+              const cur = isNumberLike(manualRaw)
+                  ? Math.round(Number(manualRaw))
+                  : (isNumberLike(sSoc?.state) ? Math.round(Number(sSoc.state)) : 0);
+              const content = `<div class="qs-soc-edit" style="text-align:center; padding: 8px 0;">`
+                  + `<input id="qs_soc_input" type="number" min="0" max="100" step="1" inputmode="numeric" value="${cur}" `
+                  + `style="font-size:1.4rem; width:96px; text-align:center; padding:6px;" /> %</div>`;
+              const buttons = [
+                  {
+                      text: 'Save', variant: 'primary', onClick: async () => {
+                          const inp = this._root?.querySelector('#qs_soc_input');
+                          let v = inp ? Number(inp.value) : NaN;
+                          if (!Number.isFinite(v)) return;
+                          v = Math.max(0, Math.min(100, Math.round(v)));
+                          await this._setNumber(e.manual_soc, v);
+                      }
+                  },
+                  { text: 'Cancel', variant: 'secondary' },
+              ];
+              if (e.reset_soc) {
+                  buttons.push({
+                      text: 'Reset', variant: 'secondary', onClick: async () => {
+                          await this._press(e.reset_soc);
+                      }
+                  });
+              }
+              this._showDialog({ title: 'Set charge percent', customContent: content, buttons });
+          };
+          socEl?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); openSocDialog(); });
+          socEl?.addEventListener('touchend', (ev) => { ev.preventDefault(); openSocDialog(); });
+          this._registerKeyActivation(socEl, openSocDialog);
       }
 
       // QS-235 AC4 — the reset button adopts the shared `_wireResetButton`

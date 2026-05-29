@@ -805,6 +805,17 @@ ring geometry** — the old `NaN` propagated through
 position; the `0` keeps the handle pinned at the bottom of the gauge.
 Confirm the `0`-on-dropout readout in the Phase-F smoke.
 
+**Estimated-SOC display + manual popup (QS-243).** The percent display is
+keyed on the `is_soc_estimated` binary sensor, not raw staleness: an
+absolute estimate renders as `NN%*` (the `*` flags an estimated value),
+the pure-delta case (estimating with no base → SOC sensor unknown) renders
+`+XX%`, and a live fresh sensor renders plain `NN%`. In percent mode the big
+SOC number is clickable → a popup with an integer 0–100 input and **Save**
+(`number.set_value` on `manual_soc`) / **Cancel** / **Reset**
+(`button.press` on `reset_soc`). The template wires `is_soc_estimated`,
+`manual_soc`, and `reset_soc` into the card. See
+[car-soc-estimation.md](car-soc-estimation.md) for the backing model.
+
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is
 explicitly excluded; the card-level pinkish `.off-grid` CSS class

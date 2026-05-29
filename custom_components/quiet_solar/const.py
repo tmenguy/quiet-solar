@@ -252,6 +252,7 @@ BINARY_SENSOR_HOME_PERSISTENCE_HEALTH = "qs_home_persistence_health"
 BINARY_SENSOR_SOLAR_FORECAST_OK = "qs_solar_forecast_ok"
 BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"
 BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"
+BINARY_SENSOR_CAR_IS_SOC_ESTIMATED = "qs_car_is_soc_estimated"
 
 SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
 SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
@@ -310,6 +311,9 @@ SWITCH_CAR_NEXT_CHARGE_FULL = "qs_next_car_charge_full"
 SWITCH_CAR_BUMP_SOLAR_CHARGE_PRIORITY = "qs_bump_solar_charge_priority"
 BUTTON_CAR_NEXT_CHARGE_FORCE_NOW = "qs_next_car_charge_force_now"
 BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT = "qs_next_car_charge_add_default"
+BUTTON_CAR_RESET_SOC_ESTIMATE = "qs_car_reset_soc_estimate"
+
+NUMBER_CAR_MANUAL_SOC_PERCENT = "qs_car_manual_soc_percent"
 
 
 BUTTON_LOAD_MARK_CURRENT_CONSTRAINT_DONE = "qs_load_mark_current_constraint_done"
