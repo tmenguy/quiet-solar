@@ -14,6 +14,7 @@ from custom_components.quiet_solar.const import (
     CONF_POOL_WINTER_IDX,
     POOL_TEMP_STEPS,
 )
+from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 
 
 class FakeQSPool:
@@ -52,6 +53,21 @@ class FakeQSPool:
     def _is_calendar_based_mode(self, bistate_mode):
         """Pool never uses calendar-based mode for auto/winter."""
         return False
+
+    def get_current_active_constraint(self, time=None):
+        """Mirror AbstractLoad.get_current_active_constraint for the fake double.
+
+        Returns the first constraint active for the given time, else None — the
+        primitive QSBiStateDuration._overnight_active_constraint_extra relies on.
+        """
+        for c in getattr(self, "_constraints", None) or []:
+            if c.is_constraint_active_for_time_period(time):
+                return c
+        return None
+
+    # Reuse the real overnight-active-constraint helper so update_current_metrics
+    # exercises production logic (QS-245).
+    _overnight_active_constraint_extra = QSBiStateDuration._overnight_active_constraint_extra
 
     def is_best_effort_only_load(self):
         return False
@@ -357,6 +373,9 @@ async def test_pool_update_current_metrics_tomorrow_constraint_excluded():
     ct = MagicMock()
     ct.end_of_constraint = datetime(2026, 3, 31, 7, 0, 0, tzinfo=pytz.UTC)  # tomorrow
     ct.start_of_constraint = datetime(2026, 3, 31, 6, 0, 0, tzinfo=pytz.UTC)
+    # current_start mirrors start at init (real constraints do this); future start
+    # so the overnight-active helper must NOT treat it as currently running.
+    ct.current_start_of_constraint = datetime(2026, 3, 31, 6, 0, 0, tzinfo=pytz.UTC)
     ct.target_value = 3600.0
     ct.current_value = 0.0
 

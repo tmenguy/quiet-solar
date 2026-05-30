@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-05-24
+last_verified: 2026-05-30
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -176,6 +176,20 @@ transport based on which `CONF_*` the user filled.
   (`QSBiStateDuration`) owns the bistate-mode signals; the transport
   owns the service-call. Crossing that boundary breaks
   `QSRadiator`'s ability to pick a transport at construction time.
+- Dropping the currently-active constraint from the daily metrics
+  when its finish time crosses local midnight. `update_current_metrics`
+  filters constraints to a today-only window
+  (`end_of_constraint <= tomorrow_utc`) in **both** the calendar and
+  default/pool paths. An active constraint that started today but ends
+  overnight (e.g. 06:30 tomorrow) falls outside that window, so the card
+  ring (`qs_bistate_current_on_h`) and target
+  (`qs_bistate_current_duration_h`) would show 0 while the
+  `constraint_completion` sensor rises. `_overnight_active_constraint_extra`
+  re-adds the running active constraint (guarded by
+  `current_start_of_constraint <= time` so a not-yet-started tomorrow-only
+  constraint stays excluded, and by `end_of_constraint > tomorrow_utc` so
+  in-window constraints are not double-counted). Both metric paths must
+  call it (QS-245).
 
 ## See also
 

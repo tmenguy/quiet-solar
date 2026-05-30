@@ -230,8 +230,14 @@ async def test_calendar_mode_actual_includes_active_constraint_current_value():
     assert device.qs_bistate_current_on_h == pytest.approx(1.5)
 
 
-async def test_calendar_mode_excludes_tomorrow_active_constraint():
-    """Calendar mode excludes active constraints ending tomorrow."""
+async def test_calendar_mode_includes_overnight_active_constraint():
+    """Calendar mode includes a currently-active constraint finishing overnight.
+
+    QS-245 (AC2): the active constraint started today (running now) but its
+    finish time is after local midnight (``end_of_constraint > tomorrow_utc``).
+    Its full target/current values are added on top of today's calendar event
+    totals, matching the constraint_completion sensor.
+    """
     device = _create_bistate_device(calendar="calendar.test")
     device.bistate_mode = "bistate_mode_auto"
     now = datetime(2026, 3, 30, 23, 0, 0, tzinfo=pytz.UTC)
@@ -239,12 +245,12 @@ async def test_calendar_mode_excludes_tomorrow_active_constraint():
     tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
     _set_day_boundaries(device, today_utc, tomorrow_utc)
 
-    # One past 1h event today
+    # One past 1h event today -> target_s = 3600, past_actual_s = 3600
     _mock_calendar_events(device, [
         (datetime(2026, 3, 30, 6, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 30, 7, 0, 0, tzinfo=pytz.UTC)),
     ])
 
-    # Constraint ending tomorrow — should NOT add current_value
+    # Active constraint started today (23:00), finishing overnight (tomorrow 01:00).
     ct = _make_constraint(
         device,
         now,
@@ -258,8 +264,9 @@ async def test_calendar_mode_excludes_tomorrow_active_constraint():
 
     await device.update_current_metrics(now)
 
-    assert device.qs_bistate_current_duration_h == pytest.approx(1.0)
-    assert device.qs_bistate_current_on_h == pytest.approx(1.0)
+    # duration = (3600 + 7200) / 3600 = 3.0 ; on = (3600 + 900) / 3600 = 1.25
+    assert device.qs_bistate_current_duration_h == pytest.approx(3.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(1.25)
 
 
 # =============================================================================
@@ -757,3 +764,221 @@ async def test_default_mode_extended_lcc_absorbed_via_initial_end():
     # lcc absorbed via initial_end match — only active counted
     assert device.qs_bistate_current_duration_h == pytest.approx(21600.0 / 3600.0)
     assert device.qs_bistate_current_on_h == pytest.approx(14400.0 / 3600.0)
+
+
+# =============================================================================
+# QS-245: include the currently-active constraint when it finishes overnight
+# (after local midnight). Both calendar and default paths.
+# =============================================================================
+
+
+async def test_default_mode_includes_overnight_active_constraint():
+    """Default mode adds an active constraint that finishes after local midnight.
+
+    QS-245 (AC1): the card's ring (qs_bistate_current_on_h) and target
+    (qs_bistate_current_duration_h) must include the currently-running active
+    constraint even when its finish time is overnight, on top of the in-window
+    constraint totals.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 22, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # In-window constraint ending today 23:00 (already met -> inactive).
+    ct_in_window = _make_constraint(
+        device,
+        now,
+        target_s=3600.0,
+        current_s=3600.0,
+        start=datetime(2026, 3, 30, 22, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 23, 0, 0, tzinfo=pytz.UTC),
+    )
+    # Active overnight constraint: started 22:00 today, ends 06:30 tomorrow.
+    ct_overnight = _make_constraint(
+        device,
+        now,
+        target_s=12600.0,
+        current_s=900.0,
+        start=datetime(2026, 3, 30, 22, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 31, 6, 30, 0, tzinfo=pytz.UTC),
+    )
+    device._constraints = [ct_in_window, ct_overnight]
+    device._last_completed_constraint = None
+
+    await device.update_current_metrics(now)
+
+    # duration = (3600 + 12600) / 3600 ; on = (3600 + 900) / 3600
+    assert device.qs_bistate_current_duration_h == pytest.approx((3600.0 + 12600.0) / 3600.0)
+    assert device.qs_bistate_current_on_h == pytest.approx((3600.0 + 900.0) / 3600.0)
+
+
+async def test_default_mode_active_in_window_not_double_counted():
+    """An active constraint ending within today is counted exactly once (AC3)."""
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 11, 30, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # Active constraint ending today 17:00 (in-window, end <= tomorrow_utc).
+    ct = _make_constraint(
+        device,
+        now,
+        target_s=3600.0,
+        current_s=1800.0,
+        start=datetime(2026, 3, 30, 16, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
+    )
+    device._constraints = [ct]
+    device._last_completed_constraint = None
+
+    await device.update_current_metrics(now)
+
+    # Identical to the plain window-loop result: 3600/3600 and 1800/3600.
+    assert device.qs_bistate_current_duration_h == pytest.approx(1.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(0.5)
+
+
+async def test_overnight_helper_no_active_constraint_inert():
+    """With only an in-window same-day constraint, the helper adds nothing (AC5).
+
+    Covers the ``end_of_constraint > tomorrow_utc`` False branch of the helper:
+    an active constraint exists but finishes inside the today window.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 11, 30, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    ct = _make_constraint(
+        device,
+        now,
+        target_s=3600.0,
+        current_s=1800.0,
+        start=datetime(2026, 3, 30, 16, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 17, 0, 0, tzinfo=pytz.UTC),
+    )
+    device._constraints = [ct]
+    device._last_completed_constraint = None
+
+    await device.update_current_metrics(now)
+
+    # Same as pre-fix: helper returned (0.0, 0.0) because end <= tomorrow_utc.
+    assert device.qs_bistate_current_duration_h == pytest.approx(1.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(0.5)
+
+
+async def test_overnight_met_constraint_excluded():
+    """A constraint ending after tomorrow but already met stays excluded.
+
+    Covers the ``active is None`` branch of the helper: a met constraint is not
+    returned by get_current_active_constraint, so its overnight finish time does
+    not leak into the metrics. Preserves the exclusion semantics lost by the
+    rename of the old 'excludes tomorrow' calendar test.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 22, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # Met (current >= target) overnight constraint -> inactive -> not returned.
+    ct = _make_constraint(
+        device,
+        now,
+        target_s=12600.0,
+        current_s=12600.0,
+        start=datetime(2026, 3, 30, 22, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 31, 6, 30, 0, tzinfo=pytz.UTC),
+    )
+    device._constraints = [ct]
+    device._last_completed_constraint = None
+
+    await device.update_current_metrics(now)
+
+    assert device.qs_bistate_current_duration_h == pytest.approx(0.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(0.0)
+
+
+async def test_calendar_event_ending_exactly_at_tomorrow_utc_no_double_count():
+    """Calendar event ending exactly at tomorrow_utc is counted once (edge).
+
+    QS-245: an event whose ev_end == tomorrow_utc stays in-window (it is not
+    ``> tomorrow_utc``), while a separate truly-overnight active constraint is
+    added by the helper. No double-counting at the exact boundary.
+    """
+    device = _create_bistate_device(calendar="calendar.test")
+    device.bistate_mode = "bistate_mode_auto"
+    now = datetime(2026, 3, 30, 23, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # Event ending exactly at tomorrow_utc (23:00 -> 00:00) -> in-window, 1h.
+    _mock_calendar_events(device, [
+        (datetime(2026, 3, 30, 23, 0, 0, tzinfo=pytz.UTC), datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)),
+    ])
+
+    # Separate overnight active constraint ending 01:00 tomorrow.
+    ct = _make_constraint(
+        device,
+        now,
+        target_s=7200.0,
+        current_s=900.0,
+        start=datetime(2026, 3, 30, 23, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 31, 1, 0, 0, tzinfo=pytz.UTC),
+    )
+    device._constraints = [ct]
+    device._last_completed_constraint = None
+
+    await device.update_current_metrics(now)
+
+    # event target 3600 (in-window, future so not past actual) + overnight 7200.
+    # on = overnight current 900 only (event not yet past at 23:00).
+    assert device.qs_bistate_current_duration_h == pytest.approx((3600.0 + 7200.0) / 3600.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(900.0 / 3600.0)
+
+
+async def test_overnight_active_constraint_local_midnight_boundary():
+    """Overnight active constraint included via the > tomorrow_utc comparison
+    when local midnight differs from UTC midnight on a DST date (AC6).
+
+    Uses the real _get_today_boundaries (not mocked) under Europe/Paris on the
+    spring-forward day (2026-03-29). tomorrow_utc is local midnight expressed in
+    UTC (2026-03-29 22:00 UTC), so a constraint ending 2026-03-30 04:00 UTC is
+    correctly treated as overnight.
+    """
+    import os
+    import time as _time
+
+    prev_tz = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/Paris"
+    _time.tzset()
+    try:
+        device = _create_bistate_device()
+        now = datetime(2026, 3, 29, 20, 0, 0, tzinfo=pytz.UTC)
+
+        ct = _make_constraint(
+            device,
+            now,
+            target_s=7200.0,
+            current_s=1800.0,
+            start=datetime(2026, 3, 29, 19, 0, 0, tzinfo=pytz.UTC),
+            end=datetime(2026, 3, 30, 4, 0, 0, tzinfo=pytz.UTC),
+        )
+        device._constraints = [ct]
+        device._last_completed_constraint = None
+
+        await device.update_current_metrics(now)
+
+        assert device.qs_bistate_current_duration_h == pytest.approx(2.0)
+        assert device.qs_bistate_current_on_h == pytest.approx(0.5)
+    finally:
+        if prev_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = prev_tz
+        _time.tzset()
