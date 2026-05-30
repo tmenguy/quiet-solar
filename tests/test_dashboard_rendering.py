@@ -23,8 +23,11 @@ from homeassistant.helpers.template import Template
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
+    BUTTON_CAR_RESET_SOC_ESTIMATE,
     CONF_POOL_TEMPERATURE_SENSOR,
     CONF_POWER,
+    NUMBER_CAR_MANUAL_SOC_PERCENT,
     CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
@@ -307,6 +310,98 @@ class TestDashboardTemplateRendering:
         assert "'QS Radiator Card'" in content
         # Stub config also reads the renamed display name.
         assert "QS Radiator" in content
+
+    @pytest.mark.asyncio
+    async def test_car_card_wires_soc_estimate_entities(self, hass, full_dashboard_home):
+        """QS-243 AC11 — the car card wires the estimated-SOC entities.
+
+        With a SOC sensor + battery capacity the car exposes the
+        `is_soc_estimated` binary sensor, the `manual_soc` number, and the
+        `reset_soc` button; the custom template must feed all three into the
+        car card config.
+        """
+        home = full_dashboard_home
+        template_path = COMPONENT_ROOT / "ui" / "quiet_solar_dashboard_template.yaml.j2"
+        template_content = await hass.async_add_executor_job(template_path.read_text)
+
+        tpl = Template(template_content, hass)
+        rendered = tpl.async_render(variables={"home": home})
+
+        parsed = yaml.safe_load(rendered)
+        assert parsed is not None
+
+        # Traverse to the real car's qs-car-card and inspect ITS entities mapping
+        # (not just "the key appears somewhere in the YAML"). The charger's
+        # invited default-generic car also renders a qs-car-card but without the
+        # SOC-estimate entities, so select the card that actually has them.
+        soc_car_cards = []
+        for view in parsed.get("views", []):
+            for section in view.get("sections", []):
+                for card in section.get("cards", []):
+                    if (
+                        isinstance(card, dict)
+                        and card.get("type") == "custom:qs-car-card"
+                        and isinstance(card.get("entities"), dict)
+                        and "is_soc_estimated" in card["entities"]
+                    ):
+                        soc_car_cards.append(card)
+        assert len(soc_car_cards) == 1, "expected exactly one estimating car card"
+        entities = soc_car_cards[0]["entities"]
+        # The card-config keys are wired to entities of the expected domains.
+        assert entities["is_soc_estimated"].startswith("binary_sensor.")
+        assert entities["manual_soc"].startswith("number.")
+        assert entities["reset_soc"].startswith("button.")
+
+        # N5 — the template resolves those entities via the const.py keys
+        # (never hardcoded ha.get("qs_car_...") string literals in the source).
+        template_src = template_content
+        assert f'ha.get("{BINARY_SENSOR_CAR_IS_SOC_ESTIMATED}")' in template_src
+        assert f'ha.get("{NUMBER_CAR_MANUAL_SOC_PERCENT}")' in template_src
+        assert f'ha.get("{BUTTON_CAR_RESET_SOC_ESTIMATE}")' in template_src
+
+    def test_car_card_consumes_soc_estimate_keys(self):
+        """QS-243 — the JS card reads the three estimated-SOC entity keys."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        assert "e.is_soc_estimated" in source
+        assert "e.manual_soc" in source
+        assert "e.reset_soc" in source
+        # The asterisk gating must be present.
+        assert "hasSocEstimate" in source
+
+    def test_car_card_soc_editable_pointer_events(self):
+        """QS-243 #02 M1 — the editable SOC re-enables pointer events (it sits
+        inside `.ring .center` which is pointer-events:none), else clicks pass
+        through to the gauge and the popup never opens."""
+        import re
+
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        # A `.soc-editable` CSS rule that sets pointer-events: auto.
+        assert re.search(r"\.soc-editable\s*\{[^}]*pointer-events:\s*auto", source), (
+            "qs-car-card.js: missing `.soc-editable { ... pointer-events: auto }` rule (M1)"
+        )
+
+    def test_car_card_soc_save_never_silently_discards(self):
+        """QS-243 #02 N1 — invalid SOC input falls back to the current value and
+        is still clamped + saved (no silent discard)."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        assert "if (!Number.isFinite(v)) v = cur;" in source
+
+    def test_car_card_css_template_literal_has_no_stray_backtick(self):
+        """QS-243 #02 — the CSS block is a template literal
+        (`baseCardCSS(colors) + ` + backtick ... backtick); a stray backtick
+        inside (e.g. in a comment) would prematurely close the literal and turn
+        CSS text into JS, throwing at render time → 'Configuration error'.
+        CSS legitimately contains no backticks, so assert there are none.
+        """
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        marker = "const css = baseCardCSS(colors) + `"
+        start = source.index(marker) + len(marker)
+        end = source.index("`;", start)  # the closing delimiter of the literal
+        css_body = source[start:end]
+        assert "`" not in css_body, (
+            "qs-car-card.js: stray backtick inside the CSS template literal — "
+            "it closes the literal early and breaks render (Configuration error)."
+        )
 
     def test_radiator_card_s14_safe_number_guards_against_nan(self):  # CR2 — sync (no hass)
         """A2 — pin S14 via regex, not a bare substring.

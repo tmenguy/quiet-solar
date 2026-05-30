@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-05-29
+last_verified: 2026-05-30
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -804,6 +804,31 @@ ring geometry** — the old `NaN` propagated through
 `socPct → handlePct → pctToDeg → polar`, emitting a `cx="NaN"` handle
 position; the `0` keeps the handle pinned at the bottom of the gauge.
 Confirm the `0`-on-dropout readout in the Phase-F smoke.
+
+**CSS template-literal hazard (QS-243).** The car card's CSS block is a JS
+template literal (`baseCardCSS(colors) + ` + backtick … backtick). A stray
+backtick **anywhere inside it — including a comment** — closes the literal early
+and turns the trailing CSS into JS, which throws at render time and surfaces as
+a Lovelace "Configuration error" placeholder (`setConfig` calls `_render`).
+Never put backticks in that block; a regression test asserts there are none. The
+editable SOC `.pct.soc-editable` re-enables `pointer-events: auto` (its parent
+`.ring .center` is `pointer-events: none`), else the popup click never fires.
+
+**SOC popup dismissal (QS-243).** Save / Cancel / Reset all dismiss the popup
+via `_showDialog`'s per-button `activate()` `finally` block (it removes the
+modal after `onClick` resolves) — no explicit close call is needed in
+`openSocDialog`.
+
+**Estimated-SOC display + manual popup (QS-243).** The percent display is
+keyed on the `is_soc_estimated` binary sensor, not raw staleness: an
+absolute estimate renders as `NN%*` (the `*` flags an estimated value),
+the pure-delta case (estimating with no base → SOC sensor unknown) renders
+`+XX%`, and a live fresh sensor renders plain `NN%`. In percent mode the big
+SOC number is clickable → a popup with an integer 0–100 input and **Save**
+(`number.set_value` on `manual_soc`) / **Cancel** / **Reset**
+(`button.press` on `reset_soc`). The template wires `is_soc_estimated`,
+`manual_soc`, and `reset_soc` into the card. See
+[car-soc-estimation.md](car-soc-estimation.md) for the backing model.
 
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is

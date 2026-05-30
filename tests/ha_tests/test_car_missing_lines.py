@@ -772,6 +772,9 @@ async def test_adapt_max_charge_limit_steps_overflow(
         },
         entry_id_suffix="lim_overflow2",
     )
+    # QS-243 — re-register after setup (the NUMBER platform re-registers the
+    # real `number.set_value`).
+    hass.services.async_register(number_mod.DOMAIN, number_mod.SERVICE_SET_VALUE, set_value_handler)
     set_value_handler.reset_mock()
 
     # Attached to a QS-managed charger so the native-limit write is permitted.

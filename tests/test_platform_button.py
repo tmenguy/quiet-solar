@@ -69,10 +69,17 @@ def test_create_ha_button_for_car():
     mock_car.user_clean_and_reset = AsyncMock()
     mock_car.can_force_a_charge_now = MagicMock(return_value=True)
     mock_car.can_add_default_charge = MagicMock(return_value=True)
+    mock_car.can_use_charge_percent_constraints = MagicMock(return_value=True)
 
     entities = create_ha_button_for_QSCar(mock_car)
 
-    assert len(entities) == 2  # Force charge, add default
+    # Force charge, add default, reset SOC estimate (QS-243)
+    assert len(entities) == 3
+
+    # Without percent constraints the reset-SOC button is not created.
+    mock_car.can_use_charge_percent_constraints = MagicMock(return_value=False)
+    entities_no_percent = create_ha_button_for_QSCar(mock_car)
+    assert len(entities_no_percent) == 2
 
 
 def test_create_ha_button_for_load():

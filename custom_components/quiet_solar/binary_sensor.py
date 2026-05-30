@@ -14,6 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     BINARY_SENSOR_CAR_API_OK,
+    BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
     BINARY_SENSOR_CAR_IS_STALE,
     BINARY_SENSOR_CAR_USE_CHARGE_PERCENT_CONSTRAINTS,
     BINARY_SENSOR_HOME_IS_OFF_GRID,
@@ -98,6 +99,18 @@ def create_ha_binary_sensor_for_QSCar(device: QSCar):
         value_fn=lambda d, key: d.is_car_effectively_stale(d._get_time_for_sensor()),
     )
     entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=is_stale))
+
+    # SOC is estimated (manual override / charge-energy interpolation) — drives
+    # the asterisk on the card. Independent of API staleness.
+    if device.can_use_charge_percent_constraints():
+        is_soc_estimated = QSBinarySensorEntityDescription(
+            key=BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
+            translation_key=BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
+            value_fn=lambda d, key: d.has_soc_estimate(),
+        )
+        entities.append(
+            QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=is_soc_estimated)
+        )
 
     return entities
 

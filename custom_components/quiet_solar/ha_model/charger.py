@@ -3192,6 +3192,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     self.car.get_user_originated("person_name"),
                 )
                 self.car.clear_all_user_originated()
+                # Edge-triggered (plugged→unplugged): clear the estimated-SOC
+                # state. The genuine plug-in path also clears it (the
+                # do_full_reset branch below), so the estimate is reset on every
+                # plug cycle; only an HA reboot (boot re-attach, with
+                # do_full_reset=False) preserves the persisted estimate.
+                self.car.reset_soc_estimate()
                 self.reset(keep_commands=True)  # will detach the car
                 self.clear_user_originated("car_name")  # physical unplug, reset the user selected car for charger
                 do_force_solve = True
@@ -3268,6 +3274,12 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     do_full_reset = False
                 else:
                     do_full_reset = True
+                if do_full_reset:
+                    # QS-243 — a genuine new plug-in resets the estimated-SOC
+                    # state (fresh charge session). A boot re-attach has
+                    # do_full_reset=False, so the persisted estimate survives an
+                    # HA reboot.
+                    best_car.reset_soc_estimate()
                 if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(
                     time, load_param=best_car.name, for_full_reset=do_full_reset
                 ):
@@ -4631,6 +4643,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         result_calculus = None
         sensor_result = None
+        delta_added = None
+
+        estimating = is_target_percent and self.car.is_in_soc_estimation_mode(time)
 
         if self.current_command is None or self.current_command.is_off_or_idle():
             _LOGGER.info("update_value_callback (is %%:%s): %s no command or idle/off", is_target_percent, self.name)
@@ -4638,26 +4653,42 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         else:
             probe_charge_window = 30 * 60
             if is_target_percent:
-                if self.car.car_api_stale_percent_mode:
-                    sensor_result = None  # explicit bypass — SOC sensor is poisoned
+                if estimating:
+                    sensor_result = None  # explicit bypass — SOC sensor not trusted while estimating
                 else:
-                    sensor_result = self.car.get_car_charge_percent(time, tolerance_seconds=probe_charge_window)
+                    sensor_result = self.car.get_car_charge_percent_raw_sensor(
+                        time, tolerance_seconds=probe_charge_window
+                    )
             else:
                 sensor_result = self.car.get_car_charge_energy(time, tolerance_seconds=probe_charge_window)
 
             total_charge_duration = (ct.last_value_update - ct.first_value_update).total_seconds()
 
-            delta_added = self._compute_added_charge_update(
-                start_time=ct.last_value_change_update, end_time=time, is_target_percent=is_target_percent
-            )
-
-            if delta_added is not None:
-                if is_target_percent:
-                    result_calculus = ct.current_value + int(
-                        delta_added
-                    )  # round it to int ... so stay the same for small updates
+            if estimating:
+                # Car-level float accumulator with a dedicated integration cursor:
+                # advances every cycle so sub-1%/cycle slices are never lost and
+                # never double-counted across solver / constraint churn. The car
+                # owns the running value; this callback is its sole writer and
+                # drives it through the car's public accessors.
+                cursor = self.car.soc_integration_cursor
+                if cursor is None:
+                    # first cycle / post-reboot / post-base-set: anchor only.
+                    inc = None
                 else:
-                    result_calculus = ct.current_value + delta_added
+                    inc = self._compute_added_charge_update(start_time=cursor, end_time=time, is_target_percent=True)
+                result_calculus = self.car.accumulate_soc_delta(inc, time)
+            else:
+                delta_added = self._compute_added_charge_update(
+                    start_time=ct.last_value_change_update, end_time=time, is_target_percent=is_target_percent
+                )
+
+                if delta_added is not None:
+                    if is_target_percent:
+                        result_calculus = ct.current_value + int(
+                            delta_added
+                        )  # round it to int ... so stay the same for small updates
+                    else:
+                        result_calculus = ct.current_value + delta_added
 
             result = sensor_result
 
@@ -4713,11 +4744,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # in case we do have a proper soc % and we expect a charge ongoing (ie "far" from the target)
         # we can check that the charger is really delivering power to the car
 
+        # The zero-power hardware-fault check needs a *trusted* SOC reference to
+        # decide growth, but it can also fall back to raw power measurement. It
+        # is therefore only skipped when the SOC sensor is genuinely distrusted
+        # (stale-percent mode / no sensor) — NOT for a plain manual override on a
+        # healthy, sensor-equipped car (S1).
         if (
             is_target_percent
             and result is not None
             and ct.target_value - result >= CHARGER_CHECK_REAL_POWER_MIN_SOC_DIFF_PERCENT
-            and not self.car.car_api_stale_percent_mode
+            and not self.car.is_soc_sensor_distrusted()
         ):
             if (
                 self._expected_charge_state.value is True

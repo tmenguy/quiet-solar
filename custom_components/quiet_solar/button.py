@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .const import (
     BUTTON_CAR_NEXT_CHARGE_ADD_DEFAULT,
     BUTTON_CAR_NEXT_CHARGE_FORCE_NOW,
+    BUTTON_CAR_RESET_SOC_ESTIMATE,
     BUTTON_DEVICE_CLEAN_AND_RESET,
     BUTTON_DEVICE_CLEAN_COMMAND_AND_CONSTRAINTS,
     BUTTON_HOME_GENERATE_YAML_DASHBOARD,
@@ -166,6 +167,16 @@ def create_ha_button_for_QSCar(device: QSCar):
     entities.append(
         QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_add_default_next_charge)
     )
+
+    if device.can_use_charge_percent_constraints():
+        qs_reset_soc_estimate = QSButtonEntityDescription(
+            key=BUTTON_CAR_RESET_SOC_ESTIMATE,
+            translation_key=BUTTON_CAR_RESET_SOC_ESTIMATE,
+            async_press=lambda x: x.device.user_button_reset_soc_estimate(),
+        )
+        entities.append(
+            QSButtonEntity(data_handler=device.data_handler, device=device, description=qs_reset_soc_estimate)
+        )
 
     return entities
 

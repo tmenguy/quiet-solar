@@ -334,7 +334,7 @@ async def test_efficiency_getter_no_soc_value(
     """Returns None when soc is None."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="eff_no_val")
     car.car_odometer_sensor = "sensor.odo"
-    car.get_car_charge_percent = MagicMock(return_value=None)
+    car.get_car_charge_percent_raw_sensor = MagicMock(return_value=None)
     car.get_car_odometer_km = MagicMock(return_value=1000.0)
 
     result = car.car_efficiency_km_per_kwh_sensor_state_getter("sensor.eff", datetime.now(pytz.UTC))
@@ -354,14 +354,14 @@ async def test_efficiency_getter_with_estimated_range_sensor(
     time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
 
     # First call to establish first segment
-    car.get_car_charge_percent = MagicMock(return_value=80.0)
+    car.get_car_charge_percent_raw_sensor = MagicMock(return_value=80.0)
     car.get_car_odometer_km = MagicMock(return_value=5000.0)
     car.get_car_estimated_range_km_from_sensor = MagicMock(return_value=320.0)  # 320 km range at 80%
     car.car_efficiency_km_per_kwh_sensor_state_getter("sensor.eff", time)
 
     # Second call with decreased SOC
     time2 = time + timedelta(hours=2)
-    car.get_car_charge_percent = MagicMock(return_value=70.0)
+    car.get_car_charge_percent_raw_sensor = MagicMock(return_value=70.0)
     car.get_car_odometer_km = MagicMock(return_value=5050.0)
     car.get_car_estimated_range_km_from_sensor = MagicMock(return_value=280.0)  # 280 km range at 70%
     result = car.car_efficiency_km_per_kwh_sensor_state_getter("sensor.eff", time2)
@@ -384,7 +384,7 @@ async def test_efficiency_getter_ema_update(
     time = datetime(2026, 2, 10, 10, 0, tzinfo=pytz.UTC)
     car._km_per_kwh = 5.0  # Previous EMA value
 
-    car.get_car_charge_percent = MagicMock(return_value=80.0)
+    car.get_car_charge_percent_raw_sensor = MagicMock(return_value=80.0)
     car.get_car_odometer_km = MagicMock(return_value=5000.0)
     car.get_car_estimated_range_km_from_sensor = MagicMock(return_value=320.0)
 
@@ -411,12 +411,12 @@ async def test_efficiency_getter_from_segments_no_range_sensor(
     time = datetime(2026, 2, 10, 8, 0, tzinfo=pytz.UTC)
 
     # Build a decreasing segment: 80% -> 70%, odometer 1000 -> 1050
-    car.get_car_charge_percent = MagicMock(return_value=80.0)
+    car.get_car_charge_percent_raw_sensor = MagicMock(return_value=80.0)
     car.get_car_odometer_km = MagicMock(return_value=1000.0)
     car.car_efficiency_km_per_kwh_sensor_state_getter("sensor.eff", time)
 
     time2 = time + timedelta(hours=1)
-    car.get_car_charge_percent = MagicMock(return_value=70.0)
+    car.get_car_charge_percent_raw_sensor = MagicMock(return_value=70.0)
     car.get_car_odometer_km = MagicMock(return_value=1050.0)
     result = car.car_efficiency_km_per_kwh_sensor_state_getter("sensor.eff", time2)
 
@@ -1912,6 +1912,11 @@ async def test_adapt_max_charge_limit_with_steps(
         entry_id_suffix="lim_steps",
     )
 
+    # QS-243 — the car now registers the NUMBER platform (for the manual-SOC
+    # entity), which re-registers HA's real `number.set_value` during setup.
+    # Re-register the mock afterwards so it is the active handler.
+    hass.services.async_register(number_mod.DOMAIN, number_mod.SERVICE_SET_VALUE, set_value_handler)
+
     # Attached to a QS-managed charger so the native-limit write is permitted
     # (a bare SimpleNamespace suffices — adapt_max_charge_limit never calls a
     # charger method).
@@ -2009,6 +2014,10 @@ async def test_charge_target_recorded_while_detached_reapplied_on_reconnect(
         },
         entry_id_suffix="lim_reconnect",
     )
+
+    # QS-243 — re-register after setup (the NUMBER platform re-registers the
+    # real `number.set_value`).
+    hass.services.async_register(number_mod.DOMAIN, number_mod.SERVICE_SET_VALUE, set_value_handler)
 
     # Detached on entry.
     assert car.charger is None

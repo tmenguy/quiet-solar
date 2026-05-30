@@ -3108,6 +3108,9 @@ async def test_charger_constraint_update_value_callback(
 
     car_device.car_charge_percent_sensor = "sensor.car_soc"
     car_device.get_car_charge_percent = MagicMock(return_value=50)
+    # QS-243 — the callback reads the raw sensor and gates on estimation mode.
+    car_device.get_car_charge_percent_raw_sensor = MagicMock(return_value=50)
+    car_device.car_api_stale_percent_mode = False
     car_device.is_car_charge_growing = MagicMock(return_value=False)
     car_device.setup_car_charge_target_if_needed = AsyncMock()
 
@@ -3235,6 +3238,8 @@ async def test_charger_constraint_update_value_callback_sensor_path(
     charger_device._compute_added_charge_update = MagicMock(return_value=5.0)
 
     car_device.get_car_charge_percent = MagicMock(return_value=90.0)
+    car_device.get_car_charge_percent_raw_sensor = MagicMock(return_value=90.0)
+    car_device.car_api_stale_percent_mode = False
     car_device.is_car_charge_growing = MagicMock(return_value=None)
     car_device.setup_car_charge_target_if_needed = AsyncMock()
     car_device.car_charge_percent_sensor = "sensor.car"
@@ -3337,6 +3342,8 @@ async def test_charger_check_load_activity_unplugged(
     assert await charger_device.check_load_activity_and_constraints(now) is True
     charger_device.reset.assert_called_once()
     charger_device.set_max_charging_current.assert_awaited()
+    # QS-243 S5 — the unplug edge cleared the car's SOC estimate.
+    assert car.reset_soc_estimate_call_count == 1
 
 
 async def test_charger_check_load_activity_plugged_best_car_none(
@@ -3685,6 +3692,8 @@ async def test_charger_constraint_update_value_callback_growth_path(
     charger_device._expected_charge_state.last_ping_time_success = None
 
     car_device.get_car_charge_percent = MagicMock(return_value=100.0)
+    car_device.get_car_charge_percent_raw_sensor = MagicMock(return_value=100.0)
+    car_device.car_api_stale_percent_mode = False
     car_device.is_car_charge_growing = MagicMock(return_value=False)
     car_device.setup_car_charge_target_if_needed = AsyncMock()
     car_device.car_charge_percent_sensor = "sensor.car"

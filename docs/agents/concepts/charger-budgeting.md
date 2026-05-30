@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-05-19
+last_verified: 2026-05-30
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -110,3 +110,14 @@ apply_budget_strategy()
   — why the split exists.
 - [../use-cases/magali-plugs-in-car.md](../use-cases/magali-plugs-in-car.md)
   — the magic-moment use case this layer enables.
+- [car-soc-estimation.md](car-soc-estimation.md) — `constraint_update_value_callback_soc`
+  is the **sole writer** of the car's float SOC accumulator (QS-243); while
+  the car is estimating it bypasses the raw sensor and seeds the constraint
+  from the effective estimate instead of a forced `0.0`. It drives the
+  accumulator through the car's public `soc_integration_cursor` /
+  `accumulate_soc_delta` accessors (no underscore reach-in), and gates the
+  zero-power hardware-fault check on `car.is_soc_sensor_distrusted()` (stale /
+  no-sensor) — **not** on the broad estimation flag, so a manual override on a
+  healthy car still gets fault detection. The estimate is reset on the
+  genuine-plug-in branch (`do_full_reset`) and the unplug edge; a boot re-attach
+  preserves it (reboot survival).

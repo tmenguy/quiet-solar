@@ -105,6 +105,21 @@ views:
               {{ "  name: " + "\'" + ha_entity.name + "\'" }}
               {%- endif %}
               {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_car_is_soc_estimated") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_car_manual_soc_percent") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
+              {%- set ha_entity = device.ha_entities.get("qs_car_reset_soc_estimate") %}
+              {%- if  ha_entity != None %}
+              {{ "- entity: " + ha_entity.entity_id }}
+              {{ "  name: " + "\'" + ha_entity.name + "\'" }}
+              {%- endif %}
               {%- set ha_entity = device.ha_entities.get("best_power_value") %}
               {%- if  ha_entity != None %}
               {{ "- entity: " + ha_entity.entity_id }}
