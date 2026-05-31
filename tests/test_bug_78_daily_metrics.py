@@ -884,10 +884,10 @@ async def test_overnight_helper_no_active_constraint_inert():
 async def test_overnight_met_constraint_excluded():
     """A constraint ending after tomorrow but already met stays excluded.
 
-    Covers the ``is_constraint_active_for_time_period`` False branch of the
-    helper: a met (current >= target) overnight constraint is not active, so its
-    overnight finish time does not leak into the metrics. Preserves the exclusion
-    semantics lost by the rename of the old 'excludes tomorrow' calendar test.
+    A met (current >= target) overnight constraint is not active, so
+    get_current_active_constraint returns None and its overnight finish time does
+    not leak into the metrics. Preserves the exclusion semantics lost by the
+    rename of the old 'excludes tomorrow' calendar test.
     """
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 22, 0, 0, tzinfo=pytz.UTC)
@@ -1002,13 +1002,17 @@ async def test_overnight_active_constraint_local_midnight_boundary():
 # =============================================================================
 
 
-async def test_default_mode_includes_multiple_overnight_active_constraints():
-    """All simultaneously-active overnight constraints are re-added, not just one.
+async def test_default_mode_single_overnight_constraint_by_construction():
+    """The helper returns exactly ONE overnight constraint (the first match).
 
-    A bistate load can hold several live constraints (push_live_constraint
-    appends). If two are active and both finish overnight, both must contribute
-    to the ring/target — otherwise the second cycle re-creates the empty-ring
-    symptom.
+    Invariant: a load's constraints follow each other in time by construction
+    (sequential, non-overlapping active windows), so at most one constraint can be
+    simultaneously started, unmet and finishing overnight — `_overnight_active_
+    constraint` returns the first match and does not accumulate several. This test
+    documents/locks that single-return contract by feeding a (by-construction
+    impossible) pair of overlapping overnight constraints and asserting only the
+    first contributes; if the invariant ever broke, this guards the deliberate
+    behaviour.
     """
     device = _create_bistate_device()
     now = datetime(2026, 3, 30, 22, 0, 0, tzinfo=pytz.UTC)
@@ -1032,15 +1036,15 @@ async def test_default_mode_includes_multiple_overnight_active_constraints():
         start=datetime(2026, 3, 30, 21, 0, 0, tzinfo=pytz.UTC),
         end=datetime(2026, 3, 31, 6, 0, 0, tzinfo=pytz.UTC),
     )
-    assert ct1.is_constraint_active_for_time_period(now) is True
-    assert ct2.is_constraint_active_for_time_period(now) is True
     device._constraints = [ct1, ct2]
     device._last_completed_constraint = None
 
     await device.update_current_metrics(now)
 
-    assert device.qs_bistate_current_duration_h == pytest.approx((7200.0 + 3600.0) / 3600.0)
-    assert device.qs_bistate_current_on_h == pytest.approx((1800.0 + 900.0) / 3600.0)
+    # Only the first overnight constraint (ct1) is counted — ct2 is not added by
+    # the overnight branch (single-return) nor by the in-window loop (out-of-window).
+    assert device.qs_bistate_current_duration_h == pytest.approx(7200.0 / 3600.0)
+    assert device.qs_bistate_current_on_h == pytest.approx(1800.0 / 3600.0)
 
 
 async def test_default_mode_lcc_rollover_not_double_counted_with_overnight_active():

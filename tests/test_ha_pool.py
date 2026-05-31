@@ -54,11 +54,23 @@ class FakeQSPool:
         """Pool never uses calendar-based mode for auto/winter."""
         return False
 
-    # Reuse the real overnight-active-constraints helper so update_current_metrics
-    # exercises production logic (QS-245). It iterates self._constraints directly
-    # and consults each constraint's is_constraint_active_for_time_period, so the
-    # tests stub that method explicitly rather than relying on MagicMock truthiness.
-    _overnight_active_constraints = QSBiStateDuration._overnight_active_constraints
+    def get_current_active_constraint(self, time=None):
+        """Mirror AbstractLoad.get_current_active_constraint for the fake double:
+        return the first constraint active for the given time, else None.
+
+        The overnight path is only reached when this returns a constraint whose
+        end is overnight; the single test that exercises that exclusion stubs
+        is_constraint_active_for_time_period explicitly rather than relying on
+        MagicMock truthiness (QS-245 review fix #01).
+        """
+        for c in getattr(self, "_constraints", None) or []:
+            if c.is_constraint_active_for_time_period(time):
+                return c
+        return None
+
+    # Reuse the real overnight-active-constraint helper so update_current_metrics
+    # exercises production logic (QS-245).
+    _overnight_active_constraint = QSBiStateDuration._overnight_active_constraint
 
     def is_best_effort_only_load(self):
         return False
