@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-05-30
+last_verified: 2026-05-31
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -184,12 +184,24 @@ transport based on which `CONF_*` the user filled.
   overnight (e.g. 06:30 tomorrow) falls outside that window, so the card
   ring (`qs_bistate_current_on_h`) and target
   (`qs_bistate_current_duration_h`) would show 0 while the
-  `constraint_completion` sensor rises. `_overnight_active_constraint_extra`
-  re-adds the running active constraint (guarded by
-  `current_start_of_constraint <= time` so a not-yet-started tomorrow-only
-  constraint stays excluded, and by `end_of_constraint > tomorrow_utc` so
-  in-window constraints are not double-counted). Both metric paths must
-  call it (QS-245).
+  `constraint_completion` sensor rises. `_overnight_active_constraints`
+  returns **every** qualifying constraint — a load can hold several live
+  constraints (`push_live_constraint` appends), so all overnight-finishing
+  active ones must be re-added, not just the first. A constraint qualifies
+  when `end_of_constraint > tomorrow_utc` (overnight finish),
+  `current_start_of_constraint <= time` (already started — excludes a
+  not-yet-started tomorrow-only constraint), `target_value is not None`, and
+  `is_constraint_active_for_time_period(time)` (unmet/active). Both metric
+  paths call it, skip the returned constraints in their in-window loops, and
+  add each one's target/runtime back (QS-245).
+- Forgetting that "today's active cycle" can finish overnight when
+  deduping `_last_completed_constraint`. The bug #101 rollover guard skips
+  an lcc that ended exactly at local midnight when a same-type active
+  constraint represents today's cycle. That cycle may itself finish overnight
+  (out-of-window), so the guard must also treat a same-type
+  `_overnight_active_constraints` entry as today's cycle — otherwise the lcc
+  is added on top of the overnight constraint and yesterday's runtime is
+  double-counted (QS-245 review fix #01).
 
 ## See also
 

@@ -173,30 +173,37 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         """Return True if the current mode uses calendar events for daily metrics."""
         return bistate_mode in ("bistate_mode_auto", "bistate_mode_exact_calendar") and self.calendar is not None
 
-    def _overnight_active_constraint_extra(self, time: datetime, tomorrow_utc: datetime) -> LoadConstraint | None:
-        """Return the currently-running active constraint whose finish time falls
-        after the today window (overnight finish time), else ``None``.
+    def _overnight_active_constraints(self, time: datetime, tomorrow_utc: datetime) -> list[LoadConstraint]:
+        """Return every currently-running active constraint whose finish time falls
+        after the today window (overnight finish time), in ``_constraints`` order.
 
         The today-window loops only count constraints finishing
         ``<= tomorrow_utc``, so an active constraint that started today but ends
         after local midnight (e.g. 06:30 tomorrow) is otherwise dropped from both
         the ring fill and the target — leaving the card empty while the
-        constraint_completion sensor rises. This returns it so the caller can add
-        its target/runtime back in.
+        constraint_completion sensor rises. The caller adds the returned
+        constraints' target/runtime back in.
 
-        Returns ``None`` when there is no active constraint, when the active
-        constraint has not started yet (future start, e.g. a tomorrow-only
-        constraint), or when it already finishes inside the today window (it is
-        then counted exactly once by the window loop — no double count).
+        A bistate load can hold several live constraints at once
+        (``push_live_constraint`` appends; bug #68 / #95), so *all* matching
+        constraints are returned, not just the first. A constraint qualifies when
+        it (a) finishes after the today window
+        (``end_of_constraint > tomorrow_utc``), (b) has already started
+        (``current_start_of_constraint <= time``), (c) is active/unmet at ``time``
+        (``is_constraint_active_for_time_period``), and (d) carries a real target
+        (``target_value is not None`` — a target-less constraint cannot drive a
+        ring/target and is reported unmet, so it is skipped defensively). The
+        result is empty when no constraint qualifies, so the caller's behaviour is
+        unchanged for the common same-day case.
         """
-        active = self.get_current_active_constraint(time)
-        if (
-            active is not None
-            and active.end_of_constraint > tomorrow_utc
-            and active.current_start_of_constraint <= time
-        ):
-            return active
-        return None
+        return [
+            ct
+            for ct in self._constraints
+            if ct.end_of_constraint > tomorrow_utc
+            and ct.current_start_of_constraint <= time
+            and ct.target_value is not None
+            and ct.is_constraint_active_for_time_period(time)
+        ]
 
     async def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
         """Update bistate UI metrics with today-only values.
@@ -224,7 +231,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             today_utc, tomorrow_utc = self._get_today_boundaries(time)
             events = await self.get_next_scheduled_events(time=today_utc, give_currently_running_event=True)
 
-            overnight_ct = self._overnight_active_constraint_extra(time, tomorrow_utc)
+            overnight_cts = self._overnight_active_constraints(time, tomorrow_utc)
 
             target_s = 0.0
             past_actual_s = 0.0
@@ -241,16 +248,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
             # Add active constraint current_value for today
             for ct in self._constraints:
-                if ct is overnight_ct:
+                if any(ct is oct for oct in overnight_cts):
                     continue
                 if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc:
                     run_s += ct.current_value
 
-            # Include the currently-active constraint when it finishes overnight
+            # Include the currently-active constraint(s) finishing overnight
             # (after local midnight) — excluded by the in-window loops above.
-            if overnight_ct is not None:
-                duration_s += overnight_ct.target_value
-                run_s += overnight_ct.current_value
+            for oct in overnight_cts:
+                duration_s += oct.target_value
+                run_s += oct.current_value
 
             # AC5: Sanity-check _last_completed_constraint against calendar
             if self._last_completed_constraint is not None:
@@ -274,20 +281,20 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # Default/pool path: day-filter constraints + last-completed
             today_utc, tomorrow_utc = self._get_today_boundaries(time)
 
-            overnight_ct = self._overnight_active_constraint_extra(time, tomorrow_utc)
+            overnight_cts = self._overnight_active_constraints(time, tomorrow_utc)
 
             for ct in self._constraints:
-                if ct is overnight_ct:
+                if any(ct is oct for oct in overnight_cts):
                     continue
                 if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc:
                     duration_s += ct.target_value
                     run_s += ct.current_value
 
-            # Include the currently-active constraint when it finishes overnight
+            # Include the currently-active constraint(s) finishing overnight
             # (after local midnight) — excluded by the in-window loop above.
-            if overnight_ct is not None:
-                duration_s += overnight_ct.target_value
-                run_s += overnight_ct.current_value
+            for oct in overnight_cts:
+                duration_s += oct.target_value
+                run_s += oct.current_value
 
             if self._last_completed_constraint is not None:
                 lcc = self._last_completed_constraint
@@ -303,11 +310,18 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 )
                 # Bug #101: skip lcc when it ended exactly at local midnight
                 # (previous day's rollover) and a same-type active constraint
-                # represents today's cycle — avoids double-counting yesterday
-                rollover_from_previous_day = lcc.end_of_constraint == today_utc and any(
-                    type(ct) == type(lcc)
-                    for ct in self._constraints
-                    if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
+                # represents today's cycle — avoids double-counting yesterday.
+                # QS-245 fix #01: today's cycle may itself finish overnight
+                # (out-of-window), so treat a same-type overnight constraint as
+                # today's active cycle too — otherwise the lcc would be added on
+                # top of the overnight constraint and yesterday double-counted.
+                rollover_from_previous_day = lcc.end_of_constraint == today_utc and (
+                    any(
+                        type(ct) == type(lcc)
+                        for ct in self._constraints
+                        if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
+                    )
+                    or any(type(oct) == type(lcc) for oct in overnight_cts)
                 )
                 if (
                     not already_absorbed
