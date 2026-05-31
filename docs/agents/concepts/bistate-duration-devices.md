@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-05-24
+last_verified: 2026-05-31
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -176,6 +176,45 @@ transport based on which `CONF_*` the user filled.
   (`QSBiStateDuration`) owns the bistate-mode signals; the transport
   owns the service-call. Crossing that boundary breaks
   `QSRadiator`'s ability to pick a transport at construction time.
+- Dropping the currently-active constraint from the daily metrics
+  when its finish time crosses local midnight. `update_current_metrics`
+  filters constraints to a today-only window
+  (`end_of_constraint <= tomorrow_utc`) in **both** the calendar and
+  default/pool paths. An active constraint that started today but ends
+  overnight (e.g. 06:30 tomorrow) falls outside that window, so the card
+  ring (`qs_bistate_current_on_h`) and target
+  (`qs_bistate_current_duration_h`) would show 0 while the
+  `constraint_completion` sensor rises. `_overnight_active_constraint`
+  returns the single qualifying constraint (or `None`). A constraint qualifies
+  when `end_of_constraint > tomorrow_utc` (overnight finish),
+  `current_start_of_constraint <= time` (already started — excludes a
+  not-yet-started tomorrow-only constraint), `target_value is not None`, and
+  `is_constraint_active_for_time_period(time)` (unmet/active). Both metric
+  paths call it, skip the returned constraint in their in-window loop, and add
+  its target/runtime back (QS-245).
+  **Invariant — at most one active constraint at a time.** A load's constraints
+  follow each other in time *by construction*: their active windows are sequential
+  and non-overlapping (`push_live_constraint` chains them, each new one starting
+  at/after the previous one's end). So a single constraint is "current" at any
+  `time` — the helper reuses `get_current_active_constraint` (already filtered for
+  unmet/active) and just asks whether that one finishes overnight. It **must not**
+  be generalised to scan for several overnight constraints (that would only matter
+  for overlapping windows, which cannot occur here).
+- Mishandling `_last_completed_constraint` (lcc) at the local-midnight
+  boundary. The default/pool path adds the lcc to the daily metrics following a
+  single rule keyed on "is there already today content?" — where *today content*
+  = any in-window constraint (`today_utc < end <= tomorrow_utc`) **or** the
+  overnight active constraint:
+  - `lcc.end == today_utc` (a cycle that ended exactly at local midnight, bug
+    #101 / #95): surface it **only when there is no today content** — otherwise
+    it is stale and would double-count yesterday on top of today's cycle
+    (whether that cycle is in-window or finishes overnight, QS-245 fix #01).
+  - `today_utc < lcc.end <= tomorrow_utc`: show it unless an active same-type
+    constraint sharing its (initial) end date already absorbed its runtime
+    (same-day cycle carry-over).
+  - anything ending before `today_utc`, the `DATETIME_MAX_UTC` sentinel, or
+    after `tomorrow_utc`: excluded. Use `== today_utc` (not `<=`) for the
+    boundary case so genuinely-old cycles are never resurrected.
 
 ## See also
 

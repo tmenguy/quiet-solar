@@ -16,7 +16,7 @@ from ..const import (
 )
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import CMD_IDLE, LoadCommand
-from ..home_model.constraints import DATETIME_MAX_UTC, TimeBasedSimplePowerLoadConstraint
+from ..home_model.constraints import DATETIME_MAX_UTC, LoadConstraint, TimeBasedSimplePowerLoadConstraint
 from ..home_model.load import AbstractLoad
 
 if TYPE_CHECKING:
@@ -173,6 +173,46 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         """Return True if the current mode uses calendar events for daily metrics."""
         return bistate_mode in ("bistate_mode_auto", "bistate_mode_exact_calendar") and self.calendar is not None
 
+    def _overnight_active_constraint(self, time: datetime, tomorrow_utc: datetime) -> LoadConstraint | None:
+        """Return the currently-running active constraint whose finish time falls
+        after the today window (overnight finish time), else ``None``.
+
+        The today-window loops only count constraints finishing
+        ``<= tomorrow_utc``, so an active constraint that started today but ends
+        after local midnight (e.g. 06:30 tomorrow) is otherwise dropped from both
+        the ring fill and the target — leaving the card empty while the
+        constraint_completion sensor rises. The caller adds the returned
+        constraint's target/runtime back in.
+
+        INVARIANT — at most one active constraint at a time. A load's constraints
+        follow each other in time **by construction**: their active windows are
+        sequential and non-overlapping (``push_live_constraint`` chains them, each
+        new one starting at/after the previous one's end). So a single constraint
+        is "current" at any ``time`` — we reuse ``get_current_active_constraint``
+        (which returns that one, already filtered for unmet/active) and simply ask
+        whether it finishes overnight. There is no need to scan for several
+        overnight constraints; overlapping windows cannot occur here.
+
+        The current active constraint qualifies as the overnight one when it
+        (a) finishes after the today window (``end_of_constraint > tomorrow_utc``),
+        (b) has already started (``current_start_of_constraint <= time`` — excludes
+        a not-yet-started tomorrow-only constraint that ``get_current_active_
+        constraint`` still reports active because it is unmet and ends in the
+        future), and (c) carries a real target (``target_value is not None`` — a
+        target-less constraint cannot drive a ring/target and is reported unmet, so
+        it is skipped defensively). Returns ``None`` for the common same-day case,
+        leaving caller behaviour unchanged.
+        """
+        active = self.get_current_active_constraint(time)
+        if (
+            active is not None
+            and active.end_of_constraint > tomorrow_utc
+            and active.current_start_of_constraint <= time
+            and active.target_value is not None
+        ):
+            return active
+        return None
+
     async def update_current_metrics(self, time: datetime, end_range: dt_time | None = None):
         """Update bistate UI metrics with today-only values.
 
@@ -198,6 +238,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # Calendar path: fetch events and compute today target + past actuals
             today_utc, tomorrow_utc = self._get_today_boundaries(time)
             events = await self.get_next_scheduled_events(time=today_utc, give_currently_running_event=True)
+
+            overnight_ct = self._overnight_active_constraint(time, tomorrow_utc)
+
             target_s = 0.0
             past_actual_s = 0.0
             for ev_start, ev_end in events:
@@ -213,8 +256,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
 
             # Add active constraint current_value for today
             for ct in self._constraints:
+                if ct is overnight_ct:
+                    continue
                 if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc:
                     run_s += ct.current_value
+
+            # Include the currently-active constraint finishing overnight
+            # (after local midnight) — excluded by the in-window loops above.
+            if overnight_ct is not None:
+                duration_s += overnight_ct.target_value
+                run_s += overnight_ct.current_value
 
             # AC5: Sanity-check _last_completed_constraint against calendar
             if self._last_completed_constraint is not None:
@@ -238,38 +289,61 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # Default/pool path: day-filter constraints + last-completed
             today_utc, tomorrow_utc = self._get_today_boundaries(time)
 
+            overnight_ct = self._overnight_active_constraint(time, tomorrow_utc)
+
             for ct in self._constraints:
+                if ct is overnight_ct:
+                    continue
                 if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc:
                     duration_s += ct.target_value
                     run_s += ct.current_value
 
+            # Include the currently-active constraint finishing overnight
+            # (after local midnight) — excluded by the in-window loop above.
+            if overnight_ct is not None:
+                duration_s += overnight_ct.target_value
+                run_s += overnight_ct.current_value
+
             if self._last_completed_constraint is not None:
                 lcc = self._last_completed_constraint
                 lcc_end = getattr(lcc, "initial_end_of_constraint", lcc.end_of_constraint)
-                # Skip lcc when an active today-constraint of the same type shares
-                # its end date (same-day-cycle: push_live_constraint already
-                # carried over runtime — mirror its type + end-date checks)
-                already_absorbed = any(
-                    type(ct) == type(lcc)
-                    and (ct.end_of_constraint == lcc.end_of_constraint or ct.end_of_constraint == lcc_end)
-                    for ct in self._constraints
-                    if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
+
+                # "Today content" already on the card: any constraint finishing
+                # inside the today window, plus the overnight active constraint.
+                # (overnight_ct ends > tomorrow_utc, so it is never in the window
+                # set — count it explicitly.)
+                has_today_content = overnight_ct is not None or any(
+                    today_utc < ct.end_of_constraint <= tomorrow_utc for ct in self._constraints
                 )
-                # Bug #101: skip lcc when it ended exactly at local midnight
-                # (previous day's rollover) and a same-type active constraint
-                # represents today's cycle — avoids double-counting yesterday
-                rollover_from_previous_day = lcc.end_of_constraint == today_utc and any(
-                    type(ct) == type(lcc)
-                    for ct in self._constraints
-                    if ct.end_of_constraint > today_utc and ct.end_of_constraint <= tomorrow_utc
-                )
-                if (
-                    not already_absorbed
-                    and not rollover_from_previous_day
-                    and lcc.end_of_constraint != DATETIME_MAX_UTC
-                    and lcc.end_of_constraint >= today_utc  # >= includes exact-midnight boundary (DST)
-                    and lcc.end_of_constraint <= tomorrow_utc
-                ):
+
+                if lcc.end_of_constraint == today_utc:
+                    # Bug #101 / #95: lcc ended exactly at local midnight (the
+                    # previous day's cycle rolling over). Surface it ONLY when
+                    # nothing else represents today — otherwise it is stale and
+                    # would double-count yesterday on top of today's cycle
+                    # (in-window OR finishing overnight).
+                    use_lcc = not has_today_content
+                else:
+                    # lcc completed strictly within today (today_utc < end <=
+                    # tomorrow_utc): show it unless an active same-type
+                    # constraint sharing its (initial) end date already absorbed
+                    # its runtime (same-day cycle carry-over by
+                    # push_live_constraint). Anything ending before today_utc,
+                    # the DATETIME_MAX_UTC sentinel, or after tomorrow_utc is
+                    # excluded (a constraint ending yesterday is not "today").
+                    already_absorbed = any(
+                        type(ct) == type(lcc)
+                        and (ct.end_of_constraint == lcc.end_of_constraint or ct.end_of_constraint == lcc_end)
+                        for ct in self._constraints
+                        if today_utc < ct.end_of_constraint <= tomorrow_utc
+                    )
+                    use_lcc = (
+                        not already_absorbed
+                        and lcc.end_of_constraint != DATETIME_MAX_UTC
+                        and today_utc < lcc.end_of_constraint <= tomorrow_utc
+                    )
+
+                if use_lcc:
                     duration_s += lcc.target_value
                     run_s += lcc.current_value
 
