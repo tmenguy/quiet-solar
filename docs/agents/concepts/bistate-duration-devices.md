@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-05-31
+last_verified: 2026-06-01
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -211,7 +211,12 @@ transport based on which `CONF_*` the user filled.
     (whether that cycle is in-window or finishes overnight, QS-245 fix #01).
   - `today_utc < lcc.end <= tomorrow_utc`: show it unless an active same-type
     constraint sharing its (initial) end date already absorbed its runtime
-    (same-day cycle carry-over).
+    (same-day cycle carry-over). Also drop it when an **overnight active
+    constraint is running** (`overnight_ct is not None`, QS-247): for a
+    non-midnight finish time the just-completed cycle is then the previous day's
+    cycle of this single-daily-cycle load and would otherwise be counted on top
+    of today's running cycle (the growing / overfull ring) — symmetric with the
+    `lcc.end == today_utc` rule above.
   - anything ending before `today_utc`, the `DATETIME_MAX_UTC` sentinel, or
     after `tomorrow_utc`: excluded. Use `== today_utc` (not `<=`) for the
     boundary case so genuinely-old cycles are never resurrected.

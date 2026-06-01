@@ -1148,3 +1148,87 @@ async def test_overnight_targetless_constraint_excluded():
 
     assert device.qs_bistate_current_duration_h == pytest.approx(0.0)
     assert device.qs_bistate_current_on_h == pytest.approx(0.0)
+
+
+async def test_default_mode_nonmidnight_finish_lcc_not_double_counted_with_running_overnight():
+    """QS-247 (AC1): non-midnight finish-time rollover with a running overnight cycle.
+
+    The lcc completed this morning at a non-midnight finish time (today 06:30),
+    so it sits strictly inside the today window (not "yesterday" by the midnight
+    frame). Today's new cycle is already running and finishes overnight
+    (tomorrow 06:30), so ``_overnight_active_constraint`` returns it. The
+    just-completed prior overnight cycle (lcc) must be dropped — otherwise it is
+    counted on top of today's growing run, producing the reported growing /
+    overfull ring (3.4h/3h -> 4.4h/3h). Only ``overnight_ct`` contributes.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 9, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    # Today's new cycle: started 02:00 today (before now -> active), ends
+    # tomorrow 06:30 (overnight, out of window). 3h target, 0.4h run so far.
+    overnight_ct = _make_constraint(
+        device,
+        now,
+        target_s=10800.0,
+        current_s=1440.0,
+        start=datetime(2026, 3, 30, 2, 0, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 31, 6, 30, 0, tzinfo=pytz.UTC),
+    )
+    # Yesterday's overnight cycle, completed this morning at 06:30 (in-window).
+    lcc = _make_constraint(
+        device,
+        now,
+        target_s=10800.0,
+        current_s=10800.0,
+        start=datetime(2026, 3, 30, 3, 30, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 6, 30, 0, tzinfo=pytz.UTC),
+    )
+    device._constraints = [overnight_ct]
+    device._last_completed_constraint = lcc
+
+    # Lock in that the helper surfaces the running overnight cycle.
+    assert device._overnight_active_constraint(now, tomorrow_utc) is overnight_ct
+
+    await device.update_current_metrics(now)
+
+    # Only overnight_ct contributes; lcc (yesterday's cycle) is dropped.
+    assert device.qs_bistate_current_on_h == pytest.approx(0.4)
+    assert device.qs_bistate_current_duration_h == pytest.approx(3.0)
+
+
+async def test_default_mode_nonmidnight_finish_lcc_kept_when_no_overnight():
+    """QS-247 (AC4): idle gap — lcc retained as a benign full ring.
+
+    In the brief window after the 06:30 completion and before the new cycle
+    starts running, ``_constraints`` is empty so ``overnight_ct is None``. The
+    just-finished cycle's lcc (today 06:30, 3.0h/3h) is retained: a full, never
+    overfull ring. This pins the ``overnight_ct is None`` True branch and
+    documents the accepted residual behaviour.
+    """
+    device = _create_bistate_device()
+    now = datetime(2026, 3, 30, 9, 0, 0, tzinfo=pytz.UTC)
+    today_utc = datetime(2026, 3, 30, 0, 0, 0, tzinfo=pytz.UTC)
+    tomorrow_utc = datetime(2026, 3, 31, 0, 0, 0, tzinfo=pytz.UTC)
+    _set_day_boundaries(device, today_utc, tomorrow_utc)
+
+    lcc = _make_constraint(
+        device,
+        now,
+        target_s=10800.0,
+        current_s=10800.0,
+        start=datetime(2026, 3, 30, 3, 30, 0, tzinfo=pytz.UTC),
+        end=datetime(2026, 3, 30, 6, 30, 0, tzinfo=pytz.UTC),
+    )
+    device._constraints = []
+    device._last_completed_constraint = lcc
+
+    assert device._overnight_active_constraint(now, tomorrow_utc) is None
+
+    await device.update_current_metrics(now)
+
+    # No running overnight cycle -> the completed cycle's full ring is shown.
+    assert device.qs_bistate_current_on_h == pytest.approx(3.0)
+    assert device.qs_bistate_current_duration_h == pytest.approx(3.0)

@@ -331,6 +331,17 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     # push_live_constraint). Anything ending before today_utc,
                     # the DATETIME_MAX_UTC sentinel, or after tomorrow_utc is
                     # excluded (a constraint ending yesterday is not "today").
+                    #
+                    # QS-247: also drop the lcc when an overnight active
+                    # constraint is running (overnight_ct is not None). In
+                    # default/pool mode there is exactly one daily cycle, and
+                    # constraints chain sequentially (the QS-245 invariant), so
+                    # an lcc that ended earlier today is the previous day's cycle
+                    # of this same recurring load — counting it on top of today's
+                    # running overnight cycle is the reported growing / overfull
+                    # ring. This is symmetric with the lcc.end == today_utc branch
+                    # above, which already drops the lcc whenever has_today_content
+                    # (overnight_ct included).
                     already_absorbed = any(
                         type(ct) == type(lcc)
                         and (ct.end_of_constraint == lcc.end_of_constraint or ct.end_of_constraint == lcc_end)
@@ -339,6 +350,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     )
                     use_lcc = (
                         not already_absorbed
+                        and overnight_ct is None
                         and lcc.end_of_constraint != DATETIME_MAX_UTC
                         and today_utc < lcc.end_of_constraint <= tomorrow_utc
                     )
