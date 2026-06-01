@@ -13,6 +13,30 @@ The agent **bodies** are identical across harnesses (same protocol, same
 hard rules). Only the **frontmatter** differs and the **handoff
 mechanics** are isolated in Python.
 
+## Code intelligence (LSP)
+
+The Claude harness wires a native Python language server. The built-in
+`LSP` tool (backed by the official `pyright-lsp` plugin, enabled in
+`.claude/settings.json`) gives agents pyright **diagnostics** — type
+errors and missing imports surfaced in-turn, before the quality gate —
+**and** code **navigation** (definitions, references, hover types,
+symbols). Because the qs `tools:` allowlists are closed, `LSP` is granted
+only to the 8 code-navigating agents; the blind reviewers and
+merge/release agents deliberately omit it. The plugin shells out to the
+`pyright-langserver` binary, a per-machine prerequisite installed with
+`npm install -g pyright` (machine-level, **not** in the venv or
+`requirements*.txt` — the product type-checker stays mypy); it degrades
+gracefully to grep when the binary is absent.
+
+This is **Claude-only** for now. Per the multi-harness contract, the
+other harnesses provide their own code intelligence rather than a shared
+layer: Cursor (2.4+) has ambient editor-native LSP (no agent tool to
+enable), and OpenCode bundles pyright but surfaces it as diagnostics-only
+(no navigation), so it is intentionally not enabled there. Full rationale,
+the per-harness capability matrix, and the rebuttal of the old
+jedi-via-MCP plan live in
+[../agents/lsp-evaluation.md](../agents/lsp-evaluation.md).
+
 ## Detection — `scripts/qs/harness.py`
 
 `harness.detect()` returns one of `claude-code` / `cursor` / `opencode` /

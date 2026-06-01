@@ -95,7 +95,8 @@ docs covering it before you write the change.
 
 - [glossary.md](glossary.md) — ~40 domain terms.
 - [lsp-evaluation.md](lsp-evaluation.md) — should agents pair with a
-  Python LSP server? (Decision: defer.)
+  Python LSP server? (Decision: adopt native pyright in the Claude
+  harness; OpenCode diagnostics-only, Cursor TBD.)
 - [../workflow/project-rules.md](../workflow/project-rules.md) —
   the quality-gate rules and the "Doc maintenance" subsection.
 - [../workflow/project-context.md](../workflow/project-context.md)

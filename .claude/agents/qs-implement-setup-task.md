@@ -6,7 +6,7 @@ description: >-
   config). Same TDD flow as qs-implement-task but narrower edit scope
   and the fast-path quality gate. Use when /create-plan selected
   implement-setup-task as the next phase.
-tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch
+tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch, LSP
 ---
 
 # qs-implement-setup-task — TDD implementation (dev-env scope)

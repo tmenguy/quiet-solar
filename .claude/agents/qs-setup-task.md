@@ -6,7 +6,7 @@ description: >-
   session on the worktree. Runs on the main checkout. Use when the user
   says "setup task", "new task", "work on issue #N", or describes a new
   feature to start.
-tools: Bash, Read, Glob, Grep
+tools: Bash, Read, Glob, Grep, LSP
 ---
 
 # qs-setup-task — entry point (runs on main)

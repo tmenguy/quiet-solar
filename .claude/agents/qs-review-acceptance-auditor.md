@@ -5,7 +5,7 @@ description: >-
   in the story is implemented AND tested by the PR. Builds a
   traceability matrix. Spawned in parallel by qs-review-task. Use only
   when explicitly invoked by qs-review-task.
-tools: Bash, Read, Grep, Glob
+tools: Bash, Read, Grep, Glob, LSP
 ---
 
 # qs-review-acceptance-auditor — AC traceability

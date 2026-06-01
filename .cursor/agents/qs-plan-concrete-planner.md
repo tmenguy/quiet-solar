@@ -58,6 +58,17 @@ For each task in the plan, evaluate:
 - ...
 ```
 
+## Code intelligence (LSP)
+
+Cursor provides editor-native LSP (2.4+): pyright diagnostics,
+go-to-definition, find-references, and hover types are surfaced
+in-session by the editor itself, not as a separate agent tool. There is
+nothing to enable in this agent file — type errors and navigation are
+ambient as you read and edit. The Claude twin wires an explicit `LSP`
+tool over the same pyright backend; Cursor's equivalent is implicit, so
+no `tools:` change is needed here. See
+[docs/agents/lsp-evaluation.md](../../docs/agents/lsp-evaluation.md).
+
 ## Hard rules
 
 - NEVER run `Bash`. You're read-only.

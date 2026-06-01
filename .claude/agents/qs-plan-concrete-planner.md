@@ -5,7 +5,7 @@ description: >-
   verifies the plan translates to concrete diffs (exact paths,
   functions, test specs). Spawned in parallel by qs-create-plan. Use
   only when explicitly invoked by qs-create-plan.
-tools: Read, Glob, Grep
+tools: Read, Glob, Grep, LSP
 ---
 
 # qs-plan-concrete-planner — file-level concreteness review

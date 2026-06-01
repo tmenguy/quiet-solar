@@ -143,6 +143,17 @@ flow is one session per phase. OpenCode's HTTP-API
 `spawn_session.py` one-liner is the in-band activation path; the agent
 picker is the manual one.
 
+## Code intelligence (LSP)
+
+OpenCode defaults to pyright (`"lsp": true` in `opencode.json`) but, per
+opencode.ai/docs/lsp, exposes LSP to the agent **only as diagnostics** —
+no go-to-definition / find-references navigation. Because navigation is
+the larger ergonomics win and the diagnostics-only mode is not worth
+dedicated wiring, LSP is intentionally **not** enabled for this agent;
+use grep/glob for code navigation here. The Claude twin carries an
+explicit `LSP` tool (diagnostics + navigation). See
+[docs/agents/lsp-evaluation.md](../../docs/agents/lsp-evaluation.md).
+
 ## Hard rules
 
 - Do NOT analyze the input. The launcher must come within a few seconds.
