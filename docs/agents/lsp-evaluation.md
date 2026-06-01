@@ -85,7 +85,7 @@ forbids reading the codebase / the repo) and the merge/release agents
 | `qs-plan-concrete-planner` | ✅ | Reads file tree + source snippets to verify diffs |
 | `qs-review-edge-case-hunter` | ✅ | Walks branching paths in the PR source |
 | `qs-review-acceptance-auditor` | ✅ | Builds a traceability matrix over source |
-| `qs-setup-task` | ✅ | Globs/reads code to scope a new issue |
+| `qs-setup-task` | ✅ | Carries `LSP` for capability parity with the other code-reading agents — but see the note below |
 | `qs-plan-critic` | ❌ | **Blind** — reviews plan text only |
 | `qs-plan-dev-proxy` | ❌ | **Blind** — never reads source |
 | `qs-plan-scope-guardian` | ❌ | **Blind** — plan + issue only |
@@ -94,9 +94,18 @@ forbids reading the codebase / the repo) and the merge/release agents
 | `qs-finish-task` | ❌ | Merge / cleanup only |
 | `qs-release` | ❌ | Version bump / tag only |
 
+> **`qs-setup-task` caveat.** This agent's hard rule is "do NOT analyze
+> the input; the launcher must come within a few seconds." It carries
+> `LSP` only for **capability parity** with the other code-reading
+> agents (and for the rare case where a session lingers past the
+> launcher) — it is **not** expected to exercise LSP on the
+> fast-launcher path. No tension with the hard rule: the tool is
+> available but unused during the few-second launch.
+
 A pin test (`tests/qs/agents/test_lsp_tool_enabled.py`) asserts **both**
-the include set and the exclude set, so granting `LSP` to a blind
-reviewer can't slip in silently.
+the include set and the exclude set (and that they partition every agent
+on disk), so granting `LSP` to a blind reviewer — or adding a new agent
+that escapes the split — can't slip in silently.
 
 ## Prerequisite: install pyright (manual, per-machine)
 
