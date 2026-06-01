@@ -5,7 +5,7 @@ description: >-
   boundary in the PR. Flags ONLY unhandled edge cases. Spawned in
   parallel by qs-review-task. Use only when explicitly invoked by
   qs-review-task.
-tools: Bash, Read, Grep, Glob
+tools: Bash, Read, Grep, Glob, LSP
 ---
 
 # qs-review-edge-case-hunter — exhaustive boundary review

@@ -5,7 +5,7 @@ description: >-
   custom_components/quiet_solar/, must pass the full quality gate,
   opens a PR. Use when the user says "implement task" or "implement
   story" inside a worktree.
-tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch
+tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch, LSP
 ---
 
 # qs-implement-task — TDD implementation (production code scope)

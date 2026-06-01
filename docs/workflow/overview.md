@@ -123,6 +123,7 @@ nearly identical across harnesses; only the frontmatter differs
 
 See [harness.md](harness.md) for how to add a new harness.
 See [project-rules.md](project-rules.md) § "Harness sync" for the cross-harness body-parity rule.
+Code intelligence is opt-in per harness: Claude agents carry a native pyright `LSP` tool — see [harness.md](harness.md) § "Code intelligence (LSP)" and [../agents/lsp-evaluation.md](../agents/lsp-evaluation.md).
 
 ## Required reading
 

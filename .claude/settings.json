@@ -2,6 +2,9 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "_comment": "Shared Claude Code permissions for the Quiet Solar pipeline. Per-user overrides live in settings.local.json.",
   "autoMemoryEnabled": false,
+  "enabledPlugins": {
+    "pyright-lsp@claude-plugins-official": true
+  },
   "permissions": {
     "allow": [
       "Bash(python scripts/qs/setup_task.py:*)",

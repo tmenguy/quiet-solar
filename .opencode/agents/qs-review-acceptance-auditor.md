@@ -101,6 +101,17 @@ prompt.
   for the failure case described in the AC.
 ```
 
+## Code intelligence (LSP)
+
+OpenCode defaults to pyright (`"lsp": true` in `opencode.json`) but, per
+opencode.ai/docs/lsp, exposes LSP to the agent **only as diagnostics** —
+no go-to-definition / find-references navigation. Because navigation is
+the larger ergonomics win and the diagnostics-only mode is not worth
+dedicated wiring, LSP is intentionally **not** enabled for this agent;
+use grep/glob for code navigation here. The Claude twin carries an
+explicit `LSP` tool (diagnostics + navigation). See
+[docs/agents/lsp-evaluation.md](../../docs/agents/lsp-evaluation.md).
+
 ## Hard rules
 
 - Your sole authority is the story file + the PR diff. Don't read
