@@ -1878,6 +1878,97 @@ async def test_radiator_step_explicit_pilot_clear_removes_persisted_key(
     assert CONF_DEVICE_TO_PILOT_NAME not in config_entry.data
 
 
+def _suggested_value(schema, key: str):
+    """Return the `suggested_value` for `key` in a rendered schema, or None."""
+    for item in schema.schema:
+        if getattr(item, "schema", None) == key:
+            return item.description.get("suggested_value") if item.description else None
+    return None
+
+
+def _schema_has_marker(schema, key: str) -> bool:
+    return any(getattr(item, "schema", None) == key for item in schema.schema)
+
+
+@pytest.mark.asyncio
+async def test_radiator_error_rerender_does_not_revive_cleared_pilot(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Review-fix #02 — a cleared pilot is not re-prefilled on an XOR-error
+    re-render (which would otherwise silently re-persist the stale value).
+
+    Repro: clear the pilot AND submit an XOR-invalid backing combo (both
+    climate and switch set). The error re-render must render the pilot empty
+    (not fall back to the persisted name), while unrelated rejected fields are
+    still re-prefilled. Fixing the backing and saving then drops the pilot.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_rerender_pilot_123",
+        data={
+            CONF_NAME: "Rerender Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Existing HP",
+        },
+        title="radiator: Rerender",
+    )
+    config_entry.add_to_hass(hass)
+
+    existing_hp = MagicMock()
+    existing_hp.name = "Existing HP"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [existing_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    # Render the form first so `_last_optional_keys` captures the pilot key.
+    render = await flow.async_step_radiator()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        # XOR error: BOTH climate and switch set, pilot cleared (omitted).
+        rerender = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Rerender Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.r",
+                CONF_SWITCH: "switch.r",
+                # CONF_DEVICE_TO_PILOT_NAME intentionally cleared (omitted)
+            }
+        )
+
+    assert rerender["type"] == FlowResultType.FORM
+    assert rerender["errors"]["base"] == "exactly_one_backing_required"
+    schema = rerender["data_schema"]
+    # The cleared pilot must NOT be re-prefilled from the persisted value.
+    assert _schema_has_marker(schema, CONF_DEVICE_TO_PILOT_NAME)
+    assert _suggested_value(schema, CONF_DEVICE_TO_PILOT_NAME) is None
+    # No-regression: an unrelated rejected field is still re-prefilled.
+    assert _suggested_value(schema, CONF_SWITCH) == "switch.r"
+
+    # Fix the backing (switch only) and save — the pilot stays cleared.
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Rerender Radiator",
+                CONF_POWER: 1000,
+                CONF_SWITCH: "switch.r",
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_DEVICE_TO_PILOT_NAME not in config_entry.data
+
+
 @pytest.mark.asyncio
 async def test_get_common_schema_dashboard_dropdown_reflects_home_sections(
     hass: HomeAssistant, mock_data_handler

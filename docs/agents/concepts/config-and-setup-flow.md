@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-06-01
+last_verified: 2026-06-02
 ---
 
 # Config flow and setup
@@ -138,6 +138,16 @@ Pass 2 can re-suggest it — no need to accumulate keys across passes. The
 helper takes the merge `base` explicitly (it never reads `config_entry`),
 so the same call serves both the terminal saves and the intermediate
 persists in both the creation and options flows.
+
+**Radiator validation-error re-render:** when a radiator submit trips a
+validation error (XOR backing, HVAC modes), `_async_show_radiator_form`
+re-renders with the rejected `pending` submission so the user keeps
+their selections. `_suggest` normally falls back to `config_entry.data`,
+but for an optional field the user *cleared* (present in
+`_last_optional_keys` yet absent/empty in `pending`) that fallback is
+suppressed so the selector renders empty — otherwise the error round-trip
+would revive the stale value and re-persist it once the user fixes the
+unrelated error. Other rejected fields are still re-prefilled.
 
 **Home options-flow section editor** (`async_step_home`): the 8
 dashboard-section slot suggestions (`CONF_DASHBOARD_SECTION_NAME_<i>`

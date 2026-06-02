@@ -2070,7 +2070,24 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         # single re-render so the user sees their own selections.
         explicit_pending: dict = pending or {}
 
+        # QS-251 review-fix #02 — on a validation-error re-render the rejected
+        # `pending` IS the user's submission, so an optional field they cleared
+        # is absent (or None/"") in it. Without this, `_suggest` would fall
+        # back to the still-persisted stale value and re-prefill the selector;
+        # the user fixing the unrelated backing error then resubmits the
+        # revived value and the clear is silently lost. Treat such keys as
+        # cleared and suppress the `config_entry.data` fallback so the field
+        # renders empty. Only the error re-render passes `pending`; the initial
+        # render and the Pass 2 re-render (`pending is None`) keep the
+        # persisted-value prefill — Pass 2 already dropped cleared keys from
+        # `config_entry.data` via `_persist_radiator_pass1`.
+        cleared_on_rerender: set[str] = set()
+        if pending is not None:
+            cleared_on_rerender = {key for key in self._last_optional_keys if explicit_pending.get(key) in (None, "")}
+
         def _suggest(key: str):
+            if key in cleared_on_rerender:
+                return None
             return explicit_pending.get(key) or self.config_entry.data.get(key)
 
         # B1 — Pass 2 form pre-fills the entity selectors with the
