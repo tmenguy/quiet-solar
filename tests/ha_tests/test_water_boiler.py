@@ -194,6 +194,51 @@ async def test_water_boiler_without_temperature_sensor(
     )
 
 
+async def test_water_boiler_missing_temperature_sensor_key_tolerated(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """AC6 / QS-251 — construction tolerates the temp-sensor key being absent.
+
+    The centralized clear-on-absence mechanism now removes the key entirely
+    (rather than the old `setdefault("")` band-aid), so a cleared water boiler
+    persists with `CONF_WATER_BOILER_TEMPERATURE_SENSOR` missing. This is the
+    consumer half of AC6: `QSWaterBoiler.__init__` must treat the missing key
+    exactly like its `""`→`None` WF-3 normalization — `None`, no probe.
+    """
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    # The key is entirely absent (the missing-key shape the generic path emits).
+    config = dict(MOCK_WATER_BOILER_CONFIG_NO_TEMP)
+    assert CONF_WATER_BOILER_TEMPERATURE_SENSOR not in config
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=config,
+        entry_id="water_boiler_missing_key_test",
+        title=f"water_boiler: {config['name']}",
+        unique_id="quiet_solar_water_boiler_missing_key_test",
+    )
+    entry.add_to_hass(hass)
+
+    real_attach = HADeviceMixin.attach_ha_state_to_probe
+    with patch.object(
+        HADeviceMixin,
+        "attach_ha_state_to_probe",
+        autospec=True,
+        wraps=real_attach,
+    ) as mock_probe:
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    device = hass.data[DOMAIN].get(entry.entry_id)
+    assert device is not None
+    assert device.water_boiler_temperature_sensor is None
+    # No probe attached for the (absent) temperature sensor entity id.
+    assert _matching_probe_calls(mock_probe, _TEMP_SENSOR_ID) == []
+
+
 async def test_water_boiler_empty_string_temperature_sensor_normalised_to_none(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,

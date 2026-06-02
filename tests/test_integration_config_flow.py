@@ -42,6 +42,7 @@ from custom_components.quiet_solar.const import (
     CONF_CAR_ESTIMATED_RANGE_SENSOR,
     CONF_CAR_IS_CUSTOM_POWER_CHARGE_VALUES_3P,
     CONF_CAR_ODOMETER_SENSOR,
+    CONF_CAR_TRACKER,
     CONF_CHARGER_DEVICE_OCPP,
     CONF_CHARGER_DEVICE_WALLBOX,
     CONF_CHARGER_LATITUDE,
@@ -58,6 +59,7 @@ from custom_components.quiet_solar.const import (
     CONF_DEVICE_TO_PILOT_NAME,
     CONF_DYN_GROUP_MAX_PHASE_AMPS,
     CONF_GRID_POWER_SENSOR,
+    CONF_GRID_POWER_SENSOR_INVERTED,
     CONF_HOME_VOLTAGE,
     CONF_IS_3P,
     CONF_LOAD_IS_BOOST_ONLY,
@@ -90,10 +92,14 @@ from custom_components.quiet_solar.const import (
     FORECAST_SOLAR_DOMAIN,
     OPEN_METEO_SOLAR_DOMAIN,
     SOLCAST_SOLAR_DOMAIN,
+    CONF_TYPE_NAME_QSBattery,
+    CONF_TYPE_NAME_QSCar,
     CONF_TYPE_NAME_QSClimateDuration,
     CONF_TYPE_NAME_QSHeatPump,
     CONF_TYPE_NAME_QSHome,
     CONF_TYPE_NAME_QSRadiator,
+    CONF_TYPE_NAME_QSWaterBoiler,
+    CONF_WATER_BOILER_TEMPERATURE_SENSOR,
 )
 from custom_components.quiet_solar.ha_model.battery import QSBattery
 from custom_components.quiet_solar.ha_model.car import QSCar
@@ -1675,14 +1681,20 @@ async def test_radiator_step_explicit_pilot_clear_with_absent_key(
 
     flow = _init_options_flow(hass, config_entry)
 
+    # Render the form first so the generic clear-on-absence mechanism
+    # captures the rendered optional pilot key (this replaces the removed
+    # per-field `explicit_pilot_clear` machinery).
+    render = await flow.async_step_radiator()
+    assert render["type"] == FlowResultType.FORM
+
     with patch(
         "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
         new_callable=AsyncMock,
     ):
         # User submits WITHOUT the pilot key at all (HA omits absent
         # `vol.Optional` fields). The persisted pilot must still be
-        # cleared because we detect "form rendered the dropdown AND
-        # user submitted nothing for it AND a value was persisted".
+        # cleared because the form rendered the dropdown AND the user
+        # submitted nothing for it.
         result = await flow.async_step_radiator(
             {
                 CONF_NAME: "Pilot Absent Radiator",
@@ -1840,6 +1852,12 @@ async def test_radiator_step_explicit_pilot_clear_removes_persisted_key(
 
     flow = _init_options_flow(hass, config_entry)
 
+    # Render the form first so the generic clear-on-absence mechanism
+    # captures the rendered optional pilot key (this replaces the removed
+    # per-field `explicit_pilot_clear` machinery).
+    render = await flow.async_step_radiator()
+    assert render["type"] == FlowResultType.FORM
+
     with patch(
         "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
         new_callable=AsyncMock,
@@ -1857,6 +1875,97 @@ async def test_radiator_step_explicit_pilot_clear_removes_persisted_key(
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     # The persisted pilot must be GONE.
+    assert CONF_DEVICE_TO_PILOT_NAME not in config_entry.data
+
+
+def _suggested_value(schema, key: str):
+    """Return the `suggested_value` for `key` in a rendered schema, or None."""
+    for item in schema.schema:
+        if getattr(item, "schema", None) == key:
+            return item.description.get("suggested_value") if item.description else None
+    return None
+
+
+def _schema_has_marker(schema, key: str) -> bool:
+    return any(getattr(item, "schema", None) == key for item in schema.schema)
+
+
+@pytest.mark.asyncio
+async def test_radiator_error_rerender_does_not_revive_cleared_pilot(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Review-fix #02 — a cleared pilot is not re-prefilled on an XOR-error
+    re-render (which would otherwise silently re-persist the stale value).
+
+    Repro: clear the pilot AND submit an XOR-invalid backing combo (both
+    climate and switch set). The error re-render must render the pilot empty
+    (not fall back to the persisted name), while unrelated rejected fields are
+    still re-prefilled. Fixing the backing and saving then drops the pilot.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_radiator_rerender_pilot_123",
+        data={
+            CONF_NAME: "Rerender Radiator",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSRadiator,
+            CONF_POWER: 1000,
+            CONF_SWITCH: "switch.r",
+            CONF_DEVICE_TO_PILOT_NAME: "Existing HP",
+        },
+        title="radiator: Rerender",
+    )
+    config_entry.add_to_hass(hass)
+
+    existing_hp = MagicMock()
+    existing_hp.name = "Existing HP"
+    mock_home = create_minimal_home_model()
+    mock_home._heat_pumps = [existing_hp]
+    mock_data_handler.home = mock_home
+
+    flow = _init_options_flow(hass, config_entry)
+
+    # Render the form first so `_last_optional_keys` captures the pilot key.
+    render = await flow.async_step_radiator()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.get_hvac_modes",
+        return_value=["heat", "off"],
+    ):
+        # XOR error: BOTH climate and switch set, pilot cleared (omitted).
+        rerender = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Rerender Radiator",
+                CONF_POWER: 1000,
+                CONF_CLIMATE: "climate.r",
+                CONF_SWITCH: "switch.r",
+                # CONF_DEVICE_TO_PILOT_NAME intentionally cleared (omitted)
+            }
+        )
+
+    assert rerender["type"] == FlowResultType.FORM
+    assert rerender["errors"]["base"] == "exactly_one_backing_required"
+    schema = rerender["data_schema"]
+    # The cleared pilot must NOT be re-prefilled from the persisted value.
+    assert _schema_has_marker(schema, CONF_DEVICE_TO_PILOT_NAME)
+    assert _suggested_value(schema, CONF_DEVICE_TO_PILOT_NAME) is None
+    # No-regression: an unrelated rejected field is still re-prefilled.
+    assert _suggested_value(schema, CONF_SWITCH) == "switch.r"
+
+    # Fix the backing (switch only) and save — the pilot stays cleared.
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_radiator(
+            {
+                CONF_NAME: "Rerender Radiator",
+                CONF_POWER: 1000,
+                CONF_SWITCH: "switch.r",
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
     assert CONF_DEVICE_TO_PILOT_NAME not in config_entry.data
 
 
@@ -3282,3 +3391,394 @@ async def test_options_solar_step_forecast_provider_filtered_when_unavailable(
             break
     else:
         pytest.fail("CONF_SOLAR_FORECAST_PROVIDERS key not found in schema")
+
+
+# ---------------------------------------------------------------------------
+# QS-251 — centralized "clear-on-absence" for optional option-flow fields.
+#
+# Clearing an optional selector (the ✕ on an entity selector) makes HA omit
+# the key from `user_input`. The options-flow merge is additive, so without a
+# correction the stale value is re-persisted. `QSFlowHandlerMixin` now records
+# the optional keys rendered in the last form (`_last_optional_keys`) and the
+# terminal save sites drop any optional key that was rendered but omitted.
+# ---------------------------------------------------------------------------
+
+
+def test_cleared_optional_keys_identifies_omitted_rendered_keys(
+    hass: HomeAssistant, mock_config_entry
+):
+    """`_cleared_optional_keys` = rendered optional keys missing from the submit.
+
+    A key that was rendered AND omitted is "cleared"; a key that was
+    rendered AND present (or never rendered) is not.
+    """
+    flow = _init_options_flow(hass, mock_config_entry)
+    flow._last_optional_keys = {CONF_CAR_TRACKER, CONF_BATTERY_CHARGE_PERCENT_SENSOR}
+
+    submitted = {CONF_NAME: "Device", CONF_BATTERY_CHARGE_PERCENT_SENSOR: "sensor.pct"}
+
+    cleared = flow._cleared_optional_keys(submitted)
+
+    # The tracker was rendered but omitted → cleared. The percent sensor was
+    # rendered and present → not cleared.
+    assert cleared == {CONF_CAR_TRACKER}
+
+
+def test_merge_with_cleared_drops_cleared_keeps_present_and_runtime(
+    hass: HomeAssistant, mock_config_entry
+):
+    """`_merge_with_cleared` drops cleared optional keys but keeps runtime keys.
+
+    The helper takes the merge `base` explicitly (it is flow-agnostic and does
+    not read `config_entry`). A rendered-then-omitted optional field
+    disappears from the merged data, while a runtime-only key that never
+    appears in the form schema (e.g. ``measured_power``) survives the additive
+    merge.
+    """
+    flow = _init_options_flow(hass, mock_config_entry)
+
+    base = {
+        CONF_NAME: "Device",
+        CONF_CAR_TRACKER: "device_tracker.old_car",
+        "measured_power": 1234,
+        "measured_charge_6": 4200,
+    }
+    # The car tracker was rendered in the last form; the submission omits it.
+    flow._last_optional_keys = {CONF_CAR_TRACKER}
+    submitted = {CONF_NAME: "Device"}
+
+    merged = flow._merge_with_cleared(base, submitted)
+
+    # Cleared optional field is gone.
+    assert CONF_CAR_TRACKER not in merged
+    # Runtime-only keys (never in the form schema) survive.
+    assert merged["measured_power"] == 1234
+    assert merged["measured_charge_6"] == 4200
+    assert merged[CONF_NAME] == "Device"
+    # The base dict is not mutated.
+    assert base[CONF_CAR_TRACKER] == "device_tracker.old_car"
+
+
+@pytest.mark.asyncio
+async def test_last_optional_keys_holds_bare_conf_strings_after_render(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Key-extraction contract — `_last_optional_keys` holds bare `CONF_*` strings.
+
+    `async_show_form` records every `vol.Optional` marker's wrapped key as a
+    plain string. The car step always renders `CONF_CAR_TRACKER` as an
+    optional selector, so it must appear verbatim in the captured set.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_last_optional_keys_123",
+        data={CONF_NAME: "Captured Car", DEVICE_TYPE: CONF_TYPE_NAME_QSCar},
+        title="car: Captured",
+    )
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+
+    result = await flow.async_step_car()
+
+    assert result["type"] == FlowResultType.FORM
+    # Bare string constant — not a wrapped marker object.
+    assert CONF_CAR_TRACKER in flow._last_optional_keys
+    assert all(isinstance(key, str) for key in flow._last_optional_keys)
+
+
+@pytest.mark.asyncio
+async def test_options_flow_car_tracker_clear_round_trips_to_absent(
+    hass: HomeAssistant, mock_data_handler
+):
+    """AC1 — clearing `CONF_CAR_TRACKER` in the options flow persists as absent.
+
+    The reported bug: clearing the car device tracker reverted to the old
+    value on save. The form is rendered (capturing the optional key), then
+    re-submitted without the tracker; the persisted entry must drop it.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_car_tracker_clear_123",
+        data={
+            CONF_NAME: "Tracked Car",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSCar,
+            CONF_CAR_TRACKER: "device_tracker.my_car",
+        },
+        title="car: Tracked",
+    )
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+
+    # Render the form first — this captures the rendered optional keys.
+    render = await flow.async_step_car()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        # Submit WITHOUT the tracker → user cleared it via the ✕.
+        result = await flow.async_step_car({CONF_NAME: "Tracked Car"})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_CAR_TRACKER not in config_entry.data
+
+
+@pytest.mark.asyncio
+async def test_options_flow_battery_sensor_clear_round_trips_to_absent(
+    hass: HomeAssistant, mock_data_handler
+):
+    """AC2 — generality: clearing a battery optional sensor also persists absent.
+
+    The mechanism is generic; proving it on a second device type
+    (`CONF_BATTERY_CHARGE_PERCENT_SENSOR`) shows it's not car-specific.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_battery_sensor_clear_123",
+        data={
+            CONF_NAME: "House Battery",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSBattery,
+            CONF_BATTERY_CHARGE_PERCENT_SENSOR: "sensor.battery_soc",
+            CONF_BATTERY_CAPACITY: 5000,
+        },
+        title="battery: House",
+    )
+    config_entry.add_to_hass(hass)
+
+    # A percent sensor must exist for the optional selector to be rendered.
+    hass.states.async_set(
+        "sensor.battery_soc",
+        "50",
+        {ATTR_UNIT_OF_MEASUREMENT: PERCENTAGE},
+    )
+
+    flow = _init_options_flow(hass, config_entry)
+
+    render = await flow.async_step_battery()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_battery(
+            {
+                CONF_NAME: "House Battery",
+                CONF_BATTERY_CAPACITY: 5000,
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_BATTERY_CHARGE_PERCENT_SENSOR not in config_entry.data
+
+
+@pytest.mark.asyncio
+async def test_options_flow_clear_preserves_runtime_only_keys(
+    hass: HomeAssistant, mock_data_handler
+):
+    """AC3 — clearing an unrelated optional field keeps runtime-only keys.
+
+    `measured_power` / `measured_charge_*` are written at runtime and never
+    appear in the form schema; the merge must preserve them even as a cleared
+    optional field is dropped.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_runtime_keys_survive_123",
+        data={
+            CONF_NAME: "Runtime Car",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSCar,
+            CONF_CAR_TRACKER: "device_tracker.my_car",
+            "measured_power": 2200,
+            "measured_charge_10": 6900,
+        },
+        title="car: Runtime",
+    )
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+
+    render = await flow.async_step_car()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_car({CONF_NAME: "Runtime Car"})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    # Cleared optional field gone, runtime-only keys intact.
+    assert CONF_CAR_TRACKER not in config_entry.data
+    assert config_entry.data["measured_power"] == 2200
+    assert config_entry.data["measured_charge_10"] == 6900
+
+
+@pytest.mark.asyncio
+async def test_options_flow_save_does_not_drop_required_or_boolean_default(
+    hass: HomeAssistant, mock_data_handler
+):
+    """AC4 — required and boolean `default=` fields are never falsely cleared.
+
+    HA always submits required (`CONF_NAME`) and boolean `default=`
+    (`CONF_GRID_POWER_SENSOR_INVERTED`) fields, so they are never in the
+    cleared set even on an otherwise minimal submission.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_no_false_clear_123",
+        data={
+            CONF_NAME: "Inverted Grid Home",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSHome,
+            CONF_GRID_POWER_SENSOR_INVERTED: True,
+        },
+        title="home: Inverted Grid",
+    )
+    config_entry.add_to_hass(hass)
+
+    # A power sensor must exist for the inverted-grid boolean to be rendered.
+    hass.states.async_set(
+        "sensor.grid_power",
+        "1000",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfPower.WATT},
+    )
+
+    flow = _init_options_flow(hass, config_entry)
+
+    render = await flow.async_step_home()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        # HA always submits required + boolean-default fields.
+        result = await flow.async_step_home(
+            {
+                CONF_NAME: "Inverted Grid Home",
+                CONF_GRID_POWER_SENSOR_INVERTED: True,
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert config_entry.data[CONF_NAME] == "Inverted Grid Home"
+    assert config_entry.data[CONF_GRID_POWER_SENSOR_INVERTED] is True
+
+
+@pytest.mark.asyncio
+async def test_options_flow_multipass_car_dampening_clears_tracker_at_intermediate_persist(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Multi-pass clear — a field cleared in Pass 1 is dropped at the
+    intermediate persist (not revived in Pass 2 nor re-persisted).
+
+    Toggling car dampening triggers a Pass 1 → Pass 2 re-render whose
+    intermediate `async_update_entry` previously merged additively, reviving
+    a Pass-1-cleared `CONF_CAR_TRACKER`. The intermediate persist now routes
+    through the same clear-on-absence path as the terminal save; runtime-only
+    keys still survive.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_multipass_car_clear_123",
+        data={
+            CONF_NAME: "Multipass Car",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSCar,
+            CONF_CAR_TRACKER: "device_tracker.my_car",
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 10,
+            "measured_power": 3300,
+        },
+        title="car: Multipass",
+    )
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+
+    # Pass 1 render — captures CONF_CAR_TRACKER as a rendered optional key.
+    render = await flow.async_step_car()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        # Pass 1 submit: enable dampening (forces Pass 2) AND clear the tracker.
+        pass2 = await flow.async_step_car(
+            {
+                CONF_NAME: "Multipass Car",
+                CONF_CAR_CHARGER_MIN_CHARGE: 6,
+                CONF_CAR_CHARGER_MAX_CHARGE: 10,
+                CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            }
+        )
+
+        assert pass2["type"] == FlowResultType.FORM
+        # Intermediate persist dropped the cleared tracker (Pass 2 cannot
+        # re-suggest it)...
+        assert CONF_CAR_TRACKER not in config_entry.data
+        # ...while runtime-only keys survive the intermediate merge.
+        assert config_entry.data["measured_power"] == 3300
+
+        # Pass 2 submit (terminal): dampening stays on, tracker still cleared.
+        result = await flow.async_step_car(
+            {
+                CONF_NAME: "Multipass Car",
+                CONF_CAR_CHARGER_MIN_CHARGE: 6,
+                CONF_CAR_CHARGER_MAX_CHARGE: 10,
+                CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_CAR_TRACKER not in config_entry.data
+    assert config_entry.data["measured_power"] == 3300
+
+
+@pytest.mark.asyncio
+async def test_options_flow_water_boiler_temperature_sensor_clear_round_trips_to_absent(
+    hass: HomeAssistant, mock_data_handler
+):
+    """AC6 — clearing the water-boiler temperature sensor persists as absent.
+
+    The former per-step `setdefault(..., "")` band-aid is gone; the generic
+    clear-on-absence path now removes the key. `QSWaterBoiler.__init__`
+    tolerates the missing key exactly like its `""`→`None` WF-3 case.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_water_boiler_temp_clear_123",
+        data={
+            CONF_NAME: "Tank",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSWaterBoiler,
+            CONF_SWITCH: "switch.tank",
+            CONF_WATER_BOILER_TEMPERATURE_SENSOR: "sensor.tank_temp",
+        },
+        title="water_boiler: Tank",
+    )
+    config_entry.add_to_hass(hass)
+
+    # A live temperature entity ensures the optional selector is rendered.
+    hass.states.async_set(
+        "sensor.tank_temp",
+        "55",
+        {ATTR_UNIT_OF_MEASUREMENT: UnitOfTemperature.CELSIUS},
+    )
+
+    flow = _init_options_flow(hass, config_entry)
+
+    render = await flow.async_step_water_boiler()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await flow.async_step_water_boiler(
+            {
+                CONF_NAME: "Tank",
+                CONF_SWITCH: "switch.tank",
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_WATER_BOILER_TEMPERATURE_SENSOR not in config_entry.data

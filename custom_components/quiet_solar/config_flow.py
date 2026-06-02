@@ -1,5 +1,6 @@
 import logging
 from abc import abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -304,9 +305,75 @@ def _get_entity_key_from_selector_key(key: str):
 class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING else object):
     """Common methods for Quiet Solar config flows."""
 
+    # The optional marker keys rendered in the most recent form. Captured by
+    # `async_show_form` so the save sites can tell a field the user CLEARED
+    # (rendered but omitted from the submission) apart from a field that was
+    # never on the form. Initialized per-instance in each concrete handler's
+    # `__init__` (annotation-only here — no shared mutable class state); a form
+    # is always rendered before any submit/merge in real usage, and the
+    # empty-set initial value keeps the additive-merge behavior intact for any
+    # code path that saves without a prior render.
+    _last_optional_keys: set[str]
+
     @abstractmethod
     def is_creation_flow(self) -> bool:
         """Return True if this is a creation flow, False if it is an options flow."""
+
+    def async_show_form(
+        self,
+        *,
+        step_id: str | None = None,
+        data_schema: vol.Schema | None = None,
+        errors: dict[str, str] | None = None,
+        description_placeholders: Mapping[str, str] | None = None,
+        last_step: bool | None = None,
+        preview: str | None = None,
+    ) -> ConfigFlowResult:
+        """Record the rendered optional keys, then defer to Home Assistant.
+
+        Capturing the optional markers on every render lets the save sites
+        distinguish a deliberately-cleared optional field (rendered but omitted
+        from the submission) from a field that was never part of the form.
+        Without it the additive merge would silently re-persist a stale value,
+        so clearing the ✕ on an optional selector never stuck. Flow-agnostic:
+        the creation flow simply never consults the captured set.
+        """
+        keys: set[str] = set()
+        if data_schema is not None:
+            # Every QS optional marker wraps a bare `CONF_*` string in
+            # `marker.schema`, so the wrapped key is captured directly.
+            keys = {marker.schema for marker in data_schema.schema if isinstance(marker, vol.Optional)}
+        self._last_optional_keys = keys
+        return super().async_show_form(
+            step_id=step_id,
+            data_schema=data_schema,
+            errors=errors,
+            description_placeholders=description_placeholders,
+            last_step=last_step,
+            preview=preview,
+        )
+
+    def _cleared_optional_keys(self, submitted: dict) -> set[str]:
+        """Return optional keys rendered in the last form but omitted from
+        the submission — i.e. the fields the user actively cleared."""
+        return {key for key in self._last_optional_keys if key not in submitted}
+
+    def _merge_with_cleared(self, base: dict, submitted: dict) -> dict:
+        """Additive merge of `submitted` onto `base`, dropping cleared fields.
+
+        Flow-agnostic: the merge `base` (the persisted data being extended) is
+        passed in explicitly rather than read from `config_entry`, so both the
+        terminal save and the multi-pass intermediate persists can reuse it.
+        Runtime-only keys (e.g. `measured_power`, `measured_charge_*`) that
+        never appear in the form schema are preserved, while an optional field
+        the user cleared (rendered but omitted) actually disappears instead of
+        being re-persisted from the stale `base`.
+        """
+        merged = dict(base)
+        merged.update(submitted)
+        for key in self._cleared_optional_keys(submitted):
+            merged.pop(key, None)
+        return merged
 
     def add_entity_selector(self, sc_dict, key, is_required, entity_list=None, domain=None):
 
@@ -1165,9 +1232,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                 )
 
                 if need_dampening_redisplay:
-                    # Merge with existing data to preserve runtime-saved measured values
-                    merged = dict(self.config_entry.data)
-                    merged.update(user_input)
+                    # Preserve runtime-saved measured values while dropping any
+                    # optional field the user cleared in this (Pass 1) form —
+                    # `_last_optional_keys` still reflects the just-submitted
+                    # schema, so the clear can't be revived by Pass 2 (QS-251).
+                    merged = self._merge_with_cleared(self.config_entry.data, user_input)
                     self.hass.config_entries.async_update_entry(self.config_entry, data=merged)
                     return await self.async_step_car({"force_dampening": True})
 
@@ -1521,18 +1590,12 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         )
 
         if user_input is not None:
-            # M3: even with the WF-4 fix that re-surfaces a stranded id in
-            # the form, `vol.Optional` lets the user omit the key — the
-            # OptionsFlow's `merged.update(user_input)` then silently
-            # re-persists the stranded value. Force the key to be present
-            # ONLY when the field was actually rendered in the form, so
-            # the merge can overwrite. Use empty-string as the sentinel
-            # rather than None because `clean_data` strips None values
-            # before the merge; `QSWaterBoiler.__init__`'s WF-3 normalises
-            # the empty string back to `None` at device-construction time.
-            field_was_rendered = bool(selectable_temperature_entities(self.hass)) or stored_temp_sensor is not None
-            if field_was_rendered:
-                user_input.setdefault(CONF_WATER_BOILER_TEMPERATURE_SENSOR, "")
+            # QS-251 — the generic clear-on-absence path in the options-flow
+            # terminal save now drops a cleared `CONF_WATER_BOILER_TEMPERATURE_SENSOR`
+            # (the field was rendered but omitted from the submission), so the
+            # former per-field `setdefault("")` band-aid is no longer needed.
+            # `QSWaterBoiler.__init__`'s WF-3 still normalises a stored `""` to
+            # `None` for any pre-existing entry.
             return await self.async_entry_next(user_input, TYPE)
 
         sc_dict, placeholders = self.get_common_schema(
@@ -1547,11 +1610,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         self.add_entity_selector(sc_dict, CONF_SWITCH, True, domain=[SWITCH_DOMAIN])
 
-        # WF-4: surface the field even when no live temperature entities
-        # remain — otherwise a previously-configured sensor that's since
-        # been removed from HA stays silently stranded in config_entry.data,
-        # because the OptionsFlow merges user_input onto the prior data
-        # and an absent key never clears the old value.
+        # Surface the field even when no live temperature entities remain, so
+        # a previously-configured sensor that HA has since dropped is still
+        # shown (with the stored id in the selector) and the user can replace
+        # or clear it — clearing then persists via the generic clear-on-absence
+        # path (QS-251).
         temperature_entities = selectable_temperature_entities(self.hass)
         entity_list = list(temperature_entities)
         if stored_temp_sensor and stored_temp_sensor not in entity_list:
@@ -1607,10 +1670,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     or user_input.get(CONF_CLIMATE_HVAC_MODE_OFF) is None
                     or user_input.get(CONF_CLIMATE_HVAC_MODE_ON) is None
                 ):
-                    # we need to force to come back to reselect the hvac modes
-                    # Merge with existing data to preserve runtime-saved measured values
-                    merged = dict(self.config_entry.data)
-                    merged.update(user_input)
+                    # we need to force to come back to reselect the hvac modes.
+                    # Preserve runtime-saved measured values while dropping any
+                    # optional field the user cleared in this (Pass 1) form so
+                    # the clear survives the Pass 2 re-render (QS-251).
+                    merged = self._merge_with_cleared(self.config_entry.data, user_input)
                     self.config_entry.data = merged
                     return await self.async_step_climate({"force_climate": True})
 
@@ -1708,10 +1772,11 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         entries, or directly into the FakeConfigEntry's `data` for the
         creation flow. Pass 2's form-render then reads `config_entry.data`
         as usual and every field (name, dashboard, power, …) gets the
-        right default — no per-field plumbing.
+        right default — no per-field plumbing. The merge drops any optional
+        field the user cleared in this (Pass 1) form so the clear survives
+        the Pass 2 re-render (QS-251).
         """
-        merged = dict(self.config_entry.data)
-        merged.update(cleaned)
+        merged = self._merge_with_cleared(self.config_entry.data, cleaned)
         if isinstance(self.config_entry, FakeConfigEntry):
             # Creation flow — direct assignment is safe; the entry
             # is not persisted until `async_create_entry` runs.
@@ -1777,7 +1842,14 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         # Options flow — compute the desired final data ourselves so we
         # can EXCLUDE the stale-backing keys from the merge (which
         # `_async_entry_next` would otherwise carry over additively).
-        stale_keys = self._stale_radiator_backing_keys(keep_climate) + tuple(extra_stale_keys)
+        # QS-251 — fold the generic "rendered-but-cleared" optional keys into
+        # the stale set so a cleared optional radiator field (e.g. the pilot
+        # dropdown) is dropped instead of re-merged from `config_entry.data`.
+        stale_keys = (
+            self._stale_radiator_backing_keys(keep_climate)
+            + tuple(extra_stale_keys)
+            + tuple(self._cleared_optional_keys(cleaned))
+        )
         merged = {k: v for k, v in self.config_entry.data.items() if k not in stale_keys}
         merged.update(cleaned)
 
@@ -1814,35 +1886,15 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     pending=user_input,
                 )
 
-            # EH5 + BH-D — detect "user explicitly cleared the pilot
-            # dropdown" BEFORE we strip empty values from `cleaned`. The
-            # form renders `CONF_DEVICE_TO_PILOT_NAME` only when at
-            # least one heat pump exists, so finding the key in
-            # `user_input` with a falsy value means the user actively
-            # cleared it. Without this, `_async_save_radiator_entry`'s
-            # merge would re-inject the old persisted value from
-            # `config_entry.data`.
-            #
-            # BH-D: HA's `vol.Optional` could deliver "user cleared"
-            # as either `{"key": None}` or `{}` (key absent). The
-            # current pattern only handles the former. Use a sentinel
-            # so both shapes funnel into the same branch — if the
-            # form rendered the field AND the user submitted nothing
-            # for it, treat it as an explicit clear regardless of
-            # which selector variant HA picked.
-            _UNSET = object()
-            pilot_value = user_input.get(CONF_DEVICE_TO_PILOT_NAME, _UNSET)
-            # The pilot dropdown is only rendered when heat pumps
-            # exist, so the previous form-render decision is the
-            # `explicit_pilot_clear` precondition.
-            data_handler = self.hass.data.get(DOMAIN, {}).get(DATA_HANDLER)
-            had_pilot_dropdown = bool(
-                data_handler and data_handler.home is not None and data_handler.home.get_heat_pumps()
-            )
-            had_persisted_pilot = bool(self.config_entry.data.get(CONF_DEVICE_TO_PILOT_NAME))
-            explicit_pilot_clear = (
-                had_pilot_dropdown and had_persisted_pilot and (pilot_value is _UNSET or not pilot_value)
-            )
+            # QS-251 — the pilot dropdown is a plain `vol.Optional` selector,
+            # so the generic "rendered-but-omitted → cleared" path in
+            # `_async_save_radiator_entry` now removes a deliberately-cleared
+            # `CONF_DEVICE_TO_PILOT_NAME` (matching how `async_step_climate`
+            # treats its fields). The former bespoke `explicit_pilot_clear`
+            # sentinel machinery is gone. The orphan-pilot cleanup
+            # (`_radiator_orphan_pilot_keys`, all heat pumps deleted — a case
+            # the generic mechanism cannot see) and the submitted-name
+            # revalidation below are kept.
 
             # N8 + EH-D — drop empty/None values from the merged dict
             # so downstream `key in dict` checks see the canonical
@@ -1872,11 +1924,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             # pump but the persisted name is stale, drop the orphan
             # reference so it doesn't reappear on the next edit.
             extra_stale_keys = self._radiator_orphan_pilot_keys(cleaned)
-            # EH5 — when the user EXPLICITLY cleared a still-valid pilot,
-            # add the key to the stale list so the merge doesn't re-inject
-            # the old persisted value.
-            if explicit_pilot_clear and CONF_DEVICE_TO_PILOT_NAME not in extra_stale_keys:
-                extra_stale_keys = extra_stale_keys + (CONF_DEVICE_TO_PILOT_NAME,)
 
             # EH-B — re-validate the SUBMITTED heat-pump name against the
             # LIVE heat-pumps list. `_radiator_orphan_pilot_keys` only
@@ -2023,7 +2070,24 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
         # single re-render so the user sees their own selections.
         explicit_pending: dict = pending or {}
 
+        # QS-251 review-fix #02 — on a validation-error re-render the rejected
+        # `pending` IS the user's submission, so an optional field they cleared
+        # is absent (or None/"") in it. Without this, `_suggest` would fall
+        # back to the still-persisted stale value and re-prefill the selector;
+        # the user fixing the unrelated backing error then resubmits the
+        # revived value and the clear is silently lost. Treat such keys as
+        # cleared and suppress the `config_entry.data` fallback so the field
+        # renders empty. Only the error re-render passes `pending`; the initial
+        # render and the Pass 2 re-render (`pending is None`) keep the
+        # persisted-value prefill — Pass 2 already dropped cleared keys from
+        # `config_entry.data` via `_persist_radiator_pass1`.
+        cleared_on_rerender: set[str] = set()
+        if pending is not None:
+            cleared_on_rerender = {key for key in self._last_optional_keys if explicit_pending.get(key) in (None, "")}
+
         def _suggest(key: str):
+            if key in cleared_on_rerender:
+                return None
             return explicit_pending.get(key) or self.config_entry.data.get(key)
 
         # B1 — Pass 2 form pre-fills the entity selectors with the
@@ -2107,10 +2171,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             # S8 + B4 — if the persisted heat-pump name no longer
             # exists, drop the suggested value and surface a
             # field-specific error to the user. Using
-            # `errors["device_to_pilot_name"]` instead of
+            # `errors[CONF_DEVICE_TO_PILOT_NAME]` instead of
             # `errors["base"]` so a co-occurring XOR error (under
-            # `"base"`) doesn't mask the heat-pump warning via the
-            # previous `setdefault` no-op.
+            # `"base"`) doesn't mask the heat-pump warning.
             if default_heat_pump and default_heat_pump not in heat_pump_options:
                 merged_errors[CONF_DEVICE_TO_PILOT_NAME] = "piloted_heat_pump_unknown"
                 default_heat_pump = None
@@ -2177,6 +2240,8 @@ class QSFlowHandler(QSFlowHandlerMixin, config_entries.ConfigFlow, domain=DOMAIN
         """Initialize Quiet Solar config flow."""
         super().__init__()
         self.config_entry: FakeConfigEntry | None | ConfigEntry = FakeConfigEntry()
+        # Per-instance init — no shared mutable class state (see mixin).
+        self._last_optional_keys = set()
 
     @staticmethod
     @callback
@@ -2256,6 +2321,8 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
             self.config_entry = config_entry
 
         self._errors = {}
+        # Per-instance init — no shared mutable class state (see mixin).
+        self._last_optional_keys = set()
 
     def is_creation_flow(self) -> bool:
         return False
@@ -2264,8 +2331,10 @@ class QSOptionsFlowHandler(QSFlowHandlerMixin, OptionsFlow):
         """Handle the next step based on user input."""
         # Merge with existing data to preserve runtime-saved measured values
         # (e.g. measured_power, measured_charge_X, measured_car_custom_power_charge_values)
-        merged = dict(self.config_entry.data)
-        merged.update(data)
+        # while dropping optional fields the user cleared in the form — a
+        # cleared key is absent from `data`, so a plain additive merge would
+        # re-persist the stale value (QS-251).
+        merged = self._merge_with_cleared(self.config_entry.data, data)
         self.hass.config_entries.async_update_entry(
             self.config_entry, data=merged, options=self.config_entry.options, title=self.get_entry_title(merged)
         )

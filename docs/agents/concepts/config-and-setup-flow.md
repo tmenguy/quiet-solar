@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-05-29
+last_verified: 2026-06-02
 ---
 
 # Config flow and setup
@@ -93,13 +93,61 @@ the LIVE `home.get_heat_pumps()` so a parallel admin action that
 removed a heat-pump between Pass 1 and the final submit can't
 silently persist a stale name.
 
-User-explicit pilot clear: the form's heat-pump dropdown is
-rendered only when at least one heat pump exists. When that
-dropdown was rendered AND the submit carries an empty value (or
-omits the key entirely — both shapes funnel through a sentinel
-check), the persisted `CONF_DEVICE_TO_PILOT_NAME` is removed.
-Without this distinction the merge in `_async_save_radiator_entry`
-would re-inject the stale name on the next edit.
+User-explicit pilot clear is handled by the **centralized
+clear-on-absence mechanism** (below), not a per-field hack: the
+heat-pump dropdown is a plain `vol.Optional(CONF_DEVICE_TO_PILOT_NAME)`
+selector, so when it was rendered and the submit omits it, the
+generic path drops the persisted name. `_async_save_radiator_entry`
+folds `_cleared_optional_keys(cleaned)` into its stale-key set so the
+single `async_update_entry` write excludes the cleared key. The
+genuinely-different `_radiator_orphan_pilot_keys` cleanup still runs
+for the case the generic mechanism cannot see — all heat pumps
+deleted, so the dropdown isn't even rendered — alongside the
+render-side stale-name surfacing and the submit-time revalidation
+against `home.get_heat_pumps()`.
+
+**Centralized clear-on-absence for optional fields**
+(`QSFlowHandlerMixin`, QS-251): clearing the ✕ on an optional
+selector makes Home Assistant omit the key from `user_input`, but the
+options-flow save is an additive merge
+(`merged = dict(config_entry.data); merged.update(user_input)`), so a
+missing key let the stale value survive — clearing nearly any optional
+field silently reverted on save. The mixin overrides `async_show_form`
+to record the optional marker keys of the rendered schema in
+`_last_optional_keys` (bare `CONF_*` strings extracted from each
+`vol.Optional` marker). The two terminal options-flow save sites then
+drop any optional key that was rendered but omitted:
+`QSOptionsFlowHandler._async_entry_next` calls `_merge_with_cleared`,
+and `_async_save_radiator_entry` adds `_cleared_optional_keys` to its
+stale set. Runtime-only keys (`measured_power`, `measured_charge_*`)
+never appear in a form schema, so they are never in the cleared set
+and survive the merge. Required fields and boolean `default=` fields
+are always submitted by HA, so they are never falsely cleared. The
+creation flow uses `async_create_entry(data=...)` with no merge, so the
+captured set is simply unused there. This replaced two per-field
+band-aids: the water-boiler `setdefault(CONF_WATER_BOILER_TEMPERATURE_SENSOR, "")`
+and the radiator `explicit_pilot_clear` sentinel block.
+
+**Multi-pass coverage:** the mechanism is applied at the two *terminal*
+save sites **and** at the three *intermediate* multi-pass persists (car
+dampening, climate/radiator HVAC reprompt, `_persist_radiator_pass1`).
+At an intermediate write, `_last_optional_keys` still reflects the
+just-submitted Pass-1 form (Pass 2 has not rendered yet), so routing the
+write through `_merge_with_cleared` drops a Pass-1-cleared field before
+Pass 2 can re-suggest it — no need to accumulate keys across passes. The
+helper takes the merge `base` explicitly (it never reads `config_entry`),
+so the same call serves both the terminal saves and the intermediate
+persists in both the creation and options flows.
+
+**Radiator validation-error re-render:** when a radiator submit trips a
+validation error (XOR backing, HVAC modes), `_async_show_radiator_form`
+re-renders with the rejected `pending` submission so the user keeps
+their selections. `_suggest` normally falls back to `config_entry.data`,
+but for an optional field the user *cleared* (present in
+`_last_optional_keys` yet absent/empty in `pending`) that fallback is
+suppressed so the selector renders empty — otherwise the error round-trip
+would revive the stale value and re-persist it once the user fixes the
+unrelated error. Other rejected fields are still re-prefilled.
 
 **Home options-flow section editor** (`async_step_home`): the 8
 dashboard-section slot suggestions (`CONF_DASHBOARD_SECTION_NAME_<i>`
@@ -201,9 +249,9 @@ device.attach_ha_state_to_probe(...) for each tracked entity
   temperature entities OR a previously-configured id is stored** — the
   latter rule prevents a stranded entity id from becoming invisible
   after HA loses the sensor (the form's selector then includes the
-  stored id so the user can replace or keep it). When the field was
-  rendered, the per-step also `setdefault`s the key in `user_input`
-  to an empty string before submission so the OptionsFlow merge can
-  actually overwrite a stranded id with a cleared value
-  (`QSWaterBoiler.__init__` normalises the empty string back to
-  `None`).
+  stored id so the user can replace or keep it). Clearing the field is
+  now handled by the centralized clear-on-absence mechanism (see
+  "Centralized clear-on-absence" above) — the former per-step
+  `setdefault(..., "")` band-aid was removed in QS-251.
+  `QSWaterBoiler.__init__` still normalises a pre-existing stored `""`
+  back to `None` at construction time.
