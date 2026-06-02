@@ -3334,33 +3334,29 @@ def test_cleared_optional_keys_identifies_omitted_rendered_keys(
 
 
 def test_merge_with_cleared_drops_cleared_keeps_present_and_runtime(
-    hass: HomeAssistant
+    hass: HomeAssistant, mock_config_entry
 ):
     """`_merge_with_cleared` drops cleared optional keys but keeps runtime keys.
 
-    A rendered-then-omitted optional field disappears from the merged data,
-    while a runtime-only key that never appears in the form schema
-    (e.g. ``measured_power``) survives the additive merge.
+    The helper takes the merge `base` explicitly (it is flow-agnostic and does
+    not read `config_entry`). A rendered-then-omitted optional field
+    disappears from the merged data, while a runtime-only key that never
+    appears in the form schema (e.g. ``measured_power``) survives the additive
+    merge.
     """
-    config_entry = MockConfigEntry(
-        domain=DOMAIN,
-        entry_id="test_merge_with_cleared_123",
-        data={
-            CONF_NAME: "Device",
-            CONF_CAR_TRACKER: "device_tracker.old_car",
-            "measured_power": 1234,
-            "measured_charge_6": 4200,
-        },
-        title="car: Device",
-    )
-    config_entry.add_to_hass(hass)
-    flow = _init_options_flow(hass, config_entry)
+    flow = _init_options_flow(hass, mock_config_entry)
 
+    base = {
+        CONF_NAME: "Device",
+        CONF_CAR_TRACKER: "device_tracker.old_car",
+        "measured_power": 1234,
+        "measured_charge_6": 4200,
+    }
     # The car tracker was rendered in the last form; the submission omits it.
     flow._last_optional_keys = {CONF_CAR_TRACKER}
     submitted = {CONF_NAME: "Device"}
 
-    merged = flow._merge_with_cleared(submitted)
+    merged = flow._merge_with_cleared(base, submitted)
 
     # Cleared optional field is gone.
     assert CONF_CAR_TRACKER not in merged
@@ -3368,6 +3364,8 @@ def test_merge_with_cleared_drops_cleared_keeps_present_and_runtime(
     assert merged["measured_power"] == 1234
     assert merged["measured_charge_6"] == 4200
     assert merged[CONF_NAME] == "Device"
+    # The base dict is not mutated.
+    assert base[CONF_CAR_TRACKER] == "device_tracker.old_car"
 
 
 @pytest.mark.asyncio
@@ -3574,6 +3572,75 @@ async def test_options_flow_save_does_not_drop_required_or_boolean_default(
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert config_entry.data[CONF_NAME] == "Inverted Grid Home"
     assert config_entry.data[CONF_GRID_POWER_SENSOR_INVERTED] is True
+
+
+@pytest.mark.asyncio
+async def test_options_flow_multipass_car_dampening_clears_tracker_at_intermediate_persist(
+    hass: HomeAssistant, mock_data_handler
+):
+    """Multi-pass clear — a field cleared in Pass 1 is dropped at the
+    intermediate persist (not revived in Pass 2 nor re-persisted).
+
+    Toggling car dampening triggers a Pass 1 → Pass 2 re-render whose
+    intermediate `async_update_entry` previously merged additively, reviving
+    a Pass-1-cleared `CONF_CAR_TRACKER`. The intermediate persist now routes
+    through the same clear-on-absence path as the terminal save; runtime-only
+    keys still survive.
+    """
+    config_entry = MockConfigEntry(
+        domain=DOMAIN,
+        entry_id="test_multipass_car_clear_123",
+        data={
+            CONF_NAME: "Multipass Car",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSCar,
+            CONF_CAR_TRACKER: "device_tracker.my_car",
+            CONF_CAR_CHARGER_MIN_CHARGE: 6,
+            CONF_CAR_CHARGER_MAX_CHARGE: 10,
+            "measured_power": 3300,
+        },
+        title="car: Multipass",
+    )
+    config_entry.add_to_hass(hass)
+    flow = _init_options_flow(hass, config_entry)
+
+    # Pass 1 render — captures CONF_CAR_TRACKER as a rendered optional key.
+    render = await flow.async_step_car()
+    assert render["type"] == FlowResultType.FORM
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        # Pass 1 submit: enable dampening (forces Pass 2) AND clear the tracker.
+        pass2 = await flow.async_step_car(
+            {
+                CONF_NAME: "Multipass Car",
+                CONF_CAR_CHARGER_MIN_CHARGE: 6,
+                CONF_CAR_CHARGER_MAX_CHARGE: 10,
+                CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            }
+        )
+
+        assert pass2["type"] == FlowResultType.FORM
+        # Intermediate persist dropped the cleared tracker (Pass 2 cannot
+        # re-suggest it)...
+        assert CONF_CAR_TRACKER not in config_entry.data
+        # ...while runtime-only keys survive the intermediate merge.
+        assert config_entry.data["measured_power"] == 3300
+
+        # Pass 2 submit (terminal): dampening stays on, tracker still cleared.
+        result = await flow.async_step_car(
+            {
+                CONF_NAME: "Multipass Car",
+                CONF_CAR_CHARGER_MIN_CHARGE: 6,
+                CONF_CAR_CHARGER_MAX_CHARGE: 10,
+                CONF_CAR_CUSTOM_POWER_CHARGE_VALUES: True,
+            }
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert CONF_CAR_TRACKER not in config_entry.data
+    assert config_entry.data["measured_power"] == 3300
 
 
 @pytest.mark.asyncio

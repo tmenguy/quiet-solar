@@ -128,12 +128,16 @@ captured set is simply unused there. This replaced two per-field
 band-aids: the water-boiler `setdefault(CONF_WATER_BOILER_TEMPERATURE_SENSOR, "")`
 and the radiator `explicit_pilot_clear` sentinel block.
 
-**Known limitation:** the mechanism only corrects the two *terminal*
-save sites. The *intermediate* multi-pass persists (car dampening,
-climate/radiator HVAC reprompt, `_persist_radiator_pass1`) are
-transient writes overwritten by the final submit, so a field cleared
-mid-multi-pass may still re-suggest until the terminal save — a
-documented follow-up, not fixed here.
+**Multi-pass coverage:** the mechanism is applied at the two *terminal*
+save sites **and** at the three *intermediate* multi-pass persists (car
+dampening, climate/radiator HVAC reprompt, `_persist_radiator_pass1`).
+At an intermediate write, `_last_optional_keys` still reflects the
+just-submitted Pass-1 form (Pass 2 has not rendered yet), so routing the
+write through `_merge_with_cleared` drops a Pass-1-cleared field before
+Pass 2 can re-suggest it — no need to accumulate keys across passes. The
+helper takes the merge `base` explicitly (it never reads `config_entry`),
+so the same call serves both the terminal saves and the intermediate
+persists in both the creation and options flows.
 
 **Home options-flow section editor** (`async_step_home`): the 8
 dashboard-section slot suggestions (`CONF_DASHBOARD_SECTION_NAME_<i>`
