@@ -403,6 +403,82 @@ class TestDashboardTemplateRendering:
             "it closes the literal early and breaks render (Configuration error)."
         )
 
+    def test_disabled_state_dims_only_ring_not_whole_card(self):
+        """QS-253 AC5 — the shared disabled dimming/disabling rule is scoped to
+        `.card.disabled .ring` (and the power-btn exemption to
+        `.card.disabled .ring .power-btn`), so below-ring controls stay
+        clickable + un-dimmed. No bare whole-card `.card.disabled { ... }`
+        greying rule remains."""
+        css = (COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-styles.js").read_text()
+        # Positive: dimming/disabling now targets the ring only.
+        assert re.search(r"\.card\.disabled\s+\.ring\s*\{[^}]*pointer-events:\s*none", css), (
+            "qs-card-styles.js: missing ring-scoped `.card.disabled .ring "
+            "{ ... pointer-events: none }` rule (AC5)."
+        )
+        # Positive: the power-button exemption is also ring-scoped.
+        assert re.search(r"\.card\.disabled\s+\.ring\s+\.power-btn\s*\{", css), (
+            "qs-card-styles.js: power-btn exemption must be "
+            "`.card.disabled .ring .power-btn` (AC5)."
+        )
+        # Negative (regression pin): no bare whole-card disable rule.
+        assert not re.search(r"\.card\.disabled\s*\{", css), (
+            "qs-card-styles.js: bare whole-card `.card.disabled { ... }` rule "
+            "must be removed — it disabled below-ring controls (AC5)."
+        )
+
+    def test_car_card_below_ring_controls_active_when_disconnected(self):
+        """QS-253 AC1/AC4 — the car card's in-ring disabled overrides are
+        ring-scoped, the below-ring greying overrides are removed (full enabled
+        fidelity), and the `disabled` class stays on the `<ha-card>` root so the
+        in-ring JS `.disabled` guards keep working (AC2)."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        # Positive: in-ring overrides are ring-scoped.
+        assert ".disabled .ring .sun-btn" in source, (
+            "qs-car-card.js: sun-btn disabled override must be ring-scoped."
+        )
+        assert ".disabled .ring .rabbit-btn" in source, (
+            "qs-car-card.js: rabbit-btn disabled override must be ring-scoped."
+        )
+        assert ".disabled .ring .time-btn" in source, (
+            "qs-car-card.js: time-btn disabled override must be ring-scoped."
+        )
+        # Negative: no whole-card below-ring greying overrides remain.
+        assert not re.search(r"(?<!\.ring )\.disabled \.(primary|secondary|chip|pill)\b", source), (
+            "qs-car-card.js: below-ring greying overrides (`.disabled .primary` "
+            "etc.) must be removed so controls render at full enabled fidelity (AC4)."
+        )
+        # Negative: dead #force / #schedule_inline rule removed.
+        assert ".disabled #force" not in source and ".disabled #schedule_inline" not in source, (
+            "qs-car-card.js: dead `.disabled #force, .disabled #schedule_inline` "
+            "rule must be removed."
+        )
+        # Precondition pin (AC2): `disabled` class is on the `<ha-card>` root.
+        assert re.search(r"<ha-card class=\"card \$\{isDisconnected \? 'disabled'", source), (
+            "qs-car-card.js: the `disabled` class must stay on the `<ha-card>` "
+            "root so in-ring JS `.disabled` guards keep working (AC2)."
+        )
+
+    @pytest.mark.parametrize(
+        "card_file",
+        [
+            "qs-car-card.js",
+            "qs-climate-card.js",
+            "qs-on-off-duration-card.js",
+            "qs-pool-card.js",
+            "qs-radiator-card.js",
+            "qs-water-boiler-card.js",
+        ],
+    )
+    def test_no_card_reintroduces_whole_card_disabled_greyer(self, card_file):
+        """QS-253 AC3/AC5 — no card re-adds a bare whole-card
+        `.card.disabled { ... }` greying rule (which would re-disable the
+        below-ring controls)."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / card_file).read_text()
+        assert not re.search(r"\.card\.disabled\s*\{", source), (
+            f"{card_file}: bare whole-card `.card.disabled {{ ... }}` rule "
+            "re-introduced — it would re-disable below-ring controls (AC5)."
+        )
+
     def test_radiator_card_s14_safe_number_guards_against_nan(self):  # CR2 — sync (no hass)
         """A2 — pin S14 via regex, not a bare substring.
 

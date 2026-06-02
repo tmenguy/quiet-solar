@@ -1094,22 +1094,19 @@ class QsCarCard extends QsCardBase {
       .secondary { background: rgba(255,255,255,.06); color: var(--primary-text-color); border:1px solid var(--divider-color); }
       /* Disconnected visual mode (greyscale) */
       .disabled .ring .target-value { color: var(--secondary-text-color); }
-      .disabled .primary { background: var(--divider-color); color: var(--primary-text-color); }
-      .disabled .secondary { background: rgba(255,255,255,.04); border-color: var(--divider-color); color: var(--secondary-text-color); }
-      .disabled .danger { background: var(--error-color); color: #fff; }
-      .disabled .danger.outline { background: transparent !important; color: var(--error-color) !important; border-color: var(--error-color) !important; }
-      .disabled .chip, .disabled .pill { border-color: var(--divider-color); }
-      .disabled .sun-btn { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
-      .disabled .sun-btn ha-icon { color: var(--secondary-text-color); }
-      .disabled .sun-btn.on { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
-      .disabled .sun-btn.on ha-icon { color: var(--secondary-text-color); }
-      .disabled .rabbit-btn { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
-      .disabled .rabbit-btn ha-icon { color: var(--secondary-text-color); }
-      .disabled .rabbit-btn.on { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
-      .disabled .rabbit-btn.on ha-icon { color: var(--secondary-text-color); }
-      .disabled .time-btn { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; cursor: not-allowed; color: var(--secondary-text-color); }
+      /* QS-253: disabled greying is scoped to in-ring controls only. The
+         below-ring controls (person / charger selects, Reset) render at full
+         enabled fidelity even when the car is disconnected. */
+      .disabled .ring .sun-btn { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
+      .disabled .ring .sun-btn ha-icon { color: var(--secondary-text-color); }
+      .disabled .ring .sun-btn.on { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
+      .disabled .ring .sun-btn.on ha-icon { color: var(--secondary-text-color); }
+      .disabled .ring .rabbit-btn { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
+      .disabled .ring .rabbit-btn ha-icon { color: var(--secondary-text-color); }
+      .disabled .ring .rabbit-btn.on { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; }
+      .disabled .ring .rabbit-btn.on ha-icon { color: var(--secondary-text-color); }
+      .disabled .ring .time-btn { border-color: var(--divider-color); background: rgba(255,255,255,.03); box-shadow: none; cursor: not-allowed; color: var(--secondary-text-color); }
       .disabled .progress > div { background: var(--divider-color); }
-      .disabled #force, .disabled #schedule_inline { pointer-events: none; cursor: not-allowed; }
       .live { display:grid; gap:10px; }
       .fault .card-title { color: var(--error-color); }
       .fault .time-btn { color: var(--secondary-text-color); }

@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-05-30
+last_verified: 2026-06-02
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -272,12 +272,40 @@ Cross-card hardening invariants worth knowing (review-fix #02): every
 entity-derived string interpolated into `innerHTML` is escaped via
 `_escapeHtml`; every custom `div` control that carries handlers is
 focusable (`role="button"` + `tabindex` + `_registerKeyActivation`),
-and a disconnected card drops its custom controls out of the tab order
-(`tabindex="-1"` + `aria-disabled`); time parsing goes through the
-hardened `_parseTimeToMinutes` (07:00 fallback for `unavailable`/
-`unknown`); and the radiator keeps its RAF loop alive until
-`QsFlameEngine.isIdle()` so an on→off transition settles to a clean
-still silhouette instead of freezing mid-flicker.
+and a disconnected/disabled card drops its **in-ring** custom controls
+out of the tab order (`tabindex="-1"` + `aria-disabled`); time parsing
+goes through the hardened `_parseTimeToMinutes` (07:00 fallback for
+`unavailable`/`unknown`); and the radiator keeps its RAF loop alive
+until `QsFlameEngine.isIdle()` so an on→off transition settles to a
+clean still silhouette instead of freezing mid-flicker.
+
+**QS-253 — disabled dimming is ring-scoped, not whole-card.** The
+shared `disabled`/disconnected dimming + `pointer-events:none` rule
+(`shared/qs-card-styles.js`) targets **`.card.disabled .ring`** (and
+the power-button exemption `.card.disabled .ring .power-btn`), *not* a
+bare whole-card `.card.disabled { … }`. Consequently the central ring
+(gauge SVG, big value, in-ring buttons) dims and goes inert when a card
+is disabled (car disconnected / device off), while the **below-ring**
+controls (`.below` / `.below-line` — the mode `<select>`, the Reset
+button, and the car's assigned-person and connected-charger selects)
+stay **clickable and rendered at full enabled fidelity** (no greyscale,
+no divider-color greying). Only the **in-ring custom** controls drop
+out of the tab order (`tabindex="-1"` + `aria-disabled`) — the native
+`<select>`/`<button>` below-ring controls were never part of that
+custom-div tab-order logic and stay focusable. The in-ring JS `.disabled`
+guards (`querySelector('.disabled')`, e.g. the rabbit / SOC-popup
+handlers) keep working because the `disabled` class stays on the
+`<ha-card>` root, not on `.ring`. This fixed the reported bug where a
+**disconnected** car blocked the Reset / person / charger controls,
+making it impossible to manually re-assign the charger from the
+dashboard.
+
+> **Authorization (issue #253):** the product owner explicitly
+> authorized modifying the JS Lovelace cards for this change, and
+> broadening the behavior beyond the car's three controls to "all
+> pills/buttons below the circle … even for other cards, which is in
+> fact desired" — mirroring the QS-200 authorization to touch the
+> otherwise hand-maintained card assets.
 
 Two subsystems were root-caused in review-fix #04 to stop a recurring
 edge-case cycle:
