@@ -77,8 +77,12 @@ export function baseCardCSS(palette, _options) {
       .ring .power-btn ha-icon { --mdc-icon-size: 20px; color: var(--secondary-text-color); display:block; line-height:1; }
       .ring .power-btn.on { border-color: rgba(33,150,243,.45); background: rgba(33,150,243,.14); box-shadow: 0 0 0 3px rgba(33,150,243,.20), 0 0 16px #2196F3; }
       .ring .power-btn.on ha-icon { color: #2196F3; }
-      .card.disabled { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
-      .card.disabled .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
+      /* QS-253: dim/disable only the central ring (gauge + in-ring buttons),
+         not the whole card. Below-ring controls (.below / .below-line — mode
+         select, Reset, the car's person/charger selects) stay clickable and
+         un-dimmed when the card is disabled/disconnected. */
+      .card.disabled .ring { opacity: 0.5; pointer-events: none; filter: grayscale(0.8); }
+      .card.disabled .ring .power-btn { pointer-events: auto; opacity: 1; filter: grayscale(0); }
       .ring .center { position:absolute; inset:0; display:grid; place-items:center; text-align:center; pointer-events: none; transform: translateY(-5px); }
       .ring .target-label { color: var(--secondary-text-color); font-weight:700; font-size: .95rem; text-shadow: var(--ring-text-shadow); }
       .ring .target-value { font-weight:800; font-size: 2.5rem; line-height: 1.1; text-shadow: var(--ring-text-shadow); }
