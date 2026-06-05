@@ -422,18 +422,65 @@ class TestContradictionDetection:
 
         assert real_car._car_api_stale_since == current_time
 
-    def test_contradiction_skipped_when_already_stale(self, real_car, current_time):
-        """Already-stale car skips contradiction check to avoid duplicate notifications."""
+    @pytest.mark.parametrize("manual,expected_flags", [(True, True), (False, False)])
+    def test_contradiction_skipped_when_already_stale(self, real_car, current_time, manual, expected_flags):
+        """Already-stale car never re-notifies; manual=True still upgrades the inferred flags."""
         real_car._car_api_stale = True
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
 
         real_car.hass = MagicMock()
         real_car.home = MagicMock()
-        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
+        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=manual)
 
         # No notification sent — early return
         real_car.hass.async_create_task.assert_not_called()
+        # The user's explicit confirmation upgrades the flags; auto never does
+        assert real_car._car_api_inferred_home is expected_flags
+        assert real_car._car_api_inferred_plugged is expected_flags
+
+    async def test_manual_upgrade_after_auto_contradiction(self, real_car_with_home, current_time):
+        """User assignment during an ongoing auto episode upgrades inferred flags without re-notifying."""
+        car = real_car_with_home
+        car._entity_probed_last_valid_state[car.car_tracker] = (current_time, "not_home", {})
+        car._entity_probed_last_valid_state[car.car_plugged] = (current_time, "on", {})
+
+        charger = MagicMock()
+        charger.name = "Test Charger"
+        charger.user_set_selected_car_by_name = AsyncMock()
+        car.home._chargers = [charger]
+
+        with patch.object(car, "_schedule_person_notification") as mock_notify:
+            # Auto episode: flagged + notified once, inferred flags stay False (D1)
+            car.check_charger_assignment_contradiction("Test Charger", current_time, manual=False)
+            assert mock_notify.call_count == 1
+            assert car._car_api_stale is True
+            assert car._car_api_inferred_home is False
+
+            # The user does what the notification asked: explicitly confirms the assignment
+            await car.user_set_selected_charger_by_name("Test Charger")
+
+        assert car._car_api_inferred_home is True
+        assert car._car_api_inferred_plugged is True
+        assert mock_notify.call_count == 1
+
+    def test_manual_upgrade_idempotent(self, real_car, current_time):
+        """A second manual=True call during an episode changes nothing and emits nothing."""
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
+
+        with patch.object(real_car, "_schedule_person_notification") as mock_notify:
+            real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
+            assert mock_notify.call_count == 1
+            assert real_car._car_api_inferred_home is True
+
+            real_car.check_charger_assignment_contradiction(
+                "Test Charger", current_time + timedelta(seconds=7), manual=True
+            )
+
+        assert mock_notify.call_count == 1
+        assert real_car._car_api_inferred_home is True
+        assert real_car._car_api_inferred_plugged is True
 
     def test_contradiction_skipped_when_stale_percent_mode(self, real_car, current_time):
         """Stale-percent mode skips contradiction check."""

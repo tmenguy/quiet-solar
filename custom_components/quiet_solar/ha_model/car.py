@@ -240,10 +240,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_api_stale_percent_mode: bool = False
         self._car_api_inferred_home: bool = False
         self._car_api_inferred_plugged: bool = False
-        # Dedup latch: charger name for which a contradiction was already flagged and
-        # notified — prevents per-cycle re-notification when nothing else (e.g.
-        # stale-percent mode) survives across update cycles
-        self._contradiction_latched_charger_name: str | None = None
         self._car_not_home_since: datetime | None = None
         self._departure_auto_reset_done: bool = False
 
@@ -821,7 +817,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_api_stale_percent_mode = False
         self._car_api_inferred_home = False
         self._car_api_inferred_plugged = False
-        self._contradiction_latched_charger_name = None
         self._car_api_stale_since = None
         self._last_valid_base_soc_value = None
         if self._user_base_soc_value is None:
@@ -866,21 +861,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
           a wrong auto-match via its own score feedback, so the inferred
           flags are never set on this path.
 
-        Manual origin is detected by `_charger_assignment_is_user_originated`
-        at the periodic call site and by the literal ``manual=True`` at the
-        user entry point (see that helper for why the two detection forms
-        are equivalent). Callers must pass the currently assigned charger's
-        name (``self.charger.name``) as ``charger_name``.
+        Manual origin detection lives in `_charger_assignment_is_user_originated`.
+        Callers must pass the currently assigned charger's name
+        (``self.charger.name``) as ``charger_name``.
 
-        A contradiction is flagged and notified once per assignment: a latch
-        keeps the car stale across cycles and is re-armed when the
-        contradiction resolves, the assignment changes, or the car exits
-        stale mode.
+        A contradiction is logged and notified once per stale episode,
+        deduplicated on ``_car_api_stale_since``; a new episode starts only
+        after genuine recovery (`_exit_stale_mode`). Within an ongoing
+        episode the check silently re-asserts the stale flag (the auto-mode
+        raw refresh resets it each cycle for cars that cannot enter
+        stale-percent mode), and a ``manual=True`` call upgrades the
+        inferred flags exactly once — the user's explicit confirmation is
+        ground truth even when the episode started as auto.
         """
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
-            return
-        # Already stale — don't re-notify
-        if self._car_api_stale or self.car_api_stale_percent_mode:
             return
 
         raw_home = self._get_raw_is_car_home(time)
@@ -890,23 +884,29 @@ class QSCar(HADeviceMixin, AbstractDevice):
         has_contradiction = (raw_home is not None and raw_home is False) or (
             raw_plugged is not None and raw_plugged is False
         )
-
         if not has_contradiction:
-            # Contradiction resolved — re-arm so a future contradiction notifies again
-            self._contradiction_latched_charger_name = None
             return
 
-        if self._contradiction_latched_charger_name == charger_name:
-            # Same assignment already flagged and notified — keep the stale flag latched
-            # across cycles (the auto-mode raw-staleness refresh resets it each cycle for
-            # cars that cannot enter stale-percent mode) without spamming logs or
-            # notifications
-            self._car_api_stale = True
-            self._was_car_api_stale = True
+        # Manual upgrade: the user's word is ground truth — apply the inferred
+        # flags even when the car is already stale from a prior auto episode,
+        # but never re-log/re-notify an ongoing episode
+        if manual and not self._car_api_inferred_home:
+            self._car_api_inferred_home = True
+            self._car_api_inferred_plugged = True
+
+        already_in_episode = self._car_api_stale_since is not None
+
+        if self._car_api_stale or self.car_api_stale_percent_mode:
+            # Already flagged this cycle — flags possibly upgraded above
             return
 
-        self._contradiction_latched_charger_name = charger_name
+        self._car_api_stale = True
+        self._was_car_api_stale = True
+        if already_in_episode:
+            # Re-assert silently across cycles — one notification per episode
+            return
 
+        self._car_api_stale_since = time
         _LOGGER.info(
             "Car %s %s charger %s while API reports home=%s, plugged=%s — flagging as stale",
             self.name,
@@ -916,9 +916,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             raw_plugged,
         )
         if manual:
-            # User's word is ground truth — override the raw API readings
-            self._car_api_inferred_home = True
-            self._car_api_inferred_plugged = True
             notification_body = (
                 f"Your {self.name} assignment contradicts its car API data — using estimated charge data"
             )
@@ -926,13 +923,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             notification_body = (
                 f"Your {self.name} was detected on {charger_name} but its API disagrees — check the car card"
             )
-        self._car_api_stale = True
-        if self._car_api_stale_since is None:
-            self._car_api_stale_since = time
         # Activate stale-percent mode if possible
         if self.can_use_charge_percent_constraints():
             self._enter_stale_percent_mode(time)
-        self._was_car_api_stale = True
         # Notify on contradiction (Feature B)
         self._schedule_person_notification(
             f"Warning: {self.name}",
@@ -941,10 +934,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
         )
 
     def clear_inferred_flags(self) -> None:
-        """Clear inferred flags and the contradiction latch when the charger assignment changes."""
+        """Clear inferred flags when car is detached from charger."""
         self._car_api_inferred_home = False
         self._car_api_inferred_plugged = False
-        self._contradiction_latched_charger_name = None
 
     async def user_set_stale_mode(self, option: str, for_init: bool = False) -> None:
         """Handle stale mode select change. Immediately re-evaluate stale state."""
