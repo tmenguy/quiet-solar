@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/device.py
-last_verified: 2026-05-21
+last_verified: 2026-06-05
 ---
 
 # External control detection
@@ -50,6 +50,26 @@ When external control is detected:
 
 This is the structural defence behind "embrace uncertainty" —
 quiet-solar doesn't assume it has exclusive control of the device.
+
+**Detection rules (QS-256).** Three guards keep false positives out
+of the bistate detection in
+`QSBiStateDuration.check_load_activity_and_constraints`:
+
+1. **Causality** — a mismatch counts only if the entity state's
+   `last_changed` is NEWER than the load's
+   `last_command_execution_time` (set on real service-call executions
+   and anchored at storage restore when a `current_command` is
+   restored). A stale state — e.g. a lagging template-switch mirror
+   right after an HA restart — is not a user action. Conservative
+   edge: `last_changed = None` while an anchor exists cannot prove
+   freshness → no override is classified.
+2. **Cooldown** — after an override resets, no new override is
+   classified for `USER_OVERRIDE_STATE_BACK_DURATION_S` (180s),
+   bounded by half the override window.
+3. **Constraint-driven end** — an override to the idle state pushes a
+   `TimeBasedHoldOffConstraint` so the solver natively sees the
+   pinned-off window and the override ends through the constraint-ack
+   path rather than relying purely on the timer.
 
 ## Key types / structures
 

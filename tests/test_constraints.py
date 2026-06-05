@@ -10,6 +10,8 @@ import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
@@ -26,7 +28,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     TimeBasedSimplePowerLoadConstraint,
     get_readable_date_string,
 )
-from tests.factories import TestDynamicGroupDouble
+from tests.factories import MinimalTestLoad, TestDynamicGroupDouble
 
 
 class _FakeLoad:
@@ -1726,3 +1728,567 @@ def test_headroom_guard_when_consumption_budget_none():
         slot_idx=0,
     )
     assert len(cmds3) == 2, "No amp budget + no headroom → all commands pass"
+
+
+# =============================================================================
+# QS-256 — TimeBasedHoldOffConstraint + override score dominance
+# =============================================================================
+
+
+def _make_hold_off(
+    load=None,
+    time=None,
+    start_offset_h: float = 0.0,
+    duration_h: float = 2.0,
+    **kwargs,
+):
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedHoldOffConstraint
+
+    if load is None:
+        load = _FakeLoad()
+    if time is None:
+        time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    start = time + timedelta(hours=start_offset_h)
+    defaults = dict(
+        time=time,
+        load=load,
+        load_param="off",
+        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+        from_user=True,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        start_of_constraint=start,
+        end_of_constraint=start + timedelta(hours=duration_h),
+        initial_value=0,
+        target_value=duration_h * 3600.0,
+    )
+    defaults.update(kwargs)
+    return TimeBasedHoldOffConstraint(**defaults)
+
+
+def test_hold_off_defaults_to_zero_power_when_not_given():
+    """No power/power_steps kwargs → a zero-consign power step is synthesized."""
+    ct = _make_hold_off()
+    assert ct._power == 0.0
+    assert len(ct._power_cmds) == 1
+    assert ct._power_cmds[0].power_consign == 0.0
+    # zero power → zero energy whatever the target
+    assert ct.convert_target_value_to_energy(ct.target_value) == 0.0
+
+
+def test_hold_off_compute_value_is_unconditional_wall_clock():
+    """Wall-clock accrual even when current command is idle or None."""
+    from custom_components.quiet_solar.home_model.commands import CMD_IDLE as _CMD_IDLE
+
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    load.current_command = _CMD_IDLE
+    ct = _make_hold_off(load=load, time=time)
+    ct.last_value_update = time
+    ct.current_value = 100.0
+
+    assert ct.compute_value(time + timedelta(seconds=60)) == 160.0
+
+    load.current_command = None
+    assert ct.compute_value(time + timedelta(seconds=120)) == 220.0
+
+
+def test_hold_off_met_at_end_of_constraint():
+    """Inherited always_end_at_end_of_constraint=True → met at window end."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    ct = _make_hold_off(time=time, duration_h=2.0)
+    assert ct.always_end_at_end_of_constraint is True
+    assert ct.is_constraint_met(time=time + timedelta(hours=1)) is False
+    assert ct.is_constraint_met(time=time + timedelta(hours=2)) is True
+
+
+def test_hold_off_serialization_round_trip_through_new_from_saved_dict():
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    ct = _make_hold_off(load=load, time=time)
+    data = ct.to_dict()
+    assert data["qs_class_type"] == "TimeBasedHoldOffConstraint"
+
+    restored = LoadConstraint.new_from_saved_dict(time, load, data)
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedHoldOffConstraint
+
+    assert isinstance(restored, TimeBasedHoldOffConstraint)
+    assert restored.to_dict() == data
+    assert restored._power == 0.0
+
+
+def test_hold_off_trivial_repartition_exact_output():
+    """compute_best_period_repartition: CMD_IDLE in-window, zeros, -1 sentinels."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 8
+    time_slots = [time + timedelta(seconds=SOLVER_STEP_S * i) for i in range(num_slots + 1)]
+    # window covers slots 2..5 (start at slot 2 anchor, end at slot 6 anchor)
+    ct = _make_hold_off(time=time)
+    ct.start_of_constraint = time_slots[2]
+    ct.current_start_of_constraint = time_slots[2]
+    ct.end_of_constraint = time_slots[6]
+
+    power_available = np.zeros(num_slots, dtype=np.float64)
+    durations = np.full(num_slots, float(SOLVER_STEP_S), dtype=np.float64)
+    prices = np.full(num_slots, 0.2 / 1000.0, dtype=np.float64)
+
+    (
+        out_constraint,
+        final_ret,
+        out_commands,
+        out_power,
+        first_slot,
+        last_slot,
+        min_idx,
+        max_idx,
+        remaining_deplete,
+    ) = ct.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=[0.2 / 1000.0],
+        time_slots=time_slots[:num_slots],
+        additional_available_energy_to_deplete=-123.0,
+        max_power_to_deplete=500.0,
+    )
+
+    assert final_ret is True
+    assert first_slot == 2
+    assert last_slot == 5
+    for i in range(num_slots):
+        if first_slot <= i <= last_slot:
+            assert out_commands[i] is not None
+            assert out_commands[i].is_off_or_idle()
+            assert out_commands[i].power_consign == 0.0
+        else:
+            assert out_commands[i] is None
+    assert np.all(out_power == 0.0)
+    assert min_idx == -1
+    assert max_idx == -1
+    # depletion budget passed through unchanged
+    assert remaining_deplete == -123.0
+    # shallow copy for budgeting with zero added quantity
+    assert out_constraint is not ct
+    assert out_constraint.current_value == ct.current_value
+    assert out_constraint.always_end_at_end_of_constraint is False
+
+
+def test_hold_off_trivial_repartition_unbounded_window_covers_all_slots():
+    """No explicit start (DATETIME_MIN) and far end → full slot range."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    time_slots = [time + timedelta(seconds=SOLVER_STEP_S * i) for i in range(num_slots)]
+    ct = _make_hold_off(time=time)
+    ct.start_of_constraint = datetime.min.replace(tzinfo=pytz.UTC)
+    ct.current_start_of_constraint = datetime.min.replace(tzinfo=pytz.UTC)
+    ct.end_of_constraint = DATETIME_MAX_UTC
+
+    power_available = np.zeros(num_slots, dtype=np.float64)
+    durations = np.full(num_slots, float(SOLVER_STEP_S), dtype=np.float64)
+    prices = np.full(num_slots, 0.2 / 1000.0, dtype=np.float64)
+
+    result = ct.compute_best_period_repartition(
+        do_use_available_power_only=True,
+        power_available_power=power_available,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=[0.2 / 1000.0],
+        time_slots=time_slots,
+    )
+    out_commands = result[2]
+    assert result[4] == 0  # first_slot
+    assert result[5] == num_slots - 1  # last_slot
+    assert all(cmd is not None and cmd.is_off_or_idle() for cmd in out_commands)
+    assert result[8] == 0.0  # default deplete budget passthrough
+
+
+def test_hold_off_adapt_repartition_is_a_no_op():
+    """adapt_repartition must never shave the hold-off window."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    ct = _make_hold_off(time=time)
+    durations = np.full(4, float(SOLVER_STEP_S), dtype=np.float64)
+    existing = [None] * 4
+
+    out_c, solved, has_changes, energy_delta, out_commands, out_delta_power = ct.adapt_repartition(
+        first_slot=0,
+        last_slot=3,
+        energy_delta=-500.0,
+        power_slots_duration_s=durations,
+        existing_commands=existing,
+        allow_change_state=True,
+        time=time,
+    )
+
+    assert out_c is ct
+    assert solved is False
+    assert has_changes is False
+    assert energy_delta == -500.0
+    assert out_commands == [None] * 4
+    assert np.all(out_delta_power == 0.0)
+
+
+def test_qs256_override_score_strictly_dominates_max_non_override():
+    """AC11: worst-case override score > max possible non-override score."""
+
+    class _MaxScoreLoad(_FakeLoad):
+        def get_normalized_score(self, ct, time: datetime, score_span: float) -> float:
+            return float(score_span)  # theoretical maximum load score
+
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+
+    # worst-case override: zero energy, lowest type, not from_user
+    worst_override = _make_hold_off(
+        load=_FakeLoad(),
+        time=time,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+        from_user=False,
+    )
+
+    # max non-override: max energy, type 9 (ASAP), from_user, max load score
+    max_load = _MaxScoreLoad()
+    best_non_override = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=max_load,
+        from_user=True,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        end_of_constraint=time + timedelta(hours=4),
+        initial_value=0,
+        target_value=2_000_000.0,  # saturates the energy score cap
+        power_steps=[LoadCommand(command="on", power_consign=10000.0)],
+    )
+
+    assert worst_override.score(time) > best_non_override.score(time)
+
+
+def test_qs256_same_end_time_cluster_dedup_keeps_override_constraint():
+    """AC11: set_live_constraints same-end cluster keeps the override one."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = MinimalTestLoad(name="dedup_load")
+    end = time + timedelta(hours=2)
+
+    hold_off = _make_hold_off(load=load, time=time)
+    hold_off.start_of_constraint = time
+    hold_off.current_start_of_constraint = time
+    hold_off.end_of_constraint = end
+
+    competitor = TimeBasedSimplePowerLoadConstraint(
+        time=time,
+        load=load,
+        from_user=True,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE - 1,
+        start_of_constraint=time,
+        end_of_constraint=end,
+        initial_value=0,
+        target_value=3600.0,
+        power=5000.0,
+    )
+
+    load.set_live_constraints(time, [competitor, hold_off])
+
+    assert load._constraints == [hold_off]
+
+
+def test_hold_off_trivial_repartition_window_clamps_and_partial_slot():
+    """Clamp branches: bisected slots beyond the power array, partial start slot."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    # two more anchors than power slots to exercise the clamps
+    time_slots = [time + timedelta(seconds=SOLVER_STEP_S * i) for i in range(num_slots + 2)]
+    power_available = np.zeros(num_slots, dtype=np.float64)
+    durations = np.full(num_slots, float(SOLVER_STEP_S), dtype=np.float64)
+    prices = np.full(num_slots, 0.2 / 1000.0, dtype=np.float64)
+
+    ct = _make_hold_off(time=time)
+    # start strictly inside slot 1 → bisect gives 2, decremented to the slot we are in
+    ct.current_start_of_constraint = time_slots[1] + timedelta(seconds=100)
+    # end at the last extra anchor → bisected last_slot beyond the power array → clamped
+    ct.end_of_constraint = time_slots[num_slots + 1]
+
+    result = ct.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=[0.2 / 1000.0],
+        time_slots=time_slots,
+    )
+    assert result[4] == 1  # first_slot decremented into the partial slot
+    assert result[5] == num_slots - 1  # last_slot clamped to the power array
+
+    # start exactly on an anchor beyond the power array → first_slot clamped
+    ct.current_start_of_constraint = time_slots[num_slots]
+    result = ct.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=[0.2 / 1000.0],
+        time_slots=time_slots,
+    )
+    assert result[4] == num_slots - 1  # first_slot clamped
+
+
+def test_qs256_override_score_offset_dominates_all_lower_order_terms():
+    """Review fix #01: dominance invariant computed from the actual span
+    constants — a future change to spans or type caps must trip this."""
+    from custom_components.quiet_solar.home_model.constraints import (
+        ENERGY_SCORE_SPAN,
+        RESERVED_LOAD_SCORE_SPAN,
+        TYPE_SCORE_SPAN,
+        USER_OVERRIDE_SCORE_OFFSET,
+    )
+
+    max_type_score = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
+    assert max_type_score < TYPE_SCORE_SPAN, "type scores must stay below TYPE_SCORE_SPAN"
+
+    max_lower_order_sum = (
+        (ENERGY_SCORE_SPAN - 1)
+        + ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN
+        + ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * max_type_score
+        + ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * TYPE_SCORE_SPAN * 1.0
+    )
+
+    assert USER_OVERRIDE_SCORE_OFFSET > max_lower_order_sum
+    assert USER_OVERRIDE_SCORE_OFFSET == (
+        ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * TYPE_SCORE_SPAN * TYPE_SCORE_SPAN
+    )
+
+
+def test_hold_off_repartition_start_beyond_every_slot_does_not_raise():
+    """Review fix #01: defensive first_slot clamp before time_slots indexing."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    time_slots = [time + timedelta(seconds=SOLVER_STEP_S * i) for i in range(num_slots)]
+    power_available = np.zeros(num_slots, dtype=np.float64)
+    durations = np.full(num_slots, float(SOLVER_STEP_S), dtype=np.float64)
+    prices = np.full(num_slots, 0.2 / 1000.0, dtype=np.float64)
+
+    ct = _make_hold_off(time=time)
+    # start strictly beyond EVERY slot anchor → bisect_left == len(time_slots)
+    ct.current_start_of_constraint = time_slots[-1] + timedelta(seconds=SOLVER_STEP_S * 5)
+    ct.end_of_constraint = ct.current_start_of_constraint + timedelta(hours=2)
+
+    result = ct.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=[0.2 / 1000.0],
+        time_slots=time_slots,
+    )
+
+    assert result[4] == num_slots - 1  # clamped, no IndexError
+
+
+def test_qs256_newer_override_wins_same_end_cluster_dedup():
+    """Review fix #02: deterministic override-vs-override tie-break — the
+    NEWER override wins same-end-time cluster dedup on otherwise-tied scores."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = MinimalTestLoad(name="tie_load")
+    end = time + timedelta(hours=2)
+
+    old_override = _make_hold_off(load=load, time=time)
+    old_override.start_of_constraint = time - timedelta(hours=4)
+    old_override.current_start_of_constraint = time - timedelta(hours=4)
+    old_override.end_of_constraint = end
+
+    new_override = _make_hold_off(load=load, time=time)
+    new_override.start_of_constraint = time
+    new_override.current_start_of_constraint = time
+    new_override.end_of_constraint = end
+
+    assert new_override.score(time) > old_override.score(time)
+
+    load.set_live_constraints(time, [old_override, new_override])
+    assert load._constraints == [new_override]
+
+
+def test_qs256_override_recency_tiebreak_is_bounded_by_energy_granularity():
+    """The recency term stays below the 1.0 energy-score granularity: an
+    OLDER override with one more Wh still outranks a newer one."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=2)
+
+    def _override(start, energy_wh):
+        return MultiStepsPowerLoadConstraint(
+            time=time,
+            load=load,
+            load_param="on",
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            from_user=True,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            start_of_constraint=start,
+            end_of_constraint=end,
+            initial_value=0,
+            target_value=float(energy_wh),
+            power_steps=[LoadCommand(command="on", power_consign=1000.0)],
+        )
+
+    older_more_energy = _override(time - timedelta(hours=4), 101)
+    newer_less_energy = _override(time, 100)
+
+    assert older_more_energy.score(time) > newer_less_energy.score(time)
+
+
+def test_qs256_override_without_start_gets_zero_recency():
+    """An override with no start (DATETIME_MIN sentinel) has no recency term."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=2)
+
+    no_start = _make_hold_off(load=load, time=time)
+    no_start.start_of_constraint = datetime.min.replace(tzinfo=pytz.UTC)
+    no_start.end_of_constraint = end
+
+    with_start = _make_hold_off(load=load, time=time)
+    with_start.start_of_constraint = time
+    with_start.end_of_constraint = end
+
+    assert with_start.score(time) > no_start.score(time)
+
+
+def test_qs256_sub_wh_energy_difference_between_overrides_is_recency_broken():
+    """Review fix #03: energy scores are int-floored, so a sub-Wh energy
+    difference between two overrides collapses to a tie — intentionally
+    decided by the recency term (newer wins). Coexistence of two overrides
+    is impossible by construction; this pins the documented behavior."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=2)
+
+    def _override(start, energy_wh):
+        return MultiStepsPowerLoadConstraint(
+            time=time,
+            load=load,
+            load_param="on",
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            from_user=True,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            start_of_constraint=start,
+            end_of_constraint=end,
+            initial_value=0,
+            target_value=float(energy_wh),
+            power_steps=[LoadCommand(command="on", power_consign=1000.0)],
+        )
+
+    older_slightly_more_energy = _override(time - timedelta(hours=4), 100.6)
+    newer_slightly_less_energy = _override(time, 100.4)
+
+    # int-floored energy scores tie (both 100) → recency decides: newer wins
+    assert newer_slightly_less_energy.score(time) > older_slightly_more_energy.score(time)
+
+
+def test_hold_off_repartition_empty_slot_array_returns_clean_empty_output():
+    """Review fix #04: an empty power array short-circuits to a clean empty
+    repartition instead of producing a degenerate last_slot == -1 range."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    ct = _make_hold_off(time=time)
+
+    (
+        out_constraint,
+        final_ret,
+        out_commands,
+        out_power,
+        first_slot,
+        last_slot,
+        min_idx,
+        max_idx,
+        remaining_deplete,
+    ) = ct.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=np.zeros(0, dtype=np.float64),
+        power_slots_duration_s=np.zeros(0, dtype=np.float64),
+        prices=np.zeros(0, dtype=np.float64),
+        prices_ordered_values=[],
+        time_slots=[],
+        additional_available_energy_to_deplete=-42.0,
+    )
+
+    assert final_ret is True
+    assert out_commands == []
+    assert len(out_power) == 0
+    assert first_slot == 0
+    assert last_slot == -1
+    assert min_idx == -1
+    assert max_idx == -1
+    assert remaining_deplete == -42.0
+    assert out_constraint is not ct
+
+
+def test_qs256_future_dated_override_start_clamps_to_max_recency():
+    """Review fix #04: a future-dated start_of_constraint is clamped to age 0
+    (max recency 0.5) by the score term — no error, same recency as a
+    just-started override. Upstream restore guards drop future-dated
+    overrides before they can be scored; this pins the clamp itself."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=4)
+
+    future_start = _make_hold_off(load=load, time=time)
+    future_start.start_of_constraint = time + timedelta(hours=1)
+    future_start.end_of_constraint = end
+
+    just_started = _make_hold_off(load=load, time=time)
+    just_started.start_of_constraint = time
+    just_started.end_of_constraint = end
+
+    # both clamp to age 0 → identical scores, no exception
+    assert future_start.score(time) == just_started.score(time)
+
+
+def test_qs256_score_with_no_load_returns_zero_load_baseline():
+    """Review fix #05: a load-less constraint must score without raising —
+    the load-dependent terms (load score, energy score via the load's
+    efficiency factor) fall back to a zero-load baseline."""
+    from custom_components.quiet_solar.home_model.constraints import (
+        ENERGY_SCORE_SPAN,
+        RESERVED_LOAD_SCORE_SPAN,
+    )
+
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    ct = LoadConstraint(
+        time=time,
+        load=None,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=time + timedelta(hours=2),
+        initial_value=0,
+        target_value=100.0,
+    )
+
+    # no UnboundLocalError / AttributeError: only the type term remains
+    assert ct.score(time) == ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * CONSTRAINT_TYPE_MANDATORY_END_TIME
+
+
+def test_qs256_loadless_override_constraint_still_dominates():
+    """Review fix #05: the override dominance invariant holds with the
+    zero-load baseline (load_score == 0, energy_score == 0)."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+
+    loadless_override = LoadConstraint(
+        time=time,
+        load=None,
+        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+        from_user=False,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+        end_of_constraint=time + timedelta(hours=2),
+        initial_value=0,
+        target_value=0.0,
+    )
+
+    class _MaxScoreLoad2(_FakeLoad):
+        def get_normalized_score(self, ct, time: datetime, score_span: float) -> float:
+            return float(score_span)
+
+    best_non_override = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=_MaxScoreLoad2(),
+        from_user=True,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        end_of_constraint=time + timedelta(hours=4),
+        initial_value=0,
+        target_value=2_000_000.0,
+        power_steps=[LoadCommand(command="on", power_consign=10000.0)],
+    )
+
+    assert loadless_override.score(time) > best_non_override.score(time)

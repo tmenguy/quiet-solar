@@ -14,6 +14,20 @@ DATA_HANDLER = "quiet_solar_data_handler"
 DATA_DEVICE_IDS = "quiet_solar_device_ids"
 DATA_SKIP_RELOAD_ENTRY_IDS = "quiet_solar_skip_reload_entry_ids"
 
+# Persisted per-device storage payload keys (read/written by
+# `use_saved_extra_device_info` / `update_to_be_saved_extra_device_info` in
+# home_model/load.py). The values are part of the on-disk storage format —
+# NEVER change them without a storage migration (review fix QS-256#05).
+STORAGE_KEY_NUM_ON_OFF = "num_on_off"
+STORAGE_KEY_CURRENT_COMMAND = "current_command"
+STORAGE_KEY_LAST_STATE_CHANGE_TIME = "last_state_change_time"
+STORAGE_KEY_LAST_CHECK_UPDATE = "last_check_update"
+STORAGE_KEY_USER_ORIGINATED = "_user_originated"
+STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE = "external_user_initiated_state"
+STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME = "external_user_initiated_state_time"
+STORAGE_KEY_ASKED_FOR_RESET_TIME = "asked_for_reset_user_initiated_state_time"
+STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE = "asked_for_reset_user_initiated_state_time_first_cmd_reset_done"
+
 DEVICE_TYPE = "device_type"
 
 CONF_TYPE_NAME_QSHome = "home"

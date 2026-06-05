@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-05-21
+last_verified: 2026-06-05
 ---
 
 # AbstractDevice & AbstractLoad
@@ -73,6 +73,32 @@ Switching-cost protection (`AbstractDevice`):
 - `push_agenda_constraints(...)` — calendar / schedule push.
 - `external_user_initiated_state` — set when the device state
   changes without a command quiet-solar sent.
+- `is_command_suppressed_by_override(time, command)` — hook checked at
+  the `launch_command` drop point (after the stacked-command clear,
+  before the same-command early-return): a suppressed command is
+  DROPPED before `running_command` is set — no ack, no counter
+  mutation, nothing for `check_commands` / `force_relaunch_command`
+  to resurrect (QS-256). `force_relaunch_command` applies the same
+  hook to a stale `running_command` and drops it (clears the running
+  slot and relaunch counters — `current_command` is intentionally
+  preserved as the last acked command of record, so a later
+  non-suppressed launch can still compare against it) instead of
+  retrying it against the override (review fix QS-256#02). Default
+  False; bistate loads override it.
+- `_restored_utc_datetime(value)` — restore-boundary parser for the
+  stored override timestamps: tz-naive isoformat strings (legacy /
+  hand-edited storage) are coerced to UTC so downstream datetime
+  arithmetic never raises (review fix QS-256#02). The persisted payload
+  keys themselves are the `STORAGE_KEY_*` constants in `const.py`
+  (review fix QS-256#05).
+- `last_command_execution_time` — in-memory causality anchor, set
+  only on real `execute_command` successes (via the shared
+  `_anchor_causality_guard_if_executed` helper called from
+  `launch_command` and `force_relaunch_command`, never on the
+  probe-already-set branch) and
+  initialized to "now" at storage restore when a `current_command` is
+  restored. Never serialized. Cleared by `user_clean_and_reset`,
+  which also clears ALL user-override fields (QS-256).
 
 ## Common mistakes
 

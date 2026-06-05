@@ -21,6 +21,8 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     CONF_SWITCH,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     DATA_HANDLER,
@@ -39,6 +41,7 @@ from custom_components.quiet_solar.home_model.commands import (
     CMD_ON,
 )
 from custom_components.quiet_solar.home_model.constraints import (
+    TimeBasedHoldOffConstraint,
     TimeBasedSimplePowerLoadConstraint,
 )
 from tests.factories import create_minimal_home_model
@@ -324,21 +327,20 @@ class TestQSBiStateDurationExpectedState:
         result = bistate_device.expected_state_from_command(None)
         assert result is None
 
-    def test_expected_state_from_command_or_user_no_override(self, bistate_device: ConcreteBiStateDevice):
-        """Test expected_state_from_command_or_user without override."""
-        bistate_device.external_user_initiated_state = None
+    def test_expected_state_from_command_ignores_override_on(self, bistate_device: ConcreteBiStateDevice):
+        """QS-256 D2: expected state is derived from the command ONLY."""
+        bistate_device.external_user_initiated_state = "off"
 
-        result = bistate_device.expected_state_from_command_or_user(CMD_ON)
+        result = bistate_device.expected_state_from_command(CMD_ON)
 
         assert result == "on"
 
-    def test_expected_state_from_command_or_user_with_override(self, bistate_device: ConcreteBiStateDevice):
-        """Test expected_state_from_command_or_user with user override."""
-        bistate_device.external_user_initiated_state = "off"
+    def test_expected_state_from_command_ignores_override_idle(self, bistate_device: ConcreteBiStateDevice):
+        """QS-256 D2: idle command maps to the off state whatever the override."""
+        bistate_device.external_user_initiated_state = "on"
 
-        result = bistate_device.expected_state_from_command_or_user(CMD_ON)
+        result = bistate_device.expected_state_from_command(CMD_IDLE)
 
-        # Should return user override state, not command state
         assert result == "off"
 
 
@@ -386,16 +388,31 @@ class TestQSBiStateDurationProbeIfCommandSet:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_probe_with_user_override(self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice):
-        """Test probe_if_command_set respects user override."""
+    async def test_probe_is_truthful_during_user_override(
+        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
+    ):
+        """AC4 (QS-256 D2): the probe answers only "did MY command land"."""
         hass.states.async_set("switch.test_device", "off")
         bistate_probe_device.external_user_initiated_state = "off"
         time = datetime.datetime.now(pytz.UTC)
 
-        # Even though command is ON, user override is OFF
+        # Command is ON, state is 'off': NOT set — the override must not
+        # masquerade as a phantom ack
         result = await bistate_probe_device.probe_if_command_set(time, CMD_ON)
 
-        # Should return True because state matches user override
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_probe_matching_command_during_override(
+        self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
+    ):
+        """A command aligned with the override probes True on its own merit."""
+        hass.states.async_set("switch.test_device", "off")
+        bistate_probe_device.external_user_initiated_state = "off"
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = await bistate_probe_device.probe_if_command_set(time, CMD_IDLE)
+
         assert result is True
 
 
@@ -436,21 +453,23 @@ class TestQSBiStateDurationExecuteCommand:
     async def test_execute_command_with_override_constraint_not_mandatory(
         self, hass: HomeAssistant, bistate_probe_device: ConcreteBiStateDevice
     ):
-        """Test execute_command with non-mandatory override constraint and idle command."""
+        """Test execute_command with non-mandatory OVERRIDE constraint and idle
+        command (review fix #02: resolved by originator, not first-active)."""
         hass.states.async_set("switch.test_device", "on")
         bistate_probe_device.external_user_initiated_state = "on"
 
-        # Create a non-mandatory constraint with load_param
+        # Create a non-mandatory override constraint with load_param
         mock_constraint = MagicMock()
         mock_constraint.is_mandatory = False
         mock_constraint.load_param = "on"
-        bistate_probe_device.get_current_active_constraint = MagicMock(return_value=mock_constraint)
+        bistate_probe_device._get_active_override_constraint = MagicMock(return_value=mock_constraint)
 
         time = datetime.datetime.now(pytz.UTC)
 
         result = await bistate_probe_device.execute_command(time, CMD_IDLE)
 
         # Should call execute_command_system with override_state=None
+        assert result is True
         assert len(bistate_probe_device._execute_command_system_calls) == 1
         assert bistate_probe_device._execute_command_system_calls[0][2] is None
 
@@ -1537,3 +1556,321 @@ class TestQSBiStateDurationOverrideBugFix134:
         # Old constraint must NOT appear in any set_live_constraints call
         for _, constraints in set_live_calls:
             assert old_constraint not in constraints
+
+
+# =========================================================================
+# QS-256 — hold-off constraint push (AC8), cooldown (AC7), suppression hook
+# =========================================================================
+
+
+class TestQS256HoldOffPush:
+    """AC8: a user override to the idle state pushes a TimeBasedHoldOffConstraint."""
+
+    @pytest.mark.asyncio
+    async def test_override_to_idle_pushes_hold_off_constraint(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        device.current_command = CMD_ON
+        device.running_command = None
+        device.override_duration = 4.0
+
+        hass.states.async_set("switch.test_device", "off")
+        time = datetime.datetime.now(pytz.UTC)
+
+        result = await device.check_load_activity_and_constraints(time)
+
+        assert result is True
+        assert device.external_user_initiated_state == "off"
+        hold_offs = [
+            c
+            for c in device._constraints
+            if c.load_info is not None
+            and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+        ]
+        assert len(hold_offs) == 1
+        ct = hold_offs[0]
+        assert isinstance(ct, TimeBasedHoldOffConstraint)
+        assert ct.load_param == "off"
+        assert ct.from_user is True
+        assert ct._type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+        assert ct.start_of_constraint == time
+        assert ct.end_of_constraint == time + datetime.timedelta(hours=4)
+        assert ct.target_value == 4 * 3600.0
+        assert ct._power == 0.0
+
+    @pytest.mark.asyncio
+    async def test_override_to_idle_expired_at_push_resets_directly(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """AC8 guard: computed end <= now → no constraint, override reset."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        device.current_command = CMD_ON
+        device.running_command = None
+        device.override_duration = 0.0  # degenerate window: end == now
+
+        hass.states.async_set("switch.test_device", "off")
+        time = datetime.datetime.now(pytz.UTC)
+
+        await device.check_load_activity_and_constraints(time)
+
+        assert device.external_user_initiated_state is None
+        assert device.asked_for_reset_user_initiated_state_time == time
+        hold_offs = [
+            c
+            for c in device._constraints
+            if c.load_info is not None
+            and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+        ]
+        assert hold_offs == []
+
+
+class TestQS256Cooldown:
+    """AC7: cooldown constant is 180s, bounded by half the override window."""
+
+    def test_cooldown_constant_is_180(self):
+        assert USER_OVERRIDE_STATE_BACK_DURATION_S == 180
+
+    @pytest.mark.asyncio
+    async def test_small_override_duration_bounds_cooldown(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """override_duration=0.05h → effective cooldown min(180, 90) = 90s."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        device.current_command = CMD_OFF
+        device.running_command = None
+        device.override_duration = 0.05
+
+        hass.states.async_set("switch.test_device", "on")
+        time = datetime.datetime.now(pytz.UTC)
+
+        # 85s after the reset ask: still inside the 90s bound → suppressed
+        device.asked_for_reset_user_initiated_state_time = time - datetime.timedelta(seconds=85)
+        await device.check_load_activity_and_constraints(time)
+        assert device.external_user_initiated_state is None
+        assert device.asked_for_reset_user_initiated_state_time is not None
+
+        # 95s after the reset ask: past the 90s bound → override classified
+        device.asked_for_reset_user_initiated_state_time = time - datetime.timedelta(seconds=95)
+        await device.check_load_activity_and_constraints(time)
+        assert device.external_user_initiated_state == "on"
+        assert device.asked_for_reset_user_initiated_state_time is None
+
+
+class TestQS256SuppressionHookBistate:
+    """T5: QSBiStateDuration.is_command_suppressed_by_override replication."""
+
+    def test_no_override_not_suppressed(self, bistate_probe_device: ConcreteBiStateDevice):
+        bistate_probe_device.external_user_initiated_state = None
+        time = datetime.datetime.now(pytz.UTC)
+        assert bistate_probe_device.is_command_suppressed_by_override(time, CMD_ON) is False
+
+    def test_conflicting_command_suppressed(self, bistate_probe_device: ConcreteBiStateDevice):
+        bistate_probe_device.external_user_initiated_state = "off"
+        bistate_probe_device.get_current_active_constraint = MagicMock(return_value=None)
+        time = datetime.datetime.now(pytz.UTC)
+        assert bistate_probe_device.is_command_suppressed_by_override(time, CMD_ON) is True
+
+    def test_aligned_command_not_suppressed(self, bistate_probe_device: ConcreteBiStateDevice):
+        bistate_probe_device.external_user_initiated_state = "off"
+        bistate_probe_device.get_current_active_constraint = MagicMock(return_value=None)
+        time = datetime.datetime.now(pytz.UTC)
+        assert bistate_probe_device.is_command_suppressed_by_override(time, CMD_IDLE) is False
+
+    def test_degraded_override_constraint_lets_idle_through(self, bistate_probe_device: ConcreteBiStateDevice):
+        """Replicates the execute_command nuance: degraded (non-mandatory)
+        OVERRIDE constraint + off/idle command → NOT suppressed."""
+        device = bistate_probe_device
+        device.external_user_initiated_state = "on"
+        time = datetime.datetime.now(pytz.UTC)
+        device._constraints = [
+            TimeBasedSimplePowerLoadConstraint(
+                type=CONSTRAINT_TYPE_FILLER_AUTO,  # degraded: non-mandatory
+                degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                time=time,
+                load=device,
+                load_param="on",
+                load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+                from_user=True,
+                start_of_constraint=time - datetime.timedelta(hours=1),
+                end_of_constraint=time + datetime.timedelta(hours=1),
+                initial_value=0,
+                target_value=7200.0,
+                power=1000.0,
+            )
+        ]
+        assert device.is_command_suppressed_by_override(time, CMD_IDLE) is False
+
+    def test_mandatory_override_constraint_suppresses_idle(self, bistate_probe_device: ConcreteBiStateDevice):
+        device = bistate_probe_device
+        device.external_user_initiated_state = "on"
+        time = datetime.datetime.now(pytz.UTC)
+        device._constraints = [
+            TimeBasedSimplePowerLoadConstraint(
+                type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                degraded_type=CONSTRAINT_TYPE_MANDATORY_END_TIME,  # stay mandatory off-grid
+                time=time,
+                load=device,
+                load_param="on",
+                load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+                from_user=True,
+                start_of_constraint=time - datetime.timedelta(hours=1),
+                end_of_constraint=time + datetime.timedelta(hours=1),
+                initial_value=0,
+                target_value=7200.0,
+                power=1000.0,
+            )
+        ]
+        assert device.is_command_suppressed_by_override(time, CMD_IDLE) is True
+
+    def test_degraded_non_override_constraint_does_not_open_the_idle_gate(
+        self, bistate_probe_device: ConcreteBiStateDevice
+    ):
+        """Review fix #02: a degraded NON-override constraint must not let a
+        conflicting off/idle command through — the override constraint is
+        resolved explicitly by originator."""
+        device = bistate_probe_device
+        device.external_user_initiated_state = "on"
+        time = datetime.datetime.now(pytz.UTC)
+        device._constraints = [
+            TimeBasedSimplePowerLoadConstraint(
+                type=CONSTRAINT_TYPE_FILLER_AUTO,  # non-mandatory, but NOT an override
+                degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                time=time,
+                load=device,
+                load_param="on",
+                load_info={"originator": "system"},
+                from_user=False,
+                start_of_constraint=time - datetime.timedelta(hours=1),
+                end_of_constraint=time + datetime.timedelta(hours=1),
+                initial_value=0,
+                target_value=7200.0,
+                power=1000.0,
+            )
+        ]
+        assert device.is_command_suppressed_by_override(time, CMD_IDLE) is True
+
+    def test_inactive_override_constraint_does_not_open_the_idle_gate(
+        self, bistate_probe_device: ConcreteBiStateDevice
+    ):
+        """An already-met (inactive) override constraint is skipped by the
+        explicit override resolution."""
+        device = bistate_probe_device
+        device.external_user_initiated_state = "on"
+        time = datetime.datetime.now(pytz.UTC)
+        met_ct = TimeBasedSimplePowerLoadConstraint(
+            type=CONSTRAINT_TYPE_FILLER_AUTO,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=time,
+            load=device,
+            load_param="on",
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            from_user=True,
+            start_of_constraint=time - datetime.timedelta(hours=2),
+            end_of_constraint=time + datetime.timedelta(hours=1),
+            initial_value=0,
+            current_value=7200.0,  # met → inactive
+            target_value=7200.0,
+            power=1000.0,
+        )
+        device._constraints = [met_ct]
+        assert device.is_command_suppressed_by_override(time, CMD_IDLE) is True
+
+    @pytest.mark.asyncio
+    async def test_hold_off_push_immediately_met_is_acked(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """Carry-over from a last-completed hold-off can make the freshly
+        pushed constraint immediately met → it must be acked (override reset)."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        device.current_command = CMD_ON
+        device.running_command = None
+        device.override_duration = 4.0
+
+        hass.states.async_set("switch.test_device", "off")
+        time = datetime.datetime.now(pytz.UTC)
+
+        # last completed hold-off sharing the new end time with a HIGHER
+        # accumulated value and a different requested target → carry-over
+        # path marks the new constraint met at push time (needs_ack)
+        completed = TimeBasedHoldOffConstraint(
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+            time=time,
+            load=device,
+            load_param="off",
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            from_user=True,
+            start_of_constraint=time - datetime.timedelta(hours=4),
+            end_of_constraint=time + datetime.timedelta(hours=4),
+            initial_value=0,
+            current_value=20000.0,
+            target_value=20000.0,
+        )
+        device._last_completed_constraint = completed
+
+        await device.check_load_activity_and_constraints(time)
+
+        # the immediately-met hold-off was acked → override reset right away
+        assert device.external_user_initiated_state is None
+        assert device.asked_for_reset_user_initiated_state_time == time
+
+    @pytest.mark.asyncio
+    async def test_on_override_expired_at_push_resets_directly(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """Review fix #01: the ON branch mirrors the idle branch's
+        expired-at-push guard — override_duration 0 → direct reset."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        device.current_command = CMD_OFF
+        device.running_command = None
+        device.override_duration = 0.0  # degenerate window: end == now
+
+        hass.states.async_set("switch.test_device", "on")
+        time = datetime.datetime.now(pytz.UTC)
+
+        await device.check_load_activity_and_constraints(time)
+
+        assert device.external_user_initiated_state is None
+        assert device.asked_for_reset_user_initiated_state_time == time
+        override_cts = [
+            c
+            for c in device._constraints
+            if c.load_info is not None
+            and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+        ]
+        assert override_cts == []

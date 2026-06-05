@@ -52,14 +52,35 @@ class FakeConfigEntry:
         self._on_unload_callbacks.append(callback)
 
 
+# Deterministic default for FakeState.last_changed so causality-guard
+# tests (QS-256) get a stable anchor without freezegun coupling.
+#
+# TEST-AUTHOR NOTE (review fix QS-256#05): this default is a fixed PAST
+# date. The QS-256 causality guard suppresses override classification when
+# `state.last_changed <= load.last_command_execution_time` — so a test that
+# sets `last_command_execution_time` (directly or by restoring a
+# `current_command` from storage) and relies on this default will silently
+# observe "no override detected". When a test must classify a user override,
+# pass an explicit `last_changed` NEWER than the load's
+# `last_command_execution_time` to `FakeStates.set(...)`.
+FAKE_STATE_DEFAULT_LAST_CHANGED = datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
+
+
 class FakeState:
     """Fake Home Assistant state."""
 
-    def __init__(self, entity_id: str, state: str, attributes: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        entity_id: str,
+        state: str,
+        attributes: dict[str, Any] | None = None,
+        last_changed: datetime | None = None,
+    ):
         self.entity_id = entity_id
         self.domain = entity_id.split(".")[0]
         self.state = state
         self.attributes = attributes or {}
+        self.last_changed = last_changed if last_changed is not None else FAKE_STATE_DEFAULT_LAST_CHANGED
 
 
 class FakeStates:
@@ -78,9 +99,15 @@ class FakeStates:
             return list(self._states.values())
         return [s for s in self._states.values() if s.entity_id.split(".")[0] in domains]
 
-    def set(self, entity_id: str, state: str, attributes: dict[str, Any] | None = None):
+    def set(
+        self,
+        entity_id: str,
+        state: str,
+        attributes: dict[str, Any] | None = None,
+        last_changed: datetime | None = None,
+    ):
         """Set a state."""
-        self._states[entity_id] = FakeState(entity_id, state, attributes)
+        self._states[entity_id] = FakeState(entity_id, state, attributes, last_changed=last_changed)
 
     def async_available(self, entity_id: str) -> bool:
         """Check if an entity_id is available (not already used)."""

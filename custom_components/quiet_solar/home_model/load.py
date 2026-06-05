@@ -31,6 +31,15 @@ from ..const import (
     OVERRIDE_STATE_ASKED_FOR_RESET,
     OVERRIDE_STATE_NO_OVERRIDE,
     OVERRIDE_STATE_PREFIX,
+    STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE,
+    STORAGE_KEY_ASKED_FOR_RESET_TIME,
+    STORAGE_KEY_CURRENT_COMMAND,
+    STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE,
+    STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME,
+    STORAGE_KEY_LAST_CHECK_UPDATE,
+    STORAGE_KEY_LAST_STATE_CHANGE_TIME,
+    STORAGE_KEY_NUM_ON_OFF,
+    STORAGE_KEY_USER_ORIGINATED,
 )
 from .commands import CMD_IDLE, LoadCommand, copy_command
 from .constraints import DATETIME_MAX_UTC, DATETIME_MIN_UTC, LoadConstraint
@@ -145,6 +154,12 @@ class AbstractDevice:
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
         self.last_check_update: datetime | None = None
         self.reset_daily_load_datas()
+
+        # QS-256 (D5): causality anchor — the time of the last REAL command
+        # execution (service call). In-memory only, never serialized, no
+        # entity/diagnostic exposure. Used by the user-override detection to
+        # ignore entity states older than the system's own last action.
+        self.last_command_execution_time: datetime | None = None
 
         self._ack_command(None, None)
 
@@ -437,19 +452,21 @@ class AbstractDevice:
         return 100.0 / self.efficiency
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
-        data_to_update["num_on_off"] = self.num_on_off
-        data_to_update["current_command"] = self.current_command.to_dict() if self.current_command is not None else None
-        data_to_update["last_state_change_time"] = (
+        data_to_update[STORAGE_KEY_NUM_ON_OFF] = self.num_on_off
+        data_to_update[STORAGE_KEY_CURRENT_COMMAND] = (
+            self.current_command.to_dict() if self.current_command is not None else None
+        )
+        data_to_update[STORAGE_KEY_LAST_STATE_CHANGE_TIME] = (
             self.last_state_change_time.isoformat() if self.last_state_change_time is not None else None
         )
-        data_to_update["last_check_update"] = (
+        data_to_update[STORAGE_KEY_LAST_CHECK_UPDATE] = (
             self.last_check_update.isoformat() if self.last_check_update is not None else None
         )
-        data_to_update["_user_originated"] = self._user_originated
+        data_to_update[STORAGE_KEY_USER_ORIGINATED] = self._user_originated
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
-        self._user_originated = stored_load_info.get("_user_originated", {})
-        self.num_on_off = stored_load_info.get("num_on_off", 0)
+        self._user_originated = stored_load_info.get(STORAGE_KEY_USER_ORIGINATED, {})
+        self.num_on_off = stored_load_info.get(STORAGE_KEY_NUM_ON_OFF, 0)
 
         if self.num_on_off > 0 and self.num_on_off % 2 == 1:
             # because of a reboot we may need a bit more ...
@@ -459,17 +476,21 @@ class AbstractDevice:
             if self.num_max_on_off - self.num_on_off <= 2:
                 self.num_on_off = self.num_max_on_off - 2
 
-        cmd_dict = stored_load_info.get("current_command", None)
+        cmd_dict = stored_load_info.get(STORAGE_KEY_CURRENT_COMMAND, None)
         if cmd_dict is not None:
             self.current_command = LoadCommand(**cmd_dict)
+            # QS-256 (D5): the restored command is the command of record,
+            # unconfirmed as of the restore moment — anchor the causality
+            # guard at restore time to close the post-restart blind spot
+            self.last_command_execution_time = datetime.now(pytz.UTC)
 
-        last_change_str = stored_load_info.get("last_state_change_time", None)
+        last_change_str = stored_load_info.get(STORAGE_KEY_LAST_STATE_CHANGE_TIME, None)
         if last_change_str is not None:
             self.last_state_change_time = datetime.fromisoformat(last_change_str)
         else:
             self.last_state_change_time = None
 
-        last_check_update_update_str = stored_load_info.get("last_check_update", None)
+        last_check_update_update_str = stored_load_info.get(STORAGE_KEY_LAST_CHECK_UPDATE, None)
         if last_check_update_update_str is not None:
             self.last_check_update = datetime.fromisoformat(last_check_update_update_str)
         else:
@@ -556,6 +577,27 @@ class AbstractDevice:
                     f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})"
                 )
 
+    def _anchor_causality_guard_if_executed(self, is_command_set: bool | None, time: datetime) -> None:
+        """QS-256 (D5): anchor the causality guard after a REAL execution.
+
+        Shared by `launch_command` and `force_relaunch_command` — set ONLY
+        when `execute_command` returned True (never on the probe-already-set
+        branch, never in `_ack_command`).
+        """
+        if is_command_set is True:
+            self.last_command_execution_time = time
+
+    def is_command_suppressed_by_override(self, time: datetime, command: LoadCommand) -> bool:
+        """Return True when an active user override must swallow this command.
+
+        QS-256 (D1): command swallowing during an active override is BY
+        DESIGN (don't fight the user) — but a suppressed command must be
+        DROPPED at the `launch_command` drop point, never phantom-acked.
+        Default: no override support, nothing suppressed. Subclasses that
+        track `external_user_initiated_state` override this.
+        """
+        return False
+
     @property
     def effective_command(self) -> LoadCommand | None:
         """Return the best known command, including pending ones not yet acked."""
@@ -595,6 +637,19 @@ class AbstractDevice:
         # there is no running : whatever we will not execute the stacked one but only the last one
         self._stacked_command = None
 
+        # QS-256 (D1): drop point — a command suppressed by an active user
+        # override is DROPPED before `running_command` is set: no ack, no
+        # counters mutation, nothing for check_commands/force_relaunch_command
+        # to resurrect
+        if self.is_command_suppressed_by_override(time, command):
+            _LOGGER.info(
+                "launch_command: command %s suppressed by user override for load %s, ctxt: %s",
+                command,
+                self.name,
+                ctxt,
+            )
+            return
+
         if self.current_command is not None and self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
             self.current_command = command  # needed as command == may have been overcharged to not test everything
@@ -619,6 +674,7 @@ class AbstractDevice:
                     stack_info=True,
                 )
                 is_command_set = None
+            self._anchor_causality_guard_if_executed(is_command_set, time)
 
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
@@ -682,6 +738,27 @@ class AbstractDevice:
             self.running_command = None
 
         if self.running_command is not None:
+            # review fix QS-256#02: a stale running command suppressed by an
+            # active user override must be DROPPED, not retried — retrying
+            # could phantom-ack it through the execute_command interception
+            # (entity already in the override state) or fight the user
+            if self.is_command_suppressed_by_override(time, self.running_command):
+                _LOGGER.info(
+                    "force_relaunch_command: command %s suppressed by user override for load %s, dropped",
+                    self.running_command,
+                    self.name,
+                )
+                self.running_command = None
+                self.running_command_num_relaunch = 0
+                self.running_command_num_relaunch_after_invalid = 0
+                self.running_command_first_launch = None
+                self.running_command_last_launch = None
+                # `current_command` is intentionally PRESERVED: it is the last
+                # acked command of record, and a later non-suppressed launch
+                # (e.g. after the override ends) must still be able to compare
+                # against it — only the stale in-flight command is dropped
+                return
+
             _LOGGER.info(
                 f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})"
             )
@@ -695,6 +772,7 @@ class AbstractDevice:
                     stack_info=True,
                 )
                 is_command_set = None
+            self._anchor_causality_guard_if_executed(is_command_set, time)
             self.running_command_last_launch = time
             if is_command_set is None:
                 _LOGGER.info(
@@ -823,48 +901,53 @@ class AbstractLoad(AbstractDevice):
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
-        data_to_update["external_user_initiated_state"] = self.external_user_initiated_state
-        data_to_update["external_user_initiated_state_time"] = None
+        data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE] = self.external_user_initiated_state
+        data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME] = None
         if self.external_user_initiated_state_time is not None:
-            data_to_update["external_user_initiated_state_time"] = f"{self.external_user_initiated_state_time}"
-
-        data_to_update["asked_for_reset_user_initiated_state_time"] = None
-        if self.asked_for_reset_user_initiated_state_time is not None:
-            data_to_update["asked_for_reset_user_initiated_state_time"] = (
-                f"{self.asked_for_reset_user_initiated_state_time}"
+            data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME] = (
+                f"{self.external_user_initiated_state_time}"
             )
 
-        data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = None
+        data_to_update[STORAGE_KEY_ASKED_FOR_RESET_TIME] = None
+        if self.asked_for_reset_user_initiated_state_time is not None:
+            data_to_update[STORAGE_KEY_ASKED_FOR_RESET_TIME] = f"{self.asked_for_reset_user_initiated_state_time}"
+
+        data_to_update[STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE] = None
         if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-            data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = (
+            data_to_update[STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE] = (
                 f"{self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done}"
             )
 
+    @staticmethod
+    def _restored_utc_datetime(value: str | None) -> datetime | None:
+        """Parse a stored isoformat timestamp, coercing tz-naive values to UTC.
+
+        Review fix QS-256#02: legacy or hand-edited `.storage` entries can
+        hold tz-naive strings; downstream datetime arithmetic against
+        tz-aware "now" values would raise TypeError.
+        """
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=pytz.UTC)
+        return parsed
+
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
-        self.external_user_initiated_state = stored_load_info.get("external_user_initiated_state", None)
+        self.external_user_initiated_state = stored_load_info.get(STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE, None)
 
-        self.external_user_initiated_state_time = stored_load_info.get("external_user_initiated_state_time", None)
-        if self.external_user_initiated_state_time is not None:
-            self.external_user_initiated_state_time = datetime.fromisoformat(
-                stored_load_info.get("external_user_initiated_state_time", None)
-            )
-
-        self.asked_for_reset_user_initiated_state_time = stored_load_info.get(
-            "asked_for_reset_user_initiated_state_time", None
+        self.external_user_initiated_state_time = self._restored_utc_datetime(
+            stored_load_info.get(STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME, None)
         )
-        if self.asked_for_reset_user_initiated_state_time is not None:
-            self.asked_for_reset_user_initiated_state_time = datetime.fromisoformat(
-                stored_load_info.get("asked_for_reset_user_initiated_state_time", None)
-            )
 
-        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = stored_load_info.get(
-            "asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None
+        self.asked_for_reset_user_initiated_state_time = self._restored_utc_datetime(
+            stored_load_info.get(STORAGE_KEY_ASKED_FOR_RESET_TIME, None)
         )
-        if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = datetime.fromisoformat(
-                stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None)
-            )
+
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = self._restored_utc_datetime(
+            stored_load_info.get(STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE, None)
+        )
 
     def get_override_state(self):
 
@@ -1643,6 +1726,15 @@ class AbstractLoad(AbstractDevice):
 
     async def user_clean_and_reset(self):
         await super().user_clean_and_reset()
+        # QS-256 (D7): the reset button must break ANY override loop — clear
+        # ALL override fields (a half-cleared ask-time would leave the UI in
+        # ASKED_FOR_RESET) and the causality anchor, BEFORE launching CMD_IDLE
+        # so the command cannot be suppressed by a stale override
+        self.external_user_initiated_state = None
+        self.external_user_initiated_state_time = None
+        self.asked_for_reset_user_initiated_state_time = None
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        self.last_command_execution_time = None
         time = datetime.now(tz=pytz.UTC)
         _LOGGER.info("user_clean_and_reset: %s", self.name)
         await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"user_clean_and_reset: {self.name}")

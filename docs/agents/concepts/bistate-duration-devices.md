@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-06-01
+last_verified: 2026-06-05
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -102,6 +102,40 @@ the solver picks the cheapest contiguous (or split) windows.
 `QSOnOffDuration`: warmer water → longer filter duration. The
 extension overrides the duration calculation but inherits the rest
 of the on/off behaviour unchanged.
+
+**Override semantics (QS-256):**
+
+- `probe_if_command_set` is truthful — it compares the entity state
+  against `expected_state_from_command(command)` ONLY (the command's
+  expected state, never the override state). Comparing against the
+  override used to phantom-ack solver commands during an override.
+- `is_command_suppressed_by_override` (the drop-point hook used by both
+  `launch_command` and `force_relaunch_command`) returns True iff an
+  override is active AND the command's expected state differs from it —
+  with the degraded-override nuance: a non-mandatory OVERRIDE constraint
+  (resolved explicitly by its `load_info` originator, NOT the first
+  active constraint) lets off/idle commands through, mirroring
+  `execute_command`'s interception block (now pure defense in depth).
+- The causality guard is conservative: a state whose `last_changed` is
+  missing (None) while a command-execution anchor exists cannot prove
+  freshness and is NOT classified as a user override; a tz-naive
+  `last_changed` is coerced to UTC locally.
+- An override to the idle state pushes a `TimeBasedHoldOffConstraint`
+  (zero power, CMD_IDLE window) so the override ends through the
+  constraint-ack path; if the computed end is already past (e.g.
+  `override_duration` is 0), the override is reset directly instead —
+  BOTH override directions share this expired-at-push guard.
+- `use_saved_extra_device_info` drops a stored override that is
+  already older than `override_duration` hours at restore time — or
+  clearly future-dated (> 60s ahead, clock-skew poison), or missing
+  its timestamp entirely (orphan state nothing could ever expire). A
+  future-dated reset-ask timestamp is dropped the same way (it would
+  keep the post-override cooldown permanently active), together with
+  its companion first-cmd-reset flag (an orphaned flag would trigger a
+  spurious constraint wipe right after restore). Stored
+  override timestamps are coerced tz-naive → UTC at the restore
+  boundary (`AbstractLoad._restored_utc_datetime`); the cooldown check
+  site coerces defensively too.
 
 ## Key types / structures
 
