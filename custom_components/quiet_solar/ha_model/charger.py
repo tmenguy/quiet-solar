@@ -138,6 +138,8 @@ from ..const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
     PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
     SENSOR_CONSTRAINT_SENSOR_CHARGE,
+    USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGER_NAME,
     CONF_TYPE_NAME_QSChargerGeneric,
     CONF_TYPE_NAME_QSChargerOCPP,
     CONF_TYPE_NAME_QSChargerWallbox,
@@ -2705,9 +2707,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             connected_time_delta = time - self.car_attach_time
             is_long_time_attached = connected_time_delta > timedelta(seconds=CAR_CHARGER_LONG_RELATIONSHIP_S)
 
-        if self.get_user_originated("car_name") is not None:
-            if self.get_user_originated("car_name") != CHARGER_NO_CAR_CONNECTED:
-                attached_car = self.home.get_car_by_name(self.get_user_originated("car_name"))
+        if self.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None:
+            if self.get_user_originated(USER_ORIGINATED_CAR_NAME) != CHARGER_NO_CAR_CONNECTED:
+                attached_car = self.home.get_car_by_name(self.get_user_originated(USER_ORIGINATED_CAR_NAME))
                 if attached_car is not None and car is not None:
                     if attached_car.name != car.name:
                         score = 0.0
@@ -2861,14 +2863,14 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         # find the best car ...
 
         # cleanly handle the case where it has been user forced to a car
-        if self.get_user_originated("car_name") is not None:
-            if self.get_user_originated("car_name") != CHARGER_NO_CAR_CONNECTED:
-                if self.get_user_originated("car_name") == self._default_generic_car.name:
+        if self.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None:
+            if self.get_user_originated(USER_ORIGINATED_CAR_NAME) != CHARGER_NO_CAR_CONNECTED:
+                if self.get_user_originated(USER_ORIGINATED_CAR_NAME) == self._default_generic_car.name:
                     car = self._default_generic_car
                 else:
-                    car = self.home.get_car_by_name(self.get_user_originated("car_name"))
+                    car = self.home.get_car_by_name(self.get_user_originated(USER_ORIGINATED_CAR_NAME))
 
-                if car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED:
+                if car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED:
                     car = None
 
                 if car is not None:
@@ -2880,13 +2882,13 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                         if charger != self and charger.car is not None and charger.car.name == car.name:
                             if (
-                                charger.get_user_originated("car_name") is not None
-                                and charger.get_user_originated("car_name") == car.name
+                                charger.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None
+                                and charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car.name
                             ):
                                 _LOGGER.error(
                                     f"get_best_car: {car.name} manually attached to multiple chargers: {self.name} and {charger.name}, detaching from {charger.name}"
                                 )
-                                charger.clear_user_originated("car_name")
+                                charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)
                             else:
                                 _LOGGER.info(
                                     f"get_best_car: {car.name} manually attached to charger {self.name}, detaching from {charger.name}"
@@ -2920,7 +2922,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             chargers_scores[charger] = []
 
             for car in self.home._cars:
-                if car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED:
+                if car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED:
                     _LOGGER.info("get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: %s", car.name)
                     continue
 
@@ -2977,7 +2979,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         if best_car is None:
             if (
                 self._boot_car is not None
-                and self._boot_car.get_user_originated("charger_name") != FORCE_CAR_NO_CHARGER_CONNECTED
+                and self._boot_car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) != FORCE_CAR_NO_CHARGER_CONNECTED
             ):
                 best_car = self._boot_car
                 _LOGGER.info("get_best_car: Best Car from boot data: %s for charger %s", best_car.name, self.name)
@@ -2995,7 +2997,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             if (
                 self._boot_car is not None
                 and self._boot_car.name != best_car.name
-                and self._boot_car.get_user_originated("charger_name") != FORCE_CAR_NO_CHARGER_CONNECTED
+                and self._boot_car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) != FORCE_CAR_NO_CHARGER_CONNECTED
             ):
                 # the best is not as good as the boot one ... we will use the boot one for now, whatever the score
                 _LOGGER.info(
@@ -3032,8 +3034,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return [CHARGER_NO_CAR_CONNECTED]
 
     def get_current_selected_car_option(self) -> str | None:
-        if self.get_user_originated("car_name") is not None:
-            return self.get_user_originated("car_name")
+        if self.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None:
+            return self.get_user_originated(USER_ORIGINATED_CAR_NAME)
 
         if self.car is None:
             return None
@@ -3041,7 +3043,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             return self.car.name
 
     async def user_set_selected_car_by_name(self, car_name: str | None):
-        self.set_user_originated("car_name", car_name)
+        self.set_user_originated(USER_ORIGINATED_CAR_NAME, car_name)
         if self.car is not None and self.car.name != car_name:
             self.detach_car()
 
@@ -3086,9 +3088,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         self._boot_time_adjusted = None
 
         old_connected_car_name = None
-        if self.get_user_originated("car_name") is not None:
-            if self.get_user_originated("car_name") != CHARGER_NO_CAR_CONNECTED:
-                old_connected_car_name = self.get_user_originated("car_name")
+        if self.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None:
+            if self.get_user_originated(USER_ORIGINATED_CAR_NAME) != CHARGER_NO_CAR_CONNECTED:
+                old_connected_car_name = self.get_user_originated(USER_ORIGINATED_CAR_NAME)
                 _LOGGER.info(
                     f"device_post_home_init: found a stored user attached car to be kept with {old_connected_car_name}"
                 )
@@ -3101,7 +3103,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self._boot_car = self.home.get_car_by_name(old_connected_car_name)
                 if (
                     self._boot_car is not None
-                    and self._boot_car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED
+                    and self._boot_car.get_user_originated(USER_ORIGINATED_CHARGER_NAME)
+                    == FORCE_CAR_NO_CHARGER_CONNECTED
                 ):
                     self._boot_car = None
                     old_connected_car_name = None
@@ -3128,7 +3131,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 self._boot_car = self.home.get_car_by_name(old_connected_car_name)
                 if (
                     self._boot_car is not None
-                    and self._boot_car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED
+                    and self._boot_car.get_user_originated(USER_ORIGINATED_CHARGER_NAME)
+                    == FORCE_CAR_NO_CHARGER_CONNECTED
                 ):
                     _LOGGER.info(
                         f"device_post_home_init: found a stored car constraint to be kept with {old_connected_car_name} but it is not attached to a charger, so we will not use it"
@@ -3199,7 +3203,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 # do_full_reset=False) preserves the persisted estimate.
                 self.car.reset_soc_estimate()
                 self.reset(keep_commands=True)  # will detach the car
-                self.clear_user_originated("car_name")  # physical unplug, reset the user selected car for charger
+                self.clear_user_originated(
+                    USER_ORIGINATED_CAR_NAME
+                )  # physical unplug, reset the user selected car for charger
                 do_force_solve = True
 
             # set_charging_num_phases will check that this switch is possible

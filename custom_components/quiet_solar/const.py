@@ -171,6 +171,11 @@ FORCE_CAR_NO_CHARGER_CONNECTED = "Force Car not connected"
 FORCE_CAR_NO_PERSON_ATTACHED = "Force no person for car"
 CHARGE_TIME_CONSTRAINTS_CLEARED = "constraints_cleared"
 
+# User-originated marker keys — persisted in stored user-originated state,
+# values must remain exactly "charger_name" / "car_name"
+USER_ORIGINATED_CHARGER_NAME = "charger_name"
+USER_ORIGINATED_CAR_NAME = "car_name"
+
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"
 CONF_CAR_CHARGE_PERCENT_SENSOR = "car_charge_percent_sensor"

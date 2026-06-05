@@ -11,6 +11,7 @@ import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
     CHARGER_NO_CAR_CONNECTED,
     CONF_CHARGER_CONSUMPTION,
     CONF_CHARGER_MAX_CHARGE,
@@ -245,7 +246,7 @@ class TestDevicePostHomeInit(unittest.TestCase):
         mock_car.get_user_originated = MagicMock(return_value=None)
 
         self.home.get_car_by_name = MagicMock(return_value=mock_car)
-        self.charger.set_user_originated("car_name", "UserCar")
+        self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, "UserCar")
 
         self.charger.device_post_home_init(time)
 
@@ -325,7 +326,7 @@ class TestGetBestCar(unittest.TestCase):
         """Test get_best_car when user attached the generic car."""
         time = datetime.now(pytz.UTC)
 
-        self.charger.set_user_originated("car_name", self.charger._default_generic_car.name)
+        self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, self.charger._default_generic_car.name)
 
         result = self.charger.get_best_car(time)
 
@@ -336,7 +337,7 @@ class TestGetBestCar(unittest.TestCase):
         time = datetime.now(pytz.UTC)
 
         # Set user attached car name to CHARGER_NO_CAR_CONNECTED
-        self.charger.set_user_originated("car_name", CHARGER_NO_CAR_CONNECTED)
+        self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, CHARGER_NO_CAR_CONNECTED)
 
         result = self.charger.get_best_car(time)
 
@@ -351,7 +352,7 @@ class TestGetBestCar(unittest.TestCase):
         mock_boot_car.get_user_originated = MagicMock(return_value=None)
 
         self.charger._boot_car = mock_boot_car
-        self.charger.clear_user_originated("car_name")
+        self.charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)
         self.home._cars = []
 
         with patch.object(self.charger, "is_plugged", return_value=False):
@@ -562,7 +563,7 @@ class TestGetCarScore(unittest.TestCase):
         attached_car.name = "AttachedCar"
 
         self.home.get_car_by_name = MagicMock(return_value=attached_car)
-        self.charger.set_user_originated("car_name", "AttachedCar")
+        self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, "AttachedCar")
 
         cache = {}
         result = self.charger.get_car_score(mock_car, time, cache)

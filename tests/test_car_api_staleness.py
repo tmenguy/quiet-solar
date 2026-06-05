@@ -30,6 +30,8 @@ from custom_components.quiet_solar.const import (
     CAR_STALE_MODE_FORCE_STALE,
     FORCE_CAR_NO_CHARGER_CONNECTED,
     SELECT_CAR_STALE_MODE,
+    USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGER_NAME,
 )
 
 
@@ -55,6 +57,11 @@ class TestConstants:
         assert CAR_STALE_MODE_AUTO == "auto"
         assert CAR_STALE_MODE_FORCE_STALE == "force_stale"
         assert CAR_STALE_MODE_FORCE_NOT_STALE == "force_not_stale"
+
+    def test_user_originated_marker_keys(self):
+        """Marker keys are persisted in stored state — values must never change."""
+        assert USER_ORIGINATED_CHARGER_NAME == "charger_name"
+        assert USER_ORIGINATED_CAR_NAME == "car_name"
 
 
 class TestSensorClassification:
@@ -1061,9 +1068,14 @@ class TestContextAwareExit:
 
 
 class TestPeriodicContradiction:
-    """Test periodic contradiction check for attached cars."""
+    """Test periodic contradiction check for attached cars, covering manual (either marker side) and auto origins."""
 
-    def test_periodic_contradiction_attached_car(self, real_car, current_time):
+    def test_charger_assignment_origin_helper_no_charger(self, real_car):
+        """Origin helper returns False when no charger is attached (defensive guard)."""
+        real_car.charger = None
+        assert real_car._charger_assignment_is_user_originated() is False
+
+    def test_periodic_contradiction_manual_marker_car_side(self, real_car, current_time):
         """Manually assigned car (car-side marker) with plug=off triggers stale with inferred flags."""
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
@@ -1074,7 +1086,7 @@ class TestPeriodicContradiction:
         real_car.charger = MagicMock(name="Test Charger")
         real_car.charger.name = "Test Charger"
         real_car.charger.get_user_originated = MagicMock(return_value=None)
-        real_car.set_user_originated("charger_name", "Test Charger")
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
         real_car._update_car_api_staleness(current_time)
 
         assert real_car._car_api_stale is True
@@ -1549,20 +1561,20 @@ class TestDepartureAutoReset:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
 
         # Set some user-originated state
-        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
-        assert real_car.has_user_originated("charger_name")
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
+        assert real_car.has_user_originated(USER_ORIGINATED_CHARGER_NAME)
 
         # Car is home
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "home", {})
         await real_car._check_departure_auto_reset(current_time)
         assert real_car._car_not_home_since is None
-        assert real_car.has_user_originated("charger_name")
+        assert real_car.has_user_originated(USER_ORIGINATED_CHARGER_NAME)
 
         # Car leaves home
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
         await real_car._check_departure_auto_reset(current_time)
         assert real_car._car_not_home_since == current_time
-        assert real_car.has_user_originated("charger_name")  # Not yet cleared
+        assert real_car.has_user_originated(USER_ORIGINATED_CHARGER_NAME)  # Not yet cleared
 
         # 15 minutes later — should trigger reset (once)
         later_time = current_time + timedelta(seconds=CAR_NOT_HOME_AUTO_RESET_S)
@@ -1583,7 +1595,7 @@ class TestDepartureAutoReset:
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
 
-        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
 
         # Car leaves
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
@@ -1595,7 +1607,7 @@ class TestDepartureAutoReset:
         with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
             await real_car._check_departure_auto_reset(later_time)
             mock_reset.assert_not_called()
-        assert real_car.has_user_originated("charger_name")
+        assert real_car.has_user_originated(USER_ORIGINATED_CHARGER_NAME)
 
     async def test_gps_glitch_preserves_state(self, real_car, current_time):
         """Car home → brief GPS glitch (not-home for 5 min then back) → state preserved."""
@@ -1603,7 +1615,7 @@ class TestDepartureAutoReset:
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
 
-        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
 
         # Car appears to leave (GPS glitch)
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
@@ -1616,16 +1628,16 @@ class TestDepartureAutoReset:
         await real_car._check_departure_auto_reset(later_time)
         assert real_car._car_not_home_since is None
         assert real_car._departure_auto_reset_done is False  # Re-armed for next departure
-        assert real_car.has_user_originated("charger_name")  # State preserved
+        assert real_car.has_user_originated(USER_ORIGINATED_CHARGER_NAME)  # State preserved
 
     async def test_no_tracker_skips_reset(self, real_car, current_time):
         """Car with no tracker → no auto-reset attempted."""
         real_car.car_tracker = None
-        real_car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
 
         await real_car._check_departure_auto_reset(current_time)
         assert real_car._car_not_home_since is None
-        assert real_car.has_user_originated("charger_name")
+        assert real_car.has_user_originated(USER_ORIGINATED_CHARGER_NAME)
 
 
 # ── Integration: Guest-to-Known-Car Transition (Bug #92) ─────────────
@@ -1739,7 +1751,7 @@ class TestGuestToKnownCarTransition:
         real_car.get_continuous_plug_duration = MagicMock(return_value=120.0)
 
         # User manually selects Twingo
-        charger.set_user_originated("car_name", "Twingo")
+        charger.set_user_originated(USER_ORIGINATED_CAR_NAME, "Twingo")
         home.get_car_by_name = MagicMock(return_value=real_car)
 
         best = charger.get_best_car(now)
