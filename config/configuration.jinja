@@ -166,6 +166,14 @@ input_boolean:
 
 template:
   - trigger:
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: "HA last start"
+        unique_id: ha_last_start
+        device_class: timestamp
+        state: {{ "'{{ now().isoformat() }}'" }}
+  - trigger:
       - platform: time_pattern
         seconds: "/15"
       - platform: state
@@ -176,11 +184,17 @@ template:
     binary_sensor:
       - name: "Legrand HomeKit link healthy"
         unique_id: legrand_homekit_link_healthy
-        state: {{ "'{{ (now() - states.input_boolean.legrand_pumpkin.last_changed).total_seconds() < 90 }}'" }}
+        state: >
+          {{ "{% set boot = states('sensor.ha_last_start') %}" }}
+          {{ "{% set warming = boot not in ['unknown', 'unavailable', 'none'] and (now() - as_datetime(boot)).total_seconds() < 120 %}" }}
+          {{ "{{ (not warming) and (now() - states.input_boolean.legrand_pumpkin.last_changed).total_seconds() < 90 }}" }}
         availability: {{ "'{{ states.input_boolean.legrand_pumpkin is not none }}'" }}
       - name: "HomeKit hub healthy"
         unique_id: homekit_hub_healthy
-        state: {{ "'{{ (now() - states.input_boolean.homekit_hub_alive.last_changed).total_seconds() < 90 }}'" }}
+        state: >
+          {{ "{% set boot = states('sensor.ha_last_start') %}" }}
+          {{ "{% set warming = boot not in ['unknown', 'unavailable', 'none'] and (now() - as_datetime(boot)).total_seconds() < 120 %}" }}
+          {{ "{{ (not warming) and (now() - states.input_boolean.homekit_hub_alive.last_changed).total_seconds() < 90 }}" }}
         availability: {{ "'{{ states.input_boolean.homekit_hub_alive is not none }}'" }}
       - name: "Tronity ID Buzz Plugged"
         unique_id: tronity_id_buzz_plugged
@@ -272,10 +286,18 @@ template:
         name: {{ s.name }}
         state: >
           {{ "{% set hk_ok = is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') %}" }}
-          {{ "{% if hk_ok and states('input_boolean." ~ s.slug ~ "_state') in ['on','off'] %}" }}
-            {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
-          {{ "{% elif states('" ~ s.cloud_entity ~ "') in ['on','off'] %}" }}
-            {{ "{{ is_state('" ~ s.cloud_entity ~ "', 'on') }}" }}
+          {{ "{% set mirror = states('input_boolean." ~ s.slug ~ "_state') %}" }}
+          {{ "{% set cloud = states('" ~ s.cloud_entity ~ "') %}" }}
+          {{ "{% set mirror_valid = hk_ok and mirror in ['on','off'] %}" }}
+          {{ "{% set cloud_valid = cloud in ['on','off'] %}" }}
+          {{ "{% if mirror_valid and cloud_valid and mirror != cloud %}" }}
+            {{ "{% set m_t = states['input_boolean." ~ s.slug ~ "_state'].last_changed %}" }}
+            {{ "{% set c_t = states['" ~ s.cloud_entity ~ "'].last_changed %}" }}
+            {{ "{{ (mirror if m_t > c_t else cloud) == 'on' }}" }}
+          {{ "{% elif mirror_valid %}" }}
+            {{ "{{ mirror == 'on' }}" }}
+          {{ "{% elif cloud_valid %}" }}
+            {{ "{{ cloud == 'on' }}" }}
           {{ "{% else %}" }}
             unknown
           {{ "{% endif %}" }}
@@ -292,12 +314,12 @@ template:
                     target:
                       entity_id: input_boolean.{{ s.slug }}_command
                   - wait_template: >-
-                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
+                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') or is_state('" ~ s.cloud_entity ~ "', 'on') }}" }}
                     timeout: "00:00:10"
                     continue_on_timeout: true
                   - choose:
                       - conditions: >-
-                          {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
+                          {{ "{{ not (is_state('input_boolean." ~ s.slug ~ "_state', 'on') or is_state('" ~ s.cloud_entity ~ "', 'on')) }}" }}
                         sequence:
                           - action: persistent_notification.create
                             data:
@@ -324,12 +346,12 @@ template:
                     target:
                       entity_id: input_boolean.{{ s.slug }}_command
                   - wait_template: >-
-                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
+                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'off') or is_state('" ~ s.cloud_entity ~ "', 'off') }}" }}
                     timeout: "00:00:10"
                     continue_on_timeout: true
                   - choose:
                       - conditions: >-
-                          {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
+                          {{ "{{ not (is_state('input_boolean." ~ s.slug ~ "_state', 'off') or is_state('" ~ s.cloud_entity ~ "', 'off')) }}" }}
                         sequence:
                           - action: persistent_notification.create
                             data:
