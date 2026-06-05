@@ -3045,6 +3045,18 @@ class TestGetBestCarEdgeCases:
         assert result is not None
         assert result.name == ch._default_generic_car.name
 
+    def test_user_selected_car_name_not_found_no_crash(self):
+        """Stored car_name marker referencing a car absent from home._cars must not raise."""
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _make_real_car(hass, home)
+        _init_charger_states(ch)
+        ch.set_user_originated(USER_ORIGINATED_CAR_NAME, "GhostCar")
+        result = ch.get_best_car(datetime.now(pytz.UTC))
+        # Stale marker is ignored — falls through to scoring instead of raising
+        assert result is not None
+
     def test_disabled_charger_skipped(self):
         """Line 2366: disabled charger skipped in active charger scan."""
         hass = _make_hass()

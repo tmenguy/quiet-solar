@@ -1103,13 +1103,37 @@ class TestPeriodicContradiction:
         real_car.charger = MagicMock(name="Test Charger")
         real_car.charger.name = "Test Charger"
         real_car.charger.get_user_originated = MagicMock(
-            side_effect=lambda k, *a: real_car.name if k == "car_name" else None
+            side_effect=lambda k, *a: real_car.name if k == USER_ORIGINATED_CAR_NAME else None
         )
         real_car._update_car_api_staleness(current_time)
 
         assert real_car._car_api_stale is True
         assert real_car._car_api_inferred_home is True
         assert real_car._car_api_inferred_plugged is True
+
+    def test_auto_contradiction_no_percent_two_cycles_single_notification(self, real_invited_car, current_time):
+        """Auto contradiction on a non-percent car latches: one notification across cycles, no inferred flags."""
+        car = real_invited_car
+        assert car.can_use_charge_percent_constraints() is False
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in car._car_api_all_sensors:
+            car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        car._entity_probed_last_valid_state[car.car_tracker] = (fresh_time, "not_home", {})
+        car._entity_probed_last_valid_state[car.car_plugged] = (fresh_time, "on", {})
+
+        car.charger = MagicMock(name="Test Charger")
+        car.charger.name = "Test Charger"
+        car.charger.get_user_originated = MagicMock(return_value=None)
+
+        with patch.object(car, "_schedule_person_notification") as mock_notify:
+            car._update_car_api_staleness(current_time)
+            car._update_car_api_staleness(current_time + timedelta(seconds=7))
+
+        assert mock_notify.call_count == 1
+        assert car._car_api_stale is True  # stays latched while the contradiction persists
+        assert car.car_api_stale_percent_mode is False
+        assert car._car_api_inferred_home is False
+        assert car._car_api_inferred_plugged is False
 
     def test_periodic_contradiction_auto_no_markers(self, real_car, current_time):
         """No user markers → auto semantics → stale but inferred flags stay False (AC3)."""

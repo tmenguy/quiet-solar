@@ -2870,7 +2870,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 else:
                     car = self.home.get_car_by_name(self.get_user_originated(USER_ORIGINATED_CAR_NAME))
 
-                if car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED:
+                if car is not None and (
+                    car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED
+                ):
                     car = None
 
                 if car is not None:
@@ -3096,7 +3098,11 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 self._boot_car = self.home.get_car_by_name(old_connected_car_name)
                 if self._boot_car is not None:
-                    self._boot_car._user_originated["charger_name"] = self.name
+                    # Deliberate direct dict write: `set_user_originated()` would trigger
+                    # `_on_user_originated_changed`, which snapshots the car's current
+                    # (boot-time) charge targets into markers and would overwrite the
+                    # persisted user-originated state being restored here
+                    self._boot_car._user_originated[USER_ORIGINATED_CHARGER_NAME] = self.name
         elif self._constraints is not None and len(self._constraints) > 0:
             for ct in self._constraints:
                 old_connected_car_name = ct.load_param
