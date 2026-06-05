@@ -2062,3 +2062,153 @@ class TestUpdateLiveConstraintsLine1295:
         load.last_check_update = t
         result = await load.update_live_constraints(t, timedelta(hours=24))
         assert result is True
+
+
+# =========================================================================
+# QS-256 — suppression hook, drop point, causality anchor, user reset
+# =========================================================================
+
+
+class _ExecRecordingLoad(MinimalTestLoad):
+    """MinimalTestLoad with a controllable probe/execute transport."""
+
+    def __init__(self, probe_result: bool | None = False, exec_result: bool | None = True, **kwargs):
+        super().__init__(**kwargs)
+        self.exec_calls: list[tuple[datetime, LoadCommand]] = []
+        self.probe_result = probe_result
+        self.exec_result = exec_result
+
+    async def probe_if_command_set(self, time, command):
+        return self.probe_result
+
+    async def execute_command(self, time, command):
+        self.exec_calls.append((time, command))
+        return self.exec_result
+
+
+class TestQS256SuppressionHook:
+    def test_default_is_command_suppressed_by_override_is_false(self):
+        device = MinimalTestLoad(name="default_hook")
+        assert device.is_command_suppressed_by_override(_t(0), CMD_ON) is False
+
+    @pytest.mark.asyncio
+    async def test_launch_command_drops_suppressed_command(self):
+        device = _ExecRecordingLoad(name="drop_load")
+        device.is_command_suppressed_by_override = MagicMock(return_value=True)
+        device.current_command = copy_command(CMD_ON, power_consign=100.0)
+        baseline_num_on_off = device.num_on_off
+
+        await device.launch_command(_t(0), copy_command(CMD_ON, power_consign=500.0), ctxt="test drop")
+
+        assert device.exec_calls == []
+        assert device.running_command is None
+        assert device._stacked_command is None
+        assert device.current_command == copy_command(CMD_ON, power_consign=100.0)
+        assert device.num_on_off == baseline_num_on_off
+        assert device.last_command_execution_time is None
+
+    @pytest.mark.asyncio
+    async def test_launch_command_not_suppressed_proceeds(self):
+        device = _ExecRecordingLoad(name="no_drop_load")
+        await device.launch_command(_t(0), CMD_ON, ctxt="test no drop")
+        assert len(device.exec_calls) == 1
+
+
+class TestQS256LastCommandExecutionTime:
+    def test_initialized_to_none(self):
+        device = MinimalTestLoad(name="anchor_init")
+        assert device.last_command_execution_time is None
+
+    @pytest.mark.asyncio
+    async def test_set_on_real_execution_in_launch_command(self):
+        device = _ExecRecordingLoad(name="anchor_exec", probe_result=False, exec_result=True)
+        await device.launch_command(_t(1), CMD_ON, ctxt="test")
+        assert device.last_command_execution_time == _t(1)
+
+    @pytest.mark.asyncio
+    async def test_not_set_on_probe_already_set_branch(self):
+        device = _ExecRecordingLoad(name="anchor_probe", probe_result=True)
+        await device.launch_command(_t(1), CMD_ON, ctxt="test")
+        assert device.exec_calls == []
+        assert device.last_command_execution_time is None
+        # the probe-ack still acked the command
+        assert device.current_command == CMD_ON
+
+    @pytest.mark.asyncio
+    async def test_not_set_when_execution_fails(self):
+        device = _ExecRecordingLoad(name="anchor_fail", probe_result=False, exec_result=False)
+        await device.launch_command(_t(1), CMD_ON, ctxt="test")
+        assert len(device.exec_calls) == 1
+        assert device.last_command_execution_time is None
+
+    @pytest.mark.asyncio
+    async def test_set_on_force_relaunch_execution(self):
+        device = _ExecRecordingLoad(name="anchor_force", probe_result=False, exec_result=True)
+        device.running_command = copy_command(CMD_ON)
+        await device.force_relaunch_command(_t(2))
+        assert len(device.exec_calls) == 1
+        assert device.last_command_execution_time == _t(2)
+
+    @pytest.mark.asyncio
+    async def test_not_set_on_force_relaunch_failure(self):
+        device = _ExecRecordingLoad(name="anchor_force_fail", probe_result=None, exec_result=None)
+        device.running_command = copy_command(CMD_ON)
+        await device.force_relaunch_command(_t(2))
+        assert device.last_command_execution_time is None
+
+    def test_restore_anchor_set_when_current_command_restored(self):
+        device = MinimalTestLoad(name="anchor_restore")
+        device.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": {"command": "on", "power_consign": 1000.0},
+                "last_state_change_time": None,
+                "last_check_update": None,
+            }
+        )
+        assert device.last_command_execution_time is not None
+
+    def test_restore_anchor_not_set_without_current_command(self):
+        device = MinimalTestLoad(name="anchor_no_restore")
+        device.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+            }
+        )
+        assert device.last_command_execution_time is None
+
+
+class TestQS256UserCleanAndReset:
+    @pytest.mark.asyncio
+    async def test_user_clean_and_reset_clears_all_override_fields(self):
+        """AC1: the reset button breaks ANY override loop."""
+        device = _ExecRecordingLoad(name="reset_load", probe_result=True)
+        now = _t(0)
+        device.external_user_initiated_state = "off"
+        device.external_user_initiated_state_time = now
+        device.asked_for_reset_user_initiated_state_time = now
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = now
+        device.last_command_execution_time = now
+        device._constraints = [
+            create_constraint(
+                load=device,
+                start_of_constraint=now,
+                end_of_constraint=now + timedelta(hours=2),
+                target_value=1000.0,
+            )
+        ]
+
+        await device.user_clean_and_reset()
+
+        assert device.external_user_initiated_state is None
+        assert device.external_user_initiated_state_time is None
+        assert device.asked_for_reset_user_initiated_state_time is None
+        assert device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+        assert device.last_command_execution_time is None
+        assert device._constraints == []
+        # CMD_IDLE launched and acked (probe returns True)
+        assert device.current_command is not None
+        assert device.current_command.is_off_or_idle()

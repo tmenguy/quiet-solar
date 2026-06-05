@@ -4,7 +4,7 @@ slug: constraints
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/constraints.py
-last_verified: 2026-05-22
+last_verified: 2026-06-05
 ---
 
 # LoadConstraint
@@ -46,6 +46,11 @@ The five priority tiers (highest first):
    solver picks cheapest fitting slots.
 3. **BEFORE_BATTERY_GREEN** (score 5) — runs before battery switches
    to solar-only mode (typically morning grid arbitrage).
+
+   (Orthogonal to the tiers: `score()` adds a highest-order 1e14 term
+   for any constraint whose `load_info` originator is
+   `user_override`, so override constraints always win allocation
+   ordering and same-end-time cluster dedup — QS-256.)
 4. **FILLER** (score 3) — uses surplus only; never imports from grid.
 5. **FILLER_AUTO** (score 1) — opportunistic; runs whenever any
    surplus exists.
@@ -59,6 +64,12 @@ The five priority tiers (highest first):
   is a battery percentage, not raw kWh.
 - `TimeBasedSimplePowerLoadConstraint` — duration-based (e.g., pool
   pump runs for N hours at fixed power).
+- `TimeBasedHoldOffConstraint` — pins a load to CMD_IDLE for its whole
+  window (QS-256 user OFF-override). Zero power by default, wall-clock
+  progress (`compute_value` accrues unconditionally), trivial
+  repartition (CMD_IDLE commands, zero power, no energy impact), no-op
+  `adapt_repartition`. Met at window end via
+  `always_end_at_end_of_constraint` → acked → override reset.
 - `load_info` dict — `{originator: "user_override" | "agenda" |
   "prediction" | "system"}`. Mandatory metadata.
 

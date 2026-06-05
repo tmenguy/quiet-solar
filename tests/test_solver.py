@@ -2594,3 +2594,105 @@ def test_adapt_repartition_non_auto_exceeds_production_limit():
     assert max_power > max_prod_power, (
         f"Non-auto constraint should exceed production limit ({max_prod_power}W), but max was {max_power}W"
     )
+
+
+# =========================================================================
+# QS-256 — AC9: hold-off constraint solver integration
+# =========================================================================
+
+
+def test_qs256_hold_off_and_chained_daily_constraint_solver_integration():
+    """AC9: a hold-off window allocates zero power / CMD_IDLE, the daily
+    constraint is allocated after the override end (boundary partial slot
+    excepted, AC12/D6), and the solver self-test passes."""
+    from custom_components.quiet_solar.const import (
+        CONSTRAINT_ORIGINATOR_KEY,
+        CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
+    )
+    from custom_components.quiet_solar.home_model.constraints import TimeBasedHoldOffConstraint
+
+    dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, tzinfo=pytz.UTC)
+    start_time = dt
+    end_time = dt + timedelta(days=1)
+    hold_off_end = dt + timedelta(hours=4)
+
+    pump = TestLoad(name="pump")
+
+    hold_off = TimeBasedHoldOffConstraint(
+        time=dt,
+        load=pump,
+        load_param="off",
+        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+        from_user=True,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        start_of_constraint=dt,
+        end_of_constraint=hold_off_end,
+        initial_value=0,
+        target_value=4 * 3600.0,
+    )
+    pump.push_live_constraint(dt, hold_off)
+
+    daily = TimeBasedSimplePowerLoadConstraint(
+        time=dt,
+        load=pump,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        start_of_constraint=hold_off_end + timedelta(seconds=1),
+        end_of_constraint=dt + timedelta(hours=12),
+        initial_value=0,
+        target_value=3 * 3600.0,
+        power=1500.0,
+    )
+    pump.push_live_constraint(dt, daily)
+
+    assert len(pump._constraints) == 2
+
+    pv_forecast = [(dt + timedelta(hours=h), 0) for h in range(24)]
+    ua_forecast = [(dt + timedelta(hours=h), 300) for h in range(24)]
+
+    s = PeriodSolver(
+        start_time=start_time,
+        end_time=end_time,
+        tariffs=0.27 / 1000.0,
+        actionable_loads=[pump],
+        battery=None,
+        pv_forecast=pv_forecast,
+        unavoidable_consumption_forecast=ua_forecast,
+    )
+
+    # self-test raises on energy-accounting mismatch
+    output_cmds, _bcmd = s.solve(with_self_test=True)
+
+    pump_cmds = None
+    for load, commands in output_cmds:
+        if load is pump:
+            pump_cmds = commands
+    assert pump_cmds is not None and len(pump_cmds) > 0
+
+    # rebuild the per-interval command laydown
+    boundary_floor = hold_off_end - timedelta(seconds=SOLVER_STEP_S)
+    on_times = []
+    for cmd_time, cmd in pump_cmds:
+        if cmd.is_off_or_idle():
+            assert cmd.power_consign == 0.0
+        else:
+            on_times.append(cmd_time)
+
+    # the daily 'on' may start at most one partial slot before its window
+    assert on_times, "daily constraint must be allocated"
+    assert min(on_times) >= boundary_floor, (
+        f"ON command at {min(on_times)} violates the hold-off window ending {hold_off_end}"
+    )
+
+    # the hold-off window itself is pinned to idle commands
+    in_window = [cmd for cmd_time, cmd in pump_cmds if cmd_time < boundary_floor]
+    assert all(cmd.is_off_or_idle() for cmd in in_window)
+
+    # enough on-time is allocated to meet the 3h daily target before 12:00
+    last_cmd_time = None
+    last_cmd = None
+    on_seconds = 0.0
+    for cmd_time, cmd in pump_cmds + [(end_time, copy_command(CMD_AUTO_GREEN_CAP))]:
+        if last_cmd is not None and not last_cmd.is_off_or_idle():
+            on_seconds += (cmd_time - last_cmd_time).total_seconds()
+        last_cmd_time, last_cmd = cmd_time, cmd
+    assert on_seconds >= 3 * 3600.0 * 0.9

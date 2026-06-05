@@ -16,7 +16,12 @@ from ..const import (
 )
 from ..ha_model.device import HADeviceMixin
 from ..home_model.commands import CMD_IDLE, LoadCommand
-from ..home_model.constraints import DATETIME_MAX_UTC, LoadConstraint, TimeBasedSimplePowerLoadConstraint
+from ..home_model.constraints import (
+    DATETIME_MAX_UTC,
+    LoadConstraint,
+    TimeBasedHoldOffConstraint,
+    TimeBasedSimplePowerLoadConstraint,
+)
 from ..home_model.load import AbstractLoad
 
 if TYPE_CHECKING:
@@ -29,7 +34,9 @@ bistate_modes = [
 ]
 
 DEFAULT_USER_OVERRIDE_DURATION_S = 4 * 3600
-USER_OVERRIDE_STATE_BACK_DURATION_S = 60
+# QS-256: post-override cooldown before a new override can be classified.
+# Bounded at the check site by half the override window.
+USER_OVERRIDE_STATE_BACK_DURATION_S = 180
 
 ConstraintItemType = namedtuple(
     "ConstraintItem",
@@ -162,6 +169,32 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         HA's Jinja sandbox restricts leading-underscore access.
         """
         return self._state_on
+
+    def use_saved_extra_device_info(self, stored_load_info: dict):
+        """Restore stored info, dropping an already-expired user override.
+
+        QS-256 (AC2): a stored override older than `override_duration` hours
+        at restore time is poison — it would re-arm the override loop after a
+        restart. Documented limitation: at restore time `override_duration`
+        may still hold the config default (the number entity restores later),
+        so expiry can be evaluated against a smaller window — conservative
+        direction (drops early rather than keeping poison).
+        """
+        super().use_saved_extra_device_info(stored_load_info)
+
+        if self.external_user_initiated_state_time is not None:
+            age_s = (datetime.now(pytz.UTC) - self.external_user_initiated_state_time).total_seconds()
+            if age_s > 3600.0 * self.override_duration:
+                _LOGGER.info(
+                    "use_saved_extra_device_info: dropping expired stored user override %s for load %s (age %ss)",
+                    self.external_user_initiated_state,
+                    self.name,
+                    int(age_s),
+                )
+                self.external_user_initiated_state = None
+                self.external_user_initiated_state_time = None
+                self.asked_for_reset_user_initiated_state_time = None
+                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
 
     def _get_today_boundaries(self, time: datetime) -> tuple[datetime, datetime]:
         """Return (start_of_today_utc, start_of_tomorrow_utc) using local midnight."""
@@ -428,22 +461,43 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         else:
             return self._state_on
 
-    def expected_state_from_command_or_user(self, command: LoadCommand):
+    def is_command_suppressed_by_override(self, time: datetime, command: LoadCommand) -> bool:
+        """QS-256 (D1): drop commands that conflict with an active user override.
 
-        if self.external_user_initiated_state is not None:
-            return self.external_user_initiated_state
-        return self.expected_state_from_command(command)
+        Replicates the degraded-override nuance from `execute_command`: when
+        the override constraint is no longer mandatory and the command is
+        off/idle, the command is ALLOWED through.
+        """
+        if self.external_user_initiated_state is None:
+            return False
+
+        ct = self.get_current_active_constraint(time)
+        if ct is not None and ct.load_param is not None and not ct.is_mandatory and command.is_off_or_idle():
+            # the override constraint has been degraded to non-mandatory:
+            # let off/idle commands through (mirrors execute_command)
+            return False
+
+        return self.expected_state_from_command(command) != self.external_user_initiated_state
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
-        """check the states of the switch to see if the command is set"""
+        """Check the states of the switch to see if the command is set.
+
+        QS-256 (D2): truthful probe — answers ONLY "did MY command land".
+        Comparing against the override state here produced phantom acks
+        (a solver `on` during an `off` override was acked without any
+        transport call, corrupting `current_command` and the counters).
+        """
         state = self.hass.states.get(self.bistate_entity)
 
         if state is None or state.state in [STATE_UNKNOWN, STATE_UNAVAILABLE] or state.state is None:
             return None
         else:
-            return state.state == self.expected_state_from_command_or_user(command)
+            return state.state == self.expected_state_from_command(command)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
+        # QS-256 (T5): this override interception block is the defensive
+        # last line of defense for the `force_relaunch_command` path, which
+        # bypasses the `launch_command` drop point — keep it intact.
 
         override_state = self.external_user_initiated_state
         ct = self.get_current_active_constraint(time)
@@ -671,6 +725,27 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             else:
                                 is_command_overridden_state_changed = True
 
+                    # QS-256 (D5): causality guard — a state mismatch is a user
+                    # action only if the entity state is NEWER than the load's
+                    # last real command execution; a stale state (e.g. a lagging
+                    # template-switch mirror after an HA restart) is not
+                    if (
+                        is_command_overridden_state_changed
+                        and self.last_command_execution_time is not None
+                        and state is not None
+                        and state.last_changed is not None
+                        and state.last_changed <= self.last_command_execution_time
+                    ):
+                        _LOGGER.debug(
+                            "check_load_activity_and_constraints: bistate state %s for load %s "
+                            "is older than the last command execution (%s <= %s), not a user action",
+                            current_state,
+                            self.name,
+                            state.last_changed,
+                            self.last_command_execution_time,
+                        )
+                        is_command_overridden_state_changed = False
+
                     if self.asked_for_reset_user_initiated_state_time is not None:
                         if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
                             float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
@@ -744,11 +819,42 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             )  # remove any constraint if any we will add it back if needed below
                             override_constraint = None  # clear stale ref after constraints wiped
 
-                            # we will create a constraint if the asked state is not idle ...
+                            # we will create a constraint whatever the asked state:
+                            # QS-256 (D3): idle overrides push a real hold-off
+                            # constraint so they end through the SAME ack path
+                            # as ON overrides (constraint met → acked →
+                            # reset_override_state_and_set_reset_ask_time)
                             if self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state:
-                                # idle command
                                 do_force_next_solve = True
-                                # all constraint removed above : command_and_constraint_reset
+                                end_schedule = time + timedelta(seconds=(3600.0 * self.override_duration))
+                                if end_schedule <= time:
+                                    # already expired at push time: reset directly (AC8)
+                                    self.reset_override_state_and_set_reset_ask_time(time)
+                                else:
+                                    override_constraint = TimeBasedHoldOffConstraint(
+                                        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                                        time=time,
+                                        load=self,
+                                        load_param=self.external_user_initiated_state,
+                                        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+                                        from_user=True,
+                                        start_of_constraint=time,
+                                        end_of_constraint=end_schedule,
+                                        power=0.0,
+                                        initial_value=0,
+                                        target_value=3600.0 * self.override_duration,
+                                    )
+
+                                    pushed, needs_ack = self.push_live_constraint(time, override_constraint)
+                                    if needs_ack:
+                                        await self.ack_completed_constraint(time, override_constraint)
+                                    if pushed:
+                                        _LOGGER.info(
+                                            "check_load_activity_and_constraints: bistate "
+                                            "load %s pushed user override hold-off constraint",
+                                            self.name,
+                                        )
                             else:
                                 end_schedule = time + timedelta(seconds=(3600.0 * self.override_duration))
                                 override_constraint = TimeBasedSimplePowerLoadConstraint(
@@ -777,6 +883,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                     )
                                     do_force_next_solve = True
 
+                    # QS-256 (D3) precedence: the timer-based anchor below is the
+                    # constraint-LESS fallback (e.g. an idle override restored
+                    # from storage without its hold-off constraint, AC14); when
+                    # an override constraint exists, its end time deliberately
+                    # overwrites this value just after
                     if (
                         self.external_user_initiated_state is not None
                         and self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state

@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-05-21
+last_verified: 2026-06-05
 ---
 
 # User override
@@ -54,6 +54,33 @@ When a user creates an override, the workflow is:
 
 User overrides are still subject to physical limits (amp budgets,
 SOC bounds). They don't trip breakers — they bend the plan.
+
+**Override lifecycle (QS-256).** On bistate loads, BOTH directions of
+an externally-detected override are constraint-driven:
+
+- An override to the ON state pushes a
+  `TimeBasedSimplePowerLoadConstraint`; an override to the idle/OFF
+  state pushes a `TimeBasedHoldOffConstraint` (zero power, CMD_IDLE
+  window). Either way the override ends through the same proven path:
+  the constraint is met at its window end → acked →
+  `ack_completed_constraint`'s USER_OVERRIDE branch calls
+  `reset_override_state_and_set_reset_ask_time()` and arms the
+  post-override cooldown.
+- `LoadConstraint.score()` gives any USER_OVERRIDE-originated
+  constraint a highest-order additive term (1e14) so it always wins
+  allocation ordering and same-end-time cluster dedup.
+- A command that conflicts with an active override is DROPPED at the
+  `launch_command` drop point (`is_command_suppressed_by_override`),
+  never phantom-acked.
+- A state mismatch only classifies as a NEW override when the entity
+  state is newer than `last_command_execution_time` (causality guard)
+  and the 180s post-override cooldown has elapsed.
+- `user_clean_and_reset` clears ALL override fields (state, time,
+  reset-ask time, first-cmd-reset flag) plus the causality anchor —
+  the reset button breaks any override loop.
+- The legacy timer reset stays as fallback for an override without a
+  constraint (e.g. restored from storage); whichever mechanism fires
+  first nulls the fields, making the other a no-op.
 
 ## Key types / structures
 

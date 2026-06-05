@@ -146,6 +146,12 @@ class AbstractDevice:
         self.last_check_update: datetime | None = None
         self.reset_daily_load_datas()
 
+        # QS-256 (D5): causality anchor — the time of the last REAL command
+        # execution (service call). In-memory only, never serialized, no
+        # entity/diagnostic exposure. Used by the user-override detection to
+        # ignore entity states older than the system's own last action.
+        self.last_command_execution_time: datetime | None = None
+
         self._ack_command(None, None)
 
         self.num_max_on_off: str | None | int = kwargs.pop(CONF_NUM_MAX_ON_OFF, None)
@@ -462,6 +468,10 @@ class AbstractDevice:
         cmd_dict = stored_load_info.get("current_command", None)
         if cmd_dict is not None:
             self.current_command = LoadCommand(**cmd_dict)
+            # QS-256 (D5): the restored command is the command of record,
+            # unconfirmed as of the restore moment — anchor the causality
+            # guard at restore time to close the post-restart blind spot
+            self.last_command_execution_time = datetime.now(pytz.UTC)
 
         last_change_str = stored_load_info.get("last_state_change_time", None)
         if last_change_str is not None:
@@ -556,6 +566,17 @@ class AbstractDevice:
                     f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})"
                 )
 
+    def is_command_suppressed_by_override(self, time: datetime, command: LoadCommand) -> bool:
+        """Return True when an active user override must swallow this command.
+
+        QS-256 (D1): command swallowing during an active override is BY
+        DESIGN (don't fight the user) — but a suppressed command must be
+        DROPPED at the `launch_command` drop point, never phantom-acked.
+        Default: no override support, nothing suppressed. Subclasses that
+        track `external_user_initiated_state` override this.
+        """
+        return False
+
     @property
     def effective_command(self) -> LoadCommand | None:
         """Return the best known command, including pending ones not yet acked."""
@@ -595,6 +616,19 @@ class AbstractDevice:
         # there is no running : whatever we will not execute the stacked one but only the last one
         self._stacked_command = None
 
+        # QS-256 (D1): drop point — a command suppressed by an active user
+        # override is DROPPED before `running_command` is set: no ack, no
+        # counters mutation, nothing for check_commands/force_relaunch_command
+        # to resurrect
+        if self.is_command_suppressed_by_override(time, command):
+            _LOGGER.info(
+                "launch_command: command %s suppressed by user override for load %s, ctxt: %s",
+                command,
+                self.name,
+                ctxt,
+            )
+            return
+
         if self.current_command is not None and self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
             self.current_command = command  # needed as command == may have been overcharged to not test everything
@@ -619,6 +653,10 @@ class AbstractDevice:
                     stack_info=True,
                 )
                 is_command_set = None
+            if is_command_set is True:
+                # QS-256 (D5): a REAL execution just happened — anchor the
+                # causality guard (never set on the probe-already-set branch)
+                self.last_command_execution_time = time
 
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
@@ -695,6 +733,9 @@ class AbstractDevice:
                     stack_info=True,
                 )
                 is_command_set = None
+            if is_command_set is True:
+                # QS-256 (D5): real execution — anchor the causality guard
+                self.last_command_execution_time = time
             self.running_command_last_launch = time
             if is_command_set is None:
                 _LOGGER.info(
@@ -1643,6 +1684,15 @@ class AbstractLoad(AbstractDevice):
 
     async def user_clean_and_reset(self):
         await super().user_clean_and_reset()
+        # QS-256 (D7): the reset button must break ANY override loop — clear
+        # ALL override fields (a half-cleared ask-time would leave the UI in
+        # ASKED_FOR_RESET) and the causality anchor, BEFORE launching CMD_IDLE
+        # so the command cannot be suppressed by a stale override
+        self.external_user_initiated_state = None
+        self.external_user_initiated_state_time = None
+        self.asked_for_reset_user_initiated_state_time = None
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        self.last_command_execution_time = None
         time = datetime.now(tz=pytz.UTC)
         _LOGGER.info("user_clean_and_reset: %s", self.name)
         await self.launch_command(time=time, command=CMD_IDLE, ctxt=f"user_clean_and_reset: {self.name}")

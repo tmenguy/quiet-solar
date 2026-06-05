@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-05-21
+last_verified: 2026-06-05
 ---
 
 # AbstractDevice & AbstractLoad
@@ -73,6 +73,18 @@ Switching-cost protection (`AbstractDevice`):
 - `push_agenda_constraints(...)` — calendar / schedule push.
 - `external_user_initiated_state` — set when the device state
   changes without a command quiet-solar sent.
+- `is_command_suppressed_by_override(time, command)` — hook checked at
+  the `launch_command` drop point (after the stacked-command clear,
+  before the same-command early-return): a suppressed command is
+  DROPPED before `running_command` is set — no ack, no counter
+  mutation, nothing for `check_commands` / `force_relaunch_command`
+  to resurrect (QS-256). Default False; bistate loads override it.
+- `last_command_execution_time` — in-memory causality anchor, set
+  only on real `execute_command` successes (in `launch_command` and
+  `force_relaunch_command`, never on the probe-already-set branch) and
+  initialized to "now" at storage restore when a `current_command` is
+  restored. Never serialized. Cleared by `user_clean_and_reset`,
+  which also clears ALL user-override fields (QS-256).
 
 ## Common mistakes
 

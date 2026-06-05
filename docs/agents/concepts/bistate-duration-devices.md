@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-06-01
+last_verified: 2026-06-05
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -102,6 +102,25 @@ the solver picks the cheapest contiguous (or split) windows.
 `QSOnOffDuration`: warmer water → longer filter duration. The
 extension overrides the duration calculation but inherits the rest
 of the on/off behaviour unchanged.
+
+**Override semantics (QS-256):**
+
+- `probe_if_command_set` is truthful — it compares the entity state
+  against `expected_state_from_command(command)` ONLY (the command's
+  expected state, never the override state). Comparing against the
+  override used to phantom-ack solver commands during an override.
+- `is_command_suppressed_by_override` (the `launch_command` drop-point
+  hook) returns True iff an override is active AND the command's
+  expected state differs from it — with the degraded-override nuance:
+  a non-mandatory override constraint lets off/idle commands through,
+  mirroring `execute_command`'s interception block (which stays as the
+  defensive guard for the `force_relaunch_command` path).
+- An override to the idle state pushes a `TimeBasedHoldOffConstraint`
+  (zero power, CMD_IDLE window) so the override ends through the
+  constraint-ack path; if the computed end is already past, the
+  override is reset directly instead.
+- `use_saved_extra_device_info` drops a stored override that is
+  already older than `override_duration` hours at restore time.
 
 ## Key types / structures
 

@@ -12,6 +12,8 @@ import pytz
 
 from ..const import (
     CHANGE_ON_OFF_STATE_HYSTERESIS_S,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
@@ -330,11 +332,23 @@ class LoadConstraint:
         if self.from_user:
             user_score = 1.0
 
+        override_score = 0.0
+        if (
+            self.load_info is not None
+            and self.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+        ):
+            override_score = 1.0
+
         return (
             energy_score
             + energy_score_span * load_score
             + energy_score_span * reserved_load_score_span * type_score
             + energy_score_span * reserved_load_score_span * type_score_span * user_score
+            # QS-256 (D4): user-override constraints always win allocation
+            # ordering and same-end-time cluster dedup. Highest-order term
+            # (== 1e14), 5x margin above the max possible sum of all the
+            # other terms (~2.0001e13: 1e6 + 1e12 + 9e12 + 1e13).
+            + energy_score_span * reserved_load_score_span * type_score_span * type_score_span * override_score
         )
 
     @classmethod
@@ -2672,6 +2686,114 @@ class TimeBasedSimplePowerLoadConstraint(MultiStepsPowerLoadConstraint):
 
     def convert_energy_to_target_value(self, energy: float) -> float:
         return (max(0.0, energy) * 3600.0) / (self._power * self.load.efficiency_factor)
+
+
+class TimeBasedHoldOffConstraint(TimeBasedSimplePowerLoadConstraint):
+    """Pin a load to CMD_IDLE for its whole window (QS-256, user OFF-override).
+
+    Pushed when a user override to the idle state is detected, so the
+    override ends through the SAME proven path as ON overrides:
+    `always_end_at_end_of_constraint` (inherited True from the TimeBased
+    parent) makes the constraint met at window end → it is acked →
+    `ack_completed_constraint`'s USER_OVERRIDE branch resets the override.
+    The solver sees the pinned-off window natively: the repartition is a
+    trivial fixed output of zero-power CMD_IDLE commands.
+
+    Must live in this module so the name-based `new_from_saved_dict`
+    factory resolves it; serialization round-trips via the inherited
+    `to_dict`/`from_dict_to_kwargs` (a zero-consign power step, no new
+    fields).
+    """
+
+    def __init__(self, **kwargs):
+        # default to zero power: the hold-off window consumes nothing
+        if kwargs.get("power_steps") is None and kwargs.get("power") is None:
+            kwargs["power"] = 0.0
+        super().__init__(**kwargs)
+
+    def compute_value(self, time: datetime) -> float | None:
+        """Wall-clock accrual, UNCONDITIONAL.
+
+        The base gates accrual on `current_command not off_or_idle`, but the
+        hold-off window runs on CMD_IDLE — override progress is wall-clock.
+        """
+        return (time - self.last_value_update).total_seconds() + self.current_value
+
+    def compute_best_period_repartition(
+        self,
+        do_use_available_power_only: bool,
+        power_available_power: npt.NDArray[np.float64],
+        power_slots_duration_s: npt.NDArray[np.float64],
+        prices: npt.NDArray[np.float64],
+        prices_ordered_values: list[float],
+        time_slots: list[datetime],
+        additional_available_energy_to_deplete: float = 0.0,
+        max_power_to_deplete: float = 0.0,
+        power_headroom: npt.NDArray[np.float64] | None = None,
+    ) -> tuple[Self, bool, list[LoadCommand | None], npt.NDArray[np.float64], int, int, int, int, float]:
+        """Trivial fixed output: CMD_IDLE over the whole window, zero power."""
+        out_power = np.zeros(len(power_available_power), dtype=np.float64)
+        out_commands: list[LoadCommand | None] = [None] * len(power_available_power)
+
+        first_slot = 0
+        last_slot = len(power_available_power) - 1
+
+        # bisect the window bounds exactly like the base repartition does
+        if self.end_of_constraint != DATETIME_MAX_UTC and self.end_of_constraint <= time_slots[-1]:
+            last_slot = bisect_left(time_slots, self.end_of_constraint)
+            last_slot = max(0, last_slot - 1)
+            if last_slot >= len(power_available_power):
+                last_slot = len(power_available_power) - 1
+
+        if self.current_start_of_constraint != DATETIME_MIN_UTC:
+            first_slot = bisect_left(time_slots, self.current_start_of_constraint)
+            if first_slot > 0 and time_slots[first_slot] > self.current_start_of_constraint:
+                first_slot -= 1
+            if first_slot >= len(power_available_power):
+                first_slot = len(power_available_power) - 1
+
+        for i in range(first_slot, last_slot + 1):
+            out_commands[i] = copy_command(CMD_IDLE)
+
+        out_constraint = self.shallow_copy_for_budget_delta_quantity(0.0)
+
+        # -1/-1 are the base's no-energy-impact sentinels; the depletion
+        # budget is passed through unchanged (nothing is consumed here)
+        return (
+            out_constraint,
+            True,
+            out_commands,
+            out_power,
+            first_slot,
+            last_slot,
+            -1,
+            -1,
+            additional_available_energy_to_deplete,
+        )
+
+    def adapt_repartition(
+        self,
+        first_slot: int,
+        last_slot: int,
+        energy_delta: float,
+        power_slots_duration_s: npt.NDArray[np.float64],
+        existing_commands: list[LoadCommand | None],
+        allow_change_state: bool,
+        time: datetime,
+        allow_no_reclaim: bool = False,
+        time_slots: list[datetime] | None = None,
+        power_headroom: npt.NDArray[np.float64] | None = None,
+        bat_charge_traj: npt.NDArray[np.float64] | None = None,
+        battery_min_wh: float = 0.0,
+    ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
+        """No-op: the hold-off window must never be shaved by `_constraints_delta`.
+
+        Defensive — the constraint is mandatory anyway, so the reclaim path
+        already skips it; this guarantees zero adaptation in every direction.
+        """
+        out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
+        out_delta_power = np.zeros(len(power_slots_duration_s), dtype=np.float64)
+        return (self, False, False, energy_delta, out_commands, out_delta_power)
 
 
 DATETIME_MAX_UTC = datetime.max.replace(tzinfo=pytz.UTC)
