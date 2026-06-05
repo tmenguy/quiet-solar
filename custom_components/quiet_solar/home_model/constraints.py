@@ -38,6 +38,18 @@ from .home_utils import add_amps, is_amps_greater, is_amps_zero
 
 _LOGGER = logging.getLogger(__name__)
 
+# QS-256 (D4): named score spans for `LoadConstraint.score()`. The override
+# offset is the highest-order additive term granted to USER_OVERRIDE
+# constraints: ENERGY * RESERVED * TYPE_SPAN^2 == 1e14, which strictly
+# exceeds the maximum possible sum of all lower-order terms
+# (~2.0001e13: (1e6-1) + 1e12 + 9e12 + 1e13) with a 5x margin. The
+# dominance invariant is asserted from these constants in
+# tests/test_constraints.py.
+ENERGY_SCORE_SPAN = 1000000.0  # 1000 kWh
+RESERVED_LOAD_SCORE_SPAN = 1000000.0
+TYPE_SCORE_SPAN = 10.0
+USER_OVERRIDE_SCORE_OFFSET = ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * TYPE_SCORE_SPAN * TYPE_SCORE_SPAN
+
 
 def get_readable_date_string(time: datetime | None, for_small_standalone: bool = False) -> str:
     if time is None or time == DATETIME_MAX_UTC or time == DATETIME_MIN_UTC:
@@ -317,10 +329,10 @@ class LoadConstraint:
 
     def score(self, time: datetime):
 
-        energy_score_span = 1000000.0  # 1000kwh
-        type_score_span = 10.0
+        energy_score_span = ENERGY_SCORE_SPAN
+        type_score_span = TYPE_SCORE_SPAN
 
-        reserved_load_score_span = 1000000.0
+        reserved_load_score_span = RESERVED_LOAD_SCORE_SPAN
         if self.load is not None:
             load_score = float(self.load.get_normalized_score(ct=self, time=time, score_span=reserved_load_score_span))
 
@@ -345,10 +357,14 @@ class LoadConstraint:
             + energy_score_span * reserved_load_score_span * type_score
             + energy_score_span * reserved_load_score_span * type_score_span * user_score
             # QS-256 (D4): user-override constraints always win allocation
-            # ordering and same-end-time cluster dedup. Highest-order term
-            # (== 1e14), 5x margin above the max possible sum of all the
-            # other terms (~2.0001e13: 1e6 + 1e12 + 9e12 + 1e13).
-            + energy_score_span * reserved_load_score_span * type_score_span * type_score_span * override_score
+            # ordering and same-end-time cluster dedup — see
+            # USER_OVERRIDE_SCORE_OFFSET for the dominance math. A load has at
+            # most ONE live override at a time (detection wipes constraints
+            # before pushing a new override constraint), so two constraints
+            # tying at this term cannot occur by construction; if that
+            # invariant ever broke, dedup would fall back to the lower-order
+            # terms (energy/type/user) like any other tie.
+            + USER_OVERRIDE_SCORE_OFFSET * override_score
         )
 
     @classmethod
@@ -2747,10 +2763,13 @@ class TimeBasedHoldOffConstraint(TimeBasedSimplePowerLoadConstraint):
 
         if self.current_start_of_constraint != DATETIME_MIN_UTC:
             first_slot = bisect_left(time_slots, self.current_start_of_constraint)
-            if first_slot > 0 and time_slots[first_slot] > self.current_start_of_constraint:
-                first_slot -= 1
+            # review fix QS-256#01: clamp BEFORE indexing time_slots — a start
+            # beyond every slot would otherwise raise IndexError (unreachable
+            # in practice since a hold-off starts at "now", but cheap to harden)
             if first_slot >= len(power_available_power):
                 first_slot = len(power_available_power) - 1
+            if first_slot > 0 and time_slots[first_slot] > self.current_start_of_constraint:
+                first_slot -= 1
 
         for i in range(first_slot, last_slot + 1):
             out_commands[i] = copy_command(CMD_IDLE)

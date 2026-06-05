@@ -117,10 +117,14 @@ of the on/off behaviour unchanged.
   defensive guard for the `force_relaunch_command` path).
 - An override to the idle state pushes a `TimeBasedHoldOffConstraint`
   (zero power, CMD_IDLE window) so the override ends through the
-  constraint-ack path; if the computed end is already past, the
-  override is reset directly instead.
+  constraint-ack path; if the computed end is already past (e.g.
+  `override_duration` is 0), the override is reset directly instead —
+  BOTH override directions share this expired-at-push guard.
 - `use_saved_extra_device_info` drops a stored override that is
-  already older than `override_duration` hours at restore time.
+  already older than `override_duration` hours at restore time, and
+  coerces a legacy tz-naive stored timestamp to UTC (the legacy timer
+  check site applies the same coercion) so datetime arithmetic cannot
+  raise.
 
 ## Key types / structures
 

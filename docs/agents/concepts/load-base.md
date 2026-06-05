@@ -80,8 +80,10 @@ Switching-cost protection (`AbstractDevice`):
   mutation, nothing for `check_commands` / `force_relaunch_command`
   to resurrect (QS-256). Default False; bistate loads override it.
 - `last_command_execution_time` — in-memory causality anchor, set
-  only on real `execute_command` successes (in `launch_command` and
-  `force_relaunch_command`, never on the probe-already-set branch) and
+  only on real `execute_command` successes (via the shared
+  `_anchor_causality_guard_if_executed` helper called from
+  `launch_command` and `force_relaunch_command`, never on the
+  probe-already-set branch) and
   initialized to "now" at storage restore when a `current_command` is
   restored. Never serialized. Cleared by `user_clean_and_reset`,
   which also clears ALL user-override fields (QS-256).

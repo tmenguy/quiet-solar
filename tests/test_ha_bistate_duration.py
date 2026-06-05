@@ -1760,3 +1760,36 @@ class TestQS256SuppressionHookBistate:
         # the immediately-met hold-off was acked → override reset right away
         assert device.external_user_initiated_state is None
         assert device.asked_for_reset_user_initiated_state_time == time
+
+    @pytest.mark.asyncio
+    async def test_on_override_expired_at_push_resets_directly(
+        self, hass: HomeAssistant, bistate_check_load_device: ConcreteBiStateDevice
+    ):
+        """Review fix #01: the ON branch mirrors the idle branch's
+        expired-at-push guard — override_duration 0 → direct reset."""
+        device = bistate_check_load_device
+        device.bistate_mode = "bistate_mode_auto"
+        device.is_load_command_set = MagicMock(return_value=True)
+        device.get_next_scheduled_events = AsyncMock(return_value=[])
+        device.external_user_initiated_state = None
+        device.external_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time = None
+        device.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+        device.current_command = CMD_OFF
+        device.running_command = None
+        device.override_duration = 0.0  # degenerate window: end == now
+
+        hass.states.async_set("switch.test_device", "on")
+        time = datetime.datetime.now(pytz.UTC)
+
+        await device.check_load_activity_and_constraints(time)
+
+        assert device.external_user_initiated_state is None
+        assert device.asked_for_reset_user_initiated_state_time == time
+        override_cts = [
+            c
+            for c in device._constraints
+            if c.load_info is not None
+            and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY, "") == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+        ]
+        assert override_cts == []

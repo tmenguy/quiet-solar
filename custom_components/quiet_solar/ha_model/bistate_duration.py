@@ -183,6 +183,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         super().use_saved_extra_device_info(stored_load_info)
 
         if self.external_user_initiated_state_time is not None:
+            # legacy/hand-edited storage may hold a tz-naive isoformat string:
+            # coerce to UTC so datetime arithmetic cannot raise TypeError
+            if self.external_user_initiated_state_time.tzinfo is None:
+                self.external_user_initiated_state_time = self.external_user_initiated_state_time.replace(
+                    tzinfo=pytz.UTC
+                )
             age_s = (datetime.now(pytz.UTC) - self.external_user_initiated_state_time).total_seconds()
             if age_s > 3600.0 * self.override_duration:
                 _LOGGER.info(
@@ -641,6 +647,17 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # - we detect that the current command is not one that has been set by the system
             # - we store this command and state change time
             # if not done we create a constraint,marked as user, with the proper command detected parameter (ex for an HVAC it could be multiple)
+
+            # review fix QS-256#01: a tz-naive timestamp (legacy storage path)
+            # would make the age arithmetic below raise TypeError — coerce once
+            if (
+                self.external_user_initiated_state_time is not None
+                and self.external_user_initiated_state_time.tzinfo is None
+            ):
+                self.external_user_initiated_state_time = self.external_user_initiated_state_time.replace(
+                    tzinfo=pytz.UTC
+                )
+
             if self.external_user_initiated_state_time is not None and (
                 time - self.external_user_initiated_state_time
             ).total_seconds() > (3600.0 * self.override_duration):
@@ -857,31 +874,40 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                         )
                             else:
                                 end_schedule = time + timedelta(seconds=(3600.0 * self.override_duration))
-                                override_constraint = TimeBasedSimplePowerLoadConstraint(
-                                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                                    degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
-                                    time=time,
-                                    load=self,
-                                    load_param=self.external_user_initiated_state,
-                                    load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
-                                    from_user=True,
-                                    start_of_constraint=time,
-                                    end_of_constraint=end_schedule,
-                                    power=self.power_use,
-                                    initial_value=0,
-                                    target_value=3600.0 * self.override_duration,
-                                )
-
-                                pushed, needs_ack = self.push_live_constraint(time, override_constraint)
-                                if needs_ack:
-                                    await self.ack_completed_constraint(time, override_constraint)
-                                if pushed:
-                                    _LOGGER.info(
-                                        "check_load_activity_and_constraints: bistate "
-                                        "load %s pushed user override constraint",
-                                        self.name,
-                                    )
+                                if end_schedule <= time:
+                                    # review fix QS-256#01: mirror the idle
+                                    # branch — already expired at push time
+                                    # (override_duration can be 0): reset
+                                    # directly instead of pushing a
+                                    # zero-length constraint
+                                    self.reset_override_state_and_set_reset_ask_time(time)
                                     do_force_next_solve = True
+                                else:
+                                    override_constraint = TimeBasedSimplePowerLoadConstraint(
+                                        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                                        degraded_type=CONSTRAINT_TYPE_FILLER_AUTO,
+                                        time=time,
+                                        load=self,
+                                        load_param=self.external_user_initiated_state,
+                                        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+                                        from_user=True,
+                                        start_of_constraint=time,
+                                        end_of_constraint=end_schedule,
+                                        power=self.power_use,
+                                        initial_value=0,
+                                        target_value=3600.0 * self.override_duration,
+                                    )
+
+                                    pushed, needs_ack = self.push_live_constraint(time, override_constraint)
+                                    if needs_ack:
+                                        await self.ack_completed_constraint(time, override_constraint)
+                                    if pushed:
+                                        _LOGGER.info(
+                                            "check_load_activity_and_constraints: bistate "
+                                            "load %s pushed user override constraint",
+                                            self.name,
+                                        )
+                                        do_force_next_solve = True
 
                     # QS-256 (D3) precedence: the timer-based anchor below is the
                     # constraint-LESS fallback (e.g. an idle override restored

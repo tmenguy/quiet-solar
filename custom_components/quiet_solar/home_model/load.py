@@ -566,6 +566,16 @@ class AbstractDevice:
                     f"Change load: {self.name} state increment num_on_off:{self.num_on_off} ({command.command})"
                 )
 
+    def _anchor_causality_guard_if_executed(self, is_command_set: bool | None, time: datetime) -> None:
+        """QS-256 (D5): anchor the causality guard after a REAL execution.
+
+        Shared by `launch_command` and `force_relaunch_command` — set ONLY
+        when `execute_command` returned True (never on the probe-already-set
+        branch, never in `_ack_command`).
+        """
+        if is_command_set is True:
+            self.last_command_execution_time = time
+
     def is_command_suppressed_by_override(self, time: datetime, command: LoadCommand) -> bool:
         """Return True when an active user override must swallow this command.
 
@@ -653,10 +663,7 @@ class AbstractDevice:
                     stack_info=True,
                 )
                 is_command_set = None
-            if is_command_set is True:
-                # QS-256 (D5): a REAL execution just happened — anchor the
-                # causality guard (never set on the probe-already-set branch)
-                self.last_command_execution_time = time
+            self._anchor_causality_guard_if_executed(is_command_set, time)
 
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
@@ -733,9 +740,7 @@ class AbstractDevice:
                     stack_info=True,
                 )
                 is_command_set = None
-            if is_command_set is True:
-                # QS-256 (D5): real execution — anchor the causality guard
-                self.last_command_execution_time = time
+            self._anchor_causality_guard_if_executed(is_command_set, time)
             self.running_command_last_launch = time
             if is_command_set is None:
                 _LOGGER.info(

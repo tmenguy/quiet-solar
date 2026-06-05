@@ -2024,3 +2024,55 @@ def test_hold_off_trivial_repartition_window_clamps_and_partial_slot():
         time_slots=time_slots,
     )
     assert result[4] == num_slots - 1  # first_slot clamped
+
+
+def test_qs256_override_score_offset_dominates_all_lower_order_terms():
+    """Review fix #01: dominance invariant computed from the actual span
+    constants — a future change to spans or type caps must trip this."""
+    from custom_components.quiet_solar.home_model.constraints import (
+        ENERGY_SCORE_SPAN,
+        RESERVED_LOAD_SCORE_SPAN,
+        TYPE_SCORE_SPAN,
+        USER_OVERRIDE_SCORE_OFFSET,
+    )
+
+    max_type_score = CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
+    assert max_type_score < TYPE_SCORE_SPAN, "type scores must stay below TYPE_SCORE_SPAN"
+
+    max_lower_order_sum = (
+        (ENERGY_SCORE_SPAN - 1)
+        + ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN
+        + ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * max_type_score
+        + ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * TYPE_SCORE_SPAN * 1.0
+    )
+
+    assert USER_OVERRIDE_SCORE_OFFSET > max_lower_order_sum
+    assert USER_OVERRIDE_SCORE_OFFSET == (
+        ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * TYPE_SCORE_SPAN * TYPE_SCORE_SPAN
+    )
+
+
+def test_hold_off_repartition_start_beyond_every_slot_does_not_raise():
+    """Review fix #01: defensive first_slot clamp before time_slots indexing."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    num_slots = 4
+    time_slots = [time + timedelta(seconds=SOLVER_STEP_S * i) for i in range(num_slots)]
+    power_available = np.zeros(num_slots, dtype=np.float64)
+    durations = np.full(num_slots, float(SOLVER_STEP_S), dtype=np.float64)
+    prices = np.full(num_slots, 0.2 / 1000.0, dtype=np.float64)
+
+    ct = _make_hold_off(time=time)
+    # start strictly beyond EVERY slot anchor → bisect_left == len(time_slots)
+    ct.current_start_of_constraint = time_slots[-1] + timedelta(seconds=SOLVER_STEP_S * 5)
+    ct.end_of_constraint = ct.current_start_of_constraint + timedelta(hours=2)
+
+    result = ct.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=power_available,
+        power_slots_duration_s=durations,
+        prices=prices,
+        prices_ordered_values=[0.2 / 1000.0],
+        time_slots=time_slots,
+    )
+
+    assert result[4] == num_slots - 1  # clamped, no IndexError

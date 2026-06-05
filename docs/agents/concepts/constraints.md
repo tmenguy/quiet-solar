@@ -47,10 +47,14 @@ The five priority tiers (highest first):
 3. **BEFORE_BATTERY_GREEN** (score 5) — runs before battery switches
    to solar-only mode (typically morning grid arbitrage).
 
-   (Orthogonal to the tiers: `score()` adds a highest-order 1e14 term
-   for any constraint whose `load_info` originator is
-   `user_override`, so override constraints always win allocation
-   ordering and same-end-time cluster dedup — QS-256.)
+   (Orthogonal to the tiers: `score()` adds
+   `USER_OVERRIDE_SCORE_OFFSET` — a highest-order 1e14 term built from
+   the module-level span constants `ENERGY_SCORE_SPAN` /
+   `RESERVED_LOAD_SCORE_SPAN` / `TYPE_SCORE_SPAN` — for any constraint
+   whose `load_info` originator is `user_override`, so override
+   constraints always win allocation ordering and same-end-time
+   cluster dedup. A load has at most one live override at a time, so
+   ties at this term cannot occur by construction — QS-256.)
 4. **FILLER** (score 3) — uses surplus only; never imports from grid.
 5. **FILLER_AUTO** (score 1) — opportunistic; runs whenever any
    surplus exists.

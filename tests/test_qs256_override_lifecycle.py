@@ -561,3 +561,70 @@ async def test_ac14_both_mechanisms_armed_converge_whichever_fires_first():
             assert pump.external_user_initiated_state is None, f"timer_first={timer_first}"
             assert pump.external_user_initiated_state_time is None, f"timer_first={timer_first}"
             assert _override_constraints(pump) == [], f"timer_first={timer_first}"
+
+
+# =========================================================================
+# Review fix #01 — naive-datetime storage tolerance (finding 1)
+# =========================================================================
+
+
+async def test_fix01_naive_expired_stored_override_dropped_without_crash(caplog):
+    """A legacy tz-naive stored timestamp must not abort the restore."""
+    caplog.set_level(logging.INFO, logger="custom_components.quiet_solar.ha_model.bistate_duration")
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        naive_stale = (RESTART_TIME - timedelta(hours=9)).replace(tzinfo=None)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "external_user_initiated_state": "off",
+                "external_user_initiated_state_time": naive_stale.isoformat(),
+            }
+        )
+
+        assert pump.external_user_initiated_state is None
+        assert pump.external_user_initiated_state_time is None
+        assert any("expired" in rec.getMessage() for rec in caplog.records)
+
+
+async def test_fix01_naive_valid_stored_override_kept_and_normalized():
+    """A still-valid naive stored override is kept, coerced to tz-aware UTC."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        naive_valid = (RESTART_TIME - timedelta(hours=1)).replace(tzinfo=None)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "external_user_initiated_state": "off",
+                "external_user_initiated_state_time": naive_valid.isoformat(),
+            }
+        )
+
+        assert pump.external_user_initiated_state == "off"
+        assert pump.external_user_initiated_state_time is not None
+        assert pump.external_user_initiated_state_time.tzinfo is not None
+        assert pump.external_user_initiated_state_time == RESTART_TIME - timedelta(hours=1)
+
+
+async def test_fix01_naive_override_time_at_check_site_does_not_crash():
+    """The legacy timer check coerces a naive timestamp instead of raising."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        pump.current_command = LoadCommand(command="idle", power_consign=0.0)
+        pump.external_user_initiated_state = "off"
+        # naive timestamp injected straight onto the field (legacy storage path)
+        pump.external_user_initiated_state_time = (RESTART_TIME - timedelta(hours=9)).replace(tzinfo=None)
+        pump.hass.states.set(PUMP_ENTITY, "off", last_changed=RESTART_TIME)
+
+        force_solve = await pump.check_load_activity_and_constraints(RESTART_TIME)
+
+        # expired override reset via the legacy timer path, no TypeError
+        assert force_solve is True
+        assert pump.external_user_initiated_state is None
+        assert pump.external_user_initiated_state_time is None
