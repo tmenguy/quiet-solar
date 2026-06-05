@@ -778,3 +778,91 @@ async def test_fix02_last_changed_none_with_anchor_suppresses_classification():
         await pump.check_load_activity_and_constraints(RESTART_TIME + timedelta(minutes=2))
 
         assert pump.external_user_initiated_state is None
+
+
+# =========================================================================
+# Review fix #03 — orphan override state, future-dated reset-ask time
+# =========================================================================
+
+
+async def test_fix03_stored_override_state_without_timestamp_is_dropped(caplog):
+    """F1: an override state restored WITHOUT its timestamp is poison —
+    nothing could ever expire it — so it is dropped at restore."""
+    caplog.set_level(logging.INFO, logger="custom_components.quiet_solar.ha_model.bistate_duration")
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "external_user_initiated_state": "off",
+                # NO external_user_initiated_state_time key at all
+            }
+        )
+
+        assert pump.external_user_initiated_state is None
+        assert pump.external_user_initiated_state_time is None
+        assert pump.asked_for_reset_user_initiated_state_time is None
+        assert pump.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+        assert any("without timestamp" in rec.getMessage() for rec in caplog.records)
+
+
+async def test_fix03_in_memory_orphan_override_state_does_not_crash_check():
+    """F1 belt-and-braces: an in-memory override state with a None timestamp
+    must not crash the idle-override timer fallback in
+    check_load_activity_and_constraints."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        pump.current_command = LoadCommand(command="idle", power_consign=0.0)
+        # orphan combination injected straight onto the fields
+        pump.external_user_initiated_state = "off"
+        pump.external_user_initiated_state_time = None
+        # entity already in the override state → the "still same override"
+        # branch never re-stamps the timestamp
+        pump.hass.states.set(PUMP_ENTITY, "off", last_changed=RESTART_TIME)
+
+        result = await pump.check_load_activity_and_constraints(RESTART_TIME + timedelta(minutes=1))
+
+        # no TypeError; the orphan override stays inert
+        assert isinstance(result, bool)
+        assert pump.external_user_initiated_state == "off"
+
+
+async def test_fix03_future_dated_reset_ask_time_is_dropped_at_restore(caplog):
+    """F2: a future-dated reset-ask timestamp would keep the cooldown
+    permanently active — dropped at restore like the override timestamp."""
+    caplog.set_level(logging.INFO, logger="custom_components.quiet_solar.ha_model.bistate_duration")
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "asked_for_reset_user_initiated_state_time": (RESTART_TIME + timedelta(hours=1)).isoformat(),
+            }
+        )
+
+        assert pump.asked_for_reset_user_initiated_state_time is None
+        assert any("future-dated" in rec.getMessage() for rec in caplog.records)
+
+
+async def test_fix03_small_skew_in_reset_ask_time_is_tolerated():
+    """F2: a small (< 60s) future skew in the reset-ask time is kept."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        slight_future = RESTART_TIME + timedelta(seconds=30)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "asked_for_reset_user_initiated_state_time": slight_future.isoformat(),
+            }
+        )
+
+        assert pump.asked_for_reset_user_initiated_state_time == slight_future

@@ -355,8 +355,13 @@ class LoadConstraint:
             # tie-break — the NEWER override wins an otherwise exact score
             # tie (e.g. a stale restored hold-off vs a freshly detected
             # override). Bounded in (0, 0.5], strictly below the 1.0
-            # energy-score granularity, so it can only decide exact ties and
-            # never perturbs non-tie ordering.
+            # energy-score granularity (energy scores are int-floored, so a
+            # sub-Wh energy difference between two overrides — an impossible
+            # state by construction — collapses to a tie and is INTENTIONALLY
+            # recency-broken, review fix #03). Scope: this guarantee applies
+            # to score comparisons (cluster dedup in `set_live_constraints`,
+            # solver allocation ordering); `push_live_constraint`'s
+            # same-end-time branch keeps its generic last-pushed-wins rule.
             if self.start_of_constraint != DATETIME_MIN_UTC:
                 age_s = max(0.0, (time - self.start_of_constraint).total_seconds())
                 override_recency_score = 1.0 / (2.0 + age_s)

@@ -742,6 +742,10 @@ class AbstractDevice:
                 self.running_command_num_relaunch_after_invalid = 0
                 self.running_command_first_launch = None
                 self.running_command_last_launch = None
+                # `current_command` is intentionally PRESERVED: it is the last
+                # acked command of record, and a later non-suppressed launch
+                # (e.g. after the override ends) must still be able to compare
+                # against it — only the stale in-flight command is dropped
                 return
 
             _LOGGER.info(

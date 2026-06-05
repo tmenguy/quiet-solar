@@ -127,7 +127,10 @@ of the on/off behaviour unchanged.
   BOTH override directions share this expired-at-push guard.
 - `use_saved_extra_device_info` drops a stored override that is
   already older than `override_duration` hours at restore time — or
-  clearly future-dated (> 60s ahead, clock-skew poison). Stored
+  clearly future-dated (> 60s ahead, clock-skew poison), or missing
+  its timestamp entirely (orphan state nothing could ever expire). A
+  future-dated reset-ask timestamp is dropped the same way (it would
+  keep the post-override cooldown permanently active). Stored
   override timestamps are coerced tz-naive → UTC at the restore
   boundary (`AbstractLoad._restored_utc_datetime`); the cooldown check
   site coerces defensively too.

@@ -2146,3 +2146,34 @@ def test_qs256_override_without_start_gets_zero_recency():
     with_start.end_of_constraint = end
 
     assert with_start.score(time) > no_start.score(time)
+
+
+def test_qs256_sub_wh_energy_difference_between_overrides_is_recency_broken():
+    """Review fix #03: energy scores are int-floored, so a sub-Wh energy
+    difference between two overrides collapses to a tie — intentionally
+    decided by the recency term (newer wins). Coexistence of two overrides
+    is impossible by construction; this pins the documented behavior."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=2)
+
+    def _override(start, energy_wh):
+        return MultiStepsPowerLoadConstraint(
+            time=time,
+            load=load,
+            load_param="on",
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            from_user=True,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            start_of_constraint=start,
+            end_of_constraint=end,
+            initial_value=0,
+            target_value=float(energy_wh),
+            power_steps=[LoadCommand(command="on", power_consign=1000.0)],
+        )
+
+    older_slightly_more_energy = _override(time - timedelta(hours=4), 100.6)
+    newer_slightly_less_energy = _override(time, 100.4)
+
+    # int-floored energy scores tie (both 100) → recency decides: newer wins
+    assert newer_slightly_less_energy.score(time) > older_slightly_more_energy.score(time)

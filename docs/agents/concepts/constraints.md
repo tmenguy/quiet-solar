@@ -56,7 +56,11 @@ The five priority tiers (highest first):
    cluster dedup. A load has at most one live override at a time by
    construction; should that ever break, a recency tie-break — bounded
    in (0, 0.5], below the 1.0 energy-score granularity — makes the
-   NEWER override win an otherwise exact score tie — QS-256.)
+   NEWER override win an otherwise exact score tie. The tie-break is
+   scoped to score comparisons (cluster dedup in
+   `set_live_constraints`, solver allocation ordering);
+   `push_live_constraint`'s same-end-time branch keeps its generic
+   last-pushed-wins rule — QS-256.)
 4. **FILLER** (score 3) — uses surplus only; never imports from grid.
 5. **FILLER_AUTO** (score 1) — opportunistic; runs whenever any
    surplus exists.

@@ -182,6 +182,34 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         """
         super().use_saved_extra_device_info(stored_load_info)
 
+        # review fix QS-256#03: an override state restored WITHOUT its
+        # timestamp is poison — no guard could ever expire it (they all
+        # short-circuit on the timestamp) and the timer fallback would
+        # dereference None. Drop the whole override, mirroring the AC2 reset.
+        if self.external_user_initiated_state is not None and self.external_user_initiated_state_time is None:
+            _LOGGER.info(
+                "use_saved_extra_device_info: dropping stored user override %s without timestamp for load %s",
+                self.external_user_initiated_state,
+                self.name,
+            )
+            self.external_user_initiated_state = None
+            self.asked_for_reset_user_initiated_state_time = None
+            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+
+        # review fix QS-256#03: a future-dated reset-ask timestamp keeps the
+        # post-override cooldown permanently active (negative age is always
+        # below the cooldown window) — same future-dated drop as the override
+        # timestamp, with the same 60s skew tolerance
+        if self.asked_for_reset_user_initiated_state_time is not None:
+            ask_age_s = (datetime.now(pytz.UTC) - self.asked_for_reset_user_initiated_state_time).total_seconds()
+            if ask_age_s < -60.0:
+                _LOGGER.info(
+                    "use_saved_extra_device_info: dropping future-dated stored reset-ask time for load %s (age %ss)",
+                    self.name,
+                    int(ask_age_s),
+                )
+                self.asked_for_reset_user_initiated_state_time = None
+
         if self.external_user_initiated_state_time is not None:
             # tz-awareness is guaranteed by the restore boundary
             # (`AbstractLoad._restored_utc_datetime`, review fix QS-256#02)
@@ -792,6 +820,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 self.name,
                             )
                             is_command_overridden_state_changed = False
+                        # Documented tradeoff (see `last_command_execution_time`
+                        # in load.py): storage restore anchors the guard at
+                        # "now", so a genuine user action whose last_changed is
+                        # at/just before restore is suppressed for one cycle —
+                        # do NOT "fix" this by loosening the <= comparison
                         elif state_last_changed <= self.last_command_execution_time:
                             _LOGGER.debug(
                                 "check_load_activity_and_constraints: bistate state %s for load %s "
@@ -962,6 +995,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     # overwrites this value just after
                     if (
                         self.external_user_initiated_state is not None
+                        # review fix QS-256#03: belt-and-braces — an orphan
+                        # override state (timestamp None, normally dropped at
+                        # restore) must not crash the timer fallback
+                        and self.external_user_initiated_state_time is not None
                         and self.expected_state_from_command(CMD_IDLE) == self.external_user_initiated_state
                     ):
                         do_push_constraint_after = self.external_user_initiated_state_time + timedelta(
