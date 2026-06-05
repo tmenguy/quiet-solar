@@ -2235,3 +2235,60 @@ def test_qs256_future_dated_override_start_clamps_to_max_recency():
 
     # both clamp to age 0 → identical scores, no exception
     assert future_start.score(time) == just_started.score(time)
+
+
+def test_qs256_score_with_no_load_returns_zero_load_baseline():
+    """Review fix #05: a load-less constraint must score without raising —
+    the load-dependent terms (load score, energy score via the load's
+    efficiency factor) fall back to a zero-load baseline."""
+    from custom_components.quiet_solar.home_model.constraints import (
+        ENERGY_SCORE_SPAN,
+        RESERVED_LOAD_SCORE_SPAN,
+    )
+
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    ct = LoadConstraint(
+        time=time,
+        load=None,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        end_of_constraint=time + timedelta(hours=2),
+        initial_value=0,
+        target_value=100.0,
+    )
+
+    # no UnboundLocalError / AttributeError: only the type term remains
+    assert ct.score(time) == ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * CONSTRAINT_TYPE_MANDATORY_END_TIME
+
+
+def test_qs256_loadless_override_constraint_still_dominates():
+    """Review fix #05: the override dominance invariant holds with the
+    zero-load baseline (load_score == 0, energy_score == 0)."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+
+    loadless_override = LoadConstraint(
+        time=time,
+        load=None,
+        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+        from_user=False,
+        type=CONSTRAINT_TYPE_FILLER_AUTO,
+        end_of_constraint=time + timedelta(hours=2),
+        initial_value=0,
+        target_value=0.0,
+    )
+
+    class _MaxScoreLoad2(_FakeLoad):
+        def get_normalized_score(self, ct, time: datetime, score_span: float) -> float:
+            return float(score_span)
+
+    best_non_override = MultiStepsPowerLoadConstraint(
+        time=time,
+        load=_MaxScoreLoad2(),
+        from_user=True,
+        type=CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
+        end_of_constraint=time + timedelta(hours=4),
+        initial_value=0,
+        target_value=2_000_000.0,
+        power_steps=[LoadCommand(command="on", power_consign=10000.0)],
+    )
+
+    assert loadless_override.score(time) > best_non_override.score(time)

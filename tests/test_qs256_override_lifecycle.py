@@ -36,6 +36,14 @@ from custom_components.quiet_solar.const import (
     CONF_SWITCH,
     CONSTRAINT_ORIGINATOR_KEY,
     CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
+    STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE,
+    STORAGE_KEY_ASKED_FOR_RESET_TIME,
+    STORAGE_KEY_CURRENT_COMMAND,
+    STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE,
+    STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME,
+    STORAGE_KEY_LAST_CHECK_UPDATE,
+    STORAGE_KEY_LAST_STATE_CHANGE_TIME,
+    STORAGE_KEY_NUM_ON_OFF,
 )
 from custom_components.quiet_solar.ha_model.bistate_duration import QSBiStateDuration
 from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_ON, LoadCommand
@@ -140,10 +148,10 @@ async def test_ac13_flagship_june_4_5_replay():
         # --- (a) restart: restored current_command + stale facade -------
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": {"command": "idle", "power_consign": 0.0},
-                "last_state_change_time": None,
-                "last_check_update": None,
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: {"command": "idle", "power_consign": 0.0},
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
             }
         )
         restore_anchor = pump.last_command_execution_time
@@ -345,14 +353,14 @@ async def test_ac2_expired_stored_override_is_dropped_at_restore(caplog):
         stale_time = RESTART_TIME - timedelta(hours=9)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
-                "external_user_initiated_state_time": stale_time.isoformat(),
-                "asked_for_reset_user_initiated_state_time": None,
-                "asked_for_reset_user_initiated_state_time_first_cmd_reset_done": None,
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME: stale_time.isoformat(),
+                STORAGE_KEY_ASKED_FOR_RESET_TIME: None,
+                STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE: None,
             }
         )
 
@@ -369,12 +377,12 @@ async def test_ac2_still_valid_stored_override_is_kept():
         valid_time = RESTART_TIME - timedelta(hours=1)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
-                "external_user_initiated_state_time": valid_time.isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME: valid_time.isoformat(),
             }
         )
 
@@ -389,10 +397,10 @@ async def test_ac2_restored_command_sets_causality_anchor():
         pump = _make_pump()
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": {"command": "on", "power_consign": 1259.0},
-                "last_state_change_time": None,
-                "last_check_update": None,
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: {"command": "on", "power_consign": 1259.0},
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
             }
         )
         assert pump.last_command_execution_time == RESTART_TIME
@@ -512,12 +520,12 @@ async def test_ac14_override_without_constraint_expires_via_legacy_timer():
         # restored from storage: override valid at restore, no constraint
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": {"command": "idle", "power_consign": 0.0},
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
-                "external_user_initiated_state_time": (RESTART_TIME - timedelta(hours=1)).isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: {"command": "idle", "power_consign": 0.0},
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME: (RESTART_TIME - timedelta(hours=1)).isoformat(),
             }
         )
         assert pump.external_user_initiated_state == "off"
@@ -576,12 +584,12 @@ async def test_fix01_naive_expired_stored_override_dropped_without_crash(caplog)
         naive_stale = (RESTART_TIME - timedelta(hours=9)).replace(tzinfo=None)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
-                "external_user_initiated_state_time": naive_stale.isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME: naive_stale.isoformat(),
             }
         )
 
@@ -597,12 +605,12 @@ async def test_fix01_naive_valid_stored_override_kept_and_normalized():
         naive_valid = (RESTART_TIME - timedelta(hours=1)).replace(tzinfo=None)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
-                "external_user_initiated_state_time": naive_valid.isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME: naive_valid.isoformat(),
             }
         )
 
@@ -642,11 +650,11 @@ async def test_fix02_naive_asked_for_reset_time_restored_is_coerced():
         naive_ask = (RESTART_TIME - timedelta(seconds=30)).replace(tzinfo=None)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "asked_for_reset_user_initiated_state_time": naive_ask.isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_ASKED_FOR_RESET_TIME: naive_ask.isoformat(),
             }
         )
         assert pump.asked_for_reset_user_initiated_state_time is not None
@@ -730,12 +738,12 @@ async def test_fix02_future_dated_stored_override_is_dropped(caplog):
         future_time = RESTART_TIME + timedelta(hours=1)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
-                "external_user_initiated_state_time": future_time.isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME: future_time.isoformat(),
             }
         )
 
@@ -752,12 +760,12 @@ async def test_fix02_small_clock_skew_in_stored_override_is_tolerated():
         slight_future = RESTART_TIME + timedelta(seconds=30)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
-                "external_user_initiated_state_time": slight_future.isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME: slight_future.isoformat(),
             }
         )
 
@@ -793,11 +801,11 @@ async def test_fix03_stored_override_state_without_timestamp_is_dropped(caplog):
         pump = _make_pump(override_duration_h=8.0)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "external_user_initiated_state": "off",
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE: "off",
                 # NO external_user_initiated_state_time key at all
             }
         )
@@ -838,11 +846,11 @@ async def test_fix03_future_dated_reset_ask_time_is_dropped_at_restore(caplog):
         pump = _make_pump(override_duration_h=8.0)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "asked_for_reset_user_initiated_state_time": (RESTART_TIME + timedelta(hours=1)).isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_ASKED_FOR_RESET_TIME: (RESTART_TIME + timedelta(hours=1)).isoformat(),
             }
         )
 
@@ -857,11 +865,11 @@ async def test_fix03_small_skew_in_reset_ask_time_is_tolerated():
         slight_future = RESTART_TIME + timedelta(seconds=30)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": None,
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "asked_for_reset_user_initiated_state_time": slight_future.isoformat(),
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: None,
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_ASKED_FOR_RESET_TIME: slight_future.isoformat(),
             }
         )
 
@@ -881,12 +889,12 @@ async def test_fix04_future_dated_reset_ask_drop_also_clears_first_cmd_reset_fla
         pump = _make_pump(override_duration_h=8.0)
         pump.use_saved_extra_device_info(
             {
-                "num_on_off": 0,
-                "current_command": {"command": "idle", "power_consign": 0.0},
-                "last_state_change_time": None,
-                "last_check_update": None,
-                "asked_for_reset_user_initiated_state_time": (RESTART_TIME + timedelta(hours=1)).isoformat(),
-                "asked_for_reset_user_initiated_state_time_first_cmd_reset_done": (
+                STORAGE_KEY_NUM_ON_OFF: 0,
+                STORAGE_KEY_CURRENT_COMMAND: {"command": "idle", "power_consign": 0.0},
+                STORAGE_KEY_LAST_STATE_CHANGE_TIME: None,
+                STORAGE_KEY_LAST_CHECK_UPDATE: None,
+                STORAGE_KEY_ASKED_FOR_RESET_TIME: (RESTART_TIME + timedelta(hours=1)).isoformat(),
+                STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE: (
                     RESTART_TIME + timedelta(hours=1)
                 ).isoformat(),
             }

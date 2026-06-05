@@ -88,7 +88,9 @@ Switching-cost protection (`AbstractDevice`):
 - `_restored_utc_datetime(value)` — restore-boundary parser for the
   stored override timestamps: tz-naive isoformat strings (legacy /
   hand-edited storage) are coerced to UTC so downstream datetime
-  arithmetic never raises (review fix QS-256#02).
+  arithmetic never raises (review fix QS-256#02). The persisted payload
+  keys themselves are the `STORAGE_KEY_*` constants in `const.py`
+  (review fix QS-256#05).
 - `last_command_execution_time` — in-memory causality anchor, set
   only on real `execute_command` successes (via the shared
   `_anchor_causality_guard_if_executed` helper called from

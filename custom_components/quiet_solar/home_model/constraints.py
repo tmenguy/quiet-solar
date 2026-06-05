@@ -333,12 +333,17 @@ class LoadConstraint:
         type_score_span = TYPE_SCORE_SPAN
 
         reserved_load_score_span = RESERVED_LOAD_SCORE_SPAN
+        # review fix QS-256#05: zero-load baseline — both load-dependent
+        # terms (the load score and the energy score, which needs the load's
+        # efficiency factor) fall back to 0.0 for a load-less constraint
+        # instead of raising UnboundLocalError / AttributeError
+        load_score = 0.0
+        energy_score = 0.0
         if self.load is not None:
             load_score = float(self.load.get_normalized_score(ct=self, time=time, score_span=reserved_load_score_span))
-
-        energy_score = float(
-            min(max(0, int(self.convert_target_value_to_energy(self.target_value))), int(energy_score_span) - 1)
-        )
+            energy_score = float(
+                min(max(0, int(self.convert_target_value_to_energy(self.target_value))), int(energy_score_span) - 1)
+            )
         type_score = self.type
         user_score = 0.0
         if self.from_user:

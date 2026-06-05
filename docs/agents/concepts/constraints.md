@@ -47,7 +47,9 @@ The five priority tiers (highest first):
 3. **BEFORE_BATTERY_GREEN** (score 5) — runs before battery switches
    to solar-only mode (typically morning grid arbitrage).
 
-   (Orthogonal to the tiers: `score()` adds
+   (`score()` falls back to a zero-load baseline — load and energy
+   terms 0.0 — for a load-less constraint instead of raising, review
+   fix QS-256#05. Orthogonal to the tiers: `score()` adds
    `USER_OVERRIDE_SCORE_OFFSET` — a highest-order 1e14 term built from
    the module-level span constants `ENERGY_SCORE_SPAN` /
    `RESERVED_LOAD_SCORE_SPAN` / `TYPE_SCORE_SPAN` — for any constraint

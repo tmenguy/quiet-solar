@@ -198,6 +198,10 @@ key instead of the localised "Dashboard section" label.
 - `create_device_from_type()` — the per-type construction switch.
 - `CONF_*` constants in `const.py` — the only place config keys
   exist.
+- `STORAGE_KEY_*` constants in `const.py` — the persisted per-device
+  storage payload keys (read/written by `home_model/load.py`'s
+  save/restore methods). Part of the on-disk format: never change the
+  values without a storage migration (QS-256).
 
 ## Lifecycle
 

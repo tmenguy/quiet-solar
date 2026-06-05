@@ -54,6 +54,15 @@ class FakeConfigEntry:
 
 # Deterministic default for FakeState.last_changed so causality-guard
 # tests (QS-256) get a stable anchor without freezegun coupling.
+#
+# TEST-AUTHOR NOTE (review fix QS-256#05): this default is a fixed PAST
+# date. The QS-256 causality guard suppresses override classification when
+# `state.last_changed <= load.last_command_execution_time` — so a test that
+# sets `last_command_execution_time` (directly or by restoring a
+# `current_command` from storage) and relies on this default will silently
+# observe "no override detected". When a test must classify a user override,
+# pass an explicit `last_changed` NEWER than the load's
+# `last_command_execution_time` to `FakeStates.set(...)`.
 FAKE_STATE_DEFAULT_LAST_CHANGED = datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
 
 

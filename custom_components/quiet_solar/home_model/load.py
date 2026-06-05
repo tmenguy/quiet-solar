@@ -31,6 +31,15 @@ from ..const import (
     OVERRIDE_STATE_ASKED_FOR_RESET,
     OVERRIDE_STATE_NO_OVERRIDE,
     OVERRIDE_STATE_PREFIX,
+    STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE,
+    STORAGE_KEY_ASKED_FOR_RESET_TIME,
+    STORAGE_KEY_CURRENT_COMMAND,
+    STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE,
+    STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME,
+    STORAGE_KEY_LAST_CHECK_UPDATE,
+    STORAGE_KEY_LAST_STATE_CHANGE_TIME,
+    STORAGE_KEY_NUM_ON_OFF,
+    STORAGE_KEY_USER_ORIGINATED,
 )
 from .commands import CMD_IDLE, LoadCommand, copy_command
 from .constraints import DATETIME_MAX_UTC, DATETIME_MIN_UTC, LoadConstraint
@@ -443,19 +452,21 @@ class AbstractDevice:
         return 100.0 / self.efficiency
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
-        data_to_update["num_on_off"] = self.num_on_off
-        data_to_update["current_command"] = self.current_command.to_dict() if self.current_command is not None else None
-        data_to_update["last_state_change_time"] = (
+        data_to_update[STORAGE_KEY_NUM_ON_OFF] = self.num_on_off
+        data_to_update[STORAGE_KEY_CURRENT_COMMAND] = (
+            self.current_command.to_dict() if self.current_command is not None else None
+        )
+        data_to_update[STORAGE_KEY_LAST_STATE_CHANGE_TIME] = (
             self.last_state_change_time.isoformat() if self.last_state_change_time is not None else None
         )
-        data_to_update["last_check_update"] = (
+        data_to_update[STORAGE_KEY_LAST_CHECK_UPDATE] = (
             self.last_check_update.isoformat() if self.last_check_update is not None else None
         )
-        data_to_update["_user_originated"] = self._user_originated
+        data_to_update[STORAGE_KEY_USER_ORIGINATED] = self._user_originated
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
-        self._user_originated = stored_load_info.get("_user_originated", {})
-        self.num_on_off = stored_load_info.get("num_on_off", 0)
+        self._user_originated = stored_load_info.get(STORAGE_KEY_USER_ORIGINATED, {})
+        self.num_on_off = stored_load_info.get(STORAGE_KEY_NUM_ON_OFF, 0)
 
         if self.num_on_off > 0 and self.num_on_off % 2 == 1:
             # because of a reboot we may need a bit more ...
@@ -465,7 +476,7 @@ class AbstractDevice:
             if self.num_max_on_off - self.num_on_off <= 2:
                 self.num_on_off = self.num_max_on_off - 2
 
-        cmd_dict = stored_load_info.get("current_command", None)
+        cmd_dict = stored_load_info.get(STORAGE_KEY_CURRENT_COMMAND, None)
         if cmd_dict is not None:
             self.current_command = LoadCommand(**cmd_dict)
             # QS-256 (D5): the restored command is the command of record,
@@ -473,13 +484,13 @@ class AbstractDevice:
             # guard at restore time to close the post-restart blind spot
             self.last_command_execution_time = datetime.now(pytz.UTC)
 
-        last_change_str = stored_load_info.get("last_state_change_time", None)
+        last_change_str = stored_load_info.get(STORAGE_KEY_LAST_STATE_CHANGE_TIME, None)
         if last_change_str is not None:
             self.last_state_change_time = datetime.fromisoformat(last_change_str)
         else:
             self.last_state_change_time = None
 
-        last_check_update_update_str = stored_load_info.get("last_check_update", None)
+        last_check_update_update_str = stored_load_info.get(STORAGE_KEY_LAST_CHECK_UPDATE, None)
         if last_check_update_update_str is not None:
             self.last_check_update = datetime.fromisoformat(last_check_update_update_str)
         else:
@@ -890,20 +901,20 @@ class AbstractLoad(AbstractDevice):
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
-        data_to_update["external_user_initiated_state"] = self.external_user_initiated_state
-        data_to_update["external_user_initiated_state_time"] = None
+        data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE] = self.external_user_initiated_state
+        data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME] = None
         if self.external_user_initiated_state_time is not None:
-            data_to_update["external_user_initiated_state_time"] = f"{self.external_user_initiated_state_time}"
-
-        data_to_update["asked_for_reset_user_initiated_state_time"] = None
-        if self.asked_for_reset_user_initiated_state_time is not None:
-            data_to_update["asked_for_reset_user_initiated_state_time"] = (
-                f"{self.asked_for_reset_user_initiated_state_time}"
+            data_to_update[STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME] = (
+                f"{self.external_user_initiated_state_time}"
             )
 
-        data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = None
+        data_to_update[STORAGE_KEY_ASKED_FOR_RESET_TIME] = None
+        if self.asked_for_reset_user_initiated_state_time is not None:
+            data_to_update[STORAGE_KEY_ASKED_FOR_RESET_TIME] = f"{self.asked_for_reset_user_initiated_state_time}"
+
+        data_to_update[STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE] = None
         if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-            data_to_update["asked_for_reset_user_initiated_state_time_first_cmd_reset_done"] = (
+            data_to_update[STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE] = (
                 f"{self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done}"
             )
 
@@ -924,18 +935,18 @@ class AbstractLoad(AbstractDevice):
 
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
-        self.external_user_initiated_state = stored_load_info.get("external_user_initiated_state", None)
+        self.external_user_initiated_state = stored_load_info.get(STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE, None)
 
         self.external_user_initiated_state_time = self._restored_utc_datetime(
-            stored_load_info.get("external_user_initiated_state_time", None)
+            stored_load_info.get(STORAGE_KEY_EXTERNAL_USER_INITIATED_STATE_TIME, None)
         )
 
         self.asked_for_reset_user_initiated_state_time = self._restored_utc_datetime(
-            stored_load_info.get("asked_for_reset_user_initiated_state_time", None)
+            stored_load_info.get(STORAGE_KEY_ASKED_FOR_RESET_TIME, None)
         )
 
         self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = self._restored_utc_datetime(
-            stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None)
+            stored_load_info.get(STORAGE_KEY_ASKED_FOR_RESET_FIRST_CMD_RESET_DONE, None)
         )
 
     def get_override_state(self):
