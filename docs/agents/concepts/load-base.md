@@ -80,9 +80,11 @@ Switching-cost protection (`AbstractDevice`):
   mutation, nothing for `check_commands` / `force_relaunch_command`
   to resurrect (QS-256). `force_relaunch_command` applies the same
   hook to a stale `running_command` and drops it (clears the running
-  slot and relaunch counters) instead of retrying it against the
-  override (review fix QS-256#02). Default False; bistate loads
-  override it.
+  slot and relaunch counters — `current_command` is intentionally
+  preserved as the last acked command of record, so a later
+  non-suppressed launch can still compare against it) instead of
+  retrying it against the override (review fix QS-256#02). Default
+  False; bistate loads override it.
 - `_restored_utc_datetime(value)` — restore-boundary parser for the
   stored override timestamps: tz-naive isoformat strings (legacy /
   hand-edited storage) are coerced to UTC so downstream datetime
