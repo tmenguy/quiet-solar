@@ -31,6 +31,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CHARGER_NAME,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
@@ -1622,7 +1623,7 @@ async def test_get_current_selected_charger_user_name(
 ) -> None:
     """Returns get_user_originated('charger_name') when set."""
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="selchg_usr")
-    car.set_user_originated("charger_name", "My Charger")
+    car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "My Charger")
     assert car.get_current_selected_charger_option() == "My Charger"
 
 

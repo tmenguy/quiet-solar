@@ -1,17 +1,18 @@
 # Test requirements for quiet_solar
-pytest>=7.0.0
-pytest-asyncio>=0.21.0
-pytest-cov>=4.0.0
-pytest-timeout>=2.1.0
-pytest-xdist>=3.5.0
+# Pinned to exact versions so CI is reproducible against the local dev env.
+pytest==9.0.3
+pytest-asyncio==1.3.0
+pytest-cov==7.1.0  # matches pytest-homeassistant-custom-component's own pin
+pytest-timeout==2.4.0
+pytest-xdist==3.8.0
 
 # Mock and testing utilities
-pytest-homeassistant-custom-component>=0.13.331  # 0.13.331 moved snapshots to __snapshots__/
-freezegun>=1.4.0
-syrupy>=5.0.0  # 5.x default snapshot dir is __snapshots__/
+pytest-homeassistant-custom-component==0.13.336
+freezegun==1.5.5
+syrupy==5.2.0  # matches pytest-homeassistant-custom-component's own pin
 
-scipy>=1.11.0
+scipy==1.17.1
 
 # Code quality
-ruff>=0.9.0
-mypy>=1.13.0
+ruff==0.15.6
+mypy==1.20.0

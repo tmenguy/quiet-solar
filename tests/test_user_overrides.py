@@ -27,6 +27,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CHARGER_NAME,
     CHARGE_TIME_CONSTRAINTS_CLEARED,
     DATA_HANDLER,
     DOMAIN,
@@ -220,7 +221,7 @@ class TestOnUserOriginatedChanged:
         car._qs_bump_solar_priority = True
         car.do_force_next_charge = True
         car.do_next_charge_time = datetime.datetime(2026, 3, 20, 7, 0, tzinfo=pytz.UTC)
-        car.set_user_originated("charger_name", "Charger1")
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Charger1")
 
         # Trigger the hook explicitly to snapshot all current state
         car._on_user_originated_changed("test", None)
@@ -230,7 +231,7 @@ class TestOnUserOriginatedChanged:
         assert car.get_user_originated("bump_solar") is True
         assert car.get_user_originated("force_charge") is True
         assert car.get_user_originated("charge_time") == "2026-03-20T07:00:00+00:00"
-        assert car.get_user_originated("charger_name") == "Charger1"
+        assert car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == "Charger1"
 
     def test_preserves_existing_person(self, create_car):
         """If person_name is already in overrides, snapshot doesn't overwrite it."""
@@ -447,12 +448,12 @@ class TestUserActionTriggersSnapshot:
         """charger_name override should reflect the post-change state."""
         car = create_car()
         car.home._chargers = []
-        car.set_user_originated("charger_name", "OldCharger")  # initial
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "OldCharger")  # initial
         from custom_components.quiet_solar.const import FORCE_CAR_NO_CHARGER_CONNECTED
 
         await car.user_set_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
         # After setting to FORCE_CAR_NO_CHARGER_CONNECTED, the snapshot should capture it
-        assert car.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED
+        assert car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED
 
     @pytest.mark.asyncio
     async def test_user_add_default_charge_at_datetime_captures_time(self, create_car):
@@ -473,15 +474,15 @@ class TestUserActionTriggersSnapshot:
         """Passing None to user_set_selected_charger_by_name clears charger_name."""
         car = create_car()
         car.home._chargers = []
-        car.set_user_originated("charger_name", "SomeCharger")
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "SomeCharger")
         await car.user_set_selected_charger_by_name(None)
-        assert car.get_user_originated("charger_name") is None
+        assert car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) is None
 
     @pytest.mark.asyncio
     async def test_user_set_selected_charger_unknown_name_clears(self, create_car):
         """Passing an unknown charger name clears charger_name."""
         car = create_car()
         car.home._chargers = []
-        car.set_user_originated("charger_name", "SomeCharger")
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "SomeCharger")
         await car.user_set_selected_charger_by_name("NonExistentCharger")
-        assert car.get_user_originated("charger_name") is None
+        assert car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) is None

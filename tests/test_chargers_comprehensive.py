@@ -9,6 +9,7 @@ import pytz
 from homeassistant.const import STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
     CONF_CHARGER_CONSUMPTION,
     CONF_CHARGER_DEVICE_OCPP,
     CONF_CHARGER_DEVICE_WALLBOX,
@@ -559,7 +560,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(charger.charger_max_charge, 32)
         self.assertEqual(charger.charger_consumption_W, 70)
         self.assertIsNone(charger.car)
-        self.assertIsNone(charger.get_user_originated("car_name"))
+        self.assertIsNone(charger.get_user_originated(USER_ORIGINATED_CAR_NAME))
         self.assertIsNone(charger.car_attach_time)
         self.assertEqual(charger.charge_state, STATE_UNKNOWN)
 
@@ -620,7 +621,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(**self.charger_config)
 
-        charger.set_user_originated("car_name", "ManualCar")
+        charger.set_user_originated(USER_ORIGINATED_CAR_NAME, "ManualCar")
         result = charger.get_current_selected_car_option()
         self.assertEqual(result, "ManualCar")
 
@@ -661,7 +662,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         ):
             await charger.user_set_selected_car_by_name("NewCar")
 
-        self.assertEqual(charger.get_user_originated("car_name"), "NewCar")
+        self.assertEqual(charger.get_user_originated(USER_ORIGINATED_CAR_NAME), "NewCar")
         mock_detach.assert_called_once()
         mock_update.assert_called_once()
 
@@ -682,7 +683,7 @@ class TestQSChargerGenericBasics(unittest.IsolatedAsyncioTestCase):
         ):
             await charger.user_set_selected_car_by_name("SameCar")
 
-        self.assertEqual(charger.get_user_originated("car_name"), "SameCar")
+        self.assertEqual(charger.get_user_originated(USER_ORIGINATED_CAR_NAME), "SameCar")
         mock_detach.assert_not_called()  # Should not detach same car
 
     def test_attach_car(self):

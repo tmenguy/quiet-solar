@@ -24,6 +24,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CHARGER_NAME,
     CAR_HARD_WIRED_CHARGER,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER_STEPS,
@@ -320,9 +321,9 @@ class TestQSCarChargerIntegration:
     def test_user_attached_charger_name(self, create_car):
         """Test get/set_user_originated for charger_name."""
         car = create_car()
-        car.set_user_originated("charger_name", "My Charger")
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "My Charger")
 
-        assert car.get_user_originated("charger_name") == "My Charger"
+        assert car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == "My Charger"
 
     def test_hard_wired_charger(self, create_car):
         """Test car with hard-wired charger."""

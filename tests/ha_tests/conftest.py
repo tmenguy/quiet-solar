@@ -12,6 +12,8 @@ from homeassistant.config_entries import SOURCE_USER, ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.syrupy import HomeAssistantSnapshotExtension
+from syrupy.assertion import SnapshotAssertion
 
 from custom_components.quiet_solar.const import DOMAIN
 
@@ -34,6 +36,21 @@ from .const import (
     MOCK_SOLAR_CONFIG,
     MOCK_SOLAR_ENTRY_ID,
 )
+
+
+@pytest.fixture
+def snapshot(snapshot: SnapshotAssertion) -> SnapshotAssertion:
+    """Force the Home Assistant snapshot extension regardless of plugin load order.
+
+    Both syrupy and pytest-homeassistant-custom-component register a `snapshot`
+    fixture; which one wins depends on pytest plugin load order, which is not
+    deterministic across environments. On the GitHub runner syrupy's default
+    extension won, so snapshot lookups used the wrong serializer (plain repr)
+    and the wrong directory (__snapshots__/ instead of snapshots/), making all
+    sensor snapshots fail with "does not exist". A conftest fixture always
+    beats plugin fixtures, making the HA extension deterministic everywhere.
+    """
+    return snapshot.use_extension(HomeAssistantSnapshotExtension)
 
 
 @pytest.fixture(autouse=True)

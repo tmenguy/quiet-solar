@@ -16,6 +16,7 @@ import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
     CONF_CHARGER_CONSUMPTION,
     CONF_CHARGER_MAX_CHARGE,
     CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
@@ -253,7 +254,7 @@ class TestCheckLoadActivityAndConstraints:
         mock_car = create_mock_car()
         mock_car._user_originated["person_name"] = "TestPerson"
         charger.car = mock_car
-        charger.set_user_originated("car_name", "TestCar")
+        charger.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
 
         with (
             patch.object(charger, "is_charger_unavailable", return_value=False),
@@ -269,7 +270,7 @@ class TestCheckLoadActivityAndConstraints:
 
         # Should reset the charger
         mock_reset.assert_called_once()
-        assert charger.get_user_originated("car_name") is None
+        assert charger.get_user_originated(USER_ORIGINATED_CAR_NAME) is None
         assert result is True  # Force solve triggered
 
     @pytest.mark.asyncio

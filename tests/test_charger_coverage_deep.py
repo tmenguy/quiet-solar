@@ -16,6 +16,8 @@ import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGER_NAME,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CHARGER_NO_CAR_CONNECTED,
     CONF_CAR_BATTERY_CAPACITY,
@@ -1490,7 +1492,7 @@ class TestDevicePostHomeInit:
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
-        ch.set_user_originated("car_name", "TestCar")
+        ch.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
         ch.device_post_home_init(datetime.now(pytz.UTC))
         assert ch._boot_car is not None and ch._boot_car.name == "TestCar"
 
@@ -1512,7 +1514,7 @@ class TestDevicePostHomeInit:
         home = _make_home()
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
-        car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
         _init_charger_states(ch)
         ct = MagicMock()
         ct.load_param = "TestCar"
@@ -3035,13 +3037,25 @@ class TestGetBestCarEdgeCases:
         ch = _create_charger(hass, home)
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
-        car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
-        ch.set_user_originated("car_name", "TestCar")
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
+        ch.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
         result = ch.get_best_car(datetime.now(pytz.UTC))
         # car was set to None at line 2358 but code falls through to scoring
         # which returns the default generic car
         assert result is not None
         assert result.name == ch._default_generic_car.name
+
+    def test_user_selected_car_name_not_found_no_crash(self):
+        """Stored car_name marker referencing a car absent from home._cars must not raise."""
+        hass = _make_hass()
+        home = _make_home()
+        ch = _create_charger(hass, home)
+        _make_real_car(hass, home)
+        _init_charger_states(ch)
+        ch.set_user_originated(USER_ORIGINATED_CAR_NAME, "GhostCar")
+        result = ch.get_best_car(datetime.now(pytz.UTC))
+        # Stale marker is ignored — falls through to scoring instead of raising
+        assert result is not None
 
     def test_disabled_charger_skipped(self):
         """Line 2366: disabled charger skipped in active charger scan."""
@@ -3053,7 +3067,7 @@ class TestGetBestCarEdgeCases:
         car = _make_real_car(hass, home)
         _init_charger_states(ch)
         _init_charger_states(ch2)
-        ch.set_user_originated("car_name", "TestCar")
+        ch.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
         # ch2 is disabled, shouldn't interfere
         result = ch.get_best_car(datetime.now(pytz.UTC))
         assert result is not None
@@ -3068,13 +3082,13 @@ class TestGetBestCarEdgeCases:
         _init_charger_states(ch1)
         _init_charger_states(ch2)
         # Both chargers claim the same car
-        ch1.set_user_originated("car_name", "TestCar")
-        ch2.set_user_originated("car_name", "TestCar")
+        ch1.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
+        ch2.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
         _plug_car(ch2, car, datetime.now(pytz.UTC))
         result = ch1.get_best_car(datetime.now(pytz.UTC))
         assert result is not None
         # ch2 should have been detached
-        assert ch2.get_user_originated("car_name") is None
+        assert ch2.get_user_originated(USER_ORIGINATED_CAR_NAME) is None
         assert ch2.car is None
 
 
@@ -4337,7 +4351,7 @@ class TestGetCarScore:
     def test_charger_no_car_connected_returns_neg(self):
         """Line 2435: disabled charger skipped in get_best_car."""
         hass, home, ch, car, now = self._setup()
-        ch.set_user_originated("car_name", CHARGER_NO_CAR_CONNECTED)
+        ch.set_user_originated(USER_ORIGINATED_CAR_NAME, CHARGER_NO_CAR_CONNECTED)
         result = ch.get_best_car(now)
         assert result is None
 
@@ -4377,7 +4391,7 @@ class TestGetCarScore:
         _init_charger_states(ch2)
         _plug_car(ch2, car2, now)
         ch.is_plugged = MagicMock(return_value=True)
-        ch.clear_user_originated("car_name")
+        ch.clear_user_originated(USER_ORIGINATED_CAR_NAME)
         ch._boot_car = None
         result = ch.get_best_car(now)
         assert result is not None
@@ -4387,7 +4401,7 @@ class TestGetCarScore:
         hass, home, ch, car, now = self._setup()
         car2 = _make_real_car(hass, home, name="BootCar")
         ch._boot_car = car2
-        ch.clear_user_originated("car_name")
+        ch.clear_user_originated(USER_ORIGINATED_CAR_NAME)
         ch.is_plugged = MagicMock(return_value=True)
         result = ch.get_best_car(now)
         assert result.name == "BootCar"
@@ -4396,8 +4410,8 @@ class TestGetCarScore:
         """Line 2502: empty chargers_scores[charger] -> continue."""
         hass, home, ch, car, now = self._setup()
         ch.detach_car()
-        car.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
-        ch.clear_user_originated("car_name")
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
+        ch.clear_user_originated(USER_ORIGINATED_CAR_NAME)
         ch._boot_car = None
         ch.is_plugged = MagicMock(return_value=True)
         result = ch.get_best_car(now)
@@ -4914,9 +4928,9 @@ class TestGetBestCarBootCarOverride:
         _init_charger_states(ch)
         now = datetime.now(pytz.UTC)
 
-        ch.clear_user_originated("car_name")
+        ch.clear_user_originated(USER_ORIGINATED_CAR_NAME)
         ch._boot_car = car_b
-        car_b.clear_user_originated("charger_name")
+        car_b.clear_user_originated(USER_ORIGINATED_CHARGER_NAME)
 
         def mock_score(car, time, cache):
             if car.name == "CarA":
@@ -4944,8 +4958,8 @@ class TestGetBestCarCleanupEmptyScores:
         _init_charger_states(ch1)
         _init_charger_states(ch2)
 
-        ch1.clear_user_originated("car_name")
-        ch2.clear_user_originated("car_name")
+        ch1.clear_user_originated(USER_ORIGINATED_CAR_NAME)
+        ch2.clear_user_originated(USER_ORIGINATED_CAR_NAME)
         ch1._boot_car = None
         ch2._boot_car = None
 

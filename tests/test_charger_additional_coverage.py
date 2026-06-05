@@ -10,6 +10,7 @@ import pytz
 from homeassistant.const import STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
     CHARGER_NO_CAR_CONNECTED,
     CONF_CHARGER_DEVICE_OCPP,
     CONF_CHARGER_DEVICE_WALLBOX,
@@ -482,7 +483,7 @@ def test_get_best_car_user_selected_detaches_others() -> None:
     car.name = "PreferredCar"
     car.get_user_originated = MagicMock(return_value=None)
 
-    charger.set_user_originated("car_name", car.name)
+    charger.set_user_originated(USER_ORIGINATED_CAR_NAME, car.name)
     home.get_car_by_name = MagicMock(return_value=car)
 
     other_charger = MagicMock()
@@ -531,7 +532,7 @@ def test_get_car_options_and_current_selection() -> None:
     assert car.name in options
     assert CHARGER_NO_CAR_CONNECTED in options
 
-    charger.set_user_originated("car_name", car.name)
+    charger.set_user_originated(USER_ORIGINATED_CAR_NAME, car.name)
     assert charger.get_current_selected_car_option() == car.name
 
     with patch.object(charger, "is_optimistic_plugged", return_value=False):
@@ -568,7 +569,7 @@ def test_device_post_home_init_uses_user_attached_car() -> None:
     car.name = "StoredCar"
     home.get_car_by_name = MagicMock(return_value=car)
 
-    charger.set_user_originated("car_name", car.name)
+    charger.set_user_originated(USER_ORIGINATED_CAR_NAME, car.name)
     charger.device_post_home_init(datetime.now(pytz.UTC))
 
     assert charger._boot_car == car

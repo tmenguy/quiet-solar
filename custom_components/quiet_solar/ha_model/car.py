@@ -46,6 +46,8 @@ from ..const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
     MAX_POSSIBLE_AMPERAGE,
+    USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGER_NAME,
     CONF_TYPE_NAME_QSCar,
 )
 from ..ha_model.device import HADeviceMixin
@@ -729,7 +731,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             and not self.car_api_stale_percent_mode
             and self.car_stale_mode_override != CAR_STALE_MODE_FORCE_NOT_STALE
         ):
-            self.check_manual_assignment_contradiction(self.charger.name, time)
+            self.check_charger_assignment_contradiction(
+                self.charger.name, time, manual=self._charger_assignment_is_user_originated()
+            )
 
         effectively_stale = self.is_car_effectively_stale(time)
 
@@ -819,50 +823,115 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._computed_added_delta_soc_percent = None
             self._delta_soc_last_integration_time = None
 
-    def check_manual_assignment_contradiction(self, charger_name: str, time: datetime) -> None:
-        """Check if manual charger assignment contradicts API data (Feature B).
+    def _charger_assignment_is_user_originated(self) -> bool:
+        """Return True when the current charger assignment originates from the user.
 
-        When a user manually assigns this car to a charger and the API reports
-        not_home or not_plugged, the manual action proves the API is wrong.
-        Flag the car as stale immediately.
+        Checks the durable user-originated markers on both sides of the
+        assignment (car-side ``charger_name`` and charger-side ``car_name``);
+        automatic ``attach_car()`` touches neither. This detection form and
+        the literal ``manual=True`` at the user entry point are equivalent
+        by construction: inside the user action ``manual=True`` holds by
+        definition, and the markers are the durable trace of that same
+        action for the periodic path.
+        """
+        if self.charger is None:
+            return False
+        return (
+            self.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == self.charger.name
+            or self.charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == self.name
+        )
+
+    def check_charger_assignment_contradiction(self, charger_name: str, time: datetime, *, manual: bool) -> None:
+        """Check if the charger assignment contradicts API data (Feature B).
+
+        When this car is assigned to a charger and the API reports not_home
+        or not_plugged, flag the car as stale immediately — for both
+        assignment origins. The inferred home/plugged flags are manual-only:
+
+        - ``manual=True`` — the user explicitly assigned this car to the
+          charger. The user's word is ground truth, so the inferred flags
+          (and the score boost they imply) are justified. The
+          user-originated marker is cleared on physical unplug and when
+          another charger claims the car, which bounds any damage from a
+          mistaken manual pick.
+        - ``manual=False`` — the car was auto-attached by plug-time
+          correlation. Identity is only a heuristic: the cable proves *a*
+          car is present, never *which* car. Setting ``inferred_home``
+          would manufacture the exact evidence the match lacks and entrench
+          a wrong auto-match via its own score feedback, so the inferred
+          flags are never set on this path.
+
+        Manual origin detection lives in `_charger_assignment_is_user_originated`.
+        Callers must pass the currently assigned charger's name
+        (``self.charger.name``) as ``charger_name``.
+
+        A contradiction is logged and notified once per stale episode,
+        deduplicated on ``_car_api_stale_since``; a new episode starts only
+        after genuine recovery (`_exit_stale_mode`). Within an ongoing
+        episode the check silently re-asserts the stale flag (the auto-mode
+        raw refresh resets it each cycle for cars that cannot enter
+        stale-percent mode), and a ``manual=True`` call upgrades the
+        inferred flags exactly once — the user's explicit confirmation is
+        ground truth even when the episode started as auto.
         """
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
-            return
-        # Already stale — don't re-notify
-        if self._car_api_stale or self.car_api_stale_percent_mode:
             return
 
         raw_home = self._get_raw_is_car_home(time)
         raw_plugged = self._get_raw_is_car_plugged(time)
 
-        # Contradiction: API says not home or not plugged, but user says car is on charger
+        # Contradiction: API says not home or not plugged, but the assignment says car is on charger
         has_contradiction = (raw_home is not None and raw_home is False) or (
             raw_plugged is not None and raw_plugged is False
         )
+        if not has_contradiction:
+            return
 
-        if has_contradiction:
-            _LOGGER.info(
-                "Car %s manually assigned to charger %s while API reports home=%s, plugged=%s — flagging as stale",
-                self.name,
-                charger_name,
-                raw_home,
-                raw_plugged,
-            )
-            self._car_api_stale = True
+        # Manual upgrade: the user's word is ground truth — apply the inferred
+        # flags even when the car is already stale from a prior auto episode,
+        # but never re-log/re-notify an ongoing episode
+        if manual and not self._car_api_inferred_home:
             self._car_api_inferred_home = True
             self._car_api_inferred_plugged = True
-            if self._car_api_stale_since is None:
-                self._car_api_stale_since = time
-            # Activate stale-percent mode if possible
-            if self.can_use_charge_percent_constraints():
-                self._enter_stale_percent_mode(time)
-            self._was_car_api_stale = True
-            # Notify on contradiction (Feature B)
-            self._schedule_person_notification(
-                f"Warning: {self.name}",
-                f"Warning: {self.name} data is not available, check the car card",
-                error=True,
+
+        already_in_episode = self._car_api_stale_since is not None
+
+        if self._car_api_stale or self.car_api_stale_percent_mode:
+            # Already flagged this cycle — flags possibly upgraded above
+            return
+
+        self._car_api_stale = True
+        self._was_car_api_stale = True
+        if already_in_episode:
+            # Re-assert silently across cycles — one notification per episode
+            return
+
+        self._car_api_stale_since = time
+        _LOGGER.info(
+            "Car %s %s charger %s while API reports home=%s, plugged=%s — flagging as stale",
+            self.name,
+            "manually assigned to" if manual else "auto-attached to",
+            charger_name,
+            raw_home,
+            raw_plugged,
+        )
+        if manual:
+            notification_body = (
+                f"Your {self.name} assignment contradicts its car API data — using estimated charge data"
             )
+        else:
+            notification_body = (
+                f"Your {self.name} was detected on {charger_name} but its API disagrees — check the car card"
+            )
+        # Activate stale-percent mode if possible
+        if self.can_use_charge_percent_constraints():
+            self._enter_stale_percent_mode(time)
+        # Notify on contradiction (Feature B)
+        self._schedule_person_notification(
+            f"Warning: {self.name}",
+            notification_body,
+            error=True,
+        )
 
     def clear_inferred_flags(self) -> None:
         """Clear inferred flags when car is detached from charger."""
@@ -2488,8 +2557,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return options
 
     def get_current_selected_charger_option(self) -> str | None:
-        if self.get_user_originated("charger_name") is not None:
-            return self.get_user_originated("charger_name")
+        if self.get_user_originated(USER_ORIGINATED_CHARGER_NAME) is not None:
+            return self.get_user_originated(USER_ORIGINATED_CHARGER_NAME)
 
         if self.charger is None:
             return None
@@ -2505,7 +2574,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.detach_charger()
 
         if charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
-            self.set_user_originated("charger_name", FORCE_CAR_NO_CHARGER_CONNECTED)
+            self.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
             self.clear_inferred_flags()
         elif charger_name is not None:
             charger = None
@@ -2514,14 +2583,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
                     charger = c
                     break
             if charger is not None:
-                self.set_user_originated("charger_name", charger_name)
+                self.set_user_originated(USER_ORIGINATED_CHARGER_NAME, charger_name)
                 # Feature B: check for contradiction on manual assignment
-                self.check_manual_assignment_contradiction(charger_name, datetime.now(tz=pytz.UTC))
+                self.check_charger_assignment_contradiction(charger_name, datetime.now(tz=pytz.UTC), manual=True)
                 await charger.user_set_selected_car_by_name(car_name=self.name)
             else:
-                self.clear_user_originated("charger_name")
+                self.clear_user_originated(USER_ORIGINATED_CHARGER_NAME)
         else:
-            self.clear_user_originated("charger_name")
+            self.clear_user_originated(USER_ORIGINATED_CHARGER_NAME)
             self.clear_inferred_flags()
 
         if orig_charger is not None:

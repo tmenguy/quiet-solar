@@ -21,6 +21,8 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGER_NAME,
     CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
@@ -1023,7 +1025,7 @@ async def test_charger_set_user_selected_car_detaches(
     await charger_device.user_set_selected_car_by_name("Other Car")
 
     assert charger_device.car is None
-    assert charger_device.get_user_originated("car_name") == "Other Car"
+    assert charger_device.get_user_originated(USER_ORIGINATED_CAR_NAME) == "Other Car"
     charger_device.update_charger_for_user_change.assert_awaited_once()
 
 
@@ -1234,7 +1236,7 @@ async def test_charger_check_load_activity_unplugged(
 
     assert do_force is True
     assert car_device.get_user_originated("person_name") is None
-    assert charger_device.get_user_originated("car_name") is None
+    assert charger_device.get_user_originated(USER_ORIGINATED_CAR_NAME) is None
     charger_device.reset.assert_called_once()
 
 
@@ -2509,7 +2511,7 @@ async def test_charger_saved_info_and_user_updates(
     assert "_user_originated" in data
 
     charger_device.use_saved_extra_device_info({"_user_originated": {"car_name": "SomeCar"}})
-    assert charger_device.get_user_originated("car_name") == "SomeCar"
+    assert charger_device.get_user_originated(USER_ORIGINATED_CAR_NAME) == "SomeCar"
 
     await charger_device.update_charger_for_user_change()
     charger_device.home.force_next_solve.assert_called_once()
@@ -3740,7 +3742,7 @@ async def test_charger_get_car_score(
 
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
     charger_device.car = None
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
     charger_device.charger_latitude = 48.8566
     charger_device.charger_longitude = 2.3522
 
@@ -3770,7 +3772,7 @@ async def test_charger_get_car_score(
     assert score is not None
     assert score > 0
 
-    charger_device.set_user_originated("car_name", car.name)
+    charger_device.set_user_originated(USER_ORIGINATED_CAR_NAME, car.name)
     charger_device.home.get_car_by_name = MagicMock(return_value=car)
     score = charger_device.get_car_score(car, datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC), cache)
     assert score >= 0
@@ -3810,7 +3812,7 @@ async def test_charger_get_car_score_user_attached(
     car_a = DummyCar("Car A")
     car_b = DummyCar("Car B")
 
-    charger_device.set_user_originated("car_name", car_a.name)
+    charger_device.set_user_originated(USER_ORIGINATED_CAR_NAME, car_a.name)
     charger_device.home.get_car_by_name = MagicMock(return_value=car_a)
 
     cache: dict = {}
@@ -3854,7 +3856,7 @@ async def test_charger_get_car_score_long_attached(
     car = DummyCar("Car Long")
     charger_device.car = car
     charger_device.car_attach_time = datetime(2026, 1, 14, 0, 0, tzinfo=pytz.UTC)
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
 
     cache: dict = {}
     score = charger_device.get_car_score(car, datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC), cache)
@@ -3883,7 +3885,7 @@ async def test_charger_get_car_score_plug_time_edges(
     await hass.async_block_till_done()
 
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
     charger_device.charger_latitude = 48.8566
     charger_device.charger_longitude = 2.3522
     charger_device.get_continuous_plug_duration = MagicMock(return_value=None)
@@ -3936,7 +3938,7 @@ async def test_charger_get_best_car_boot_and_default(
     await hass.async_block_till_done()
 
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
     charger_device.home._cars = []
     charger_device.home._chargers = [charger_device]
     charger_device.is_plugged = MagicMock(return_value=False)
@@ -3944,14 +3946,14 @@ async def test_charger_get_best_car_boot_and_default(
     from tests.factories import create_test_car_double
 
     boot_car = create_test_car_double(name="Boot Car")
-    boot_car.set_user_originated("charger_name", "charger")
+    boot_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "charger")
     boot_car.charger = None
     charger_device._boot_car = boot_car
     assert charger_device.get_best_car(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)) == boot_car
 
     charger_device._boot_car = None
     default_car = create_test_car_double(name="Default Car")
-    default_car.clear_user_originated("charger_name")
+    default_car.clear_user_originated(USER_ORIGINATED_CHARGER_NAME)
     default_car.charger = None
     charger_device._default_generic_car = default_car
     assert charger_device.get_best_car(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)) == default_car
@@ -4014,7 +4016,7 @@ async def test_charger_best_car_and_user_selection(
     best = charger_device.get_best_car(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
     assert best in [car_a, car_b]
 
-    charger_device.set_user_originated("car_name", car_a.name)
+    charger_device.set_user_originated(USER_ORIGINATED_CAR_NAME, car_a.name)
     from tests.factories import create_test_charger_double
 
     other_charger = create_test_charger_double(name="Other", car=car_a)
@@ -4030,10 +4032,10 @@ async def test_charger_best_car_and_user_selection(
     assert best == car_a
     other_charger.detach_car.assert_called_once()
 
-    charger_device.set_user_originated("car_name", CHARGER_NO_CAR_CONNECTED)
+    charger_device.set_user_originated(USER_ORIGINATED_CAR_NAME, CHARGER_NO_CAR_CONNECTED)
     assert charger_device.get_best_car(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)) is None
 
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
     charger_device.car = car_a
     car_a.default_charge_time = datetime(2026, 1, 15, 7, 0, tzinfo=pytz.UTC).time()
     assert charger_device.default_charge_time == car_a.default_charge_time
@@ -4116,9 +4118,9 @@ async def test_charger_user_helpers_and_boot_data(
     options = charger_device.get_car_options()
     assert car.name in options
 
-    charger_device.set_user_originated("car_name", car.name)
+    charger_device.set_user_originated(USER_ORIGINATED_CAR_NAME, car.name)
     assert charger_device.get_current_selected_car_option() == car.name
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
     charger_device.car = car
     assert charger_device.get_current_selected_car_option() == car.name
     charger_device.car = None
@@ -4128,10 +4130,10 @@ async def test_charger_user_helpers_and_boot_data(
     await charger_device.user_add_default_charge()
     await charger_device.user_force_charge_now()
 
-    charger_device.set_user_originated("car_name", car.name)
+    charger_device.set_user_originated(USER_ORIGINATED_CAR_NAME, car.name)
     charger_device.device_post_home_init(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
     assert charger_device._boot_car == car
-    assert car.get_user_originated("charger_name") == charger_device.name
+    assert car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == charger_device.name
 
 
 async def test_charger_boot_constraints_restore(
@@ -4185,7 +4187,7 @@ async def test_charger_boot_constraints_restore(
             self.name = name
             self.load_param = load_param
 
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
     charger_device._constraints = [DummyConstraint("ct1", "Car Boot")]
     charger_device._last_completed_constraint = DummyConstraint("ct_last", "Car Boot")
 
@@ -4216,7 +4218,7 @@ async def test_charger_best_car_assignment_loop(
     await hass.async_block_till_done()
 
     charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
-    charger_device.clear_user_originated("car_name")
+    charger_device.clear_user_originated(USER_ORIGINATED_CAR_NAME)
 
     class DummyCar:
         def __init__(self, name: str) -> None:

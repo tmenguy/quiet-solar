@@ -11,6 +11,7 @@ import pytz
 from homeassistant.const import STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
     CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE,
     CAR_CHARGE_TYPE_FAULTED,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
@@ -754,7 +755,7 @@ class TestQSChargerGenericSavedInfo(unittest.TestCase):
 
     def test_update_to_be_saved_extra_device_info(self):
         """Test update_to_be_saved_extra_device_info method."""
-        self.charger.set_user_originated("car_name", "TestCar")
+        self.charger.set_user_originated(USER_ORIGINATED_CAR_NAME, "TestCar")
 
         data = {}
         self.charger.update_to_be_saved_extra_device_info(data)
@@ -767,7 +768,7 @@ class TestQSChargerGenericSavedInfo(unittest.TestCase):
 
         self.charger.use_saved_extra_device_info(stored_info)
 
-        self.assertEqual(self.charger.get_user_originated("car_name"), "SavedCar")
+        self.assertEqual(self.charger.get_user_originated(USER_ORIGINATED_CAR_NAME), "SavedCar")
 
 
 if __name__ == "__main__":

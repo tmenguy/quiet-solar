@@ -14,6 +14,8 @@ from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
+    USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGER_NAME,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
@@ -1736,12 +1738,12 @@ async def test_car_user_selected_charger_by_name(
 
     with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()) as mock_update:
         await car_device.user_set_selected_charger_by_name(charger_device.name)
-        assert charger_device.get_user_originated("car_name") == car_device.name
-        assert car_device.get_user_originated("charger_name") == charger_device.name
+        assert charger_device.get_user_originated(USER_ORIGINATED_CAR_NAME) == car_device.name
+        assert car_device.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == charger_device.name
         mock_update.assert_awaited()
 
         await car_device.user_set_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
-        assert car_device.get_user_originated("charger_name") == FORCE_CAR_NO_CHARGER_CONNECTED
+        assert car_device.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED
         assert car_device.charger is None
         assert charger_device.car is None
 
@@ -1785,7 +1787,7 @@ async def test_car_user_clean_and_reset(
 
     charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
     car_device._constraints = [MagicMock()]
-    car_device.set_user_originated("charger_name", charger_device.name)
+    car_device.set_user_originated(USER_ORIGINATED_CHARGER_NAME, charger_device.name)
     car_device.set_user_originated("person_name", "Person A")
     car_device._next_charge_target = 90
     car_device._next_charge_target_energy = 30000.0
@@ -1798,13 +1800,13 @@ async def test_car_user_clean_and_reset(
     with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()):
         await car_device.user_clean_and_reset()
 
-    assert car_device.get_user_originated("charger_name") is None
+    assert car_device.get_user_originated(USER_ORIGINATED_CHARGER_NAME) is None
     assert car_device.get_user_originated("person_name") is None
     assert car_device.charger is None
     assert car_device._constraints == []
     assert car_device._next_charge_target == car_device.car_default_charge
     assert car_device._next_charge_target_energy is None
-    assert charger_device.get_user_originated("car_name") is None
+    assert charger_device.get_user_originated(USER_ORIGINATED_CAR_NAME) is None
 
 
 async def test_car_user_clean_constraints(
@@ -1847,7 +1849,7 @@ async def test_car_user_clean_constraints(
     charger_device.attach_car(car_device, datetime.now(tz=pytz.UTC))
     car_device._constraints = [MagicMock()]
     car_device._next_charge_target = 95
-    car_device.set_user_originated("charger_name", charger_device.name)
+    car_device.set_user_originated(USER_ORIGINATED_CHARGER_NAME, charger_device.name)
 
     with patch.object(charger_device, "update_charger_for_user_change", new=AsyncMock()):
         await car_device.user_clean_constraints()
