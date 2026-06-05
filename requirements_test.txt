@@ -8,7 +8,7 @@ pytest-xdist>=3.5.0
 # Mock and testing utilities
 pytest-homeassistant-custom-component>=0.13.331  # 0.13.331 moved snapshots to __snapshots__/
 freezegun>=1.4.0
-syrupy>=5.0.0  # 5.x default snapshot dir is __snapshots__/
+syrupy>=5.3.1  # 5.3.x reads/writes tests/**/__snapshots__/ (plugin's snapshots/ override no longer applies)
 
 scipy>=1.11.0
 
