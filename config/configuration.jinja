@@ -35,15 +35,18 @@
 ] %}
 {%- set legrand_switches_to_map.switches = legrand_switches_to_map.switches + [
   {'slug': 'lhk_seche_serviette_arthur',
-   'name': 'towel arthur'}
+   'name': 'towel arthur',
+   'cloud_entity': 'switch.radiateur_serviettes_arthur_qs_switch'}
 ] %}
 {%- set legrand_switches_to_map.switches = legrand_switches_to_map.switches + [
   {'slug': 'lhk_seche_serviette_enfants',
-   'name': 'towel enfants'}
+   'name': 'towel enfants',
+   'cloud_entity': 'switch.radiateur_serviettes_enfants_qs_switch'}
 ] %}
 {%- set legrand_switches_to_map.switches = legrand_switches_to_map.switches + [
   {'slug': 'lhk_seche_serviette_parents',
-   'name': 'towel parents'}
+   'name': 'towel parents',
+   'cloud_entity': 'switch.radiateur_serviettes_parents_qs_switch'}
 ] %}
 {## --- END EDIT --- ##}
 
@@ -175,11 +178,14 @@ template:
         unique_id: legrand_homekit_link_healthy
         state: {{ "'{{ (now() - states.input_boolean.legrand_pumpkin.last_changed).total_seconds() < 90 }}'" }}
         availability: {{ "'{{ states.input_boolean.legrand_pumpkin is not none }}'" }}
-
       - name: "HomeKit hub healthy"
         unique_id: homekit_hub_healthy
         state: {{ "'{{ (now() - states.input_boolean.homekit_hub_alive.last_changed).total_seconds() < 90 }}'" }}
         availability: {{ "'{{ states.input_boolean.homekit_hub_alive is not none }}'" }}
+      - name: "Tronity ID Buzz Plugged"
+        unique_id: tronity_id_buzz_plugged
+        state: {{ "'{{ states(''sensor.tronity_id_buzz_lwb_plugged'') | lower == ''true'' }}'"}}
+        availability: {{ "'{{ states(''sensor.tronity_id_buzz_lwb_plugged'') not in [''unknown'', ''unavailable'', ''none''] }}'"}}
   - switch:
       - unique_id: cumulus_enfants_sauter_boost_switch
         turn_on:
@@ -565,5 +571,6 @@ homekit:
       input_boolean.{{ s.slug }}_command:
         name: LHK {{ s.name }} Cmd
 {%- endfor %}
+
 
 
