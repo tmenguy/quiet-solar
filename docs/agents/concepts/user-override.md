@@ -82,6 +82,12 @@ an externally-detected override are constraint-driven:
 - The legacy timer reset stays as fallback for an override without a
   constraint (e.g. restored from storage); whichever mechanism fires
   first nulls the fields, making the other a no-op.
+- Restart-time limitation: storage restore evaluates stored-override
+  expiry against `override_duration`, which may still hold the config
+  default (the number entity restores later). If the default is
+  smaller than the configured value, a still-valid override can be
+  dropped on restart — accepted conservative direction (drop early
+  rather than keep poison).
 
 ## Key types / structures
 

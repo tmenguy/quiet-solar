@@ -866,3 +866,45 @@ async def test_fix03_small_skew_in_reset_ask_time_is_tolerated():
         )
 
         assert pump.asked_for_reset_user_initiated_state_time == slight_future
+
+
+# =========================================================================
+# Review fix #04
+# =========================================================================
+
+
+async def test_fix04_future_dated_reset_ask_drop_also_clears_first_cmd_reset_flag():
+    """F1: the future-dated reset-ask drop clears BOTH ask-related fields —
+    an orphaned first-cmd-reset flag would trigger a spurious constraint
+    wipe + forced solve on the first cycle after restore."""
+    with freeze_time(RESTART_TIME) as frozen:
+        pump = _make_pump(override_duration_h=8.0)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": {"command": "idle", "power_consign": 0.0},
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "asked_for_reset_user_initiated_state_time": (RESTART_TIME + timedelta(hours=1)).isoformat(),
+                "asked_for_reset_user_initiated_state_time_first_cmd_reset_done": (
+                    RESTART_TIME + timedelta(hours=1)
+                ).isoformat(),
+            }
+        )
+
+        assert pump.asked_for_reset_user_initiated_state_time is None
+        assert pump.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+
+        # no spurious constraint reset on the next cycles: first check pushes
+        # the daily constraint, the second is a steady-state no-op
+        pump.hass.states.set(PUMP_ENTITY, "off", last_changed=RESTART_TIME - timedelta(minutes=5))
+        t1 = RESTART_TIME + timedelta(minutes=1)
+        frozen.move_to(t1)
+        await pump.check_load_activity_and_constraints(t1)
+        assert len(_daily_constraints(pump)) == 1
+
+        t2 = t1 + timedelta(minutes=1)
+        frozen.move_to(t2)
+        result = await pump.check_load_activity_and_constraints(t2)
+        assert result is False  # no forced solve, constraints untouched
+        assert len(_daily_constraints(pump)) == 1

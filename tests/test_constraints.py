@@ -2177,3 +2177,61 @@ def test_qs256_sub_wh_energy_difference_between_overrides_is_recency_broken():
 
     # int-floored energy scores tie (both 100) → recency decides: newer wins
     assert newer_slightly_less_energy.score(time) > older_slightly_more_energy.score(time)
+
+
+def test_hold_off_repartition_empty_slot_array_returns_clean_empty_output():
+    """Review fix #04: an empty power array short-circuits to a clean empty
+    repartition instead of producing a degenerate last_slot == -1 range."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    ct = _make_hold_off(time=time)
+
+    (
+        out_constraint,
+        final_ret,
+        out_commands,
+        out_power,
+        first_slot,
+        last_slot,
+        min_idx,
+        max_idx,
+        remaining_deplete,
+    ) = ct.compute_best_period_repartition(
+        do_use_available_power_only=False,
+        power_available_power=np.zeros(0, dtype=np.float64),
+        power_slots_duration_s=np.zeros(0, dtype=np.float64),
+        prices=np.zeros(0, dtype=np.float64),
+        prices_ordered_values=[],
+        time_slots=[],
+        additional_available_energy_to_deplete=-42.0,
+    )
+
+    assert final_ret is True
+    assert out_commands == []
+    assert len(out_power) == 0
+    assert first_slot == 0
+    assert last_slot == -1
+    assert min_idx == -1
+    assert max_idx == -1
+    assert remaining_deplete == -42.0
+    assert out_constraint is not ct
+
+
+def test_qs256_future_dated_override_start_clamps_to_max_recency():
+    """Review fix #04: a future-dated start_of_constraint is clamped to age 0
+    (max recency 0.5) by the score term — no error, same recency as a
+    just-started override. Upstream restore guards drop future-dated
+    overrides before they can be scored; this pins the clamp itself."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=4)
+
+    future_start = _make_hold_off(load=load, time=time)
+    future_start.start_of_constraint = time + timedelta(hours=1)
+    future_start.end_of_constraint = end
+
+    just_started = _make_hold_off(load=load, time=time)
+    just_started.start_of_constraint = time
+    just_started.end_of_constraint = end
+
+    # both clamp to age 0 → identical scores, no exception
+    assert future_start.score(time) == just_started.score(time)

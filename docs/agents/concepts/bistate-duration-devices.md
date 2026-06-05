@@ -130,7 +130,9 @@ of the on/off behaviour unchanged.
   clearly future-dated (> 60s ahead, clock-skew poison), or missing
   its timestamp entirely (orphan state nothing could ever expire). A
   future-dated reset-ask timestamp is dropped the same way (it would
-  keep the post-override cooldown permanently active). Stored
+  keep the post-override cooldown permanently active), together with
+  its companion first-cmd-reset flag (an orphaned flag would trigger a
+  spurious constraint wipe right after restore). Stored
   override timestamps are coerced tz-naive → UTC at the restore
   boundary (`AbstractLoad._restored_utc_datetime`); the cooldown check
   site coerces defensively too.

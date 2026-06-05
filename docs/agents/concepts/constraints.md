@@ -77,7 +77,8 @@ The five priority tiers (highest first):
 - `TimeBasedHoldOffConstraint` — pins a load to CMD_IDLE for its whole
   window (QS-256 user OFF-override). Zero power by default, wall-clock
   progress (`compute_value` accrues unconditionally), trivial
-  repartition (CMD_IDLE commands, zero power, no energy impact), no-op
+  repartition (CMD_IDLE commands, zero power, no energy impact; an
+  empty slot array short-circuits to a clean empty output), no-op
   `adapt_repartition`. Met at window end via
   `always_end_at_end_of_constraint` → acked → override reset.
 - `load_info` dict — `{originator: "user_override" | "agenda" |

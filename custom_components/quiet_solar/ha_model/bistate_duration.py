@@ -209,6 +209,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     int(ask_age_s),
                 )
                 self.asked_for_reset_user_initiated_state_time = None
+                # review fix QS-256#04: clear the companion flag too — an
+                # orphaned first-cmd-reset flag would trigger a spurious
+                # constraint wipe + forced solve right after restore
+                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
 
         if self.external_user_initiated_state_time is not None:
             # tz-awareness is guaranteed by the restore boundary
@@ -797,7 +801,15 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     # QS-256 (D5): causality guard — a state mismatch is a user
                     # action only if the entity state is NEWER than the load's
                     # last real command execution; a stale state (e.g. a lagging
-                    # template-switch mirror after an HA restart) is not
+                    # template-switch mirror after an HA restart) is not.
+                    # Accepted gap (review fix #04, documentation-level): when no
+                    # anchor exists (e.g. the first command was probe-acked
+                    # without a service call, or nothing was restored),
+                    # classification proceeds on state mismatch + cooldown alone —
+                    # this is the AC6 None-branch contract approved in the story
+                    # and the pre-QS-256 behavior; there is no prior command to
+                    # attribute the state to, so suppressing here would mask
+                    # genuine first-tick user actions
                     if (
                         is_command_overridden_state_changed
                         and self.last_command_execution_time is not None
@@ -924,7 +936,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                                 do_force_next_solve = True
                                 end_schedule = time + timedelta(seconds=(3600.0 * self.override_duration))
                                 if end_schedule <= time:
-                                    # already expired at push time: reset directly (AC8)
+                                    # already expired at push time: reset directly (AC8).
+                                    # This only catches override_duration == 0 — safe
+                                    # because the number entity's 0.25h step makes 900s
+                                    # the smallest non-zero window; revisit if the step
+                                    # contract changes (review fix QS-256#04)
                                     self.reset_override_state_and_set_reset_ask_time(time)
                                 else:
                                     override_constraint = TimeBasedHoldOffConstraint(

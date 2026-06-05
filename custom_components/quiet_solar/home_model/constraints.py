@@ -363,6 +363,10 @@ class LoadConstraint:
             # solver allocation ordering); `push_live_constraint`'s
             # same-end-time branch keeps its generic last-pushed-wins rule.
             if self.start_of_constraint != DATETIME_MIN_UTC:
+                # a future-dated start clamps to age 0 (max recency 0.5) —
+                # benign: the restore drop-guards (QSBiStateDuration.
+                # use_saved_extra_device_info) eliminate future-dated
+                # overrides before they can ever be scored (review fix #04)
                 age_s = max(0.0, (time - self.start_of_constraint).total_seconds())
                 override_recency_score = 1.0 / (2.0 + age_s)
 
@@ -2765,6 +2769,22 @@ class TimeBasedHoldOffConstraint(TimeBasedSimplePowerLoadConstraint):
         """Trivial fixed output: CMD_IDLE over the whole window, zero power."""
         out_power = np.zeros(len(power_available_power), dtype=np.float64)
         out_commands: list[LoadCommand | None] = [None] * len(power_available_power)
+
+        # review fix QS-256#04: an empty slot array (unreachable from the
+        # solver, defensive) short-circuits to a clean empty repartition so
+        # the degenerate `len - 1 == -1` cannot masquerade as a real slot
+        if len(power_available_power) == 0:
+            return (
+                self.shallow_copy_for_budget_delta_quantity(0.0),
+                True,
+                out_commands,
+                out_power,
+                0,
+                -1,
+                -1,
+                -1,
+                additional_available_energy_to_deplete,
+            )
 
         first_slot = 0
         last_slot = len(power_available_power) - 1
