@@ -78,7 +78,15 @@ Switching-cost protection (`AbstractDevice`):
   before the same-command early-return): a suppressed command is
   DROPPED before `running_command` is set — no ack, no counter
   mutation, nothing for `check_commands` / `force_relaunch_command`
-  to resurrect (QS-256). Default False; bistate loads override it.
+  to resurrect (QS-256). `force_relaunch_command` applies the same
+  hook to a stale `running_command` and drops it (clears the running
+  slot and relaunch counters) instead of retrying it against the
+  override (review fix QS-256#02). Default False; bistate loads
+  override it.
+- `_restored_utc_datetime(value)` — restore-boundary parser for the
+  stored override timestamps: tz-naive isoformat strings (legacy /
+  hand-edited storage) are coerced to UTC so downstream datetime
+  arithmetic never raises (review fix QS-256#02).
 - `last_command_execution_time` — in-memory causality anchor, set
   only on real `execute_command` successes (via the shared
   `_anchor_causality_guard_if_executed` helper called from

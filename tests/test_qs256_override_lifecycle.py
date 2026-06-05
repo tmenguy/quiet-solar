@@ -628,3 +628,153 @@ async def test_fix01_naive_override_time_at_check_site_does_not_crash():
         assert force_solve is True
         assert pump.external_user_initiated_state is None
         assert pump.external_user_initiated_state_time is None
+
+
+# =========================================================================
+# Review fix #02 — must-fix and should-fix findings
+# =========================================================================
+
+
+async def test_fix02_naive_asked_for_reset_time_restored_is_coerced():
+    """F1: a tz-naive stored reset-ask timestamp is coerced at restore."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        naive_ask = (RESTART_TIME - timedelta(seconds=30)).replace(tzinfo=None)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "asked_for_reset_user_initiated_state_time": naive_ask.isoformat(),
+            }
+        )
+        assert pump.asked_for_reset_user_initiated_state_time is not None
+        assert pump.asked_for_reset_user_initiated_state_time.tzinfo is not None
+        assert pump.asked_for_reset_user_initiated_state_time == RESTART_TIME - timedelta(seconds=30)
+
+
+async def test_fix02_naive_asked_for_reset_time_at_cooldown_site_no_crash():
+    """F1: the cooldown check coerces a naive timestamp instead of raising."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        pump.current_command = LoadCommand(command="idle", power_consign=0.0)
+        # naive timestamp injected straight onto the field (legacy path)
+        pump.asked_for_reset_user_initiated_state_time = (RESTART_TIME - timedelta(seconds=30)).replace(tzinfo=None)
+        # mismatching fresh state would classify a new override without cooldown
+        pump.hass.states.set(PUMP_ENTITY, "on", last_changed=RESTART_TIME)
+
+        await pump.check_load_activity_and_constraints(RESTART_TIME)
+
+        # inside the 180s cooldown: suppressed, no TypeError, field coerced
+        assert pump.external_user_initiated_state is None
+        assert pump.asked_for_reset_user_initiated_state_time is not None
+        assert pump.asked_for_reset_user_initiated_state_time.tzinfo is not None
+
+
+async def test_fix02_force_relaunch_drops_suppressed_command_state_matches_override():
+    """F2(a): stale running command under an override → no phantom ack."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump()
+        pump.external_user_initiated_state = "off"
+        pump.external_user_initiated_state_time = RESTART_TIME
+        pump.current_command = LoadCommand(command="idle", power_consign=0.0)
+        pump.running_command = LoadCommand(command="on", power_consign=1259.0)
+        pump.hass.states.set(PUMP_ENTITY, "off", last_changed=RESTART_TIME)
+
+        await pump.force_relaunch_command(RESTART_TIME + timedelta(minutes=1))
+
+        assert pump.transport_calls == []  # no service call
+        assert pump.running_command is None  # dropped, nothing to resurrect
+        assert pump.current_command == LoadCommand(command="idle", power_consign=0.0)  # no ack
+        assert pump.num_on_off == 0  # no counter increment
+        assert pump.last_command_execution_time is None  # no re-anchor
+
+
+async def test_fix02_force_relaunch_no_transport_call_when_state_unavailable_under_override():
+    """F2(b): entity unavailable under an active override → no transport call."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump()
+        pump.external_user_initiated_state = "off"
+        pump.external_user_initiated_state_time = RESTART_TIME
+        pump.running_command = LoadCommand(command="on", power_consign=1259.0)
+        pump.hass.states.set(PUMP_ENTITY, "unavailable", last_changed=RESTART_TIME)
+
+        await pump.force_relaunch_command(RESTART_TIME + timedelta(minutes=1))
+
+        assert pump.transport_calls == []
+        assert pump.running_command is None
+        assert pump.num_on_off == 0
+
+
+async def test_fix02_naive_state_last_changed_in_causality_guard_no_crash():
+    """F3: a tz-naive entity last_changed is coerced, not raised on."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump()
+        pump.current_command = LoadCommand(command="idle", power_consign=0.0)
+        pump.last_command_execution_time = RESTART_TIME
+        naive_stale = (RESTART_TIME - timedelta(seconds=1)).replace(tzinfo=None)
+        pump.hass.states.set(PUMP_ENTITY, "on", last_changed=naive_stale)
+
+        await pump.check_load_activity_and_constraints(RESTART_TIME + timedelta(minutes=2))
+
+        # stale (once coerced) → suppressed, no TypeError
+        assert pump.external_user_initiated_state is None
+
+
+async def test_fix02_future_dated_stored_override_is_dropped(caplog):
+    """F4: a stored override timestamp ahead of now is poison → dropped."""
+    caplog.set_level(logging.INFO, logger="custom_components.quiet_solar.ha_model.bistate_duration")
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        future_time = RESTART_TIME + timedelta(hours=1)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "external_user_initiated_state": "off",
+                "external_user_initiated_state_time": future_time.isoformat(),
+            }
+        )
+
+        assert pump.external_user_initiated_state is None
+        assert pump.external_user_initiated_state_time is None
+        assert pump.asked_for_reset_user_initiated_state_time is None
+        assert pump.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is None
+
+
+async def test_fix02_small_clock_skew_in_stored_override_is_tolerated():
+    """F4: a small (< 60s) future skew is NOT treated as poison."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump(override_duration_h=8.0)
+        slight_future = RESTART_TIME + timedelta(seconds=30)
+        pump.use_saved_extra_device_info(
+            {
+                "num_on_off": 0,
+                "current_command": None,
+                "last_state_change_time": None,
+                "last_check_update": None,
+                "external_user_initiated_state": "off",
+                "external_user_initiated_state_time": slight_future.isoformat(),
+            }
+        )
+
+        assert pump.external_user_initiated_state == "off"
+        assert pump.external_user_initiated_state_time == slight_future
+
+
+async def test_fix02_last_changed_none_with_anchor_suppresses_classification():
+    """F8: last_changed=None while an anchor exists → cannot prove freshness
+    → conservative: no override classified."""
+    with freeze_time(RESTART_TIME):
+        pump = _make_pump()
+        pump.current_command = LoadCommand(command="idle", power_consign=0.0)
+        pump.last_command_execution_time = RESTART_TIME
+        pump.hass.states.set(PUMP_ENTITY, "on", last_changed=RESTART_TIME)
+        pump.hass.states.get(PUMP_ENTITY).last_changed = None
+
+        await pump.check_load_activity_and_constraints(RESTART_TIME + timedelta(minutes=2))
+
+        assert pump.external_user_initiated_state is None

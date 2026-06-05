@@ -41,10 +41,10 @@ _LOGGER = logging.getLogger(__name__)
 # QS-256 (D4): named score spans for `LoadConstraint.score()`. The override
 # offset is the highest-order additive term granted to USER_OVERRIDE
 # constraints: ENERGY * RESERVED * TYPE_SPAN^2 == 1e14, which strictly
-# exceeds the maximum possible sum of all lower-order terms
-# (~2.0001e13: (1e6-1) + 1e12 + 9e12 + 1e13) with a 5x margin. The
-# dominance invariant is asserted from these constants in
-# tests/test_constraints.py.
+# exceeds the maximum possible sum of all lower-order terms — capped at
+# ~2.1e13 (< 1e6 energy + 1e12 load + < 1e13 type + 1e13 user), a ~4.7x
+# margin. The dominance invariant is asserted from these constants in
+# tests/test_constraints.py (the test is the source of truth).
 ENERGY_SCORE_SPAN = 1000000.0  # 1000 kWh
 RESERVED_LOAD_SCORE_SPAN = 1000000.0
 TYPE_SCORE_SPAN = 10.0
@@ -345,11 +345,21 @@ class LoadConstraint:
             user_score = 1.0
 
         override_score = 0.0
+        override_recency_score = 0.0
         if (
             self.load_info is not None
             and self.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
         ):
             override_score = 1.0
+            # review fix QS-256#02: deterministic override-vs-override
+            # tie-break — the NEWER override wins an otherwise exact score
+            # tie (e.g. a stale restored hold-off vs a freshly detected
+            # override). Bounded in (0, 0.5], strictly below the 1.0
+            # energy-score granularity, so it can only decide exact ties and
+            # never perturbs non-tie ordering.
+            if self.start_of_constraint != DATETIME_MIN_UTC:
+                age_s = max(0.0, (time - self.start_of_constraint).total_seconds())
+                override_recency_score = 1.0 / (2.0 + age_s)
 
         return (
             energy_score
@@ -360,11 +370,11 @@ class LoadConstraint:
             # ordering and same-end-time cluster dedup — see
             # USER_OVERRIDE_SCORE_OFFSET for the dominance math. A load has at
             # most ONE live override at a time (detection wipes constraints
-            # before pushing a new override constraint), so two constraints
-            # tying at this term cannot occur by construction; if that
-            # invariant ever broke, dedup would fall back to the lower-order
-            # terms (energy/type/user) like any other tie.
+            # before pushing a new override constraint); should that invariant
+            # ever break, the recency tie-break above keeps dedup
+            # deterministic (newer override wins).
             + USER_OVERRIDE_SCORE_OFFSET * override_score
+            + override_recency_score
         )
 
     @classmethod

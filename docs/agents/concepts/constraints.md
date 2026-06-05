@@ -53,8 +53,10 @@ The five priority tiers (highest first):
    `RESERVED_LOAD_SCORE_SPAN` / `TYPE_SCORE_SPAN` — for any constraint
    whose `load_info` originator is `user_override`, so override
    constraints always win allocation ordering and same-end-time
-   cluster dedup. A load has at most one live override at a time, so
-   ties at this term cannot occur by construction — QS-256.)
+   cluster dedup. A load has at most one live override at a time by
+   construction; should that ever break, a recency tie-break — bounded
+   in (0, 0.5], below the 1.0 energy-score granularity — makes the
+   NEWER override win an otherwise exact score tie — QS-256.)
 4. **FILLER** (score 3) — uses surplus only; never imports from grid.
 5. **FILLER_AUTO** (score 1) — opportunistic; runs whenever any
    surplus exists.

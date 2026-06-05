@@ -183,16 +183,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         super().use_saved_extra_device_info(stored_load_info)
 
         if self.external_user_initiated_state_time is not None:
-            # legacy/hand-edited storage may hold a tz-naive isoformat string:
-            # coerce to UTC so datetime arithmetic cannot raise TypeError
-            if self.external_user_initiated_state_time.tzinfo is None:
-                self.external_user_initiated_state_time = self.external_user_initiated_state_time.replace(
-                    tzinfo=pytz.UTC
-                )
+            # tz-awareness is guaranteed by the restore boundary
+            # (`AbstractLoad._restored_utc_datetime`, review fix QS-256#02)
             age_s = (datetime.now(pytz.UTC) - self.external_user_initiated_state_time).total_seconds()
-            if age_s > 3600.0 * self.override_duration:
+            # review fix QS-256#02: a clearly future-dated timestamp (clock
+            # skew, NTP correction) is poison too — drop rather than keep,
+            # with a small tolerance for benign skew
+            if age_s > 3600.0 * self.override_duration or age_s < -60.0:
                 _LOGGER.info(
-                    "use_saved_extra_device_info: dropping expired stored user override %s for load %s (age %ss)",
+                    "use_saved_extra_device_info: dropping expired or future-dated "
+                    "stored user override %s for load %s (age %ss)",
                     self.external_user_initiated_state,
                     self.name,
                     int(age_s),
@@ -467,6 +467,23 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         else:
             return self._state_on
 
+    def _get_active_override_constraint(self, time: datetime) -> LoadConstraint | None:
+        """Return the active USER_OVERRIDE-originated constraint, if any.
+
+        Review fix QS-256#02: the degraded-override nuance must inspect the
+        OVERRIDE constraint specifically — `get_current_active_constraint`
+        returns the FIRST active constraint, which can be a chained
+        non-override one.
+        """
+        for ct in self._constraints:
+            if (
+                ct.load_info is not None
+                and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+                and ct.is_constraint_active_for_time_period(time)
+            ):
+                return ct
+        return None
+
     def is_command_suppressed_by_override(self, time: datetime, command: LoadCommand) -> bool:
         """QS-256 (D1): drop commands that conflict with an active user override.
 
@@ -477,11 +494,14 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         if self.external_user_initiated_state is None:
             return False
 
-        ct = self.get_current_active_constraint(time)
-        if ct is not None and ct.load_param is not None and not ct.is_mandatory and command.is_off_or_idle():
-            # the override constraint has been degraded to non-mandatory:
-            # let off/idle commands through (mirrors execute_command)
-            return False
+        if command.is_off_or_idle():
+            # the nuance only applies to off/idle commands — resolve the
+            # override constraint explicitly by its originator
+            ct = self._get_active_override_constraint(time)
+            if ct is not None and ct.load_param is not None and not ct.is_mandatory:
+                # the override constraint has been degraded to non-mandatory:
+                # let off/idle commands through (mirrors execute_command)
+                return False
 
         return self.expected_state_from_command(command) != self.external_user_initiated_state
 
@@ -501,17 +521,21 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             return state.state == self.expected_state_from_command(command)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
-        # QS-256 (T5): this override interception block is the defensive
-        # last line of defense for the `force_relaunch_command` path, which
-        # bypasses the `launch_command` drop point — keep it intact.
+        # QS-256 (T5): this override interception block is pure defense in
+        # depth — both call sites (`launch_command` drop point and the
+        # `force_relaunch_command` suppression drop, review fix #02) already
+        # drop conflicting commands, so only override-aligned commands
+        # normally reach this point during an override.
 
         override_state = self.external_user_initiated_state
-        ct = self.get_current_active_constraint(time)
-        if ct is not None and ct.load_param is not None and self.external_user_initiated_state is not None:
-            if not ct.is_mandatory:
-                # if the override constraint is no more mandatory
-                if command.is_off_or_idle():
-                    override_state = None
+        if override_state is not None and command.is_off_or_idle():
+            # review fix QS-256#02: resolve the OVERRIDE constraint explicitly
+            # by originator (the first active constraint can be a chained
+            # non-override one)
+            ct = self._get_active_override_constraint(time)
+            if ct is not None and ct.load_param is not None and not ct.is_mandatory:
+                # the override constraint is no more mandatory
+                override_state = None
 
         if override_state is not None:
             _LOGGER.info(
@@ -750,20 +774,42 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         is_command_overridden_state_changed
                         and self.last_command_execution_time is not None
                         and state is not None
-                        and state.last_changed is not None
-                        and state.last_changed <= self.last_command_execution_time
                     ):
-                        _LOGGER.debug(
-                            "check_load_activity_and_constraints: bistate state %s for load %s "
-                            "is older than the last command execution (%s <= %s), not a user action",
-                            current_state,
-                            self.name,
-                            state.last_changed,
-                            self.last_command_execution_time,
-                        )
-                        is_command_overridden_state_changed = False
+                        # review fix QS-256#02: coerce a naive last_changed to
+                        # UTC (local variable — never mutate the HA state)
+                        state_last_changed = state.last_changed
+                        if state_last_changed is not None and state_last_changed.tzinfo is None:
+                            state_last_changed = state_last_changed.replace(tzinfo=pytz.UTC)
+
+                        if state_last_changed is None:
+                            # review fix QS-256#02: cannot prove the state is
+                            # fresher than our own last action — conservative:
+                            # do not classify a user override
+                            _LOGGER.debug(
+                                "check_load_activity_and_constraints: bistate state %s for load %s "
+                                "has no last_changed, cannot prove freshness, not a user action",
+                                current_state,
+                                self.name,
+                            )
+                            is_command_overridden_state_changed = False
+                        elif state_last_changed <= self.last_command_execution_time:
+                            _LOGGER.debug(
+                                "check_load_activity_and_constraints: bistate state %s for load %s "
+                                "is older than the last command execution (%s <= %s), not a user action",
+                                current_state,
+                                self.name,
+                                state_last_changed,
+                                self.last_command_execution_time,
+                            )
+                            is_command_overridden_state_changed = False
 
                     if self.asked_for_reset_user_initiated_state_time is not None:
+                        # review fix QS-256#02: coerce a legacy tz-naive
+                        # reset-ask timestamp before the subtraction
+                        if self.asked_for_reset_user_initiated_state_time.tzinfo is None:
+                            self.asked_for_reset_user_initiated_state_time = (
+                                self.asked_for_reset_user_initiated_state_time.replace(tzinfo=pytz.UTC)
+                            )
                         if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
                             float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
                         ):

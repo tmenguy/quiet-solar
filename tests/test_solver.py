@@ -2683,16 +2683,21 @@ def test_qs256_hold_off_and_chained_daily_constraint_solver_integration():
         f"ON command at {min(on_times)} violates the hold-off window ending {hold_off_end}"
     )
 
-    # the hold-off window itself is pinned to idle commands
+    # the hold-off window itself is pinned to idle commands — and the idle
+    # prefix must actually exist (review fix #02: no vacuous pass)
     in_window = [cmd for cmd_time, cmd in pump_cmds if cmd_time < boundary_floor]
+    assert in_window, "the hold-off window must emit an idle command prefix"
     assert all(cmd.is_off_or_idle() for cmd in in_window)
 
-    # enough on-time is allocated to meet the 3h daily target before 12:00
+    # enough on-time is allocated to meet the 3h daily target BEFORE the
+    # daily deadline (12:00) — runtime past the deadline must not count
+    # (review fix #02)
+    daily_deadline = daily.end_of_constraint
     last_cmd_time = None
     last_cmd = None
     on_seconds = 0.0
     for cmd_time, cmd in pump_cmds + [(end_time, copy_command(CMD_AUTO_GREEN_CAP))]:
-        if last_cmd is not None and not last_cmd.is_off_or_idle():
-            on_seconds += (cmd_time - last_cmd_time).total_seconds()
+        if last_cmd is not None and not last_cmd.is_off_or_idle() and last_cmd_time < daily_deadline:
+            on_seconds += (min(cmd_time, daily_deadline) - last_cmd_time).total_seconds()
         last_cmd_time, last_cmd = cmd_time, cmd
     assert on_seconds >= 3 * 3600.0 * 0.9

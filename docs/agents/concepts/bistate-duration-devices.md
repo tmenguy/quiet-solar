@@ -109,22 +109,28 @@ of the on/off behaviour unchanged.
   against `expected_state_from_command(command)` ONLY (the command's
   expected state, never the override state). Comparing against the
   override used to phantom-ack solver commands during an override.
-- `is_command_suppressed_by_override` (the `launch_command` drop-point
-  hook) returns True iff an override is active AND the command's
-  expected state differs from it — with the degraded-override nuance:
-  a non-mandatory override constraint lets off/idle commands through,
-  mirroring `execute_command`'s interception block (which stays as the
-  defensive guard for the `force_relaunch_command` path).
+- `is_command_suppressed_by_override` (the drop-point hook used by both
+  `launch_command` and `force_relaunch_command`) returns True iff an
+  override is active AND the command's expected state differs from it —
+  with the degraded-override nuance: a non-mandatory OVERRIDE constraint
+  (resolved explicitly by its `load_info` originator, NOT the first
+  active constraint) lets off/idle commands through, mirroring
+  `execute_command`'s interception block (now pure defense in depth).
+- The causality guard is conservative: a state whose `last_changed` is
+  missing (None) while a command-execution anchor exists cannot prove
+  freshness and is NOT classified as a user override; a tz-naive
+  `last_changed` is coerced to UTC locally.
 - An override to the idle state pushes a `TimeBasedHoldOffConstraint`
   (zero power, CMD_IDLE window) so the override ends through the
   constraint-ack path; if the computed end is already past (e.g.
   `override_duration` is 0), the override is reset directly instead —
   BOTH override directions share this expired-at-push guard.
 - `use_saved_extra_device_info` drops a stored override that is
-  already older than `override_duration` hours at restore time, and
-  coerces a legacy tz-naive stored timestamp to UTC (the legacy timer
-  check site applies the same coercion) so datetime arithmetic cannot
-  raise.
+  already older than `override_duration` hours at restore time — or
+  clearly future-dated (> 60s ahead, clock-skew poison). Stored
+  override timestamps are coerced tz-naive → UTC at the restore
+  boundary (`AbstractLoad._restored_utc_datetime`); the cooldown check
+  site coerces defensively too.
 
 ## Key types / structures
 

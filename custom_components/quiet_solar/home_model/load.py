@@ -727,6 +727,23 @@ class AbstractDevice:
             self.running_command = None
 
         if self.running_command is not None:
+            # review fix QS-256#02: a stale running command suppressed by an
+            # active user override must be DROPPED, not retried — retrying
+            # could phantom-ack it through the execute_command interception
+            # (entity already in the override state) or fight the user
+            if self.is_command_suppressed_by_override(time, self.running_command):
+                _LOGGER.info(
+                    "force_relaunch_command: command %s suppressed by user override for load %s, dropped",
+                    self.running_command,
+                    self.name,
+                )
+                self.running_command = None
+                self.running_command_num_relaunch = 0
+                self.running_command_num_relaunch_after_invalid = 0
+                self.running_command_first_launch = None
+                self.running_command_last_launch = None
+                return
+
             _LOGGER.info(
                 f"force launch command {self.running_command.command} for this load {self.name} (#{self.running_command_num_relaunch})"
             )
@@ -886,31 +903,36 @@ class AbstractLoad(AbstractDevice):
                 f"{self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done}"
             )
 
+    @staticmethod
+    def _restored_utc_datetime(value: str | None) -> datetime | None:
+        """Parse a stored isoformat timestamp, coercing tz-naive values to UTC.
+
+        Review fix QS-256#02: legacy or hand-edited `.storage` entries can
+        hold tz-naive strings; downstream datetime arithmetic against
+        tz-aware "now" values would raise TypeError.
+        """
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=pytz.UTC)
+        return parsed
+
     def use_saved_extra_device_info(self, stored_load_info: dict):
         super().use_saved_extra_device_info(stored_load_info)
         self.external_user_initiated_state = stored_load_info.get("external_user_initiated_state", None)
 
-        self.external_user_initiated_state_time = stored_load_info.get("external_user_initiated_state_time", None)
-        if self.external_user_initiated_state_time is not None:
-            self.external_user_initiated_state_time = datetime.fromisoformat(
-                stored_load_info.get("external_user_initiated_state_time", None)
-            )
-
-        self.asked_for_reset_user_initiated_state_time = stored_load_info.get(
-            "asked_for_reset_user_initiated_state_time", None
+        self.external_user_initiated_state_time = self._restored_utc_datetime(
+            stored_load_info.get("external_user_initiated_state_time", None)
         )
-        if self.asked_for_reset_user_initiated_state_time is not None:
-            self.asked_for_reset_user_initiated_state_time = datetime.fromisoformat(
-                stored_load_info.get("asked_for_reset_user_initiated_state_time", None)
-            )
 
-        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = stored_load_info.get(
-            "asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None
+        self.asked_for_reset_user_initiated_state_time = self._restored_utc_datetime(
+            stored_load_info.get("asked_for_reset_user_initiated_state_time", None)
         )
-        if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-            self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = datetime.fromisoformat(
-                stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None)
-            )
+
+        self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = self._restored_utc_datetime(
+            stored_load_info.get("asked_for_reset_user_initiated_state_time_first_cmd_reset_done", None)
+        )
 
     def get_override_state(self):
 

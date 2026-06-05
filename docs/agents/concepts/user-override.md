@@ -69,9 +69,10 @@ an externally-detected override are constraint-driven:
 - `LoadConstraint.score()` gives any USER_OVERRIDE-originated
   constraint a highest-order additive term (1e14) so it always wins
   allocation ordering and same-end-time cluster dedup.
-- A command that conflicts with an active override is DROPPED at the
-  `launch_command` drop point (`is_command_suppressed_by_override`),
-  never phantom-acked.
+- A command that conflicts with an active override is DROPPED, never
+  phantom-acked: `launch_command` drops it at the drop point and
+  `force_relaunch_command` drops a stale suppressed `running_command`
+  (both via `is_command_suppressed_by_override`).
 - A state mismatch only classifies as a NEW override when the entity
   state is newer than `last_command_execution_time` (causality guard)
   and the 180s post-override cooldown has elapsed.

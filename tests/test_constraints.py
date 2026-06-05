@@ -10,6 +10,8 @@ import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
@@ -1751,7 +1753,7 @@ def _make_hold_off(
         time=time,
         load=load,
         load_param="off",
-        load_info={"originator": "user_override"},
+        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
         from_user=True,
         type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
         start_of_constraint=start,
@@ -2076,3 +2078,71 @@ def test_hold_off_repartition_start_beyond_every_slot_does_not_raise():
     )
 
     assert result[4] == num_slots - 1  # clamped, no IndexError
+
+
+def test_qs256_newer_override_wins_same_end_cluster_dedup():
+    """Review fix #02: deterministic override-vs-override tie-break — the
+    NEWER override wins same-end-time cluster dedup on otherwise-tied scores."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = MinimalTestLoad(name="tie_load")
+    end = time + timedelta(hours=2)
+
+    old_override = _make_hold_off(load=load, time=time)
+    old_override.start_of_constraint = time - timedelta(hours=4)
+    old_override.current_start_of_constraint = time - timedelta(hours=4)
+    old_override.end_of_constraint = end
+
+    new_override = _make_hold_off(load=load, time=time)
+    new_override.start_of_constraint = time
+    new_override.current_start_of_constraint = time
+    new_override.end_of_constraint = end
+
+    assert new_override.score(time) > old_override.score(time)
+
+    load.set_live_constraints(time, [old_override, new_override])
+    assert load._constraints == [new_override]
+
+
+def test_qs256_override_recency_tiebreak_is_bounded_by_energy_granularity():
+    """The recency term stays below the 1.0 energy-score granularity: an
+    OLDER override with one more Wh still outranks a newer one."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=2)
+
+    def _override(start, energy_wh):
+        return MultiStepsPowerLoadConstraint(
+            time=time,
+            load=load,
+            load_param="on",
+            load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE},
+            from_user=True,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            start_of_constraint=start,
+            end_of_constraint=end,
+            initial_value=0,
+            target_value=float(energy_wh),
+            power_steps=[LoadCommand(command="on", power_consign=1000.0)],
+        )
+
+    older_more_energy = _override(time - timedelta(hours=4), 101)
+    newer_less_energy = _override(time, 100)
+
+    assert older_more_energy.score(time) > newer_less_energy.score(time)
+
+
+def test_qs256_override_without_start_gets_zero_recency():
+    """An override with no start (DATETIME_MIN sentinel) has no recency term."""
+    time = datetime(2026, 6, 4, 12, 0, 0, tzinfo=pytz.UTC)
+    load = _FakeLoad()
+    end = time + timedelta(hours=2)
+
+    no_start = _make_hold_off(load=load, time=time)
+    no_start.start_of_constraint = datetime.min.replace(tzinfo=pytz.UTC)
+    no_start.end_of_constraint = end
+
+    with_start = _make_hold_off(load=load, time=time)
+    with_start.start_of_constraint = time
+    with_start.end_of_constraint = end
+
+    assert with_start.score(time) > no_start.score(time)

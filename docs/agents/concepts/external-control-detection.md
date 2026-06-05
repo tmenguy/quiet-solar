@@ -60,7 +60,9 @@ of the bistate detection in
    `last_command_execution_time` (set on real service-call executions
    and anchored at storage restore when a `current_command` is
    restored). A stale state — e.g. a lagging template-switch mirror
-   right after an HA restart — is not a user action.
+   right after an HA restart — is not a user action. Conservative
+   edge: `last_changed = None` while an anchor exists cannot prove
+   freshness → no override is classified.
 2. **Cooldown** — after an override resets, no new override is
    classified for `USER_OVERRIDE_STATE_BACK_DURATION_S` (180s),
    bounded by half the override window.

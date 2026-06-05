@@ -2212,3 +2212,29 @@ class TestQS256UserCleanAndReset:
         # CMD_IDLE launched and acked (probe returns True)
         assert device.current_command is not None
         assert device.current_command.is_off_or_idle()
+
+
+@pytest.mark.asyncio
+async def test_force_relaunch_drops_suppressed_running_command():
+    """Review fix #02: a suppressed stale running command is dropped in
+    force_relaunch_command — no execution, no ack, counters unwound."""
+    device = _ExecRecordingLoad(name="force_drop_load")
+    device.is_command_suppressed_by_override = MagicMock(return_value=True)
+    device.current_command = copy_command(CMD_ON, power_consign=100.0)
+    device.running_command = copy_command(CMD_ON, power_consign=500.0)
+    device.running_command_num_relaunch = 2
+    device.running_command_num_relaunch_after_invalid = 1
+    device.running_command_first_launch = _t(0)
+    device.running_command_last_launch = _t(0)
+
+    await device.force_relaunch_command(_t(1))
+
+    assert device.exec_calls == []
+    assert device.running_command is None
+    assert device.current_command == copy_command(CMD_ON, power_consign=100.0)
+    assert device.num_on_off == 0
+    assert device.last_command_execution_time is None
+    assert device.running_command_num_relaunch == 0
+    assert device.running_command_num_relaunch_after_invalid == 0
+    assert device.running_command_first_launch is None
+    assert device.running_command_last_launch is None
