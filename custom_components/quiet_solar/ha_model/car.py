@@ -469,12 +469,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return
 
         if self.home:
-            for car in self.home._cars:
-                if car.name != self.name and car.get_user_originated("person_name") == new_value:
-                    # the person is being reassigned to self; the other car's
-                    # entire snapshot (charge targets, times, etc.) was tied
-                    # to that person, so clear everything.
-                    car.clear_all_user_originated()
+            if new_value != FORCE_CAR_NO_PERSON_ATTACHED:
+                for car in self.home._cars:
+                    if car.name != self.name and car.get_user_originated("person_name") == new_value:
+                        # the person is being reassigned to self; the other car's
+                        # entire snapshot (charge targets, times, etc.) was tied
+                        # to that person, so clear everything.
+                        car.clear_all_user_originated()
 
             await self.home.compute_and_set_best_persons_cars_allocations(force_update=True, do_notify=True)
 

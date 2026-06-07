@@ -323,6 +323,81 @@ class TestPersonSwapNotification:
         assert "PersonY" in notified, "PersonY should be notified of the swap"
 
 
+class TestNoPersonMultipleCars:
+    """Regression tests for issue #260: setting "no person" on a second car
+    must not clear the first car's user-originated "no person" selection."""
+
+    @pytest.mark.asyncio
+    async def test_no_person_on_two_cars_preserves_both(self):
+        """AC1: setting FORCE_CAR_NO_PERSON_ATTACHED on Twingo and then Zoe
+        must keep BOTH cars pinned to "no person" — the second call must not
+        wipe the first car's user-originated state."""
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        # Both cars must hold a forecasted person, otherwise the early
+        # return in user_set_person_for_car skips the clearing loop and the
+        # test would pass even on unfixed code.
+        assert _person_name(twingo) == "Arthur"
+        assert _person_name(zoe) == "Magali"
+
+        await twingo.user_set_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
+
+        # Intermediate state: Twingo is pinned to "no person".
+        assert twingo.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
+        assert twingo.current_forecasted_person is None
+
+        await zoe.user_set_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
+
+        # Final state: Twingo's manual "no person" survived the second call
+        # (the forced reallocation must keep it pinned), and Zoe is also
+        # pinned to "no person".
+        assert twingo.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
+        assert twingo.current_forecasted_person is None
+        assert zoe.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
+        assert zoe.current_forecasted_person is None
+
+    @pytest.mark.asyncio
+    async def test_no_person_preserves_other_manual_person(self):
+        """AC2: setting "no person" on Zoe must not touch Twingo's manual
+        real-person assignment."""
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        await twingo.user_set_person_for_car("Arthur")
+        assert twingo.get_user_originated("person_name") == "Arthur"
+
+        await zoe.user_set_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
+
+        assert twingo.get_user_originated("person_name") == "Arthur"
+        assert _person_name(twingo) == "Arthur"
+        assert zoe.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
+        assert zoe.current_forecasted_person is None
+
+    @pytest.mark.asyncio
+    async def test_no_person_frees_person_for_reallocation(self):
+        """AC4: setting "no person" on Twingo must still trigger a full
+        reallocation of the other cars. Arthur (displaced from Twingo) lands
+        on Zoe deterministically: with Twingo pinned out, Zoe is Arthur's
+        only remaining authorized car. Magali, displaced from Zoe, lands on
+        IDBuzz."""
+        home, tesla, twingo, zoe, idbuzz, arthur, magali, thomas, brice = _build_scenario()
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        assert _person_name(twingo) == "Arthur"
+        assert _person_name(zoe) == "Magali"
+
+        await twingo.user_set_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
+
+        # Twingo stays pinned to "no person".
+        assert twingo.get_user_originated("person_name") == FORCE_CAR_NO_PERSON_ATTACHED
+        assert twingo.current_forecasted_person is None
+        # Arthur was reallocated to Zoe (his only remaining authorized car).
+        assert _person_name(zoe) == "Arthur"
+        # Magali, displaced from Zoe, landed on IDBuzz.
+        assert _person_name(idbuzz) == "Magali"
+
+
 class TestCacheHitReApply:
     """Cover the cache-hit re-apply branch (home.py lines 2358-2367)."""
 
