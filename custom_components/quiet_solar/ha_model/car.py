@@ -824,6 +824,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._computed_added_delta_soc_percent = None
             self._delta_soc_last_integration_time = None
 
+    def reset_car_api_stale_detection(self) -> None:
+        """Reset the detected stale state so the live API gets a fresh chance.
+
+        Never touches `car_stale_mode_override`: an explicit Force stale /
+        Force not stale select override is preserved; only the detected
+        state is cleared.
+        """
+        _LOGGER.debug("Resetting detected car API stale state for %s", self.name)
+        self._exit_stale_mode()
+        self._was_car_api_stale = False
+
     def _charger_assignment_is_user_originated(self) -> bool:
         """Return True when the current charger assignment originates from the user.
 
@@ -2577,6 +2588,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if charger_name == FORCE_CAR_NO_CHARGER_CONNECTED:
             self.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
             self.clear_inferred_flags()
+            self.reset_car_api_stale_detection()
         elif charger_name is not None:
             charger = None
             for c in self.home._chargers:
@@ -2603,6 +2615,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self.current_forecasted_person = None
         self.reset_soc_estimate()
+        self.reset_car_api_stale_detection()
 
         self.reset(keep_commands=True)  # will detach the car
 

@@ -28,6 +28,7 @@ from custom_components.quiet_solar.const import (
     CAR_STALE_MODE_AUTO,
     CAR_STALE_MODE_FORCE_NOT_STALE,
     CAR_STALE_MODE_FORCE_STALE,
+    CHARGER_NO_CAR_CONNECTED,
     FORCE_CAR_NO_CHARGER_CONNECTED,
     SELECT_CAR_STALE_MODE,
     USER_ORIGINATED_CAR_NAME,
@@ -1827,3 +1828,154 @@ class TestGuestToKnownCarTransition:
 
         best = charger.get_best_car(now)
         assert best.name == "Twingo"
+
+
+# ── QS-262: Stale-detection reset triggers ───────────────────────────
+
+
+class TestStaleResetTriggers:
+    """Reset of detected car API stale state on the three manual triggers.
+
+    Triggers: the clean-and-reset button (`user_clean_and_reset`), a manual
+    `FORCE_CAR_NO_CHARGER_CONNECTED` select on the car, and a manual
+    charger-side car allocation that displaces the currently attached car.
+    """
+
+    @staticmethod
+    def _stage_detected_stale(car, time):
+        """Stage a car in detected (contradiction-flagged) stale state."""
+        car._car_api_stale = True
+        car.car_api_stale_percent_mode = True
+        car._car_api_stale_since = time
+        car._car_api_inferred_home = True
+        car._car_api_inferred_plugged = True
+        car._was_car_api_stale = True
+        car._last_valid_base_soc_value = 55.0
+
+    @staticmethod
+    def _assert_detected_cleared(car):
+        """Assert all detected stale fields are reset (AC1 field set)."""
+        assert car._car_api_stale is False
+        assert car.car_api_stale_percent_mode is False
+        assert car._car_api_stale_since is None
+        assert car._was_car_api_stale is False
+        assert car._car_api_inferred_home is False
+        assert car._car_api_inferred_plugged is False
+        assert car._last_valid_base_soc_value is None
+
+    @staticmethod
+    def _make_charger_with_attached(car):
+        """Build a real charger with ``car`` attached (charger-side + backref)."""
+        from tests.test_charger_additional_coverage import (
+            create_charger_generic,
+            create_mock_hass,
+            create_mock_home,
+        )
+
+        hass = create_mock_hass()
+        home = create_mock_home(hass)
+        charger = create_charger_generic(hass, home)
+        charger.car = car
+        car.charger = charger
+        return charger
+
+    async def _run_reset_path(self, entry_point, car):
+        """Drive one of the three manual reset entry points on ``car``."""
+        if entry_point == "clean_and_reset":
+            await car.user_clean_and_reset()
+        elif entry_point == "no_charger_select":
+            await car.user_set_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
+        else:  # "charger_displacement"
+            charger = self._make_charger_with_attached(car)
+            with patch.object(charger, "update_charger_for_user_change", new_callable=AsyncMock):
+                await charger.user_set_selected_car_by_name("Some Other Car")
+
+    async def test_no_charger_select_resets_stale_detection(self, real_car, current_time):
+        """AC1: manual FORCE_CAR_NO_CHARGER_CONNECTED clears detected stale state."""
+        self._stage_detected_stale(real_car, current_time)
+
+        await real_car.user_set_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
+
+        self._assert_detected_cleared(real_car)
+        assert real_car.is_car_effectively_stale(current_time) is False
+
+    @pytest.mark.parametrize(
+        "entry_point",
+        ["clean_and_reset", "no_charger_select", "charger_displacement"],
+    )
+    async def test_reset_preserves_force_stale_override(self, entry_point, real_car, current_time):
+        """AC2: an explicit Force-stale override survives every reset path."""
+        self._stage_detected_stale(real_car, current_time)
+        real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_STALE
+
+        await self._run_reset_path(entry_point, real_car)
+
+        assert real_car.car_stale_mode_override == CAR_STALE_MODE_FORCE_STALE
+        assert real_car.is_car_effectively_stale(current_time) is True
+        self._assert_detected_cleared(real_car)
+
+    async def test_clean_and_reset_resets_stale_detection(self, real_car, current_time):
+        """AC3: the clean-and-reset button clears detected stale state."""
+        self._stage_detected_stale(real_car, current_time)
+
+        await real_car.user_clean_and_reset()
+
+        self._assert_detected_cleared(real_car)
+        assert real_car.is_car_effectively_stale(current_time) is False
+
+    async def test_departure_auto_reset_resets_stale_detection(self, real_car, current_time):
+        """AC3: the departure auto-reset path inherits the stale reset."""
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        self._stage_detected_stale(real_car, current_time)
+
+        # First call starts the departure timer.
+        await real_car._check_departure_auto_reset(current_time)
+        assert real_car._car_not_home_since == current_time
+
+        # After the confirmation window the real user_clean_and_reset fires.
+        later_time = current_time + timedelta(seconds=CAR_NOT_HOME_AUTO_RESET_S)
+        await real_car._check_departure_auto_reset(later_time)
+
+        assert real_car._departure_auto_reset_done is True
+        self._assert_detected_cleared(real_car)
+        assert real_car.is_car_effectively_stale(later_time) is False
+
+    async def test_charger_side_manual_allocation_resets_displaced_car(self, real_car, current_time):
+        """AC4: a manual charger-side car pick resets the displaced car."""
+        charger = self._make_charger_with_attached(real_car)
+        self._stage_detected_stale(real_car, current_time)
+
+        with patch.object(charger, "update_charger_for_user_change", new_callable=AsyncMock):
+            await charger.user_set_selected_car_by_name("Another Car")
+
+        # Displaced car detached AND reset.
+        assert charger.car is None
+        assert real_car.charger is None
+        self._assert_detected_cleared(real_car)
+        assert real_car.is_car_effectively_stale(current_time) is False
+
+    async def test_charger_side_no_car_selection_resets_displaced_car(self, real_car, current_time):
+        """AC4 variant: selecting CHARGER_NO_CAR_CONNECTED resets the displaced car."""
+        charger = self._make_charger_with_attached(real_car)
+        self._stage_detected_stale(real_car, current_time)
+
+        with patch.object(charger, "update_charger_for_user_change", new_callable=AsyncMock):
+            await charger.user_set_selected_car_by_name(CHARGER_NO_CAR_CONNECTED)
+
+        assert charger.car is None
+        assert real_car.charger is None
+        self._assert_detected_cleared(real_car)
+
+    async def test_plain_detach_car_does_not_reset_stale_detection(self, real_car, current_time):
+        """AC5: a direct detach_car (the automatic primitive) keeps detected stale state."""
+        charger = self._make_charger_with_attached(real_car)
+        self._stage_detected_stale(real_car, current_time)
+
+        charger.detach_car()
+
+        # Only the inferred flags are cleared — the stale episode is preserved.
+        assert real_car.car_api_stale_percent_mode is True
+        assert real_car._car_api_stale_since == current_time
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False

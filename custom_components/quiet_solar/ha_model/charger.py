@@ -3047,7 +3047,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
     async def user_set_selected_car_by_name(self, car_name: str | None):
         self.set_user_originated(USER_ORIGINATED_CAR_NAME, car_name)
         if self.car is not None and self.car.name != car_name:
+            displaced_car = self.car
             self.detach_car()
+            displaced_car.reset_car_api_stale_detection()
 
         await self.update_charger_for_user_change()
 

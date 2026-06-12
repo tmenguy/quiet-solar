@@ -4,7 +4,7 @@ slug: car-soc-estimation
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-05-30
+last_verified: 2026-06-13
 ---
 
 # Car SOC estimation — the effective-SOC model
@@ -94,6 +94,17 @@ charger computes `inc` from `soc_integration_cursor` then calls
   override owns its own accumulator lifecycle, so a transient stale blip must
   not wipe its accumulated delta. The user base is never cleared by stale-mode
   exit.
+- **Manual stale-detection reset** (`reset_car_api_stale_detection`): three
+  manual user actions give the live API a fresh chance by calling
+  `_exit_stale_mode` and clearing `_was_car_api_stale` (the *detected* state
+  only — `car_stale_mode_override` is preserved, so a Force-stale override
+  still wins): the car's clean-and-reset button (`user_clean_and_reset`, which
+  also covers the departure auto-reset path), a manual
+  `FORCE_CAR_NO_CHARGER_CONNECTED` select on the car, and a manual
+  charger-side car allocation that displaces the currently attached car
+  (`user_set_selected_car_by_name`, including `CHARGER_NO_CAR_CONNECTED`).
+  Automatic detaches (`detach_car` on its own) deliberately do **not** reset —
+  they keep the stale episode.
 - Estimation is **orthogonal** to `is_car_effectively_stale`: a manual
   override on a healthy API marks the car *estimated* (asterisk) but **not**
   API-stale.
