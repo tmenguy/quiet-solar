@@ -4001,6 +4001,9 @@ async def test_charger_best_car_and_user_selection(
         def clear_user_originated(self, key):
             self._user_originated.pop(key, None)
 
+        def reset_car_api_stale_detection(self) -> None:
+            pass
+
         def __hash__(self) -> int:
             return id(self)
 
