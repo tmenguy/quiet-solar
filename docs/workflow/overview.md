@@ -15,7 +15,7 @@ isolated in `scripts/qs/launchers/`.
 | Phase            | Where it runs        | What it produces                            |
 | ---------------- | -------------------- | ------------------------------------------- |
 | `setup-task`     | main checkout        | issue, branch `QS_<N>`, worktree            |
-| `create-plan`    | worktree             | story file at `docs/stories/QS-<N>.story.md`, committed |
+| `create-plan`    | worktree             | story file at `docs/stories/QS-<N>.story.md` via an interactive discuss/review/finalize loop, committed at finalize |
 | `implement-task` | worktree             | TDD code, green quality gate, PR opened     |
 | `review-task`    | worktree             | parallel adversarial review, fix-plan loop  |
 | `finish-task`    | worktree             | PR merged, worktree removed                 |
@@ -38,17 +38,23 @@ under `legacy/`; this is the only supported model going forward.
 
 ## Adversarial review (parallel sub-agents)
 
-Two phases fan out into four parallel sub-agents that each look at the
-same input through a different lens:
+Two phases fan out into parallel sub-agents that each look at the same
+input through a different lens:
 
-- **create-plan** spawns: `qs-plan-critic`, `qs-plan-concrete-planner`,
-  `qs-plan-dev-proxy`, `qs-plan-scope-guardian`.
-- **review-task** spawns: `qs-review-blind-hunter`,
+- **create-plan** is an on-demand, repeatable review inside its mode
+  loop. **Round 1** spawns the 4 global plan reviewers —
+  `qs-plan-critic`, `qs-plan-concrete-planner`, `qs-plan-dev-proxy`,
+  `qs-plan-scope-guardian`. **Round 2+** spawns those four **plus
+  `qs-plan-delta-auditor`**, a fifth diff-aware reviewer fed an
+  in-context diff of the plan's edits + the prior round's accepted
+  findings.
+- **review-task** always spawns four: `qs-review-blind-hunter`,
   `qs-review-edge-case-hunter`, `qs-review-acceptance-auditor`,
   `qs-review-coderabbit`.
 
-All four must be spawned in **one message with four parallel sub-agent
-invocations** — serial spawning defeats the design (later reviewers see
+All of a round's reviewers must be spawned in **one message with
+parallel sub-agent invocations** (four, or five for a round-2+ plan
+review) — serial spawning defeats the design (later reviewers see
 earlier findings and conform to them). See
 [adversarial-review.md](adversarial-review.md) for the full pattern.
 

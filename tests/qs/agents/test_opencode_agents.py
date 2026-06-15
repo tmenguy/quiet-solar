@@ -80,6 +80,7 @@ SUB_AGENT_NAMES: tuple[str, ...] = (
     "qs-plan-concrete-planner",
     "qs-plan-dev-proxy",
     "qs-plan-scope-guardian",
+    "qs-plan-delta-auditor",
     "qs-review-blind-hunter",
     "qs-review-edge-case-hunter",
     "qs-review-acceptance-auditor",

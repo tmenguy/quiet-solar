@@ -62,6 +62,7 @@ LSP_EXCLUDE_AGENTS: tuple[str, ...] = (
     "qs-plan-critic",
     "qs-plan-dev-proxy",
     "qs-plan-scope-guardian",
+    "qs-plan-delta-auditor",
     "qs-review-blind-hunter",
     "qs-review-coderabbit",
     "qs-finish-task",
