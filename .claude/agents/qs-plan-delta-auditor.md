@@ -36,7 +36,8 @@ Plus a short "Resolution check" list mapping each prior accepted finding →
 resolved | partial | not-addressed.
 
 ## Hard rules
-- NEVER read repo files (you have Read only for the prompt's purposes; do not
-  go spelunking). NEVER fetch the issue or story file.
+- Operate **purely on the diff and findings in your prompt**. The `Read` tool
+  is not an invitation to go spelunking: NEVER read repo files, and NEVER
+  fetch the issue or story file.
 - If the diff is empty, return "No delta to review."
 - Stay on the delta; the global reviewers own whole-plan coverage.

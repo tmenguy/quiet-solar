@@ -73,10 +73,39 @@ CREATE_PLAN_FORBIDDEN_MARKERS: tuple[str, ...] = (
 DELTA_AUDITOR_NAME = "qs-plan-delta-auditor"
 
 
+# AC8 — the three workflow docs must describe the 5th reviewer and the
+# round asymmetry (review-fix #01 should-fix). ``check_doc_drift.py``
+# only enforces co-modification (that the docs were *edited* alongside
+# the agents), not content, so without these pins a future edit could
+# silently drop the round-asymmetry paragraph. Per-doc marker sets
+# (each doc phrases it slightly differently — see the doc bodies).
+DOC_AC8_MARKERS: dict[str, tuple[str, ...]] = {
+    "docs/workflow/overview.md": (
+        "qs-plan-delta-auditor",
+        "Round 2+",
+        "diff-aware",
+        "in-context diff",
+    ),
+    "docs/workflow/adversarial-review.md": (
+        "qs-plan-delta-auditor",
+        "Round asymmetry",
+        "round 2+",
+        "diff-aware",
+    ),
+    "docs/workflow/phase-protocols.md": (
+        "qs-plan-delta-auditor",
+        "round 2+",
+        "in-context diff",
+    ),
+}
+
+
 def _harness_id(p: Path) -> str:
-    # Mirror test_doc_maintenance_parity: strip the leading dot so
-    # ``pytest -k claude`` works without the dot being read as a regex
-    # meta-char.
+    # Mirror test_doc_maintenance_parity: strip the leading dot so the
+    # parametrize id is ``claude`` rather than ``.claude`` (a leading dot
+    # is awkward in test-selection filters). Run these via
+    # ``python scripts/qs/quality_gate.py --quick tests/qs/agents`` — the
+    # single test entry point.
     return p.parent.name.lstrip(".")
 
 
@@ -110,6 +139,32 @@ def test_create_plan_body_drops_linear_pipeline_marker(
         f"linear protocol with early persistence (F10) and cuts scoped / "
         f"quick-check reviews (F3)."
     )
+
+
+@pytest.mark.parametrize(
+    ("doc_rel", "markers"),
+    list(DOC_AC8_MARKERS.items()),
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_workflow_docs_describe_fifth_reviewer(
+    doc_rel: str, markers: tuple[str, ...],
+) -> None:
+    """AC8 — the workflow docs pin the 5th reviewer + round asymmetry.
+
+    Content pin (review-fix #01): ``check_doc_drift.py`` enforces only
+    that these docs are co-edited with the agents, not what they say.
+    These markers fail loudly if the round-asymmetry / delta-auditor
+    prose is dropped on a future edit.
+    """
+    path = REPO_ROOT / doc_rel
+    assert path.is_file(), f"Missing workflow doc: {path}"
+    body = path.read_text(encoding="utf-8")
+    for marker in markers:
+        assert marker in body, (
+            f"{doc_rel}: missing AC8 marker {marker!r} — the doc must keep "
+            f"describing the 5th reviewer (qs-plan-delta-auditor) and the "
+            f"round-1 vs round-2+ asymmetry."
+        )
 
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)

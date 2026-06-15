@@ -9,7 +9,7 @@ split and the plugin-enablement schema cannot silently regress:
   ``code.claude.com/docs/en/sub-agents``), the ``LSP`` tool — and its
   auto post-edit diagnostics, which are a behavior of the same tool —
   stays inactive for any agent that omits it.
-- ``test_lsp_excluded_on_blind_and_merge_agents`` — the 7
+- ``test_lsp_excluded_on_blind_and_merge_agents`` — the 8
   context-starved reviewers / merge / release agents do **not** list
   ``LSP``. The blind reviewers' design forbids reading the codebase, so
   granting them code navigation would be a direct hard-rule violation.

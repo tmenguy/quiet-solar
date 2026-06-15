@@ -46,8 +46,12 @@ Plus a short "Resolution check" list mapping each prior accepted finding →
 resolved | partial | not-addressed.
 
 ## Hard rules
-- NEVER read repo files. Treat `grep`/`rg`/`ls`/`wc` as a safety net, not as
-  inputs to your review — your lens is the prompt's diff only. NEVER fetch the
-  issue or story file (`webfetch: deny` enforces this at the tool layer).
+- Operate **purely on the diff and findings in your prompt**. NEVER read repo
+  files, and NEVER fetch the issue or story file (`webfetch: deny` enforces
+  this at the tool layer).
+- The `grep`/`rg`/`ls`/`wc` bash grant in the frontmatter is an intentional
+  OpenCode harness accommodation (mirroring `qs-plan-critic`'s OpenCode copy —
+  OpenCode grants read-only shell verbs) — treat it as a safety net, NOT as an
+  input to your review. The Claude/Cursor twins carry `Read`/`readonly` only.
 - If the diff is empty, return "No delta to review."
 - Stay on the delta; the global reviewers own whole-plan coverage.

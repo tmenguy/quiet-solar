@@ -132,14 +132,13 @@ invocations**:
   `qs-plan-concrete-planner`, `qs-plan-dev-proxy`,
   `qs-plan-scope-guardian` — each on the whole plan.
 - **Round 2+:** the same 4 global reviewers **plus
-  `qs-plan-delta-auditor`**. You hold both the previously-reviewed plan
-  text and the current text in-session, compute a unified
-  **in-context diff** (no `.qs/` snapshot files, no git diff), then paste
-  that diff
-  plus the prior round's accepted-findings list into the delta-auditor's
-  prompt. The delta-auditor has `tools: Read` only and never diffs
-  anything itself — its job is to (a) verify prior accepted findings
-  were resolved and (b) flag new contradictions the edits introduced.
+  `qs-plan-delta-auditor`**. Hold both the previously-reviewed plan text
+  and the current text in-session, compute a unified **in-context diff**
+  (no `.qs/` snapshot files, no git diff), and paste that diff plus the
+  prior round's accepted-findings list into the delta-auditor's prompt.
+  The delta-auditor has `tools: Read` only and never diffs anything
+  itself — its job is to (a) verify prior accepted findings were resolved
+  and (b) flag new contradictions the edits introduced.
 
 Pass each global reviewer its usual artifact: `qs-plan-critic` — plan
 text only; `qs-plan-concrete-planner` — plan + file tree + source
