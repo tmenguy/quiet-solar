@@ -144,7 +144,11 @@ def test_create_plan_body_drops_linear_pipeline_marker(
 @pytest.mark.parametrize(
     ("doc_rel", "markers"),
     list(DOC_AC8_MARKERS.items()),
-    ids=lambda v: v if isinstance(v, str) else "",
+    # Explicit id list (one per doc) — a callable ``ids`` is invoked
+    # per-arg (doc_rel AND markers), so the markers tuple rendered an
+    # empty trailing-dash segment (review-fix #02). The doc path alone
+    # is the clean, filterable id.
+    ids=list(DOC_AC8_MARKERS.keys()),
 )
 def test_workflow_docs_describe_fifth_reviewer(
     doc_rel: str, markers: tuple[str, ...],
