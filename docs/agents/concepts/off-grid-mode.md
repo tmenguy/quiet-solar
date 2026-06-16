@@ -4,7 +4,7 @@ slug: off-grid-mode
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-05-23
+last_verified: 2026-06-16
 ---
 
 # Off-grid mode
@@ -80,6 +80,49 @@ mode = NORMAL → resume FILLER → broadcast recovery
   storms.
 - Trying to keep `FILLER_AUTO` loads running on battery. The whole
   point of shedding is to extend battery life during the outage.
+
+## Battery outage reserve is a native inverter concern (not QS-managed)
+
+Holding a slice of battery charge so the house survives the *instant*
+the grid drops is **not** something quiet-solar implements — it is a
+native inverter / backup-gateway setting, and that is a deliberate
+decision (QS-264).
+
+- **Software enforcement blacks out the transition.** Any QS-side way
+  of holding a reserve — forcing the battery's max-discharge power to
+  0, or raising a minimum-SOC floor — is still *in place* at the
+  instant the grid fails. QS only learns of the outage after the fact
+  (state change → service call → inverter reacts), so the reserve it
+  "saved" is locked behind the very block it must then race to lift.
+  The release at t=0 cannot be QS's job.
+- **The backup gateway already does it, instantly.** Inverters with a
+  backup gateway (e.g. Huawei SmartGuard / Backup Box) keep two floors:
+  a higher **on-grid reserve** the battery will not discharge below
+  while the grid is up, and a lower **deep-discharge floor** it runs
+  down to in island mode. On grid loss the gateway islands and releases
+  the reserve in hardware — sub-second, no controller action.
+- **On gateway-managed setups the setpoints are read-only anyway.**
+  With a Huawei EMMA in front, the SOC setpoints are exposed read-only
+  over local Modbus (the `wlcrs/huawei_solar` integration never creates
+  a writable SOC entity for an EMMA device), so QS could not write them
+  even if it wanted to.
+
+User configuration (Huawei EMMA + SmartGuard, for support questions):
+the reserve is **`Backup power SOC`**, set on the **inverter** (not the
+battery, not the SmartGuard) and only visible once **`Off-grid mode`**
+is enabled — FusionSolar app → Device Commissioning → connect to the
+EMMA → `Monitor > SUN2000 > Set > Feature parameters`. `Backup power
+SOC` takes precedence over the battery's `End-of-discharge SOC`:
+on-grid the battery stops discharging at the reserve, and on grid loss
+it runs the reserve down toward the deep floor. Guaranteed outage
+runway ≈ Backup power SOC − End-of-discharge SOC (Huawei recommends a
+20–30% reserve).
+
+What QS must still avoid: do not pin the battery at max-discharge = 0
+longer than necessary while on-grid — on inverters that honour that
+limit in island mode it would defeat the native reserve. QS already
+restores discharge on the off-grid transition
+(`async_set_off_grid_mode` → `CMD_GREEN_CHARGE_AND_DISCHARGE`).
 
 ## See also
 
