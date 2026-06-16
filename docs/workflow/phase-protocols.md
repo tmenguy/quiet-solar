@@ -41,7 +41,8 @@ the user runs to open a new session on the worktree.
 **Runs on**: worktree.
 **Inputs**: branch `QS_<N>` (issue resolves from there).
 **Side effects**: writes story file to
-`docs/stories/QS-<N>.story.md`, commits and pushes.
+`docs/stories/QS-<N>.story.md` (written as soon as the first discussion
+round converges, **committed only at FINALIZE**).
 **Output**: story file with acceptance criteria + task breakdown +
 adversarial review notes appended.
 **Next phase**: `claude --agent qs-implement-task` or
@@ -50,33 +51,43 @@ fresh interactive session), or `/implement-task` /
 `/implement-setup-task` as fallback. The agent decides which based on
 the file paths in its task breakdown.
 
-**Phase protocol**:
-1. Read the issue (`gh issue view`). Read `docs/workflow/project-rules.md`
-   and `docs/workflow/project-context.md`. Glob the relevant code areas.
-2. Present a scope/risk summary; ask clarifying questions; wait for user
-   answers.
-3. Draft the plan in memory — acceptance criteria (Given/When/Then) and
-   task breakdown.
-4. **Adversarial review**: spawn the 4 plan-reviewer subagents in
-   parallel (one message, 4 sub-agent invocations). See
-   [adversarial-review.md](adversarial-review.md).
-5. Synthesize and triage findings interactively with the user. Max 3
-   review rounds before forcing finalization.
-6. Determine `NEXT_PHASE`: `implement-setup-task` if all touched files
-   are in `scripts/`, `.claude/`, `.cursor/`, `.opencode/`,
-   `legacy/`, `docs/`, `.github/`, or top-level config;
-   otherwise `implement-task`.
-7. Write the story file. Append "Adversarial Review Notes". Commit and
-   push.
-8. Tell the user the next command — emit the launcher payload (preferred,
-   `claude --agent qs-implement-task` or `claude --agent
-   qs-implement-setup-task`) plus the slash-command fallback
-   (`/implement-task` or `/implement-setup-task`).
+**Phase protocol** — a **user-driven mode loop** (DISCUSS / REVIEW /
+TRIAGE / FINALIZE), not a linear pipeline. DISCUSS is the durable
+default; REVIEW is invoked on demand and repeatable; the story file is
+the living document:
+
+- **DISCUSS (default)**: read the issue (`gh issue view`), read
+  `project-rules.md` / `project-context.md`, glob the relevant code,
+  and discuss scope/risks/acceptance with the user — iterate
+  indefinitely. As soon as the first round **converges** (the plan has
+  all required headings, or the user says "write it"), write the story
+  file and overwrite it on every later change; announce it is readable.
+  Run the doc-maintenance sub-step (`check_doc_drift.py --paths`). Print
+  the status banner and offer REVIEW once per stable version. The story
+  stays uncommitted.
+- **REVIEW (invoked)**: spawn the plan reviewers in parallel (one
+  message). Round 1 = the **4 global reviewers**; round 2+ = the same 4
+  **plus `qs-plan-delta-auditor`** fed an in-context diff + the prior
+  round's accepted findings. See [adversarial-review.md](adversarial-review.md).
+- **TRIAGE**: dedupe via the finding-state model
+  (`open`/`resolved`/`rejected`), present deltas first, drive
+  interactive triage, fold accepted findings into the story, then return
+  to DISCUSS.
+- **FINALIZE (on confirmed intent)**: an **advisory** gate (never
+  hard-blocks) — if the plan changed since the last review, or open
+  criticals remain, the agent asks but the user decides. Determine
+  `NEXT_PHASE` (`implement-setup-task` if all touched files are in
+  `scripts/`, `.claude/`, `.cursor/`, `.opencode/`, `legacy/`,
+  `docs/`, `.github/`, or top-level config; otherwise `implement-task`),
+  commit + push, then emit the launcher payload (preferred,
+  `claude --agent qs-implement-task` / `qs-implement-setup-task`) plus
+  the slash-command fallback.
 
 **Hard rules**:
 - Do not write code in this phase.
-- Edit scope is the story file only.
-- Never skip the adversarial review.
+- Edit scope is the story file — written during DISCUSS/TRIAGE,
+  committed only at FINALIZE.
+- Never skip the adversarial review for a plan you intend to ship.
 
 ---
 
