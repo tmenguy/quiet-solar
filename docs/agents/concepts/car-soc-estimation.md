@@ -4,7 +4,7 @@ slug: car-soc-estimation
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-13
+last_verified: 2026-06-17
 ---
 
 # Car SOC estimation — the effective-SOC model
@@ -53,14 +53,14 @@ runtime reset (plug-in / reset button / recovery) is reflected in the card.
 - `_estimated_soc_percent` — `clamp(base + delta, 0, 100)`, or `None` with no
   base (pure-delta `+XX%`).
 - `is_in_soc_estimation_mode` — True for a no-sensor car, in stale-percent
-  mode, or with a manual base on a healthy API.
+  mode, or with a manual base on a healthy API. **Drives the `*` /
+  `is_soc_estimated` binary sensor**: the asterisk means "the SOC number is
+  being extrapolated/overridden", so a fresh SOC shows no asterisk and the
+  pure-delta stale case (no absolute estimate) still shows it.
 - `is_soc_sensor_distrusted` — True only in stale-percent mode or with no SOC
   sensor. A manual override on a healthy sensor is **not** distrust — the
   charger's zero-power hardware-fault check still runs (it is gated on distrust,
   not on `is_in_soc_estimation_mode`).
-- `has_soc_estimate` — an absolute estimate exists (drives the `*` /
-  `is_soc_estimated` sensor). Distinct from `is_in_soc_estimation_mode`:
-  they diverge for the pure-delta case.
 - `soc_integration_cursor` (property) + `accumulate_soc_delta(inc, time)` — the
   car's public accumulator API; the charger drives it through these instead of
   reaching into the underscore-private fields. `accumulate_soc_delta` clamps the
@@ -108,6 +108,30 @@ charger computes `inc` from `soc_integration_cursor` then calls
 - Estimation is **orthogonal** to `is_car_effectively_stale`: a manual
   override on a healthy API marks the car *estimated* (asterisk) but **not**
   API-stale.
+
+## Manual charger assignment vs a wrong location tracker (QS-265)
+
+A *manual charger assignment* is the user explicitly attaching a car to a
+charger; it is distinct from a *manual SOC value* (the override above). When a
+manually-assigned car's location tracker wrongly reports "away" (or the plug
+sensor reports unplugged) while the SOC sensor is live:
+
+- `check_charger_assignment_contradiction(..., manual=True)` **trusts the
+  user**: it sets `_car_api_inferred_home`/`_car_api_inferred_plugged` (so the
+  car keeps being managed and charged) and logs **one WARNING per episode**
+  (deduped on the inferred-home flag). It does **not** mark the car stale and
+  does **not** notify. A manually-assigned car's staleness therefore depends
+  only on its SOC sensor (the SOC-only stale entry) plus the all-sensors-dead
+  and force paths. With a fresh SOC the car is not in estimation mode, so
+  `get_car_charge_percent` returns the live sensor and the constraint seed is
+  the real SOC (never force-init at 0), with no asterisk.
+- `manual=False` (auto-attached by plug-time correlation): a contradiction
+  takes **no action** — identity is only a heuristic, so it neither marks the
+  car stale nor sets the inferred flags.
+- **Recovery** (`can_exit_stale_percent_mode`): a user-originated assignment
+  recovers on SOC freshness alone (`return not self._is_soc_sensor_stale(time)`,
+  right after the force checks), ignoring the possibly-wrong raw home/plug
+  readings that gate the non-manual connected/not-connected branches.
 
 ## Capture at the fresh→stale edge
 

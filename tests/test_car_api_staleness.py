@@ -365,35 +365,39 @@ class TestStalenessTransitions:
 
 
 class TestContradictionDetection:
-    """Test manual assignment contradiction detection."""
+    """Feature B: trust a manual charger assignment over a contradicting tracker (D1)."""
 
-    def test_contradiction_when_api_says_not_home(self, real_car, current_time):
-        """Manual assign while API says not_home triggers immediate stale."""
+    def test_manual_contradiction_not_home_sets_inferred_not_stale(self, real_car, current_time):
+        """Manual assign while API says not_home: inferred flags set, car NOT stale."""
         # API reports car is away
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
 
         real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
 
-        assert real_car._car_api_stale is True
+        # The user's word is ground truth: keep the car managed/charged ...
         assert real_car._car_api_inferred_home is True
         assert real_car._car_api_inferred_plugged is True
-        assert real_car.car_api_stale_percent_mode is True
-        assert real_car._was_car_api_stale is True
+        # ... but never mark a manually-assigned car stale on this path (D1)
+        assert real_car._car_api_stale is False
+        assert real_car.car_api_stale_percent_mode is False
+        assert real_car._car_api_stale_since is None
+        assert real_car._was_car_api_stale is False
 
-    def test_contradiction_when_api_says_not_plugged(self, real_car, current_time):
-        """Manual assign while API says not_plugged triggers immediate stale."""
+    def test_manual_contradiction_not_plugged_sets_inferred_not_stale(self, real_car, current_time):
+        """Manual assign while API says not_plugged: inferred flags set, car NOT stale."""
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
 
         real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
 
-        assert real_car._car_api_stale is True
         assert real_car._car_api_inferred_home is True
         assert real_car._car_api_inferred_plugged is True
+        assert real_car._car_api_stale is False
+        assert real_car.car_api_stale_percent_mode is False
 
     def test_no_contradiction_when_api_agrees(self, real_car, current_time):
-        """Manual assign with API agreeing does NOT trigger stale."""
+        """Manual assign with API agreeing does NOT set inferred flags."""
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
 
@@ -404,7 +408,7 @@ class TestContradictionDetection:
         assert real_car._car_api_inferred_plugged is False
 
     def test_contradiction_skipped_when_force_not_stale(self, real_car, current_time):
-        """Force Not Stale mode skips contradiction detection."""
+        """Force Not Stale mode skips contradiction handling entirely."""
         real_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
@@ -414,138 +418,51 @@ class TestContradictionDetection:
         assert real_car._car_api_stale is False
         assert real_car._car_api_inferred_home is False
 
-    def test_stale_since_set_on_contradiction(self, real_car, current_time):
-        """Contradiction sets stale_since timestamp."""
-        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
-        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
-
-        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
-
-        assert real_car._car_api_stale_since == current_time
-
-    @pytest.mark.parametrize("manual,expected_flags", [(True, True), (False, False)])
-    def test_contradiction_skipped_when_already_stale(self, real_car, current_time, manual, expected_flags):
-        """Already-stale car never re-notifies; manual=True still upgrades the inferred flags."""
-        real_car._car_api_stale = True
-        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
-        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
-
-        real_car.hass = MagicMock()
-        real_car.home = MagicMock()
-        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=manual)
-
-        # No notification sent — early return
-        real_car.hass.async_create_task.assert_not_called()
-        # The user's explicit confirmation upgrades the flags; auto never does
-        assert real_car._car_api_inferred_home is expected_flags
-        assert real_car._car_api_inferred_plugged is expected_flags
-
-    async def test_manual_upgrade_after_auto_contradiction(self, real_car_with_home, current_time):
-        """User assignment during an ongoing auto episode upgrades inferred flags without re-notifying."""
-        car = real_car_with_home
-        car._entity_probed_last_valid_state[car.car_tracker] = (current_time, "not_home", {})
-        car._entity_probed_last_valid_state[car.car_plugged] = (current_time, "on", {})
-
-        charger = MagicMock()
-        charger.name = "Test Charger"
-        charger.user_set_selected_car_by_name = AsyncMock()
-        car.home._chargers = [charger]
-
-        with patch.object(car, "_schedule_person_notification") as mock_notify:
-            # Auto episode: flagged + notified once, inferred flags stay False (D1)
-            car.check_charger_assignment_contradiction("Test Charger", current_time, manual=False)
-            assert mock_notify.call_count == 1
-            assert car._car_api_stale is True
-            assert car._car_api_inferred_home is False
-
-            # The user does what the notification asked: explicitly confirms the assignment
-            await car.user_set_selected_charger_by_name("Test Charger")
-
-        assert car._car_api_inferred_home is True
-        assert car._car_api_inferred_plugged is True
-        assert mock_notify.call_count == 1
-
-    def test_manual_upgrade_idempotent(self, real_car, current_time):
-        """A second manual=True call during an episode changes nothing and emits nothing."""
+    def test_manual_contradiction_logs_one_warning_no_notification(self, real_car, current_time, caplog):
+        """Manual contradiction logs exactly one WARNING per episode and never notifies."""
+        caplog.set_level(logging.WARNING)
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
 
         with patch.object(real_car, "_schedule_person_notification") as mock_notify:
             real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
-            assert mock_notify.call_count == 1
-            assert real_car._car_api_inferred_home is True
-
+            # Re-asserting the same episode must not re-log (deduped on inferred flag)
             real_car.check_charger_assignment_contradiction(
                 "Test Charger", current_time + timedelta(seconds=7), manual=True
             )
 
-        assert mock_notify.call_count == 1
+        assert caplog.text.count("trusting manual assignment") == 1
         assert real_car._car_api_inferred_home is True
         assert real_car._car_api_inferred_plugged is True
+        mock_notify.assert_not_called()
 
-    def test_contradiction_skipped_when_stale_percent_mode(self, real_car, current_time):
-        """Stale-percent mode skips contradiction check."""
-        real_car.car_api_stale_percent_mode = True
-        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
-        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
-
-        real_car.hass = MagicMock()
-        real_car.home = MagicMock()
-        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
-
-        real_car.hass.async_create_task.assert_not_called()
-
-    def test_auto_contradiction_does_not_set_inferred_flags(self, real_car, current_time):
-        """Auto-attach contradiction flags stale but never sets inferred flags (AC2)."""
+    def test_manual_warning_wording(self, real_car, current_time, caplog):
+        """The WARNING names the charger and the contradicting raw API readings (AC1)."""
+        caplog.set_level(logging.WARNING)
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
 
-        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=False)
+        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
 
-        assert real_car._car_api_stale is True
-        assert real_car.car_api_stale_percent_mode is True
-        assert real_car._car_api_inferred_home is False
-        assert real_car._car_api_inferred_plugged is False
-        assert real_car._was_car_api_stale is True
+        assert "manually assigned to charger Test Charger" in caplog.text
+        assert "home=False" in caplog.text
 
-    def test_auto_contradiction_notification_wording(self, real_car, current_time):
-        """Notification body differs by assignment origin (AC1/AC2)."""
+    def test_auto_contradiction_takes_no_action(self, real_car, current_time, caplog):
+        """Auto-attach contradiction marks nothing stale and sets no inferred flags (AC4)."""
+        caplog.set_level(logging.WARNING)
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
 
         with patch.object(real_car, "_schedule_person_notification") as mock_notify:
             real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=False)
-        title, body = mock_notify.call_args.args[0], mock_notify.call_args.args[1]
-        assert title == f"Warning: {real_car.name}"
-        assert "detected on" in body
-        assert "Test Charger" in body
-        assert "disagrees" in body
 
-        # Reset stale state, then check the manual counterpart
-        real_car._exit_stale_mode()
-        real_car._was_car_api_stale = False
-        with patch.object(real_car, "_schedule_person_notification") as mock_notify:
-            real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
-        title, body = mock_notify.call_args.args[0], mock_notify.call_args.args[1]
-        assert title == f"Warning: {real_car.name}"
-        assert "estimated" in body
-
-    def test_contradiction_log_wording_manual_vs_auto(self, real_car, current_time, caplog):
-        """Log wording reflects the assignment origin (AC1/AC2)."""
-        caplog.set_level(logging.INFO)
-        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
-        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
-
-        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
-        assert "manually assigned to charger" in caplog.text
-
-        caplog.clear()
-        real_car._exit_stale_mode()
-        real_car._was_car_api_stale = False
-
-        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=False)
-        assert "auto-attached to charger" in caplog.text
-        assert "manually assigned to charger" not in caplog.text
+        assert real_car._car_api_stale is False
+        assert real_car.car_api_stale_percent_mode is False
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False
+        assert real_car._car_api_stale_since is None
+        mock_notify.assert_not_called()
+        assert "trusting manual assignment" not in caplog.text
 
     async def test_user_set_selected_charger_passes_manual_true(self, real_car_with_home):
         """user_set_selected_charger_by_name invokes the check with manual=True (AC4)."""
@@ -830,6 +747,92 @@ class TestRecoveryLogic:
 
         # Even though inferred flags are True, can't exit because raw sensors are stale
         assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+
+# ── Manual-Assignment Recovery (D2 / AC3) ───────────────────────────────
+
+
+class TestManualAssignmentRecovery:
+    """A manually-assigned car recovers on SOC freshness alone, ignoring the
+    (possibly wrong) raw home/plug readings (D2)."""
+
+    def _make_manual_stale_car(self, car, current_time):
+        """Put a user-assigned car into stale-percent mode."""
+        car.charger = MagicMock()
+        car.charger.name = "Test Charger"
+        car.charger.get_user_originated = MagicMock(return_value=None)
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
+        car.car_api_stale_percent_mode = True
+        car._was_car_api_stale = True
+        car._car_api_stale_since = current_time - timedelta(hours=2)
+
+    def test_manual_recovery_on_fresh_soc_ignores_away_tracker(self, real_car, current_time):
+        """Fresh SOC exits stale mode even while the tracker still reports away (AC3)."""
+        self._make_manual_stale_car(real_car, current_time)
+        fresh_time = current_time - timedelta(seconds=60)
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh_time, 80.0, {})
+        # Raw tracker/plug still wrong — must NOT gate recovery for a manual car
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+
+        assert real_car._charger_assignment_is_user_originated() is True
+        assert real_car.can_exit_stale_percent_mode(current_time) is True
+
+    def test_manual_no_recovery_while_soc_stale(self, real_car, current_time):
+        """A manual car stays in estimation while its SOC sensor is stale (AC2)."""
+        self._make_manual_stale_car(real_car, current_time)
+        soc_stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (soc_stale_time, 80.0, {})
+
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_manual_no_recovery_while_soc_none(self, real_car, current_time):
+        """A manual car with no valid SOC reading cannot recover."""
+        self._make_manual_stale_car(real_car, current_time)
+        # No SOC entry at all → _is_soc_sensor_stale True
+
+        assert real_car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_manual_all_sensors_dead_does_not_recover(self, real_invited_car, current_time):
+        """The genuine all-data-dead safety is never bypassed for a manual car.
+
+        A no-SOC-sensor car (``_is_soc_sensor_stale`` is vacuously False) whose
+        every API sensor is dead must NOT report recovery — otherwise it would
+        flip-flop recovered↔stale every cycle.
+        """
+        car = real_invited_car
+        car.car_is_invited = False  # real car with capacity but no SOC sensor
+        car.car_charge_percent_sensor = None
+        car.charger = MagicMock()
+        car.charger.name = "Test Charger"
+        car.charger.get_user_originated = MagicMock(return_value=None)
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
+        car.car_api_stale_percent_mode = True
+        assert car._charger_assignment_is_user_originated() is True
+        assert car._is_soc_sensor_stale(current_time) is False  # no SOC sensor
+
+        # Every tracked API sensor is dead beyond the 6h threshold
+        dead_time = current_time - timedelta(seconds=CAR_API_STALE_THRESHOLD_S + 1)
+        for sensor_id in car._car_api_all_sensors:
+            car._entity_probed_last_valid_state[sensor_id] = (dead_time, "value", {})
+
+        assert car.can_exit_stale_percent_mode(current_time) is False
+
+    def test_manual_recovery_via_update_clears_asterisk(self, real_car, current_time):
+        """A full update cycle exits estimation once SOC is fresh — asterisk clears (AC3/AC5)."""
+        self._make_manual_stale_car(real_car, current_time)
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh_time, 80.0, {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh_time, "off", {})
+
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car.car_api_stale_percent_mode is False
+        assert real_car.is_car_effectively_stale(current_time) is False
+        assert real_car.is_in_soc_estimation_mode(current_time) is False
 
 
 # ── SOC-only Staleness ──────────────────────────────────────────────────
@@ -1124,7 +1127,7 @@ class TestPeriodicContradiction:
         assert real_car._charger_assignment_is_user_originated() is False
 
     def test_periodic_contradiction_manual_marker_car_side(self, real_car, current_time):
-        """Manually assigned car (car-side marker) with plug=off triggers stale with inferred flags."""
+        """Manually assigned car (car-side marker) with plug=off sets inferred flags, NOT stale (D1)."""
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
@@ -1137,11 +1140,13 @@ class TestPeriodicContradiction:
         real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
         real_car._update_car_api_staleness(current_time)
 
-        assert real_car._car_api_stale is True
         assert real_car._car_api_inferred_plugged is True
+        assert real_car._car_api_inferred_home is True
+        assert real_car._car_api_stale is False
+        assert real_car.car_api_stale_percent_mode is False
 
     def test_periodic_contradiction_manual_marker_charger_side(self, real_car, current_time):
-        """Charger-side user marker → manual semantics → inferred flags set (AC3)."""
+        """Charger-side user marker → manual semantics → inferred flags set, NOT stale (D1)."""
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
@@ -1155,12 +1160,12 @@ class TestPeriodicContradiction:
         )
         real_car._update_car_api_staleness(current_time)
 
-        assert real_car._car_api_stale is True
         assert real_car._car_api_inferred_home is True
         assert real_car._car_api_inferred_plugged is True
+        assert real_car._car_api_stale is False
 
-    def test_auto_contradiction_no_percent_two_cycles_single_notification(self, real_invited_car, current_time):
-        """Auto contradiction on a non-percent car latches: one notification across cycles, no inferred flags."""
+    def test_auto_contradiction_no_percent_two_cycles_no_action(self, real_invited_car, current_time):
+        """Auto contradiction on a non-percent car takes no action across cycles (AC4)."""
         car = real_invited_car
         assert car.can_use_charge_percent_constraints() is False
         fresh_time = current_time - timedelta(seconds=60)
@@ -1177,14 +1182,14 @@ class TestPeriodicContradiction:
             car._update_car_api_staleness(current_time)
             car._update_car_api_staleness(current_time + timedelta(seconds=7))
 
-        assert mock_notify.call_count == 1
-        assert car._car_api_stale is True  # stays latched while the contradiction persists
+        mock_notify.assert_not_called()
+        assert car._car_api_stale is False
         assert car.car_api_stale_percent_mode is False
         assert car._car_api_inferred_home is False
         assert car._car_api_inferred_plugged is False
 
     def test_periodic_contradiction_auto_no_markers(self, real_car, current_time):
-        """No user markers → auto semantics → stale but inferred flags stay False (AC3)."""
+        """No user markers → auto semantics → no action, never stale, inferred flags stay False (AC4)."""
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
@@ -1196,7 +1201,7 @@ class TestPeriodicContradiction:
         real_car.charger.get_user_originated = MagicMock(return_value=None)
         real_car._update_car_api_staleness(current_time)
 
-        assert real_car._car_api_stale is True
+        assert real_car._car_api_stale is False
         assert real_car._car_api_inferred_home is False
         assert real_car._car_api_inferred_plugged is False
 
@@ -1340,8 +1345,8 @@ class TestNotifications:
 
         real_car.hass.async_create_task.assert_called_once()
 
-    def test_contradiction_schedules_notification(self, real_car, current_time):
-        """Contradiction detection schedules a notification."""
+    def test_manual_contradiction_does_not_schedule_notification(self, real_car, current_time):
+        """A manual contradiction logs a WARNING but never schedules a notification (D1)."""
         real_car.hass = MagicMock()
         real_car.home = MagicMock()
         real_car.current_forecasted_person = MagicMock()
@@ -1350,7 +1355,7 @@ class TestNotifications:
 
         real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
 
-        real_car.hass.async_create_task.assert_called_once()
+        real_car.hass.async_create_task.assert_not_called()
 
     def test_no_notification_when_no_hass(self, real_car, current_time):
         """No crash when hass is None during notification."""

@@ -75,7 +75,6 @@ def test_constants():
 def test_healthy_sensor_passthrough(est_car, current_time):
     _set_soc(est_car, 42.0, current_time)
     assert est_car.is_in_soc_estimation_mode(current_time) is False
-    assert est_car.has_soc_estimate() is False
     assert est_car.get_car_charge_percent(current_time) == 42.0
 
 
@@ -143,12 +142,6 @@ def test_estimated_soc_delta_none(est_car):
     assert est_car._estimated_soc_percent == 50.0
 
 
-def test_has_soc_estimate(est_car):
-    assert est_car.has_soc_estimate() is False
-    est_car._user_base_soc_value = 50.0
-    assert est_car.has_soc_estimate() is True
-
-
 def test_get_car_charge_percent_returns_estimate(est_car, current_time):
     _set_soc(est_car, 10.0, current_time)
     est_car._user_base_soc_value = 60.0
@@ -165,7 +158,7 @@ def test_raw_sensor_none_when_no_sensor(est_car_no_sensor, current_time):
 def test_pure_delta_get_charge_percent_none(est_car_no_sensor):
     # estimating, no base -> get_car_charge_percent returns None
     assert est_car_no_sensor.get_car_charge_percent() is None
-    assert est_car_no_sensor.has_soc_estimate() is False
+    assert est_car_no_sensor._estimated_soc_percent is None
 
 
 # ── AC4 + invariants: can_use_charge_percent_constraints ─────────────────
@@ -630,7 +623,7 @@ def test_orthogonality_manual_override_not_stale(est_car, current_time):
         est_car._entity_probed_last_valid_state[sensor_id] = (fresh, "value", {})
     est_car._user_base_soc_value = 55.0
     est_car._car_api_stale = False
-    assert est_car.has_soc_estimate() is True
+    assert est_car.is_in_soc_estimation_mode(current_time) is True
     assert est_car.is_car_effectively_stale(current_time) is False
 
 
@@ -701,14 +694,35 @@ def test_create_binary_sensor_for_car_includes_estimated(est_car):
     assert BINARY_SENSOR_CAR_IS_SOC_ESTIMATED in keys
 
 
-def test_binary_sensor_estimated_value_fn(est_car):
+def test_binary_sensor_estimated_value_fn(est_car, current_time):
+    """The asterisk is driven by is_in_soc_estimation_mode, not has_soc_estimate (AC5)."""
     from custom_components.quiet_solar.binary_sensor import create_ha_binary_sensor_for_QSCar
 
     entities = create_ha_binary_sensor_for_QSCar(est_car)
     est = next(e for e in entities if e.entity_description.key == BINARY_SENSOR_CAR_IS_SOC_ESTIMATED)
+
+    # Fresh SOC sensor, no override → not estimating → no asterisk
+    _set_soc(est_car, 42.0, current_time)
     assert est.entity_description.value_fn(est_car, "k") is False
+
+    # A manual SOC value active → estimating → asterisk
     est_car._user_base_soc_value = 50.0
     assert est.entity_description.value_fn(est_car, "k") is True
+    est_car._user_base_soc_value = None
+
+    # SOC stale-percent mode (force-stale / SOC stale / API failure) → asterisk
+    est_car.car_api_stale_percent_mode = True
+    assert est.entity_description.value_fn(est_car, "k") is True
+    est_car.car_api_stale_percent_mode = False
+
+
+def test_binary_sensor_estimated_value_fn_no_sensor(est_car_no_sensor):
+    """A car without a SOC sensor always estimates → asterisk always on (AC5)."""
+    from custom_components.quiet_solar.binary_sensor import create_ha_binary_sensor_for_QSCar
+
+    entities = create_ha_binary_sensor_for_QSCar(est_car_no_sensor)
+    est = next(e for e in entities if e.entity_description.key == BINARY_SENSOR_CAR_IS_SOC_ESTIMATED)
+    assert est.entity_description.value_fn(est_car_no_sensor, "k") is True
 
 
 def test_create_binary_sensor_invited_no_estimated(est_car):

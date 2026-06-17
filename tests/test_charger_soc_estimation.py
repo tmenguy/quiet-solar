@@ -141,7 +141,7 @@ async def test_accumulator_no_loss_no_double_count():
     # First cycle only anchors the cursor (no integration); the next four
     # each add 0.4 → 4 * 0.4 = 1.6, with no loss and no double-count.
     assert car._computed_added_delta_soc_percent == pytest.approx(1.6)
-    assert car.has_soc_estimate() is False  # pure-delta: no base
+    assert car._estimated_soc_percent is None  # pure-delta: no base
 
 
 async def test_accumulator_absolute_estimate_with_base():
