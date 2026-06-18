@@ -1905,6 +1905,11 @@ async def test_qs265_manual_assignment_bad_tracker_not_stale(
     assert car_device is not None
     assert charger_device is not None
 
+    # NOTE (R3-NTH3): a fixed past `time_now` is safe here because every
+    # staleness comparison under `_update_car_api_staleness` (is_car_api_stale,
+    # _is_soc_sensor_stale, _have_all_api_sensors_reported, can_exit_stale_percent_mode)
+    # uses the passed `time`, never `datetime.now()` — so freshness is measured
+    # against this `time_now`, not wall-clock.
     time_now = datetime(2026, 6, 13, 11, 0, tzinfo=pytz.UTC)
 
     # User manually assigns the car to the charger

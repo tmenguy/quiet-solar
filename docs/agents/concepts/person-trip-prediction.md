@@ -49,8 +49,10 @@ tomorrow's predicted trips with margin.
 - Charger assignment: which charger this car is plugged into. A manual
   charger assignment is trusted over a wrongly-"away" tracker (the car is
   kept managed via inferred home/plug flags), but only up to the raw-tracker
-  departure auto-reset ceiling (`CAR_NOT_HOME_AUTO_RESET_S`, 15 min) — see the
-  manual-trust ceiling note in [car-soc-estimation.md](car-soc-estimation.md).
+  departure auto-reset ceiling (`CAR_NOT_HOME_AUTO_RESET_S`, 15 min), and a
+  user Force-Not-Stale selection drops the override immediately (live presence
+  truth wins) — see the manual-trust ceiling note in
+  [car-soc-estimation.md](car-soc-estimation.md).
 - Person allocation: which person owns this car (drives prediction
   targeting).
 - Custom power → amperage table per car: different cars accept

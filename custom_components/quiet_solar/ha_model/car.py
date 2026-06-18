@@ -639,6 +639,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         wrongly "away" is reset (user-originated marker + inferred flags wiped)
         after `CAR_NOT_HOME_AUTO_RESET_S`. See the manual-trust ceiling note in
         `docs/agents/concepts/car-soc-estimation.md`.
+
+        The ceiling is **tracker-only**: it returns early when ``raw_home is
+        True``, so a plug-only contradiction (tracker genuinely home, plug
+        sensor unplugged) is never time-bounded here — that case relies on the
+        charger-side detach (`charger._check_plugged_val`, which only consults
+        `is_car_plugged()` when its own plug sensor is inconclusive).
         """
         if self.car_tracker is None:
             return  # No home sensor — cannot detect departure
@@ -734,11 +740,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # cycle (SF2), and drops the override as soon as the raw API agrees
         # again (SF1). It is skipped while fully API-stale (all sensors dead),
         # where there is no reliable raw home/plug signal to reconcile against.
-        if (
-            self.charger is not None
-            and not self._car_api_stale
-            and self.car_stale_mode_override != CAR_STALE_MODE_FORCE_NOT_STALE
-        ):
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+            # Force-Not-Stale means "trust live data" — drop any latched manual
+            # inferred override so the raw home/plug truth is honored. The
+            # contradiction reconciliation never runs under this override (and
+            # a never-stale manual car is not caught by the stale-percent
+            # recovery above), so clear the flags explicitly here (R3-SF1).
+            self.clear_inferred_flags()
+        elif self.charger is not None and not self._car_api_stale:
             self.check_charger_assignment_contradiction(
                 self.charger.name, time, manual=self._charger_assignment_is_user_originated()
             )
@@ -913,7 +922,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return
 
         if not manual:
-            # Auto-attach: identity is only a heuristic — never override the API
+            # Auto-attach: identity is only a heuristic — never override the API.
+            # This path intentionally does NOT clear pre-existing inferred flags:
+            # a manual→non-manual flip while still attached defers clearing to the
+            # detach/reassign paths (`clear_inferred_flags`), so a transient
+            # auto-mode read does not race-clear a still-valid manual override.
             return
 
         raw_home = self._get_raw_is_car_home(time)

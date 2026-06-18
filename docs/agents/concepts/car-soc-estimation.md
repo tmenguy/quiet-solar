@@ -153,7 +153,15 @@ sensor reports unplugged) while the SOC sensor is live:
   flags, ending the manual trust and reverting to pre-fix behavior. This is the
   deliberate upper bound from the story's adversarial-review notes ("trusted
   until the existing unplug/displacement resets fire") — a genuinely-away car
-  must not be charged forever on a stale manual pick.
+  must not be charged forever on a stale manual pick. The ceiling is
+  **tracker-only**: a plug-only contradiction (tracker genuinely home, plug
+  unplugged) is not time-bounded here — it relies on the charger-side detach
+  (`charger._check_plugged_val`, which consults `is_car_plugged()` only when its
+  own plug sensor is inconclusive).
+- **Force-Not-Stale drops the override.** Selecting Force-Not-Stale means "trust
+  live data", so `_update_car_api_staleness` clears the inferred flags whenever
+  that override is active — the manual home/plug override never outlives an
+  explicit Force-Not-Stale, even for a never-stale car (R3-SF1).
 
 ## Capture at the fresh→stale edge
 

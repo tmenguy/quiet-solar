@@ -562,6 +562,32 @@ class TestContradictionDetection:
         assert real_car._car_api_inferred_home is True  # re-set: still managed as home
         assert caplog.text.count("trusting manual assignment") == 1  # not re-logged
 
+    async def test_force_not_stale_clears_latched_inferred_flags(self, real_car):
+        """R3-SF1: Force-Not-Stale drops a latched manual inferred override (even for a
+        never-stale car) so the live home/plug truth is honored afterwards."""
+        real_car.charger = MagicMock()
+        real_car.charger.name = "Test Charger"
+        real_car.charger.get_user_originated = MagicMock(return_value=None)
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
+        # Manual override latched, but the car was never marked stale (D1 path)
+        real_car._car_api_inferred_home = True
+        real_car._car_api_inferred_plugged = True
+        real_car._manual_contradiction_logged = True
+        real_car.car_api_stale_percent_mode = False
+
+        await real_car.user_set_stale_mode(CAR_STALE_MODE_FORCE_NOT_STALE)
+
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False
+        assert real_car._manual_contradiction_logged is False
+
+        # A subsequent genuine "away" / "unplugged" is now honored by the live values
+        now = datetime.now(tz=pytz.UTC)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (now, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (now, "off", {})
+        assert real_car.is_car_home(now) is False
+        assert real_car.is_car_plugged(now) is False
+
     def test_manual_not_stale_returns_live_soc(self, real_car, current_time):
         """NTH5/AC1: a not-stale manual car returns the live raw SOC from get_car_charge_percent."""
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
