@@ -8815,10 +8815,11 @@ def test_wire_tap_click_prevent_default_is_option_gated():
 
 
 def test_wire_tap_uses_one_shot_latch_for_synthetic_click_dedup():
-    """QS-271 fix #01 S2 — the synthetic-click dedup is a one-shot latch
-    (swallow the single click that follows a touchend, regardless of how
-    late it arrives), not a pure time window — so a slow device whose
-    synthetic click lands after SYNTHETIC_CLICK_MS can't double-fire."""
+    """QS-271 fix #01 S2 + fix #02 S1 — the synthetic-click dedup is a
+    one-shot latch armed on touchend, but the latch is only honored
+    WITHIN `SYNTHETIC_CLICK_MS` of the touchend (fix #02 S1) so it can't
+    stay stuck `true` and silently swallow a later unrelated genuine
+    click."""
     base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
     body = _extract_js_function_body(base, r"_wireTap\([^\n]*\)\s*\{")
     assert body is not None, "could not extract `_wireTap` body."
@@ -8830,13 +8831,37 @@ def test_wire_tap_uses_one_shot_latch_for_synthetic_click_dedup():
         "_wireTap must arm the latch (`swallowNextClick = true`) on touchend."
     )
     assert re.search(r"swallowNextClick\s*=\s*false", body), (
-        "_wireTap must clear the latch (`swallowNextClick = false`) when the "
-        "synthetic click is swallowed."
+        "_wireTap must clear the latch (`swallowNextClick = false`)."
     )
-    # The click handler swallows when the latch is set (independent of the
-    # time window — that stays as a belt-and-suspenders secondary).
+    # The click handler swallows when the latch is set.
     assert re.search(r"if\s*\(\s*swallowNextClick", body), (
         "_wireTap's click handler must swallow when the latch is set."
+    )
+
+
+def test_wire_tap_latch_only_honored_within_window():
+    """QS-271 fix #02 S1 — the latch is gated by the
+    `SYNTHETIC_CLICK_MS` window (`swallowNextClick && <within window>`),
+    NOT an unconditional `swallowNextClick ||` that could stay stuck
+    `true` forever. A genuine click arriving after the window must NOT
+    be swallowed."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    body = _extract_js_function_body(base, r"_wireTap\([^\n]*\)\s*\{")
+    assert body is not None, "could not extract `_wireTap` body."
+
+    # The swallow decision must AND the latch with a window condition …
+    assert re.search(r"swallowNextClick\s*&&", body), (
+        "the latch must be ANDed with the time-window check, not honored "
+        "unconditionally (`swallowNextClick && <within window>`)."
+    )
+    # … the window is computed from SYNTHETIC_CLICK_MS …
+    assert "SYNTHETIC_CLICK_MS" in body, (
+        "the swallow window must be derived from SYNTHETIC_CLICK_MS."
+    )
+    # … and must NOT use the stuck-prone unconditional `swallowNextClick ||`.
+    assert not re.search(r"swallowNextClick\s*\|\|", body), (
+        "the latch must NOT be honored unconditionally (`swallowNextClick ||`) "
+        "— that leaves it stuck `true` and swallows later genuine clicks."
     )
 
 
@@ -8892,16 +8917,24 @@ def test_connected_callback_initializes_press_guard_field():
 
 
 def test_arm_press_guard_skips_disabled_controls():
-    """QS-271 fix #01 N4 — `_armPressGuard` does not arm the render-defer
-    window for a disabled control (its action no-ops, so deferring
-    repaints would be pure waste)."""
+    """QS-271 fix #01 N4 + fix #02 N1 — `_armPressGuard` does not arm the
+    render-defer window for a disabled control (its action no-ops). The
+    skip consults BOTH the element's own `aria-disabled` AND a
+    card-level `.disabled` ancestor (`closest('.disabled')`), so a
+    control that reflects disabled state only on a wrapping ancestor is
+    still covered (fix #02 N1)."""
     base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
-    body = _extract_js_function_body(base, r"_armPressGuard\s*\(")
+    body = _extract_js_function_body(base, r"_armPressGuard\(el\)\s*\{")
     assert body is not None, "could not extract `_armPressGuard` body."
-    # Skips arming when the element is disabled (aria-disabled or the
-    # `.disabled` class used by the in-ring custom controls).
-    assert "aria-disabled" in body or "disabled" in body, (
-        "_armPressGuard must short-circuit for a disabled control."
+    # The element's own disabled state.
+    assert "aria-disabled" in body, (
+        "_armPressGuard must short-circuit on the element's `aria-disabled`."
+    )
+    # The card-level `.disabled` ancestor (fix #02 N1) — `closest` walks
+    # up from the control through its wrappers.
+    assert re.search(r"closest\(\s*['\"]\.disabled['\"]\s*\)", body), (
+        "_armPressGuard must also consult a `.disabled` ancestor via "
+        "`closest('.disabled')` (fix #02 N1)."
     )
 
 

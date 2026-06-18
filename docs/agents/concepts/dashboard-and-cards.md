@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-06-17
+last_verified: 2026-06-18
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -1038,22 +1038,32 @@ patterns after the cross-card audit:
     > `addEventListener('click'…)` rule scoped to action buttons, kept
     > clear of the pill/`<select>` handlers). Until then the dual-binding
     > pattern — the dominant bug surface — is fully covered.
-  - **Robustness hardening (QS-271 review-fix #01).** The guard window
-    is measured with the **monotonic** `performance.now()` (not
+  - **Robustness hardening (QS-271 review-fix #01 + #02).** The guard
+    window is measured with the **monotonic** `performance.now()` (not
     `Date.now()`), so a backward wall-clock step can't wedge rendering
-    (S3). The synthetic-click dedup is a **one-shot latch** —
-    `touchend` arms `swallowNextClick`; the next `click` is swallowed
-    regardless of how late it arrives — with `SYNTHETIC_CLICK_MS` kept
-    as a belt-and-suspenders secondary, so a slow device's late
-    synthetic click can't double-fire the action (S2). `_wireTap`'s
-    **click** `preventDefault()` is option-gated (`preventDefaultClick`,
-    default true; power/green pass `false`) so routing a bare-click
-    button through the chokepoint doesn't silently suppress a native
-    default — `touchend`'s `preventDefault` stays unconditional (S1/N2).
-    `_armPressGuard` skips arming for a `.disabled` / `aria-disabled`
-    control (N4), and schedules a single coalesced catch-up
-    `_render()` (via re-running `set hass` over the stored state) when
-    the window expires so a dropped push isn't stranded (N5).
+    (#01 S3). The synthetic-click dedup is a **window-bounded one-shot
+    latch**: `touchend` arms `swallowNextClick`, and the next `click` is
+    swallowed only when it lands **within `SYNTHETIC_CLICK_MS`** of the
+    touchend (#02 S1) — so the latch can't stay stuck `true` and
+    silently swallow a later unrelated genuine click (hybrid
+    touch+mouse, programmatic `.click()`, assistive tech); a click
+    outside the window is treated as genuine and resets the latch.
+    `SYNTHETIC_CLICK_MS` (>= 300) sizes that window to cover the iOS
+    synthetic-click delay (#01 S2). `_wireTap`'s **click**
+    `preventDefault()` is option-gated (`preventDefaultClick`, default
+    true; power/green pass `false`) so routing a bare-click button
+    through the chokepoint doesn't silently suppress a native default —
+    `touchend`'s `preventDefault` stays unconditional (#01 S1/N2).
+    `_armPressGuard` skips arming for a control disabled on its own node
+    (`aria-disabled`) **or** via a `.disabled` ancestor
+    (`closest('.disabled')` — #02 N1, covering inline actions gated only
+    by the card-level `.disabled` container) (#01 N4), and schedules a
+    single coalesced catch-up `_render()` (via re-running `set hass`
+    over the stored state) when the window expires so a dropped push
+    isn't stranded (#01 N5). The dual `pointerdown` + `touchstart`
+    arming is an intentional idempotent double-arm (#02 N2): both fire
+    on touch but re-stamp the same window and reset the one coalesced
+    flush timer.
 
 ### Ring text readability — uniform shadow (QS-228)
 

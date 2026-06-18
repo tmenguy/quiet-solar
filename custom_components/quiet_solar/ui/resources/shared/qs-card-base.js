@@ -412,10 +412,14 @@ export class QsCardBase extends HTMLElement {
     _armPressGuard(el) {
         if (!el) return;
         const begin = () => {
-            // QS-271 fix #01 N4: a disabled control's action no-ops, so
-            // arming the guard (deferring the next repaint by up to
-            // PRESS_GUARD_MS) would be pure waste — skip it.
-            if (el.getAttribute('aria-disabled') === 'true' || el.classList.contains('disabled')) return;
+            // QS-271 fix #01 N4 + fix #02 N1: a disabled control's action
+            // no-ops, so arming the guard (deferring the next repaint by up
+            // to PRESS_GUARD_MS) would be pure waste — skip it. Consult both
+            // the element's own `aria-disabled` AND a `.disabled` ancestor
+            // (`closest` walks the control + its wrappers), so an inline
+            // action that reflects disabled state only on the card-level
+            // `.disabled` container is covered too.
+            if (el.getAttribute('aria-disabled') === 'true' || el.closest('.disabled')) return;
             this._pressInFlightUntil = performance.now() + PRESS_GUARD_MS;
             // QS-271 fix #01 N5: schedule a single catch-up render for when
             // the window expires, so a `hass` push dropped during the
@@ -430,6 +434,11 @@ export class QsCardBase extends HTMLElement {
                 if (this.isConnected && this._root && this._hass != null) this.hass = this._hass;
             }, PRESS_GUARD_MS + 50);
         };
+        // QS-271 fix #02 N2: intentional idempotent double-arm — on touch,
+        // BOTH `pointerdown` and `touchstart` fire, so `begin` runs twice
+        // per tap. That is harmless: it re-stamps the same window and
+        // resets the single coalesced flush timer (no double scheduling).
+        // Binding both covers pointer-capable and touch-only browsers.
         el.addEventListener('pointerdown', begin, { passive: true });
         el.addEventListener('touchstart', begin, { passive: true });
     }
@@ -461,10 +470,17 @@ export class QsCardBase extends HTMLElement {
             swallowNextClick = true;
             action();
         });
-        // click: swallow the synthetic twin via the one-shot latch (S2),
-        // with SYNTHETIC_CLICK_MS as a belt-and-suspenders secondary.
-        // Genuine mouse clicks (no preceding touchend) and rapid touch
-        // re-taps (each fired by its own touchend) are unaffected.
+        // click: swallow the synthetic twin via a one-shot latch that is
+        // only honored WITHIN the SYNTHETIC_CLICK_MS window of the
+        // touchend (QS-271 fix #02 S1). The window bound matters because
+        // touchend's preventDefault usually suppresses the synthetic click
+        // outright, so the latch is often never consumed — leaving it
+        // stuck `true` would silently swallow a LATER unrelated genuine
+        // click (hybrid touch+mouse, programmatic `.click()`, assistive
+        // tech). Gating on the window means a click after it is treated as
+        // genuine and the stale latch is reset. Genuine mouse clicks (no
+        // preceding touchend) and rapid touch re-taps (each fired by its
+        // own touchend) are unaffected.
         // S1/N2 — `preventDefault()` here is OPTION-GATED: power/green
         // buttons historically bound a bare `click` with no
         // preventDefault, so routing them through `_wireTap` must not
@@ -473,10 +489,14 @@ export class QsCardBase extends HTMLElement {
         el.addEventListener('click', (ev) => {
             if (stopPropagation) ev.stopPropagation();
             if (preventDefaultClick) ev.preventDefault();
-            if (swallowNextClick || (performance.now() - lastTouchEnd < SYNTHETIC_CLICK_MS)) {
-                swallowNextClick = false;
+            const withinSyntheticWindow = (performance.now() - lastTouchEnd) < SYNTHETIC_CLICK_MS;
+            if (swallowNextClick && withinSyntheticWindow) {
+                swallowNextClick = false;  // consume the synthetic twin (once)
                 return;
             }
+            // A click outside the window is genuine — clear any stale latch
+            // so it can't swallow a future click, then fire.
+            swallowNextClick = false;
             action();
         });
         if (keyboard) this._registerKeyActivation(el, action);
