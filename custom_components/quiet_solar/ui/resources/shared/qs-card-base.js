@@ -104,10 +104,13 @@ export const RING_BOTTOM_CARVE_R = 35;     // cover radius (user-tunable)
 // node was destroyed before it — can never wedge rendering forever.
 const PRESS_GUARD_MS = 600;
 
-// SYNTHETIC_CLICK_MS — window within which a `click` is treated as the
-// OS-synthesized twin of a just-fired `touchend` (and therefore ignored).
-// Deliberately SEPARATE from PRESS_GUARD_MS: it must NOT throttle genuine
-// rapid re-taps, only dedupe the single synthetic click per physical tap.
+// SYNTHETIC_CLICK_MS — belt-and-suspenders secondary window backing the
+// one-shot synthetic-click latch (QS-271 fix #01 S2). A `click` landing
+// within this window of a touchend is treated as the OS-synthesized twin
+// even if the latch was already consumed. Deliberately SEPARATE from
+// PRESS_GUARD_MS: it must NOT throttle genuine rapid re-taps, only dedupe
+// the synthetic twin. >= 300 to cover iOS Safari's synthetic-click delay
+// (pinned by `test_synthetic_click_ms_has_lower_bound`).
 const SYNTHETIC_CLICK_MS = 350;
 
 
@@ -117,6 +120,10 @@ export class QsCardBase extends HTMLElement {
     connectedCallback() {
         // RAF intentionally NOT started here — _render() decides when to
         // start the dashed-arc animation via _startArcDashAnimation().
+        // QS-271 fix #01 N1: initialize the press-guard window for clarity
+        // (the defensive `|| 0` in `_isPressInFlight` still covers a guard
+        // armed before any connect).
+        this._pressInFlightUntil = 0;
     }
 
     disconnectedCallback() {
@@ -135,6 +142,12 @@ export class QsCardBase extends HTMLElement {
         // on the card element, so it can't clear an in-flight guard
         // mid-tap.
         this._pressInFlightUntil = 0;
+        // QS-271 fix #01 N5: cancel any pending catch-up flush render so it
+        // can't fire against a torn-down shadow root after detach.
+        if (this._pressGuardFlushTimer) {
+            clearTimeout(this._pressGuardFlushTimer);
+            this._pressGuardFlushTimer = null;
+        }
     }
 
     setConfig(config) {
@@ -377,9 +390,17 @@ export class QsCardBase extends HTMLElement {
       boolean set on `pointerdown` and cleared on the up-event would
       WEDGE rendering forever exactly when the node is destroyed before
       the up-event fires (this bug). The window auto-expires instead.
+
+      QS-271 fix #01 S3: the window is measured against the MONOTONIC
+      clock (`performance.now()`), NOT `Date.now()`. A backward
+      wall-clock step (NTP correction, manual change, mobile DST/timezone
+      re-sync) while a press is in flight would otherwise keep
+      `_isPressInFlight()` true for the magnitude of the jump (minutes)
+      and silently drop every `hass` push — defeating the "self-healing"
+      guarantee. `performance.now()` only moves forward.
     */
     _isPressInFlight() {
-        return Date.now() < (this._pressInFlightUntil || 0);
+        return performance.now() < (this._pressInFlightUntil || 0);
     }
 
     // _armPressGuard — low-level primitive: arms the render-defer window
@@ -390,7 +411,25 @@ export class QsCardBase extends HTMLElement {
     // it internally for plain action buttons.
     _armPressGuard(el) {
         if (!el) return;
-        const begin = () => { this._pressInFlightUntil = Date.now() + PRESS_GUARD_MS; };
+        const begin = () => {
+            // QS-271 fix #01 N4: a disabled control's action no-ops, so
+            // arming the guard (deferring the next repaint by up to
+            // PRESS_GUARD_MS) would be pure waste — skip it.
+            if (el.getAttribute('aria-disabled') === 'true' || el.classList.contains('disabled')) return;
+            this._pressInFlightUntil = performance.now() + PRESS_GUARD_MS;
+            // QS-271 fix #01 N5: schedule a single catch-up render for when
+            // the window expires, so a `hass` push dropped during the
+            // window (the gate returned before `_render()`) isn't stranded
+            // until the next organic push (~4 s). Re-running `set hass` via
+            // the stored state replays the FULL gate (all `_isInteracting*`
+            // / `_modalOpen` / press-in-flight checks), so it only paints
+            // when genuinely idle. Coalesced: each new press resets it.
+            if (this._pressGuardFlushTimer) clearTimeout(this._pressGuardFlushTimer);
+            this._pressGuardFlushTimer = setTimeout(() => {
+                this._pressGuardFlushTimer = null;
+                if (this.isConnected && this._root && this._hass != null) this.hass = this._hass;
+            }, PRESS_GUARD_MS + 50);
+        };
         el.addEventListener('pointerdown', begin, { passive: true });
         el.addEventListener('touchstart', begin, { passive: true });
     }
@@ -399,28 +438,45 @@ export class QsCardBase extends HTMLElement {
     // buttons. Arms the press guard, then owns the touchend / click /
     // keyboard binding so the guard can never be forgotten on a new
     // button. Replaces the copy-pasted click+touchend boilerplate.
-    _wireTap(el, action, { keyboard = true, stopPropagation = true } = {}) {
+    _wireTap(el, action, { keyboard = true, stopPropagation = true, preventDefaultClick = true } = {}) {
         if (!el) return;
         el.style.pointerEvents = 'auto';
         this._armPressGuard(el);
         let lastTouchEnd = 0;
+        // QS-271 fix #01 S2 — one-shot latch: the single `click` that
+        // follows a real `touchend` is the OS synthetic twin. Swallow
+        // exactly that one click, regardless of how late it arrives, so a
+        // slow device whose synthetic click lands after SYNTHETIC_CLICK_MS
+        // can never double-fire `action()`.
+        let swallowNextClick = false;
         // touchend: NON-passive (no passive option) so preventDefault can
-        // suppress the OS's delayed synthetic click; fires the action
-        // immediately and records the time.
+        // suppress the OS's delayed synthetic click. This preventDefault is
+        // ALWAYS-ON (unlike the click path) precisely because suppressing
+        // that synthetic twin is the whole point — fires the action
+        // immediately, records the time, and arms the latch.
         el.addEventListener('touchend', (ev) => {
             if (stopPropagation) ev.stopPropagation();
             ev.preventDefault();
-            lastTouchEnd = Date.now();
+            lastTouchEnd = performance.now();
+            swallowNextClick = true;
             action();
         });
-        // click: ignore ONLY the synthetic twin that follows a real
-        // touchend (event-aware dedup, not a blanket time latch). Genuine
-        // mouse/synthesized clicks (no recent touchend) still fire, and
-        // genuine rapid re-taps are NOT throttled.
+        // click: swallow the synthetic twin via the one-shot latch (S2),
+        // with SYNTHETIC_CLICK_MS as a belt-and-suspenders secondary.
+        // Genuine mouse clicks (no preceding touchend) and rapid touch
+        // re-taps (each fired by its own touchend) are unaffected.
+        // S1/N2 — `preventDefault()` here is OPTION-GATED: power/green
+        // buttons historically bound a bare `click` with no
+        // preventDefault, so routing them through `_wireTap` must not
+        // silently suppress a native default. touchend's preventDefault
+        // stays unconditional (see above).
         el.addEventListener('click', (ev) => {
             if (stopPropagation) ev.stopPropagation();
-            ev.preventDefault();
-            if (Date.now() - lastTouchEnd < SYNTHETIC_CLICK_MS) return;
+            if (preventDefaultClick) ev.preventDefault();
+            if (swallowNextClick || (performance.now() - lastTouchEnd < SYNTHETIC_CLICK_MS)) {
+                swallowNextClick = false;
+                return;
+            }
             action();
         });
         if (keyboard) this._registerKeyActivation(el, action);
@@ -800,9 +856,9 @@ export class QsCardBase extends HTMLElement {
                 // ignore; HA state will resync UI on next render
             }
         };
-        // QS-271 — chokepoint. stopPropagation:false preserves the
-        // power button's current behaviour (no parent delegation relied on).
-        this._wireTap(buttonEl, togglePower, { keyboard: true, stopPropagation: false });
+        // QS-271 — chokepoint. stopPropagation:false + preventDefaultClick:false
+        // preserve the power button's original bare-click behaviour (fix #01 S1).
+        this._wireTap(buttonEl, togglePower, { keyboard: true, stopPropagation: false, preventDefaultClick: false });
     }
 
     /*
@@ -826,9 +882,9 @@ export class QsCardBase extends HTMLElement {
                 // ignore; HA state will resync UI on next render
             }
         };
-        // QS-271 — chokepoint. stopPropagation:false preserves the
-        // green button's current behaviour (no parent delegation relied on).
-        this._wireTap(buttonEl, toggleGreen, { keyboard: true, stopPropagation: false });
+        // QS-271 — chokepoint. stopPropagation:false + preventDefaultClick:false
+        // preserve the green button's original bare-click behaviour (fix #01 S1).
+        this._wireTap(buttonEl, toggleGreen, { keyboard: true, stopPropagation: false, preventDefaultClick: false });
     }
 
     // ----- Ring builder -----

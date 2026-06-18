@@ -1031,6 +1031,29 @@ patterns after the cross-card audit:
     button from the legitimate pill/`<select>` click handlers without
     false positives, so a future *click-only* action button could
     still slip past.
+    > **Tracked follow-up (QS-271 review-fix #01 N3):** the
+    > `touchend`-only canary gap is a known limitation, not an
+    > oversight. If a click-only action-button pattern ever lands, open a
+    > follow-up issue to extend the canary (e.g. an allowlist-based
+    > `addEventListener('click'…)` rule scoped to action buttons, kept
+    > clear of the pill/`<select>` handlers). Until then the dual-binding
+    > pattern — the dominant bug surface — is fully covered.
+  - **Robustness hardening (QS-271 review-fix #01).** The guard window
+    is measured with the **monotonic** `performance.now()` (not
+    `Date.now()`), so a backward wall-clock step can't wedge rendering
+    (S3). The synthetic-click dedup is a **one-shot latch** —
+    `touchend` arms `swallowNextClick`; the next `click` is swallowed
+    regardless of how late it arrives — with `SYNTHETIC_CLICK_MS` kept
+    as a belt-and-suspenders secondary, so a slow device's late
+    synthetic click can't double-fire the action (S2). `_wireTap`'s
+    **click** `preventDefault()` is option-gated (`preventDefaultClick`,
+    default true; power/green pass `false`) so routing a bare-click
+    button through the chokepoint doesn't silently suppress a native
+    default — `touchend`'s `preventDefault` stays unconditional (S1/N2).
+    `_armPressGuard` skips arming for a `.disabled` / `aria-disabled`
+    control (N4), and schedules a single coalesced catch-up
+    `_render()` (via re-running `set hass` over the stored state) when
+    the window expires so a dropped push isn't stranded (N5).
 
 ### Ring text readability — uniform shadow (QS-228)
 

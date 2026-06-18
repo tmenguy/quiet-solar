@@ -8776,3 +8776,156 @@ def test_no_card_uses_bare_touchend_outside_shared_helpers():
             "found — route the control through `_wireTap` / `_armPressGuard` "
             "(shared chokepoint) instead."
         )
+
+
+# ---------------------------------------------------------------------------
+# QS-271 review-fix #01 — robustness hardening of the press-in-flight guard.
+# ---------------------------------------------------------------------------
+
+
+def test_wire_tap_click_prevent_default_is_option_gated():
+    """QS-271 fix #01 S1/N2 — `_wireTap` gates the click-path
+    `preventDefault()` behind a `preventDefaultClick` option (default
+    preserves the buttons that relied on it). Power/green buttons —
+    which historically bound a bare `click` with no preventDefault —
+    wire with `preventDefaultClick: false`. touchend's preventDefault
+    stays unconditional (it must suppress the synthetic click)."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    body = _extract_js_function_body(base, r"_wireTap\([^\n]*\)\s*\{")
+    assert body is not None, "could not extract `_wireTap` body."
+
+    # The option exists in the destructured opts (default true). This
+    # lives in the SIGNATURE (param list), not the extracted body.
+    assert re.search(r"_wireTap\([^\n]*preventDefaultClick\s*=\s*true[^\n]*\)\s*\{", base), (
+        "_wireTap must accept `preventDefaultClick` (default true) in its signature."
+    )
+    # The click handler's preventDefault is gated on the option.
+    assert re.search(r"if\s*\(\s*preventDefaultClick\s*\)\s*ev\.preventDefault\(\)", body), (
+        "_wireTap's click `preventDefault()` must be gated on `preventDefaultClick`."
+    )
+
+    # Power and green buttons opt out (preserve their original bare-click
+    # behaviour — no native default suppressed).
+    for helper in ("_wirePowerButton", "_wireGreenButton"):
+        hbody = _extract_js_function_body(base, rf"{helper}\(params\)\s*\{{")
+        assert hbody is not None, f"could not extract `{helper}` body."
+        assert re.search(r"preventDefaultClick\s*:\s*false", hbody), (
+            f"{helper} must wire `_wireTap` with `preventDefaultClick: false`."
+        )
+
+
+def test_wire_tap_uses_one_shot_latch_for_synthetic_click_dedup():
+    """QS-271 fix #01 S2 — the synthetic-click dedup is a one-shot latch
+    (swallow the single click that follows a touchend, regardless of how
+    late it arrives), not a pure time window — so a slow device whose
+    synthetic click lands after SYNTHETIC_CLICK_MS can't double-fire."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    body = _extract_js_function_body(base, r"_wireTap\([^\n]*\)\s*\{")
+    assert body is not None, "could not extract `_wireTap` body."
+
+    # A one-shot latch variable is armed on touchend and cleared on the
+    # swallowed click.
+    assert "swallowNextClick" in body, "_wireTap must use a one-shot latch."
+    assert re.search(r"swallowNextClick\s*=\s*true", body), (
+        "_wireTap must arm the latch (`swallowNextClick = true`) on touchend."
+    )
+    assert re.search(r"swallowNextClick\s*=\s*false", body), (
+        "_wireTap must clear the latch (`swallowNextClick = false`) when the "
+        "synthetic click is swallowed."
+    )
+    # The click handler swallows when the latch is set (independent of the
+    # time window — that stays as a belt-and-suspenders secondary).
+    assert re.search(r"if\s*\(\s*swallowNextClick", body), (
+        "_wireTap's click handler must swallow when the latch is set."
+    )
+
+
+def test_synthetic_click_ms_has_lower_bound():
+    """QS-271 fix #01 S2 — SYNTHETIC_CLICK_MS carries a `>= 300` lower
+    bound (mirrors PRESS_GUARD_MS) so the belt-and-suspenders window
+    can't be silently shrunk below the iOS synthetic-click delay."""
+    executable = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    m = re.search(r"const\s+SYNTHETIC_CLICK_MS\s*=\s*(\d+)", executable)
+    assert m is not None, "SYNTHETIC_CLICK_MS const must exist."
+    assert int(m.group(1)) >= 300, (
+        f"SYNTHETIC_CLICK_MS must be >= 300 (iOS synthetic-click delay); got {m.group(1)}."
+    )
+
+
+def test_press_guard_uses_monotonic_clock():
+    """QS-271 fix #01 S3 — the guard arms/checks against a MONOTONIC
+    clock (`performance.now()`), not the wall-clock `Date.now()`, so a
+    backward wall-clock step (NTP / DST / manual change) can't wedge
+    rendering for the magnitude of the jump."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+
+    # Anchor on the method DEFINITIONS (`name() {` / `name(el) {`), not the
+    # earlier call-sites in `set hass` / `_wireTap`.
+    for method in (r"_isPressInFlight\(\)\s*\{", r"_armPressGuard\(el\)\s*\{"):
+        body = _extract_js_function_body(base, method)
+        assert body is not None, f"could not extract body for /{method}/."
+        assert "performance.now()" in body, (
+            f"/{method}/ must use the monotonic `performance.now()`."
+        )
+        assert "Date.now()" not in body, (
+            f"/{method}/ must NOT use the non-monotonic `Date.now()` for the guard."
+        )
+
+    # The _wireTap timestamp (lastTouchEnd) is also monotonic for
+    # consistency with the guard window.
+    wire_tap = _extract_js_function_body(base, r"_wireTap\([^\n]*\)\s*\{")
+    assert wire_tap is not None
+    assert "Date.now()" not in wire_tap, (
+        "_wireTap must use `performance.now()` (monotonic), not `Date.now()`."
+    )
+
+
+def test_connected_callback_initializes_press_guard_field():
+    """QS-271 fix #01 N1 — `_pressInFlightUntil` is initialized (= 0) in
+    `connectedCallback` for clarity (the defensive `|| 0` may remain)."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    body = _extract_js_function_body(base, r"connectedCallback\s*\(")
+    assert body is not None, "could not extract `connectedCallback` body."
+    assert re.search(r"this\._pressInFlightUntil\s*=\s*0", body), (
+        "connectedCallback must initialize `this._pressInFlightUntil = 0`."
+    )
+
+
+def test_arm_press_guard_skips_disabled_controls():
+    """QS-271 fix #01 N4 — `_armPressGuard` does not arm the render-defer
+    window for a disabled control (its action no-ops, so deferring
+    repaints would be pure waste)."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    body = _extract_js_function_body(base, r"_armPressGuard\s*\(")
+    assert body is not None, "could not extract `_armPressGuard` body."
+    # Skips arming when the element is disabled (aria-disabled or the
+    # `.disabled` class used by the in-ring custom controls).
+    assert "aria-disabled" in body or "disabled" in body, (
+        "_armPressGuard must short-circuit for a disabled control."
+    )
+
+
+def test_press_guard_schedules_catch_up_flush_render():
+    """QS-271 fix #01 N5 — when the guard window expires the card
+    schedules a single catch-up render (re-running the full `set hass`
+    gate via the stored state) so a `hass` push dropped during the
+    window isn't stranded until the next organic push. The timer is
+    cleared on disconnect."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+
+    arm_body = _extract_js_function_body(base, r"_armPressGuard\s*\(")
+    assert arm_body is not None
+    assert "_pressGuardFlushTimer" in arm_body, (
+        "_armPressGuard must schedule a `_pressGuardFlushTimer` catch-up render."
+    )
+    assert "setTimeout(" in arm_body, "_armPressGuard must schedule the flush via setTimeout."
+    # The flush re-runs the full gate by re-assigning the stored state.
+    assert re.search(r"this\.hass\s*=\s*this\._hass", arm_body), (
+        "the catch-up flush must re-run `set hass` via `this.hass = this._hass`."
+    )
+
+    disc_body = _extract_js_function_body(base, r"disconnectedCallback\s*\(")
+    assert disc_body is not None
+    assert "_pressGuardFlushTimer" in disc_body and "clearTimeout(" in disc_body, (
+        "disconnectedCallback must clear the `_pressGuardFlushTimer`."
+    )
