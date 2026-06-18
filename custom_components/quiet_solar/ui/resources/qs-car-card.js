@@ -797,7 +797,9 @@ class QsCarCard extends QsCardBase {
   set hass(hass) {
     this._hass = hass;
     if (!this._root) return;
-    if (this._isInteracting || this._isInteractingCharger || this._isInteractingPerson || this._modalOpen || this._isInteractingTarget) return;
+    // QS-271 — also defer the repaint while a tap is in flight (state is
+    // stored above; only the _render() repaint is deferred).
+    if (this._isInteracting || this._isInteractingCharger || this._isInteractingPerson || this._modalOpen || this._isInteractingTarget || this._isPressInFlight()) return;
     this._render();
   }
 
@@ -1559,6 +1561,8 @@ class QsCarCard extends QsCardBase {
                   if (ev.target.tagName === 'SELECT') return;
                   try { personSel.showPicker(); } catch (_) { personSel.focus(); }
               });
+              // QS-271 — defer re-render across the click→showPicker tap.
+              this._armPressGuard(personPill);
           }
       }
 
@@ -1587,6 +1591,8 @@ class QsCarCard extends QsCardBase {
                   if (ev.target.tagName === 'SELECT') return;
                   try { chargerSel.showPicker(); } catch (_) { chargerSel.focus(); }
               });
+              // QS-271 — defer re-render across the click→showPicker tap.
+              this._armPressGuard(chargerPill);
           }
       }
 
@@ -1650,7 +1656,6 @@ class QsCarCard extends QsCardBase {
       if (e.force_now) {
           const rbtn = ids('rabbit_btn');
           if (rbtn) {
-              rbtn.style.pointerEvents = 'auto';
               const rbtnAction = async () => {
                   if (this._root?.querySelector('.disabled')) return;
 
@@ -1685,10 +1690,10 @@ class QsCarCard extends QsCardBase {
                       });
                   }
               };
-              rbtn.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); rbtnAction(); });
-              rbtn.addEventListener('touchend', (ev) => { ev.preventDefault(); rbtnAction(); });
-              // S5: keyboard activation for the focusable div.
-              this._registerKeyActivation(rbtn, rbtnAction);
+              // QS-271 — chokepoint. stopPropagation:true so the tap
+              // doesn't bubble into the ring/center handlers; keyboard:true
+              // for the focusable div (S5).
+              this._wireTap(rbtn, rbtnAction, { keyboard: true, stopPropagation: true });
           }
       }
 
@@ -1751,8 +1756,8 @@ class QsCarCard extends QsCardBase {
                   ]
               });
           };
-          forceBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); forceAction(); });
-          forceBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); forceAction(); });
+          // QS-271 — chokepoint. keyboard:false (matches prior behaviour).
+          this._wireTap(forceBtn, forceAction, { keyboard: false, stopPropagation: true });
       }
 
       if (e.schedule) {
@@ -1774,8 +1779,8 @@ class QsCarCard extends QsCardBase {
                   ]
               });
           };
-          schedBtn?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); schedAction(); });
-          schedBtn?.addEventListener('touchend', (ev) => { ev.preventDefault(); schedAction(); });
+          // QS-271 — chokepoint. keyboard:false (matches prior behaviour).
+          this._wireTap(schedBtn, schedAction, { keyboard: false, stopPropagation: true });
       }
 
       // QS-243 — the big SOC number opens a manual-charge popup with an
@@ -1820,9 +1825,8 @@ class QsCarCard extends QsCardBase {
               // all dismiss the popup — no explicit close needed here (N6).
               this._showDialog({ title: 'Set charge percent', customContent: content, buttons });
           };
-          socEl?.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); openSocDialog(); });
-          socEl?.addEventListener('touchend', (ev) => { ev.preventDefault(); openSocDialog(); });
-          this._registerKeyActivation(socEl, openSocDialog);
+          // QS-271 — chokepoint. keyboard:true, stopPropagation:true.
+          this._wireTap(socEl, openSocDialog, { keyboard: true, stopPropagation: true });
       }
 
       // QS-235 AC4 — the reset button adopts the shared `_wireResetButton`

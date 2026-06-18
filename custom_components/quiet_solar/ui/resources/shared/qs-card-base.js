@@ -92,6 +92,24 @@ export const RING_BOTTOM_CARVE_CX = 160;   // SVG x-centre of the ring
 export const RING_BOTTOM_CARVE_CY = 277;   // button-centre y (derived from CSS .*-btn position)
 export const RING_BOTTOM_CARVE_R = 35;     // cover radius (user-tunable)
 
+// QS-271 — press-in-flight guard windows. Non-exported module consts
+// (matching the RING_BOTTOM_CARVE_* style) so they stay card-internal.
+//
+// PRESS_GUARD_MS — render-defer window armed around a tap. Sized to
+// cover iOS Safari's ~300 ms synthetic-click delay plus margin for the
+// handler to fire and the service call to begin. A `hass` push landing
+// inside this window skips the `_render()` repaint (NOT the state store)
+// so the live button node isn't torn out mid-tap. The window
+// auto-expires (self-healing) so a tap whose up-event never fires — the
+// node was destroyed before it — can never wedge rendering forever.
+const PRESS_GUARD_MS = 600;
+
+// SYNTHETIC_CLICK_MS — window within which a `click` is treated as the
+// OS-synthesized twin of a just-fired `touchend` (and therefore ignored).
+// Deliberately SEPARATE from PRESS_GUARD_MS: it must NOT throttle genuine
+// rapid re-taps, only dedupe the single synthetic click per physical tap.
+const SYNTHETIC_CLICK_MS = 350;
+
 
 export class QsCardBase extends HTMLElement {
     // ----- Lifecycle -----
@@ -111,6 +129,12 @@ export class QsCardBase extends HTMLElement {
         this._isInteractingTarget = false;
         this._isProcessingModeChange = false;
         this._modalOpen = false;
+        // QS-271 S7: reset the press-in-flight window. Non-critical (the
+        // window auto-expires anyway), but keeps the flag clean on
+        // re-attach. An innerHTML rewrite of a CHILD does not fire this
+        // on the card element, so it can't clear an in-flight guard
+        // mid-tap.
+        this._pressInFlightUntil = 0;
     }
 
     setConfig(config) {
@@ -123,8 +147,12 @@ export class QsCardBase extends HTMLElement {
     set hass(hass) {
         this._hass = hass;
         if (!this._root) return;
-        // Avoid re-rendering while user is interacting with selects or a modal is open
-        if (this._isInteractingMode || this._modalOpen || this._isInteractingTarget) return;
+        // Avoid re-rendering while user is interacting with selects or a
+        // modal is open, or while a tap is in flight (QS-271 — so a hass
+        // push can't tear the button node out mid-tap). `this._hass` is
+        // stored above the gate, so no state is dropped — only the repaint
+        // is deferred, by at most the guard window.
+        if (this._isInteractingMode || this._modalOpen || this._isInteractingTarget || this._isPressInFlight()) return;
         this._render();
     }
 
@@ -335,6 +363,67 @@ export class QsCardBase extends HTMLElement {
         });
         this._root.appendChild(wrap);
         return wrap;
+    }
+
+    // ----- Press-in-flight guard (QS-271) -----
+    /*
+      The bug: every `hass` push runs `set hass → _render() → innerHTML`,
+      which destroys and rebuilds every button node. A plain button tap
+      set NONE of the `_isInteracting*` guards, so a push landing between
+      `pointerdown` and the (iOS-delayed ~300 ms) synthetic `click`
+      tore the node out mid-tap and the press was dropped.
+
+      The fix is a self-expiring TIMESTAMP window — not a boolean. A
+      boolean set on `pointerdown` and cleared on the up-event would
+      WEDGE rendering forever exactly when the node is destroyed before
+      the up-event fires (this bug). The window auto-expires instead.
+    */
+    _isPressInFlight() {
+        return Date.now() < (this._pressInFlightUntil || 0);
+    }
+
+    // _armPressGuard — low-level primitive: arms the render-defer window
+    // on `pointerdown` + `touchstart`. Both listeners are {passive:true}
+    // (they never preventDefault), so on the native-`<select>` pills they
+    // cannot interfere with the picker opening. Used directly on controls
+    // that keep their own activation handler (the pills); _wireTap calls
+    // it internally for plain action buttons.
+    _armPressGuard(el) {
+        if (!el) return;
+        const begin = () => { this._pressInFlightUntil = Date.now() + PRESS_GUARD_MS; };
+        el.addEventListener('pointerdown', begin, { passive: true });
+        el.addEventListener('touchstart', begin, { passive: true });
+    }
+
+    // _wireTap — the full button-wiring chokepoint for plain action
+    // buttons. Arms the press guard, then owns the touchend / click /
+    // keyboard binding so the guard can never be forgotten on a new
+    // button. Replaces the copy-pasted click+touchend boilerplate.
+    _wireTap(el, action, { keyboard = true, stopPropagation = true } = {}) {
+        if (!el) return;
+        el.style.pointerEvents = 'auto';
+        this._armPressGuard(el);
+        let lastTouchEnd = 0;
+        // touchend: NON-passive (no passive option) so preventDefault can
+        // suppress the OS's delayed synthetic click; fires the action
+        // immediately and records the time.
+        el.addEventListener('touchend', (ev) => {
+            if (stopPropagation) ev.stopPropagation();
+            ev.preventDefault();
+            lastTouchEnd = Date.now();
+            action();
+        });
+        // click: ignore ONLY the synthetic twin that follows a real
+        // touchend (event-aware dedup, not a blanket time latch). Genuine
+        // mouse/synthesized clicks (no recent touchend) still fire, and
+        // genuine rapid re-taps are NOT throttled.
+        el.addEventListener('click', (ev) => {
+            if (stopPropagation) ev.stopPropagation();
+            ev.preventDefault();
+            if (Date.now() - lastTouchEnd < SYNTHETIC_CLICK_MS) return;
+            action();
+        });
+        if (keyboard) this._registerKeyActivation(el, action);
     }
 
     // ----- Keyboard activation -----
@@ -652,10 +741,8 @@ export class QsCardBase extends HTMLElement {
             });
         };
 
-        buttonEl.style.pointerEvents = 'auto';
-        buttonEl.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); timeAction(); });
-        buttonEl.addEventListener('touchend', (ev) => { ev.preventDefault(); timeAction(); });
-        this._registerKeyActivation(buttonEl, timeAction);
+        // QS-271 — chokepoint: arms the press guard + owns touchend/click/keyboard.
+        this._wireTap(buttonEl, timeAction, { keyboard: true, stopPropagation: true });
     }
 
     /*
@@ -685,8 +772,9 @@ export class QsCardBase extends HTMLElement {
                 ],
             });
         };
-        buttonEl.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); resetAction(); });
-        buttonEl.addEventListener('touchend', (ev) => { ev.preventDefault(); resetAction(); });
+        // QS-271 — chokepoint. N6: native `<button id="reset">` is
+        // keyboard-native, so no `_registerKeyActivation` (keyboard:false).
+        this._wireTap(buttonEl, resetAction, { keyboard: false, stopPropagation: true });
     }
 
     /*
@@ -712,10 +800,9 @@ export class QsCardBase extends HTMLElement {
                 // ignore; HA state will resync UI on next render
             }
         };
-        buttonEl.style.pointerEvents = 'auto';
-        buttonEl.addEventListener('click', togglePower);
-        buttonEl.addEventListener('touchend', (ev) => { ev.preventDefault(); togglePower(); });
-        this._registerKeyActivation(buttonEl, togglePower);
+        // QS-271 — chokepoint. stopPropagation:false preserves the
+        // power button's current behaviour (no parent delegation relied on).
+        this._wireTap(buttonEl, togglePower, { keyboard: true, stopPropagation: false });
     }
 
     /*
@@ -739,10 +826,9 @@ export class QsCardBase extends HTMLElement {
                 // ignore; HA state will resync UI on next render
             }
         };
-        buttonEl.style.pointerEvents = 'auto';
-        buttonEl.addEventListener('click', toggleGreen);
-        buttonEl.addEventListener('touchend', (ev) => { ev.preventDefault(); toggleGreen(); });
-        this._registerKeyActivation(buttonEl, toggleGreen);
+        // QS-271 — chokepoint. stopPropagation:false preserves the
+        // green button's current behaviour (no parent delegation relied on).
+        this._wireTap(buttonEl, toggleGreen, { keyboard: true, stopPropagation: false });
     }
 
     // ----- Ring builder -----

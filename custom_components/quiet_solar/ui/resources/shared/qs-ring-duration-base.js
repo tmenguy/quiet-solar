@@ -107,9 +107,9 @@ export class QsRingDurationCardBase extends QsCardBase {
                 ],
             });
         };
-        buttonEl.addEventListener('click', (ev) => { ev.stopPropagation(); ev.preventDefault(); obtnAction(); });
-        buttonEl.addEventListener('touchend', (ev) => { ev.preventDefault(); obtnAction(); });
-        this._registerKeyActivation(buttonEl, obtnAction);
+        // QS-271 — chokepoint. stopPropagation:true so a tap doesn't
+        // bubble into the ring/center handlers.
+        this._wireTap(buttonEl, obtnAction, { keyboard: true, stopPropagation: true });
     }
 
     /*
@@ -162,6 +162,9 @@ export class QsRingDurationCardBase extends QsCardBase {
                 if (ev.target.tagName === 'SELECT') return;
                 try { selectEl.showPicker(); } catch (_) { selectEl.focus(); }
             });
+            // QS-271 — defer re-render across the click→showPicker tap so
+            // a hass push can't destroy the pill before the picker opens.
+            this._armPressGuard(modePill);
         }
     }
 }

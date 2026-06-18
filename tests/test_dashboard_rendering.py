@@ -561,19 +561,29 @@ class TestDashboardTemplateRendering:
         # and is wired into every action via the shared wire-helpers.
         union = card_source_union("qs-radiator-card.js")
         assert "_registerKeyActivation(" in union
-        # QS-199 review-fix #02 S12 — count CALL-SITES only. The method
-        # DEFINITION `_registerKeyActivation(el, action) {` in
-        # qs-card-base.js would otherwise inflate the count, letting the
-        # test pass with fewer wired actions than expected. `this.` and
-        # bare-call forms are call-sites; the `(el, action)` signature is
-        # the definition.
-        call_sites = re.findall(r"_registerKeyActivation\(", union)
-        definitions = re.findall(r"_registerKeyActivation\(el,\s*action\)", union)
-        wired = len(call_sites) - len(definitions)
-        assert wired >= 4, (
-            f"expected ≥4 _registerKeyActivation call-sites across the union, "
-            f"got {wired} (calls={len(call_sites)}, defs={len(definitions)})"
+        # QS-271 — keyboard activation was centralized into the shared
+        # `_wireTap` chokepoint: it now calls `_registerKeyActivation`
+        # once (for keyboard:true controls) instead of every wire-helper
+        # calling it directly. So the assertion is now structural:
+        #   (a) `_wireTap` calls `_registerKeyActivation` (the chokepoint
+        #       wires keyboard activation for every routed control), and
+        #   (b) the radiator's four action helpers route through `_wireTap`
+        #       (so each action div still gets keyboard activation).
+        executable = _strip_js_comments(union)
+        wire_tap_body = _extract_js_function_body(executable, r"_wireTap\([^\n]*\)\s*\{")
+        assert wire_tap_body is not None and "_registerKeyActivation(" in wire_tap_body, (
+            "_wireTap chokepoint must call _registerKeyActivation so every "
+            "routed control gets keyboard activation."
         )
+        for helper in ("_wirePowerButton", "_wireGreenButton", "_wireTimePicker", "_wireOverrideButton"):
+            # Anchor on the `(params)` DEFINITION, not the `({ ... })`
+            # call-site (the radiator card text precedes the shared
+            # modules in the union, so a bare-name match would grab the
+            # call's object-literal arg instead of the method body).
+            body = _extract_js_function_body(executable, rf"{helper}\(params\)\s*\{{")
+            assert body is not None and "_wireTap(" in body, (
+                f"{helper} must route through `_wireTap` (keyboard activation chokepoint)."
+            )
 
     def test_radiator_card_s17_async_calls_wrapped_in_try_finally(self):  # CR2 — sync (no hass)
         """A2 — pin S17: each `_select` / `_setNumber` await is wrapped.
@@ -8523,4 +8533,246 @@ def test_car_disconnected_controls_leave_tab_order():
     for el_id in ("sun_btn", "rabbit_btn", "time_btn"):
         assert re.search(rf'id="{el_id}"[^>]*\$\{{ctrlTabAttrs\}}', car), (
             f"CR1: car `{el_id}` must use `${{ctrlTabAttrs}}` (conditional tab order)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# QS-271 — press-in-flight guard + _wireTap / _armPressGuard chokepoint.
+#
+# The JS cards live outside the executable test pipeline (no jsdom / JS
+# harness — a documented KNOWN GAP). These are therefore source-text /
+# structural assertions, tolerant of single/double quotes and whitespace,
+# matching the established convention in this module.
+# ---------------------------------------------------------------------------
+
+_CARD_BASE_JS = COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-card-base.js"
+_RING_DURATION_JS = COMPONENT_ROOT / "ui" / "resources" / "shared" / "qs-ring-duration-base.js"
+_CAR_CARD_JS = COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js"
+_CLIMATE_CARD_JS = COMPONENT_ROOT / "ui" / "resources" / "qs-climate-card.js"
+
+# Every JS file that wires tappable controls (the six cards + the two
+# shared base classes). Used by the touchend chokepoint canary.
+_ALL_CARD_JS_FILES = [
+    "qs-car-card.js",
+    "qs-climate-card.js",
+    "qs-on-off-duration-card.js",
+    "qs-pool-card.js",
+    "qs-radiator-card.js",
+    "qs-water-boiler-card.js",
+    "shared/qs-card-base.js",
+    "shared/qs-ring-duration-base.js",
+]
+
+
+def test_card_base_defines_press_guard_primitives():
+    """QS-271 AC1 — `QsCardBase` defines the two press-guard module
+    consts and the three guard methods."""
+    src = _CARD_BASE_JS.read_text(encoding="utf-8")
+    executable = _strip_js_comments(src)
+
+    # PRESS_GUARD_MS module const with a numeric value >= 300 (covers
+    # iOS Safari's ~300 ms synthetic-click delay). The exact value is
+    # user-tunable; only the >= 300 lower bound is pinned.
+    m = re.search(r"const\s+PRESS_GUARD_MS\s*=\s*(\d+)", executable)
+    assert m is not None, "qs-card-base.js must define `const PRESS_GUARD_MS = <int>`."
+    assert int(m.group(1)) >= 300, (
+        f"PRESS_GUARD_MS must be >= 300 (iOS synthetic-click window); got {m.group(1)}."
+    )
+
+    # SYNTHETIC_CLICK_MS module const (separate from PRESS_GUARD_MS).
+    assert re.search(r"const\s+SYNTHETIC_CLICK_MS\s*=\s*\d+", executable), (
+        "qs-card-base.js must define `const SYNTHETIC_CLICK_MS = <int>`."
+    )
+
+    # The three guard methods.
+    assert "_isPressInFlight(" in executable, "missing `_isPressInFlight(` method."
+    assert "_armPressGuard(" in executable, "missing `_armPressGuard(` method."
+    assert "_wireTap(" in executable, "missing `_wireTap(` method."
+
+    # _armPressGuard arms on BOTH pointerdown and touchstart, passive.
+    arm_body = _extract_js_function_body(executable, r"_armPressGuard\s*\(")
+    assert arm_body is not None, "could not extract `_armPressGuard` body."
+    assert "pointerdown" in arm_body and "touchstart" in arm_body, (
+        "_armPressGuard must arm on both `pointerdown` and `touchstart`."
+    )
+    assert re.search(r"passive\s*:\s*true", arm_body), (
+        "_armPressGuard listeners must be registered `{ passive: true }`."
+    )
+    # The guard sets the timestamp window from PRESS_GUARD_MS.
+    assert "PRESS_GUARD_MS" in arm_body, (
+        "_armPressGuard must arm the window using PRESS_GUARD_MS."
+    )
+
+
+def test_wire_tap_touchend_is_non_passive_with_synthetic_click_dedup():
+    """QS-271 AC1/AC8 — `_wireTap`'s touchend is non-passive (so
+    preventDefault works), records the touchend time, and the click
+    handler dedups only the synthetic twin via SYNTHETIC_CLICK_MS."""
+    executable = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    # `_wireTap`'s signature carries a destructuring default `{ ... } = {}`
+    # in its param list, so anchor on the body-opening brace (after the
+    # closing `)`) rather than the first `{` the walker would otherwise hit.
+    body = _extract_js_function_body(executable, r"_wireTap\([^\n]*\)\s*\{")
+    assert body is not None, "could not extract `_wireTap` body."
+
+    # Calls the low-level primitive internally.
+    assert "_armPressGuard(" in body, "_wireTap must call `_armPressGuard(el)`."
+    # Sets pointer-events auto.
+    assert re.search(r"pointerEvents\s*=\s*['\"]auto['\"]", body), (
+        "_wireTap must set `el.style.pointerEvents = 'auto'`."
+    )
+    # touchend listener present and NON-passive (no `passive: true` on it).
+    tm = re.search(r"addEventListener\(\s*['\"]touchend['\"][\s\S]*?\)\s*;", body)
+    assert tm is not None, "_wireTap must register a `touchend` listener."
+    # The touchend registration must not opt into passive — otherwise
+    # preventDefault (needed to suppress the synthetic click) is a no-op.
+    assert "passive" not in tm.group(0), (
+        "_wireTap's `touchend` listener must be NON-passive so preventDefault works."
+    )
+    assert "preventDefault" in body, "_wireTap handlers must call preventDefault."
+    # Records the last touchend time and dedups the synthetic click.
+    assert "lastTouchEnd" in body, "_wireTap must record `lastTouchEnd`."
+    assert "SYNTHETIC_CLICK_MS" in body, (
+        "_wireTap's click handler must dedup the synthetic twin via SYNTHETIC_CLICK_MS."
+    )
+    # Optional keyboard activation.
+    assert "_registerKeyActivation(" in body, (
+        "_wireTap must optionally register keyboard activation."
+    )
+
+
+@pytest.mark.parametrize(
+    "card_file",
+    ["shared/qs-card-base.js", "qs-car-card.js", "qs-climate-card.js"],
+)
+def test_all_set_hass_overrides_gate_on_press_in_flight(card_file):
+    """QS-271 AC2 — each of the three `set hass` overrides gates the
+    re-render on `_isPressInFlight()` AND still assigns `this._hass`
+    before the gate (so no state is dropped)."""
+    src = (COMPONENT_ROOT / "ui" / "resources" / card_file).read_text(encoding="utf-8")
+    executable = _strip_js_comments(src)
+    body = _extract_js_function_body(executable, r"set\s+hass\s*\(")
+    assert body is not None, f"{card_file}: could not extract `set hass` body."
+
+    assert "_isPressInFlight" in body, (
+        f"{card_file}: `set hass` must gate re-render on `_isPressInFlight()`."
+    )
+    # `this._hass = hass` must appear before the first interaction gate
+    # (the first `return`), so the latest state is always stored.
+    hass_idx = body.find("this._hass")
+    gate_idx = body.find("return")
+    assert hass_idx != -1, f"{card_file}: `set hass` must assign `this._hass`."
+    assert gate_idx != -1, f"{card_file}: `set hass` must have a guard `return`."
+    assert hass_idx < gate_idx, (
+        f"{card_file}: `this._hass = hass` must be assigned BEFORE the guard return."
+    )
+
+
+def test_wire_helpers_and_inline_buttons_route_through_wire_tap():
+    """QS-271 AC3 — the four base wire-helpers, the ring-duration
+    override button, and the four car inline buttons route through
+    `_wireTap`."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    for helper in ("_wireTimePicker", "_wireResetButton", "_wirePowerButton", "_wireGreenButton"):
+        body = _extract_js_function_body(base, rf"{helper}\s*\(")
+        assert body is not None, f"could not extract `{helper}` body."
+        assert "_wireTap(" in body, f"{helper} must route through `_wireTap(`."
+
+    ring = _strip_js_comments(_RING_DURATION_JS.read_text(encoding="utf-8"))
+    override_body = _extract_js_function_body(ring, r"_wireOverrideButton\s*\(")
+    assert override_body is not None, "could not extract `_wireOverrideButton` body."
+    assert "_wireTap(" in override_body, "_wireOverrideButton must route through `_wireTap(`."
+
+    car = _strip_js_comments(_CAR_CARD_JS.read_text(encoding="utf-8"))
+    # Each inline button is wired via `_wireTap(<var>, ...)`.
+    for var in ("rbtn", "forceBtn", "schedBtn", "socEl"):
+        assert re.search(rf"_wireTap\(\s*{var}\b", car), (
+            f"car inline button `{var}` must route through `_wireTap({var}, ...)`."
+        )
+
+
+def test_select_pills_arm_press_guard():
+    """QS-271 AC4 — the native-`<select>` pills add `_armPressGuard`
+    while keeping their existing click->showPicker handler."""
+    car = _strip_js_comments(_CAR_CARD_JS.read_text(encoding="utf-8"))
+    for pill in ("personPill", "chargerPill"):
+        assert re.search(rf"_armPressGuard\(\s*{pill}\b", car), (
+            f"car `{pill}` must add `_armPressGuard({pill})`."
+        )
+        # The existing click->showPicker handler is preserved.
+        assert "showPicker(" in car, "car pills must keep their showPicker handler."
+
+    climate = _strip_js_comments(_CLIMATE_CARD_JS.read_text(encoding="utf-8"))
+    assert re.search(r"_armPressGuard\(\s*stateOnPill\b", climate), (
+        "climate `stateOnPill` must add `_armPressGuard(stateOnPill)`."
+    )
+
+    ring = _strip_js_comments(_RING_DURATION_JS.read_text(encoding="utf-8"))
+    assert re.search(r"_armPressGuard\(\s*modePill\b", ring), (
+        "ring-duration `modePill` must add `_armPressGuard(modePill)`."
+    )
+
+
+def test_disconnected_callback_resets_press_guard():
+    """QS-271 AC6 — base `disconnectedCallback` resets
+    `_pressInFlightUntil` to 0 (S7 interaction-flag-reset pattern)."""
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    body = _extract_js_function_body(base, r"disconnectedCallback\s*\(")
+    assert body is not None, "could not extract base `disconnectedCallback` body."
+    assert re.search(r"this\._pressInFlightUntil\s*=\s*0", body), (
+        "base disconnectedCallback must reset `this._pressInFlightUntil = 0`."
+    )
+
+
+def test_no_card_uses_bare_touchend_outside_shared_helpers():
+    """QS-271 AC7 — chokepoint canary: every element-level
+    `addEventListener('touchend'...)` in the card files must live inside
+    one of the allowlisted shared sites (`_wireTap`, `_wireTargetHandle`,
+    `_showDialog`). Pins the `_showDialog` occurrence count so a new bare
+    touchend added elsewhere in that method is still caught.
+
+    Mirrors `test_no_card_reintroduces_whole_card_disabled_greyer`.
+    """
+    pat = re.compile(r"addEventListener\(\s*['\"]touchend['\"]")
+
+    # Only qs-card-base.js may contain element-level touchend bindings —
+    # and only inside the three allowlisted methods. Every other card
+    # file must contain ZERO.
+    base = _strip_js_comments(_CARD_BASE_JS.read_text(encoding="utf-8"))
+    base_total = len(pat.findall(base))
+
+    allowlisted_total = 0
+    # `_wireTap`'s param list contains a destructuring default brace, so
+    # anchor its extraction on the body-opening brace (see above).
+    for method in (r"_wireTap\([^\n]*\)\s*\{", r"_wireTargetHandle\s*\(", r"_showDialog\s*\("):
+        body = _extract_js_function_body(base, method)
+        assert body is not None, f"could not extract body for /{method}/."
+        allowlisted_total += len(pat.findall(body))
+
+    assert base_total == allowlisted_total, (
+        "qs-card-base.js has element-level `addEventListener('touchend'...)` "
+        f"OUTSIDE the allowlisted methods (_wireTap / _wireTargetHandle / "
+        f"_showDialog): {base_total} total vs {allowlisted_total} allowlisted."
+    )
+
+    # Pin the _showDialog occurrence count (currently one) so a NEW bare
+    # touchend added inside _showDialog is still caught.
+    show_dialog = _extract_js_function_body(base, r"_showDialog\s*\(")
+    assert len(pat.findall(show_dialog)) == 1, (
+        "_showDialog must contain exactly one `touchend` binding (its "
+        "latch-bearing modal-button wiring); a new bare one was added."
+    )
+
+    # Every OTHER card file must have no element-level touchend at all —
+    # they all route through `_wireTap` / `_armPressGuard` now.
+    for card_file in _ALL_CARD_JS_FILES:
+        if card_file == "shared/qs-card-base.js":
+            continue
+        src = _strip_js_comments(
+            (COMPONENT_ROOT / "ui" / "resources" / card_file).read_text(encoding="utf-8")
+        )
+        assert pat.search(src) is None, (
+            f"{card_file}: bare element-level `addEventListener('touchend'...)` "
+            "found — route the control through `_wireTap` / `_armPressGuard` "
+            "(shared chokepoint) instead."
         )
