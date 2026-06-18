@@ -730,7 +730,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 f"Car {self.name} recovered",
                 f"Your {self.name}'s data is available again",
             )
-            self._exit_stale_mode()
+            # For a manual car the inferred override is owned by the per-cycle
+            # reconciliation below (tri-state), so preserve it across the exit
+            # rather than wiping it here — a None read on this same recovery
+            # cycle must hold the override, not drop it (R5-SF1). For non-manual
+            # / charger-less cars the reconciliation does not run, so the
+            # default unconditional clear still applies.
+            self._exit_stale_mode(preserve_inferred=self._charger_assignment_is_user_originated())
             self._was_car_api_stale = False
 
         # Manual inferred-flag management for attached cars. Runs BEFORE the
@@ -749,7 +755,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
             # (R3-SF1) — only when set, to avoid churning every cycle (R4-NTH2).
             # The WARNING dedup key is deliberately preserved so toggling FNS and
             # back to AUTO during the same ongoing contradiction does not re-log
-            # the "trusting manual assignment" WARNING (R4-NTH3).
+            # the "trusting manual assignment" WARNING (R4-NTH3). This is also
+            # why it intentionally does NOT delegate to `clear_inferred_flags()`
+            # (which would reset that dedup key) — the two clearing sites differ
+            # on purpose (R5-NTH3).
             if self._car_api_inferred_home or self._car_api_inferred_plugged:
                 self._car_api_inferred_home = False
                 self._car_api_inferred_plugged = False
@@ -837,7 +846,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 parts.append(f"{sensor_id}: never updated")
         return ", ".join(parts)
 
-    def _exit_stale_mode(self) -> None:
+    def _exit_stale_mode(self, preserve_inferred: bool = False) -> None:
         """Clear all stale flags and exit stale-percent mode.
 
         Also clears the system-captured SOC base. When there is NO user
@@ -845,11 +854,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
         takes over. When a user override IS active, the override owns its own
         accumulator lifecycle (the case-1/2 recovery in `_update_soc_estimation`),
         so a transient stale blip must not wipe its accumulated delta.
+
+        ``preserve_inferred`` keeps the manual inferred home/plug override in
+        place so the immediately-following per-cycle reconciliation
+        (`check_charger_assignment_contradiction`) can apply its tri-state rule
+        instead of this unconditional wipe — otherwise a `None` (unavailable)
+        raw read on a recovery cycle would drop a still-valid override that the
+        reconciliation could only re-set on an explicit `False` (R5-SF1).
         """
         self._car_api_stale = False
         self.car_api_stale_percent_mode = False
-        self._car_api_inferred_home = False
-        self._car_api_inferred_plugged = False
+        if not preserve_inferred:
+            self._car_api_inferred_home = False
+            self._car_api_inferred_plugged = False
         self._car_api_stale_since = None
         self._last_valid_base_soc_value = None
         if self._user_base_soc_value is None:
@@ -941,6 +958,9 @@ class QSCar(HADeviceMixin, AbstractDevice):
             # auto-mode read does not race-clear a still-valid manual override.
             return
 
+        # Instantaneous reads (for_duration=None): the reconciliation reasons
+        # about the current home/plug truth, not a debounced window — the
+        # duration-aware path is a different mechanism and never feeds here (R5-NTH4).
         raw_home = self._get_raw_is_car_home(time)
         raw_plugged = self._get_raw_is_car_plugged(time)
 

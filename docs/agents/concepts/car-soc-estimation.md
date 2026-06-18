@@ -120,7 +120,7 @@ sensor reports unplugged) while the SOC sensor is live:
   user**: on a contradiction it sets
   `_car_api_inferred_home`/`_car_api_inferred_plugged` (so the car keeps being
   managed and charged) and logs **one WARNING per contradiction episode**
-  (deduped on the inferred-home flag). It does **not** mark the car stale and
+  (deduped on the dedicated `_manual_contradiction_logged` key). It does **not** mark the car stale and
   does **not** notify. A manually-assigned car's staleness therefore depends
   only on its SOC sensor (the SOC-only stale entry) plus the all-sensors-dead
   and force paths. With a fresh SOC the car is not in estimation mode, so

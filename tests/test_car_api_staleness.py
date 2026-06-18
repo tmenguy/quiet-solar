@@ -438,7 +438,7 @@ class TestContradictionDetection:
 
         with patch.object(real_car, "_schedule_person_notification") as mock_notify:
             real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
-            # Re-asserting the same episode must not re-log (deduped on inferred flag)
+            # Re-asserting the same episode must not re-log (deduped on _manual_contradiction_logged)
             real_car.check_charger_assignment_contradiction(
                 "Test Charger", current_time + timedelta(seconds=7), manual=True
             )
@@ -988,6 +988,52 @@ class TestManualAssignmentRecovery:
         assert real_car.car_api_stale_percent_mode is False
         assert real_car.is_car_effectively_stale(current_time) is False
         assert real_car.is_in_soc_estimation_mode(current_time) is False
+
+    def _make_manual_recovery_car(self, car, current_time):
+        """A manual car in SOC-stale estimation with the inferred override active."""
+        car.charger = MagicMock()
+        car.charger.name = "Test Charger"
+        car.charger.get_user_originated = MagicMock(return_value=None)
+        car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
+        car.car_api_stale_percent_mode = True
+        car._was_car_api_stale = True
+        car._car_api_stale_since = current_time - timedelta(hours=2)
+        car._car_api_inferred_home = True
+        car._car_api_inferred_plugged = True
+        car._manual_contradiction_logged = True
+
+    def test_recovery_cycle_none_read_preserves_override(self, real_car, current_time):
+        """R5-SF1: on a SOC-recovery cycle, a None (unavailable) tracker/plug read holds the
+        inferred override — the recovery exit preserves it for the manual reconciliation,
+        which holds on None instead of dropping a still-valid override."""
+        self._make_manual_recovery_car(real_car, current_time)
+        fresh = current_time - timedelta(seconds=60)
+        # Fresh SOC arrives (triggers recovery) but tracker/plug flicker to unavailable (None)
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh, 55.0, {})
+        # No tracker/plug entries → raw reads are None
+
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car.car_api_stale_percent_mode is False  # recovered
+        # Override held despite the None reads (not dropped on the flicker)
+        assert real_car._car_api_inferred_home is True
+        assert real_car._car_api_inferred_plugged is True
+
+    def test_recovery_cycle_affirmative_reads_clear_override(self, real_car, current_time):
+        """R5-SF1 complement: on a recovery cycle, explicit positive reads clear the override."""
+        self._make_manual_recovery_car(real_car, current_time)
+        fresh = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh, 55.0, {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh, "on", {})
+
+        real_car._update_car_api_staleness(current_time)
+
+        assert real_car.car_api_stale_percent_mode is False
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False
 
     def test_sf3_no_soc_sensor_manual_does_not_short_circuit_recovery(self, real_invited_car, current_time):
         """SF3: the manual branch is self-defending — a no-SOC car does not recover via it
@@ -1911,10 +1957,10 @@ class TestDepartureAutoReset:
             await real_car._check_departure_auto_reset(even_later)
             mock_reset.assert_not_called()
 
-    async def test_manual_trust_override_capped_by_departure_reset(self, real_car, current_time):
+    async def test_manual_trust_override_ceiling_triggers_reset(self, real_car, current_time):
         """R2-NTH2: the manual-trust override has a 15-min ceiling — a wrongly-"away"
-        tracker on a manually-assigned car triggers the departure auto-reset, which wipes
-        the user-originated marker (and the override the QS-265 fix relies on)."""
+        tracker on a manually-assigned car *triggers* the departure auto-reset at the
+        ceiling. (The reset's clearing contract is asserted separately below.)"""
         fresh_time = current_time - timedelta(seconds=60)
         for sensor_id in real_car._car_api_all_sensors:
             real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
@@ -1935,6 +1981,21 @@ class TestDepartureAutoReset:
             await real_car._check_departure_auto_reset(later_time)
             mock_reset.assert_called_once()
         assert real_car._departure_auto_reset_done is True
+
+    def test_stale_detection_reset_clears_manual_override(self, real_car):
+        """R5-CR3: the override-clearing contract that `user_clean_and_reset` relies on —
+        `reset_car_api_stale_detection()` actually wipes the inferred home/plug flags, so
+        the manual override does not survive the departure reset."""
+        real_car._car_api_inferred_home = True
+        real_car._car_api_inferred_plugged = True
+        real_car._car_api_stale_since = datetime.now(tz=pytz.UTC)
+        real_car.car_api_stale_percent_mode = True
+
+        real_car.reset_car_api_stale_detection()
+
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False
+        assert real_car.car_api_stale_percent_mode is False
 
     async def test_departure_10min_preserves_state(self, real_car, current_time):
         """Car home → car leaves → only 10 min → user-originated state preserved."""

@@ -9,7 +9,7 @@ import pytest
 import pytz
 from homeassistant.components import number
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN
+from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -1884,7 +1884,7 @@ async def test_qs265_manual_assignment_bad_tracker_not_stale(
         domain=DOMAIN,
         data=MOCK_CHARGER_CONFIG,
         entry_id="charger_qs265_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
+        title=f"charger: {MOCK_CHARGER_CONFIG[CONF_NAME]}",
         unique_id="quiet_solar_charger_qs265_test",
     )
     charger_entry.add_to_hass(hass)
@@ -1895,7 +1895,7 @@ async def test_qs265_manual_assignment_bad_tracker_not_stale(
         domain=DOMAIN,
         data=MOCK_CAR_CONFIG,
         entry_id="car_qs265_test",
-        title=f"car: {MOCK_CAR_CONFIG['name']}",
+        title=f"car: {MOCK_CAR_CONFIG[CONF_NAME]}",
         unique_id="quiet_solar_car_qs265_test",
     )
     car_entry.add_to_hass(hass)
@@ -1935,8 +1935,8 @@ async def test_qs265_manual_assignment_bad_tracker_not_stale(
     with caplog.at_level(logging.WARNING):
         car_device._update_car_api_staleness(time_now)
 
-    # The manual contradiction is logged once (R4-NTH5)
-    assert "trusting manual assignment" in caplog.text
+    # The manual contradiction is logged exactly once (R4-NTH5 / R5-CR2)
+    assert sum(1 for r in caplog.records if "trusting manual assignment" in r.getMessage()) == 1
 
     # The manual assignment is trusted, the car is NOT stale, the inferred
     # flags keep it managed/charged, and the displayed SOC is the live value.
