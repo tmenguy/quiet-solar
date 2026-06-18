@@ -146,6 +146,14 @@ sensor reports unplugged) while the SOC sensor is live:
   all-data-dead guard and is itself guarded on a SOC sensor existing, so a
   no-SOC-sensor car (whose `_is_soc_sensor_stale` is vacuously False) never
   short-circuits to permanent recovery.
+- **15-minute ceiling on the override.** `_check_departure_auto_reset` reads the
+  **raw** tracker, so a manually-assigned car whose tracker is *persistently*
+  (wrongly) "away" is auto-reset after `CAR_NOT_HOME_AUTO_RESET_S` (15 min):
+  `user_clean_and_reset` wipes the user-originated marker and the inferred
+  flags, ending the manual trust and reverting to pre-fix behavior. This is the
+  deliberate upper bound from the story's adversarial-review notes ("trusted
+  until the existing unplug/displacement resets fire") — a genuinely-away car
+  must not be charged forever on a stale manual pick.
 
 ## Capture at the fresh→stale edge
 

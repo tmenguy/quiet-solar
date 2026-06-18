@@ -18,6 +18,7 @@ from custom_components.quiet_solar.const import (
     BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
     BUTTON_CAR_RESET_SOC_ESTIMATE,
     CAR_SOC_STALE_THRESHOLD_S,
+    CAR_STALE_MODE_AUTO,
     CAR_STALE_MODE_FORCE_NOT_STALE,
     CAR_STALE_MODE_FORCE_STALE,
     NUMBER_CAR_MANUAL_SOC_PERCENT,
@@ -766,6 +767,22 @@ def test_manual_soc_reset_case2_clears_on_differing_read(est_car, current_time):
 
     assert est_car._user_base_soc_value is None
     assert est_car.is_in_soc_estimation_mode(current_time) is False
+
+
+def test_manual_soc_reset_case3_clears_on_any_valid_read(est_car, current_time):
+    """SF4/R2-SF1/AC7 (Case 3): entered not-stale with no valid entry value — any valid
+    fresh raw read clears the manual SOC value (and the asterisk), with no force override."""
+    est_car._user_base_soc_value = 60.0
+    est_car._user_base_soc_entry_api_stale = False
+    est_car._user_base_soc_entry_sensor_value = None  # Case 3 — no valid entry reference
+    assert est_car.car_stale_mode_override == CAR_STALE_MODE_AUTO  # no force path in play
+    assert est_car.is_in_soc_estimation_mode(current_time) is True  # asterisk on
+
+    _set_soc(est_car, 72.0, current_time)  # any valid fresh read
+    est_car._update_soc_estimation(current_time)
+
+    assert est_car._user_base_soc_value is None
+    assert est_car.is_in_soc_estimation_mode(current_time) is False  # asterisk cleared
 
 
 def test_manual_soc_reset_force_not_stale_proceeds_when_time_stale(est_car, current_time):

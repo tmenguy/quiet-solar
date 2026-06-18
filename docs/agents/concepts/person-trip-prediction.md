@@ -46,7 +46,11 @@ tomorrow's predicted trips with margin.
   `get_car_charge_percent`, which returns an **estimate** (manual override or
   charged-energy interpolation) when the SOC API is failed / inaccurate /
   absent — see [car-soc-estimation.md](car-soc-estimation.md).
-- Charger assignment: which charger this car is plugged into.
+- Charger assignment: which charger this car is plugged into. A manual
+  charger assignment is trusted over a wrongly-"away" tracker (the car is
+  kept managed via inferred home/plug flags), but only up to the raw-tracker
+  departure auto-reset ceiling (`CAR_NOT_HOME_AUTO_RESET_S`, 15 min) — see the
+  manual-trust ceiling note in [car-soc-estimation.md](car-soc-estimation.md).
 - Person allocation: which person owns this car (drives prediction
   targeting).
 - Custom power → amperage table per car: different cars accept

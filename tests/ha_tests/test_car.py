@@ -1913,7 +1913,11 @@ async def test_qs265_manual_assignment_bad_tracker_not_stale(
     car_device.car_stale_mode_override = CAR_STALE_MODE_AUTO
     assert car_device._charger_assignment_is_user_originated() is True
 
-    # The Twingo scenario: tracker wrongly "away", plug "off", but SOC is live
+    # The Twingo scenario: tracker wrongly "away", plug "off", but SOC is live.
+    # NOTE (R2-NTH4): the probed-state cache is seeded directly here rather than
+    # via mocked HA sensor states + polling — this matches the existing ha_tests
+    # convention (e.g. test_soc_stale_triggers_stale_percent_mode_via_ha) and
+    # keeps the scenario deterministic without driving full update cycles.
     fresh = time_now - timedelta(minutes=2)
     for sensor_id in car_device._car_api_all_sensors:
         car_device._entity_probed_last_valid_state[sensor_id] = (fresh, "value", {})

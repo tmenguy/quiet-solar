@@ -240,6 +240,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_api_stale_percent_mode: bool = False
         self._car_api_inferred_home: bool = False
         self._car_api_inferred_plugged: bool = False
+        # Dedup key for the manual "trusting manual assignment" WARNING, kept
+        # separate from the inferred-flag state so it survives a stale→recovery
+        # transition (which clears the inferred flags via `_exit_stale_mode`)
+        # and therefore logs exactly once per genuine contradiction episode.
+        self._manual_contradiction_logged: bool = False
         self._car_not_home_since: datetime | None = None
         self._departure_auto_reset_done: bool = False
 
@@ -627,7 +632,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await self._check_departure_auto_reset(time)
 
     async def _check_departure_auto_reset(self, time: datetime) -> None:
-        """Auto-reset car state after confirmed departure (not-home for CAR_NOT_HOME_AUTO_RESET_S)."""
+        """Auto-reset car state after confirmed departure (not-home for CAR_NOT_HOME_AUTO_RESET_S).
+
+        This reads the **raw** tracker, so it is also the upper bound on the
+        QS-265 manual-trust override: a manually-assigned car whose tracker is
+        wrongly "away" is reset (user-originated marker + inferred flags wiped)
+        after `CAR_NOT_HOME_AUTO_RESET_S`. See the manual-trust ceiling note in
+        `docs/agents/concepts/car-soc-estimation.md`.
+        """
         if self.car_tracker is None:
             return  # No home sensor — cannot detect departure
 
@@ -887,13 +899,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
         Callers must pass the currently assigned charger's name
         (``self.charger.name``) as ``charger_name``.
 
-        The WARNING is deduplicated on the inferred-home flag: it stays set
-        while the contradiction persists (so a re-contradiction within the same
-        episode is an intentional silent no-op) and is cleared here as soon as
-        the raw API agrees — so a tracker away→home→away cycle logs once per
-        away (one WARNING per contradiction episode). `_exit_stale_mode` /
-        `clear_inferred_flags` also clear it on stale recovery, unplug, or
-        reset.
+        The WARNING is deduplicated on `_manual_contradiction_logged`, a flag
+        kept separate from the inferred-flag state. It is set on the first log
+        of an episode and re-armed only when the raw API genuinely agrees again
+        — so a tracker away→home→away cycle logs once per away (one WARNING per
+        contradiction episode), and a stale→recovery transition (which clears
+        the inferred flags via `_exit_stale_mode` while the contradiction is
+        still ongoing) does **not** re-log. The flag covers any contradiction
+        kind: a plug-only contradiction (raw_home True, raw_plugged False) sets
+        the inferred home flag too, since both flags travel together.
         """
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return
@@ -912,17 +926,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if not has_contradiction:
             # The raw API now agrees with the manual assignment — the inferred
             # override is redundant. Clear it so a later genuine unplug is
-            # honored (SF1) and so the next contradiction re-arms the WARNING.
+            # honored (SF1), and re-arm the WARNING for the next episode.
             self._car_api_inferred_home = False
             self._car_api_inferred_plugged = False
+            self._manual_contradiction_logged = False
             return
 
         # Manual + contradiction: trust the user. Set the inferred flags so the
-        # car keeps being managed/charged, and log one WARNING per contradiction
-        # episode (deduped on the flag — a re-contradiction is silently a no-op).
-        if not self._car_api_inferred_home:
-            self._car_api_inferred_home = True
-            self._car_api_inferred_plugged = True
+        # car keeps being managed/charged. Both flags travel together regardless
+        # of which sensor contradicts (home-only, plug-only, or both).
+        self._car_api_inferred_home = True
+        self._car_api_inferred_plugged = True
+        # Log one WARNING per contradiction episode (deduped on a dedicated key,
+        # so a re-contradiction — including the re-set after a stale recovery
+        # with a persistently-away tracker — is an intentional silent no-op).
+        if not self._manual_contradiction_logged:
+            self._manual_contradiction_logged = True
             _LOGGER.warning(
                 "Car %s manually assigned to charger %s but API reports home=%s, plugged=%s "
                 "— trusting manual assignment",
@@ -933,9 +952,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
             )
 
     def clear_inferred_flags(self) -> None:
-        """Clear inferred flags when car is detached from charger."""
+        """Clear inferred flags when car is detached from charger.
+
+        Also re-arms the manual-contradiction WARNING so a fresh attachment
+        starts a new contradiction episode.
+        """
         self._car_api_inferred_home = False
         self._car_api_inferred_plugged = False
+        self._manual_contradiction_logged = False
 
     async def user_set_stale_mode(self, option: str, for_init: bool = False) -> None:
         """Handle stale mode select change. Immediately re-evaluate stale state."""

@@ -533,6 +533,35 @@ class TestContradictionDetection:
 
         assert caplog.text.count("trusting manual assignment") == 2
 
+    def test_no_duplicate_warning_across_recovery_with_persistent_away(self, real_car, current_time, caplog):
+        """R2-NTH1: one WARNING per contradiction episode, even across a SOC-stale recovery
+        while the raw tracker stays away the whole time."""
+        caplog.set_level(logging.WARNING)
+        real_car.charger = MagicMock()
+        real_car.charger.name = "Test Charger"
+        real_car.charger.get_user_originated = MagicMock(return_value=None)
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
+
+        fresh = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh, "value", {})
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh, "not_home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (fresh, "on", {})
+        # SOC stale → enters SOC-only estimation; the contradiction logs once
+        soc_stale = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (soc_stale, 50.0, {})
+        real_car._update_car_api_staleness(current_time)
+        assert real_car.car_api_stale_percent_mode is True
+        assert caplog.text.count("trusting manual assignment") == 1
+
+        # SOC becomes fresh → recovery exits stale mode (clears inferred flags),
+        # but the tracker is STILL away — same contradiction episode, no re-log
+        real_car._entity_probed_last_valid_state[real_car.car_charge_percent_sensor] = (fresh, 55.0, {})
+        real_car._update_car_api_staleness(current_time)
+        assert real_car.car_api_stale_percent_mode is False
+        assert real_car._car_api_inferred_home is True  # re-set: still managed as home
+        assert caplog.text.count("trusting manual assignment") == 1  # not re-logged
+
     def test_manual_not_stale_returns_live_soc(self, real_car, current_time):
         """NTH5/AC1: a not-stale manual car returns the live raw SOC from get_car_charge_percent."""
         real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "not_home", {})
@@ -1823,6 +1852,31 @@ class TestDepartureAutoReset:
         with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
             await real_car._check_departure_auto_reset(even_later)
             mock_reset.assert_not_called()
+
+    async def test_manual_trust_override_capped_by_departure_reset(self, real_car, current_time):
+        """R2-NTH2: the manual-trust override has a 15-min ceiling — a wrongly-"away"
+        tracker on a manually-assigned car triggers the departure auto-reset, which wipes
+        the user-originated marker (and the override the QS-265 fix relies on)."""
+        fresh_time = current_time - timedelta(seconds=60)
+        for sensor_id in real_car._car_api_all_sensors:
+            real_car._entity_probed_last_valid_state[sensor_id] = (fresh_time, "value", {})
+
+        # Manually-assigned car whose tracker is wrongly "away" → inferred override active
+        real_car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, "Test Charger")
+        real_car._car_api_inferred_home = True
+        real_car._car_api_inferred_plugged = True
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (fresh_time, "not_home", {})
+
+        # Departure timer starts, override still honored before the ceiling
+        await real_car._check_departure_auto_reset(current_time)
+        assert real_car._car_not_home_since == current_time
+
+        # At the 15-min ceiling the auto-reset fires, ending the manual trust
+        later_time = current_time + timedelta(seconds=CAR_NOT_HOME_AUTO_RESET_S)
+        with patch.object(real_car, "user_clean_and_reset", new_callable=AsyncMock) as mock_reset:
+            await real_car._check_departure_auto_reset(later_time)
+            mock_reset.assert_called_once()
+        assert real_car._departure_auto_reset_done is True
 
     async def test_departure_10min_preserves_state(self, real_car, current_time):
         """Car home → car leaves → only 10 min → user-originated state preserved."""
