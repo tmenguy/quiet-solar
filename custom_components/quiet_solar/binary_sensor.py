@@ -100,13 +100,15 @@ def create_ha_binary_sensor_for_QSCar(device: QSCar):
     )
     entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=is_stale))
 
-    # SOC is estimated (manual override / charge-energy interpolation) — drives
-    # the asterisk on the card. Independent of API staleness.
+    # SOC is estimated — drives the asterisk on the card. True whenever the SOC
+    # number is being extrapolated/overridden: SOC sensor stale/None, no SOC
+    # sensor, force-stale, or a manual SOC value active. A fresh SOC ⇒ no
+    # asterisk. Independent of API home/plug staleness.
     if device.can_use_charge_percent_constraints():
         is_soc_estimated = QSBinarySensorEntityDescription(
             key=BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
             translation_key=BINARY_SENSOR_CAR_IS_SOC_ESTIMATED,
-            value_fn=lambda d, key: d.has_soc_estimate(),
+            value_fn=lambda d, key: d.is_in_soc_estimation_mode(d._get_time_for_sensor()),
         )
         entities.append(
             QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=is_soc_estimated)

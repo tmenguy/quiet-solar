@@ -240,6 +240,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.car_api_stale_percent_mode: bool = False
         self._car_api_inferred_home: bool = False
         self._car_api_inferred_plugged: bool = False
+        # Dedup key for the manual "trusting manual assignment" WARNING, kept
+        # separate from the inferred-flag state so it survives a stale→recovery
+        # transition (which clears the inferred flags via `_exit_stale_mode`)
+        # and therefore logs exactly once per genuine contradiction episode.
+        self._manual_contradiction_logged: bool = False
         self._car_not_home_since: datetime | None = None
         self._departure_auto_reset_done: bool = False
 
@@ -627,7 +632,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await self._check_departure_auto_reset(time)
 
     async def _check_departure_auto_reset(self, time: datetime) -> None:
-        """Auto-reset car state after confirmed departure (not-home for CAR_NOT_HOME_AUTO_RESET_S)."""
+        """Auto-reset car state after confirmed departure (not-home for CAR_NOT_HOME_AUTO_RESET_S).
+
+        This reads the **raw** tracker, so it is also the upper bound on the
+        QS-265 manual-trust override: a manually-assigned car whose tracker is
+        wrongly "away" is reset (user-originated marker + inferred flags wiped)
+        after `CAR_NOT_HOME_AUTO_RESET_S`. See the manual-trust ceiling note in
+        `docs/agents/concepts/car-soc-estimation.md`.
+
+        The ceiling is **tracker-only**: it returns early when ``raw_home is
+        True``, so a plug-only contradiction (tracker genuinely home, plug
+        sensor unplugged) is never time-bounded here — that case relies on the
+        charger-side detach (`charger._check_plugged_val`, which only consults
+        `is_car_plugged()` when its own plug sensor is inconclusive).
+        """
         if self.car_tracker is None:
             return  # No home sensor — cannot detect departure
 
@@ -712,8 +730,42 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 f"Car {self.name} recovered",
                 f"Your {self.name}'s data is available again",
             )
-            self._exit_stale_mode()
+            # For a manual car the inferred override is owned by the per-cycle
+            # reconciliation below (tri-state), so preserve it across the exit
+            # rather than wiping it here — a None read on this same recovery
+            # cycle must hold the override, not drop it (R5-SF1). For non-manual
+            # / charger-less cars the reconciliation does not run, so the
+            # default unconditional clear still applies.
+            self._exit_stale_mode(preserve_inferred=self._charger_assignment_is_user_originated())
             self._was_car_api_stale = False
+
+        # Manual inferred-flag management for attached cars. Runs BEFORE the
+        # SOC-only stale entry and regardless of stale-percent mode so that a
+        # manually-assigned car keeps the inferred home/plug override even when
+        # SOC-stale estimation and a tracker contradiction coincide on the same
+        # cycle (SF2), and drops the override as soon as the raw API agrees
+        # again (SF1). It is skipped while fully API-stale (all sensors dead),
+        # where there is no reliable raw home/plug signal to reconcile against.
+        if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
+            # Force-Not-Stale means "trust live data" — drop any latched manual
+            # inferred override so the raw home/plug truth is honored. The
+            # contradiction reconciliation never runs under this override (and
+            # a never-stale manual car is not caught by the stale-percent
+            # recovery above), so clear the home/plug flags explicitly here
+            # (R3-SF1) — only when set, to avoid churning every cycle (R4-NTH2).
+            # The WARNING dedup key is deliberately preserved so toggling FNS and
+            # back to AUTO during the same ongoing contradiction does not re-log
+            # the "trusting manual assignment" WARNING (R4-NTH3). This is also
+            # why it intentionally does NOT delegate to `clear_inferred_flags()`
+            # (which would reset that dedup key) — the two clearing sites differ
+            # on purpose (R5-NTH3).
+            if self._car_api_inferred_home or self._car_api_inferred_plugged:
+                self._car_api_inferred_home = False
+                self._car_api_inferred_plugged = False
+        elif self.charger is not None and not self._car_api_stale:
+            self.check_charger_assignment_contradiction(
+                self.charger.name, time, manual=self._charger_assignment_is_user_originated()
+            )
 
         # SOC-only stale entry: SOC sensor stale but not full API stale
         if (
@@ -724,17 +776,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             and self._is_soc_sensor_stale(time)
         ):
             self._enter_stale_percent_mode(time)
-
-        # Periodic contradiction check for attached cars
-        if (
-            self.charger is not None
-            and not self._car_api_stale
-            and not self.car_api_stale_percent_mode
-            and self.car_stale_mode_override != CAR_STALE_MODE_FORCE_NOT_STALE
-        ):
-            self.check_charger_assignment_contradiction(
-                self.charger.name, time, manual=self._charger_assignment_is_user_originated()
-            )
 
         effectively_stale = self.is_car_effectively_stale(time)
 
@@ -805,7 +846,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 parts.append(f"{sensor_id}: never updated")
         return ", ".join(parts)
 
-    def _exit_stale_mode(self) -> None:
+    def _exit_stale_mode(self, preserve_inferred: bool = False) -> None:
         """Clear all stale flags and exit stale-percent mode.
 
         Also clears the system-captured SOC base. When there is NO user
@@ -813,11 +854,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
         takes over. When a user override IS active, the override owns its own
         accumulator lifecycle (the case-1/2 recovery in `_update_soc_estimation`),
         so a transient stale blip must not wipe its accumulated delta.
+
+        ``preserve_inferred`` keeps the manual inferred home/plug override in
+        place so the immediately-following per-cycle reconciliation
+        (`check_charger_assignment_contradiction`) can apply its tri-state rule
+        instead of this unconditional wipe — otherwise a `None` (unavailable)
+        raw read on a recovery cycle would drop a still-valid override that the
+        reconciliation could only re-set on an explicit `False` (R5-SF1).
         """
         self._car_api_stale = False
         self.car_api_stale_percent_mode = False
-        self._car_api_inferred_home = False
-        self._car_api_inferred_plugged = False
+        if not preserve_inferred:
+            self._car_api_inferred_home = False
+            self._car_api_inferred_plugged = False
         self._car_api_stale_since = None
         self._last_valid_base_soc_value = None
         if self._user_base_soc_value is None:
@@ -854,101 +903,111 @@ class QSCar(HADeviceMixin, AbstractDevice):
         )
 
     def check_charger_assignment_contradiction(self, charger_name: str, time: datetime, *, manual: bool) -> None:
-        """Check if the charger assignment contradicts API data (Feature B).
+        """Trust a manual charger assignment over a contradicting tracker (Feature B).
 
-        When this car is assigned to a charger and the API reports not_home
-        or not_plugged, flag the car as stale immediately — for both
-        assignment origins. The inferred home/plugged flags are manual-only:
+        When this car is assigned to a charger but the API reports not_home or
+        not_plugged, the action depends on the assignment origin:
 
         - ``manual=True`` — the user explicitly assigned this car to the
-          charger. The user's word is ground truth, so the inferred flags
-          (and the score boost they imply) are justified. The
-          user-originated marker is cleared on physical unplug and when
-          another charger claims the car, which bounds any damage from a
-          mistaken manual pick.
+          charger, so the user's word is ground truth (QS-265). On a
+          contradiction the inferred home/plugged flags are set so the car
+          keeps being managed and charged, and a single WARNING is logged per
+          contradiction episode. The car is **not** marked stale on this path:
+          a manually-assigned car's staleness depends only on its SOC sensor
+          (plus the all-sensors-dead and force paths). When the raw API agrees
+          again the inferred flags are cleared, so the override never outlives
+          the contradiction and a later genuine unplug is honored (SF1). The
+          user-originated marker is cleared on physical unplug and when another
+          charger claims the car, which bounds any damage from a mistaken
+          manual pick.
         - ``manual=False`` — the car was auto-attached by plug-time
-          correlation. Identity is only a heuristic: the cable proves *a*
-          car is present, never *which* car. Setting ``inferred_home``
-          would manufacture the exact evidence the match lacks and entrench
-          a wrong auto-match via its own score feedback, so the inferred
-          flags are never set on this path.
+          correlation. Identity is only a heuristic: the cable proves *a* car
+          is present, never *which* car. A contradiction therefore takes no
+          action — it neither marks the car stale nor sets the inferred flags.
+          Effective staleness still comes from the SOC-only stale entry and the
+          all-sensors-dead rule.
 
         Manual origin detection lives in `_charger_assignment_is_user_originated`.
         Callers must pass the currently assigned charger's name
         (``self.charger.name``) as ``charger_name``.
 
-        A contradiction is logged and notified once per stale episode,
-        deduplicated on ``_car_api_stale_since``; a new episode starts only
-        after genuine recovery (`_exit_stale_mode`). Within an ongoing
-        episode the check silently re-asserts the stale flag (the auto-mode
-        raw refresh resets it each cycle for cars that cannot enter
-        stale-percent mode), and a ``manual=True`` call upgrades the
-        inferred flags exactly once — the user's explicit confirmation is
-        ground truth even when the episode started as auto.
+        The WARNING is deduplicated on `_manual_contradiction_logged`, a flag
+        kept separate from the inferred-flag state. It is set on the first log
+        of an episode and re-armed only when the raw API genuinely agrees again
+        — so a tracker away→home→away cycle logs once per away (one WARNING per
+        contradiction episode), and a stale→recovery transition (which clears
+        the inferred flags via `_exit_stale_mode` while the contradiction is
+        still ongoing) does **not** re-log. The flag covers any contradiction
+        kind: a plug-only contradiction (raw_home True, raw_plugged False) sets
+        the inferred home flag too, since both flags travel together.
+
+        Tri-state handling: an explicit ``False`` raw read is a contradiction
+        (set the override); affirmative ``True`` reads on every available sensor
+        clear it; a ``None`` (unavailable/unknown) read is "no new information"
+        and **holds** the current override — so a single-cycle sensor flicker to
+        unavailable does not drop a still-valid manual override (R4-SF1).
         """
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return
 
+        if not manual:
+            # Auto-attach: identity is only a heuristic — never override the API.
+            # This path intentionally does NOT clear pre-existing inferred flags:
+            # a manual→non-manual flip while still attached defers clearing to the
+            # detach/reassign paths (`clear_inferred_flags`), so a transient
+            # auto-mode read does not race-clear a still-valid manual override.
+            return
+
+        # Instantaneous reads (for_duration=None): the reconciliation reasons
+        # about the current home/plug truth, not a debounced window — the
+        # duration-aware path is a different mechanism and never feeds here (R5-NTH4).
         raw_home = self._get_raw_is_car_home(time)
         raw_plugged = self._get_raw_is_car_plugged(time)
 
-        # Contradiction: API says not home or not plugged, but the assignment says car is on charger
-        has_contradiction = (raw_home is not None and raw_home is False) or (
-            raw_plugged is not None and raw_plugged is False
-        )
+        # Contradiction: API affirmatively says not home or not plugged, but the
+        # assignment says the car is on the charger. Only an explicit False counts.
+        has_contradiction = (raw_home is False) or (raw_plugged is False)
         if not has_contradiction:
+            # No contradiction. Clear the override only when the API
+            # *affirmatively* agrees on every available sensor — a None
+            # (unavailable) read is "no new info", so hold the current override
+            # rather than dropping it on a transient flicker (R4-SF1).
+            home_ok = raw_home is True if self.car_tracker is not None else True
+            plugged_ok = raw_plugged is True if self.car_plugged is not None else True
+            if home_ok and plugged_ok:
+                # Affirmatively consistent — the inferred override is redundant;
+                # clear it (and re-arm the WARNING for the next episode).
+                self.clear_inferred_flags()
             return
 
-        # Manual upgrade: the user's word is ground truth — apply the inferred
-        # flags even when the car is already stale from a prior auto episode,
-        # but never re-log/re-notify an ongoing episode
-        if manual and not self._car_api_inferred_home:
-            self._car_api_inferred_home = True
-            self._car_api_inferred_plugged = True
-
-        already_in_episode = self._car_api_stale_since is not None
-
-        if self._car_api_stale or self.car_api_stale_percent_mode:
-            # Already flagged this cycle — flags possibly upgraded above
-            return
-
-        self._car_api_stale = True
-        self._was_car_api_stale = True
-        if already_in_episode:
-            # Re-assert silently across cycles — one notification per episode
-            return
-
-        self._car_api_stale_since = time
-        _LOGGER.info(
-            "Car %s %s charger %s while API reports home=%s, plugged=%s — flagging as stale",
-            self.name,
-            "manually assigned to" if manual else "auto-attached to",
-            charger_name,
-            raw_home,
-            raw_plugged,
-        )
-        if manual:
-            notification_body = (
-                f"Your {self.name} assignment contradicts its car API data — using estimated charge data"
+        # Manual + contradiction: trust the user. Set the inferred flags so the
+        # car keeps being managed/charged. Both flags travel together regardless
+        # of which sensor contradicts (home-only, plug-only, or both).
+        self._car_api_inferred_home = True
+        self._car_api_inferred_plugged = True
+        # Log one WARNING per contradiction episode (deduped on a dedicated key,
+        # so a re-contradiction — including the re-set after a stale recovery
+        # with a persistently-away tracker — is an intentional silent no-op).
+        if not self._manual_contradiction_logged:
+            self._manual_contradiction_logged = True
+            _LOGGER.warning(
+                "Car %s manually assigned to charger %s but API reports home=%s, plugged=%s "
+                "— trusting manual assignment",
+                self.name,
+                charger_name,
+                raw_home,
+                raw_plugged,
             )
-        else:
-            notification_body = (
-                f"Your {self.name} was detected on {charger_name} but its API disagrees — check the car card"
-            )
-        # Activate stale-percent mode if possible
-        if self.can_use_charge_percent_constraints():
-            self._enter_stale_percent_mode(time)
-        # Notify on contradiction (Feature B)
-        self._schedule_person_notification(
-            f"Warning: {self.name}",
-            notification_body,
-            error=True,
-        )
 
     def clear_inferred_flags(self) -> None:
-        """Clear inferred flags when car is detached from charger."""
+        """Clear inferred flags when car is detached from charger.
+
+        Also re-arms the manual-contradiction WARNING so a fresh attachment
+        starts a new contradiction episode.
+        """
         self._car_api_inferred_home = False
         self._car_api_inferred_plugged = False
+        self._manual_contradiction_logged = False
 
     async def user_set_stale_mode(self, option: str, for_init: bool = False) -> None:
         """Handle stale mode select change. Immediately re-evaluate stale state."""
@@ -976,9 +1035,21 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return False
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return True
-        # Common: at least one sensor moved in CAR_API_STALE_THRESHOLD_S
+        # Common: at least one sensor moved in CAR_API_STALE_THRESHOLD_S. This
+        # genuine all-data-dead safety is never bypassed — not even for a manual
+        # assignment (a no-SOC-sensor car would otherwise flip-flop here, since
+        # `_is_soc_sensor_stale` is vacuously False for it).
         if self.is_car_api_stale(time):
             return False
+        # Manual assignment: data is alive, so recover on SOC freshness alone.
+        # The raw home/plug *values* may be wrong (that is why the user assigned
+        # the car by hand), so they must not gate recovery — only the SOC
+        # sensor's freshness does. Guard explicitly on a SOC sensor existing so
+        # the branch is self-defending, not merely protected by the preceding
+        # all-dead check: for a no-SOC-sensor car `_is_soc_sensor_stale` is
+        # vacuously False, which would otherwise mean "always recover" (SF3).
+        if self._charger_assignment_is_user_originated() and self.car_charge_percent_sensor is not None:
+            return not self._is_soc_sensor_stale(time)
         # Common: all sensors must have valid readings
         if not self._have_all_api_sensors_reported(time):
             return False
@@ -1449,10 +1520,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.car_api_stale_percent_mode:
             return True  # API failure / SOC stale / force_stale
         return self._user_base_soc_value is not None  # manual override on a healthy API
-
-    def has_soc_estimate(self) -> bool:
-        """Return True when an absolute SOC estimate exists (drives the asterisk)."""
-        return self._estimated_soc_percent is not None
 
     def is_soc_sensor_distrusted(self) -> bool:
         """Return True when the raw SOC sensor cannot be trusted.

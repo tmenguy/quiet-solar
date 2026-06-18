@@ -1,5 +1,6 @@
 """Tests for quiet_solar car.py functionality."""
 
+import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,7 +9,7 @@ import pytest
 import pytz
 from homeassistant.components import number
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNKNOWN
+from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -1857,3 +1858,92 @@ async def test_car_user_clean_constraints(
     assert car_device._constraints == []
     assert car_device._next_charge_target == car_device.car_default_charge
     assert car_device.charger is charger_device
+
+
+async def test_qs265_manual_assignment_bad_tracker_not_stale(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """QS-265 incident end-to-end (AC8).
+
+    A car is manually assigned to a charger while its location tracker wrongly
+    reports "away" and the plug sensor reports unplugged, but the SOC sensor is
+    live. The car must NOT be stale, the displayed SOC tracks the live sensor
+    (so the charge constraint is seeded from the real SOC, not 0), and no
+    asterisk is shown — no charger.py change required.
+    """
+    from .const import MOCK_CAR_CONFIG, MOCK_CHARGER_CONFIG
+
+    from custom_components.quiet_solar.const import CAR_STALE_MODE_AUTO
+
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    charger_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CHARGER_CONFIG,
+        entry_id="charger_qs265_test",
+        title=f"charger: {MOCK_CHARGER_CONFIG[CONF_NAME]}",
+        unique_id="quiet_solar_charger_qs265_test",
+    )
+    charger_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(charger_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_entry = MockConfigEntry(
+        domain=DOMAIN,
+        data=MOCK_CAR_CONFIG,
+        entry_id="car_qs265_test",
+        title=f"car: {MOCK_CAR_CONFIG[CONF_NAME]}",
+        unique_id="quiet_solar_car_qs265_test",
+    )
+    car_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(car_entry.entry_id)
+    await hass.async_block_till_done()
+
+    car_device = hass.data[DOMAIN].get(car_entry.entry_id)
+    charger_device = hass.data[DOMAIN].get(charger_entry.entry_id)
+    assert car_device is not None
+    assert charger_device is not None
+
+    # NOTE (R3-NTH3): a fixed past `time_now` is safe here because every
+    # staleness comparison under `_update_car_api_staleness` (is_car_api_stale,
+    # _is_soc_sensor_stale, _have_all_api_sensors_reported, can_exit_stale_percent_mode)
+    # uses the passed `time`, never `datetime.now()` — so freshness is measured
+    # against this `time_now`, not wall-clock.
+    time_now = datetime(2026, 6, 13, 11, 0, tzinfo=pytz.UTC)
+
+    # User manually assigns the car to the charger
+    charger_device.attach_car(car_device, time_now)
+    car_device.set_user_originated(USER_ORIGINATED_CHARGER_NAME, charger_device.name)
+    car_device.car_stale_mode_override = CAR_STALE_MODE_AUTO
+    assert car_device._charger_assignment_is_user_originated() is True
+
+    # The Twingo scenario: tracker wrongly "away", plug "off", but SOC is live.
+    # NOTE (R2-NTH4): the probed-state cache is seeded directly here rather than
+    # via mocked HA sensor states + polling — this matches the existing ha_tests
+    # convention (e.g. test_soc_stale_triggers_stale_percent_mode_via_ha) and
+    # keeps the scenario deterministic without driving full update cycles.
+    fresh = time_now - timedelta(minutes=2)
+    for sensor_id in car_device._car_api_all_sensors:
+        car_device._entity_probed_last_valid_state[sensor_id] = (fresh, "value", {})
+    car_device._entity_probed_last_valid_state[car_device.car_tracker] = (fresh, "not_home", {})
+    car_device._entity_probed_last_valid_state[car_device.car_plugged] = (fresh, "off", {})
+    car_device._entity_probed_last_valid_state[car_device.car_charge_percent_sensor] = (fresh, 74.0, {})
+
+    with caplog.at_level(logging.WARNING):
+        car_device._update_car_api_staleness(time_now)
+
+    # The manual contradiction is logged exactly once (R4-NTH5 / R5-CR2)
+    assert sum(1 for r in caplog.records if "trusting manual assignment" in r.getMessage()) == 1
+
+    # The manual assignment is trusted, the car is NOT stale, the inferred
+    # flags keep it managed/charged, and the displayed SOC is the live value.
+    assert car_device.is_car_effectively_stale(time_now) is False
+    assert car_device.car_api_stale_percent_mode is False
+    assert car_device.is_in_soc_estimation_mode(time_now) is False  # no asterisk
+    assert car_device.is_car_home(time_now) is True
+    assert car_device.is_car_plugged(time_now) is True
+    # The charge constraint is seeded from the real SOC (74), never force-init at 0
+    assert car_device.get_car_charge_percent(time_now) == 74.0

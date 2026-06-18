@@ -4,7 +4,7 @@ slug: car-soc-estimation
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-13
+last_verified: 2026-06-18
 ---
 
 # Car SOC estimation — the effective-SOC model
@@ -53,14 +53,14 @@ runtime reset (plug-in / reset button / recovery) is reflected in the card.
 - `_estimated_soc_percent` — `clamp(base + delta, 0, 100)`, or `None` with no
   base (pure-delta `+XX%`).
 - `is_in_soc_estimation_mode` — True for a no-sensor car, in stale-percent
-  mode, or with a manual base on a healthy API.
+  mode, or with a manual base on a healthy API. **Drives the `*` /
+  `is_soc_estimated` binary sensor**: the asterisk means "the SOC number is
+  being extrapolated/overridden", so a fresh SOC shows no asterisk and the
+  pure-delta stale case (no absolute estimate) still shows it.
 - `is_soc_sensor_distrusted` — True only in stale-percent mode or with no SOC
   sensor. A manual override on a healthy sensor is **not** distrust — the
   charger's zero-power hardware-fault check still runs (it is gated on distrust,
   not on `is_in_soc_estimation_mode`).
-- `has_soc_estimate` — an absolute estimate exists (drives the `*` /
-  `is_soc_estimated` sensor). Distinct from `is_in_soc_estimation_mode`:
-  they diverge for the pure-delta case.
 - `soc_integration_cursor` (property) + `accumulate_soc_delta(inc, time)` — the
   car's public accumulator API; the charger drives it through these instead of
   reaching into the underscore-private fields. `accumulate_soc_delta` clamps the
@@ -108,6 +108,63 @@ charger computes `inc` from `soc_integration_cursor` then calls
 - Estimation is **orthogonal** to `is_car_effectively_stale`: a manual
   override on a healthy API marks the car *estimated* (asterisk) but **not**
   API-stale.
+
+## Manual charger assignment vs a wrong location tracker (QS-265)
+
+A *manual charger assignment* is the user explicitly attaching a car to a
+charger; it is distinct from a *manual SOC value* (the override above). When a
+manually-assigned car's location tracker wrongly reports "away" (or the plug
+sensor reports unplugged) while the SOC sensor is live:
+
+- `check_charger_assignment_contradiction(..., manual=True)` **trusts the
+  user**: on a contradiction it sets
+  `_car_api_inferred_home`/`_car_api_inferred_plugged` (so the car keeps being
+  managed and charged) and logs **one WARNING per contradiction episode**
+  (deduped on the dedicated `_manual_contradiction_logged` key). It does **not** mark the car stale and
+  does **not** notify. A manually-assigned car's staleness therefore depends
+  only on its SOC sensor (the SOC-only stale entry) plus the all-sensors-dead
+  and force paths. With a fresh SOC the car is not in estimation mode, so
+  `get_car_charge_percent` returns the live sensor and the constraint seed is
+  the real SOC (never force-init at 0), with no asterisk.
+- **Flag lifecycle** (single owner, tri-state). The same call reconciles the
+  override against the raw reads each cycle: an explicit `False` sets it (+ the
+  per-episode WARNING); affirmative `True` reads on **every available sensor**
+  clear it (the override never outlives the contradiction — an away→home blip on
+  an attached, never-stale car drops it and a later genuine unplug is honored,
+  and the next contradiction re-arms the WARNING); a `None` (unavailable) read
+  is "no new info" and **holds** the current override, so a single-cycle sensor
+  flicker does not drop a still-valid override (R4-SF1). To make this robust it
+  runs every cycle in `_update_car_api_staleness` **before** the SOC-only stale
+  entry and independent of stale-percent mode, so a manual car still gets the
+  override when a SOC-stale entry and a tracker contradiction coincide on one
+  cycle. It is skipped only while fully API-stale (all sensors dead), where
+  there is no reliable raw signal to reconcile against.
+- `manual=False` (auto-attached by plug-time correlation): a contradiction
+  takes **no action** — identity is only a heuristic, so it neither marks the
+  car stale nor sets the inferred flags.
+- **Recovery** (`can_exit_stale_percent_mode`): a user-originated assignment
+  recovers on SOC freshness alone (`return not self._is_soc_sensor_stale(time)`),
+  ignoring the possibly-wrong raw home/plug readings that gate the non-manual
+  connected/not-connected branches. The branch sits **after** the genuine
+  all-data-dead guard and is itself guarded on a SOC sensor existing, so a
+  no-SOC-sensor car (whose `_is_soc_sensor_stale` is vacuously False) never
+  short-circuits to permanent recovery.
+- **15-minute ceiling on the override.** `_check_departure_auto_reset` reads the
+  **raw** tracker, so a manually-assigned car whose tracker is *persistently*
+  (wrongly) "away" is auto-reset after `CAR_NOT_HOME_AUTO_RESET_S` (15 min):
+  `user_clean_and_reset` wipes the user-originated marker and the inferred
+  flags, ending the manual trust and reverting to pre-fix behavior. This is the
+  deliberate upper bound from the story's adversarial-review notes ("trusted
+  until the existing unplug/displacement resets fire") — a genuinely-away car
+  must not be charged forever on a stale manual pick. The ceiling is
+  **tracker-only**: a plug-only contradiction (tracker genuinely home, plug
+  unplugged) is not time-bounded here — it relies on the charger-side detach
+  (`charger._check_plugged_val`, which consults `is_car_plugged()` only when its
+  own plug sensor is inconclusive).
+- **Force-Not-Stale drops the override.** Selecting Force-Not-Stale means "trust
+  live data", so `_update_car_api_staleness` clears the inferred flags whenever
+  that override is active — the manual home/plug override never outlives an
+  explicit Force-Not-Stale, even for a never-stale car (R3-SF1).
 
 ## Capture at the fresh→stale edge
 

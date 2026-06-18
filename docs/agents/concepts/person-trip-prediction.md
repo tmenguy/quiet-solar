@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-13
+last_verified: 2026-06-18
 ---
 
 # Person, Car, and trip prediction
@@ -46,7 +46,17 @@ tomorrow's predicted trips with margin.
   `get_car_charge_percent`, which returns an **estimate** (manual override or
   charged-energy interpolation) when the SOC API is failed / inaccurate /
   absent — see [car-soc-estimation.md](car-soc-estimation.md).
-- Charger assignment: which charger this car is plugged into.
+- Charger assignment: which charger this car is plugged into. A manual
+  charger assignment is trusted over a wrongly-"away" tracker (the car is
+  kept managed via inferred home/plug flags). The override is reconciled
+  tri-state against the raw reads — affirmative positives drop it, an explicit
+  contradiction holds it, and a transient `unavailable`/`None` read holds the
+  current state (no flicker-drop, including across a SOC-stale recovery cycle) —
+  but it is still bounded by the raw-tracker
+  departure auto-reset ceiling (`CAR_NOT_HOME_AUTO_RESET_S`, 15 min), and a
+  user Force-Not-Stale selection drops it immediately (live presence truth
+  wins) — see the manual-trust ceiling note in
+  [car-soc-estimation.md](car-soc-estimation.md).
 - Person allocation: which person owns this car (drives prediction
   targeting).
 - Custom power → amperage table per car: different cars accept
