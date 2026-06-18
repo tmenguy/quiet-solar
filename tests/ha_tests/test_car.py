@@ -1,5 +1,6 @@
 """Tests for quiet_solar car.py functionality."""
 
+import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1862,6 +1863,7 @@ async def test_car_user_clean_constraints(
 async def test_qs265_manual_assignment_bad_tracker_not_stale(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """QS-265 incident end-to-end (AC8).
 
@@ -1930,7 +1932,11 @@ async def test_qs265_manual_assignment_bad_tracker_not_stale(
     car_device._entity_probed_last_valid_state[car_device.car_plugged] = (fresh, "off", {})
     car_device._entity_probed_last_valid_state[car_device.car_charge_percent_sensor] = (fresh, 74.0, {})
 
-    car_device._update_car_api_staleness(time_now)
+    with caplog.at_level(logging.WARNING):
+        car_device._update_car_api_staleness(time_now)
+
+    # The manual contradiction is logged once (R4-NTH5)
+    assert "trusting manual assignment" in caplog.text
 
     # The manual assignment is trusted, the car is NOT stale, the inferred
     # flags keep it managed/charged, and the displayed SOC is the live value.

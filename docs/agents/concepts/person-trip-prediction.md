@@ -48,10 +48,13 @@ tomorrow's predicted trips with margin.
   absent — see [car-soc-estimation.md](car-soc-estimation.md).
 - Charger assignment: which charger this car is plugged into. A manual
   charger assignment is trusted over a wrongly-"away" tracker (the car is
-  kept managed via inferred home/plug flags), but only up to the raw-tracker
+  kept managed via inferred home/plug flags). The override is reconciled
+  tri-state against the raw reads — affirmative positives drop it, an explicit
+  contradiction holds it, and a transient `unavailable`/`None` read holds the
+  current state (no flicker-drop) — but it is still bounded by the raw-tracker
   departure auto-reset ceiling (`CAR_NOT_HOME_AUTO_RESET_S`, 15 min), and a
-  user Force-Not-Stale selection drops the override immediately (live presence
-  truth wins) — see the manual-trust ceiling note in
+  user Force-Not-Stale selection drops it immediately (live presence truth
+  wins) — see the manual-trust ceiling note in
   [car-soc-estimation.md](car-soc-estimation.md).
 - Person allocation: which person owns this car (drives prediction
   targeting).

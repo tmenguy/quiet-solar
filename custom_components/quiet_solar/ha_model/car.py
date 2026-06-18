@@ -745,8 +745,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
             # inferred override so the raw home/plug truth is honored. The
             # contradiction reconciliation never runs under this override (and
             # a never-stale manual car is not caught by the stale-percent
-            # recovery above), so clear the flags explicitly here (R3-SF1).
-            self.clear_inferred_flags()
+            # recovery above), so clear the home/plug flags explicitly here
+            # (R3-SF1) — only when set, to avoid churning every cycle (R4-NTH2).
+            # The WARNING dedup key is deliberately preserved so toggling FNS and
+            # back to AUTO during the same ongoing contradiction does not re-log
+            # the "trusting manual assignment" WARNING (R4-NTH3).
+            if self._car_api_inferred_home or self._car_api_inferred_plugged:
+                self._car_api_inferred_home = False
+                self._car_api_inferred_plugged = False
         elif self.charger is not None and not self._car_api_stale:
             self.check_charger_assignment_contradiction(
                 self.charger.name, time, manual=self._charger_assignment_is_user_originated()
@@ -917,6 +923,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         still ongoing) does **not** re-log. The flag covers any contradiction
         kind: a plug-only contradiction (raw_home True, raw_plugged False) sets
         the inferred home flag too, since both flags travel together.
+
+        Tri-state handling: an explicit ``False`` raw read is a contradiction
+        (set the override); affirmative ``True`` reads on every available sensor
+        clear it; a ``None`` (unavailable/unknown) read is "no new information"
+        and **holds** the current override — so a single-cycle sensor flicker to
+        unavailable does not drop a still-valid manual override (R4-SF1).
         """
         if self.car_stale_mode_override == CAR_STALE_MODE_FORCE_NOT_STALE:
             return
@@ -932,17 +944,20 @@ class QSCar(HADeviceMixin, AbstractDevice):
         raw_home = self._get_raw_is_car_home(time)
         raw_plugged = self._get_raw_is_car_plugged(time)
 
-        # Contradiction: API says not home or not plugged, but the assignment says car is on charger
-        has_contradiction = (raw_home is not None and raw_home is False) or (
-            raw_plugged is not None and raw_plugged is False
-        )
+        # Contradiction: API affirmatively says not home or not plugged, but the
+        # assignment says the car is on the charger. Only an explicit False counts.
+        has_contradiction = (raw_home is False) or (raw_plugged is False)
         if not has_contradiction:
-            # The raw API now agrees with the manual assignment — the inferred
-            # override is redundant. Clear it so a later genuine unplug is
-            # honored (SF1), and re-arm the WARNING for the next episode.
-            self._car_api_inferred_home = False
-            self._car_api_inferred_plugged = False
-            self._manual_contradiction_logged = False
+            # No contradiction. Clear the override only when the API
+            # *affirmatively* agrees on every available sensor — a None
+            # (unavailable) read is "no new info", so hold the current override
+            # rather than dropping it on a transient flicker (R4-SF1).
+            home_ok = raw_home is True if self.car_tracker is not None else True
+            plugged_ok = raw_plugged is True if self.car_plugged is not None else True
+            if home_ok and plugged_ok:
+                # Affirmatively consistent — the inferred override is redundant;
+                # clear it (and re-arm the WARNING for the next episode).
+                self.clear_inferred_flags()
             return
 
         # Manual + contradiction: trust the user. Set the inferred flags so the

@@ -519,6 +519,36 @@ class TestContradictionDetection:
         real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "off", {})
         assert real_car.is_car_plugged(current_time) is False
 
+    def test_none_plug_read_preserves_inferred_override(self, real_car, current_time):
+        """R4-SF1: a transient None (unavailable) plug read does NOT clear a still-valid
+        inferred override — None is 'no new info', so the override is held."""
+        real_car._car_api_inferred_home = True
+        real_car._car_api_inferred_plugged = True
+        real_car._manual_contradiction_logged = True
+        # Tracker affirmatively home, but plug sensor flickers to unavailable (None)
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "home", {})
+        # No plug entry → _get_raw_is_car_plugged returns None
+
+        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
+
+        # Override held (not dropped on the flicker); flags still travel together
+        assert real_car._car_api_inferred_home is True
+        assert real_car._car_api_inferred_plugged is True
+
+    def test_affirmative_reads_clear_inferred_override(self, real_car, current_time):
+        """R4-SF1/R4-NTH4: an explicit positive read on every sensor clears the override."""
+        real_car._car_api_inferred_home = True
+        real_car._car_api_inferred_plugged = True
+        real_car._manual_contradiction_logged = True
+        real_car._entity_probed_last_valid_state[real_car.car_tracker] = (current_time, "home", {})
+        real_car._entity_probed_last_valid_state[real_car.car_plugged] = (current_time, "on", {})
+
+        real_car.check_charger_assignment_contradiction("Test Charger", current_time, manual=True)
+
+        assert real_car._car_api_inferred_home is False
+        assert real_car._car_api_inferred_plugged is False
+        assert real_car._manual_contradiction_logged is False  # re-armed for next episode
+
     def test_manual_resolved_relogs_on_new_contradiction_episode(self, real_car, current_time, caplog):
         """NTH1: clearing on resolve re-arms the WARNING — away→home→away logs once per away."""
         caplog.set_level(logging.WARNING)
@@ -579,7 +609,9 @@ class TestContradictionDetection:
 
         assert real_car._car_api_inferred_home is False
         assert real_car._car_api_inferred_plugged is False
-        assert real_car._manual_contradiction_logged is False
+        # The WARNING dedup key is preserved across FNS so an AUTO round-trip on
+        # the same ongoing contradiction does not re-log (R4-NTH3)
+        assert real_car._manual_contradiction_logged is True
 
         # A subsequent genuine "away" / "unplugged" is now honored by the live values
         now = datetime.now(tz=pytz.UTC)
