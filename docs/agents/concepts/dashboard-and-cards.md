@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-06-02
+last_verified: 2026-06-18
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -980,6 +980,90 @@ patterns after the cross-card audit:
   `buttons` is empty, and the per-button `activate` closure wraps
   `b.onClick?.()` in `try/finally` so a synchronous throw can't
   leave the modal locked open.
+- **Press-in-flight guard + `_wireTap` / `_armPressGuard` chokepoint
+  (QS-271).** Every `hass` push runs `set hass → _render() →
+  innerHTML`, which destroys and rebuilds every button node. A plain
+  button tap set none of the `_isInteracting*` guards, so a push
+  landing between `pointerdown` and the (iOS-delayed ~300 ms)
+  synthetic `click` tore the node out mid-tap and dropped the press.
+  The fix lives in `shared/qs-card-base.js`:
+  - A self-expiring **timestamp window** (`_pressInFlightUntil`,
+    `_isPressInFlight()`) — *not* a boolean, which would wedge
+    rendering forever when the node is destroyed before the up-event.
+    `PRESS_GUARD_MS` (non-exported module const, ≥ 300 to cover the
+    iOS synthetic-click delay) sizes the window. All three `set hass`
+    overrides (`qs-card-base.js`, `qs-car-card.js`, `qs-climate-card.js`)
+    add `|| this._isPressInFlight()` to their interaction gate. State
+    is never dropped — `this._hass = hass` is assigned *above* the
+    gate; only the `_render()` repaint is deferred (the RAF animation
+    loop is independent of `_render()`, so visuals keep moving).
+    `disconnectedCallback` resets `_pressInFlightUntil = 0` (S7).
+  - **`_armPressGuard(el)`** — low-level primitive that arms the window
+    on `pointerdown` + `touchstart`, both `{passive:true}` (so it can
+    never `preventDefault` / interfere with a native picker). Used
+    directly on the native-`<select>` **pills** (`personPill` /
+    `chargerPill` in car, `stateOnPill` in climate, `modePill` in
+    ring-duration base): a pill's tap is click-only and merely opens
+    `showPicker()`, so it needs the render deferred across the
+    synthetic-click window but must keep its own handler — `_wireTap`
+    would be wrong there.
+  - **`_wireTap(el, action, {keyboard, stopPropagation})`** — the full
+    button-wiring **chokepoint** for plain action buttons. Calls
+    `_armPressGuard` internally, then owns the binding: a **non-passive**
+    `touchend` (so `preventDefault` suppresses the synthetic click) that
+    fires the action and records `lastTouchEnd`; a `click` that fires
+    *unless* within `SYNTHETIC_CLICK_MS` (a separate const, ~350 ms —
+    event-aware dedup of the synthetic twin, **not** a blanket re-tap
+    throttle); optional keyboard activation. The four base wire-helpers
+    (`_wireTimePicker`, `_wireResetButton`, `_wirePowerButton`,
+    `_wireGreenButton`), `_wireOverrideButton` (ring-duration base) and
+    the four car inline buttons (`rbtn`, `forceBtn`, `schedBtn`,
+    `socEl`) all route through it — their raw `click`/`touchend`
+    bindings were **replaced**, not augmented. `_showDialog`'s modal
+    buttons are intentionally left unchanged (already `_modalOpen`-
+    guarded + double-fire latched).
+  - **Enforced going forward** by
+    `test_no_card_uses_bare_touchend_outside_shared_helpers`: every
+    element-level `addEventListener('touchend'…)` must live inside
+    `_wireTap` / `_wireTargetHandle` / `_showDialog` (the latter's
+    occurrence count is pinned). The canary is `touchend`-only by
+    design — a source-text rule can't distinguish a click-only action
+    button from the legitimate pill/`<select>` click handlers without
+    false positives, so a future *click-only* action button could
+    still slip past.
+    > **Tracked follow-up (QS-271 review-fix #01 N3):** the
+    > `touchend`-only canary gap is a known limitation, not an
+    > oversight. If a click-only action-button pattern ever lands, open a
+    > follow-up issue to extend the canary (e.g. an allowlist-based
+    > `addEventListener('click'…)` rule scoped to action buttons, kept
+    > clear of the pill/`<select>` handlers). Until then the dual-binding
+    > pattern — the dominant bug surface — is fully covered.
+  - **Robustness hardening (QS-271 review-fix #01 + #02).** The guard
+    window is measured with the **monotonic** `performance.now()` (not
+    `Date.now()`), so a backward wall-clock step can't wedge rendering
+    (#01 S3). The synthetic-click dedup is a **window-bounded one-shot
+    latch**: `touchend` arms `swallowNextClick`, and the next `click` is
+    swallowed only when it lands **within `SYNTHETIC_CLICK_MS`** of the
+    touchend (#02 S1) — so the latch can't stay stuck `true` and
+    silently swallow a later unrelated genuine click (hybrid
+    touch+mouse, programmatic `.click()`, assistive tech); a click
+    outside the window is treated as genuine and resets the latch.
+    `SYNTHETIC_CLICK_MS` (>= 300) sizes that window to cover the iOS
+    synthetic-click delay (#01 S2). `_wireTap`'s **click**
+    `preventDefault()` is option-gated (`preventDefaultClick`, default
+    true; power/green pass `false`) so routing a bare-click button
+    through the chokepoint doesn't silently suppress a native default —
+    `touchend`'s `preventDefault` stays unconditional (#01 S1/N2).
+    `_armPressGuard` skips arming for a control disabled on its own node
+    (`aria-disabled`) **or** via a `.disabled` ancestor
+    (`closest('.disabled')` — #02 N1, covering inline actions gated only
+    by the card-level `.disabled` container) (#01 N4), and schedules a
+    single coalesced catch-up `_render()` (via re-running `set hass`
+    over the stored state) when the window expires so a dropped push
+    isn't stranded (#01 N5). The dual `pointerdown` + `touchstart`
+    arming is an intentional idempotent double-arm (#02 N2): both fire
+    on touch but re-stamp the same window and reset the one coalesced
+    flush timer.
 
 ### Ring text readability — uniform shadow (QS-228)
 

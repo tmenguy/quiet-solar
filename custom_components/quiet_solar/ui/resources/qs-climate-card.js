@@ -629,7 +629,9 @@ class QsClimateCard extends QsRingDurationCardBase {
   set hass(hass) {
     this._hass = hass;
     if (!this._root) return;
-    if (this._isInteractingMode || this._isInteractingStateOn || this._modalOpen || this._isInteractingTarget) return;
+    // QS-271 — also defer the repaint while a tap is in flight (state is
+    // stored above; only the _render() repaint is deferred).
+    if (this._isInteractingMode || this._isInteractingStateOn || this._modalOpen || this._isInteractingTarget || this._isPressInFlight()) return;
     this._render();
   }
 
@@ -1403,6 +1405,8 @@ class QsClimateCard extends QsRingDurationCardBase {
                   if (ev.target.tagName === 'SELECT') return;
                   try { stateOnSel.showPicker(); } catch (_) { stateOnSel.focus(); }
               });
+              // QS-271 — defer re-render across the click→showPicker tap.
+              this._armPressGuard(stateOnPill);
           }
       }
 
