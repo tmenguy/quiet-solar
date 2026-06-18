@@ -732,3 +732,82 @@ def test_create_binary_sensor_invited_no_estimated(est_car):
     entities = create_ha_binary_sensor_for_QSCar(est_car)
     keys = [e.entity_description.key for e in entities]
     assert BINARY_SENSOR_CAR_IS_SOC_ESTIMATED not in keys
+
+
+# ── SF4: manual-SOC reset clears value + asterisk (AC7) ───────────────────
+
+
+def test_manual_soc_reset_case1_clears_value_and_asterisk(est_car, current_time):
+    """SF4/AC7 (Case 1): a manual SOC value entered while stale clears once the car
+    exits stale mode and a fresh raw read lands — and the asterisk clears with it."""
+    est_car.car_api_stale_percent_mode = True
+    est_car._user_base_soc_value = 60.0
+    est_car._user_base_soc_entry_api_stale = True
+    est_car._user_base_soc_entry_sensor_value = None
+    assert est_car.is_in_soc_estimation_mode(current_time) is True  # asterisk on (manual value)
+
+    # Car has exited stale-percent mode and a fresh valid read arrives
+    est_car.car_api_stale_percent_mode = False
+    _set_soc(est_car, 72.0, current_time)
+    est_car._update_soc_estimation(current_time)
+
+    assert est_car._user_base_soc_value is None  # manual value cleared
+    assert est_car.is_in_soc_estimation_mode(current_time) is False  # asterisk cleared
+
+
+def test_manual_soc_reset_case2_clears_on_differing_read(est_car, current_time):
+    """SF4/AC7 (Case 2): entered not-stale with a value — clears on a differing fresh read."""
+    est_car._user_base_soc_value = 60.0
+    est_car._user_base_soc_entry_api_stale = False
+    est_car._user_base_soc_entry_sensor_value = 50.0
+
+    _set_soc(est_car, 72.0, current_time)  # differs from the 50.0 entry reference
+    est_car._update_soc_estimation(current_time)
+
+    assert est_car._user_base_soc_value is None
+    assert est_car.is_in_soc_estimation_mode(current_time) is False
+
+
+def test_manual_soc_reset_force_not_stale_proceeds_when_time_stale(est_car, current_time):
+    """SF4/AC7: Force-Not-Stale treats the sensor as trusted, so the reset proceeds
+    even when the SOC sensor is time-stale."""
+    est_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
+    est_car._user_base_soc_value = 60.0
+    est_car._user_base_soc_entry_api_stale = False
+    est_car._user_base_soc_entry_sensor_value = None  # Case 3 — any valid value clears
+
+    # Sensor is time-stale (>1h) but Force-Not-Stale asserts it is trusted
+    stale = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
+    _set_soc(est_car, 72.0, stale)
+    est_car._update_soc_estimation(current_time)
+
+    assert est_car._user_base_soc_value is None
+    assert est_car.is_in_soc_estimation_mode(current_time) is False
+
+
+# ── SF5: force overrides drive the asterisk via the rewired value_fn (AC6) ─
+
+
+async def test_force_stale_drives_asterisk_via_value_fn(est_car, current_time):
+    """SF5/AC6: force-stale enters estimation → asterisk on through the rewired value_fn."""
+    from custom_components.quiet_solar.binary_sensor import create_ha_binary_sensor_for_QSCar
+
+    entities = create_ha_binary_sensor_for_QSCar(est_car)
+    est = next(e for e in entities if e.entity_description.key == BINARY_SENSOR_CAR_IS_SOC_ESTIMATED)
+
+    _set_soc(est_car, 50.0, current_time)
+    assert est.entity_description.value_fn(est_car, "k") is False
+
+    await est_car.user_set_stale_mode(CAR_STALE_MODE_FORCE_STALE, for_init=True)
+    assert est_car.car_api_stale_percent_mode is True
+    assert est.entity_description.value_fn(est_car, "k") is True
+
+
+def test_force_not_stale_recovers_and_clears_asterisk(est_car, current_time):
+    """SF5/AC6: force-not-stale lets recovery proceed; the asterisk clears after exit."""
+    est_car.car_api_stale_percent_mode = True
+    est_car.car_stale_mode_override = CAR_STALE_MODE_FORCE_NOT_STALE
+
+    assert est_car.can_exit_stale_percent_mode(current_time) is True
+    est_car._exit_stale_mode()
+    assert est_car.is_in_soc_estimation_mode(current_time) is False

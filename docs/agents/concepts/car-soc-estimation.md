@@ -4,7 +4,7 @@ slug: car-soc-estimation
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-17
+last_verified: 2026-06-18
 ---
 
 # Car SOC estimation — the effective-SOC model
@@ -117,21 +117,35 @@ manually-assigned car's location tracker wrongly reports "away" (or the plug
 sensor reports unplugged) while the SOC sensor is live:
 
 - `check_charger_assignment_contradiction(..., manual=True)` **trusts the
-  user**: it sets `_car_api_inferred_home`/`_car_api_inferred_plugged` (so the
-  car keeps being managed and charged) and logs **one WARNING per episode**
+  user**: on a contradiction it sets
+  `_car_api_inferred_home`/`_car_api_inferred_plugged` (so the car keeps being
+  managed and charged) and logs **one WARNING per contradiction episode**
   (deduped on the inferred-home flag). It does **not** mark the car stale and
   does **not** notify. A manually-assigned car's staleness therefore depends
   only on its SOC sensor (the SOC-only stale entry) plus the all-sensors-dead
   and force paths. With a fresh SOC the car is not in estimation mode, so
   `get_car_charge_percent` returns the live sensor and the constraint seed is
   the real SOC (never force-init at 0), with no asterisk.
+- **Flag lifecycle** (single owner). The same call **clears** the inferred
+  flags as soon as the raw API agrees again, so the override never outlives the
+  contradiction — an away→home tracker blip on an attached, never-stale car
+  drops the override (and a later genuine unplug is honored), and the next
+  contradiction re-arms the WARNING. To make this robust it runs every cycle in
+  `_update_car_api_staleness` **before** the SOC-only stale entry and
+  independent of stale-percent mode, so a manual car still gets the override
+  when a SOC-stale entry and a tracker contradiction coincide on one cycle. It
+  is skipped only while fully API-stale (all sensors dead), where there is no
+  reliable raw signal to reconcile against.
 - `manual=False` (auto-attached by plug-time correlation): a contradiction
   takes **no action** — identity is only a heuristic, so it neither marks the
   car stale nor sets the inferred flags.
 - **Recovery** (`can_exit_stale_percent_mode`): a user-originated assignment
-  recovers on SOC freshness alone (`return not self._is_soc_sensor_stale(time)`,
-  right after the force checks), ignoring the possibly-wrong raw home/plug
-  readings that gate the non-manual connected/not-connected branches.
+  recovers on SOC freshness alone (`return not self._is_soc_sensor_stale(time)`),
+  ignoring the possibly-wrong raw home/plug readings that gate the non-manual
+  connected/not-connected branches. The branch sits **after** the genuine
+  all-data-dead guard and is itself guarded on a SOC sensor existing, so a
+  no-SOC-sensor car (whose `_is_soc_sensor_stale` is vacuously False) never
+  short-circuits to permanent recovery.
 
 ## Capture at the fresh→stale edge
 
