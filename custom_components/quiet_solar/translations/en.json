@@ -656,6 +656,9 @@
             "qs_car_autonomy_to_target_soc_km": {
                 "name": "Autonomy to Target SOC (km)"
             },
+            "qs_car_charge_origin": {
+                "name": "Charge Origin"
+            },
             "qs_car_charge_time": {
                 "name": "Charge ETA"
             },

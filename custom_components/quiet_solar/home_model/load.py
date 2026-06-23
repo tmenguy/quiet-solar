@@ -21,6 +21,7 @@ from ..const import (
     CONF_NUM_MAX_ON_OFF,
     CONF_POWER,
     CONF_SWITCH,
+    CONSTRAINT_ORIGINATOR_AGENDA,
     CONSTRAINT_ORIGINATOR_KEY,
     CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
@@ -1045,11 +1046,15 @@ class AbstractLoad(AbstractDevice):
     ) -> tuple[bool, list[LoadConstraint]]:
         """Push agenda constraints. Returns (changed, constraints_to_ack)."""
         for new_ct in new_constraints:
-            new_ct.add_or_update_load_info(CONSTRAINT_ORIGINATOR_KEY, "agenda")
+            new_ct.add_or_update_load_info(CONSTRAINT_ORIGINATOR_KEY, CONSTRAINT_ORIGINATOR_AGENDA)
 
         one_c_removed = False
         for i, ct in enumerate(self._constraints):
-            if ct and ct.load_info is not None and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == "agenda":
+            if (
+                ct
+                and ct.load_info is not None
+                and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY, None) == CONSTRAINT_ORIGINATOR_AGENDA
+            ):
                 # find if we have a agenda one that is matching, if no : we kill it
                 found = False
                 for new_ct in new_constraints:

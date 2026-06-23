@@ -73,6 +73,20 @@ prediction_kWh + margin` is pushed for the car's charger.
   surface from `AbstractLoad`.
 - 31-day mileage ring (sensor-attribute restored).
 - Custom power-to-amperage lookup table on `QSCar`.
+- `QSCar.get_car_person_readable_forecast_mileage()` — raw forecast
+  string (`"<Person>: <km>km <HH:MM>"`); backs the `qs_car_person_forecast`
+  sensor. Unchanged by QS-274 (kept for history/automations).
+- `QSCar.get_car_charge_origin_readable_string()` (QS-274) — the
+  origin-responsive context line backing the new `qs_car_charge_origin`
+  sensor. Pure / sync-safe: reads
+  `self.charger.get_charge_type(return_charge_errors=False)` and the live
+  `current_forecasted_person`. Returns `"Forecasted from <Person>: …"`
+  (person-automated with a resolvable person), `"No proper Forecast"`
+  (orphaned person — type Person but `current_forecasted_person is None`),
+  `"Calendar · HH:MM"`, `"Manually set to HH:MM"`, the two as-fast
+  strings, or — for any other type — today's forecast string (else
+  `"No proper Forecast"`). This is the single source of truth for the car
+  card's origin context row.
 
 ## Lifecycle
 

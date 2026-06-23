@@ -30,6 +30,20 @@
     'state': 'unknown',
   })
 # ---
+# name: test_car_sensors[sensor.car_test_car_charge_origin-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'car Test Car Charge Origin',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.car_test_car_charge_origin',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
 # name: test_car_sensors[sensor.car_test_car_charge_type-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({
@@ -175,6 +189,20 @@
     }),
     'context': <ANY>,
     'entity_id': 'sensor.car_test_charger_generic_car_charge_eta',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
+# name: test_charger_sensors[sensor.car_test_charger_generic_car_charge_origin-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'friendly_name': 'car Test Charger generic car Charge Origin',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.car_test_charger_generic_car_charge_origin',
     'last_changed': <ANY>,
     'last_reported': <ANY>,
     'last_updated': <ANY>,

@@ -13,12 +13,19 @@ from homeassistant.const import STATE_UNKNOWN
 from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CAR_NAME,
     CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE,
+    CAR_CHARGE_TYPE_CALENDAR,
     CAR_CHARGE_TYPE_FAULTED,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
-    CAR_CHARGE_TYPE_SCHEDULE,
+    CAR_CHARGE_TYPE_MANUAL,
+    CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE,
+    CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY,
     CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY,
     CAR_CHARGE_TYPE_TARGET_MET,
+    CONSTRAINT_ORIGINATOR_AGENDA,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_PERSON,
+    CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONF_CHARGER_CONSUMPTION,
     CONF_CHARGER_MAX_CHARGE,
     CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER,
@@ -469,7 +476,102 @@ class TestQSChargerGenericChargeType(unittest.TestCase):
         with patch.object(self.charger, "is_charger_faulted", return_value=False):
             charge_type, constraint = self.charger.get_charge_type()
 
-        self.assertEqual(charge_type, CAR_CHARGE_TYPE_SCHEDULE)
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_MANUAL)
+
+    def _make_deadline_constraint(self, load_info):
+        mock_constraint = MagicMock()
+        mock_constraint.is_constraint_active_for_time_period.return_value = True
+        mock_constraint.as_fast_as_possible = False
+        mock_constraint.end_of_constraint = datetime.now(pytz.UTC) + timedelta(hours=1)
+        mock_constraint.load_info = load_info
+        return mock_constraint
+
+    def test_get_charge_type_calendar(self):
+        """A deadline constraint tagged as agenda → Calendar."""
+        self.charger.car = MagicMock()
+        ct = self._make_deadline_constraint({CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_AGENDA})
+        self.charger._constraints = [ct]
+
+        with patch.object(self.charger, "is_charger_faulted", return_value=False):
+            charge_type, constraint = self.charger.get_charge_type()
+
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_CALENDAR)
+        self.assertIs(constraint, ct)
+
+    def test_get_charge_type_person(self):
+        """A deadline constraint tagged with a person → Person Automated."""
+        self.charger.car = MagicMock()
+        ct = self._make_deadline_constraint(
+            {"person": "Magali", CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_PERSON}
+        )
+        self.charger._constraints = [ct]
+
+        with patch.object(self.charger, "is_charger_faulted", return_value=False):
+            charge_type, constraint = self.charger.get_charge_type()
+
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
+
+    def test_get_charge_type_legacy_person_no_originator(self):
+        """A legacy person constraint carrying only {person: name} → Person Automated."""
+        self.charger.car = MagicMock()
+        ct = self._make_deadline_constraint({"person": "Magali"})
+        self.charger._constraints = [ct]
+
+        with patch.object(self.charger, "is_charger_faulted", return_value=False):
+            charge_type, constraint = self.charger.get_charge_type()
+
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
+
+    def test_get_charge_type_untagged_deadline_is_manual(self):
+        """A deadline constraint with load_info=None → Manual (None-guard path)."""
+        self.charger.car = MagicMock()
+        ct = self._make_deadline_constraint(None)
+        self.charger._constraints = [ct]
+
+        with patch.object(self.charger, "is_charger_faulted", return_value=False):
+            charge_type, constraint = self.charger.get_charge_type()
+
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_MANUAL)
+
+    def test_get_charge_type_manual_as_fast_as_possible(self):
+        """A user-forced (user_override) as-fast constraint → Manual As Fast As Possible."""
+        self.charger.car = MagicMock()
+        ct = MagicMock()
+        ct.is_constraint_active_for_time_period.return_value = True
+        ct.as_fast_as_possible = True
+        ct.load_info = {CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_USER_OVERRIDE}
+        self.charger._constraints = [ct]
+
+        with patch.object(self.charger, "is_charger_faulted", return_value=False):
+            charge_type, constraint = self.charger.get_charge_type()
+
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE)
+
+    def test_get_charge_type_automation_as_fast_as_possible(self):
+        """An as-fast constraint without user_override → As Fast As Possible."""
+        self.charger.car = MagicMock()
+        ct = MagicMock()
+        ct.is_constraint_active_for_time_period.return_value = True
+        ct.as_fast_as_possible = True
+        ct.load_info = None
+        self.charger._constraints = [ct]
+
+        with patch.object(self.charger, "is_charger_faulted", return_value=False):
+            charge_type, constraint = self.charger.get_charge_type()
+
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE)
+
+    def test_get_charge_type_skips_errors_when_disabled(self):
+        """With return_charge_errors=False the Faulted short-circuit is skipped."""
+        self.charger.car = MagicMock()
+        ct = self._make_deadline_constraint(None)
+        self.charger._constraints = [ct]
+
+        with patch.object(self.charger, "is_charger_faulted", return_value=True):
+            charge_type, constraint = self.charger.get_charge_type(return_charge_errors=False)
+
+        # the underlying type is returned, never the Faulted error string
+        self.assertEqual(charge_type, CAR_CHARGE_TYPE_MANUAL)
 
     def test_get_charge_type_target_met(self):
         """Test get_charge_type when target is met."""

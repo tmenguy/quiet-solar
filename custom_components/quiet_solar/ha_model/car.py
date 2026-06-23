@@ -16,6 +16,10 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 
 from ..const import (
     CAR_API_STALE_THRESHOLD_S,
+    CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE,
+    CAR_CHARGE_TYPE_CALENDAR,
+    CAR_CHARGE_TYPE_MANUAL,
+    CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CAR_EFFICIENCY_KM_PER_KWH,
@@ -1141,6 +1145,47 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return CAR_CHARGE_TYPE_NOT_PLUGGED
         else:
             return self.charger.get_charge_type()[0]
+
+    def get_car_charge_origin_readable_string(self) -> str:
+        """Origin-responsive context line for the car card.
+
+        Pure / CPU-only: reads in-memory constraint/load state only. Calls
+        ``get_charge_type(return_charge_errors=False)`` so charger-error
+        states (Faulted / No Power / Not Plugged) never reach the switch and
+        are never surfaced in the origin line.
+        """
+        if self.charger is None:
+            if self.current_forecasted_person is not None:
+                return self.get_car_person_readable_forecast_mileage()
+            return "No proper Forecast"
+
+        charge_type, ct = self.charger.get_charge_type(return_charge_errors=False)
+
+        if charge_type == CAR_CHARGE_TYPE_PERSON_AUTOMATED:
+            if self.current_forecasted_person is not None:
+                return f"Forecasted from {self.get_car_person_readable_forecast_mileage()}"
+            return "No proper Forecast"
+
+        if charge_type == CAR_CHARGE_TYPE_CALENDAR:
+            assert ct is not None
+            target = ct.get_readable_next_target_date_string(for_small_standalone=True)
+            return f"Calendar · {target}"
+
+        if charge_type == CAR_CHARGE_TYPE_MANUAL:
+            assert ct is not None
+            target = ct.get_readable_next_target_date_string(for_small_standalone=True)
+            return f"Manually set to {target}"
+
+        if charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE:
+            return "Automatically forced to charge as fast as possible"
+
+        if charge_type == CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE:
+            return "Manual as fast as possible charge"
+
+        # any other type (Solar / Solar Priority / Target Met / Not Charging / none)
+        if self.current_forecasted_person is not None:
+            return self.get_car_person_readable_forecast_mileage()
+        return "No proper Forecast"
 
     async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
 
