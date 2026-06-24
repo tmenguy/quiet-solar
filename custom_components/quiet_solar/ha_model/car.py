@@ -1153,40 +1153,45 @@ class QSCar(HADeviceMixin, AbstractDevice):
         ``get_charge_type(return_charge_errors=False)`` so charger-error
         states (Faulted / No Power / Not Plugged) never reach the switch and
         are never surfaced in the origin line.
+
+        Calendar / Manual / as-fast origins return their own dedicated string.
+        Every other case — no charger, person-automated, and any other charge
+        type (Solar / Solar Priority / Target Met / Not Charging / none) —
+        delegates to ``get_car_person_readable_forecast_mileage()`` and surfaces
+        the person-forecast line (``"<name>: <forecast>"`` / ``"<name>: No
+        forecast"`` / ``"No forecasted person"``).
         """
-        if self.charger is None:
-            return self.get_car_person_readable_forecast_mileage()
+        if self.charger is not None:
+            charge_type, ct = self.charger.get_charge_type(return_charge_errors=False)
 
-        charge_type, ct = self.charger.get_charge_type(return_charge_errors=False)
+            if ct is not None:
+                if charge_type == CAR_CHARGE_TYPE_CALENDAR:
+                    return f"Calendar · {self._origin_target_single_line(ct)}"
 
-        if charge_type == CAR_CHARGE_TYPE_PERSON_AUTOMATED:
-            return self.get_car_person_readable_forecast_mileage()
+                if charge_type == CAR_CHARGE_TYPE_MANUAL:
+                    return f"Manually set to {self._origin_target_single_line(ct)}"
 
-        if ct is not None:
-            if charge_type == CAR_CHARGE_TYPE_CALENDAR:
-                target = self._origin_target_single_line(ct)
-                return f"Calendar · {target}"
+            if charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE:
+                return "Automatically forced to charge as fast as possible"
 
-            if charge_type == CAR_CHARGE_TYPE_MANUAL:
-                target = self._origin_target_single_line(ct)
-                return f"Manually set to {target}"
+            if charge_type == CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE:
+                return "Manual as fast as possible charge"
 
-        if charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE:
-            return "Automatically forced to charge as fast as possible"
-
-        if charge_type == CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE:
-            return "Manual as fast as possible charge"
-
-        # any other type (Solar / Solar Priority / Target Met / Not Charging / none)
+        # No charger, person-automated, or any other type: the person-forecast line.
         return self.get_car_person_readable_forecast_mileage()
 
     @staticmethod
     def _origin_target_single_line(ct) -> str:
         """Target time for the single-line origin row.
 
-        ``get_readable_next_target_date_string(for_small_standalone=True)``
-        returns a two-line ``"%m-%d\\n%H:%M"`` form for targets more than ~24h
-        out; collapse the newline so the single-line context row reads cleanly.
+        Coupling note: this depends on the upstream format of
+        ``get_readable_next_target_date_string(for_small_standalone=True)``,
+        which emits a two-line ``"%m-%d\\n%H:%M"`` form (see
+        ``home_model/constraints.get_readable_date_string``) for targets more
+        than ~24h out. We collapse the embedded newline to a space so the
+        single-line context row reads cleanly; if that upstream format ever
+        changes, revisit this. The newline-collapse is covered by the far-out
+        Calendar/Manual tests in ``tests/test_car_charge_origin.py``.
         """
         target = ct.get_readable_next_target_date_string(for_small_standalone=True)
         return target.replace("\n", " ")
