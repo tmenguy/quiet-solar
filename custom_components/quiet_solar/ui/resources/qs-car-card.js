@@ -1416,7 +1416,7 @@ class QsCarCard extends QsCardBase {
             </select>
           </div>
         </div>
-        <div class="forecast-row">${chargeIcon ? `<ha-icon icon="${chargeIcon}"></ha-icon> ` : ''}${forecastDisplay}</div>
+        <div class="forecast-row">${forecastDisplay}</div>
         <div class="below">
           <div class="pill">
             <ha-icon icon="mdi:ev-station"></ha-icon>
