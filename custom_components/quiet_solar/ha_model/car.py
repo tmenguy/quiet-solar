@@ -50,7 +50,6 @@ from ..const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
     MAX_POSSIBLE_AMPERAGE,
-    PERSON_NO_FORECAST_STRING,
     USER_ORIGINATED_CAR_NAME,
     USER_ORIGINATED_CHARGER_NAME,
     CONF_TYPE_NAME_QSCar,
@@ -1156,22 +1155,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         are never surfaced in the origin line.
         """
         if self.charger is None:
-            if self.current_forecasted_person is not None:
-                return self.get_car_person_readable_forecast_mileage()
-            return "No proper Forecast"
+            return self.get_car_person_readable_forecast_mileage()
 
         charge_type, ct = self.charger.get_charge_type(return_charge_errors=False)
 
         if charge_type == CAR_CHARGE_TYPE_PERSON_AUTOMATED:
-            person = self.current_forecasted_person
-            if person is not None:
-                # get_forecast_readable_string() returns the PERSON_NO_FORECAST_STRING
-                # sentinel when there is no mileage/leave-time prediction; surface a
-                # clean line instead of "Forecasted from <name>: No forecast".
-                forecast_str = person.get_forecast_readable_string()
-                if forecast_str != PERSON_NO_FORECAST_STRING:
-                    return f"Forecasted from {person.name}: {forecast_str}"
-            return "No proper Forecast"
+            return self.get_car_person_readable_forecast_mileage()
 
         if ct is not None:
             if charge_type == CAR_CHARGE_TYPE_CALENDAR:
@@ -1189,9 +1178,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return "Manual as fast as possible charge"
 
         # any other type (Solar / Solar Priority / Target Met / Not Charging / none)
-        if self.current_forecasted_person is not None:
-            return self.get_car_person_readable_forecast_mileage()
-        return "No proper Forecast"
+        return self.get_car_person_readable_forecast_mileage()
 
     @staticmethod
     def _origin_target_single_line(ct) -> str:

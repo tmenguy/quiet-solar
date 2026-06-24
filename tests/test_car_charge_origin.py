@@ -105,8 +105,10 @@ def test_person_origin(origin_car, fake_hass, mock_data_handler):
     origin_car.current_forecasted_person = person
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
 
+    # review-fix #03: all person branches delegate to the single helper
+    # get_car_person_readable_forecast_mileage() → "<name>: <forecast>"
     result = origin_car.get_car_charge_origin_readable_string()
-    assert result.startswith("Forecasted from Magali: ")
+    assert result.startswith("Magali: ")
     assert "30km" in result
 
 
@@ -114,17 +116,17 @@ def test_orphaned_person_origin(origin_car):
     """Person-tagged constraint outlives a now-None current_forecasted_person."""
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
     origin_car.current_forecasted_person = None
-    assert origin_car.get_car_charge_origin_readable_string() == "No proper Forecast"
+    assert origin_car.get_car_charge_origin_readable_string() == "No forecasted person"
 
 
 def test_empty_forecast_person_origin(origin_car, fake_hass, mock_data_handler):
-    """A person constraint with an empty forecast → clean "No proper Forecast"
-    instead of "Forecasted from Magali: No forecast" (review-fix #01 finding 9)."""
+    """A person attached with an empty forecast surfaces the person line as-is —
+    "<name>: No forecast" (review-fix #03 — accepted, unified behavior)."""
     person = _make_person(fake_hass, mock_data_handler, mileage=None, leave_time=None)
     origin_car.current_forecasted_person = person
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
 
-    assert origin_car.get_car_charge_origin_readable_string() == "No proper Forecast"
+    assert origin_car.get_car_charge_origin_readable_string() == "Magali: No forecast"
 
 
 # ── Calendar / Manual (real formatter — review-fix #01 finding 6) ────────────
@@ -169,14 +171,14 @@ def test_calendar_origin_ct_none_falls_through(origin_car):
     """CALENDAR type with ct=None must not raise — falls through to fallback."""
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_CALENDAR, None)
     origin_car.current_forecasted_person = None
-    assert origin_car.get_car_charge_origin_readable_string() == "No proper Forecast"
+    assert origin_car.get_car_charge_origin_readable_string() == "No forecasted person"
 
 
 def test_manual_origin_ct_none_falls_through(origin_car):
     """MANUAL type with ct=None must not raise — falls through to fallback."""
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_MANUAL, None)
     origin_car.current_forecasted_person = None
-    assert origin_car.get_car_charge_origin_readable_string() == "No proper Forecast"
+    assert origin_car.get_car_charge_origin_readable_string() == "No forecasted person"
 
 
 # ── As-fast (automation vs user) ────────────────────────────────────────────
@@ -218,7 +220,7 @@ def test_other_type_with_person_returns_forecast(origin_car, fake_hass, mock_dat
 def test_other_type_without_person_returns_no_forecast(origin_car):
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY)
     origin_car.current_forecasted_person = None
-    assert origin_car.get_car_charge_origin_readable_string() == "No proper Forecast"
+    assert origin_car.get_car_charge_origin_readable_string() == "No forecasted person"
 
 
 # ── No charger ─────────────────────────────────────────────────────────────
@@ -240,4 +242,4 @@ def test_no_charger_with_person_returns_forecast(origin_car, fake_hass, mock_dat
 def test_no_charger_without_person_returns_no_forecast(origin_car):
     origin_car.charger = None
     origin_car.current_forecasted_person = None
-    assert origin_car.get_car_charge_origin_readable_string() == "No proper Forecast"
+    assert origin_car.get_car_charge_origin_readable_string() == "No forecasted person"

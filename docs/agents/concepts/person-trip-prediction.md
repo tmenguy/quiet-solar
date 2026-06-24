@@ -80,13 +80,15 @@ prediction_kWh + margin` is pushed for the car's charger.
   origin-responsive context line backing the new `qs_car_charge_origin`
   sensor. Pure / sync-safe: reads
   `self.charger.get_charge_type(return_charge_errors=False)` and the live
-  `current_forecasted_person`. Returns `"Forecasted from <Person>: …"`
-  (person-automated with a resolvable person), `"No proper Forecast"`
-  (orphaned person — type Person but `current_forecasted_person is None`),
-  `"Calendar · HH:MM"`, `"Manually set to HH:MM"`, the two as-fast
-  strings, or — for any other type — today's forecast string (else
-  `"No proper Forecast"`). This is the single source of truth for the car
-  card's origin context row.
+  `current_forecasted_person`. Returns `"Calendar · HH:MM"`,
+  `"Manually set to HH:MM"`, or the two as-fast strings for those origins;
+  for the person-automated, no-charger and any-other-type cases it
+  delegates to the single `get_car_person_readable_forecast_mileage()`
+  helper — i.e. the raw person line `"<Person>: <forecast>"` (including
+  `"<Person>: No forecast"` when there is no prediction) or
+  `"No forecasted person"` when no person is attached. Far-out
+  (>~24h) Calendar/Manual targets are collapsed to a single line. This is
+  the single source of truth for the car card's origin context row.
 
 ## Lifecycle
 
