@@ -242,6 +242,10 @@ CONSTRAINT_ORIGINATOR_PERSON = "person"
 # load_info key carrying the forecasted-person name on a person constraint.
 # Wire value stays "person" for back-compat with persisted/restored constraints.
 CONSTRAINT_FORECASTED_PERSON_KEY = "person"
+# Sentinel returned by QSPerson.get_forecast_readable_string() when there is no
+# mileage / leave-time prediction. Shared so the car-card origin line can detect
+# the empty-forecast case without coupling to the literal string.
+PERSON_NO_FORECAST_STRING = "No forecast"
 
 SENSOR_LOAD_BEST_POWER_VALUE = "qs_load_best_power_value"
 SENSOR_CONSTRAINT_SENSOR = "qs_constraint_sensor"

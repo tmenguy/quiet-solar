@@ -50,6 +50,7 @@ from ..const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
     FORCE_CAR_NO_PERSON_ATTACHED,
     MAX_POSSIBLE_AMPERAGE,
+    PERSON_NO_FORECAST_STRING,
     USER_ORIGINATED_CAR_NAME,
     USER_ORIGINATED_CHARGER_NAME,
     CONF_TYPE_NAME_QSCar,
@@ -1162,22 +1163,23 @@ class QSCar(HADeviceMixin, AbstractDevice):
         charge_type, ct = self.charger.get_charge_type(return_charge_errors=False)
 
         if charge_type == CAR_CHARGE_TYPE_PERSON_AUTOMATED:
-            if self.current_forecasted_person is not None:
-                forecast = self.get_car_person_readable_forecast_mileage()
-                # QSPerson.get_forecast_readable_string() returns the "No forecast"
+            person = self.current_forecasted_person
+            if person is not None:
+                # get_forecast_readable_string() returns the PERSON_NO_FORECAST_STRING
                 # sentinel when there is no mileage/leave-time prediction; surface a
                 # clean line instead of "Forecasted from <name>: No forecast".
-                if not forecast.endswith(": No forecast"):
-                    return f"Forecasted from {forecast}"
+                forecast_str = person.get_forecast_readable_string()
+                if forecast_str != PERSON_NO_FORECAST_STRING:
+                    return f"Forecasted from {person.name}: {forecast_str}"
             return "No proper Forecast"
 
         if ct is not None:
             if charge_type == CAR_CHARGE_TYPE_CALENDAR:
-                target = ct.get_readable_next_target_date_string(for_small_standalone=True)
+                target = self._origin_target_single_line(ct)
                 return f"Calendar · {target}"
 
             if charge_type == CAR_CHARGE_TYPE_MANUAL:
-                target = ct.get_readable_next_target_date_string(for_small_standalone=True)
+                target = self._origin_target_single_line(ct)
                 return f"Manually set to {target}"
 
         if charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE:
@@ -1190,6 +1192,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.current_forecasted_person is not None:
             return self.get_car_person_readable_forecast_mileage()
         return "No proper Forecast"
+
+    @staticmethod
+    def _origin_target_single_line(ct) -> str:
+        """Target time for the single-line origin row.
+
+        ``get_readable_next_target_date_string(for_small_standalone=True)``
+        returns a two-line ``"%m-%d\\n%H:%M"`` form for targets more than ~24h
+        out; collapse the newline so the single-line context row reads cleanly.
+        """
+        target = ct.get_readable_next_target_date_string(for_small_standalone=True)
+        return target.replace("\n", " ")
 
     async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
 

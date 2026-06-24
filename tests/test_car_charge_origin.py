@@ -83,6 +83,15 @@ def _near_term_constraint():
     return ct, expected_hhmm
 
 
+def _far_term_constraint():
+    """A real constraint >24h out — the formatter returns a two-line date."""
+    end_time = datetime.now(pytz.UTC) + timedelta(days=3)
+    ct = create_real_constraint(load=None, end_time=end_time)
+    # sanity: the raw formatter really does produce a two-line form here
+    assert "\n" in get_readable_date_string(end_time, for_small_standalone=True)
+    return ct
+
+
 # ── Person (real method, no mock — review-fix #01 finding 4) ─────────────────
 
 
@@ -133,6 +142,24 @@ def test_manual_origin(origin_car):
     assert (
         origin_car.get_car_charge_origin_readable_string() == f"Manually set to {expected}"
     )
+
+
+def test_calendar_origin_far_out_target_is_single_line(origin_car):
+    """A >24h target must render on one line — no raw newline (review-fix #02)."""
+    ct = _far_term_constraint()
+    _set_charge_type(origin_car, CAR_CHARGE_TYPE_CALENDAR, ct)
+    result = origin_car.get_car_charge_origin_readable_string()
+    assert "\n" not in result
+    assert result.startswith("Calendar · ")
+
+
+def test_manual_origin_far_out_target_is_single_line(origin_car):
+    """A >24h manual target must render on one line — no raw newline."""
+    ct = _far_term_constraint()
+    _set_charge_type(origin_car, CAR_CHARGE_TYPE_MANUAL, ct)
+    result = origin_car.get_car_charge_origin_readable_string()
+    assert "\n" not in result
+    assert result.startswith("Manually set to ")
 
 
 # ── ct-is-None fall-through (review-fix #01 finding 2) ───────────────────────
