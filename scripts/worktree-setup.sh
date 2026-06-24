@@ -333,6 +333,10 @@ fi
 # tests/test_quality_gate.py::TestTestmonRelocationInvariant
 # (real testmon: relocate a seeded DB, change a covered file, prove the
 # covering test is reselected).
+# NH3 (review-fix #03): the loop handles BOTH a directory (.mypy_cache)
+# and a single file (.testmondata). `cp -R` is deliberately used for both
+# — for a regular file it behaves like a plain copy, so one code path
+# covers both kinds without a per-cache branch.
 for cache in .mypy_cache .testmondata; do
     src="${MAIN_DIR}/${cache}"
     dst="${WORKTREE_DIR}/${cache}"

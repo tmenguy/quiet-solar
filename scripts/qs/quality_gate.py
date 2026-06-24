@@ -132,15 +132,43 @@ def _run(
     `TimeoutExpired`, so callers handle it via the normal returncode
     path. Callers that omit `timeout` keep the original unbounded
     behavior.
+
+    QS-276 review-fix SF1: pins `encoding="utf-8", errors="replace"`
+    (matching `_stream_pytest`) so non-ASCII output from git / diff-cover
+    can't raise `UnicodeDecodeError` under `LANG=C` / `LC_ALL=POSIX` and
+    bypass the normal return-code handling.
     """
     try:
         return subprocess.run(
-            cmd, capture_output=True, text=True, cwd=cwd or str(REPO_ROOT), timeout=timeout
+            cmd,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd or str(REPO_ROOT),
+            timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
+        # NH1: preserve any partial output captured before the timeout —
+        # it aids diagnosis. `exc.stdout`/`.stderr` may be bytes (decode),
+        # str (already decoded), or None.
+        out = _decode_maybe(exc.stdout)
+        err = _decode_maybe(exc.stderr)
+        timeout_note = f"timed out after {timeout}s"
         return subprocess.CompletedProcess(
-            args=cmd, returncode=124, stdout="", stderr=f"timed out after {timeout}s"
+            args=cmd,
+            returncode=124,
+            stdout=out,
+            stderr=f"{err}\n{timeout_note}".strip() if err else timeout_note,
         )
+
+
+def _decode_maybe(value: bytes | str | None) -> str:
+    """Return `value` as text — decode bytes (utf-8/replace), pass through str, "" for None."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value
 
 
 def _emit(name: str, line: str) -> None:
@@ -603,6 +631,11 @@ def _stream_pytest(
     return {
         "name": "pytest",
         "passed": passed,
+        # QS-276 review-fix NH4 (#03): expose the raw pytest exit code so
+        # callers (e.g. seed_testmon) can distinguish a mere test failure
+        # (1, DB still updated) from a collection error / internal crash
+        # (>=2, .testmondata may be partial).
+        "returncode": proc.returncode,
         "coverage": coverage,
         "missing": missing_lines[:10],
         "detail": stdout_text[-500:] if not passed else "",
@@ -1047,13 +1080,20 @@ def _build_testmon_cmd() -> list[str]:
         "-m",
         "pytest",
         "--testmon",
-        # QS-276 review-fix N5: keep the slow real-subprocess integration
-        # tests (git-init + nested pytest runs each) out of the inner
-        # loop. They never cover `custom_components/quiet_solar`, so
-        # deselecting them cannot affect the diff-cover verdict — it only
-        # keeps the fast loop fast. CI's whole-repo gate still runs them.
-        "-m",
-        "not integration",
+        # QS-276 review-fix MF1: keep the slow testmon SELF-tests (the
+        # real-subprocess git-init + nested-pytest cases in
+        # tests/test_quality_gate.py) out of the inner loop WITHOUT
+        # deselecting the shared `integration` marker. The earlier
+        # `-m "not integration"` (review-fix N5) was wrong: ~9 DOMAIN
+        # integration test files (charger rebalancing, solver forecast,
+        # constraint boundaries, …) carry that marker AND exercise
+        # `custom_components/quiet_solar`. Deselecting them meant a
+        # production line covered ONLY by a domain integration test ran
+        # zero times → 0% in coverage.xml → diff-cover FAIL the dev could
+        # never clear locally. Ignoring by PATH targets only the
+        # self-tests (which never cover production code, so the diff-cover
+        # verdict is unaffected) and leaves every domain test selectable.
+        f"--ignore={TESTS_DIR / 'test_quality_gate.py'}",
         f"--cov={SRC_DIR}",
         "--cov-report=",
         f"--cov-report=xml:{COVERAGE_XML}",
@@ -1074,6 +1114,33 @@ def _build_diff_cover_cmd(base: str) -> list[str]:
         f"--compare-branch={base}",
         "--fail-under=100",
     ]
+
+
+# QS-276 review-fix NH2 (#03): single source of truth for the reseed
+# command so the two failure-path hints can't drift apart.
+_SEED_TESTMON_CMD = "python scripts/qs/quality_gate.py --seed-testmon"
+
+
+def _emit_reseed_guidance(*, stale: bool) -> None:
+    """Emit reseed guidance on a diff-cover failure (consolidated, NH2).
+
+    `stale=True` is the confirmed stale-baseline branch (the diff base
+    advanced past HEAD); `stale=False` is the generic-coverage-failure
+    fallback where a reseed *might* still help. Both reference the single
+    `_SEED_TESTMON_CMD` constant.
+    """
+    if stale:
+        _emit(
+            "impacted",
+            f"baseline stale: reseed with `{_SEED_TESTMON_CMD}` "
+            "(or merge/rebase origin/main into your branch) and re-run",
+        )
+    else:
+        _emit(
+            "impacted",
+            f"hint: if origin/main advanced past your testmon baseline, reseed with "
+            f"`{_SEED_TESTMON_CMD}` and re-run",
+        )
 
 
 def check_impacted() -> int:
@@ -1123,28 +1190,23 @@ def check_impacted() -> int:
     sys.stdout.write(dc.stdout)
     sys.stdout.flush()
     if dc.returncode != 0:
-        # QS-276 review-fix SF2: distinguish a genuine missing-coverage
-        # failure from a stale-baseline false-FAIL. If the diff base has
-        # advanced past HEAD's fork point, testmon's seeded baseline can't
-        # have selected tests for those upstream-changed lines — surface a
-        # distinct "baseline stale → reseed" verdict rather than a generic
-        # coverage failure.
-        if _diff_base_ahead_of_head(base):
+        # QS-276 review-fix SF2 (#03): a timed-out diff-cover returns the
+        # synthetic 124 from `_run`. Report THAT as the primary verdict
+        # first — otherwise the coverage/staleness branches below would
+        # mislabel a timeout as "<100% covered" or "baseline stale".
+        if dc.returncode == 124:
+            _emit("impacted", f"FAIL (diff-cover timed out after {_DIFF_COVER_TIMEOUT_SECONDS}s)")
+        # SF2 (#02): distinguish a genuine missing-coverage failure from a
+        # stale-baseline false-FAIL. If the diff base advanced past HEAD's
+        # fork point, testmon's seeded baseline can't have selected tests
+        # for those upstream-changed lines — surface a distinct
+        # "baseline stale → reseed" verdict rather than a generic failure.
+        elif _diff_base_ahead_of_head(base):
             _emit("impacted", f"FAIL (baseline stale — {base} advanced past your branch; reseed required)")
-            _emit(
-                "impacted",
-                "baseline stale: reseed with `python scripts/qs/quality_gate.py --seed-testmon` "
-                "(or merge/rebase origin/main into your branch) and re-run",
-            )
+            _emit_reseed_guidance(stale=True)
         else:
             _emit("impacted", "FAIL (changed lines <100% covered)")
-            # S5 fallback hint: a reseed can also help if the baseline is
-            # subtly behind even when no upstream commits are detected.
-            _emit(
-                "impacted",
-                "hint: if origin/main advanced past your testmon baseline, reseed with "
-                "`python scripts/qs/quality_gate.py --seed-testmon` and re-run",
-            )
+            _emit_reseed_guidance(stale=False)
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
         return 1
@@ -1167,7 +1229,16 @@ def seed_testmon() -> int:
         _emit("seed-testmon", "pytest-testmon not importable — skipping")
         return 3
     _emit("seed-testmon", "refreshing .testmondata (pytest --testmon)")
-    _stream_pytest(_build_seed_testmon_cmd())
+    result = _stream_pytest(_build_seed_testmon_cmd())
+    # QS-276 review-fix NH4 (#03): a pytest exit code >= 2 means a
+    # collection error / internal crash (NOT a mere test failure, which is
+    # 1 and still updates the DB). Surface it as a warning so a partial /
+    # unwritten `.testmondata` is observable — but stay best-effort:
+    # finish-task runs this detached and a stale/absent baseline only
+    # over-selects, so we still return 0.
+    rc = result.get("returncode", 0)
+    if rc >= 2:
+        _emit("seed-testmon", f"warning: pytest exited {rc} (collection error/crash) — .testmondata may be incomplete")
     return 0
 
 
