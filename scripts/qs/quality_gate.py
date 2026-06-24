@@ -853,13 +853,24 @@ TESTMON_DATA = REPO_ROOT / ".testmondata"
 # the gate. CI re-fetches authoritatively, so a short bound is safe.
 _FETCH_TIMEOUT_SECONDS = 15.0
 
-# Static decision (Design A): pytest-testmon 2.2.0 does not reliably
-# attribute per-test coverage across xdist workers, so the selection pass
-# runs serially. Measured worst case (a full select against a cold
-# `.testmondata`) approaches the warm full suite; a small diff selects a
-# handful of tests and finishes in seconds. A *runtime* probe would add an
-# uncoverable branch, so this is a module constant by design.
-_TESTMON_SUPPORTS_XDIST = False
+# Static decision (Design A): whether the pinned pytest-testmon attributes
+# per-test coverage correctly across xdist workers, so the selection /
+# seeding passes can run in parallel.
+#
+# QS-276 review-fix: empirically verified TRUE for pytest-testmon==2.2.0 +
+# pytest-xdist==3.8.0. testmon 2.2.0 ships first-class xdist support
+# (`TestmonXdistSync`, `pytest_xdist_node_collection_finished`,
+# controller↔worker `workerinput` plumbing). Probed on a throwaway repo:
+# under `-n auto` the superset property holds exactly (no-op → 0 selected,
+# covered edit → reselect, uncovered edit → 0) AND testmon ⊕ pytest-cov
+# combine the per-worker `.coverage` files into a valid `coverage.xml`
+# that diff-cover reads at 100%. Leaving this serial made the select-all
+# worst case (~45 min) *slower* than the `-n auto` full gate — the whole
+# point of the inner loop is lost. A *runtime* probe of testmon's own
+# xdist support would add an uncoverable branch, so this stays a module
+# constant; `_pytest_workers()` (already probed + tested) still decides
+# the actual worker count and honours `QS_QG_PYTEST_WORKERS`.
+_TESTMON_SUPPORTS_XDIST = True
 
 
 def _impacted_tooling_available() -> bool:
@@ -1095,8 +1106,26 @@ def seed_testmon() -> int:
         _emit("seed-testmon", "pytest-testmon not importable — skipping")
         return 3
     _emit("seed-testmon", "refreshing .testmondata (pytest --testmon)")
-    _stream_pytest([VENV_PYTHON, "-m", "pytest", "--testmon", "-q"])
+    _stream_pytest(_build_seed_testmon_cmd())
     return 0
+
+
+def _build_seed_testmon_cmd() -> list[str]:
+    """Build the `--seed-testmon` baseline-refresh pytest argv.
+
+    Runs the whole suite under `--testmon` to (re)build `.testmondata`;
+    no coverage, no verdict. Parallelized with xdist (QS-276 review-fix)
+    when `_TESTMON_SUPPORTS_XDIST` is set and workers resolve — seeding
+    the baseline is the heaviest testmon pass (a full select-all), so it
+    benefits the most from `-n auto`. Honours `QS_QG_PYTEST_WORKERS` via
+    the shared `_pytest_workers()` resolver.
+    """
+    cmd = [VENV_PYTHON, "-m", "pytest", "--testmon", "-q"]
+    if _TESTMON_SUPPORTS_XDIST:
+        workers = _pytest_workers()
+        if workers is not None:
+            cmd.extend(["-n", workers])
+    return cmd
 
 
 def main() -> None:

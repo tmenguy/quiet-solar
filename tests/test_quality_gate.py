@@ -2274,7 +2274,11 @@ class TestEnsureTestmonDbSafe:
 class TestBuildImpactedCmds:
     """Pure argv builders for the `--impacted` seam."""
 
-    def test_testmon_cmd_default_serial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_testmon_supports_xdist_enabled_by_default(self) -> None:
+        """review-fix: testmon 2.2.0 attributes coverage across xdist workers, so we parallelize."""
+        assert quality_gate._TESTMON_SUPPORTS_XDIST is True
+
+    def test_testmon_cmd_shape_when_xdist_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", False)
         cmd = quality_gate._build_testmon_cmd()
         assert cmd[:4] == [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon"]
@@ -2282,7 +2286,7 @@ class TestBuildImpactedCmds:
         # Empty --cov-report= must precede the xml report (clears pytest.ini).
         assert cmd.index("--cov-report=") < cmd.index(f"--cov-report=xml:{quality_gate.COVERAGE_XML}")
         assert "--cov-fail-under=100" not in cmd  # verdict is diff-cover's job
-        assert "-n" not in cmd  # static serial decision
+        assert "-n" not in cmd  # serial only when testmon⊕xdist is disabled
         # review-fix N5: integration tests are deselected from the fast loop.
         # (`-m` appears twice — `python -m pytest` and the marker — so locate
         # the marker value and assert it is preceded by a `-m` flag.)
@@ -2339,6 +2343,9 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            # Isolate _run to the diff-cover call: the cmd builder probes
+            # xdist via _run, so stub it (it is unit-tested separately).
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": False}),
             patch.object(quality_gate, "_run") as mock_run,
         ):
@@ -2355,6 +2362,7 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
         ):
@@ -2370,6 +2378,7 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", missing),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run") as mock_run,
         ):
@@ -2384,6 +2393,7 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe") as mock_safe,
             patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run", return_value=_cp(0, stdout="Coverage: 100%")) as mock_run,
         ):
@@ -2432,11 +2442,30 @@ class TestSeedTestmon:
         # Even a failing selection still updates the DB → seed returns 0.
         with (
             patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
             patch.object(quality_gate, "_stream_pytest", return_value={"passed": False}) as mock_stream,
         ):
             assert quality_gate.seed_testmon() == 0
-        cmd = mock_stream.call_args.args[0]
+        assert mock_stream.call_args.args[0] == ["SEED_CMD"]
+
+    def test_seed_cmd_parallelizes_when_xdist_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """review-fix: seeding is the heaviest testmon pass, so it runs under -n auto."""
+        monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", True)
+        with patch.object(quality_gate, "_pytest_workers", return_value="auto"):
+            cmd = quality_gate._build_seed_testmon_cmd()
+        assert cmd[:5] == [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon", "-q"]
+        assert cmd[cmd.index("-n") + 1] == "auto"
+
+    def test_seed_cmd_serial_when_xdist_disabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", False)
+        cmd = quality_gate._build_seed_testmon_cmd()
         assert cmd == [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon", "-q"]
+
+    def test_seed_cmd_serial_when_workers_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", True)
+        with patch.object(quality_gate, "_pytest_workers", return_value=None):
+            cmd = quality_gate._build_seed_testmon_cmd()
+        assert "-n" not in cmd
 
 
 class TestImpactedCli:
