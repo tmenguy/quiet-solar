@@ -239,6 +239,9 @@ CONSTRAINT_ORIGINATOR_USER_OVERRIDE = "user_override"
 CONSTRAINT_ORIGINATOR_MANUAL = "manual"
 CONSTRAINT_ORIGINATOR_AGENDA = "agenda"
 CONSTRAINT_ORIGINATOR_PERSON = "person"
+# load_info key carrying the forecasted-person name on a person constraint.
+# Wire value stays "person" for back-compat with persisted/restored constraints.
+CONSTRAINT_FORECASTED_PERSON_KEY = "person"
 
 SENSOR_LOAD_BEST_POWER_VALUE = "qs_load_best_power_value"
 SENSOR_CONSTRAINT_SENSOR = "qs_constraint_sensor"

@@ -130,6 +130,7 @@ from ..const import (
     CONF_CHARGER_STATUS_SENSOR,
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH,
     CONF_DEVICE_EFFICIENCY,
+    CONSTRAINT_FORECASTED_PERSON_KEY,
     CONSTRAINT_ORIGINATOR_AGENDA,
     CONSTRAINT_ORIGINATOR_KEY,
     CONSTRAINT_ORIGINATOR_MANUAL,
@@ -3448,7 +3449,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             # unless the user explicitly overrode the charge target
                             has_person_info = (
                                 force_constraint.load_info is not None
-                                and force_constraint.load_info.get("person") is not None
+                                and force_constraint.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) is not None
                             )
                             if (
                                 user_target is not None or not has_person_info
@@ -3649,7 +3650,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # we found and removed a previous person based constraint, or anything not as it should be there
                     if person is not None:
                         if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(
-                            time, load_param=self.car.name, load_info={"person": person.name}, for_full_reset=False
+                            time,
+                            load_param=self.car.name,
+                            load_info={CONSTRAINT_FORECASTED_PERSON_KEY: person.name},
+                            for_full_reset=False,
                         ):
                             do_force_solve = True
 
@@ -3690,7 +3694,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                         ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
                                         and ct.load_param == self.car.name
                                         and ct.load_info is not None
-                                        and ct.load_info.get("person") == person.name
+                                        and ct.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) == person.name
                                     ):
                                         # ok found one ...
                                         car_charge_person = ct
@@ -3721,7 +3725,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     load=self,
                                     load_param=self.car.name,
                                     load_info={
-                                        "person": person.name,
+                                        CONSTRAINT_FORECASTED_PERSON_KEY: person.name,
                                         CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_PERSON,
                                     },
                                     from_user=False,
@@ -3752,7 +3756,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(
                             time,
                             load_param=self.car.name,
-                            load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
+                            load_info={CONSTRAINT_FORECASTED_PERSON_KEY: "ANY_PERSON_OF_ANY_NAME"},
                             for_full_reset=False,
                         ):
                             do_force_solve = True
@@ -4382,7 +4386,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         type = CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
                 else:
                     if ct.end_of_constraint < DATETIME_MAX_UTC:
-                        if ct.load_info and "person" in ct.load_info:
+                        if ct.load_info and CONSTRAINT_FORECASTED_PERSON_KEY in ct.load_info:
                             type = CAR_CHARGE_TYPE_PERSON_AUTOMATED
                         elif (
                             ct.load_info and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_AGENDA

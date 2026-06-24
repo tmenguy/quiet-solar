@@ -1163,18 +1163,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         if charge_type == CAR_CHARGE_TYPE_PERSON_AUTOMATED:
             if self.current_forecasted_person is not None:
-                return f"Forecasted from {self.get_car_person_readable_forecast_mileage()}"
+                forecast = self.get_car_person_readable_forecast_mileage()
+                # QSPerson.get_forecast_readable_string() returns the "No forecast"
+                # sentinel when there is no mileage/leave-time prediction; surface a
+                # clean line instead of "Forecasted from <name>: No forecast".
+                if not forecast.endswith(": No forecast"):
+                    return f"Forecasted from {forecast}"
             return "No proper Forecast"
 
-        if charge_type == CAR_CHARGE_TYPE_CALENDAR:
-            assert ct is not None
-            target = ct.get_readable_next_target_date_string(for_small_standalone=True)
-            return f"Calendar · {target}"
+        if ct is not None:
+            if charge_type == CAR_CHARGE_TYPE_CALENDAR:
+                target = ct.get_readable_next_target_date_string(for_small_standalone=True)
+                return f"Calendar · {target}"
 
-        if charge_type == CAR_CHARGE_TYPE_MANUAL:
-            assert ct is not None
-            target = ct.get_readable_next_target_date_string(for_small_standalone=True)
-            return f"Manually set to {target}"
+            if charge_type == CAR_CHARGE_TYPE_MANUAL:
+                target = ct.get_readable_next_target_date_string(for_small_standalone=True)
+                return f"Manually set to {target}"
 
         if charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE:
             return "Automatically forced to charge as fast as possible"

@@ -14,6 +14,9 @@ from custom_components.quiet_solar.const import (
     CONF_MONO_PHASE,
     CONF_NUM_MAX_ON_OFF,
     CONF_POWER,
+    CONSTRAINT_FORECASTED_PERSON_KEY,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_PERSON,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
@@ -1913,6 +1916,56 @@ class Testclean_constraints_for_load_param_and_if_same_key_same_value_info:
         assert result is True
         assert len(load._constraints) == 1
         assert load._constraints[0].load_info == {"charger": "charger_1"}
+
+    def test_clean_constraints_person_only_cleanup_matches_dual_key_constraint(self):
+        """QS-274 AC2 — a cleanup call passing only {"person": name} still matches
+        (keeps) a person constraint that ALSO carries {originator: "person"}."""
+        load = self.create_load()
+        ct1 = self.create_constraint(
+            load,
+            load_param="car_A",
+            load_info={
+                CONSTRAINT_FORECASTED_PERSON_KEY: "Magali",
+                CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_PERSON,
+            },
+        )
+        load._constraints = [ct1]
+        load._last_completed_constraint = None
+
+        # the loose key-intersection matcher used by the cleanup path
+        assert (
+            load._match_ct(ct1, "car_A", {CONSTRAINT_FORECASTED_PERSON_KEY: "Magali"})
+            is True
+        )
+
+        # end-to-end: the constraint survives the cleanup (is kept / re-pushed)
+        time_now = datetime.now(tz=pytz.UTC)
+        load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
+            time_now, "car_A", {CONSTRAINT_FORECASTED_PERSON_KEY: "Magali"}
+        )
+
+        assert len(load._constraints) == 1
+        assert load._constraints[0].load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) == "Magali"
+        assert (
+            load._constraints[0].load_info.get(CONSTRAINT_ORIGINATOR_KEY)
+            == CONSTRAINT_ORIGINATOR_PERSON
+        )
+
+    def test_clean_constraints_person_only_cleanup_drops_other_person(self):
+        """A cleanup for a different person must NOT match the constraint."""
+        load = self.create_load()
+        ct1 = self.create_constraint(
+            load,
+            load_param="car_A",
+            load_info={
+                CONSTRAINT_FORECASTED_PERSON_KEY: "Magali",
+                CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_PERSON,
+            },
+        )
+        assert (
+            load._match_ct(ct1, "car_A", {CONSTRAINT_FORECASTED_PERSON_KEY: "Someone Else"})
+            is False
+        )
 
     def test_clean_constraints_with_load_info_conflicting(self):
         """Test constraints with conflicting load_info are removed."""

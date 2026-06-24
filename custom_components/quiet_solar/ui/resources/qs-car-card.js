@@ -877,7 +877,7 @@ class QsCarCard extends QsCardBase {
           "Not Charging": "mdi:battery-off",
           "Target Met": "mdi:battery-high",
           "Manual": "mdi:hand-back-right",
-          "Calendar" : "mdi:calendar",
+          "Calendar": "mdi:calendar",
           "As Fast As Possible": "mdi:rabbit",
           "Manual As Fast As Possible": "mdi:rabbit",
           "Solar Priority": "mdi:solar-power",

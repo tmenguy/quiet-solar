@@ -22,7 +22,7 @@ def card_source() -> str:
 def test_origin_icon_entries_present(card_source: str) -> None:
     """The origin-aware Mode icons are mapped in ``carChargeTypeIcons``."""
     assert '"Manual": "mdi:hand-back-right"' in card_source
-    assert '"Calendar" : "mdi:calendar"' in card_source
+    assert '"Calendar": "mdi:calendar"' in card_source
     assert '"As Fast As Possible": "mdi:rabbit"' in card_source
     assert '"Manual As Fast As Possible": "mdi:rabbit"' in card_source
     assert '"Person Automated": "mdi:account-clock"' in card_source
