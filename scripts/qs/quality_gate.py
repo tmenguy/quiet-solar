@@ -4,6 +4,8 @@
 Usage:
     python scripts/qs/quality_gate.py [--fix] [--json] [--cache] [--no-cache] [--full]
     python scripts/qs/quality_gate.py --quick PATH [PATH ...]
+    python scripts/qs/quality_gate.py --impacted
+    python scripts/qs/quality_gate.py --seed-testmon
 
 Options:
     --fix                    Auto-fix what can be fixed (ruff format, ruff check --fix)
@@ -15,6 +17,15 @@ Options:
                              or directories) with xdist + sysmon; skip ruff/mypy/
                              translations/coverage/cache/scope. Mutex with
                              --cache/--no-cache/--full/--fix.
+    --impacted               Inner-loop gate (QS-276): run only the testmon-selected
+                             tests under --cov=<package>, write coverage.xml, then
+                             diff-cover --fail-under=100 against the resolved diff
+                             base. Guarantees the lines YOU changed are 100% covered
+                             (the whole-repo 100% gate stays authoritative in CI).
+                             Mutex with --quick/--cache/--no-cache/--full/--fix.
+    --seed-testmon           Sanctioned non-gate subcommand: refresh .testmondata via
+                             `pytest --testmon` (no coverage, no pass/fail verdict).
+                             Used by finish-task to rebuild the main baseline.
 
 Smart scope detection:
     When only dev-infrastructure files are modified (tests/, legacy/, docs/,
@@ -24,8 +35,10 @@ Smart scope detection:
 
 Exit codes:
     0 = all gates pass
-    1 = one or more gates failed
+    1 = one or more gates failed (incl. --impacted changed-lines <100%)
     2 = argument parsing error (e.g., --quick with no paths, or mutex violation)
+    3 = required tooling missing (--impacted: testmon / diff-cover not importable)
+    4 = --impacted could not resolve a diff base in CI
 """
 
 from __future__ import annotations
@@ -34,6 +47,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -804,6 +818,195 @@ def _output_results(
                 print(f"FAILED gates: {', '.join(failed)}")
 
 
+# --- QS-276: impacted-tests inner loop (`--impacted`) + testmon seeding ---
+#
+# `--impacted` runs only the testmon-selected tests under
+# `--cov=custom_components/quiet_solar`, writes `coverage.xml`, and lets
+# `diff-cover` assert the CHANGED lines are 100% covered. The whole-repo
+# 100% gate stays authoritative in CI; this is the sub-~15s inner loop.
+
+COVERAGE_XML = REPO_ROOT / "coverage.xml"
+TESTMON_DATA = REPO_ROOT / ".testmondata"
+
+# Static decision (Design A): pytest-testmon 2.2.0 does not reliably
+# attribute per-test coverage across xdist workers, so the selection pass
+# runs serially. Measured worst case (a full select against a cold
+# `.testmondata`) approaches the warm full suite; a small diff selects a
+# handful of tests and finishes in seconds. A *runtime* probe would add an
+# uncoverable branch, so this is a module constant by design.
+_TESTMON_SUPPORTS_XDIST = False
+
+
+def _impacted_tooling_available() -> bool:
+    """Return True iff `testmon` AND `diff_cover` import from VENV_PYTHON.
+
+    Probes the venv interpreter (same reasoning as `_has_xdist`) so the
+    check reflects the environment pytest / diff-cover actually run in,
+    not the orchestrator's.
+    """
+    probe = (
+        "import importlib.util as u, sys; "
+        "sys.exit(0 if u.find_spec('testmon') and u.find_spec('diff_cover') else 1)"
+    )
+    return _run([VENV_PYTHON, "-c", probe]).returncode == 0
+
+
+def _is_ci() -> bool:
+    """Return True when running under CI (GitHub Actions sets `CI=true`)."""
+    return os.environ.get("CI", "").strip().lower() in ("1", "true")
+
+
+def _resolve_diff_base() -> str | None:
+    """Resolve the `--impacted` diff base via the fallback ladder.
+
+    Order: `origin/main` → `main` → merge-base of HEAD with the tracked
+    upstream. `origin/main` is fetched fresh first so the local
+    changed-line set matches CI's. Returns the resolved ref / sha, or
+    None when nothing resolves (offline / fresh worktree with no
+    upstream). The base is live git, independent of the seeded
+    `.testmondata`.
+    """
+    # Best-effort fresh fetch; ignore failure — an offline dev still
+    # resolves a local `main` or the upstream merge-base below.
+    _run(["git", "fetch", "origin", "main"])
+    for ref in ("origin/main", "main"):
+        if _run(["git", "rev-parse", "--verify", ref]).returncode == 0:
+            return ref
+    upstream = _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    tracked = upstream.stdout.strip()
+    if upstream.returncode == 0 and tracked:
+        mb = _run(["git", "merge-base", "HEAD", tracked])
+        sha = mb.stdout.strip()
+        if mb.returncode == 0 and sha:
+            return sha
+    return None
+
+
+def _ensure_testmon_db_safe() -> None:
+    """Delete `.testmondata` when it is not a readable SQLite database.
+
+    testmon recovers from a schema-version mismatch on its own (it
+    rebuilds and selects all tests), but a genuinely corrupt /
+    partially-written / non-SQLite file (a killed run, a dependency bump,
+    a path relocation) makes it raise `sqlite3.DatabaseError` mid-run
+    instead. Removing the file forces a clean rebuild → select-all,
+    honouring the 'never silently under-select' fail-safe.
+    """
+    if not TESTMON_DATA.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(TESTMON_DATA))
+        try:
+            conn.execute("PRAGMA schema_version").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.DatabaseError:
+        _emit("impacted", "corrupt .testmondata detected — removing to force select-all")
+        TESTMON_DATA.unlink()
+
+
+def _build_testmon_cmd() -> list[str]:
+    """Build the single-process testmon selection + coverage pytest argv.
+
+    Design A preferred path (Task 2 confirmed testmon ⊕ pytest-cov share
+    one process): the testmon-selected tests run under `--cov=<package>`,
+    the leading empty `--cov-report=` clears pytest.ini's term default
+    before the XML report, and there is NO `--cov-fail-under` — the 100%
+    verdict is delegated to diff-cover on the changed lines only (a
+    whole-tree subset run is always <100% and would otherwise fail before
+    diff-cover runs). xdist is gated on the static `_TESTMON_SUPPORTS_XDIST`
+    constant.
+    """
+    cmd = [
+        VENV_PYTHON,
+        "-m",
+        "pytest",
+        "--testmon",
+        f"--cov={SRC_DIR}",
+        "--cov-report=",
+        f"--cov-report=xml:{COVERAGE_XML}",
+        "-q",
+    ]
+    if _TESTMON_SUPPORTS_XDIST:
+        workers = _pytest_workers()
+        if workers is not None:
+            cmd.extend(["-n", workers])
+    return cmd
+
+
+def _build_diff_cover_cmd(base: str) -> list[str]:
+    """Build the diff-cover argv asserting changed lines are 100% covered."""
+    return [
+        _venv_tool("diff-cover"),
+        str(COVERAGE_XML),
+        f"--compare-branch={base}",
+        "--fail-under=100",
+    ]
+
+
+def check_impacted() -> int:
+    """Run the `--impacted` inner-loop gate; return the process exit code.
+
+    Pipeline: tooling probe → diff-base ladder → testmon-selected tests
+    under `--cov` (writes coverage.xml) → diff-cover --fail-under=100 on
+    the changed lines.
+
+    Exit codes: 0 pass · 1 selected-test failure OR diff-coverage <100% ·
+    3 testmon / diff-cover not importable · 4 no diff base resolvable in
+    CI (warn-and-skip → 0 locally so an offline dev isn't blocked).
+
+    Fail-safe: a corrupt / schema-incompatible `.testmondata` makes
+    testmon select *all* tests (its native recovery), never silently
+    under-select.
+    """
+    if not _impacted_tooling_available():
+        _emit("impacted", "pytest-testmon / diff-cover not importable — install requirements_test.txt")
+        return 3
+
+    base = _resolve_diff_base()
+    if base is None:
+        if _is_ci():
+            _emit("impacted", "no diff base (origin/main) resolvable in CI")
+            return 4
+        _emit("impacted", "no diff base resolvable — skipping diff-coverage check (offline/fresh worktree)")
+        return 0
+
+    _ensure_testmon_db_safe()
+    _emit("impacted", f"selecting impacted tests (testmon) vs base {base}")
+    result = _stream_pytest(_build_testmon_cmd())
+    if not result["passed"]:
+        _emit("impacted", "FAIL (selected tests failed)")
+        return 1
+
+    dc = _run(_build_diff_cover_cmd(base))
+    sys.stdout.write(dc.stdout)
+    sys.stdout.flush()
+    if dc.returncode != 0:
+        _emit("impacted", "FAIL (changed lines <100% covered)")
+        sys.stderr.write(dc.stderr)
+        sys.stderr.flush()
+        return 1
+    _emit("impacted", "PASS (changed lines 100% covered)")
+    return 0
+
+
+def seed_testmon() -> int:
+    """Refresh `.testmondata` via `pytest --testmon`; no coverage, no verdict.
+
+    Sanctioned non-gate subcommand (see the project-rules raw-`pytest`
+    carve-out) used by `finish-task` to rebuild the main-worktree
+    baseline after a merge. Returns 0 once the selection completes (a
+    failing test still updates the DB — there is no pass/fail verdict);
+    returns 3 when testmon is not importable.
+    """
+    if not _impacted_tooling_available():
+        _emit("seed-testmon", "pytest-testmon not importable — skipping")
+        return 3
+    _emit("seed-testmon", "refreshing .testmondata (pytest --testmon)")
+    _stream_pytest([VENV_PYTHON, "-m", "pytest", "--testmon", "-q"])
+    return 0
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run quality gates")
     parser.add_argument("--fix", action="store_true", help="Auto-fix formatting/lint issues")
@@ -821,6 +1024,20 @@ def main() -> None:
             "translations/coverage."
         ),
     )
+    parser.add_argument(
+        "--impacted",
+        action="store_true",
+        help=(
+            "Inner-loop gate: testmon-selected tests under --cov, then "
+            "diff-cover --fail-under=100 on the changed lines. Mutex with "
+            "--quick/--cache/--no-cache/--full/--fix."
+        ),
+    )
+    parser.add_argument(
+        "--seed-testmon",
+        action="store_true",
+        help="Refresh .testmondata via `pytest --testmon` (no coverage, no verdict).",
+    )
     args = parser.parse_args()
 
     # --quick is mutually exclusive with cache/full/fix. argparse's nargs="+"
@@ -830,6 +1047,14 @@ def main() -> None:
     if args.quick and (args.cache or args.no_cache or args.full or args.fix):
         parser.error(
             "you cannot combine --quick with --cache, --no-cache, --full, or --fix"
+        )
+
+    # --impacted joins the same mutex: it is a self-contained inner-loop
+    # gate with its own selection + coverage semantics, incompatible with
+    # the cache/scope/fix machinery and with --quick's bare-pytest run.
+    if args.impacted and (args.quick or args.cache or args.no_cache or args.full or args.fix):
+        parser.error(
+            "you cannot combine --impacted with --quick, --cache, --no-cache, --full, or --fix"
         )
 
     # Review-fix #01 finding 8 — `--quick ""` would otherwise resolve to
@@ -866,6 +1091,16 @@ def main() -> None:
             scope="quick",
         )
         sys.exit(0 if result["passed"] else 1)
+
+    # --impacted short-circuits before scope detection / caching, exactly
+    # like --quick: it is its own gate with a bespoke exit-code table.
+    if args.impacted:
+        sys.exit(check_impacted())
+
+    # --seed-testmon is a non-gate maintenance subcommand: refresh the DB
+    # and exit, never touching scope detection or the coverage gate.
+    if args.seed_testmon:
+        sys.exit(seed_testmon())
 
     use_cache = args.cache and not args.fix and not args.no_cache
 

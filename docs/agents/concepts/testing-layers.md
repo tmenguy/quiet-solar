@@ -7,7 +7,7 @@ covers:
   - tests/factories.py
   - tests/ha_tests/conftest.py
   - tests/ha_tests/const.py
-last_verified: 2026-05-19
+last_verified: 2026-06-24
 ---
 
 # Testing layers — FakeHass, factories, and real HA fixtures
@@ -59,6 +59,34 @@ stay in sync or tests pass while testing the wrong thing.
 testing. A solver bug is a domain test; a config-flow bug is an HA
 test. Don't run the slow layer for logic that the fast layer can
 cover.
+
+## Test-impact inner loop — `--impacted` (QS-276)
+
+Orthogonal to the two *layers* above is a third *execution mode* for
+the dev loop: `python scripts/qs/quality_gate.py --impacted`. It uses
+`pytest-testmon` to run **only the tests impacted by your change set**
+(across both layers), under `--cov=custom_components/quiet_solar`, then
+`diff-cover --fail-under=100` asserts the **lines you changed** are
+100% covered. On a small diff this is seconds instead of minutes, so it
+is the implement-phase default before commit/PR.
+
+**The split that makes this safe.** Whole-repo "100% on every PR" is
+NON-NEGOTIABLE — and a test-impact subset can never prove it. So the
+guarantee is split: `--impacted` proves *changed lines* locally; the
+**whole-repo 100% gate runs authoritatively in CI** on every PR.
+
+**Hard limitation — read this.** `--impacted` guarantees the lines you
+*changed* are covered. It does **not** detect coverage lost in
+*unchanged* code — e.g. deleting a test that was the sole cover of an
+untouched line drops whole-repo coverage but changes no measured line,
+so `--impacted` stays green. Only CI's whole-repo gate catches that.
+Never treat a green `--impacted` as a substitute for the CI gate.
+
+Fail-safe: a corrupt / non-SQLite `.testmondata` makes the gate select
+*all* tests (rebuild from scratch), never silently under-select. New
+worktrees seed `.testmondata` + `.mypy_cache` from the main worktree
+(`worktree-setup.sh`); `finish-task` refreshes the main baseline via
+`--seed-testmon` after a merge.
 
 ## Key types / structures
 

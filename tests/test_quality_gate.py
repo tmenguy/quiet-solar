@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -1670,10 +1673,9 @@ class TestQuickMode:
             quality_gate.main()
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert (
-            "you cannot combine --quick with --cache, --no-cache, --full, or --fix"
-            in err
-        ), f"mutex message missing/changed: {err!r}"
+        assert "you cannot combine --quick with --cache, --no-cache, --full, or --fix" in err, (
+            f"mutex message missing/changed: {err!r}"
+        )
 
     @pytest.mark.parametrize(
         ("workers_value", "expected_in_cmd"),
@@ -1708,9 +1710,7 @@ class TestQuickMode:
         )
         if expected_in_cmd:
             n_idx = cmd.index("-n")
-            assert cmd[n_idx + 1] == workers_value, (
-                f"-n value mismatch; want {workers_value!r}, got {cmd[n_idx + 1]!r}"
-            )
+            assert cmd[n_idx + 1] == workers_value, f"-n value mismatch; want {workers_value!r}, got {cmd[n_idx + 1]!r}"
 
     def test_quick_collect_only_uses_cited_paths_not_tests_dir(
         self,
@@ -1754,9 +1754,7 @@ class TestQuickMode:
         # The cited file (resolved against REPO_ROOT) must appear in the count
         # cmd; the full tests/ tree path must NOT.
         cited = str(quality_gate.REPO_ROOT / "tests/test_factories_pytest_opt_out.py")
-        assert cited in collect_cmd, (
-            f"collect-only cmd must include the cited path {cited!r}; got {collect_cmd!r}"
-        )
+        assert cited in collect_cmd, f"collect-only cmd must include the cited path {cited!r}; got {collect_cmd!r}"
         assert str(quality_gate.TESTS_DIR) not in collect_cmd, (
             f"collect-only cmd must NOT walk full TESTS_DIR; got {collect_cmd!r}"
         )
@@ -1822,9 +1820,7 @@ class TestQuickMode:
             quality_gate.main()
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert "must be inside the repo" in err, (
-            f"path-escape message missing/changed: {err!r}"
-        )
+        assert "must be inside the repo" in err, f"path-escape message missing/changed: {err!r}"
         assert bad_path in err, f"offending path must appear in error: {err!r}"
 
     @pytest.mark.parametrize(
@@ -1851,9 +1847,7 @@ class TestQuickMode:
             quality_gate.main()
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
-        assert "must be non-empty" in err, (
-            f"empty-path message missing/changed: {err!r}"
-        )
+        assert "must be non-empty" in err, f"empty-path message missing/changed: {err!r}"
 
 
 # --- QS-208 T1.1: _is_ui_asset detector ---
@@ -1865,17 +1859,9 @@ class TestIsUIAsset:
     def test_recognizes_j2_template_anywhere_under_ui(self) -> None:
         """Both top-level and nested `.j2` files under `ui/` count as UI assets."""
         assert (
-            quality_gate._is_ui_asset(
-                "custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2"
-            )
-            is True
+            quality_gate._is_ui_asset("custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2") is True
         )
-        assert (
-            quality_gate._is_ui_asset(
-                "custom_components/quiet_solar/ui/subdir/partial.j2"
-            )
-            is True
-        )
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/ui/subdir/partial.j2") is True
 
     def test_recognizes_any_file_under_resources(self) -> None:
         """Any file under `ui/resources/` is a UI asset, regardless of extension.
@@ -1884,48 +1870,21 @@ class TestIsUIAsset:
         `.py` file there is treated as a UI asset (and would be a category error
         — Python code belongs outside `resources/`).
         """
-        assert (
-            quality_gate._is_ui_asset(
-                "custom_components/quiet_solar/ui/resources/qs-car-card.js"
-            )
-            is True
-        )
-        assert (
-            quality_gate._is_ui_asset(
-                "custom_components/quiet_solar/ui/resources/sub/nested.css"
-            )
-            is True
-        )
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/ui/resources/qs-car-card.js") is True
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/ui/resources/sub/nested.css") is True
         # Convention-documenting test: nothing should be .py here, but if it
         # is, it still routes through the UI fast path. Users should move it.
-        assert (
-            quality_gate._is_ui_asset(
-                "custom_components/quiet_solar/ui/resources/hypothetical.py"
-            )
-            is True
-        )
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/ui/resources/hypothetical.py") is True
 
     def test_rejects_python_at_ui_root(self) -> None:
         """`.py` files directly under `ui/` are Python production code, not UI assets."""
-        assert (
-            quality_gate._is_ui_asset("custom_components/quiet_solar/ui/dashboard.py")
-            is False
-        )
-        assert (
-            quality_gate._is_ui_asset("custom_components/quiet_solar/ui/__init__.py")
-            is False
-        )
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/ui/dashboard.py") is False
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/ui/__init__.py") is False
 
     def test_rejects_paths_outside_ui(self) -> None:
         """Files outside `custom_components/quiet_solar/ui/` are never UI assets."""
-        assert (
-            quality_gate._is_ui_asset("custom_components/quiet_solar/home_model/foo.py")
-            is False
-        )
-        assert (
-            quality_gate._is_ui_asset("custom_components/quiet_solar/ha_model/bar.py")
-            is False
-        )
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/home_model/foo.py") is False
+        assert quality_gate._is_ui_asset("custom_components/quiet_solar/ha_model/bar.py") is False
         assert quality_gate._is_ui_asset("tests/test_baz.py") is False
         assert quality_gate._is_ui_asset("scripts/qs/quality_gate.py") is False
 
@@ -1938,9 +1897,7 @@ class TestDetectScopeUIOnly:
 
     def test_returns_ui_only_when_only_j2_changed(self) -> None:
         """Diff of one `.j2` template → scope is `"ui-only"`."""
-        info = quality_gate._detect_scope(
-            ["custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2"]
-        )
+        info = quality_gate._detect_scope(["custom_components/quiet_solar/ui/quiet_solar_dashboard_template.yaml.j2"])
         assert info["scope"] == "ui-only"
         assert info["changed_test_files"] == []
 
@@ -2074,9 +2031,7 @@ class TestUIOnlyMainBranch:
         ):
             quality_gate.main()
 
-        mock_pytest_files.assert_called_once_with(
-            ["tests/test_dashboard_rendering.py", "tests/test_other.py"]
-        )
+        mock_pytest_files.assert_called_once_with(["tests/test_dashboard_rendering.py", "tests/test_other.py"])
 
     def test_full_flag_overrides_ui_only_scope(
         self,
@@ -2106,3 +2061,461 @@ class TestUIOnlyMainBranch:
             m.assert_called()
         # The UI fast-path pytest must NOT have been called.
         mock_pytest_files.assert_not_called()
+
+
+# ===========================================================================
+# QS-276 — `--impacted` inner loop + `--seed-testmon`
+# ===========================================================================
+
+
+def _cp(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
+    """Build a CompletedProcess stand-in for mocking `quality_gate._run`."""
+    return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+class TestImpactedToolingAvailable:
+    """`_impacted_tooling_available` probes the venv for testmon + diff_cover."""
+
+    @pytest.mark.parametrize(
+        ("probe_rc", "expected"),
+        [(0, True), (1, False)],
+        ids=["both-importable", "missing"],
+    )
+    def test_probe_result_maps_to_bool(self, probe_rc: int, expected: bool) -> None:
+        with patch.object(quality_gate, "_run", return_value=_cp(probe_rc)) as mock_run:
+            assert quality_gate._impacted_tooling_available() is expected
+        # Probes the venv interpreter, not the orchestrator.
+        cmd = mock_run.call_args.args[0]
+        assert cmd[0] == quality_gate.VENV_PYTHON
+        assert "diff_cover" in cmd[-1] and "testmon" in cmd[-1]
+
+
+class TestIsCi:
+    """`_is_ci` recognizes the GitHub Actions `CI` env var."""
+
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [("true", True), ("1", True), ("TRUE", True), ("  true ", True), ("false", False), ("0", False), ("", False)],
+    )
+    def test_ci_env(self, value: str, expected: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CI", value)
+        assert quality_gate._is_ci() is expected
+
+    def test_ci_unset_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CI", raising=False)
+        assert quality_gate._is_ci() is False
+
+
+class TestResolveDiffBase:
+    """`_resolve_diff_base` walks origin/main → main → upstream merge-base."""
+
+    @staticmethod
+    def _router(
+        rev_parse: dict[str, int], *, upstream: tuple[int, str] = (1, ""), merge_base: tuple[int, str] = (1, "")
+    ):
+        """Build a `_run` side_effect keyed on the git subcommand."""
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:2] == ["git", "fetch"]:
+                return _cp(0)
+            if cmd[:3] == ["git", "rev-parse", "--verify"]:
+                return _cp(rev_parse.get(cmd[3], 1))
+            if cmd[:2] == ["git", "rev-parse"]:  # @{u} upstream lookup
+                return _cp(upstream[0], stdout=upstream[1])
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(merge_base[0], stdout=merge_base[1])
+            raise AssertionError(f"unexpected cmd {cmd!r}")
+
+        return _side_effect
+
+    def test_origin_main_wins(self) -> None:
+        with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 0, "main": 0})):
+            assert quality_gate._resolve_diff_base() == "origin/main"
+
+    def test_fetches_origin_main_first(self) -> None:
+        with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 0})) as mock_run:
+            quality_gate._resolve_diff_base()
+        first = mock_run.call_args_list[0].args[0]
+        assert first == ["git", "fetch", "origin", "main"]
+
+    def test_falls_back_to_local_main(self) -> None:
+        with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 1, "main": 0})):
+            assert quality_gate._resolve_diff_base() == "main"
+
+    def test_falls_back_to_upstream_merge_base(self) -> None:
+        router = self._router(
+            {"origin/main": 1, "main": 1},
+            upstream=(0, "origin/feature"),
+            merge_base=(0, "deadbeefcafe"),
+        )
+        with patch.object(quality_gate, "_run", side_effect=router):
+            assert quality_gate._resolve_diff_base() == "deadbeefcafe"
+
+    def test_none_when_no_upstream(self) -> None:
+        router = self._router({"origin/main": 1, "main": 1}, upstream=(1, ""))
+        with patch.object(quality_gate, "_run", side_effect=router):
+            assert quality_gate._resolve_diff_base() is None
+
+    def test_none_when_merge_base_fails(self) -> None:
+        router = self._router(
+            {"origin/main": 1, "main": 1},
+            upstream=(0, "origin/feature"),
+            merge_base=(1, ""),
+        )
+        with patch.object(quality_gate, "_run", side_effect=router):
+            assert quality_gate._resolve_diff_base() is None
+
+
+class TestEnsureTestmonDbSafe:
+    """`_ensure_testmon_db_safe` deletes only a non-SQLite `.testmondata`."""
+
+    def test_absent_is_noop(self, tmp_path: Path) -> None:
+        db = tmp_path / ".testmondata"
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            quality_gate._ensure_testmon_db_safe()  # must not raise
+        assert not db.exists()
+
+    def test_valid_sqlite_is_kept(self, tmp_path: Path) -> None:
+        db = tmp_path / ".testmondata"
+        conn = sqlite3.connect(str(db))
+        conn.execute("CREATE TABLE t (x)")
+        conn.commit()
+        conn.close()
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            quality_gate._ensure_testmon_db_safe()
+        assert db.exists(), "a valid SQLite DB must be preserved"
+
+    def test_corrupt_db_is_removed(self, tmp_path: Path) -> None:
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"this is not a sqlite database")
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            quality_gate._ensure_testmon_db_safe()
+        assert not db.exists(), "corrupt .testmondata must be removed to force select-all"
+
+
+class TestBuildImpactedCmds:
+    """Pure argv builders for the `--impacted` seam."""
+
+    def test_testmon_cmd_default_serial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", False)
+        cmd = quality_gate._build_testmon_cmd()
+        assert cmd[:4] == [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon"]
+        assert f"--cov={quality_gate.SRC_DIR}" in cmd
+        # Empty --cov-report= must precede the xml report (clears pytest.ini).
+        assert cmd.index("--cov-report=") < cmd.index(f"--cov-report=xml:{quality_gate.COVERAGE_XML}")
+        assert "--cov-fail-under=100" not in cmd  # verdict is diff-cover's job
+        assert "-n" not in cmd  # static serial decision
+
+    def test_testmon_cmd_adds_workers_when_xdist_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", True)
+        with patch.object(quality_gate, "_pytest_workers", return_value="auto"):
+            cmd = quality_gate._build_testmon_cmd()
+        assert cmd[cmd.index("-n") + 1] == "auto"
+
+    def test_testmon_cmd_serial_when_xdist_enabled_but_workers_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", True)
+        with patch.object(quality_gate, "_pytest_workers", return_value=None):
+            cmd = quality_gate._build_testmon_cmd()
+        assert "-n" not in cmd
+
+    def test_diff_cover_cmd(self) -> None:
+        cmd = quality_gate._build_diff_cover_cmd("origin/main")
+        assert cmd == [
+            quality_gate._venv_tool("diff-cover"),
+            str(quality_gate.COVERAGE_XML),
+            "--compare-branch=origin/main",
+            "--fail-under=100",
+        ]
+
+
+class TestCheckImpacted:
+    """`check_impacted` orchestrator + exit-code mapping (mocked seam)."""
+
+    def test_tooling_missing_returns_3(self) -> None:
+        with patch.object(quality_gate, "_impacted_tooling_available", return_value=False):
+            assert quality_gate.check_impacted() == 3
+
+    def test_no_base_in_ci_returns_4(self) -> None:
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            assert quality_gate.check_impacted() == 4
+
+    def test_no_base_locally_warns_and_passes(self) -> None:
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+        ):
+            assert quality_gate.check_impacted() == 0
+
+    def test_selected_tests_fail_returns_1(self) -> None:
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": False}),
+            patch.object(quality_gate, "_run") as mock_run,
+        ):
+            assert quality_gate.check_impacted() == 1
+        mock_run.assert_not_called()  # diff-cover never runs if tests failed
+
+    def test_diff_coverage_below_100_returns_1(self) -> None:
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
+        ):
+            assert quality_gate.check_impacted() == 1
+
+    def test_pass_returns_0(self) -> None:
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe") as mock_safe,
+            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_run", return_value=_cp(0, stdout="Coverage: 100%")) as mock_run,
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_safe.assert_called_once()
+        dc_cmd = mock_run.call_args.args[0]
+        assert dc_cmd[2] == "--compare-branch=origin/main"
+
+
+class TestSeedTestmon:
+    """`seed_testmon` refreshes the DB with no pass/fail verdict."""
+
+    def test_tooling_missing_returns_3(self) -> None:
+        with patch.object(quality_gate, "_impacted_tooling_available", return_value=False):
+            assert quality_gate.seed_testmon() == 3
+
+    def test_success_returns_0_regardless_of_test_outcome(self) -> None:
+        # Even a failing selection still updates the DB → seed returns 0.
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_stream_pytest", return_value={"passed": False}) as mock_stream,
+        ):
+            assert quality_gate.seed_testmon() == 0
+        cmd = mock_stream.call_args.args[0]
+        assert cmd == [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon", "-q"]
+
+
+class TestImpactedCli:
+    """`main()` wiring: short-circuit, exit-code passthrough, mutex."""
+
+    @pytest.mark.parametrize("exit_code", [0, 1, 3, 4], ids=["pass", "fail", "tooling", "no-base"])
+    def test_impacted_exits_with_check_impacted_code(self, exit_code: int) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--impacted"]),
+            patch.object(quality_gate, "check_impacted", return_value=exit_code) as mock_check,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == exit_code
+        mock_check.assert_called_once_with()
+
+    def test_impacted_short_circuits_before_scope_and_cache(self) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--impacted"]),
+            patch.object(quality_gate, "check_impacted", return_value=0),
+            patch.object(quality_gate, "_detect_scope") as mock_scope,
+            patch.object(quality_gate, "_read_cache") as mock_cache,
+            patch.object(quality_gate, "_get_changed_files") as mock_changed,
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        for m in (mock_scope, mock_cache, mock_changed):
+            m.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "conflict",
+        [["--cache"], ["--no-cache"], ["--full"], ["--fix"], ["--quick", "tests/test_x.py"]],
+        ids=["cache", "no-cache", "full", "fix", "quick"],
+    )
+    def test_impacted_mutex_exits_2(self, conflict: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--impacted", *conflict]),
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        assert "you cannot combine --impacted with" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("seed_code", [0, 3], ids=["ok", "tooling-missing"])
+    def test_seed_testmon_cli_passthrough(self, seed_code: int) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon"]),
+            patch.object(quality_gate, "seed_testmon", return_value=seed_code) as mock_seed,
+            patch.object(quality_gate, "_detect_scope") as mock_scope,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == seed_code
+        mock_seed.assert_called_once_with()
+        mock_scope.assert_not_called()
+
+
+class TestImpactedDeps:
+    """Regression guards for requirements_test.txt + .gitignore (AC#1)."""
+
+    def test_testmon_and_diff_cover_pinned(self) -> None:
+        reqs = (Path(__file__).resolve().parent.parent / "requirements_test.txt").read_text()
+        assert "pytest-testmon==" in reqs
+        assert "diff-cover==" in reqs
+
+    def test_testmondata_gitignored(self) -> None:
+        gi = (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
+        assert any(line.strip() == ".testmondata" for line in gi.splitlines())
+
+
+class TestWorktreeSetupSeedsCaches:
+    """AC#8: worktree-setup.sh copies (never symlinks) .testmondata + .mypy_cache."""
+
+    def _script(self) -> str:
+        return (Path(__file__).resolve().parent.parent / "scripts" / "worktree-setup.sh").read_text()
+
+    def test_copies_both_caches(self) -> None:
+        body = self._script()
+        assert ".mypy_cache" in body and ".testmondata" in body
+        assert "cp -R" in body, "caches must be copied, not symlinked"
+
+    def test_warns_when_absent(self) -> None:
+        assert "Warning:" in self._script() and "absent in main worktree" in self._script()
+
+
+class TestFinishTaskRefreshesBaseline:
+    """AC#9: all three finish-task harness copies refresh via --seed-testmon."""
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_seed_testmon_refresh_present(self, harness: str) -> None:
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        assert "--seed-testmon" in body
+        assert "git worktree list --porcelain" in body  # MAIN_DIR captured before cleanup
+        assert "nohup" in body  # detached / best-effort
+
+
+class TestImplementAgentsDefaultImpacted:
+    """AC#10: implement agents default to --impacted; review-task untouched."""
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("agent", ["qs-implement-task", "qs-implement-setup-task"])
+    def test_implement_agents_use_impacted(self, harness: str, agent: str) -> None:
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / f"{agent}.md").read_text()
+        assert "quality_gate.py --impacted" in body
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_review_task_untouched_by_impacted(self, harness: str) -> None:
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-review-task.md").read_text()
+        assert "--impacted" not in body
+
+
+def _run_testmon(repo: Path, *, cov: bool = False, xml: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Run `pytest --testmon` in an isolated subprocess inside `repo`.
+
+    Plugin autoload is disabled so the host's pytest-homeassistant /
+    asyncio plugin stack can't crash collection in the throwaway repo;
+    testmon (and pytest-cov when measuring) are loaded explicitly.
+    cacheprovider is a pytest builtin and stays loaded.
+    """
+    env = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
+    cmd = [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon", "-q", "-p", "testmon.pytest_testmon"]
+    if cov:
+        assert xml is not None
+        cmd += ["-p", "pytest_cov", "--cov=pkg", "--cov-report=", f"--cov-report=xml:{xml}"]
+    return subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, env=env)
+
+
+def _selected_count(result: subprocess.CompletedProcess[str]) -> int:
+    """Parse the number of tests testmon actually ran from pytest output."""
+    out = result.stdout
+    if "no tests ran" in out:
+        return 0
+    m = __import__("re").search(r"(\d+) passed", out)
+    return int(m.group(1)) if m else -1
+
+
+@pytest.mark.integration
+class TestImpactedIntegrationRealTestmon:
+    """AC#5/#6/#7: genuine testmon block-fingerprinting in a throwaway repo.
+
+    These exercise REAL pytest-testmon + diff-cover (no mocks) to prove
+    the correctness basis of `--impacted`: a changed line is "covered"
+    iff a selected test ran it, and testmon selects a superset of the
+    tests that cover the diff.
+    """
+
+    @pytest.fixture
+    def repo(self, tmp_path: Path) -> Path:
+        if not quality_gate._impacted_tooling_available():
+            pytest.skip("pytest-testmon / diff-cover not importable")
+        repo = tmp_path / "repo"
+        (repo / "pkg").mkdir(parents=True)
+        (repo / "tests").mkdir()
+        (repo / "pkg" / "__init__.py").write_text("")
+        (repo / "pkg" / "calc.py").write_text("X = 1\n\n\ndef add(a, b):\n    return a + b\n")
+        (repo / "pkg" / "isolated_const.py").write_text("UNUSED = 1\n")
+        (repo / "tests" / "test_calc.py").write_text(
+            "from pkg.calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"
+        )
+        for args in (
+            ["init", "-q"],
+            ["config", "user.email", "t@t.co"],
+            ["config", "user.name", "t"],
+            ["add", "-A"],
+            ["commit", "-qm", "base"],
+        ):
+            subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True, text=True)
+        # Seed the testmon baseline (selects all → records coverage).
+        seed = _run_testmon(repo)
+        assert _selected_count(seed) == 1, seed.stdout + seed.stderr
+        return repo
+
+    def test_noop_selects_zero(self, repo: Path) -> None:
+        """Nothing changed since the seed → testmon selects zero tests."""
+        assert _selected_count(_run_testmon(repo)) == 0
+
+    def test_edit_to_uncovered_code_selects_zero(self, repo: Path) -> None:
+        """AC#5: a new constant in a module no test exercises selects zero."""
+        (repo / "pkg" / "isolated_const.py").write_text("UNUSED = 1\nNEW_CONST = 2\n")
+        assert _selected_count(_run_testmon(repo)) == 0
+
+    def test_edit_to_covered_code_reselects_its_test(self, repo: Path) -> None:
+        """Superset property: editing a covered function reselects its test."""
+        (repo / "pkg" / "calc.py").write_text("X = 1\n\n\ndef add(a, b):\n    return a + b + 0\n")
+        assert _selected_count(_run_testmon(repo)) == 1
+
+    def test_new_untested_function_fails_diff_cover(self, repo: Path) -> None:
+        """AC#6: a new untested function → 0% on the new lines → diff-cover fails."""
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True
+        ).stdout.strip()
+        (repo / "pkg" / "calc.py").write_text(
+            "X = 1\n\n\ndef add(a, b):\n    return a + b\n\n\ndef untested(z):\n    return z * 99\n"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-qm", "untested"], cwd=str(repo), check=True, capture_output=True, text=True)
+        xml = repo / "coverage.xml"
+        _run_testmon(repo, cov=True, xml=xml)
+        assert xml.exists()
+        dc = subprocess.run(
+            [quality_gate._venv_tool("diff-cover"), str(xml), f"--compare-branch={base}", "--fail-under=100"],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+        )
+        assert dc.returncode != 0, f"diff-cover should fail on the untested function:\n{dc.stdout}"
+
+    def test_corrupt_db_selects_all(self, repo: Path) -> None:
+        """AC#7: a corrupt .testmondata → fail-safe deletes it → select-all."""
+        db = repo / ".testmondata"
+        db.write_bytes(b"not a sqlite database")
+        # Mirror check_impacted's fail-safe against the throwaway DB.
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            quality_gate._ensure_testmon_db_safe()
+        assert not db.exists()
+        # With the corrupt DB gone, testmon rebuilds and selects all tests.
+        assert _selected_count(_run_testmon(repo)) == 1

@@ -315,6 +315,28 @@ if [ -d "${MAIN_DIR}/custom_components" ]; then
     done
 fi
 
+# QS-276: seed cold-start caches from the main worktree so the first
+# inner-loop run is fast. COPY (never symlink) — both are written during
+# runs, and a shared symlink would corrupt across concurrent worktrees:
+#   - .mypy_cache kills the ~16s cold-mypy on a fresh worktree;
+#   - .testmondata gives `--impacted` a warm test-impact baseline (a
+#     path-relocated DB degrades to "select more", never fewer).
+# Copy-if-present / warn-if-absent: a missing cache means main never ran
+# the gate / `--seed-testmon` yet, which only costs a slow first loop.
+for cache in .mypy_cache .testmondata; do
+    src="${MAIN_DIR}/${cache}"
+    dst="${WORKTREE_DIR}/${cache}"
+    if [ -e "$src" ]; then
+        if [ ! -e "$dst" ]; then
+            cp -R "$src" "$dst"
+            echo "Seeded ${cache} from main worktree"
+        fi
+    else
+        echo "Warning: ${cache} absent in main worktree — first inner-loop run will be slower"
+        echo "  (run 'python scripts/qs/quality_gate.py' or '--seed-testmon' in ${MAIN_DIR} to populate it)"
+    fi
+done
+
 # Verify the worktree's HEAD landed on the expected branch. A downstream
 # session (e.g. Claude Desktop auto-isolation) that creates its own
 # worktree on top of this one inherits HEAD — if HEAD is wrong here, the

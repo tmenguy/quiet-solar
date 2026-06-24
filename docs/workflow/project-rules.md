@@ -20,12 +20,20 @@ it owns the cache, `pytest-xdist` parallelization,
 all four; use it only for ad-hoc single-node debugging.
 
 ```bash
+# Impacted-tests inner loop (QS-276) — the implement-phase default
+# before commit/PR. Runs only the testmon-selected tests under
+# --cov=<package>, then diff-cover --fail-under=100 on the CHANGED
+# lines. Guarantees the lines YOU changed are 100% covered in ~seconds.
+python scripts/qs/quality_gate.py --impacted
+
 # Full quality gate (pytest 100% cov + ruff + mypy + translations).
-# Required before every commit.
+# Authoritative whole-repo gate — enforced in CI on every PR; run
+# locally on explicit request or when you suspect coverage lost in
+# UNCHANGED code (which --impacted cannot see).
 python scripts/qs/quality_gate.py
 
-# Recommended default for repeated dev-loop runs — skips gates when
-# git state matches a previous pass on a clean tree.
+# Caching for repeated FULL-gate runs — skips gates when git state
+# matches a previous pass on a clean tree.
 python scripts/qs/quality_gate.py --cache
 
 # Auto-fix formatting and lint.
@@ -34,16 +42,32 @@ python scripts/qs/quality_gate.py --fix
 # JSON output for scripts.
 python scripts/qs/quality_gate.py --json
 
-# Fast iteration on one or more test paths (files or directories).
+# Fast iteration on one or more EXPLICIT test paths (files or dirs).
 # Uses xdist + sysmon, skips coverage / ruff / mypy / translations.
-# The canonical TDD red/green/refactor command.
+# The canonical TDD red/green/refactor command while you iterate on a
+# known test target; --impacted is the pre-commit gate that finds the
+# impacted tests for you.
 python scripts/qs/quality_gate.py --quick tests/test_solver.py
 python scripts/qs/quality_gate.py --quick tests/ha_tests
 python scripts/qs/quality_gate.py --quick tests/test_solver.py tests/test_constraints.py
 
+# Refresh the testmon baseline (no coverage, no verdict). Sanctioned
+# non-gate subcommand — used by finish-task after a merge.
+python scripts/qs/quality_gate.py --seed-testmon
+
 # Ad-hoc single-node pytest — debugging only.
 source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 ```
+
+**Local-vs-CI coverage invariant (QS-276).** Local commits run
+`--impacted` (the lines you changed are 100% covered); the **whole-repo
+100% coverage** requirement is enforced in **CI on every PR** and is
+what actually guarantees full coverage. The three iteration commands
+relate as: `--impacted` is the pre-commit default (finds + runs the
+impacted tests, checks changed-line coverage); `--quick` is for hammering
+an explicit test path you already know; `--cache` accelerates repeated
+*full*-gate runs. `--impacted` is mutually exclusive with
+`--quick`/`--cache`/`--no-cache`/`--full`/`--fix`.
 
 **Raw-`pytest` grammar rule.** Allowed: `pytest <path>::<nodeid> [-v]`
 — the positional argument MUST contain `::`. Forbidden as a habitual
@@ -51,6 +75,14 @@ command: any `pytest` invocation whose positional argument lacks
 `::`, e.g., `pytest tests/`, `pytest tests/ha_tests`,
 `pytest tests/test_foo.py`. Use `--quick` on the enclosing file or
 directory instead.
+
+**Carve-out — `--seed-testmon` (QS-276).** The one sanctioned
+whole-suite-ish `pytest --testmon` invocation is routed through
+`quality_gate.py --seed-testmon`, never run as a raw `pytest`. It keeps
+`quality_gate.py` the single pytest owner: it only refreshes
+`.testmondata` (no coverage, no pass/fail verdict) and is invoked
+detached/best-effort by `finish-task` to rebuild the main baseline
+after a merge. A bare `pytest --testmon` remains forbidden.
 
 **UI-only fast path.** When only `custom_components/quiet_solar/ui/*.j2`
 templates and `custom_components/quiet_solar/ui/resources/**` assets

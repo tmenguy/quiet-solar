@@ -66,8 +66,9 @@ Red → green → refactor. For every cycle:
 
 Verify with `python scripts/qs/quality_gate.py --quick <path>` during
 the inner loop (the canonical TDD command; accepts files,
-directories, or both). The full quality gate runs at step 4 before
-commit. See the `## Commands` section of
+directories, or both). The `--impacted` gate runs at step 4 before
+commit (changed lines 100%); the whole-repo 100% gate is enforced in
+CI on every PR. See the `## Commands` section of
 [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 for the full command grammar and the forbidden-vs-allowed raw-pytest
 rule.
@@ -87,13 +88,26 @@ Then ask: **"Ready to run the quality gate?"** Wait for confirmation.
 
 ### 4. Quality gate (non-negotiable)
 
+Default to the **impacted** inner-loop gate before commit/PR:
+
 ```bash
-python scripts/qs/quality_gate.py
+python scripts/qs/quality_gate.py --impacted
 ```
 
-Must exit 0: pytest 100% coverage + ruff + mypy + translations. If it
-fails, fix autonomously and re-run. Only ask the user for direction
-after 2–3 unsuccessful attempts.
+`--impacted` runs the testmon-selected tests and verifies the lines
+**you changed** are 100% covered (exit 0 required). The whole-repo
+100% gate (pytest + ruff + mypy + translations) stays authoritative in
+**CI** on every PR — that is what guarantees full coverage, not a local
+full run. Run the full gate locally only on explicit request, or when
+you suspect coverage lost in *unchanged* code (which `--impacted`
+cannot see):
+
+```bash
+python scripts/qs/quality_gate.py        # full gate, on request
+```
+
+If the gate fails, fix autonomously and re-run. Only ask the user for
+direction after 2–3 unsuccessful attempts.
 
 **Doc-maintenance pre-commit sub-step.** After staging your
 intended changes (`git add` first so the diff is populated), run

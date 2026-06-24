@@ -107,8 +107,13 @@ auto-commits, pushes, opens PR after green quality gate.
 2. TDD: write failing tests → implement minimum code → refactor.
 3. Present implementation summary (files modified, design decisions,
    risks). Ask "Ready to run the quality gate?".
-4. Run quality gate (`python scripts/qs/quality_gate.py`). Fix
-   autonomously on failure; escalate only after 2–3 attempts.
+4. Run the impacted inner-loop gate
+   (`python scripts/qs/quality_gate.py --impacted`) before commit/PR —
+   it proves the *changed lines* are 100% covered in seconds. The
+   whole-repo 100% gate runs authoritatively in **CI** on every PR; run
+   the full gate locally only on explicit request or when coverage may
+   have been lost in *unchanged* code (which `--impacted` cannot see).
+   Fix autonomously on failure; escalate only after 2–3 attempts.
 5. Auto-commit, push, open PR. No confirmation prompt — authorized by
    the workflow.
 
@@ -197,11 +202,18 @@ as alternatives (see QS-175 OUT OF SCOPE).
    failed, STOP.
 3. Ask user for explicit merge authorization.
 4. Merge PR: `gh pr merge --merge`.
-5. Delete remote branch (safety check: refuse if branch is
+5. Refresh the `--impacted` baseline (QS-276): capture `MAIN_DIR` (via
+   `git worktree list --porcelain | head -1`) **before** cleanup,
+   update the main checkout (`fetch` + `checkout main` + `pull
+   --ff-only`), then refresh the testmon DB via
+   `quality_gate.py --seed-testmon` — detached/best-effort, never
+   blocking cleanup. A failure or stale baseline is safe (new worktrees
+   just run more tests).
+6. Delete remote branch (safety check: refuse if branch is
    `main` / `master`).
-6. Run `python scripts/qs/cleanup_worktree.py --work-dir <wd>
+7. Run `python scripts/qs/cleanup_worktree.py --work-dir <wd>
    --issue <N> --force` (force because code is safely on main).
-7. Report. If merged and production code touched, tell the user to run
+8. Report. If merged and production code touched, tell the user to run
    `/release` from main.
 
 **Hard rules**:
