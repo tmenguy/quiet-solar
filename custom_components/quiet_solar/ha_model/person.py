@@ -18,6 +18,7 @@ from ..const import (
     CONF_PERSON_TRACKER,
     DEVICE_STATUS_CHANGE_NOTIFY,
     MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    PERSON_NO_FORECAST_STRING,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
     PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
@@ -339,9 +340,9 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         self.update_person_forecast(time)
 
         if self.predicted_mileage is None or self.predicted_leave_time is None:
-            return "No forecast"
+            return PERSON_NO_FORECAST_STRING
         else:
-            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True)}"
+            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True, allow_cr=False)}"
 
     async def notify_of_forecast_if_needed(
         self,

@@ -37,6 +37,7 @@ from .const import (
     SENSOR_BISTATE_CURRENT_DURATION_H,
     SENSOR_BISTATE_CURRENT_ON_H,
     SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM,
+    SENSOR_CAR_CHARGE_ORIGIN,
     SENSOR_CAR_CHARGE_TIME,
     SENSOR_CAR_CHARGE_TYPE,
     SENSOR_CAR_ESTIMATED_RANGE_KM,
@@ -199,6 +200,13 @@ def create_ha_sensor_for_QSCar(device: QSCar):
         key=SENSOR_CAR_PERSON_FORECAST,
         translation_key=SENSOR_CAR_PERSON_FORECAST,
         value_fn=lambda device, key: device.get_car_person_readable_forecast_mileage(),
+    )
+    entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+    load_current_command = QSSensorEntityDescription(
+        key=SENSOR_CAR_CHARGE_ORIGIN,
+        translation_key=SENSOR_CAR_CHARGE_ORIGIN,
+        value_fn=lambda device, key: device.get_car_charge_origin_readable_string(),
     )
     entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
 

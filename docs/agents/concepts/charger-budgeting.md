@@ -68,6 +68,43 @@ Then `apply_budget_strategy()`:
   rebalancing.
 - `CHARGER_STATE_REFRESH_INTERVAL_S = 14` — state-polling cadence.
 
+### Charge-origin tagging & `get_charge_type()` (QS-274)
+
+Constraints carry their origin in `load_info[CONSTRAINT_ORIGINATOR_KEY]`
+so the UI can distinguish *where* a charge target came from. Creation
+sites stamp named constants from `const.py`:
+
+- **manual finish time** → `CONSTRAINT_ORIGINATOR_MANUAL`
+- **calendar/agenda** → `CONSTRAINT_ORIGINATOR_AGENDA` (value is exactly
+  `"agenda"`, an invariant — persisted pre-QS-274 calendar constraints
+  must still match)
+- **person forecast** → `CONSTRAINT_ORIGINATOR_PERSON`, stamped
+  *alongside* the existing `{"person": <name>}` matching key (do not
+  drop that key — `_match_ct` cleanup relies on it)
+- **force/override** → `CONSTRAINT_ORIGINATOR_USER_OVERRIDE` (pre-existing)
+
+`QSChargerGeneric.get_charge_type(return_charge_errors=True)` returns
+`(type, constraint)`:
+
+- **as-fast branch:** `user_override` originator →
+  `CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE`, else
+  `CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE`.
+- **deadline branch (precedence):** `"person"` key →
+  `CAR_CHARGE_TYPE_PERSON_AUTOMATED` (person-first, keeps legacy
+  `{"person": name}`-only constraints working); `elif` agenda originator
+  → `CAR_CHARGE_TYPE_CALENDAR`; `else` → `CAR_CHARGE_TYPE_MANUAL`
+  (untagged / `load_info=None`). The `ct.load_info and …` guard is
+  mandatory to avoid `None.get(...)`.
+- **`return_charge_errors=False`** skips the Faulted / No Power / Not
+  Plugged short-circuits and returns the underlying type — used by the
+  origin context line so a charger-error string never leaks into it.
+
+`CAR_CHARGE_TYPE_SCHEDULE` was removed entirely; the unrelated
+`WallboxChargerStatus.SCHEDULED` hardware status is a different concept
+and is untouched. The `CONSTRAINT_ORIGINATOR_MANUAL/PERSON` stamps are
+written for coherence/forward-compat — detection keys off the `"person"`
+key and the `else`, so they are not read by `get_charge_type()` itself.
+
 ## Lifecycle / sequence (one update cycle)
 
 ```text

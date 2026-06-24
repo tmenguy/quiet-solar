@@ -51,7 +51,7 @@ TYPE_SCORE_SPAN = 10.0
 USER_OVERRIDE_SCORE_OFFSET = ENERGY_SCORE_SPAN * RESERVED_LOAD_SCORE_SPAN * TYPE_SCORE_SPAN * TYPE_SCORE_SPAN
 
 
-def get_readable_date_string(time: datetime | None, for_small_standalone: bool = False) -> str:
+def get_readable_date_string(time: datetime | None, for_small_standalone: bool = False, allow_cr: bool = True) -> str:
     if time is None or time == DATETIME_MAX_UTC or time == DATETIME_MIN_UTC:
         if for_small_standalone:
             return "--:--"
@@ -70,7 +70,10 @@ def get_readable_date_string(time: datetime | None, for_small_standalone: bool =
                 # the target hour/mn/ss is enough to describe unambiguously the target date vs now
                 target = local_target_date.strftime("%H:%M")
             else:
-                target = local_target_date.strftime("%m-%d\n%H:%M")
+                if allow_cr:
+                    target = local_target_date.strftime("%m-%d\n%H:%M")
+                else:
+                    target = local_target_date.strftime("%m-%d %H:%M")
         elif local_constraint_day == local_today:
             target = "today " + local_target_date.strftime("%H:%M")
         elif local_constraint_day == local_tomorrow:
@@ -511,8 +514,10 @@ class LoadConstraint:
         else:
             return 100.0 * (self.current_value - init_val) / (target_val - init_val)
 
-    def get_readable_next_target_date_string(self, for_small_standalone: bool = False) -> str:
-        return get_readable_date_string(self.end_of_constraint, for_small_standalone=for_small_standalone)
+    def get_readable_next_target_date_string(self, for_small_standalone: bool = False, allow_cr: bool = True) -> str:
+        return get_readable_date_string(
+            self.end_of_constraint, for_small_standalone=for_small_standalone, allow_cr=allow_cr
+        )
 
     def _get_target_value_for_readable(self) -> int | float:
         target_value = self.target_value

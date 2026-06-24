@@ -828,7 +828,7 @@ class QsCarCard extends QsCardBase {
       const sChargeTime = this._entity(e.charge_time);
       const sRangeNow = this._entity(e.range_now);
       const sRangeTarget = this._entity(e.range_target);
-      const sPersonForecast = this._entity(e.person_forecast);
+      const sChargeOrigin = this._entity(e.charge_origin);
       const sUsePercentMode = this._entity(e.use_percent_mode);
       const sIsOffGrid = this._entity(e.is_off_grid);
       const sCarIsStale = this._entity(e.car_is_stale);
@@ -876,11 +876,13 @@ class QsCarCard extends QsCardBase {
           "No Power To Car": "mdi:flash-off",
           "Not Charging": "mdi:battery-off",
           "Target Met": "mdi:battery-high",
+          "Manual": "mdi:hand-back-right",
+          "Calendar": "mdi:calendar",
           "As Fast As Possible": "mdi:rabbit",
-          "Scheduled": "mdi:clock-outline",
+          "Manual As Fast As Possible": "mdi:rabbit",
           "Solar Priority": "mdi:solar-power",
           "Solar": "mdi:white-balance-sunny",
-          "Person Automated": "mdi:auto-fix",
+          "Person Automated": "mdi:account-clock",
       };
       const iconForChargeType = (str) => carChargeTypeIcons[str];
       const chargeIcon = iconForChargeType(sChargeType?.state);
@@ -1190,11 +1192,12 @@ class QsCarCard extends QsCardBase {
           ? [`<option value="" selected>No person attached</option>`, ...personOptions.map(o => `<option>${this._escapeHtml(o)}</option>`)].join('')
           : personOptions.map(o => `<option ${o === personState ? 'selected' : ''}>${this._escapeHtml(o)}</option>`).join('');
 
-      // Person forecast string
-      const personForecastStr = sPersonForecast?.state || '';
-      const validPersonForecast = personForecastStr && personForecastStr.toLowerCase() !== 'none' && personForecastStr.toLowerCase() !== 'unknown' && personForecastStr.toLowerCase() !== 'unavailable' && personForecastStr.trim() !== '';
+      // Charge-origin string (origin-responsive context line — replaces the
+      // raw person-forecast string in the .forecast-row).
+      const chargeOriginStr = sChargeOrigin?.state || '';
+      const validChargeOrigin = chargeOriginStr && chargeOriginStr.toLowerCase() !== 'none' && chargeOriginStr.toLowerCase() !== 'unknown' && chargeOriginStr.toLowerCase() !== 'unavailable' && chargeOriginStr.trim() !== '';
       // S3: escape — `forecastDisplay` is interpolated into the .forecast-row innerHTML.
-      const forecastDisplay = validPersonForecast ? this._escapeHtml(personForecastStr) : 'None';
+      const forecastDisplay = validChargeOrigin ? this._escapeHtml(chargeOriginStr) : 'None';
 
       const activeGradId = isFaulted ? gradFaultId : (isStale ? gradStaleId : (isDisconnected ? gradDisabledId : (charging ? gradChargeId : gradGreenId)));
       // In stale-percent mode, show animation whenever charging regardless of arc size
@@ -1413,7 +1416,7 @@ class QsCarCard extends QsCardBase {
             </select>
           </div>
         </div>
-        <div class="forecast-row">Forecast: ${forecastDisplay}</div>
+        <div class="forecast-row">${chargeIcon ? `<ha-icon icon="${chargeIcon}"></ha-icon> ` : ''}${forecastDisplay}</div>
         <div class="below">
           <div class="pill">
             <ha-icon icon="mdi:ev-station"></ha-icon>
