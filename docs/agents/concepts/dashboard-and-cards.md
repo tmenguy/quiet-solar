@@ -438,11 +438,13 @@ The card's `.forecast-row` is now an **origin context row**: it renders
 the new `qs_car_charge_origin` sensor (wired through the template as
 `charge_origin:`) instead of the raw `qs_car_person_forecast` string, and
 drops the old `Forecast:` prefix. The row shows the active charge origin
-("Calendar · HH:MM", "Manually set to HH:MM", "Forecasted from
-<Person>: …", as-fast strings, or today's forecast / "No proper
-Forecast" otherwise), prefixed with the same Mode icon. The
-`qs_car_person_forecast` sensor stays registered for history/automations
-but is no longer surfaced on the card.
+(`"Calendar · HH:MM"`, `"Manually set to HH:MM"`, the as-fast strings),
+and for the person-automated / no-charger / any-other-type cases delegates
+to `get_car_person_readable_forecast_mileage()` — i.e. `"<Person>:
+<forecast>"`, `"<Person>: No forecast"` (empty forecast), or `"No
+forecasted person"` when no person is attached. It is prefixed with the
+same Mode icon. The `qs_car_person_forecast` sensor stays registered for
+history/automations but is no longer surfaced on the card.
 
 New Jinja branches added by QS-194 use the idiomatic `is not none`
 test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`

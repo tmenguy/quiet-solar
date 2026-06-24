@@ -112,6 +112,23 @@ def test_person_origin(origin_car, fake_hass, mock_data_handler):
     assert "30km" in result
 
 
+def test_person_origin_far_out_leave_time_is_single_line(origin_car, fake_hass, mock_data_handler):
+    """A person forecast with a >24h leave time must render on one line — no raw
+    newline (review-fix #05: allow_cr=False threaded through the person branch)."""
+    person = _make_person(
+        fake_hass,
+        mock_data_handler,
+        mileage=30.0,
+        leave_time=datetime.now(pytz.UTC) + timedelta(days=3),
+    )
+    origin_car.current_forecasted_person = person
+    _set_charge_type(origin_car, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
+
+    result = origin_car.get_car_charge_origin_readable_string()
+    assert "\n" not in result
+    assert result.startswith("Magali: 30km ")
+
+
 def test_orphaned_person_origin(origin_car):
     """Person-tagged constraint outlives a now-None current_forecasted_person."""
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_PERSON_AUTOMATED)

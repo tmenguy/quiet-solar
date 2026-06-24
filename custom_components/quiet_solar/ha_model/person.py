@@ -342,7 +342,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         if self.predicted_mileage is None or self.predicted_leave_time is None:
             return PERSON_NO_FORECAST_STRING
         else:
-            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True)}"
+            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True, allow_cr=False)}"
 
     async def notify_of_forecast_if_needed(
         self,

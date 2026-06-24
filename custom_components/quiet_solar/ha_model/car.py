@@ -1184,17 +1184,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def _origin_target_single_line(ct) -> str:
         """Target time for the single-line origin row.
 
-        Coupling note: this depends on the upstream format of
-        ``get_readable_next_target_date_string(for_small_standalone=True)``,
-        which emits a two-line ``"%m-%d\\n%H:%M"`` form (see
-        ``home_model/constraints.get_readable_date_string``) for targets more
-        than ~24h out. We collapse the embedded newline to a space so the
-        single-line context row reads cleanly; if that upstream format ever
-        changes, revisit this. The newline-collapse is covered by the far-out
+        Delegates to the shared formatter with ``allow_cr=False`` so a far-out
+        (>~24h) target renders as ``"%m-%d %H:%M"`` on a single line instead of
+        the two-line ``"%m-%d\\n%H:%M"`` form. Covered by the far-out
         Calendar/Manual tests in ``tests/test_car_charge_origin.py``.
         """
-        target = ct.get_readable_next_target_date_string(for_small_standalone=True)
-        return target.replace("\n", " ")
+        return ct.get_readable_next_target_date_string(for_small_standalone=True, allow_cr=False)
 
     async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
 
