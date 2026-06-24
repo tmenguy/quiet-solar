@@ -319,10 +319,20 @@ fi
 # inner-loop run is fast. COPY (never symlink) — both are written during
 # runs, and a shared symlink would corrupt across concurrent worktrees:
 #   - .mypy_cache kills the ~16s cold-mypy on a fresh worktree;
-#   - .testmondata gives `--impacted` a warm test-impact baseline (a
-#     path-relocated DB degrades to "select more", never fewer).
+#   - .testmondata gives `--impacted` a warm test-impact baseline.
 # Copy-if-present / warn-if-absent: a missing cache means main never ran
 # the gate / `--seed-testmon` yet, which only costs a slow first loop.
+#
+# SAFETY INVARIANT (review-fix SF3): copying `.testmondata` across
+# worktrees can NEVER under-select impacted tests. testmon keys on
+# rootdir-RELATIVE paths + file-content checksums (not absolute paths or
+# mtimes), so in the relocated worktree any file whose content differs
+# from the seeded baseline is reselected; an identical file selects zero
+# (the intended warm-baseline speedup). It "selects more, never fewer".
+# This is enforced, not asserted: see
+# tests/test_quality_gate.py::TestTestmonRelocationInvariant
+# (real testmon: relocate a seeded DB, change a covered file, prove the
+# covering test is reselected).
 for cache in .mypy_cache .testmondata; do
     src="${MAIN_DIR}/${cache}"
     dst="${WORKTREE_DIR}/${cache}"

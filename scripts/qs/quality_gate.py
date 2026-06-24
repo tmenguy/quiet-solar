@@ -853,6 +853,12 @@ TESTMON_DATA = REPO_ROOT / ".testmondata"
 # the gate. CI re-fetches authoritatively, so a short bound is safe.
 _FETCH_TIMEOUT_SECONDS = 15.0
 
+# QS-276 review-fix NH1: bound the diff-cover subprocess too — a
+# pathological hang there would break the same sub-15s inner-loop promise
+# as an unbounded fetch (S1). diff-cover only parses an already-written
+# coverage.xml + a git diff, so a generous cap is safe.
+_DIFF_COVER_TIMEOUT_SECONDS = 60.0
+
 # Static decision (Design A): whether the pinned pytest-testmon attributes
 # per-test coverage correctly across xdist workers, so the selection /
 # seeding passes can run in parallel.
@@ -899,18 +905,20 @@ def _testmon_available() -> bool:
     return _run([VENV_PYTHON, "-c", probe]).returncode == 0
 
 
-# QS-276 review-fix N3: accept the common truthy spellings some CI systems
-# use (`CI=yes` / `on`) and also honor GitHub Actions' own provider var,
-# which it always sets to `true`.
-_CI_TRUTHY = ("1", "true", "yes", "on")
+# QS-276 review-fix N3/NH4: accept the common truthy spellings CI systems
+# use — `1`, `true`, `yes`, `on`, plus the single-letter `y` / `t` some
+# providers emit — and also honor GitHub Actions' own provider var, which
+# it always sets to `true`.
+_CI_TRUTHY = ("1", "true", "yes", "on", "y", "t")
 
 
 def _is_ci() -> bool:
     """Return True when running under CI.
 
-    Recognizes a truthy `CI` env var (GitHub Actions sets `CI=true`;
-    other providers use `yes` / `on`) and falls back to GitHub Actions'
-    own `GITHUB_ACTIONS=true` provider variable.
+    Recognizes a truthy `CI` env var (accepted values:
+    `1`/`true`/`yes`/`on`/`y`/`t`, case-insensitive; GitHub Actions sets
+    `CI=true`) and falls back to GitHub Actions' own `GITHUB_ACTIONS=true`
+    provider variable.
     """
     if os.environ.get("CI", "").strip().lower() in _CI_TRUTHY:
         return True
@@ -926,6 +934,14 @@ def _resolve_diff_base() -> str | None:
     None when nothing resolves (offline / fresh worktree with no
     upstream). The base is live git, independent of the seeded
     `.testmondata`.
+
+    QS-276 review-fix NH2: a candidate ref is only accepted if it shares
+    a merge-base with HEAD. A shallow CI clone (`fetch-depth: 1`) can
+    resolve `origin/main` to a commit with no common ancestor, which
+    would make diff-cover diff against unrelated history and report a
+    spuriously huge changed-line set. An unreachable ref is skipped (and
+    a warning emitted); if nothing reachable resolves, we return None and
+    the caller applies the no-base policy (warn-skip locally, exit 4 CI).
     """
     # Best-effort fresh fetch; ignore failure — an offline dev still
     # resolves a local `main` or the upstream merge-base below.
@@ -942,8 +958,12 @@ def _resolve_diff_base() -> str | None:
             "warning: `git fetch origin main` failed/timed out — diff base may be stale vs CI",
         )
     for ref in ("origin/main", "main"):
-        if _run(["git", "rev-parse", "--verify", ref]).returncode == 0:
+        if _run(["git", "rev-parse", "--verify", ref]).returncode != 0:
+            continue
+        # NH2: require a common ancestor with HEAD before trusting the ref.
+        if _run(["git", "merge-base", ref, "HEAD"]).returncode == 0:
             return ref
+        _emit("impacted", f"warning: {ref} has no merge-base with HEAD (shallow clone?) — skipping")
     upstream = _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
     tracked = upstream.stdout.strip()
     if upstream.returncode == 0 and tracked:
@@ -952,6 +972,24 @@ def _resolve_diff_base() -> str | None:
         if mb.returncode == 0 and sha:
             return sha
     return None
+
+
+def _diff_base_ahead_of_head(base: str) -> bool:
+    """Return True when `base` has commits not reachable from HEAD.
+
+    QS-276 review-fix SF2: testmon selects against the seeded
+    `.testmondata` baseline, while diff-cover compares changed lines
+    against the freshly-fetched diff base. When the base (`origin/main`)
+    has advanced past the branch's fork point — i.e. `HEAD..base` is
+    non-empty — the diff includes upstream changes the testmon baseline
+    never saw, so the gate can *false*-FAIL (safe direction; never a
+    false-pass). This turns that into an observable, distinct verdict
+    instead of a generic coverage failure. A non-zero `rev-list --count
+    HEAD..base` is the precise signal.
+    """
+    r = _run(["git", "rev-list", "--count", f"HEAD..{base}"])
+    count = r.stdout.strip()
+    return r.returncode == 0 and count.isdigit() and int(count) > 0
 
 
 def _ensure_testmon_db_safe() -> None:
@@ -963,6 +1001,14 @@ def _ensure_testmon_db_safe() -> None:
     a path relocation) makes it raise `sqlite3.DatabaseError` mid-run
     instead. Removing the file forces a clean rebuild → select-all,
     honouring the 'never silently under-select' fail-safe.
+
+    QS-276 review-fix SF1: `sqlite3.OperationalError` ("database is
+    locked") is a *subclass* of `sqlite3.DatabaseError`. A VALID DB that
+    is transiently locked by a concurrent `--seed-testmon` / `--impacted`
+    run must NOT be deleted — wiping it would discard a recoverable
+    baseline and force a needless select-all. So catch `OperationalError`
+    FIRST and leave the file intact; only a genuine, corruption-specific
+    `DatabaseError` triggers the unlink.
     """
     if not TESTMON_DATA.exists():
         return
@@ -972,6 +1018,9 @@ def _ensure_testmon_db_safe() -> None:
             conn.execute("PRAGMA schema_version").fetchone()
         finally:
             conn.close()
+    except sqlite3.OperationalError as exc:
+        # Valid-but-busy (locked) — leave it; testmon handles the lock.
+        _emit("impacted", f".testmondata is locked/busy — leaving intact ({exc})")
     except sqlite3.DatabaseError:
         _emit("impacted", "corrupt .testmondata detected — removing to force select-all")
         # QS-276 review-fix N6: `missing_ok=True` so a file that vanishes
@@ -1069,21 +1118,33 @@ def check_impacted() -> int:
         _emit("impacted", f"FAIL (coverage report not written: {COVERAGE_XML})")
         return 1
 
-    dc = _run(_build_diff_cover_cmd(base))
+    # NH1: bound diff-cover so a hang can't break the sub-15s promise.
+    dc = _run(_build_diff_cover_cmd(base), timeout=_DIFF_COVER_TIMEOUT_SECONDS)
     sys.stdout.write(dc.stdout)
     sys.stdout.flush()
     if dc.returncode != 0:
-        _emit("impacted", "FAIL (changed lines <100% covered)")
-        # QS-276 review-fix S5: testmon selection runs against the seeded
-        # baseline while diff-cover compares against live `origin/main`.
-        # If main advanced past the baseline, testmon may not select a
-        # test covering a changed line even though one exists — the real
-        # remedy is a reseed, not a new test. Point at it.
-        _emit(
-            "impacted",
-            "hint: if origin/main advanced past your testmon baseline, reseed with "
-            "`python scripts/qs/quality_gate.py --seed-testmon` and re-run",
-        )
+        # QS-276 review-fix SF2: distinguish a genuine missing-coverage
+        # failure from a stale-baseline false-FAIL. If the diff base has
+        # advanced past HEAD's fork point, testmon's seeded baseline can't
+        # have selected tests for those upstream-changed lines — surface a
+        # distinct "baseline stale → reseed" verdict rather than a generic
+        # coverage failure.
+        if _diff_base_ahead_of_head(base):
+            _emit("impacted", f"FAIL (baseline stale — {base} advanced past your branch; reseed required)")
+            _emit(
+                "impacted",
+                "baseline stale: reseed with `python scripts/qs/quality_gate.py --seed-testmon` "
+                "(or merge/rebase origin/main into your branch) and re-run",
+            )
+        else:
+            _emit("impacted", "FAIL (changed lines <100% covered)")
+            # S5 fallback hint: a reseed can also help if the baseline is
+            # subtly behind even when no upstream commits are detected.
+            _emit(
+                "impacted",
+                "hint: if origin/main advanced past your testmon baseline, reseed with "
+                "`python scripts/qs/quality_gate.py --seed-testmon` and re-run",
+            )
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
         return 1

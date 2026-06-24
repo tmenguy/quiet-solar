@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -2104,8 +2105,13 @@ class TestIsCi:
             # review-fix N3: broaden the truthy set beyond {1, true}.
             ("yes", True),
             ("on", True),
+            # review-fix NH4: single-letter spellings some providers emit.
+            ("y", True),
+            ("t", True),
+            ("T", True),
             ("false", False),
             ("0", False),
+            ("n", False),
             ("", False),
         ],
     )
@@ -2131,9 +2137,19 @@ class TestResolveDiffBase:
 
     @staticmethod
     def _router(
-        rev_parse: dict[str, int], *, upstream: tuple[int, str] = (1, ""), merge_base: tuple[int, str] = (1, "")
+        rev_parse: dict[str, int],
+        *,
+        upstream: tuple[int, str] = (1, ""),
+        merge_base: tuple[int, str] = (1, ""),
+        reachable: dict[str, int] | None = None,
     ):
-        """Build a `_run` side_effect keyed on the git subcommand."""
+        """Build a `_run` side_effect keyed on the git subcommand.
+
+        `reachable` (NH2) maps a candidate ref → returncode for the
+        `git merge-base <ref> HEAD` reachability probe; default 0
+        (reachable) so the pre-NH2 tests keep passing unchanged.
+        """
+        reachable = reachable or {}
 
         def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
             if cmd[:2] == ["git", "fetch"]:
@@ -2143,6 +2159,10 @@ class TestResolveDiffBase:
             if cmd[:2] == ["git", "rev-parse"]:  # @{u} upstream lookup
                 return _cp(upstream[0], stdout=upstream[1])
             if cmd[:2] == ["git", "merge-base"]:
+                # NH2 reachability probe is `merge-base <ref> HEAD`; the
+                # upstream-path call is `merge-base HEAD <tracked>`.
+                if cmd[3] == "HEAD":
+                    return _cp(reachable.get(cmd[2], 0))
                 return _cp(merge_base[0], stdout=merge_base[1])
             raise AssertionError(f"unexpected cmd {cmd!r}")
 
@@ -2201,12 +2221,34 @@ class TestResolveDiffBase:
                 return _cp(124, stderr="timed out after 15.0s")  # simulate a hung remote
             if cmd[:3] == ["git", "rev-parse", "--verify"] and cmd[3] == "origin/main":
                 return _cp(0)
+            if cmd[:2] == ["git", "merge-base"]:  # NH2 reachability probe — reachable
+                return _cp(0)
             return _cp(1)
 
         with patch.object(quality_gate, "_run", side_effect=_side_effect):
             base = quality_gate._resolve_diff_base()
         assert base == "origin/main"  # stale local origin/main still resolves
         assert "git fetch origin main` failed/timed out" in capsys.readouterr().err
+
+    def test_skips_origin_main_without_merge_base(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix NH2: a resolvable but unreachable ref (shallow clone) is skipped."""
+        router = self._router(
+            {"origin/main": 0, "main": 0},
+            reachable={"origin/main": 1},  # origin/main has no common ancestor
+        )
+        with patch.object(quality_gate, "_run", side_effect=router):
+            assert quality_gate._resolve_diff_base() == "main"  # falls through to reachable main
+        assert "no merge-base with HEAD" in capsys.readouterr().err
+
+    def test_none_when_no_ref_is_reachable(self) -> None:
+        """review-fix NH2: both refs resolve but neither is reachable, and no upstream → None."""
+        router = self._router(
+            {"origin/main": 0, "main": 0},
+            reachable={"origin/main": 1, "main": 1},
+            upstream=(1, ""),
+        )
+        with patch.object(quality_gate, "_run", side_effect=router):
+            assert quality_gate._resolve_diff_base() is None
 
 
 class TestRunTimeout:
@@ -2226,6 +2268,26 @@ class TestRunTimeout:
         with patch.object(quality_gate.subprocess, "run", return_value=_cp(0)) as mock_run:
             quality_gate._run(["git", "status"], timeout=3.0)
         assert mock_run.call_args.kwargs.get("timeout") == 3.0
+
+
+class TestDiffBaseAheadOfHead:
+    """`_diff_base_ahead_of_head` (review-fix SF2) detects an advanced diff base."""
+
+    @pytest.mark.parametrize(
+        ("rc", "stdout", "expected"),
+        [
+            (0, "3\n", True),  # base has 3 commits not in HEAD → stale
+            (0, "0\n", False),  # base fully merged → not stale
+            (0, "", False),  # empty output → defensive False
+            (0, "garbage", False),  # non-numeric → defensive False
+            (1, "5", False),  # rev-list failed → don't claim staleness
+        ],
+        ids=["ahead", "level", "empty", "nonnumeric", "rev-list-failed"],
+    )
+    def test_count_maps_to_bool(self, rc: int, stdout: str, expected: bool) -> None:
+        with patch.object(quality_gate, "_run", return_value=_cp(rc, stdout=stdout)) as mock_run:
+            assert quality_gate._diff_base_ahead_of_head("origin/main") is expected
+        assert mock_run.call_args.args[0] == ["git", "rev-list", "--count", "HEAD..origin/main"]
 
 
 class TestEnsureTestmonDbSafe:
@@ -2269,6 +2331,26 @@ class TestEnsureTestmonDbSafe:
         ):
             quality_gate._ensure_testmon_db_safe()  # must NOT raise FileNotFoundError
         assert not db.exists()
+
+    def test_locked_but_valid_db_is_preserved(self, tmp_path: Path) -> None:
+        """review-fix SF1: 'database is locked' (OperationalError) must NOT delete a valid baseline.
+
+        OperationalError is a subclass of DatabaseError, so the corruption
+        probe would otherwise wipe a recoverable DB that is merely busy
+        with a concurrent --seed-testmon/--impacted run.
+        """
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"placeholder-valid-baseline")
+
+        def _locked(*_a: object, **_k: object) -> None:
+            raise sqlite3.OperationalError("database is locked")
+
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate.sqlite3, "connect", side_effect=_locked),
+        ):
+            quality_gate._ensure_testmon_db_safe()
+        assert db.exists(), "a locked-but-valid .testmondata must be left intact"
 
 
 class TestBuildImpactedCmds:
@@ -2363,12 +2445,37 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            # SF2: not stale → generic missing-coverage verdict + S5 hint.
+            patch.object(quality_gate, "_diff_base_ahead_of_head", return_value=False),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
         ):
             assert quality_gate.check_impacted() == 1
+        err = capsys.readouterr().err
+        assert "changed lines <100% covered" in err
         # review-fix S5: failure points at a reseed when the baseline may be stale.
-        assert "--seed-testmon" in capsys.readouterr().err
+        assert "--seed-testmon" in err
+
+    def test_stale_baseline_emits_distinct_verdict_returns_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix SF2: when the diff base advanced past HEAD, surface a stale-baseline verdict."""
+        xml = tmp_path / "coverage.xml"
+        xml.write_text("<coverage/>")
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_diff_base_ahead_of_head", return_value=True),
+            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
+        ):
+            assert quality_gate.check_impacted() == 1
+        err = capsys.readouterr().err
+        assert "baseline stale" in err
+        assert "advanced past your branch" in err
 
     def test_missing_coverage_xml_returns_1(self, tmp_path: Path) -> None:
         """review-fix N7: if pytest-cov fails to emit coverage.xml, fail loudly (don't diff-cover a stale file)."""
@@ -2401,6 +2508,8 @@ class TestCheckImpacted:
         mock_safe.assert_called_once()
         dc_cmd = mock_run.call_args.args[0]
         assert dc_cmd[2] == "--compare-branch=origin/main"
+        # review-fix NH1: the diff-cover subprocess is bounded by a timeout.
+        assert mock_run.call_args.kwargs.get("timeout") == quality_gate._DIFF_COVER_TIMEOUT_SECONDS
 
 
 class TestTestmonAvailable:
@@ -2471,6 +2580,11 @@ class TestSeedTestmon:
 class TestImpactedCli:
     """`main()` wiring: short-circuit, exit-code passthrough, mutex."""
 
+    # review-fix NH3: this table covers the codes `check_impacted` itself
+    # returns (0/1/3/4). Exit code 2 (usage/mutex error) is raised by
+    # `parser.error` BEFORE `check_impacted` runs, so its dedicated rows
+    # live in `test_impacted_mutex_exits_2` and `test_seed_testmon_mutex_exits_2`
+    # — together they give the "dedicated test per exit-code row" guarantee.
     @pytest.mark.parametrize("exit_code", [0, 1, 3, 4], ids=["pass", "fail", "tooling", "no-base"])
     def test_impacted_exits_with_check_impacted_code(self, exit_code: int) -> None:
         with (
@@ -2606,6 +2720,19 @@ class TestWorktreeSetupSeedsCaches:
         block = self._seed_block()
         assert ".mypy_cache" in block and ".testmondata" in block
         assert "cp -R" in block, "caches must be copied, not symlinked"
+
+    def test_loop_enumerates_each_cache_explicitly(self) -> None:
+        """review-fix NH5: both caches are handled by the same copy loop, not one-off.
+
+        Asserts the loop header names BOTH caches, so the regression can't
+        pass with only one cache genuinely copied and the other appearing
+        solely in a warning line.
+        """
+        block = self._seed_block()
+        assert "for cache in .mypy_cache .testmondata; do" in block
+        # The copy is keyed on the loop variable (applies to every cache),
+        # not hard-coded for a single cache name.
+        assert 'cp -R "$src" "$dst"' in block
 
     def test_seeding_never_symlinks(self) -> None:
         """review-fix N1: reject any symlink in the seeding block (copy, not link)."""
@@ -2771,3 +2898,59 @@ class TestImpactedIntegrationRealTestmon:
         assert not db.exists()
         # With the corrupt DB gone, testmon rebuilds and selects all tests.
         assert _selected_count(_run_testmon(repo)) == 1
+
+
+@pytest.mark.integration
+class TestTestmonRelocationInvariant:
+    """review-fix SF3: enforce the cross-worktree `.testmondata` relocation invariant.
+
+    `worktree-setup.sh` COPIES `.testmondata` from the main worktree into
+    a freshly-created one. The safety claim — "selects more, never fewer"
+    — must be *enforced*, not just asserted in a comment: copying the DB
+    across worktrees may never cause testmon to UNDER-select impacted
+    tests. testmon keys on rootdir-relative paths + file-content
+    checksums, so a relocated DB still reselects any file whose content
+    differs from the baseline. This proves it with real testmon.
+    """
+
+    def _make_repo(self, root: Path, *, calc_body: str) -> Path:
+        if not quality_gate._impacted_tooling_available():
+            pytest.skip("pytest-testmon / diff-cover not importable")
+        (root / "pkg").mkdir(parents=True)
+        (root / "tests").mkdir()
+        (root / "pkg" / "__init__.py").write_text("")
+        (root / "pkg" / "calc.py").write_text(calc_body)
+        (root / "tests" / "test_calc.py").write_text(
+            "from pkg.calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"
+        )
+        for args in (
+            ["init", "-q"],
+            ["config", "user.email", "t@t.co"],
+            ["config", "user.name", "t"],
+            ["add", "-A"],
+            ["commit", "-qm", "base"],
+        ):
+            subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True, text=True)
+        return root
+
+    def test_relocated_db_with_changed_content_reselects_never_underselects(self, tmp_path: Path) -> None:
+        base_body = "def add(a, b):\n    return a + b\n"
+        # "main" worktree: seed the baseline against the original content.
+        main = self._make_repo(tmp_path / "main", calc_body=base_body)
+        seed = _run_testmon(main)
+        assert _selected_count(seed) == 1, seed.stdout + seed.stderr
+        # A noop re-run in the SAME repo selects zero (warm baseline).
+        assert _selected_count(_run_testmon(main)) == 0
+
+        # "worktree": identical repo, but the COVERED file has different
+        # content than the seeded baseline. Relocate (copy) the DB in.
+        work = self._make_repo(tmp_path / "work", calc_body="def add(a, b):\n    return a + b + 0\n")
+        shutil.copy2(main / ".testmondata", work / ".testmondata")
+
+        # Invariant: the relocated DB must NOT skip the test covering the
+        # changed file — it reselects it (selects more, never fewer).
+        selected = _selected_count(_run_testmon(work))
+        assert selected == 1, (
+            "relocated .testmondata under-selected a changed-content test "
+            f"(got {selected}); the 'never fewer' invariant is violated"
+        )
