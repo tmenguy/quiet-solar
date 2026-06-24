@@ -326,16 +326,36 @@ fi
 for cache in .mypy_cache .testmondata; do
     src="${MAIN_DIR}/${cache}"
     dst="${WORKTREE_DIR}/${cache}"
+    # Cache-specific remediation (review-fix S4): each line is an actually
+    # runnable command, not a generic suggestion.
+    case "$cache" in
+        .testmondata) populate="python scripts/qs/quality_gate.py --seed-testmon" ;;
+        *)            populate="python scripts/qs/quality_gate.py" ;;
+    esac
     if [ -e "$src" ]; then
-        if [ ! -e "$dst" ]; then
-            cp -R "$src" "$dst"
+        # review-fix S4: re-copy (don't silently skip) when $dst already
+        # exists — a re-run after an interrupted setup may have left a
+        # truncated DB. Remove it first so the copy is clean.
+        if [ -e "$dst" ]; then
+            echo "Note: ${cache} already present in worktree — refreshing from main"
+            rm -rf "$dst"
+        fi
+        # review-fix S4: guard the copy. A partial copy (disk full /
+        # permissions) can wedge .mypy_cache irrecoverably; on failure,
+        # remove the partial result and warn rather than leave it broken.
+        if cp -R "$src" "$dst"; then
             echo "Seeded ${cache} from main worktree"
+        else
+            rm -rf "$dst"
+            echo "Warning: failed to copy ${cache} from main worktree — first inner-loop run will be slower"
+            echo "  (run '${populate}' in ${MAIN_DIR}, then re-run setup, to populate it)"
         fi
     else
         echo "Warning: ${cache} absent in main worktree — first inner-loop run will be slower"
-        echo "  (run 'python scripts/qs/quality_gate.py' or '--seed-testmon' in ${MAIN_DIR} to populate it)"
+        echo "  (run '${populate}' in ${MAIN_DIR} to populate it)"
     fi
 done
+# QS-276 end: cache seeding
 
 # Verify the worktree's HEAD landed on the expected branch. A downstream
 # session (e.g. Claude Desktop auto-isolation) that creates its own

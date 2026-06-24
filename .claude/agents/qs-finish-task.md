@@ -141,9 +141,19 @@ The standard merge flow.
    # Detached + best-effort: must never block or hang cleanup.
    # `--seed-testmon` is the SANCTIONED non-gate subcommand (NOT a raw
    # pytest, NOT the quality gate) — it only refreshes .testmondata.
-   ( cd "$MAIN_DIR" && nohup "$MAIN_DIR/venv/bin/python" \
-       scripts/qs/quality_gate.py --seed-testmon >/dev/null 2>&1 & )
-   echo "Baseline refresh started (detached, best-effort)."
+   # Probe for a usable interpreter (review-fix S3): the main venv may
+   # be missing (fresh clone, relocated checkout). Fall back to python3
+   # / python on PATH; if none is usable, WARN instead of printing a
+   # false success.
+   QG_PY="$MAIN_DIR/venv/bin/python"
+   [ -x "$QG_PY" ] || QG_PY="$(command -v python3 || command -v python || true)"
+   if [ -n "$QG_PY" ]; then
+       ( cd "$MAIN_DIR" && nohup "$QG_PY" \
+           scripts/qs/quality_gate.py --seed-testmon >/dev/null 2>&1 & )
+       echo "Baseline refresh started (detached, best-effort)."
+   else
+       echo "Warning: no usable Python interpreter found — skipping baseline refresh."
+   fi
    ```
    A failure or timeout here is harmless — a stale baseline is still
    safe (new worktrees just run more tests). Proceed regardless. The

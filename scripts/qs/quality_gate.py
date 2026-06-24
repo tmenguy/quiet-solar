@@ -119,8 +119,28 @@ def _venv_tool(name: str) -> str:
     return str(VENV_BIN / name)
 
 
-def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd or str(REPO_ROOT))
+def _run(
+    cmd: list[str], cwd: str | None = None, timeout: float | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess, capturing stdout/stderr.
+
+    `timeout` (QS-276 review-fix S1) bounds calls on the inner-loop hot
+    path (e.g. the `--impacted` `git fetch`): a hung/slow remote (VPN
+    drop, dead SSH host) must not block the sub-15s gate indefinitely. A
+    timeout is surfaced as a non-zero `CompletedProcess` (returncode
+    124, matching the shell convention) rather than a raised
+    `TimeoutExpired`, so callers handle it via the normal returncode
+    path. Callers that omit `timeout` keep the original unbounded
+    behavior.
+    """
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, cwd=cwd or str(REPO_ROOT), timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=124, stdout="", stderr=f"timed out after {timeout}s"
+        )
 
 
 def _emit(name: str, line: str) -> None:
@@ -828,6 +848,11 @@ def _output_results(
 COVERAGE_XML = REPO_ROOT / "coverage.xml"
 TESTMON_DATA = REPO_ROOT / ".testmondata"
 
+# QS-276 review-fix S1: cap the inner-loop `git fetch origin main` so a
+# dead/slow remote degrades to a stale base + warning instead of hanging
+# the gate. CI re-fetches authoritatively, so a short bound is safe.
+_FETCH_TIMEOUT_SECONDS = 15.0
+
 # Static decision (Design A): pytest-testmon 2.2.0 does not reliably
 # attribute per-test coverage across xdist workers, so the selection pass
 # runs serially. Measured worst case (a full select against a cold
@@ -851,9 +876,34 @@ def _impacted_tooling_available() -> bool:
     return _run([VENV_PYTHON, "-c", probe]).returncode == 0
 
 
+def _testmon_available() -> bool:
+    """Return True iff `testmon` imports from VENV_PYTHON.
+
+    Narrower probe than `_impacted_tooling_available` (QS-276 review-fix
+    S2): `--seed-testmon` only runs `pytest --testmon` — it never invokes
+    diff-cover — so the post-merge baseline refresh must not be blocked
+    when diff-cover happens to be absent.
+    """
+    probe = "import importlib.util as u, sys; sys.exit(0 if u.find_spec('testmon') else 1)"
+    return _run([VENV_PYTHON, "-c", probe]).returncode == 0
+
+
+# QS-276 review-fix N3: accept the common truthy spellings some CI systems
+# use (`CI=yes` / `on`) and also honor GitHub Actions' own provider var,
+# which it always sets to `true`.
+_CI_TRUTHY = ("1", "true", "yes", "on")
+
+
 def _is_ci() -> bool:
-    """Return True when running under CI (GitHub Actions sets `CI=true`)."""
-    return os.environ.get("CI", "").strip().lower() in ("1", "true")
+    """Return True when running under CI.
+
+    Recognizes a truthy `CI` env var (GitHub Actions sets `CI=true`;
+    other providers use `yes` / `on`) and falls back to GitHub Actions'
+    own `GITHUB_ACTIONS=true` provider variable.
+    """
+    if os.environ.get("CI", "").strip().lower() in _CI_TRUTHY:
+        return True
+    return os.environ.get("GITHUB_ACTIONS", "").strip().lower() in _CI_TRUTHY
 
 
 def _resolve_diff_base() -> str | None:
@@ -868,7 +918,18 @@ def _resolve_diff_base() -> str | None:
     """
     # Best-effort fresh fetch; ignore failure — an offline dev still
     # resolves a local `main` or the upstream merge-base below.
-    _run(["git", "fetch", "origin", "main"])
+    #
+    # QS-276 review-fix S1: bound the fetch so a hung/slow remote can't
+    # block the sub-15s inner loop, and WARN on a non-zero result so a
+    # silently-failed fetch (offline / timeout) — which leaves a stale
+    # `origin/main` whose changed-line set may diverge from CI's — is
+    # observable instead of pretending the base was fetched fresh.
+    fetch = _run(["git", "fetch", "origin", "main"], timeout=_FETCH_TIMEOUT_SECONDS)
+    if fetch.returncode != 0:
+        _emit(
+            "impacted",
+            "warning: `git fetch origin main` failed/timed out — diff base may be stale vs CI",
+        )
     for ref in ("origin/main", "main"):
         if _run(["git", "rev-parse", "--verify", ref]).returncode == 0:
             return ref
@@ -902,7 +963,11 @@ def _ensure_testmon_db_safe() -> None:
             conn.close()
     except sqlite3.DatabaseError:
         _emit("impacted", "corrupt .testmondata detected — removing to force select-all")
-        TESTMON_DATA.unlink()
+        # QS-276 review-fix N6: `missing_ok=True` so a file that vanishes
+        # between the readability probe and the unlink (a concurrent run,
+        # another worktree) doesn't raise — an absent DB already satisfies
+        # the select-all fail-safe intent.
+        TESTMON_DATA.unlink(missing_ok=True)
 
 
 def _build_testmon_cmd() -> list[str]:
@@ -922,6 +987,13 @@ def _build_testmon_cmd() -> list[str]:
         "-m",
         "pytest",
         "--testmon",
+        # QS-276 review-fix N5: keep the slow real-subprocess integration
+        # tests (git-init + nested pytest runs each) out of the inner
+        # loop. They never cover `custom_components/quiet_solar`, so
+        # deselecting them cannot affect the diff-cover verdict — it only
+        # keeps the fast loop fast. CI's whole-repo gate still runs them.
+        "-m",
+        "not integration",
         f"--cov={SRC_DIR}",
         "--cov-report=",
         f"--cov-report=xml:{COVERAGE_XML}",
@@ -978,11 +1050,29 @@ def check_impacted() -> int:
         _emit("impacted", "FAIL (selected tests failed)")
         return 1
 
+    # QS-276 review-fix N7: pytest-cov writes coverage.xml even on a
+    # zero-collection run (verified for the pinned version), but guard
+    # defensively — if a future pytest-cov stops emitting it, diff-cover
+    # would silently read a stale/missing file. Fail loudly instead.
+    if not COVERAGE_XML.exists():
+        _emit("impacted", f"FAIL (coverage report not written: {COVERAGE_XML})")
+        return 1
+
     dc = _run(_build_diff_cover_cmd(base))
     sys.stdout.write(dc.stdout)
     sys.stdout.flush()
     if dc.returncode != 0:
         _emit("impacted", "FAIL (changed lines <100% covered)")
+        # QS-276 review-fix S5: testmon selection runs against the seeded
+        # baseline while diff-cover compares against live `origin/main`.
+        # If main advanced past the baseline, testmon may not select a
+        # test covering a changed line even though one exists — the real
+        # remedy is a reseed, not a new test. Point at it.
+        _emit(
+            "impacted",
+            "hint: if origin/main advanced past your testmon baseline, reseed with "
+            "`python scripts/qs/quality_gate.py --seed-testmon` and re-run",
+        )
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
         return 1
@@ -999,7 +1089,9 @@ def seed_testmon() -> int:
     failing test still updates the DB — there is no pass/fail verdict);
     returns 3 when testmon is not importable.
     """
-    if not _impacted_tooling_available():
+    # QS-276 review-fix S2: probe ONLY testmon — seeding never invokes
+    # diff-cover, so a missing diff-cover must not block the refresh.
+    if not _testmon_available():
         _emit("seed-testmon", "pytest-testmon not importable — skipping")
         return 3
     _emit("seed-testmon", "refreshing .testmondata (pytest --testmon)")
@@ -1036,7 +1128,10 @@ def main() -> None:
     parser.add_argument(
         "--seed-testmon",
         action="store_true",
-        help="Refresh .testmondata via `pytest --testmon` (no coverage, no verdict).",
+        help=(
+            "Refresh .testmondata via `pytest --testmon` (no coverage, no verdict). "
+            "Mutex with --impacted/--quick/--cache/--no-cache/--full/--fix."
+        ),
     )
     args = parser.parse_args()
 
@@ -1055,6 +1150,19 @@ def main() -> None:
     if args.impacted and (args.quick or args.cache or args.no_cache or args.full or args.fix):
         parser.error(
             "you cannot combine --impacted with --quick, --cache, --no-cache, --full, or --fix"
+        )
+
+    # --seed-testmon (QS-276 review-fix M1) is a self-contained maintenance
+    # subcommand, not a gate mode: combining it with any execution mode
+    # silently dropped the seeding request (the main() dispatch order
+    # short-circuited --impacted before it, and it before cache/scope/full).
+    # Make the conflict an explicit usage error instead.
+    if args.seed_testmon and (
+        args.impacted or args.quick or args.cache or args.no_cache or args.full or args.fix
+    ):
+        parser.error(
+            "you cannot combine --seed-testmon with --impacted, --quick, --cache, "
+            "--no-cache, --full, or --fix"
         )
 
     # Review-fix #01 finding 8 — `--quick ""` would otherwise resolve to

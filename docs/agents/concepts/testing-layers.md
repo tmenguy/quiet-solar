@@ -88,6 +88,18 @@ worktrees seed `.testmondata` + `.mypy_cache` from the main worktree
 (`worktree-setup.sh`); `finish-task` refreshes the main baseline via
 `--seed-testmon` after a merge.
 
+**`integration` marker vs the two regimes (QS-276).** The slow
+real-subprocess `@pytest.mark.integration` tests (e.g. the throwaway-git
+testmon tests) are **deselected from the `--impacted` fast loop**
+(`pytest --testmon -m "not integration"`) so the inner loop stays fast;
+they never cover `custom_components/quiet_solar`, so deselecting them
+cannot change the diff-cover verdict. CI's whole-repo gate
+(`pr-quality.yml`, `pytest tests/ -n auto --cov-fail-under=100`) applies
+**no** `-m` deselection, so it *does* run the integration tests — they
+must run there for the 100% gate to pass. New `quality_gate.py` lines
+are therefore also covered independently by mocked-seam unit tests, not
+solely by the integration tests.
+
 ## Key types / structures
 
 - `FakeHass` — lightweight HA stand-in. Provides `services`,

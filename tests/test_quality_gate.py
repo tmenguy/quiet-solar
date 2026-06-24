@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -2091,19 +2092,38 @@ class TestImpactedToolingAvailable:
 
 
 class TestIsCi:
-    """`_is_ci` recognizes the GitHub Actions `CI` env var."""
+    """`_is_ci` recognizes the `CI` env var and the GitHub Actions provider var."""
 
     @pytest.mark.parametrize(
         ("value", "expected"),
-        [("true", True), ("1", True), ("TRUE", True), ("  true ", True), ("false", False), ("0", False), ("", False)],
+        [
+            ("true", True),
+            ("1", True),
+            ("TRUE", True),
+            ("  true ", True),
+            # review-fix N3: broaden the truthy set beyond {1, true}.
+            ("yes", True),
+            ("on", True),
+            ("false", False),
+            ("0", False),
+            ("", False),
+        ],
     )
     def test_ci_env(self, value: str, expected: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         monkeypatch.setenv("CI", value)
         assert quality_gate._is_ci() is expected
 
     def test_ci_unset_is_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CI", raising=False)
+        monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
         assert quality_gate._is_ci() is False
+
+    def test_github_actions_provider_var_honored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """review-fix N3: GitHub Actions sets GITHUB_ACTIONS=true even if CI is unset."""
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        assert quality_gate._is_ci() is True
 
 
 class TestResolveDiffBase:
@@ -2165,6 +2185,48 @@ class TestResolveDiffBase:
         with patch.object(quality_gate, "_run", side_effect=router):
             assert quality_gate._resolve_diff_base() is None
 
+    def test_fetch_is_bounded_by_timeout(self) -> None:
+        """review-fix S1: the hot-path fetch must pass a subprocess timeout."""
+        with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 0})) as mock_run:
+            quality_gate._resolve_diff_base()
+        fetch_call = mock_run.call_args_list[0]
+        assert fetch_call.args[0] == ["git", "fetch", "origin", "main"]
+        assert fetch_call.kwargs.get("timeout") == quality_gate._FETCH_TIMEOUT_SECONDS
+
+    def test_fetch_failure_emits_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix S1: a non-zero/timed-out fetch warns so a stale base is observable."""
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:2] == ["git", "fetch"]:
+                return _cp(124, stderr="timed out after 15.0s")  # simulate a hung remote
+            if cmd[:3] == ["git", "rev-parse", "--verify"] and cmd[3] == "origin/main":
+                return _cp(0)
+            return _cp(1)
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            base = quality_gate._resolve_diff_base()
+        assert base == "origin/main"  # stale local origin/main still resolves
+        assert "git fetch origin main` failed/timed out" in capsys.readouterr().err
+
+
+class TestRunTimeout:
+    """`_run` (review-fix S1) surfaces a subprocess timeout as a non-zero result."""
+
+    def test_timeout_returns_nonzero_completed_process(self) -> None:
+        with patch.object(
+            quality_gate.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["git", "fetch"], timeout=5.0),
+        ):
+            result = quality_gate._run(["git", "fetch"], timeout=5.0)
+        assert result.returncode == 124
+        assert "timed out" in result.stderr
+
+    def test_timeout_is_forwarded_to_subprocess_run(self) -> None:
+        with patch.object(quality_gate.subprocess, "run", return_value=_cp(0)) as mock_run:
+            quality_gate._run(["git", "status"], timeout=3.0)
+        assert mock_run.call_args.kwargs.get("timeout") == 3.0
+
 
 class TestEnsureTestmonDbSafe:
     """`_ensure_testmon_db_safe` deletes only a non-SQLite `.testmondata`."""
@@ -2192,6 +2254,22 @@ class TestEnsureTestmonDbSafe:
             quality_gate._ensure_testmon_db_safe()
         assert not db.exists(), "corrupt .testmondata must be removed to force select-all"
 
+    def test_unlink_missing_safe_when_db_vanishes(self, tmp_path: Path) -> None:
+        """review-fix N6: the file disappearing between probe and unlink must not raise."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"corrupt")
+
+        def _boom(*_a: object, **_k: object) -> None:
+            db.unlink()  # simulate a concurrent run removing it first
+            raise sqlite3.DatabaseError("file is not a database")
+
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate.sqlite3, "connect", side_effect=_boom),
+        ):
+            quality_gate._ensure_testmon_db_safe()  # must NOT raise FileNotFoundError
+        assert not db.exists()
+
 
 class TestBuildImpactedCmds:
     """Pure argv builders for the `--impacted` seam."""
@@ -2205,6 +2283,11 @@ class TestBuildImpactedCmds:
         assert cmd.index("--cov-report=") < cmd.index(f"--cov-report=xml:{quality_gate.COVERAGE_XML}")
         assert "--cov-fail-under=100" not in cmd  # verdict is diff-cover's job
         assert "-n" not in cmd  # static serial decision
+        # review-fix N5: integration tests are deselected from the fast loop.
+        # (`-m` appears twice — `python -m pytest` and the marker — so locate
+        # the marker value and assert it is preceded by a `-m` flag.)
+        assert "not integration" in cmd
+        assert cmd[cmd.index("not integration") - 1] == "-m"
 
     def test_testmon_cmd_adds_workers_when_xdist_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(quality_gate, "_TESTMON_SUPPORTS_XDIST", True)
@@ -2262,21 +2345,45 @@ class TestCheckImpacted:
             assert quality_gate.check_impacted() == 1
         mock_run.assert_not_called()  # diff-cover never runs if tests failed
 
-    def test_diff_coverage_below_100_returns_1(self) -> None:
+    def test_diff_coverage_below_100_returns_1(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        xml = tmp_path / "coverage.xml"
+        xml.write_text("<coverage/>")
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
         ):
             assert quality_gate.check_impacted() == 1
+        # review-fix S5: failure points at a reseed when the baseline may be stale.
+        assert "--seed-testmon" in capsys.readouterr().err
 
-    def test_pass_returns_0(self) -> None:
+    def test_missing_coverage_xml_returns_1(self, tmp_path: Path) -> None:
+        """review-fix N7: if pytest-cov fails to emit coverage.xml, fail loudly (don't diff-cover a stale file)."""
+        missing = tmp_path / "coverage.xml"  # never created
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "COVERAGE_XML", missing),
+            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_run") as mock_run,
+        ):
+            assert quality_gate.check_impacted() == 1
+        mock_run.assert_not_called()  # diff-cover never runs without a coverage report
+
+    def test_pass_returns_0(self, tmp_path: Path) -> None:
+        xml = tmp_path / "coverage.xml"
+        xml.write_text("<coverage/>")
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe") as mock_safe,
+            patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run", return_value=_cp(0, stdout="Coverage: 100%")) as mock_run,
         ):
@@ -2286,17 +2393,45 @@ class TestCheckImpacted:
         assert dc_cmd[2] == "--compare-branch=origin/main"
 
 
+class TestTestmonAvailable:
+    """review-fix S2: `_testmon_available` probes ONLY testmon, never diff-cover."""
+
+    @pytest.mark.parametrize(
+        ("probe_rc", "expected"),
+        [(0, True), (1, False)],
+        ids=["importable", "missing"],
+    )
+    def test_probe_result_maps_to_bool(self, probe_rc: int, expected: bool) -> None:
+        with patch.object(quality_gate, "_run", return_value=_cp(probe_rc)) as mock_run:
+            assert quality_gate._testmon_available() is expected
+        cmd = mock_run.call_args.args[0]
+        assert cmd[0] == quality_gate.VENV_PYTHON
+        assert "testmon" in cmd[-1]
+        assert "diff_cover" not in cmd[-1]  # narrower than _impacted_tooling_available
+
+
 class TestSeedTestmon:
     """`seed_testmon` refreshes the DB with no pass/fail verdict."""
 
     def test_tooling_missing_returns_3(self) -> None:
-        with patch.object(quality_gate, "_impacted_tooling_available", return_value=False):
+        # review-fix S2: gated on the testmon-only probe, NOT the full impacted set.
+        with patch.object(quality_gate, "_testmon_available", return_value=False):
             assert quality_gate.seed_testmon() == 3
+
+    def test_seed_not_blocked_when_only_diff_cover_missing(self) -> None:
+        """review-fix S2: seeding never calls diff-cover, so a missing diff-cover must not block it."""
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=False) as mock_full,
+            patch.object(quality_gate, "_stream_pytest", return_value={"passed": True}),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        mock_full.assert_not_called()  # the full (diff-cover-inclusive) probe is never consulted
 
     def test_success_returns_0_regardless_of_test_outcome(self) -> None:
         # Even a failing selection still updates the DB → seed returns 0.
         with (
-            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_testmon_available", return_value=True),
             patch.object(quality_gate, "_stream_pytest", return_value={"passed": False}) as mock_stream,
         ):
             assert quality_gate.seed_testmon() == 0
@@ -2345,6 +2480,35 @@ class TestImpactedCli:
         assert exc.value.code == 2
         assert "you cannot combine --impacted with" in capsys.readouterr().err
 
+    @pytest.mark.parametrize(
+        "conflict",
+        [
+            ["--impacted"],
+            ["--cache"],
+            ["--no-cache"],
+            ["--full"],
+            ["--fix"],
+            ["--quick", "tests/test_x.py"],
+        ],
+        ids=["impacted", "cache", "no-cache", "full", "fix", "quick"],
+    )
+    def test_seed_testmon_mutex_exits_2(
+        self, conflict: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix M1: --seed-testmon combined with any execution mode is a usage error."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon", *conflict]),
+            patch.object(quality_gate, "seed_testmon") as mock_seed,
+            patch.object(quality_gate, "check_impacted") as mock_impacted,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        assert "you cannot combine --seed-testmon with" in capsys.readouterr().err
+        # The conflicting request must NOT silently execute either mode.
+        mock_seed.assert_not_called()
+        mock_impacted.assert_not_called()
+
     @pytest.mark.parametrize("seed_code", [0, 3], ids=["ok", "tooling-missing"])
     def test_seed_testmon_cli_passthrough(self, seed_code: int) -> None:
         with (
@@ -2372,16 +2536,68 @@ class TestImpactedDeps:
         assert any(line.strip() == ".testmondata" for line in gi.splitlines())
 
 
+class TestProjectRulesDocGuards:
+    """review-fix N2: content guard for the AC#12 doc edits (not just drift-checker)."""
+
+    def _rules(self) -> str:
+        return (
+            Path(__file__).resolve().parent.parent / "docs" / "workflow" / "project-rules.md"
+        ).read_text()
+
+    def test_seed_testmon_carveout_heading_present(self) -> None:
+        rules = self._rules()
+        assert "Carve-out — `--seed-testmon`" in rules
+        assert "single pytest owner" in rules  # the carve-out's rationale
+
+    def test_cache_quick_impacted_reconciliation_present(self) -> None:
+        rules = self._rules()
+        assert "Local-vs-CI coverage invariant" in rules
+        assert "`--impacted` is mutually exclusive" in rules
+
+
 class TestWorktreeSetupSeedsCaches:
     """AC#8: worktree-setup.sh copies (never symlinks) .testmondata + .mypy_cache."""
 
     def _script(self) -> str:
         return (Path(__file__).resolve().parent.parent / "scripts" / "worktree-setup.sh").read_text()
 
-    def test_copies_both_caches(self) -> None:
+    def _seed_block(self) -> str:
+        """Return only the QS-276 cache-seeding block (review-fix N1).
+
+        Scoping the symlink-rejection assertions to this block is essential:
+        the rest of the script legitimately uses `ln -s` for config /
+        custom_components links.
+        """
         body = self._script()
-        assert ".mypy_cache" in body and ".testmondata" in body
-        assert "cp -R" in body, "caches must be copied, not symlinked"
+        start = body.index("# QS-276: seed cold-start caches")
+        end = body.index("# QS-276 end: cache seeding")
+        return body[start:end]
+
+    def test_copies_both_caches(self) -> None:
+        block = self._seed_block()
+        assert ".mypy_cache" in block and ".testmondata" in block
+        assert "cp -R" in block, "caches must be copied, not symlinked"
+
+    def test_seeding_never_symlinks(self) -> None:
+        """review-fix N1: reject any symlink in the seeding block (copy, not link)."""
+        block = self._seed_block()
+        assert "ln -s" not in block and "ln -sf" not in block
+
+    def test_copy_is_error_guarded(self) -> None:
+        """review-fix S4: a failed copy must clean up the partial result, not wedge the cache."""
+        block = self._seed_block()
+        assert "rm -rf" in block
+        assert "failed to copy" in block
+
+    def test_existing_dst_is_refreshed_not_silently_skipped(self) -> None:
+        """review-fix S4: a pre-existing (possibly truncated) cache is refreshed, not skipped silently."""
+        block = self._seed_block()
+        assert "already present" in block
+
+    def test_absent_remediation_is_cache_specific_and_runnable(self) -> None:
+        """review-fix S4: the cache-miss hint cites a real command, --seed-testmon for the DB."""
+        block = self._seed_block()
+        assert "--seed-testmon" in block  # .testmondata remediation is executable
 
     def test_warns_when_absent(self) -> None:
         assert "Warning:" in self._script() and "absent in main worktree" in self._script()
@@ -2396,6 +2612,13 @@ class TestFinishTaskRefreshesBaseline:
         assert "--seed-testmon" in body
         assert "git worktree list --porcelain" in body  # MAIN_DIR captured before cleanup
         assert "nohup" in body  # detached / best-effort
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_interpreter_is_probed_not_hardcoded(self, harness: str) -> None:
+        """review-fix S3: probe for a usable interpreter; warn instead of a false success if none."""
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        assert "command -v python3" in body or "command -v python" in body
+        assert "no usable Python interpreter" in body
 
 
 class TestImplementAgentsDefaultImpacted:
@@ -2434,7 +2657,7 @@ def _selected_count(result: subprocess.CompletedProcess[str]) -> int:
     out = result.stdout
     if "no tests ran" in out:
         return 0
-    m = __import__("re").search(r"(\d+) passed", out)
+    m = re.search(r"(\d+) passed", out)
     return int(m.group(1)) if m else -1
 
 
