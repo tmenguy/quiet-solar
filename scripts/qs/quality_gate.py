@@ -137,6 +137,13 @@ def _run(
     (matching `_stream_pytest`) so non-ASCII output from git / diff-cover
     can't raise `UnicodeDecodeError` under `LANG=C` / `LC_ALL=POSIX` and
     bypass the normal return-code handling.
+
+    QS-276 review-fix MF1 (#04): a missing executable (e.g. the venv
+    interpreter absent on a CI runner) is surfaced as returncode 127
+    (shell "command not found"), NOT a raised `FileNotFoundError`. This
+    lets the tooling probes (`_impacted_tooling_available`,
+    `_testmon_available`, `_has_xdist`) degrade to "unavailable" → the
+    integration tests skip cleanly instead of erroring.
     """
     try:
         return subprocess.run(
@@ -158,8 +165,15 @@ def _run(
             args=cmd,
             returncode=124,
             stdout=out,
-            stderr=f"{err}\n{timeout_note}".strip() if err else timeout_note,
+            # SF-C (#04): use `err.strip()` so a whitespace-only stderr is
+            # treated as empty and doesn't inject a leading blank line.
+            stderr=f"{err}\n{timeout_note}".strip() if err.strip() else timeout_note,
         )
+    except FileNotFoundError as exc:
+        # MF1: executable not found — degrade to a non-zero result so
+        # callers handle it via the normal return-code path (probes treat
+        # 127 as "tool unavailable").
+        return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr=str(exc))
 
 
 def _decode_maybe(value: bytes | str | None) -> str:
@@ -878,6 +892,14 @@ def _output_results(
 # `diff-cover` assert the CHANGED lines are 100% covered. The whole-repo
 # 100% gate stays authoritative in CI; this is the sub-~15s inner loop.
 
+# NH1 (review-fix #04): `--impacted` writes a single fixed coverage.xml at
+# the repo root and immediately consumes it with diff-cover. This assumes
+# ONE `--impacted` run per worktree at a time — two overlapping runs in the
+# same worktree would race on this path (run A's diff-cover could read run
+# B's freshly-overwritten XML). The implement agents never run `--impacted`
+# concurrently in one worktree (each task has its own worktree), so this
+# documented single-run constraint is the accepted resolution rather than a
+# per-run temp path.
 COVERAGE_XML = REPO_ROOT / "coverage.xml"
 TESTMON_DATA = REPO_ROOT / ".testmondata"
 
@@ -1007,24 +1029,6 @@ def _resolve_diff_base() -> str | None:
     return None
 
 
-def _diff_base_ahead_of_head(base: str) -> bool:
-    """Return True when `base` has commits not reachable from HEAD.
-
-    QS-276 review-fix SF2: testmon selects against the seeded
-    `.testmondata` baseline, while diff-cover compares changed lines
-    against the freshly-fetched diff base. When the base (`origin/main`)
-    has advanced past the branch's fork point — i.e. `HEAD..base` is
-    non-empty — the diff includes upstream changes the testmon baseline
-    never saw, so the gate can *false*-FAIL (safe direction; never a
-    false-pass). This turns that into an observable, distinct verdict
-    instead of a generic coverage failure. A non-zero `rev-list --count
-    HEAD..base` is the precise signal.
-    """
-    r = _run(["git", "rev-list", "--count", f"HEAD..{base}"])
-    count = r.stdout.strip()
-    return r.returncode == 0 and count.isdigit() and int(count) > 0
-
-
 def _ensure_testmon_db_safe() -> None:
     """Delete `.testmondata` when it is not a readable SQLite database.
 
@@ -1107,40 +1111,46 @@ def _build_testmon_cmd() -> list[str]:
 
 
 def _build_diff_cover_cmd(base: str) -> list[str]:
-    """Build the diff-cover argv asserting changed lines are 100% covered."""
+    """Build the diff-cover argv asserting changed lines are 100% covered.
+
+    QS-276 review-fix SF-A (#04): `--include-untracked` so a brand-new,
+    not-yet-`git add`-ed source file with an untested function is counted
+    as changed lines (diff-cover 10.3.0 defaults to excluding untracked
+    files, which made the dominant inner-loop case — new code starts
+    untracked — score a vacuous 100% PASS before staging, defeating AC#6
+    locally).
+    """
     return [
         _venv_tool("diff-cover"),
         str(COVERAGE_XML),
         f"--compare-branch={base}",
+        "--include-untracked",
         "--fail-under=100",
     ]
 
 
-# QS-276 review-fix NH2 (#03): single source of truth for the reseed
-# command so the two failure-path hints can't drift apart.
+# QS-276 review-fix NH2 (#03): single source of truth for the reseed command.
 _SEED_TESTMON_CMD = "python scripts/qs/quality_gate.py --seed-testmon"
 
 
-def _emit_reseed_guidance(*, stale: bool) -> None:
-    """Emit reseed guidance on a diff-cover failure (consolidated, NH2).
+def _emit_reseed_guidance() -> None:
+    """Emit the reseed hint on a diff-cover coverage failure.
 
-    `stale=True` is the confirmed stale-baseline branch (the diff base
-    advanced past HEAD); `stale=False` is the generic-coverage-failure
-    fallback where a reseed *might* still help. Both reference the single
-    `_SEED_TESTMON_CMD` constant.
+    QS-276 review-fix SF-B (#04): the previous "baseline stale" branch was
+    removed. diff-cover's pinned default uses three-dot range notation
+    (`merge-base(base, HEAD)...HEAD`), so an advanced `origin/main` does
+    NOT inflate the changed-line set — the staleness false-FAIL it guarded
+    against cannot occur, and the branch only mislabeled genuine
+    uncovered-line failures. This single hint remains useful because
+    testmon's *selection* (vs the seeded baseline) is independent of
+    diff-cover's range: a stale baseline can still under-select, so a
+    reseed is a reasonable thing to suggest on any coverage failure.
     """
-    if stale:
-        _emit(
-            "impacted",
-            f"baseline stale: reseed with `{_SEED_TESTMON_CMD}` "
-            "(or merge/rebase origin/main into your branch) and re-run",
-        )
-    else:
-        _emit(
-            "impacted",
-            f"hint: if origin/main advanced past your testmon baseline, reseed with "
-            f"`{_SEED_TESTMON_CMD}` and re-run",
-        )
+    _emit(
+        "impacted",
+        f"hint: if a changed line looks covered but failed, your testmon baseline "
+        f"may be stale — reseed with `{_SEED_TESTMON_CMD}` and re-run",
+    )
 
 
 def check_impacted() -> int:
@@ -1187,26 +1197,27 @@ def check_impacted() -> int:
 
     # NH1: bound diff-cover so a hang can't break the sub-15s promise.
     dc = _run(_build_diff_cover_cmd(base), timeout=_DIFF_COVER_TIMEOUT_SECONDS)
+
+    # QS-276 review-fix SF2 (#03) + NH2 (#04): a timed-out diff-cover
+    # returns the synthetic 124 from `_run`. Report THAT as the primary
+    # verdict FIRST — before writing dc.stdout (which is empty/partial on
+    # timeout, NH2) and before the coverage messaging (which would
+    # mislabel a timeout as "<100% covered", SF2).
+    if dc.returncode == 124:
+        _emit("impacted", f"FAIL (diff-cover timed out after {_DIFF_COVER_TIMEOUT_SECONDS}s)")
+        sys.stderr.write(dc.stderr)
+        sys.stderr.flush()
+        return 1
+
     sys.stdout.write(dc.stdout)
     sys.stdout.flush()
     if dc.returncode != 0:
-        # QS-276 review-fix SF2 (#03): a timed-out diff-cover returns the
-        # synthetic 124 from `_run`. Report THAT as the primary verdict
-        # first — otherwise the coverage/staleness branches below would
-        # mislabel a timeout as "<100% covered" or "baseline stale".
-        if dc.returncode == 124:
-            _emit("impacted", f"FAIL (diff-cover timed out after {_DIFF_COVER_TIMEOUT_SECONDS}s)")
-        # SF2 (#02): distinguish a genuine missing-coverage failure from a
-        # stale-baseline false-FAIL. If the diff base advanced past HEAD's
-        # fork point, testmon's seeded baseline can't have selected tests
-        # for those upstream-changed lines — surface a distinct
-        # "baseline stale → reseed" verdict rather than a generic failure.
-        elif _diff_base_ahead_of_head(base):
-            _emit("impacted", f"FAIL (baseline stale — {base} advanced past your branch; reseed required)")
-            _emit_reseed_guidance(stale=True)
-        else:
-            _emit("impacted", "FAIL (changed lines <100% covered)")
-            _emit_reseed_guidance(stale=False)
+        # SF-B (#04): the "baseline stale" branch was removed (diff-cover's
+        # three-dot range means an advanced origin/main can't inflate the
+        # changed-line set, so that scenario never occurs). A non-zero,
+        # non-timeout diff-cover is a genuine changed-line coverage gap.
+        _emit("impacted", "FAIL (changed lines <100% covered)")
+        _emit_reseed_guidance()
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
         return 1

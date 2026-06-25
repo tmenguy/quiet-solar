@@ -2277,12 +2277,32 @@ class TestRunTimeout:
         assert mock_run.call_args.kwargs.get("errors") == "replace"
 
     def test_run_decodes_non_ascii_output_without_crashing(self) -> None:
-        """review-fix SF1: real non-ASCII subprocess output round-trips, never raises."""
-        result = quality_gate._run(
-            [quality_gate.VENV_PYTHON, "-c", "import sys; sys.stdout.write('café—✓ déjà')"]
-        )
+        """review-fix SF1: real non-ASCII subprocess output round-trips, never raises.
+
+        review-fix MF1 (#04): use `sys.executable` (always present) rather
+        than `VENV_PYTHON` (absent on CI runners) so this real-subprocess
+        test runs everywhere — `_run` is interpreter-agnostic.
+        """
+        result = quality_gate._run([sys.executable, "-c", "import sys; sys.stdout.write('café—✓ déjà')"])
         assert result.returncode == 0
         assert "café" in result.stdout and "déjà" in result.stdout
+
+    def test_missing_executable_returns_127(self) -> None:
+        """review-fix MF1 (#04): a missing interpreter degrades to rc 127, not a raised FileNotFoundError."""
+        with patch.object(quality_gate.subprocess, "run", side_effect=FileNotFoundError("no such file")):
+            result = quality_gate._run(["/nonexistent/venv/bin/python", "-c", "pass"])
+        assert result.returncode == 127
+        assert "no such file" in result.stderr
+
+    def test_timeout_whitespace_only_stderr_has_no_leading_blank(self) -> None:
+        """review-fix SF-C (#04): whitespace-only stderr must not inject a leading blank line."""
+        with patch.object(
+            quality_gate.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired(cmd=["x"], timeout=5.0, output="", stderr="   \n  "),
+        ):
+            result = quality_gate._run(["x"], timeout=5.0)
+        assert result.stderr == "timed out after 5.0s"  # not "...\ntimed out..."
 
     def test_timeout_preserves_partial_output(self) -> None:
         """review-fix NH1: partial stdout/stderr captured before the timeout is retained."""
@@ -2308,26 +2328,6 @@ class TestRunTimeout:
         ):
             result = quality_gate._run(["x"], timeout=5.0)
         assert result.stdout == "café"
-
-
-class TestDiffBaseAheadOfHead:
-    """`_diff_base_ahead_of_head` (review-fix SF2) detects an advanced diff base."""
-
-    @pytest.mark.parametrize(
-        ("rc", "stdout", "expected"),
-        [
-            (0, "3\n", True),  # base has 3 commits not in HEAD → stale
-            (0, "0\n", False),  # base fully merged → not stale
-            (0, "", False),  # empty output → defensive False
-            (0, "garbage", False),  # non-numeric → defensive False
-            (1, "5", False),  # rev-list failed → don't claim staleness
-        ],
-        ids=["ahead", "level", "empty", "nonnumeric", "rev-list-failed"],
-    )
-    def test_count_maps_to_bool(self, rc: int, stdout: str, expected: bool) -> None:
-        with patch.object(quality_gate, "_run", return_value=_cp(rc, stdout=stdout)) as mock_run:
-            assert quality_gate._diff_base_ahead_of_head("origin/main") is expected
-        assert mock_run.call_args.args[0] == ["git", "rev-list", "--count", "HEAD..origin/main"]
 
 
 class TestEnsureTestmonDbSafe:
@@ -2415,14 +2415,20 @@ class TestBuildImpactedCmds:
         assert f"--ignore={quality_gate.TESTS_DIR / 'test_quality_gate.py'}" in cmd
 
     def test_testmon_cmd_does_not_deselect_integration_marker(self) -> None:
-        """review-fix MF1: must NOT carry `-m "not integration"` — that dropped domain coverage."""
-        cmd = quality_gate._build_testmon_cmd()
+        """review-fix MF1: must NOT carry `-m "not integration"` — that dropped domain coverage.
+
+        review-fix MF1 (#04): patch `_pytest_workers` so this argv unit test
+        never reaches the real `VENV_PYTHON` xdist probe (absent on CI).
+        """
+        with patch.object(quality_gate, "_pytest_workers", return_value=None):
+            cmd = quality_gate._build_testmon_cmd()
         assert "not integration" not in cmd
         assert "-m" not in cmd[3:]  # no marker filter beyond `python -m pytest`
 
     def test_testmon_cmd_ignores_only_the_selftest_file(self) -> None:
         """review-fix MF1: exactly one --ignore, targeting the testmon self-tests."""
-        cmd = quality_gate._build_testmon_cmd()
+        with patch.object(quality_gate, "_pytest_workers", return_value=None):
+            cmd = quality_gate._build_testmon_cmd()
         ignores = [a for a in cmd if a.startswith("--ignore=")]
         assert ignores == [f"--ignore={quality_gate.TESTS_DIR / 'test_quality_gate.py'}"]
 
@@ -2444,6 +2450,8 @@ class TestBuildImpactedCmds:
             quality_gate._venv_tool("diff-cover"),
             str(quality_gate.COVERAGE_XML),
             "--compare-branch=origin/main",
+            # review-fix SF-A (#04): untracked new files must count as changes.
+            "--include-untracked",
             "--fail-under=100",
         ]
 
@@ -2496,8 +2504,6 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
-            # SF2: not stale → generic missing-coverage verdict + S5 hint.
-            patch.object(quality_gate, "_diff_base_ahead_of_head", return_value=False),
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
         ):
@@ -2507,31 +2513,10 @@ class TestCheckImpacted:
         # review-fix S5: failure points at a reseed when the baseline may be stale.
         assert "--seed-testmon" in err
 
-    def test_stale_baseline_emits_distinct_verdict_returns_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """review-fix SF2: when the diff base advanced past HEAD, surface a stale-baseline verdict."""
-        xml = tmp_path / "coverage.xml"
-        xml.write_text("<coverage/>")
-        with (
-            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
-            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
-            patch.object(quality_gate, "_ensure_testmon_db_safe"),
-            patch.object(quality_gate, "COVERAGE_XML", xml),
-            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
-            patch.object(quality_gate, "_diff_base_ahead_of_head", return_value=True),
-            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
-            patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
-        ):
-            assert quality_gate.check_impacted() == 1
-        err = capsys.readouterr().err
-        assert "baseline stale" in err
-        assert "advanced past your branch" in err
-
     def test_diff_cover_timeout_returns_1_with_distinct_verdict(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """review-fix SF2 (#03): a timed-out diff-cover (124) reports a timeout, not a coverage/stale verdict."""
+        """review-fix SF2 (#03): a timed-out diff-cover (124) reports a timeout, not a coverage verdict."""
         xml = tmp_path / "coverage.xml"
         xml.write_text("<coverage/>")
         with (
@@ -2540,8 +2525,6 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
-            # If the staleness probe were consulted, the verdict would be wrong.
-            patch.object(quality_gate, "_diff_base_ahead_of_head") as mock_ahead,
             patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
             patch.object(quality_gate, "_run", return_value=_cp(124, stderr="timed out after 60.0s")),
         ):
@@ -2549,8 +2532,6 @@ class TestCheckImpacted:
         err = capsys.readouterr().err
         assert "diff-cover timed out" in err
         assert "changed lines <100%" not in err
-        assert "baseline stale" not in err
-        mock_ahead.assert_not_called()  # timeout verdict short-circuits the staleness probe
 
     def test_missing_coverage_xml_returns_1(self, tmp_path: Path) -> None:
         """review-fix N7: if pytest-cov fails to emit coverage.xml, fail loudly (don't diff-cover a stale file)."""
@@ -2613,11 +2594,16 @@ class TestSeedTestmon:
             assert quality_gate.seed_testmon() == 3
 
     def test_seed_not_blocked_when_only_diff_cover_missing(self) -> None:
-        """review-fix S2: seeding never calls diff-cover, so a missing diff-cover must not block it."""
+        """review-fix S2: seeding never calls diff-cover, so a missing diff-cover must not block it.
+
+        review-fix MF1 (#04): stub `_build_seed_testmon_cmd` so this unit test
+        never reaches the real `VENV_PYTHON` xdist probe (absent on CI).
+        """
         with (
             patch.object(quality_gate, "_testmon_available", return_value=True),
             patch.object(quality_gate, "_impacted_tooling_available", return_value=False) as mock_full,
-            patch.object(quality_gate, "_stream_pytest", return_value={"passed": True}),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(quality_gate, "_stream_pytest", return_value={"passed": True, "returncode": 0}),
         ):
             assert quality_gate.seed_testmon() == 0
         mock_full.assert_not_called()  # the full (diff-cover-inclusive) probe is never consulted
@@ -2981,6 +2967,35 @@ class TestImpactedIntegrationRealTestmon:
             text=True,
         )
         assert dc.returncode != 0, f"diff-cover should fail on the untested function:\n{dc.stdout}"
+
+    def test_untracked_new_file_fails_only_with_include_untracked(self, repo: Path) -> None:
+        """review-fix SF-A (#04): a brand-new UNTRACKED file with an uncovered function.
+
+        Proves the dominant inner-loop case (new code starts untracked):
+        without `--include-untracked` diff-cover scores a vacuous 100% PASS;
+        with it (the argv `_build_diff_cover_cmd` now emits) it FAILs.
+        """
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True
+        ).stdout.strip()
+        # New file, NEVER `git add`-ed, with an untested function.
+        (repo / "pkg" / "untracked_mod.py").write_text("def untracked_fn(z):\n    return z * 99\n")
+        xml = repo / "coverage.xml"
+        _run_testmon(repo, cov=True, xml=xml)
+        assert xml.exists()
+
+        def _dc(*extra: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [quality_gate._venv_tool("diff-cover"), str(xml), f"--compare-branch={base}", *extra, "--fail-under=100"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+            )
+
+        # Without the flag: untracked file ignored → vacuous PASS (the bug).
+        assert _dc().returncode == 0
+        # With the flag (what we now emit): the uncovered new lines FAIL.
+        assert _dc("--include-untracked").returncode != 0
 
     def test_corrupt_db_selects_all(self, repo: Path) -> None:
         """AC#7: a corrupt .testmondata → fail-safe deletes it → select-all."""
