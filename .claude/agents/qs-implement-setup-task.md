@@ -75,15 +75,26 @@ than dev tooling tests), STOP — this should have been routed to
 
 Present a summary, ask "Ready to run the quality gate?". Wait.
 
-### 4. Quality gate (dev-only fast path)
+### 4. Quality gate (impacted inner loop)
+
+Default to the **impacted** gate before commit/PR:
 
 ```bash
-python scripts/qs/quality_gate.py
+python scripts/qs/quality_gate.py --impacted
 ```
 
-Smart scope detection skips the full suite when only dev files changed —
-runs the modified test files only. To force the full suite, use
-`--full`. Pass on a green gate; fix on red.
+It runs the testmon-selected tests and verifies any changed lines
+under `custom_components/quiet_solar/` are 100% covered. Dev-only
+changes (`scripts/`, `docs/`, agent files) carry no production-coverage
+delta, so `--impacted` just runs the impacted tests fast. The
+whole-repo 100% gate is enforced in **CI** on every PR; run it locally
+only on explicit request:
+
+```bash
+python scripts/qs/quality_gate.py        # full gate, on request
+```
+
+Pass on a green gate; fix on red.
 
 **Doc-maintenance pre-commit sub-step.** After staging your
 intended changes (`git add` first so the diff is populated), run
