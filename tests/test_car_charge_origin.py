@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import pytz
+from freezegun import freeze_time
 from homeassistant.const import CONF_NAME
 
 from custom_components.quiet_solar.const import (
@@ -76,20 +77,24 @@ def _make_person(fake_hass, mock_data_handler, *, mileage, leave_time) -> QSPers
 
 
 def _near_term_constraint():
-    """A real constraint with a near-term target so the real formatter yields HH:MM."""
+    """A real constraint with a near-term target so the real formatter yields the
+    normal ``today HH:MM`` form (QS-278: origin line uses normal formatting). The
+    expected value is derived from the formatter — not a literal — so the
+    today/tomorrow boundary at midnight cannot cause a flaky assertion."""
     end_time = datetime.now(pytz.UTC) + timedelta(hours=2)
     ct = create_real_constraint(load=None, end_time=end_time)
-    expected_hhmm = get_readable_date_string(end_time, for_small_standalone=True)
-    return ct, expected_hhmm
+    expected = get_readable_date_string(end_time, for_small_standalone=False)
+    return ct, expected
 
 
 def _far_term_constraint():
-    """A real constraint >24h out — the formatter returns a two-line date."""
+    """A real constraint >24h out. QS-278: the origin line renders the full
+    ``%Y-%m-%d %H:%M`` date on a single line. Returns the expected full-date
+    substring derived from the normal formatter."""
     end_time = datetime.now(pytz.UTC) + timedelta(days=3)
     ct = create_real_constraint(load=None, end_time=end_time)
-    # sanity: the raw formatter really does produce a two-line form here
-    assert "\n" in get_readable_date_string(end_time, for_small_standalone=True)
-    return ct
+    expected = get_readable_date_string(end_time, for_small_standalone=False)
+    return ct, expected
 
 
 # ── Person (real method, no mock — review-fix #01 finding 4) ─────────────────
@@ -164,21 +169,68 @@ def test_manual_origin(origin_car):
 
 
 def test_calendar_origin_far_out_target_is_single_line(origin_car):
-    """A >24h target must render on one line — no raw newline (review-fix #02)."""
-    ct = _far_term_constraint()
+    """A >24h target renders the full ``%Y-%m-%d %H:%M`` date on one line
+    (QS-278: normal formatting, no raw newline)."""
+    ct, expected = _far_term_constraint()
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_CALENDAR, ct)
     result = origin_car.get_car_charge_origin_readable_string()
     assert "\n" not in result
-    assert result.startswith("Calendar · ")
+    assert result == f"Calendar · {expected}"
+    assert expected[:4].isdigit()  # full-date form "%Y-%m-%d %H:%M"
 
 
 def test_manual_origin_far_out_target_is_single_line(origin_car):
-    """A >24h manual target must render on one line — no raw newline."""
-    ct = _far_term_constraint()
+    """A >24h manual target renders the full ``%Y-%m-%d %H:%M`` date on one line."""
+    ct, expected = _far_term_constraint()
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_MANUAL, ct)
     result = origin_car.get_car_charge_origin_readable_string()
     assert "\n" not in result
-    assert result.startswith("Manually set to ")
+    assert result == f"Manually set to {expected}"
+    assert expected[:4].isdigit()  # full-date form "%Y-%m-%d %H:%M"
+
+
+# ── QS-278 wording locks (normal today/tomorrow formatting) ──────────────────
+
+
+@freeze_time("2026-01-15 12:00:00")
+def test_calendar_origin_uses_tomorrow_wording(origin_car):
+    """QS-278 AC1: a Calendar target one day out renders ``tomorrow HH:MM`` —
+    the normal formatting, not the compact ``%m-%d %H:%M`` form."""
+    target = datetime.now(pytz.UTC) + timedelta(days=1)
+    ct = create_real_constraint(load=None, end_time=target)
+    _set_charge_type(origin_car, CAR_CHARGE_TYPE_CALENDAR, ct)
+    result = origin_car.get_car_charge_origin_readable_string()
+    expected = get_readable_date_string(target, for_small_standalone=False)
+    assert result == f"Calendar · {expected}"
+    assert result.startswith("Calendar · tomorrow ")
+
+
+@freeze_time("2026-01-15 12:00:00")
+def test_default_forecast_mileage_keeps_compact_form(origin_car, fake_hass, mock_data_handler):
+    """QS-278 AC4: direct callers (default ``for_small_standalone=True``) keep the
+    compact form — a one-day-out leave time stays ``%m-%d %H:%M``, never
+    ``tomorrow``. Locks the True branch of both threaded methods."""
+    leave_time = datetime.now(pytz.UTC) + timedelta(days=1)
+    person = _make_person(fake_hass, mock_data_handler, mileage=30.0, leave_time=leave_time)
+    origin_car.current_forecasted_person = person
+    result = origin_car.get_car_person_readable_forecast_mileage()
+    expected = get_readable_date_string(leave_time, for_small_standalone=True, allow_cr=False)
+    assert result == f"Magali: 30km {expected}"
+    assert "tomorrow" not in result
+
+
+@freeze_time("2026-01-15 12:00:00")
+def test_person_origin_uses_tomorrow_wording(origin_car, fake_hass, mock_data_handler):
+    """QS-278 AC2: the person fall-through renders the leave time with the normal
+    ``tomorrow HH:MM`` formatting (was the compact ``HH:MM`` form)."""
+    leave_time = datetime.now(pytz.UTC) + timedelta(days=1)
+    person = _make_person(fake_hass, mock_data_handler, mileage=30.0, leave_time=leave_time)
+    origin_car.current_forecasted_person = person
+    _set_charge_type(origin_car, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
+    result = origin_car.get_car_charge_origin_readable_string()
+    expected = get_readable_date_string(leave_time, for_small_standalone=False)
+    assert result == f"Magali: 30km {expected}"
+    assert result.startswith("Magali: 30km tomorrow ")
 
 
 # ── ct-is-None fall-through (review-fix #01 finding 2) ───────────────────────

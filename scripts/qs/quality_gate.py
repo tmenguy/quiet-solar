@@ -902,6 +902,17 @@ def _output_results(
 # per-run temp path.
 COVERAGE_XML = REPO_ROOT / "coverage.xml"
 TESTMON_DATA = REPO_ROOT / ".testmondata"
+# QS-278: the persistent coverage DATA file (coverage.py's default). The
+# `--impacted` gate runs testmon-selected tests with `--cov-append` so
+# coverage ACCUMULATES across inner-loop invocations. testmon 2.2.0
+# correctly selects 0 tests for a no-op re-run (and only a small subset for
+# a single-file edit); without accumulation, pytest-cov would erase
+# `.coverage` and emit a report covering only THIS run, so any line changed
+# vs origin/main but not re-exercised this run would read as uncovered and
+# diff-cover would FAIL spuriously. Accumulation keeps prior coverage so the
+# changed-line verdict stays correct while the run stays fast. The data is
+# reset only on a fresh select-all baseline (see `_reset_coverage_data`).
+COVERAGE_DATA = REPO_ROOT / ".coverage"
 
 # QS-276 review-fix S1: cap the inner-loop `git fetch origin main` so a
 # dead/slow remote degrades to a stale base + warning instead of hanging
@@ -1070,6 +1081,24 @@ def _ensure_testmon_db_safe() -> None:
         TESTMON_DATA.unlink(missing_ok=True)
 
 
+def _reset_coverage_data() -> None:
+    """Erase the accumulated coverage data before a fresh select-all baseline.
+
+    QS-278: `--impacted` runs with `--cov-append`, so coverage accumulates
+    across inner-loop invocations (keeping the changed-line verdict correct
+    when testmon reselects 0 tests). That accumulation must be reset
+    whenever testmon is about to select *all* tests — i.e. a first-ever run
+    or a rebuilt/purged `.testmondata` — otherwise stale coverage from an
+    earlier branch state could mask a genuine gap. A select-all run rewrites
+    the full picture from scratch, so a clean slate here is both safe and
+    necessary. Removes the primary `.coverage` plus any leftover xdist
+    per-worker shards (`.coverage.*`).
+    """
+    COVERAGE_DATA.unlink(missing_ok=True)
+    for shard in REPO_ROOT.glob(".coverage.*"):
+        shard.unlink(missing_ok=True)
+
+
 def _build_testmon_cmd() -> list[str]:
     """Build the single-process testmon selection + coverage pytest argv.
 
@@ -1102,6 +1131,14 @@ def _build_testmon_cmd() -> list[str]:
         # verdict is unaffected) and leaves every domain test selectable.
         f"--ignore={TESTS_DIR / 'test_quality_gate.py'}",
         f"--cov={SRC_DIR}",
+        # QS-278: accumulate coverage across inner-loop runs. testmon
+        # reselects 0 tests for a no-op re-run and only an edit's subset for
+        # an incremental change; `--cov-append` keeps the prior runs'
+        # coverage so the diff-cover changed-line verdict (vs origin/main)
+        # stays correct without re-running the whole impacted set every
+        # time. The data is reset on a fresh select-all baseline so it can't
+        # grow stale across unrelated branch states.
+        "--cov-append",
         "--cov-report=",
         f"--cov-report=xml:{COVERAGE_XML}",
         "-q",
@@ -1184,6 +1221,13 @@ def check_impacted() -> int:
         return 0
 
     _ensure_testmon_db_safe()
+    # QS-278: a missing `.testmondata` here (first-ever run, or just purged
+    # as corrupt) means testmon is about to select ALL tests — a fresh
+    # baseline. Reset the accumulated `--cov-append` coverage data so it
+    # reflects only this clean full run, never stale lines from an earlier
+    # branch state. When the DB exists, accumulation is intentional.
+    if not TESTMON_DATA.exists():
+        _reset_coverage_data()
     # QS-276 review-fix SF1 (#05): delete any stale coverage.xml from a
     # previous run BEFORE the testmon/cov pass. Otherwise a pytest-cov
     # emission failure would be masked — the N7 exists-guard below would

@@ -335,14 +335,21 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         return self.predicted_leave_time, self.predicted_mileage
 
-    def get_forecast_readable_string(self, time: datetime | None = None) -> str:
-        """Get a human-readable string of the person's forecast."""
+    def get_forecast_readable_string(self, time: datetime | None = None, for_small_standalone: bool = True) -> str:
+        """Get a human-readable string of the person's forecast.
+
+        ``for_small_standalone`` (default ``True``) selects the leave-time date
+        formatting passed to ``get_readable_date_string``. The default preserves
+        every existing direct caller on the compact widget form (``HH:MM`` /
+        ``%m-%d %H:%M``); the car-card origin line passes ``False`` to get the
+        normal ``today HH:MM`` / ``tomorrow HH:MM`` / ``%Y-%m-%d %H:%M`` form.
+        """
         self.update_person_forecast(time)
 
         if self.predicted_mileage is None or self.predicted_leave_time is None:
             return PERSON_NO_FORECAST_STRING
         else:
-            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=True, allow_cr=False)}"
+            return f"{int(self.predicted_mileage)}km {get_readable_date_string(self.predicted_leave_time, for_small_standalone=for_small_standalone, allow_cr=False)}"
 
     async def notify_of_forecast_if_needed(
         self,

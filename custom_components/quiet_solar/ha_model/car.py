@@ -407,13 +407,22 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 self.current_forecasted_person.name,
             )
 
-    def get_car_person_readable_forecast_mileage(self):
+    def get_car_person_readable_forecast_mileage(self, for_small_standalone: bool = True):
+        """Person-forecast line ``"<name>: <forecast>"`` for the car card.
 
+        ``for_small_standalone`` (default ``True``) is forwarded to
+        ``QSPerson.get_forecast_readable_string`` and selects the leave-time date
+        formatting. The default preserves every existing direct caller (e.g. the
+        ``qs_car_person_forecast`` sensor) on the compact form; the origin line
+        (``get_car_charge_origin_readable_string``) passes ``False`` to get the
+        normal ``today HH:MM`` / ``tomorrow HH:MM`` / ``%Y-%m-%d %H:%M`` form.
+        """
         person = self.current_forecasted_person
         if person is None:
             return "No forecasted person"
         else:
-            forecast_str = person.get_forecast_readable_string()  # will update the forecast too if needed
+            # will update the forecast too if needed
+            forecast_str = person.get_forecast_readable_string(for_small_standalone=for_small_standalone)
             return f"{person.name}: {forecast_str}"
 
     def get_car_persons_options(self) -> list[str]:
@@ -1178,18 +1187,23 @@ class QSCar(HADeviceMixin, AbstractDevice):
                 return "Manual as fast as possible charge"
 
         # No charger, person-automated, or any other type: the person-forecast line.
-        return self.get_car_person_readable_forecast_mileage()
+        # QS-278: render the leave time with the normal date formatting.
+        return self.get_car_person_readable_forecast_mileage(for_small_standalone=False)
 
     @staticmethod
     def _origin_target_single_line(ct) -> str:
         """Target time for the single-line origin row.
 
-        Delegates to the shared formatter with ``allow_cr=False`` so a far-out
-        (>~24h) target renders as ``"%m-%d %H:%M"`` on a single line instead of
-        the two-line ``"%m-%d\\n%H:%M"`` form. Covered by the far-out
-        Calendar/Manual tests in ``tests/test_car_charge_origin.py``.
+        Uses the **normal** ``get_readable_date_string`` formatting
+        (``for_small_standalone=False``) so the target renders as
+        ``today HH:MM`` / ``tomorrow HH:MM`` / ``%Y-%m-%d %H:%M`` — the more
+        legible form wanted on the origin line, rather than the compact
+        ``for_small_standalone`` widget form. ``allow_cr=False`` is kept
+        explicit to state the single-line intent at the call site; the normal
+        formatting branch never emits a newline. Covered by the Calendar/Manual
+        tests in ``tests/test_car_charge_origin.py``.
         """
-        return ct.get_readable_next_target_date_string(for_small_standalone=True, allow_cr=False)
+        return ct.get_readable_next_target_date_string(for_small_standalone=False, allow_cr=False)
 
     async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
 

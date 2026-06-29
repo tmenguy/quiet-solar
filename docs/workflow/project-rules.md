@@ -24,6 +24,11 @@ all four; use it only for ad-hoc single-node debugging.
 # before commit/PR. Runs only the testmon-selected tests under
 # --cov=<package>, then diff-cover --fail-under=100 on the CHANGED
 # lines. Guarantees the lines YOU changed are 100% covered in ~seconds.
+# QS-278: coverage ACCUMULATES across runs (--cov-append), so a no-op
+# re-run (testmon selects 0 tests) or a single-file edit (small subset)
+# still has every changed-vs-origin line covered — no spurious FAIL, and
+# the run stays fast. The accumulated data is reset only on a fresh
+# select-all baseline (missing/rebuilt .testmondata).
 python scripts/qs/quality_gate.py --impacted
 
 # Full quality gate (pytest 100% cov + ruff + mypy + translations).

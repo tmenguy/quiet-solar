@@ -2409,6 +2409,9 @@ class TestBuildImpactedCmds:
         cmd = quality_gate._build_testmon_cmd()
         assert cmd[:4] == [quality_gate.VENV_PYTHON, "-m", "pytest", "--testmon"]
         assert f"--cov={quality_gate.SRC_DIR}" in cmd
+        # QS-278: coverage accumulates across inner-loop runs so a 0/partial
+        # testmon reselection still covers every line changed vs origin/main.
+        assert "--cov-append" in cmd
         # Empty --cov-report= must precede the xml report (clears pytest.ini).
         assert cmd.index("--cov-report=") < cmd.index(f"--cov-report=xml:{quality_gate.COVERAGE_XML}")
         assert "--cov-fail-under=100" not in cmd  # verdict is diff-cover's job
@@ -2462,6 +2465,18 @@ class TestBuildImpactedCmds:
 
 class TestCheckImpacted:
     """`check_impacted` orchestrator + exit-code mapping (mocked seam)."""
+
+    @pytest.fixture(autouse=True)
+    def _testmon_db_present(self, tmp_path_factory: pytest.TempPathFactory):
+        """QS-278: by default point `TESTMON_DATA` at an existing file so the
+        fresh-baseline branch (which resets the real `.coverage` via
+        `--cov-append`) never fires against the real FS during these
+        mocked-seam tests. Dedicated tests below re-patch it to exercise the
+        branch explicitly."""
+        db = tmp_path_factory.mktemp("tmdb") / ".testmondata"
+        db.write_bytes(b"x")
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            yield
 
     def test_tooling_missing_returns_3(self) -> None:
         with patch.object(quality_gate, "_impacted_tooling_available", return_value=False):
@@ -2605,6 +2620,83 @@ class TestCheckImpacted:
             assert quality_gate.check_impacted() == 1
         assert not xml.exists(), "the stale coverage.xml must have been cleared before the run"
         mock_run.assert_not_called()  # diff-cover never scores against a stale report
+
+    def test_fresh_baseline_resets_accumulated_coverage(self, tmp_path: Path) -> None:
+        """QS-278: an absent `.testmondata` (testmon about to select ALL tests)
+        resets the accumulated `--cov-append` coverage data before the run."""
+        xml = tmp_path / "coverage.xml"
+        absent_db = tmp_path / ".testmondata"  # never created
+
+        def _emit_xml(*_a: object, **_k: object) -> dict:
+            xml.write_text("<coverage/>")
+            return {"name": "pytest", "passed": True}
+
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", absent_db),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_reset_coverage_data") as mock_reset,
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml),
+            patch.object(quality_gate, "_run", return_value=_cp(0, stdout="Coverage: 100%")),
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_reset.assert_called_once()
+
+    def test_existing_baseline_keeps_accumulated_coverage(self, tmp_path: Path) -> None:
+        """QS-278: when `.testmondata` exists, coverage accumulation is
+        intentional — the reset must NOT fire (so a 0/partial reselection
+        keeps prior runs' coverage of changed-vs-origin lines)."""
+        xml = tmp_path / "coverage.xml"
+        present_db = tmp_path / ".testmondata"
+        present_db.write_bytes(b"x")
+
+        def _emit_xml(*_a: object, **_k: object) -> dict:
+            xml.write_text("<coverage/>")
+            return {"name": "pytest", "passed": True}
+
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", present_db),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_reset_coverage_data") as mock_reset,
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml),
+            patch.object(quality_gate, "_run", return_value=_cp(0, stdout="Coverage: 100%")),
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_reset.assert_not_called()
+
+
+class TestResetCoverageData:
+    """QS-278: `_reset_coverage_data` clears the persistent coverage data."""
+
+    def test_removes_primary_data_and_xdist_shards(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        data = tmp_path / ".coverage"
+        data.write_text("primary")
+        shard = tmp_path / ".coverage.host.12345"
+        shard.write_text("shard")
+        monkeypatch.setattr(quality_gate, "COVERAGE_DATA", data)
+        monkeypatch.setattr(quality_gate, "REPO_ROOT", tmp_path)
+
+        quality_gate._reset_coverage_data()
+
+        assert not data.exists()
+        assert not shard.exists()
+
+    def test_is_noop_when_no_data_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Absent data must not raise (first-ever run)."""
+        monkeypatch.setattr(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage")
+        monkeypatch.setattr(quality_gate, "REPO_ROOT", tmp_path)
+        quality_gate._reset_coverage_data()  # must not raise
 
 
 class TestTestmonAvailable:

@@ -1272,7 +1272,7 @@ async def test_car_person_forecast_readable_variants(
         name="Forecast Person",
         predicted_mileage=50.0,
         predicted_leave_time=datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC),
-        get_forecast_readable_string=lambda: "50km tomorrow",
+        get_forecast_readable_string=lambda **kwargs: "50km tomorrow",
     )
     car_device.current_forecasted_person = person
     assert "Forecast Person" in car_device.get_car_person_readable_forecast_mileage()

@@ -46,8 +46,11 @@ htmlcov/
 nosetests.xml
 coverage.xml
 
-# pytest-testmon test-impact DB (QS-276) — written during runs, never committed
+# pytest-testmon test-impact DB (QS-276) — written during runs, never committed.
+# QS-278: also ignore the SQLite WAL/SHM sidecars left by an interrupted run.
 .testmondata
+.testmondata-wal
+.testmondata-shm
 *.cover
 *.py,cover
 .hypothesis/
@@ -173,17 +176,20 @@ cython_debug/
 config/
 
 # Third-party custom components
-custom_components/hacs/
+# NOTE: no trailing slash — these are often symlinks into a sibling HA
+# checkout, and a trailing-slash pattern matches dirs but NOT symlinks,
+# leaving them untracked and crashing `diff-cover --include-untracked`.
+custom_components/hacs
 custom_components/netatmo
-custom_components/ocpp/
+custom_components/ocpp
 custom_components/renault
-custom_components/solcast_solar/
+custom_components/solcast_solar
 custom_components/volkswagencarnet
-/custom_components/hacs/
+/custom_components/hacs
 /custom_components/netatmo
-/custom_components/ocpp/
+/custom_components/ocpp
 /custom_components/renault
-/custom_components/solcast_solar/
+/custom_components/solcast_solar
 /custom_components/volkswagencarnet
 /custom_components/abetterrouteplanner
 
