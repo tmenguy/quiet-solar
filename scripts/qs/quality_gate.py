@@ -1015,8 +1015,10 @@ def _resolve_diff_base() -> str | None:
     for ref in ("origin/main", "main"):
         if _run(["git", "rev-parse", "--verify", ref]).returncode != 0:
             continue
-        # NH2: require a common ancestor with HEAD before trusting the ref.
+        # NH2 (#02): require a common ancestor with HEAD before trusting the ref.
         if _run(["git", "merge-base", ref, "HEAD"]).returncode == 0:
+            # NH2 (#05): name the chosen base so an unexpected diff-cover range is debuggable.
+            _emit("impacted", f"diff base: {ref}")
             return ref
         _emit("impacted", f"warning: {ref} has no merge-base with HEAD (shallow clone?) — skipping")
     upstream = _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
@@ -1025,6 +1027,7 @@ def _resolve_diff_base() -> str | None:
         mb = _run(["git", "merge-base", "HEAD", tracked])
         sha = mb.stdout.strip()
         if mb.returncode == 0 and sha:
+            _emit("impacted", f"diff base: {sha} (merge-base with {tracked})")
             return sha
     return None
 
@@ -1181,6 +1184,12 @@ def check_impacted() -> int:
         return 0
 
     _ensure_testmon_db_safe()
+    # QS-276 review-fix SF1 (#05): delete any stale coverage.xml from a
+    # previous run BEFORE the testmon/cov pass. Otherwise a pytest-cov
+    # emission failure would be masked — the N7 exists-guard below would
+    # see the *old* report and diff-cover would score the changed lines
+    # against stale data instead of failing loudly.
+    COVERAGE_XML.unlink(missing_ok=True)
     _emit("impacted", f"selecting impacted tests (testmon) vs base {base}")
     result = _stream_pytest(_build_testmon_cmd())
     if not result["passed"]:
@@ -1190,7 +1199,8 @@ def check_impacted() -> int:
     # QS-276 review-fix N7: pytest-cov writes coverage.xml even on a
     # zero-collection run (verified for the pinned version), but guard
     # defensively — if a future pytest-cov stops emitting it, diff-cover
-    # would silently read a stale/missing file. Fail loudly instead.
+    # would silently read a stale/missing file. Combined with the SF1
+    # pre-delete above, a fresh report is guaranteed or we fail loudly.
     if not COVERAGE_XML.exists():
         _emit("impacted", f"FAIL (coverage report not written: {COVERAGE_XML})")
         return 1
@@ -1262,6 +1272,12 @@ def _build_seed_testmon_cmd() -> list[str]:
     the baseline is the heaviest testmon pass (a full select-all), so it
     benefits the most from `-n auto`. Honours `QS_QG_PYTEST_WORKERS` via
     the shared `_pytest_workers()` resolver.
+
+    NH1 (review-fix #05): unlike the inner-loop `_build_testmon_cmd`, this
+    deliberately does NOT `--ignore tests/test_quality_gate.py`. Seeding is
+    the FULL baseline — the testmon self-tests must be fingerprinted too,
+    or a later change to the gate would force a select-all. Do not mirror
+    the inner-loop `--ignore` here (it would leave the baseline incomplete).
     """
     cmd = [VENV_PYTHON, "-m", "pytest", "--testmon", "-q"]
     if _TESTMON_SUPPORTS_XDIST:

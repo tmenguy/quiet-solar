@@ -2168,9 +2168,11 @@ class TestResolveDiffBase:
 
         return _side_effect
 
-    def test_origin_main_wins(self) -> None:
+    def test_origin_main_wins(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 0, "main": 0})):
             assert quality_gate._resolve_diff_base() == "origin/main"
+        # review-fix NH2 (#05): the chosen base is announced for debuggability.
+        assert "diff base: origin/main" in capsys.readouterr().err
 
     def test_fetches_origin_main_first(self) -> None:
         with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 0})) as mock_run:
@@ -2182,7 +2184,7 @@ class TestResolveDiffBase:
         with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 1, "main": 0})):
             assert quality_gate._resolve_diff_base() == "main"
 
-    def test_falls_back_to_upstream_merge_base(self) -> None:
+    def test_falls_back_to_upstream_merge_base(self, capsys: pytest.CaptureFixture[str]) -> None:
         router = self._router(
             {"origin/main": 1, "main": 1},
             upstream=(0, "origin/feature"),
@@ -2190,6 +2192,8 @@ class TestResolveDiffBase:
         )
         with patch.object(quality_gate, "_run", side_effect=router):
             assert quality_gate._resolve_diff_base() == "deadbeefcafe"
+        # review-fix NH2 (#05): the merge-base sha + tracked ref are announced.
+        assert "diff base: deadbeefcafe (merge-base with origin/feature)" in capsys.readouterr().err
 
     def test_none_when_no_upstream(self) -> None:
         router = self._router({"origin/main": 1, "main": 1}, upstream=(1, ""))
@@ -2497,14 +2501,18 @@ class TestCheckImpacted:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         xml = tmp_path / "coverage.xml"
-        xml.write_text("<coverage/>")
+
+        def _emit_xml(*_a: object, **_k: object) -> dict:
+            xml.write_text("<coverage/>")  # simulate pytest-cov writing a fresh report
+            return {"name": "pytest", "passed": True}
+
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
-            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml),
             patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="fail")),
         ):
             assert quality_gate.check_impacted() == 1
@@ -2518,14 +2526,18 @@ class TestCheckImpacted:
     ) -> None:
         """review-fix SF2 (#03): a timed-out diff-cover (124) reports a timeout, not a coverage verdict."""
         xml = tmp_path / "coverage.xml"
-        xml.write_text("<coverage/>")
+
+        def _emit_xml(*_a: object, **_k: object) -> dict:
+            xml.write_text("<coverage/>")
+            return {"name": "pytest", "passed": True}
+
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
-            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml),
             patch.object(quality_gate, "_run", return_value=_cp(124, stderr="timed out after 60.0s")),
         ):
             assert quality_gate.check_impacted() == 1
@@ -2550,14 +2562,18 @@ class TestCheckImpacted:
 
     def test_pass_returns_0(self, tmp_path: Path) -> None:
         xml = tmp_path / "coverage.xml"
-        xml.write_text("<coverage/>")
+
+        def _emit_xml(*_a: object, **_k: object) -> dict:
+            xml.write_text("<coverage/>")  # fresh report, written AFTER the SF1 pre-delete
+            return {"name": "pytest", "passed": True}
+
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe") as mock_safe,
             patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
-            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml),
             patch.object(quality_gate, "_run", return_value=_cp(0, stdout="Coverage: 100%")) as mock_run,
         ):
             assert quality_gate.check_impacted() == 0
@@ -2566,6 +2582,29 @@ class TestCheckImpacted:
         assert dc_cmd[2] == "--compare-branch=origin/main"
         # review-fix NH1: the diff-cover subprocess is bounded by a timeout.
         assert mock_run.call_args.kwargs.get("timeout") == quality_gate._DIFF_COVER_TIMEOUT_SECONDS
+
+    def test_stale_coverage_xml_cleared_so_emission_failure_fails(self, tmp_path: Path) -> None:
+        """review-fix SF1 (#05): a stale coverage.xml must not mask a pytest-cov emission failure.
+
+        A previous run's report is present, but this run's (mocked) pytest
+        does NOT emit a fresh one. The pre-run unlink + exists-guard must
+        still FAIL (return 1) and never run diff-cover against stale data.
+        """
+        xml = tmp_path / "coverage.xml"
+        xml.write_text("<coverage>STALE from a previous run</coverage>")
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            # pytest runs but does NOT (re)write coverage.xml this time.
+            patch.object(quality_gate, "_stream_pytest", return_value={"name": "pytest", "passed": True}),
+            patch.object(quality_gate, "_run") as mock_run,
+        ):
+            assert quality_gate.check_impacted() == 1
+        assert not xml.exists(), "the stale coverage.xml must have been cleared before the run"
+        mock_run.assert_not_called()  # diff-cover never scores against a stale report
 
 
 class TestTestmonAvailable:
