@@ -175,23 +175,20 @@ cython_debug/
 # Home Assistant runtime config
 config/
 
-# Third-party custom components
+# Third-party custom components.
 # NOTE: no trailing slash — these are often symlinks into a sibling HA
 # checkout, and a trailing-slash pattern matches dirs but NOT symlinks,
 # leaving them untracked and crashing `diff-cover --include-untracked`.
+# A mid-path slash already anchors each pattern to the repo root, so the
+# old `/custom_components/*` leading-slash duplicates were redundant
+# (QS-278 review-fix #01-6) and have been dropped.
+custom_components/abetterrouteplanner
 custom_components/hacs
 custom_components/netatmo
 custom_components/ocpp
 custom_components/renault
 custom_components/solcast_solar
 custom_components/volkswagencarnet
-/custom_components/hacs
-/custom_components/netatmo
-/custom_components/ocpp
-/custom_components/renault
-/custom_components/solcast_solar
-/custom_components/volkswagencarnet
-/custom_components/abetterrouteplanner
 
 # Per-task OpenCode agent files (rendered dynamically, not tracked)
 .opencode/agents/qs-*-QS-*.md

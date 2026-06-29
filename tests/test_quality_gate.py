@@ -2343,22 +2343,69 @@ class TestEnsureTestmonDbSafe:
             quality_gate._ensure_testmon_db_safe()  # must not raise
         assert not db.exists()
 
-    def test_valid_sqlite_is_kept(self, tmp_path: Path) -> None:
+    def test_valid_sqlite_matching_schema_is_kept(self, tmp_path: Path) -> None:
         db = tmp_path / ".testmondata"
         conn = sqlite3.connect(str(db))
         conn.execute("CREATE TABLE t (x)")
+        conn.execute("PRAGMA user_version = 14")
         conn.commit()
         conn.close()
-        with patch.object(quality_gate, "TESTMON_DATA", db):
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            # QS-278 #01-1: matching schema → valid incremental baseline → kept.
+            patch.object(quality_gate, "_testmon_schema_version", return_value=14),
+        ):
             quality_gate._ensure_testmon_db_safe()
-        assert db.exists(), "a valid SQLite DB must be preserved"
+        assert db.exists(), "a valid, schema-matching SQLite DB must be preserved"
 
-    def test_corrupt_db_is_removed(self, tmp_path: Path) -> None:
+    def test_schema_version_mismatch_is_removed_with_sidecars(self, tmp_path: Path) -> None:
+        """QS-278 #01-1: testmon rebuilds in place on a `user_version` mismatch,
+        leaving the file present. We must purge it (and its WAL/SHM sidecars)
+        so the select-all run resets the accumulated `--cov-append` coverage."""
+        db = tmp_path / ".testmondata"
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA user_version = 13")  # stale (testmon expects 14)
+        conn.commit()
+        conn.close()
+        wal = tmp_path / ".testmondata-wal"
+        wal.write_bytes(b"stale-wal")
+        shm = tmp_path / ".testmondata-shm"
+        shm.write_bytes(b"stale-shm")
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "_testmon_schema_version", return_value=14),
+        ):
+            quality_gate._ensure_testmon_db_safe()
+        assert not db.exists(), "a schema-mismatched .testmondata must be purged"
+        assert not wal.exists() and not shm.exists(), "WAL/SHM sidecars must be purged too"
+
+    def test_unknown_schema_version_keeps_db(self, tmp_path: Path) -> None:
+        """QS-278 #01-1: when the expected schema can't be probed (testmon not
+        importable), fall back to leaving a readable DB intact, not purging."""
+        db = tmp_path / ".testmondata"
+        conn = sqlite3.connect(str(db))
+        conn.execute("PRAGMA user_version = 7")
+        conn.commit()
+        conn.close()
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "_testmon_schema_version", return_value=None),
+        ):
+            quality_gate._ensure_testmon_db_safe()
+        assert db.exists(), "an unknown expected schema must not trigger a purge"
+
+    def test_corrupt_db_is_removed_with_sidecars(self, tmp_path: Path) -> None:
+        """QS-278 #01-2: a corrupt DB AND its orphaned WAL/SHM sidecars are purged."""
         db = tmp_path / ".testmondata"
         db.write_bytes(b"this is not a sqlite database")
+        wal = tmp_path / ".testmondata-wal"
+        wal.write_bytes(b"orphan-wal")
+        shm = tmp_path / ".testmondata-shm"
+        shm.write_bytes(b"orphan-shm")
         with patch.object(quality_gate, "TESTMON_DATA", db):
             quality_gate._ensure_testmon_db_safe()
         assert not db.exists(), "corrupt .testmondata must be removed to force select-all"
+        assert not wal.exists() and not shm.exists(), "orphaned WAL/SHM sidecars must be removed"
 
     def test_unlink_missing_safe_when_db_vanishes(self, tmp_path: Path) -> None:
         """review-fix N6: the file disappearing between probe and unlink must not raise."""
@@ -2672,18 +2719,36 @@ class TestCheckImpacted:
         mock_reset.assert_not_called()
 
 
+class TestTestmonSchemaVersion:
+    """QS-278 #01-1: `_testmon_schema_version` probes VENV_PYTHON for testmon's DATA_VERSION."""
+
+    def test_parses_int_from_probe_stdout(self) -> None:
+        with patch.object(quality_gate, "_run", return_value=_cp(0, stdout="14\n")) as mock_run:
+            assert quality_gate._testmon_schema_version() == 14
+        assert mock_run.call_args.args[0][0] == quality_gate.VENV_PYTHON
+
+    def test_returns_none_when_probe_fails(self) -> None:
+        with patch.object(quality_gate, "_run", return_value=_cp(1, stderr="ModuleNotFoundError")):
+            assert quality_gate._testmon_schema_version() is None
+
+    def test_returns_none_on_unparseable_stdout(self) -> None:
+        with patch.object(quality_gate, "_run", return_value=_cp(0, stdout="not-an-int")):
+            assert quality_gate._testmon_schema_version() is None
+
+
 class TestResetCoverageData:
     """QS-278: `_reset_coverage_data` clears the persistent coverage data."""
 
     def test_removes_primary_data_and_xdist_shards(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # #01-5: shards are globbed from COVERAGE_DATA's own dir — patching it
+        # alone must clear both the primary file and the shards.
         data = tmp_path / ".coverage"
         data.write_text("primary")
         shard = tmp_path / ".coverage.host.12345"
         shard.write_text("shard")
         monkeypatch.setattr(quality_gate, "COVERAGE_DATA", data)
-        monkeypatch.setattr(quality_gate, "REPO_ROOT", tmp_path)
 
         quality_gate._reset_coverage_data()
 
@@ -2695,7 +2760,6 @@ class TestResetCoverageData:
     ) -> None:
         """Absent data must not raise (first-ever run)."""
         monkeypatch.setattr(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage")
-        monkeypatch.setattr(quality_gate, "REPO_ROOT", tmp_path)
         quality_gate._reset_coverage_data()  # must not raise
 
 

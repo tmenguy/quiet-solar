@@ -117,21 +117,22 @@ def test_person_origin(origin_car, fake_hass, mock_data_handler):
     assert "30km" in result
 
 
+@freeze_time("2026-01-15 12:00:00")
 def test_person_origin_far_out_leave_time_is_single_line(origin_car, fake_hass, mock_data_handler):
-    """A person forecast with a >24h leave time must render on one line — no raw
-    newline (review-fix #05: allow_cr=False threaded through the person branch)."""
-    person = _make_person(
-        fake_hass,
-        mock_data_handler,
-        mileage=30.0,
-        leave_time=datetime.now(pytz.UTC) + timedelta(days=3),
-    )
+    """AC3 (review-fix #01-3): the person fall-through with a >24h leave time
+    renders the full ``%Y-%m-%d %H:%M`` date on a single line — directly locking
+    the "leave times" clause, not just the Calendar/Manual target path. Frozen
+    clock makes the full-date branch deterministic."""
+    leave_time = datetime.now(pytz.UTC) + timedelta(days=3)
+    person = _make_person(fake_hass, mock_data_handler, mileage=30.0, leave_time=leave_time)
     origin_car.current_forecasted_person = person
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
 
     result = origin_car.get_car_charge_origin_readable_string()
+    expected = get_readable_date_string(leave_time, for_small_standalone=False)
     assert "\n" not in result
-    assert result.startswith("Magali: 30km ")
+    assert result == f"Magali: 30km {expected}"
+    assert expected[:4].isdigit()  # full-date form "%Y-%m-%d %H:%M", not compact
 
 
 def test_orphaned_person_origin(origin_car):
@@ -168,9 +169,11 @@ def test_manual_origin(origin_car):
     )
 
 
+@freeze_time("2026-01-15 12:00:00")
 def test_calendar_origin_far_out_target_is_single_line(origin_car):
     """A >24h target renders the full ``%Y-%m-%d %H:%M`` date on one line
-    (QS-278: normal formatting, no raw newline)."""
+    (QS-278: normal formatting, no raw newline). Frozen clock (review-fix
+    #01-4) keeps the full-date branch deterministic regardless of run timing."""
     ct, expected = _far_term_constraint()
     _set_charge_type(origin_car, CAR_CHARGE_TYPE_CALENDAR, ct)
     result = origin_car.get_car_charge_origin_readable_string()
@@ -179,6 +182,7 @@ def test_calendar_origin_far_out_target_is_single_line(origin_car):
     assert expected[:4].isdigit()  # full-date form "%Y-%m-%d %H:%M"
 
 
+@freeze_time("2026-01-15 12:00:00")
 def test_manual_origin_far_out_target_is_single_line(origin_car):
     """A >24h manual target renders the full ``%Y-%m-%d %H:%M`` date on one line."""
     ct, expected = _far_term_constraint()
