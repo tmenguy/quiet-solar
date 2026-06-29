@@ -902,6 +902,17 @@ def _output_results(
 # per-run temp path.
 COVERAGE_XML = REPO_ROOT / "coverage.xml"
 TESTMON_DATA = REPO_ROOT / ".testmondata"
+# QS-278: the persistent coverage DATA file (coverage.py's default). The
+# `--impacted` gate runs testmon-selected tests with `--cov-append` so
+# coverage ACCUMULATES across inner-loop invocations. testmon 2.2.0
+# correctly selects 0 tests for a no-op re-run (and only a small subset for
+# a single-file edit); without accumulation, pytest-cov would erase
+# `.coverage` and emit a report covering only THIS run, so any line changed
+# vs origin/main but not re-exercised this run would read as uncovered and
+# diff-cover would FAIL spuriously. Accumulation keeps prior coverage so the
+# changed-line verdict stays correct while the run stays fast. The data is
+# reset only on a fresh select-all baseline (see `_reset_coverage_data`).
+COVERAGE_DATA = REPO_ROOT / ".coverage"
 
 # QS-276 review-fix S1: cap the inner-loop `git fetch origin main` so a
 # dead/slow remote degrades to a stale base + warning instead of hanging
@@ -1032,42 +1043,107 @@ def _resolve_diff_base() -> str | None:
     return None
 
 
+def _testmon_schema_version() -> int | None:
+    """The DB schema version (`PRAGMA user_version`) the installed testmon
+    expects, probed in VENV_PYTHON — the interpreter pytest actually runs
+    under (mirroring `_testmon_available`). Returns None when testmon is not
+    importable there or the constant is unreadable, so callers fall back to
+    leaving the DB untouched rather than purging on an unknown.
+    """
+    res = _run([VENV_PYTHON, "-c", "import testmon.db as d; print(int(d.DATA_VERSION))"])
+    if res.returncode != 0:
+        return None
+    try:
+        return int(res.stdout.strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _purge_testmon_db(reason: str) -> None:
+    """Unlink `.testmondata` AND its SQLite WAL/SHM sidecars so the next run
+    rebuilds from scratch (select-all).
+
+    QS-278 review-fix #01-2: the `-wal` / `-shm` sidecars must go too. A fresh
+    `.testmondata` opened against an orphaned `-wal` can replay stale WAL
+    frames or raise, so a corrupt-DB recovery that left them behind merely
+    relocated the breakage to the next run. `missing_ok=True` everywhere
+    (QS-276 N6): a file that vanishes between probe and unlink (a concurrent
+    run / another worktree) already satisfies the select-all intent.
+    """
+    _emit("impacted", f"{reason} — removing .testmondata (+WAL/SHM) to force select-all")
+    TESTMON_DATA.unlink(missing_ok=True)
+    for suffix in ("-wal", "-shm"):
+        (TESTMON_DATA.parent / (TESTMON_DATA.name + suffix)).unlink(missing_ok=True)
+
+
 def _ensure_testmon_db_safe() -> None:
-    """Delete `.testmondata` when it is not a readable SQLite database.
+    """Purge `.testmondata` (+WAL/SHM) when it is unusable as an INCREMENTAL
+    baseline, so testmon rebuilds cleanly and `check_impacted`'s absence→reset
+    branch clears the accumulated `--cov-append` coverage. Two purge triggers:
 
-    testmon recovers from a schema-version mismatch on its own (it
-    rebuilds and selects all tests), but a genuinely corrupt /
-    partially-written / non-SQLite file (a killed run, a dependency bump,
-    a path relocation) makes it raise `sqlite3.DatabaseError` mid-run
-    instead. Removing the file forces a clean rebuild → select-all,
-    honouring the 'never silently under-select' fail-safe.
+    1. **Not a readable SQLite DB** — a genuinely corrupt / partially-written
+       / non-SQLite file (a killed run, a path relocation) raises
+       `sqlite3.DatabaseError`. (QS-276)
+    2. **Schema-version mismatch** (QS-278 review-fix #01-1) — testmon normally
+       rebuilds IN PLACE on a `PRAGMA user_version` mismatch (e.g. after a
+       testmon version bump), leaving the file present, so
+       `TESTMON_DATA.exists()` stays True and the coverage reset would be
+       skipped while a select-all runs and `--cov-append`s fresh coverage onto
+       STALE accumulated `.coverage` — masking a genuine changed-line gap.
+       Detecting the mismatch up front and purging unifies every select-all
+       trigger behind the absence→reset path.
 
-    QS-276 review-fix SF1: `sqlite3.OperationalError` ("database is
-    locked") is a *subclass* of `sqlite3.DatabaseError`. A VALID DB that
-    is transiently locked by a concurrent `--seed-testmon` / `--impacted`
-    run must NOT be deleted — wiping it would discard a recoverable
-    baseline and force a needless select-all. So catch `OperationalError`
-    FIRST and leave the file intact; only a genuine, corruption-specific
-    `DatabaseError` triggers the unlink.
+    QS-276 review-fix SF1: `sqlite3.OperationalError` ("database is locked")
+    is a *subclass* of `sqlite3.DatabaseError`. A VALID DB that is transiently
+    locked by a concurrent `--seed-testmon` / `--impacted` run must NOT be
+    deleted — wiping it (and its sidecars) would corrupt that live run's
+    baseline. So catch `OperationalError` FIRST and leave everything intact;
+    the schema probe is skipped too (we could not read it under the lock
+    anyway). Only a genuine corruption or a confirmed schema mismatch purges.
     """
     if not TESTMON_DATA.exists():
         return
     try:
         conn = sqlite3.connect(str(TESTMON_DATA))
         try:
-            conn.execute("PRAGMA schema_version").fetchone()
+            stored = int(conn.execute("PRAGMA user_version").fetchone()[0])
         finally:
             conn.close()
     except sqlite3.OperationalError as exc:
         # Valid-but-busy (locked) — leave it; testmon handles the lock.
         _emit("impacted", f".testmondata is locked/busy — leaving intact ({exc})")
+        return
     except sqlite3.DatabaseError:
-        _emit("impacted", "corrupt .testmondata detected — removing to force select-all")
-        # QS-276 review-fix N6: `missing_ok=True` so a file that vanishes
-        # between the readability probe and the unlink (a concurrent run,
-        # another worktree) doesn't raise — an absent DB already satisfies
-        # the select-all fail-safe intent.
-        TESTMON_DATA.unlink(missing_ok=True)
+        _purge_testmon_db("corrupt .testmondata detected")
+        return
+
+    expected = _testmon_schema_version()
+    if expected is not None and stored != expected:
+        _purge_testmon_db(f"testmon schema-version mismatch (db={stored}, expected={expected})")
+
+
+def _reset_coverage_data() -> None:
+    """Erase the accumulated coverage data before a fresh select-all baseline.
+
+    QS-278: `--impacted` runs with `--cov-append`, so coverage accumulates
+    across inner-loop invocations (keeping the changed-line verdict correct
+    when testmon reselects 0 tests). That accumulation must be reset
+    whenever testmon is about to select *all* tests — a first-ever run, a
+    rebuilt/purged `.testmondata`, or a schema-version mismatch (see
+    `_ensure_testmon_db_safe`) — otherwise stale coverage from an earlier
+    branch state could mask a genuine gap. A select-all run rewrites the full
+    picture from scratch, so a clean slate here is both safe and necessary.
+    Removes the primary `.coverage` plus any leftover xdist per-worker shards.
+
+    QS-278 review-fix #01-5: the shard glob is resolved from `COVERAGE_DATA`'s
+    OWN directory, never a separately-resolved root, so the primary file and
+    its `.coverage.*` shards can never target divergent dirs. Single-writer
+    assumption (see the `COVERAGE_XML` note): at most one `--impacted` runs per
+    worktree at a time, so the glob-then-unlink need not be atomic.
+    """
+    COVERAGE_DATA.unlink(missing_ok=True)
+    for shard in COVERAGE_DATA.parent.glob(COVERAGE_DATA.name + ".*"):
+        shard.unlink(missing_ok=True)
 
 
 def _build_testmon_cmd() -> list[str]:
@@ -1102,6 +1178,14 @@ def _build_testmon_cmd() -> list[str]:
         # verdict is unaffected) and leaves every domain test selectable.
         f"--ignore={TESTS_DIR / 'test_quality_gate.py'}",
         f"--cov={SRC_DIR}",
+        # QS-278: accumulate coverage across inner-loop runs. testmon
+        # reselects 0 tests for a no-op re-run and only an edit's subset for
+        # an incremental change; `--cov-append` keeps the prior runs'
+        # coverage so the diff-cover changed-line verdict (vs origin/main)
+        # stays correct without re-running the whole impacted set every
+        # time. The data is reset on a fresh select-all baseline so it can't
+        # grow stale across unrelated branch states.
+        "--cov-append",
         "--cov-report=",
         f"--cov-report=xml:{COVERAGE_XML}",
         "-q",
@@ -1184,6 +1268,13 @@ def check_impacted() -> int:
         return 0
 
     _ensure_testmon_db_safe()
+    # QS-278: a missing `.testmondata` here (first-ever run, or just purged
+    # as corrupt) means testmon is about to select ALL tests — a fresh
+    # baseline. Reset the accumulated `--cov-append` coverage data so it
+    # reflects only this clean full run, never stale lines from an earlier
+    # branch state. When the DB exists, accumulation is intentional.
+    if not TESTMON_DATA.exists():
+        _reset_coverage_data()
     # QS-276 review-fix SF1 (#05): delete any stale coverage.xml from a
     # previous run BEFORE the testmon/cov pass. Otherwise a pytest-cov
     # emission failure would be masked — the N7 exists-guard below would

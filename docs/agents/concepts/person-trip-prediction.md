@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-18
+last_verified: 2026-06-29
 ---
 
 # Person, Car, and trip prediction
@@ -73,22 +73,29 @@ prediction_kWh + margin` is pushed for the car's charger.
   surface from `AbstractLoad`.
 - 31-day mileage ring (sensor-attribute restored).
 - Custom power-to-amperage lookup table on `QSCar`.
-- `QSCar.get_car_person_readable_forecast_mileage()` — raw forecast
-  string (`"<Person>: <km>km <HH:MM>"`); backs the `qs_car_person_forecast`
-  sensor. Unchanged by QS-274 (kept for history/automations).
+- `QSCar.get_car_person_readable_forecast_mileage(for_small_standalone=True)`
+  — raw forecast string (`"<Person>: <km>km <date>"`); backs the
+  `qs_car_person_forecast` sensor. The default `for_small_standalone=True`
+  keeps the compact widget date form (`HH:MM` / `%m-%d %H:%M`) for that
+  sensor and all other direct callers; QS-278 added the parameter so the
+  origin line can request the normal form. Unchanged by QS-274.
 - `QSCar.get_car_charge_origin_readable_string()` (QS-274) — the
   origin-responsive context line backing the new `qs_car_charge_origin`
   sensor. Pure / sync-safe: reads
   `self.charger.get_charge_type(return_charge_errors=False)` and the live
-  `current_forecasted_person`. Returns `"Calendar · HH:MM"`,
-  `"Manually set to HH:MM"`, or the two as-fast strings for those origins;
+  `current_forecasted_person`. QS-278: every date-bearing branch renders
+  with the **normal** `get_readable_date_string` formatting —
+  `today HH:MM` / `tomorrow HH:MM` / `%Y-%m-%d %H:%M` — not the compact
+  `for_small_standalone` form. Returns `"Calendar · <date>"`,
+  `"Manually set to <date>"`, or the two as-fast strings for those origins;
   for the person-automated, no-charger and any-other-type cases it
-  delegates to the single `get_car_person_readable_forecast_mileage()`
-  helper — i.e. the raw person line `"<Person>: <forecast>"` (including
-  `"<Person>: No forecast"` when there is no prediction) or
-  `"No forecasted person"` when no person is attached. Far-out
-  (>~24h) Calendar/Manual targets are collapsed to a single line. This is
-  the single source of truth for the car card's origin context row.
+  delegates to `get_car_person_readable_forecast_mileage(for_small_standalone=False)`
+  — i.e. the person line `"<Person>: <forecast>"` with the leave time in
+  the same normal form (including `"<Person>: No forecast"` when there is no
+  prediction) or `"No forecasted person"` when no person is attached. Every
+  branch stays single-line; far-out (>~24h) targets/leave times render the
+  full `%Y-%m-%d %H:%M` date on one line. This is the single source of
+  truth for the car card's origin context row.
 
 ## Lifecycle
 

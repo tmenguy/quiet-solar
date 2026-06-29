@@ -4,7 +4,7 @@ slug: car-soc-estimation
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-18
+last_verified: 2026-06-29
 ---
 
 # Car SOC estimation — the effective-SOC model
