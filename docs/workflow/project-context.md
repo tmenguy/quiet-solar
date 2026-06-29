@@ -147,8 +147,10 @@ When adding a new device type, agents must touch:
 
 ### Coverage
 
-- **100% test coverage is MANDATORY and NON-NEGOTIABLE.** Every PR must maintain 100% coverage.
-- `scripts/qs/quality_gate.py` is the single test entry point (owns cache, xdist, sysmon, scope detection). Raw `pytest` bypasses all four.
+- **100% test coverage is MANDATORY and NON-NEGOTIABLE.** Every PR must maintain 100% coverage — enforced authoritatively in **CI** on every PR (`pr-quality.yml`, whole-repo `--cov-fail-under=100`).
+- **Local-vs-CI split (QS-276).** Local commits run the `--impacted` inner loop (the lines *you changed* are 100% covered, in ~seconds); the whole-repo 100% guarantee lives in CI. `--impacted` deliberately cannot detect coverage lost in *unchanged* code — only CI's whole-repo gate catches that.
+- `scripts/qs/quality_gate.py` is the single test entry point (owns cache, xdist, sysmon, scope detection, `--impacted`/`--seed-testmon`). Raw `pytest` bypasses all of it.
+- Impacted inner-loop gate (implement-phase default before commit/PR): `python scripts/qs/quality_gate.py --impacted`.
 - Full gate (pytest 100% cov + ruff + mypy + translations): `python scripts/qs/quality_gate.py`. Add `--cache` for cheap repeat runs on a clean tree.
 - Fast iteration on a single file or directory during TDD: `python scripts/qs/quality_gate.py --quick tests/test_<file>.py` (also accepts `tests/ha_tests`, `tests/`, or multiple paths).
 - Ad-hoc single-node debugging only: `source venv/bin/activate && pytest tests/test_<file>.py::test_specific -v`.

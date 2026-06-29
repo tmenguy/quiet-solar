@@ -45,6 +45,9 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+
+# pytest-testmon test-impact DB (QS-276) — written during runs, never committed
+.testmondata
 *.cover
 *.py,cover
 .hypothesis/

@@ -127,7 +127,39 @@ The standard merge flow.
    If the PR was already merged externally between steps 2 and 5, treat
    as success.
 
-6. Delete the remote branch. The guard refuses `main` / `master` at
+6. Refresh the `--impacted` baseline on the main worktree (QS-276). The
+   merged code is now on the true `main`, so rebuild the testmon
+   baseline **there** — the worktree's own `.testmondata` reflects its
+   (possibly stale) base and is unsafe to copy back. Capture `MAIN_DIR`
+   **before** cleanup removes this worktree (it is NOT in `context.py`):
+   ```bash
+   MAIN_DIR="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
+   git -C "$MAIN_DIR" fetch origin
+   git -C "$MAIN_DIR" checkout main
+   git -C "$MAIN_DIR" pull --ff-only
+   # Detached + best-effort: must never block or hang cleanup.
+   # `--seed-testmon` is the SANCTIONED non-gate subcommand (NOT a raw
+   # pytest, NOT the quality gate) — it only refreshes .testmondata.
+   # Probe for a usable interpreter (review-fix S3): the main venv may
+   # be missing (fresh clone, relocated checkout). Fall back to python3
+   # / python on PATH; if none is usable, WARN instead of printing a
+   # false success.
+   QG_PY="$MAIN_DIR/venv/bin/python"
+   [ -x "$QG_PY" ] || QG_PY="$(command -v python3 || command -v python || true)"
+   if [ -n "$QG_PY" ]; then
+       ( cd "$MAIN_DIR" && nohup "$QG_PY" \
+           scripts/qs/quality_gate.py --seed-testmon >/dev/null 2>&1 & )
+       echo "Baseline refresh started (detached, best-effort)."
+   else
+       echo "Warning: no usable Python interpreter found — skipping baseline refresh."
+   fi
+   ```
+   A failure or timeout here is harmless — a stale baseline is still
+   safe (new worktrees just run more tests). Proceed regardless. The
+   first refresh after a large merge may approach a near-full run;
+   acceptable because it is detached.
+
+7. Delete the remote branch. The guard refuses `main` / `master` at
    the shell level — never rely on the agent alone:
    ```bash
    if [ "{{branch}}" = "main" ] || [ "{{branch}}" = "master" ]; then
@@ -137,7 +169,7 @@ The standard merge flow.
    git push origin --delete "{{branch}}"
    ```
 
-7. Remove the worktree (`--force` is safe — code is merged):
+8. Remove the worktree (`--force` is safe — code is merged):
    ```bash
    python scripts/qs/cleanup_worktree.py \
        --work-dir "{{worktree}}" \
@@ -145,7 +177,7 @@ The standard merge flow.
        --force
    ```
 
-8. Report:
+9. Report:
     ```text
     ✅ PR #{{pr_number}} merged into main.
     ✅ Remote branch {{branch}} deleted.
@@ -167,7 +199,9 @@ The standard merge flow.
 ## Hard rules
 
 - **Never run the quality gate.** Cleanup must succeed even if tests
-  would fail.
+  would fail. (Carve-out: the post-merge `--seed-testmon` baseline
+  refresh in Case B step 6 is a non-gate DB refresh — no coverage, no
+  pass/fail verdict — run detached/best-effort. It is not the gate.)
 - No merge without explicit user authorization in this turn.
 - Never auto-chain to `/release` — it's a separate decision.
 - Refuse to delete `main` / `master` even if asked.

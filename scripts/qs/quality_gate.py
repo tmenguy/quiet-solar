@@ -4,6 +4,8 @@
 Usage:
     python scripts/qs/quality_gate.py [--fix] [--json] [--cache] [--no-cache] [--full]
     python scripts/qs/quality_gate.py --quick PATH [PATH ...]
+    python scripts/qs/quality_gate.py --impacted
+    python scripts/qs/quality_gate.py --seed-testmon
 
 Options:
     --fix                    Auto-fix what can be fixed (ruff format, ruff check --fix)
@@ -15,6 +17,15 @@ Options:
                              or directories) with xdist + sysmon; skip ruff/mypy/
                              translations/coverage/cache/scope. Mutex with
                              --cache/--no-cache/--full/--fix.
+    --impacted               Inner-loop gate (QS-276): run only the testmon-selected
+                             tests under --cov=<package>, write coverage.xml, then
+                             diff-cover --fail-under=100 against the resolved diff
+                             base. Guarantees the lines YOU changed are 100% covered
+                             (the whole-repo 100% gate stays authoritative in CI).
+                             Mutex with --quick/--cache/--no-cache/--full/--fix.
+    --seed-testmon           Sanctioned non-gate subcommand: refresh .testmondata via
+                             `pytest --testmon` (no coverage, no pass/fail verdict).
+                             Used by finish-task to rebuild the main baseline.
 
 Smart scope detection:
     When only dev-infrastructure files are modified (tests/, legacy/, docs/,
@@ -24,8 +35,10 @@ Smart scope detection:
 
 Exit codes:
     0 = all gates pass
-    1 = one or more gates failed
+    1 = one or more gates failed (incl. --impacted changed-lines <100%)
     2 = argument parsing error (e.g., --quick with no paths, or mutex violation)
+    3 = required tooling missing (--impacted: testmon / diff-cover not importable)
+    4 = --impacted could not resolve a diff base in CI
 """
 
 from __future__ import annotations
@@ -34,6 +47,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -105,8 +119,70 @@ def _venv_tool(name: str) -> str:
     return str(VENV_BIN / name)
 
 
-def _run(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=cwd or str(REPO_ROOT))
+def _run(
+    cmd: list[str], cwd: str | None = None, timeout: float | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess, capturing stdout/stderr.
+
+    `timeout` (QS-276 review-fix S1) bounds calls on the inner-loop hot
+    path (e.g. the `--impacted` `git fetch`): a hung/slow remote (VPN
+    drop, dead SSH host) must not block the sub-15s gate indefinitely. A
+    timeout is surfaced as a non-zero `CompletedProcess` (returncode
+    124, matching the shell convention) rather than a raised
+    `TimeoutExpired`, so callers handle it via the normal returncode
+    path. Callers that omit `timeout` keep the original unbounded
+    behavior.
+
+    QS-276 review-fix SF1: pins `encoding="utf-8", errors="replace"`
+    (matching `_stream_pytest`) so non-ASCII output from git / diff-cover
+    can't raise `UnicodeDecodeError` under `LANG=C` / `LC_ALL=POSIX` and
+    bypass the normal return-code handling.
+
+    QS-276 review-fix MF1 (#04): a missing executable (e.g. the venv
+    interpreter absent on a CI runner) is surfaced as returncode 127
+    (shell "command not found"), NOT a raised `FileNotFoundError`. This
+    lets the tooling probes (`_impacted_tooling_available`,
+    `_testmon_available`, `_has_xdist`) degrade to "unavailable" → the
+    integration tests skip cleanly instead of erroring.
+    """
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd or str(REPO_ROOT),
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # NH1: preserve any partial output captured before the timeout —
+        # it aids diagnosis. `exc.stdout`/`.stderr` may be bytes (decode),
+        # str (already decoded), or None.
+        out = _decode_maybe(exc.stdout)
+        err = _decode_maybe(exc.stderr)
+        timeout_note = f"timed out after {timeout}s"
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=124,
+            stdout=out,
+            # SF-C (#04): use `err.strip()` so a whitespace-only stderr is
+            # treated as empty and doesn't inject a leading blank line.
+            stderr=f"{err}\n{timeout_note}".strip() if err.strip() else timeout_note,
+        )
+    except FileNotFoundError as exc:
+        # MF1: executable not found — degrade to a non-zero result so
+        # callers handle it via the normal return-code path (probes treat
+        # 127 as "tool unavailable").
+        return subprocess.CompletedProcess(args=cmd, returncode=127, stdout="", stderr=str(exc))
+
+
+def _decode_maybe(value: bytes | str | None) -> str:
+    """Return `value` as text — decode bytes (utf-8/replace), pass through str, "" for None."""
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", "replace")
+    return value
 
 
 def _emit(name: str, line: str) -> None:
@@ -569,6 +645,11 @@ def _stream_pytest(
     return {
         "name": "pytest",
         "passed": passed,
+        # QS-276 review-fix NH4 (#03): expose the raw pytest exit code so
+        # callers (e.g. seed_testmon) can distinguish a mere test failure
+        # (1, DB still updated) from a collection error / internal crash
+        # (>=2, .testmondata may be partial).
+        "returncode": proc.returncode,
         "coverage": coverage,
         "missing": missing_lines[:10],
         "detail": stdout_text[-500:] if not passed else "",
@@ -804,6 +885,408 @@ def _output_results(
                 print(f"FAILED gates: {', '.join(failed)}")
 
 
+# --- QS-276: impacted-tests inner loop (`--impacted`) + testmon seeding ---
+#
+# `--impacted` runs only the testmon-selected tests under
+# `--cov=custom_components/quiet_solar`, writes `coverage.xml`, and lets
+# `diff-cover` assert the CHANGED lines are 100% covered. The whole-repo
+# 100% gate stays authoritative in CI; this is the sub-~15s inner loop.
+
+# NH1 (review-fix #04): `--impacted` writes a single fixed coverage.xml at
+# the repo root and immediately consumes it with diff-cover. This assumes
+# ONE `--impacted` run per worktree at a time — two overlapping runs in the
+# same worktree would race on this path (run A's diff-cover could read run
+# B's freshly-overwritten XML). The implement agents never run `--impacted`
+# concurrently in one worktree (each task has its own worktree), so this
+# documented single-run constraint is the accepted resolution rather than a
+# per-run temp path.
+COVERAGE_XML = REPO_ROOT / "coverage.xml"
+TESTMON_DATA = REPO_ROOT / ".testmondata"
+
+# QS-276 review-fix S1: cap the inner-loop `git fetch origin main` so a
+# dead/slow remote degrades to a stale base + warning instead of hanging
+# the gate. CI re-fetches authoritatively, so a short bound is safe.
+_FETCH_TIMEOUT_SECONDS = 15.0
+
+# QS-276 review-fix NH1: bound the diff-cover subprocess too — a
+# pathological hang there would break the same sub-15s inner-loop promise
+# as an unbounded fetch (S1). diff-cover only parses an already-written
+# coverage.xml + a git diff, so a generous cap is safe.
+_DIFF_COVER_TIMEOUT_SECONDS = 60.0
+
+# Static decision (Design A): whether the pinned pytest-testmon attributes
+# per-test coverage correctly across xdist workers, so the selection /
+# seeding passes can run in parallel.
+#
+# QS-276 review-fix: empirically verified TRUE for pytest-testmon==2.2.0 +
+# pytest-xdist==3.8.0. testmon 2.2.0 ships first-class xdist support
+# (`TestmonXdistSync`, `pytest_xdist_node_collection_finished`,
+# controller↔worker `workerinput` plumbing). Probed on a throwaway repo:
+# under `-n auto` the superset property holds exactly (no-op → 0 selected,
+# covered edit → reselect, uncovered edit → 0) AND testmon ⊕ pytest-cov
+# combine the per-worker `.coverage` files into a valid `coverage.xml`
+# that diff-cover reads at 100%. Leaving this serial made the select-all
+# worst case (~45 min) *slower* than the `-n auto` full gate — the whole
+# point of the inner loop is lost. A *runtime* probe of testmon's own
+# xdist support would add an uncoverable branch, so this stays a module
+# constant; `_pytest_workers()` (already probed + tested) still decides
+# the actual worker count and honours `QS_QG_PYTEST_WORKERS`.
+_TESTMON_SUPPORTS_XDIST = True
+
+
+def _impacted_tooling_available() -> bool:
+    """Return True iff `testmon` AND `diff_cover` import from VENV_PYTHON.
+
+    Probes the venv interpreter (same reasoning as `_has_xdist`) so the
+    check reflects the environment pytest / diff-cover actually run in,
+    not the orchestrator's.
+    """
+    probe = (
+        "import importlib.util as u, sys; "
+        "sys.exit(0 if u.find_spec('testmon') and u.find_spec('diff_cover') else 1)"
+    )
+    return _run([VENV_PYTHON, "-c", probe]).returncode == 0
+
+
+def _testmon_available() -> bool:
+    """Return True iff `testmon` imports from VENV_PYTHON.
+
+    Narrower probe than `_impacted_tooling_available` (QS-276 review-fix
+    S2): `--seed-testmon` only runs `pytest --testmon` — it never invokes
+    diff-cover — so the post-merge baseline refresh must not be blocked
+    when diff-cover happens to be absent.
+    """
+    probe = "import importlib.util as u, sys; sys.exit(0 if u.find_spec('testmon') else 1)"
+    return _run([VENV_PYTHON, "-c", probe]).returncode == 0
+
+
+# QS-276 review-fix N3/NH4: accept the common truthy spellings CI systems
+# use — `1`, `true`, `yes`, `on`, plus the single-letter `y` / `t` some
+# providers emit — and also honor GitHub Actions' own provider var, which
+# it always sets to `true`.
+_CI_TRUTHY = ("1", "true", "yes", "on", "y", "t")
+
+
+def _is_ci() -> bool:
+    """Return True when running under CI.
+
+    Recognizes a truthy `CI` env var (accepted values:
+    `1`/`true`/`yes`/`on`/`y`/`t`, case-insensitive; GitHub Actions sets
+    `CI=true`) and falls back to GitHub Actions' own `GITHUB_ACTIONS=true`
+    provider variable.
+    """
+    if os.environ.get("CI", "").strip().lower() in _CI_TRUTHY:
+        return True
+    return os.environ.get("GITHUB_ACTIONS", "").strip().lower() in _CI_TRUTHY
+
+
+def _resolve_diff_base() -> str | None:
+    """Resolve the `--impacted` diff base via the fallback ladder.
+
+    Order: `origin/main` → `main` → merge-base of HEAD with the tracked
+    upstream. `origin/main` is fetched fresh first so the local
+    changed-line set matches CI's. Returns the resolved ref / sha, or
+    None when nothing resolves (offline / fresh worktree with no
+    upstream). The base is live git, independent of the seeded
+    `.testmondata`.
+
+    QS-276 review-fix NH2: a candidate ref is only accepted if it shares
+    a merge-base with HEAD. A shallow CI clone (`fetch-depth: 1`) can
+    resolve `origin/main` to a commit with no common ancestor, which
+    would make diff-cover diff against unrelated history and report a
+    spuriously huge changed-line set. An unreachable ref is skipped (and
+    a warning emitted); if nothing reachable resolves, we return None and
+    the caller applies the no-base policy (warn-skip locally, exit 4 CI).
+    """
+    # Best-effort fresh fetch; ignore failure — an offline dev still
+    # resolves a local `main` or the upstream merge-base below.
+    #
+    # QS-276 review-fix S1: bound the fetch so a hung/slow remote can't
+    # block the sub-15s inner loop, and WARN on a non-zero result so a
+    # silently-failed fetch (offline / timeout) — which leaves a stale
+    # `origin/main` whose changed-line set may diverge from CI's — is
+    # observable instead of pretending the base was fetched fresh.
+    fetch = _run(["git", "fetch", "origin", "main"], timeout=_FETCH_TIMEOUT_SECONDS)
+    if fetch.returncode != 0:
+        _emit(
+            "impacted",
+            "warning: `git fetch origin main` failed/timed out — diff base may be stale vs CI",
+        )
+    for ref in ("origin/main", "main"):
+        if _run(["git", "rev-parse", "--verify", ref]).returncode != 0:
+            continue
+        # NH2 (#02): require a common ancestor with HEAD before trusting the ref.
+        if _run(["git", "merge-base", ref, "HEAD"]).returncode == 0:
+            # NH2 (#05): name the chosen base so an unexpected diff-cover range is debuggable.
+            _emit("impacted", f"diff base: {ref}")
+            return ref
+        _emit("impacted", f"warning: {ref} has no merge-base with HEAD (shallow clone?) — skipping")
+    upstream = _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
+    tracked = upstream.stdout.strip()
+    if upstream.returncode == 0 and tracked:
+        mb = _run(["git", "merge-base", "HEAD", tracked])
+        sha = mb.stdout.strip()
+        if mb.returncode == 0 and sha:
+            _emit("impacted", f"diff base: {sha} (merge-base with {tracked})")
+            return sha
+    return None
+
+
+def _ensure_testmon_db_safe() -> None:
+    """Delete `.testmondata` when it is not a readable SQLite database.
+
+    testmon recovers from a schema-version mismatch on its own (it
+    rebuilds and selects all tests), but a genuinely corrupt /
+    partially-written / non-SQLite file (a killed run, a dependency bump,
+    a path relocation) makes it raise `sqlite3.DatabaseError` mid-run
+    instead. Removing the file forces a clean rebuild → select-all,
+    honouring the 'never silently under-select' fail-safe.
+
+    QS-276 review-fix SF1: `sqlite3.OperationalError` ("database is
+    locked") is a *subclass* of `sqlite3.DatabaseError`. A VALID DB that
+    is transiently locked by a concurrent `--seed-testmon` / `--impacted`
+    run must NOT be deleted — wiping it would discard a recoverable
+    baseline and force a needless select-all. So catch `OperationalError`
+    FIRST and leave the file intact; only a genuine, corruption-specific
+    `DatabaseError` triggers the unlink.
+    """
+    if not TESTMON_DATA.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(TESTMON_DATA))
+        try:
+            conn.execute("PRAGMA schema_version").fetchone()
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as exc:
+        # Valid-but-busy (locked) — leave it; testmon handles the lock.
+        _emit("impacted", f".testmondata is locked/busy — leaving intact ({exc})")
+    except sqlite3.DatabaseError:
+        _emit("impacted", "corrupt .testmondata detected — removing to force select-all")
+        # QS-276 review-fix N6: `missing_ok=True` so a file that vanishes
+        # between the readability probe and the unlink (a concurrent run,
+        # another worktree) doesn't raise — an absent DB already satisfies
+        # the select-all fail-safe intent.
+        TESTMON_DATA.unlink(missing_ok=True)
+
+
+def _build_testmon_cmd() -> list[str]:
+    """Build the single-process testmon selection + coverage pytest argv.
+
+    Design A preferred path (Task 2 confirmed testmon ⊕ pytest-cov share
+    one process): the testmon-selected tests run under `--cov=<package>`,
+    the leading empty `--cov-report=` clears pytest.ini's term default
+    before the XML report, and there is NO `--cov-fail-under` — the 100%
+    verdict is delegated to diff-cover on the changed lines only (a
+    whole-tree subset run is always <100% and would otherwise fail before
+    diff-cover runs). xdist is gated on the static `_TESTMON_SUPPORTS_XDIST`
+    constant.
+    """
+    cmd = [
+        VENV_PYTHON,
+        "-m",
+        "pytest",
+        "--testmon",
+        # QS-276 review-fix MF1: keep the slow testmon SELF-tests (the
+        # real-subprocess git-init + nested-pytest cases in
+        # tests/test_quality_gate.py) out of the inner loop WITHOUT
+        # deselecting the shared `integration` marker. The earlier
+        # `-m "not integration"` (review-fix N5) was wrong: ~9 DOMAIN
+        # integration test files (charger rebalancing, solver forecast,
+        # constraint boundaries, …) carry that marker AND exercise
+        # `custom_components/quiet_solar`. Deselecting them meant a
+        # production line covered ONLY by a domain integration test ran
+        # zero times → 0% in coverage.xml → diff-cover FAIL the dev could
+        # never clear locally. Ignoring by PATH targets only the
+        # self-tests (which never cover production code, so the diff-cover
+        # verdict is unaffected) and leaves every domain test selectable.
+        f"--ignore={TESTS_DIR / 'test_quality_gate.py'}",
+        f"--cov={SRC_DIR}",
+        "--cov-report=",
+        f"--cov-report=xml:{COVERAGE_XML}",
+        "-q",
+    ]
+    if _TESTMON_SUPPORTS_XDIST:
+        workers = _pytest_workers()
+        if workers is not None:
+            cmd.extend(["-n", workers])
+    return cmd
+
+
+def _build_diff_cover_cmd(base: str) -> list[str]:
+    """Build the diff-cover argv asserting changed lines are 100% covered.
+
+    QS-276 review-fix SF-A (#04): `--include-untracked` so a brand-new,
+    not-yet-`git add`-ed source file with an untested function is counted
+    as changed lines (diff-cover 10.3.0 defaults to excluding untracked
+    files, which made the dominant inner-loop case — new code starts
+    untracked — score a vacuous 100% PASS before staging, defeating AC#6
+    locally).
+    """
+    return [
+        _venv_tool("diff-cover"),
+        str(COVERAGE_XML),
+        f"--compare-branch={base}",
+        "--include-untracked",
+        "--fail-under=100",
+    ]
+
+
+# QS-276 review-fix NH2 (#03): single source of truth for the reseed command.
+_SEED_TESTMON_CMD = "python scripts/qs/quality_gate.py --seed-testmon"
+
+
+def _emit_reseed_guidance() -> None:
+    """Emit the reseed hint on a diff-cover coverage failure.
+
+    QS-276 review-fix SF-B (#04): the previous "baseline stale" branch was
+    removed. diff-cover's pinned default uses three-dot range notation
+    (`merge-base(base, HEAD)...HEAD`), so an advanced `origin/main` does
+    NOT inflate the changed-line set — the staleness false-FAIL it guarded
+    against cannot occur, and the branch only mislabeled genuine
+    uncovered-line failures. This single hint remains useful because
+    testmon's *selection* (vs the seeded baseline) is independent of
+    diff-cover's range: a stale baseline can still under-select, so a
+    reseed is a reasonable thing to suggest on any coverage failure.
+    """
+    _emit(
+        "impacted",
+        f"hint: if a changed line looks covered but failed, your testmon baseline "
+        f"may be stale — reseed with `{_SEED_TESTMON_CMD}` and re-run",
+    )
+
+
+def check_impacted() -> int:
+    """Run the `--impacted` inner-loop gate; return the process exit code.
+
+    Pipeline: tooling probe → diff-base ladder → testmon-selected tests
+    under `--cov` (writes coverage.xml) → diff-cover --fail-under=100 on
+    the changed lines.
+
+    Exit codes: 0 pass · 1 selected-test failure OR diff-coverage <100% ·
+    3 testmon / diff-cover not importable · 4 no diff base resolvable in
+    CI (warn-and-skip → 0 locally so an offline dev isn't blocked).
+
+    Fail-safe: a corrupt / schema-incompatible `.testmondata` makes
+    testmon select *all* tests (its native recovery), never silently
+    under-select.
+    """
+    if not _impacted_tooling_available():
+        _emit("impacted", "pytest-testmon / diff-cover not importable — install requirements_test.txt")
+        return 3
+
+    base = _resolve_diff_base()
+    if base is None:
+        if _is_ci():
+            _emit("impacted", "no diff base (origin/main) resolvable in CI")
+            return 4
+        _emit("impacted", "no diff base resolvable — skipping diff-coverage check (offline/fresh worktree)")
+        return 0
+
+    _ensure_testmon_db_safe()
+    # QS-276 review-fix SF1 (#05): delete any stale coverage.xml from a
+    # previous run BEFORE the testmon/cov pass. Otherwise a pytest-cov
+    # emission failure would be masked — the N7 exists-guard below would
+    # see the *old* report and diff-cover would score the changed lines
+    # against stale data instead of failing loudly.
+    COVERAGE_XML.unlink(missing_ok=True)
+    _emit("impacted", f"selecting impacted tests (testmon) vs base {base}")
+    result = _stream_pytest(_build_testmon_cmd())
+    if not result["passed"]:
+        _emit("impacted", "FAIL (selected tests failed)")
+        return 1
+
+    # QS-276 review-fix N7: pytest-cov writes coverage.xml even on a
+    # zero-collection run (verified for the pinned version), but guard
+    # defensively — if a future pytest-cov stops emitting it, diff-cover
+    # would silently read a stale/missing file. Combined with the SF1
+    # pre-delete above, a fresh report is guaranteed or we fail loudly.
+    if not COVERAGE_XML.exists():
+        _emit("impacted", f"FAIL (coverage report not written: {COVERAGE_XML})")
+        return 1
+
+    # NH1: bound diff-cover so a hang can't break the sub-15s promise.
+    dc = _run(_build_diff_cover_cmd(base), timeout=_DIFF_COVER_TIMEOUT_SECONDS)
+
+    # QS-276 review-fix SF2 (#03) + NH2 (#04): a timed-out diff-cover
+    # returns the synthetic 124 from `_run`. Report THAT as the primary
+    # verdict FIRST — before writing dc.stdout (which is empty/partial on
+    # timeout, NH2) and before the coverage messaging (which would
+    # mislabel a timeout as "<100% covered", SF2).
+    if dc.returncode == 124:
+        _emit("impacted", f"FAIL (diff-cover timed out after {_DIFF_COVER_TIMEOUT_SECONDS}s)")
+        sys.stderr.write(dc.stderr)
+        sys.stderr.flush()
+        return 1
+
+    sys.stdout.write(dc.stdout)
+    sys.stdout.flush()
+    if dc.returncode != 0:
+        # SF-B (#04): the "baseline stale" branch was removed (diff-cover's
+        # three-dot range means an advanced origin/main can't inflate the
+        # changed-line set, so that scenario never occurs). A non-zero,
+        # non-timeout diff-cover is a genuine changed-line coverage gap.
+        _emit("impacted", "FAIL (changed lines <100% covered)")
+        _emit_reseed_guidance()
+        sys.stderr.write(dc.stderr)
+        sys.stderr.flush()
+        return 1
+    _emit("impacted", "PASS (changed lines 100% covered)")
+    return 0
+
+
+def seed_testmon() -> int:
+    """Refresh `.testmondata` via `pytest --testmon`; no coverage, no verdict.
+
+    Sanctioned non-gate subcommand (see the project-rules raw-`pytest`
+    carve-out) used by `finish-task` to rebuild the main-worktree
+    baseline after a merge. Returns 0 once the selection completes (a
+    failing test still updates the DB — there is no pass/fail verdict);
+    returns 3 when testmon is not importable.
+    """
+    # QS-276 review-fix S2: probe ONLY testmon — seeding never invokes
+    # diff-cover, so a missing diff-cover must not block the refresh.
+    if not _testmon_available():
+        _emit("seed-testmon", "pytest-testmon not importable — skipping")
+        return 3
+    _emit("seed-testmon", "refreshing .testmondata (pytest --testmon)")
+    result = _stream_pytest(_build_seed_testmon_cmd())
+    # QS-276 review-fix NH4 (#03): a pytest exit code >= 2 means a
+    # collection error / internal crash (NOT a mere test failure, which is
+    # 1 and still updates the DB). Surface it as a warning so a partial /
+    # unwritten `.testmondata` is observable — but stay best-effort:
+    # finish-task runs this detached and a stale/absent baseline only
+    # over-selects, so we still return 0.
+    rc = result.get("returncode", 0)
+    if rc >= 2:
+        _emit("seed-testmon", f"warning: pytest exited {rc} (collection error/crash) — .testmondata may be incomplete")
+    return 0
+
+
+def _build_seed_testmon_cmd() -> list[str]:
+    """Build the `--seed-testmon` baseline-refresh pytest argv.
+
+    Runs the whole suite under `--testmon` to (re)build `.testmondata`;
+    no coverage, no verdict. Parallelized with xdist (QS-276 review-fix)
+    when `_TESTMON_SUPPORTS_XDIST` is set and workers resolve — seeding
+    the baseline is the heaviest testmon pass (a full select-all), so it
+    benefits the most from `-n auto`. Honours `QS_QG_PYTEST_WORKERS` via
+    the shared `_pytest_workers()` resolver.
+
+    NH1 (review-fix #05): unlike the inner-loop `_build_testmon_cmd`, this
+    deliberately does NOT `--ignore tests/test_quality_gate.py`. Seeding is
+    the FULL baseline — the testmon self-tests must be fingerprinted too,
+    or a later change to the gate would force a select-all. Do not mirror
+    the inner-loop `--ignore` here (it would leave the baseline incomplete).
+    """
+    cmd = [VENV_PYTHON, "-m", "pytest", "--testmon", "-q"]
+    if _TESTMON_SUPPORTS_XDIST:
+        workers = _pytest_workers()
+        if workers is not None:
+            cmd.extend(["-n", workers])
+    return cmd
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run quality gates")
     parser.add_argument("--fix", action="store_true", help="Auto-fix formatting/lint issues")
@@ -821,6 +1304,23 @@ def main() -> None:
             "translations/coverage."
         ),
     )
+    parser.add_argument(
+        "--impacted",
+        action="store_true",
+        help=(
+            "Inner-loop gate: testmon-selected tests under --cov, then "
+            "diff-cover --fail-under=100 on the changed lines. Mutex with "
+            "--quick/--cache/--no-cache/--full/--fix."
+        ),
+    )
+    parser.add_argument(
+        "--seed-testmon",
+        action="store_true",
+        help=(
+            "Refresh .testmondata via `pytest --testmon` (no coverage, no verdict). "
+            "Mutex with --impacted/--quick/--cache/--no-cache/--full/--fix."
+        ),
+    )
     args = parser.parse_args()
 
     # --quick is mutually exclusive with cache/full/fix. argparse's nargs="+"
@@ -830,6 +1330,27 @@ def main() -> None:
     if args.quick and (args.cache or args.no_cache or args.full or args.fix):
         parser.error(
             "you cannot combine --quick with --cache, --no-cache, --full, or --fix"
+        )
+
+    # --impacted joins the same mutex: it is a self-contained inner-loop
+    # gate with its own selection + coverage semantics, incompatible with
+    # the cache/scope/fix machinery and with --quick's bare-pytest run.
+    if args.impacted and (args.quick or args.cache or args.no_cache or args.full or args.fix):
+        parser.error(
+            "you cannot combine --impacted with --quick, --cache, --no-cache, --full, or --fix"
+        )
+
+    # --seed-testmon (QS-276 review-fix M1) is a self-contained maintenance
+    # subcommand, not a gate mode: combining it with any execution mode
+    # silently dropped the seeding request (the main() dispatch order
+    # short-circuited --impacted before it, and it before cache/scope/full).
+    # Make the conflict an explicit usage error instead.
+    if args.seed_testmon and (
+        args.impacted or args.quick or args.cache or args.no_cache or args.full or args.fix
+    ):
+        parser.error(
+            "you cannot combine --seed-testmon with --impacted, --quick, --cache, "
+            "--no-cache, --full, or --fix"
         )
 
     # Review-fix #01 finding 8 — `--quick ""` would otherwise resolve to
@@ -866,6 +1387,16 @@ def main() -> None:
             scope="quick",
         )
         sys.exit(0 if result["passed"] else 1)
+
+    # --impacted short-circuits before scope detection / caching, exactly
+    # like --quick: it is its own gate with a bespoke exit-code table.
+    if args.impacted:
+        sys.exit(check_impacted())
+
+    # --seed-testmon is a non-gate maintenance subcommand: refresh the DB
+    # and exit, never touching scope detection or the coverage gate.
+    if args.seed_testmon:
+        sys.exit(seed_testmon())
 
     use_cache = args.cache and not args.fix and not args.no_cache
 

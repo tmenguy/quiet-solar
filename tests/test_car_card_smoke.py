@@ -35,11 +35,14 @@ def test_dropped_icons_absent(card_source: str) -> None:
 
 
 def test_charge_origin_wired_into_context_row(card_source: str) -> None:
-    """The new ``charge_origin`` entity feeds the ``.forecast-row`` string."""
+    """The ``charge_origin`` entity feeds the ``.forecast-row`` string."""
     assert "this._entity(e.charge_origin)" in card_source
     assert "chargeOriginStr" in card_source
-    # the row is driven by the origin string and a leading Mode icon
-    assert 'class="forecast-row">${chargeIcon' in card_source
+    # The row is driven by the origin string (``forecastDisplay``). The
+    # leading Mode icon was intentionally removed (main commit "removed
+    # icon on car js"), so the row no longer carries a ``${chargeIcon`` prefix.
+    assert 'class="forecast-row">${forecastDisplay}' in card_source
+    assert 'class="forecast-row">${chargeIcon' not in card_source
 
 
 def test_forecast_prefix_dropped(card_source: str) -> None:

@@ -315,6 +315,62 @@ if [ -d "${MAIN_DIR}/custom_components" ]; then
     done
 fi
 
+# QS-276: seed cold-start caches from the main worktree so the first
+# inner-loop run is fast. COPY (never symlink) — both are written during
+# runs, and a shared symlink would corrupt across concurrent worktrees:
+#   - .mypy_cache kills the ~16s cold-mypy on a fresh worktree;
+#   - .testmondata gives `--impacted` a warm test-impact baseline.
+# Copy-if-present / warn-if-absent: a missing cache means main never ran
+# the gate / `--seed-testmon` yet, which only costs a slow first loop.
+#
+# SAFETY INVARIANT (review-fix SF3): copying `.testmondata` across
+# worktrees can NEVER under-select impacted tests. testmon keys on
+# rootdir-RELATIVE paths + file-content checksums (not absolute paths or
+# mtimes), so in the relocated worktree any file whose content differs
+# from the seeded baseline is reselected; an identical file selects zero
+# (the intended warm-baseline speedup). It "selects more, never fewer".
+# This is enforced, not asserted: see
+# tests/test_quality_gate.py::TestTestmonRelocationInvariant
+# (real testmon: relocate a seeded DB, change a covered file, prove the
+# covering test is reselected).
+# NH3 (review-fix #03): the loop handles BOTH a directory (.mypy_cache)
+# and a single file (.testmondata). `cp -R` is deliberately used for both
+# — for a regular file it behaves like a plain copy, so one code path
+# covers both kinds without a per-cache branch.
+for cache in .mypy_cache .testmondata; do
+    src="${MAIN_DIR}/${cache}"
+    dst="${WORKTREE_DIR}/${cache}"
+    # Cache-specific remediation (review-fix S4): each line is an actually
+    # runnable command, not a generic suggestion.
+    case "$cache" in
+        .testmondata) populate="python scripts/qs/quality_gate.py --seed-testmon" ;;
+        *)            populate="python scripts/qs/quality_gate.py" ;;
+    esac
+    if [ -e "$src" ]; then
+        # review-fix S4: re-copy (don't silently skip) when $dst already
+        # exists — a re-run after an interrupted setup may have left a
+        # truncated DB. Remove it first so the copy is clean.
+        if [ -e "$dst" ]; then
+            echo "Note: ${cache} already present in worktree — refreshing from main"
+            rm -rf "$dst"
+        fi
+        # review-fix S4: guard the copy. A partial copy (disk full /
+        # permissions) can wedge .mypy_cache irrecoverably; on failure,
+        # remove the partial result and warn rather than leave it broken.
+        if cp -R "$src" "$dst"; then
+            echo "Seeded ${cache} from main worktree"
+        else
+            rm -rf "$dst"
+            echo "Warning: failed to copy ${cache} from main worktree — first inner-loop run will be slower"
+            echo "  (run '${populate}' in ${MAIN_DIR}, then re-run setup, to populate it)"
+        fi
+    else
+        echo "Warning: ${cache} absent in main worktree — first inner-loop run will be slower"
+        echo "  (run '${populate}' in ${MAIN_DIR} to populate it)"
+    fi
+done
+# QS-276 end: cache seeding
+
 # Verify the worktree's HEAD landed on the expected branch. A downstream
 # session (e.g. Claude Desktop auto-isolation) that creates its own
 # worktree on top of this one inherits HEAD — if HEAD is wrong here, the
