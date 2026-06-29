@@ -927,6 +927,9 @@
       "qs_car_person_forecast": {
         "name": "Person Forecasted Mileage"
       },
+      "qs_car_charge_origin": {
+        "name": "Charge Origin"
+      },
       "qs_bistate_current_duration_h": {
         "name": "Current Duration (h)"
       },

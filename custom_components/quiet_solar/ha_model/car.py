@@ -16,6 +16,10 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 
 from ..const import (
     CAR_API_STALE_THRESHOLD_S,
+    CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE,
+    CAR_CHARGE_TYPE_CALENDAR,
+    CAR_CHARGE_TYPE_MANUAL,
+    CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
     CAR_EFFICIENCY_KM_PER_KWH,
@@ -1141,6 +1145,51 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return CAR_CHARGE_TYPE_NOT_PLUGGED
         else:
             return self.charger.get_charge_type()[0]
+
+    def get_car_charge_origin_readable_string(self) -> str:
+        """Origin-responsive context line for the car card.
+
+        Pure / CPU-only: reads in-memory constraint/load state only. Calls
+        ``get_charge_type(return_charge_errors=False)`` so charger-error
+        states (Faulted / No Power / Not Plugged) never reach the switch and
+        are never surfaced in the origin line.
+
+        Calendar / Manual / as-fast origins return their own dedicated string.
+        Every other case — no charger, person-automated, and any other charge
+        type (Solar / Solar Priority / Target Met / Not Charging / none) —
+        delegates to ``get_car_person_readable_forecast_mileage()`` and surfaces
+        the person-forecast line (``"<name>: <forecast>"`` / ``"<name>: No
+        forecast"`` / ``"No forecasted person"``).
+        """
+        if self.charger is not None:
+            charge_type, ct = self.charger.get_charge_type(return_charge_errors=False)
+
+            if ct is not None:
+                if charge_type == CAR_CHARGE_TYPE_CALENDAR:
+                    return f"Calendar · {self._origin_target_single_line(ct)}"
+
+                if charge_type == CAR_CHARGE_TYPE_MANUAL:
+                    return f"Manually set to {self._origin_target_single_line(ct)}"
+
+            if charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE:
+                return "Automatically forced to charge as fast as possible"
+
+            if charge_type == CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE:
+                return "Manual as fast as possible charge"
+
+        # No charger, person-automated, or any other type: the person-forecast line.
+        return self.get_car_person_readable_forecast_mileage()
+
+    @staticmethod
+    def _origin_target_single_line(ct) -> str:
+        """Target time for the single-line origin row.
+
+        Delegates to the shared formatter with ``allow_cr=False`` so a far-out
+        (>~24h) target renders as ``"%m-%d %H:%M"`` on a single line instead of
+        the two-line ``"%m-%d\\n%H:%M"`` form. Covered by the far-out
+        Calendar/Manual tests in ``tests/test_car_charge_origin.py``.
+        """
+        return ct.get_readable_next_target_date_string(for_small_standalone=True, allow_cr=False)
 
     async def convert_auto_constraint_to_manual_if_needed(self) -> bool:
 

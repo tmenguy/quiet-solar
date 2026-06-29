@@ -7854,7 +7854,7 @@ def test_cards_escape_entity_derived_option_text():
     car = _strip_js_comments((COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text(encoding="utf-8"))
     # Car option maps must escape the option value.
     assert "this._escapeHtml(o)" in car, "qs-car-card.js: charger/person `<option>` text must be escaped (S3)."
-    assert "this._escapeHtml(personForecastStr)" in car, "qs-car-card.js: person forecast string must be escaped (S3)."
+    assert "this._escapeHtml(chargeOriginStr)" in car, "qs-car-card.js: charge origin string must be escaped (S3)."
     # A raw `<option>${o}</option>` (no escape) must NOT remain.
     assert not re.search(r"<option[^>]*>\$\{o\}</option>", car), (
         "qs-car-card.js: found an unescaped `<option>${o}</option>` (S3)."

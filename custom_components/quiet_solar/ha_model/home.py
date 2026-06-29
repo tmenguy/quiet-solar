@@ -58,6 +58,7 @@ from ..const import (
     PASS1_PREFERRED_CAR_PENALTY_KWH,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
+    SENSOR_CAR_CHARGE_ORIGIN,
     SENSOR_CAR_PERSON_FORECAST,
     CONF_TYPE_NAME_QSHome,
     QSForecastHomeNonControlledSensors,
@@ -2774,10 +2775,16 @@ class QSHome(QSDynamicGroup):
                 await person.notify_of_forecast_if_needed(notify_reason=PERSON_NOTIFY_REASON_CHANGED_CAR)
 
         for car in cars_that_changed:
+            time = datetime.now(tz=pytz.UTC)
             person_forecast_entity = car.ha_entities.get(SENSOR_CAR_PERSON_FORECAST, None)
             if person_forecast_entity is not None:
-                time = datetime.now(tz=pytz.UTC)
                 person_forecast_entity.async_update_callback(time)
+
+            # The origin context line derives from the same person-allocation
+            # state — refresh it immediately too so it doesn't lag a tick.
+            charge_origin_entity = car.ha_entities.get(SENSOR_CAR_CHARGE_ORIGIN, None)
+            if charge_origin_entity is not None:
+                charge_origin_entity.async_update_callback(time)
 
             if car.charger:
                 await car.charger.update_charger_for_user_change()

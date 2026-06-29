@@ -24,6 +24,8 @@ from custom_components.quiet_solar.const import (
     DATA_HANDLER,
     DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
+    SENSOR_CAR_CHARGE_ORIGIN,
+    SENSOR_CAR_PERSON_FORECAST,
 )
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.ha_model.solar import QSSolar
@@ -1171,6 +1173,65 @@ async def test_home_best_persons_cars_allocations_basic(
     assert result
     assert car_a.current_forecasted_person is not None
     assert car_b.current_forecasted_person is not None
+
+
+async def test_home_allocation_nudges_both_forecast_and_origin_sensors(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """QS-274 review-fix #01 finding 8 — on a person-allocation change, BOTH
+    the person-forecast sensor and the new charge-origin sensor are refreshed
+    immediately (the origin row must not lag a tick)."""
+    await hass.config_entries.async_setup(home_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    data_handler = hass.data[DOMAIN][DATA_HANDLER]
+    home = data_handler.home
+
+    forecast_entity = MagicMock()
+    origin_entity = MagicMock()
+
+    car_a = SimpleNamespace(
+        name="Car A",
+        current_forecasted_person=None,
+        _user_originated={},
+        car_is_invited=False,
+        charger=_FakeCharger(),
+        ha_entities={
+            SENSOR_CAR_PERSON_FORECAST: forecast_entity,
+            SENSOR_CAR_CHARGE_ORIGIN: origin_entity,
+        },
+        get_adapt_target_percent_soc_to_reach_range_km=MagicMock(return_value=(False, 40.0, 80.0, 10.0)),
+    )
+    car_a.get_user_originated = lambda key, default=None: car_a._user_originated.get(key, default)
+    car_a.set_user_originated = lambda key, value: car_a._user_originated.__setitem__(key, value)
+    car_a.has_user_originated = lambda key: key in car_a._user_originated
+    car_a.clear_user_originated = lambda key: car_a._user_originated.pop(key, None)
+
+    person_a = _HashableNS(
+        name="Person A",
+        preferred_car="Car A",
+        update_person_forecast=MagicMock(return_value=(datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC), 30.0)),
+        get_authorized_cars=MagicMock(return_value=[car_a]),
+        notify_of_forecast_if_needed=AsyncMock(),
+    )
+
+    home._cars = [car_a]
+    home._persons = [person_a]
+
+    with patch(
+        "custom_components.quiet_solar.ha_model.home.hungarian_algorithm",
+        return_value={0: 0},
+    ):
+        await home.compute_and_set_best_persons_cars_allocations(
+            time=datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC),
+            force_update=True,
+            do_notify=False,
+        )
+
+    assert car_a.current_forecasted_person is not None
+    forecast_entity.async_update_callback.assert_called_once()
+    origin_entity.async_update_callback.assert_called_once()
 
 
 async def test_home_allocation_rejects_unauthorized_cross_assignment(

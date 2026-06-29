@@ -98,11 +98,13 @@ class QSOCPPv16v201ChargePointStatus(StrEnum):
 from ..const import (
     CAR_CHARGE_NO_POWER_ERROR,
     CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE,
+    CAR_CHARGE_TYPE_CALENDAR,
     CAR_CHARGE_TYPE_FAULTED,
+    CAR_CHARGE_TYPE_MANUAL,
+    CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE,
     CAR_CHARGE_TYPE_NOT_CHARGING,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
-    CAR_CHARGE_TYPE_SCHEDULE,
     CAR_CHARGE_TYPE_SOLAR_AFTER_BATTERY,
     CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY,
     CAR_CHARGE_TYPE_TARGET_MET,
@@ -128,7 +130,11 @@ from ..const import (
     CONF_CHARGER_STATUS_SENSOR,
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH,
     CONF_DEVICE_EFFICIENCY,
+    CONSTRAINT_FORECASTED_PERSON_KEY,
+    CONSTRAINT_ORIGINATOR_AGENDA,
     CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_MANUAL,
+    CONSTRAINT_ORIGINATOR_PERSON,
     CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
@@ -3443,7 +3449,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             # unless the user explicitly overrode the charge target
                             has_person_info = (
                                 force_constraint.load_info is not None
-                                and force_constraint.load_info.get("person") is not None
+                                and force_constraint.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) is not None
                             )
                             if (
                                 user_target is not None or not has_person_info
@@ -3506,6 +3512,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         time=time,
                         load=self,
                         load_param=self.car.name,
+                        load_info={CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_MANUAL},
                         from_user=True,
                         end_of_constraint=local_end_of_constraint,
                         initial_value=car_initial_value,
@@ -3595,6 +3602,8 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                             support_auto=True,
                         )
 
+                        # push_agenda_constraints will add properly CONSTRAINT_ORIGINATOR_AGENDA on the constraint
+                        # CONSTRAINT_ORIGINATOR_KEY load info
                         pushed, agenda_to_ack = self.push_agenda_constraints(time, [car_charge_agenda])
                         for ct_ack in agenda_to_ack:
                             await self.ack_completed_constraint(time, ct_ack)
@@ -3641,7 +3650,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                     # we found and removed a previous person based constraint, or anything not as it should be there
                     if person is not None:
                         if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(
-                            time, load_param=self.car.name, load_info={"person": person.name}, for_full_reset=False
+                            time,
+                            load_param=self.car.name,
+                            load_info={CONSTRAINT_FORECASTED_PERSON_KEY: person.name},
+                            for_full_reset=False,
                         ):
                             do_force_solve = True
 
@@ -3682,7 +3694,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                         ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
                                         and ct.load_param == self.car.name
                                         and ct.load_info is not None
-                                        and ct.load_info.get("person") == person.name
+                                        and ct.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) == person.name
                                     ):
                                         # ok found one ...
                                         car_charge_person = ct
@@ -3712,7 +3724,10 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                                     time=time,
                                     load=self,
                                     load_param=self.car.name,
-                                    load_info={"person": person.name},
+                                    load_info={
+                                        CONSTRAINT_FORECASTED_PERSON_KEY: person.name,
+                                        CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_PERSON,
+                                    },
                                     from_user=False,
                                     initial_value=car_initial_value,
                                     target_value=target_charge,
@@ -3741,7 +3756,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                         if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(
                             time,
                             load_param=self.car.name,
-                            load_info={"person": "ANY_PERSON_OF_ANY_NAME"},
+                            load_info={CONSTRAINT_FORECASTED_PERSON_KEY: "ANY_PERSON_OF_ANY_NAME"},
                             for_full_reset=False,
                         ):
                             do_force_solve = True
@@ -4338,19 +4353,20 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         return contiguous_status > 0
 
-    def get_charge_type(self) -> tuple[str, None | LoadConstraint]:
+    def get_charge_type(self, return_charge_errors=True) -> tuple[str, None | LoadConstraint]:
 
         # set time as now
         time = datetime.now(pytz.UTC)
 
-        if self.is_charger_faulted(time):
-            return CAR_CHARGE_TYPE_FAULTED, None
+        if return_charge_errors:
+            if self.is_charger_faulted(time):
+                return CAR_CHARGE_TYPE_FAULTED, None
 
-        if self.possible_charge_error_start_time is not None:
-            return CAR_CHARGE_NO_POWER_ERROR, None
+            if self.possible_charge_error_start_time is not None:
+                return CAR_CHARGE_NO_POWER_ERROR, None
 
-        if self.car is None:
-            return CAR_CHARGE_TYPE_NOT_PLUGGED, None
+            if self.car is None:
+                return CAR_CHARGE_TYPE_NOT_PLUGGED, None
 
         type = CAR_CHARGE_TYPE_NOT_CHARGING
 
@@ -4361,13 +4377,23 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         for ct in constraints:
             if ct.is_constraint_active_for_time_period(time):
                 if ct.as_fast_as_possible:
-                    type = CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
-
+                    if (
+                        ct.load_info
+                        and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_USER_OVERRIDE
+                    ):
+                        type = CAR_CHARGE_TYPE_MANUAL_AS_FAST_AS_POSSIBLE
+                    else:
+                        type = CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
                 else:
                     if ct.end_of_constraint < DATETIME_MAX_UTC:
-                        type = CAR_CHARGE_TYPE_SCHEDULE
-                        if ct.load_info and "person" in ct.load_info:
+                        if ct.load_info and CONSTRAINT_FORECASTED_PERSON_KEY in ct.load_info:
                             type = CAR_CHARGE_TYPE_PERSON_AUTOMATED
+                        elif (
+                            ct.load_info and ct.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_AGENDA
+                        ):
+                            type = CAR_CHARGE_TYPE_CALENDAR
+                        else:
+                            type = CAR_CHARGE_TYPE_MANUAL
                     elif self.compute_is_before_battery(ct, time):
                         type = CAR_CHARGE_TYPE_SOLAR_PRIORITY_BEFORE_BATTERY
                     else:
@@ -4837,7 +4863,7 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
         is_target_percent: bool,
         accept_bigger_tolerance: bool = False,
         result_calculus: float | None = None,
-    ) -> tuple[bool, int | float]:
+    ) -> tuple[bool, int | float | None]:
         """Check if the car has reached its charge target."""
         is_car_stopped_asked_current = self.is_car_stopped_asking_current(time=time)
         result = current_charge

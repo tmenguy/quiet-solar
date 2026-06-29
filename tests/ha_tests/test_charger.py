@@ -26,13 +26,15 @@ from custom_components.quiet_solar.const import (
     CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CAR_CHARGE_TYPE_PERSON_AUTOMATED,
-    CAR_CHARGE_TYPE_SCHEDULE,
+    CAR_CHARGE_TYPE_MANUAL,
     CAR_CHARGE_TYPE_TARGET_MET,
     CHARGER_NO_CAR_CONNECTED,
     CONF_CHARGER_MAX_CHARGE,
     CONF_CHARGER_MIN_CHARGE,
     CONF_CHARGER_THREE_TO_ONE_PHASE_SWITCH,
     CONF_IS_3P,
+    CONSTRAINT_ORIGINATOR_KEY,
+    CONSTRAINT_ORIGINATOR_PERSON,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     DOMAIN,
@@ -1398,7 +1400,7 @@ async def test_charger_get_charge_type_variants(
     assert charge_type == CAR_CHARGE_TYPE_AS_FAST_AS_POSSIBLE
     assert ct is fast_ct
 
-    # Mock constraint for scheduled charging
+    # Mock constraint for a person-driven scheduled charge → Person Automated
     sched_ct = MagicMock()
     sched_ct.as_fast_as_possible = False
     sched_ct.end_of_constraint = datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC)
@@ -1407,8 +1409,21 @@ async def test_charger_get_charge_type_variants(
     sched_ct.is_constraint_met = MagicMock(return_value=False)
     charger_device._constraints = [sched_ct]
     charge_type, ct = charger_device.get_charge_type()
-    assert charge_type in (CAR_CHARGE_TYPE_SCHEDULE, CAR_CHARGE_TYPE_PERSON_AUTOMATED)
+    assert charge_type == CAR_CHARGE_TYPE_PERSON_AUTOMATED
     assert ct is sched_ct
+
+    # Mock constraint for a manual (untagged / load_info=None) deadline → Manual.
+    # This exercises the `ct.load_info and ...` None-guard in get_charge_type.
+    manual_ct = MagicMock()
+    manual_ct.as_fast_as_possible = False
+    manual_ct.end_of_constraint = datetime(2026, 1, 16, 8, 0, tzinfo=pytz.UTC)
+    manual_ct.load_info = None
+    manual_ct.is_constraint_active_for_time_period = MagicMock(return_value=True)
+    manual_ct.is_constraint_met = MagicMock(return_value=False)
+    charger_device._constraints = [manual_ct]
+    charge_type, ct = charger_device.get_charge_type()
+    assert charge_type == CAR_CHARGE_TYPE_MANUAL
+    assert ct is manual_ct
 
     # Mock constraint that's already met
     met_ct = MagicMock()
@@ -3646,8 +3661,11 @@ async def test_charger_check_load_activity_person_constraint_creation(
     ):
         assert await charger_device.check_load_activity_and_constraints(now) is True
         assert charger_device.push_live_constraint.call_count > 0
+        # QS-274: the person constraint keeps its {"person": name} matching key
+        # and is additionally stamped with the person originator.
         assert any(
-            call_args[0][1].load_info == {"person": person.name}
+            call_args[0][1].load_info.get("person") == person.name
+            and call_args[0][1].load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_PERSON
             for call_args in charger_device.push_live_constraint.call_args_list
         )
 

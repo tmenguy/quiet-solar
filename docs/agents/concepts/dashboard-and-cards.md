@@ -411,6 +411,41 @@ JS card's input contract via `key: value` pairs (e.g.
 just like the other dedicated cards. The standard template still
 falls back to plain `- entity:` rows — that's the no-JS variant.
 
+### QS-274 — car-card origin Mode icon + origin context row
+
+The car card's **Mode icon** is driven by the `car_charge_type` sensor
+(`QSCar.get_car_charge_type()` → `QSChargerGeneric.get_charge_type()`).
+The `carChargeTypeIcons` map in `qs-car-card.js` now keys off the
+origin-aware charge types:
+
+| charge type (sensor state) | icon |
+|---|---|
+| `As Fast As Possible` | `mdi:rabbit` |
+| `Manual As Fast As Possible` | `mdi:rabbit` (the context row differentiates user vs automation) |
+| `Manual` | `mdi:hand-back-right` |
+| `Calendar` | `mdi:calendar` |
+| `Person Automated` | `mdi:account-clock` |
+| `Solar Priority` | `mdi:solar-power` |
+| `Solar` | `mdi:white-balance-sunny` |
+| faulted / no power / not plugged / target met / not charging | unchanged |
+
+`CAR_CHARGE_TYPE_SCHEDULE` (`"Scheduled"` → `mdi:clock-outline`) and the
+old `mdi:auto-fix` person icon were **removed**. The JS map keys are the
+rendered string values of the `CAR_CHARGE_TYPE_*` constants — they must
+stay in sync with `const.py`.
+
+The card's `.forecast-row` is now an **origin context row**: it renders
+the new `qs_car_charge_origin` sensor (wired through the template as
+`charge_origin:`) instead of the raw `qs_car_person_forecast` string, and
+drops the old `Forecast:` prefix. The row shows the active charge origin
+(`"Calendar · HH:MM"`, `"Manually set to HH:MM"`, the as-fast strings),
+and for the person-automated / no-charger / any-other-type cases delegates
+to `get_car_person_readable_forecast_mileage()` — i.e. `"<Person>:
+<forecast>"`, `"<Person>: No forecast"` (empty forecast), or `"No
+forecasted person"` when no person is attached. It is prefixed with the
+same Mode icon. The `qs_car_person_forecast` sensor stays registered for
+history/automations but is no longer surfaced on the card.
+
 New Jinja branches added by QS-194 use the idiomatic `is not none`
 test (rather than the pre-existing `!= None`) and `{# NOTE: ... #}`
 documentation comments (rather than `{# TODO: ... #}`); follow these
