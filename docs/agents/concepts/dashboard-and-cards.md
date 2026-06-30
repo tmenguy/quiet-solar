@@ -899,11 +899,15 @@ energy / not stale-percent mode) the card now reads the `best_soc` entity
 SOC value and the ring fill whenever numeric — **both while charging and
 idle** — so the slow car API no longer makes the gauge look stuck. It falls
 back to the raw SOC (`rawSoc`, captured *before* any reassignment) when
-`best_soc` is non-numeric. A purely **visual** `*` is appended iff the integer
-part of the estimate differs from the raw value
-(`Math.trunc(bestSocVal) !== Math.trunc(rawSoc)`) — it is OR-combined with the
-QS-243 `hasSocEstimate` asterisk so at most one `*` shows, and it does **not**
-touch `is_soc_estimated` or the degraded-box logic.
+`best_soc` is non-numeric **or** numeric-but-non-finite (the `isNumberLike` /
+`_percent` helpers can disagree, so a bad estimate never poisons the display).
+A purely **visual** `*` is appended iff the estimate and the raw value differ
+once rounded the **same way the gauge displays them** —
+`Math.round(bestSocVal) !== Math.round(rawSoc)`, matching `_fmt`'s `Math.round`
+so a `45.6`→`46` estimate is correctly flagged against a raw `45` (an earlier
+`Math.trunc` gate mismatched the displayed rounding). It is OR-combined with
+the QS-243 `hasSocEstimate` asterisk so at most one `*` shows, and it does
+**not** touch `is_soc_estimated` or the degraded-box logic.
 
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is

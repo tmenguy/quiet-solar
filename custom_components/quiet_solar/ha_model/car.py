@@ -1654,9 +1654,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
         """
         if time is None:
             time = datetime.now(tz=pytz.UTC)
-        if self.is_in_soc_estimation_mode(time):
-            return self._estimated_soc_percent
-        if self._last_valid_base_soc_value is not None:
+        # Estimating (stale / no-sensor / manual override) OR a healthy sensor
+        # that already has a system base → the canonical clamped estimate (which
+        # is `None` only in the pure-delta no-base case). Otherwise the plain raw.
+        if self.is_in_soc_estimation_mode(time) or self._last_valid_base_soc_value is not None:
             return self._estimated_soc_percent
         return self.get_car_charge_percent_raw_sensor(time)
 
@@ -1712,23 +1713,32 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         Runs once per cycle from `update_states`, independent of stale state.
         `_last_valid_base_soc_value` tracks the freshest raw SOC the API has
-        reported. When the raw value genuinely *changes* — detected by an
-        **integer** comparison (mirroring the card's `Math.trunc`, so a
-        same-integer heartbeat does NOT re-anchor and float noise can't cause a
-        spurious reset) — the accumulated delta is reset to `0.0` and the
-        integration cursor re-anchored, so the live estimate snaps back to the
-        truth the API just reported.
+        reported. When the raw value changes at the **integer** level (mirroring
+        the card's `Math.trunc`, so a same-integer heartbeat does NOT re-anchor),
+        the accumulated delta is reset to `0.0` and the integration cursor
+        re-anchored, so the live estimate snaps back to the truth the API just
+        reported. (Sub-integer jitter is absorbed, but a raw oscillating across
+        an integer boundary — e.g. `44.9`↔`45.1` — will re-anchor on each flip;
+        the integer compare is a coarse de-bounce, not full hysteresis.)
 
-        No-op when the raw value is `None` (no reading yet / no-sensor car) and
-        skipped entirely when a manual override is active — that override owns
-        its delta lifecycle via `_update_soc_estimation`.
+        No-op when the raw value is `None` (no reading yet / no-sensor car) or
+        **non-finite** (`nan`/`inf` — a misbehaving template/SOC sensor whose
+        literal `"nan"`/`"inf"` survives numeric coercion: `int()` on those
+        raises, so the per-cycle `update_states` must not crash). Skipped
+        entirely when a manual override is active — that override owns its delta
+        lifecycle via `_update_soc_estimation`.
         """
         if self._user_base_soc_value is not None:
             return
         raw = self.get_car_charge_percent_raw_sensor(time)
-        if raw is None:
+        # No-op unless `raw` is a finite real number: `None` (no reading), a
+        # non-numeric sensor state (the raw read is typed `str | float | None`),
+        # or a non-finite `nan`/`inf` must never reach `int()` — it would raise
+        # and crash the per-cycle `update_states`.
+        if not isinstance(raw, (int, float)) or not math.isfinite(raw):
             return
-        if self._last_valid_base_soc_value is None or int(raw) != int(self._last_valid_base_soc_value):
+        base = self._last_valid_base_soc_value
+        if not isinstance(base, (int, float)) or not math.isfinite(base) or int(raw) != int(base):
             self._last_valid_base_soc_value = raw
             self._computed_added_delta_soc_percent = 0.0
             self._delta_soc_last_integration_time = None

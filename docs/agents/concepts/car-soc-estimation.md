@@ -201,16 +201,20 @@ sensor reports unplugged) while the SOC sensor is live:
 `_capture_last_valid_base_soc(time)` runs **once per cycle** from
 `update_states` (beside `_update_soc_estimation`), independent of stale state.
 It anchors `_last_valid_base_soc_value` to the last known good raw value; on a
-genuinely *different* raw value — detected by an **integer** compare
-(`int(raw) != int(base)`, mirroring the card's `Math.trunc` so a same-integer
-heartbeat does NOT re-anchor and float noise can't cause a spurious reset) — it
-resets the delta to `0.0` and re-anchors the cursor, so the estimate snaps back
-to the truth the API just reported. It is a **no-op when raw is `None`** and is
-**skipped entirely when a manual override is active** (`_user_base_soc_value is
-not None`) — that override owns its delta lifecycle via `_update_soc_estimation`,
-so the re-anchor must not zero it. A genuine API change is trusted and may move
-the displayed value up **or** down; the only invariant is that it never
-decreases due to accumulation alone between real API updates.
+raw value that differs at the **integer** level (`int(raw) != int(base)`,
+mirroring the card's `Math.trunc` so a same-integer heartbeat does NOT
+re-anchor; sub-integer jitter is absorbed but a value oscillating across an
+integer boundary still re-anchors on each flip — a coarse de-bounce, not full
+hysteresis) — it resets the delta to `0.0` and re-anchors the cursor, so the
+estimate snaps back to the truth the API just reported. It is a **no-op when
+raw is `None`, non-numeric, or non-finite** (`nan`/`inf`: `int()` would raise
+and crash the per-cycle `update_states`, so they are skipped like a `None`
+read) and is **skipped entirely when a manual override is active**
+(`_user_base_soc_value is not None`) — that override owns its delta lifecycle
+via `_update_soc_estimation`, so the re-anchor must not zero it. A genuine API
+change is trusted and may move the displayed value up **or** down; the only
+invariant is that it never decreases due to accumulation alone between real API
+updates.
 
 `_enter_stale_percent_mode` now only flips the mode flag — it no longer
 captures the base (the re-anchor maintains it every cycle).

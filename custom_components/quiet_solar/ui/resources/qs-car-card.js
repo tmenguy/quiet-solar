@@ -992,16 +992,22 @@ class QsCarCard extends QsCardBase {
           // QS-281 — normal percent path: prefer the live best-estimated SOC
           // (both while charging AND idle) whenever it is numeric, so the slow
           // car API no longer makes the gauge look stuck. Fall back to the raw
-          // `rawSoc` when the best-estimate entity is unavailable.
+          // `rawSoc` when the best-estimate entity is unavailable — OR when it
+          // is "numeric" per `isNumberLike` yet `_percent` yields a non-finite
+          // value (the two helpers can disagree on range/format), so a bad
+          // best-estimate never poisons the displayed value.
           const bestSocNumeric = isNumberLike(sBestSoc?.state);
-          const bestSocVal = bestSocNumeric ? this._percent(sBestSoc.state) : rawSoc;
+          const bestSocCandidate = bestSocNumeric ? this._percent(sBestSoc.state) : rawSoc;
+          const bestSocUsable = bestSocNumeric && Number.isFinite(bestSocCandidate);
+          const bestSocVal = bestSocUsable ? bestSocCandidate : rawSoc;
           soc = bestSocVal;
           // The asterisk marks a live extrapolation running ahead of the API:
-          // shown iff the integer part of the estimate differs from the raw
-          // value (mirroring the per-cycle re-anchor's integer compare). It is
-          // purely visual and must not stack with QS-243's `hasSocEstimate`
+          // shown iff the estimate and the raw value differ once rounded the
+          // SAME way the gauge displays them (`_fmt` = `Math.round`), so a value
+          // like 45.6 that displays as 46 is correctly flagged against a raw 45.
+          // Purely visual; must not stack with QS-243's `hasSocEstimate`
           // asterisk — at most a single `*` is ever shown.
-          const showEstimateStar = bestSocNumeric && Math.trunc(bestSocVal) !== Math.trunc(rawSoc);
+          const showEstimateStar = bestSocUsable && Math.round(bestSocVal) !== Math.round(rawSoc);
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
           displayTargetValue = `${this._fmt(targetPct ?? soc)}%`;

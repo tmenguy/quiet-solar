@@ -19,6 +19,11 @@ from custom_components.quiet_solar.ha_model.car import QSCar
 
 
 def _make_car(fake_hass, mock_data_handler, **overrides) -> QSCar:
+    # A REAL `QSCar` domain object built from the standard `MOCK_CAR_CONFIG`
+    # (no MagicMock for the domain object, per project rules). Only
+    # `config_entry` is a MagicMock — it is genuine HA infrastructure (a config
+    # entry handle), not a domain object, and the same convention is used by the
+    # sibling `test_car_soc_estimation.py` fixtures.
     from tests.ha_tests.const import MOCK_CAR_CONFIG
 
     config = {
@@ -81,6 +86,7 @@ def test_best_estimate_base_plus_delta_when_not_estimating(est_car, current_time
 def test_best_estimate_clamped_at_100(est_car, current_time):
     """Branch 2 — base + delta clamps to 100 (reuses `_estimated_soc_percent`)."""
     _set_soc(est_car, 98.0, current_time)
+    assert est_car.is_in_soc_estimation_mode(current_time) is False  # pin branch 2, not 1
     est_car._last_valid_base_soc_value = 98.0
     est_car._computed_added_delta_soc_percent = 10.0
     assert est_car.get_best_estimated_car_charge_percent(current_time) == 100.0
@@ -187,6 +193,41 @@ def test_reanchor_noop_when_raw_none(est_car, current_time):
     est_car._capture_last_valid_base_soc(current_time)
     assert est_car._last_valid_base_soc_value == 40.0
     assert est_car._computed_added_delta_soc_percent == 6.0
+
+
+@pytest.mark.parametrize("bad_raw", [float("nan"), float("inf"), float("-inf")])
+def test_reanchor_noop_when_raw_non_finite(est_car, current_time, bad_raw):
+    """A non-finite raw (`nan`/`inf`) must be a no-op, never `int()`-crash the
+    per-cycle re-anchor (must-fix #01)."""
+    est_car._last_valid_base_soc_value = 40.0
+    est_car._computed_added_delta_soc_percent = 6.0
+    _set_soc(est_car, bad_raw, current_time)
+    # Must not raise (int(nan) → ValueError, int(inf) → OverflowError).
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 40.0
+    assert est_car._computed_added_delta_soc_percent == 6.0
+
+
+def test_reanchor_noop_when_raw_non_numeric_string(est_car, current_time):
+    """A non-numeric sensor state (raw is typed `str | float | None`) is a
+    no-op — `int("foo")` must never crash the per-cycle re-anchor."""
+    est_car._last_valid_base_soc_value = 40.0
+    est_car._computed_added_delta_soc_percent = 6.0
+    _set_soc(est_car, "unavailable", current_time)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 40.0
+    assert est_car._computed_added_delta_soc_percent == 6.0
+
+
+def test_reanchor_recovers_when_base_non_finite(est_car, current_time):
+    """A previously-stored non-finite base re-anchors to the next good raw
+    rather than crashing the compare."""
+    est_car._last_valid_base_soc_value = float("nan")
+    est_car._computed_added_delta_soc_percent = 3.0
+    _set_soc(est_car, 50.0, current_time)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 50.0
+    assert est_car._computed_added_delta_soc_percent == 0.0
 
 
 def test_reanchor_skips_when_user_override(est_car, current_time):
