@@ -836,6 +836,9 @@ class QsCarCard extends QsCardBase {
       // number entity (popup prefill + write target), and the reset button.
       const sIsSocEstimated = this._entity(e.is_soc_estimated);
       const sManualSoc = this._entity(e.manual_soc);
+      // QS-281 — live best-estimated SOC (re-anchors on each fresh raw value,
+      // extrapolates `base + charge added` while the slow car API lags).
+      const sBestSoc = this._entity(e.best_soc);
 
       const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
 
@@ -844,6 +847,11 @@ class QsCarCard extends QsCardBase {
       // Check if car API data is stale
       const isStale = sCarIsStale?.state === 'on';
       let soc = this._percent(sSoc?.state);
+      // QS-281 N2 — capture the RAW SOC up front, before `soc` can be
+      // reassigned to the best-estimate below: the asterisk compares the
+      // estimate against this raw value, so it must never be the (possibly
+      // overwritten) display variable.
+      const rawSoc = this._percent(sSoc?.state);
       // QS-235 AC6 — guard-shaped sensor read via the shared `_safeNumber`
       // (trims, rejects unknown/unavailable/±Infinity) instead of the raw
       // `Number(sPower?.state || "0")` pattern.
@@ -981,12 +989,23 @@ class QsCarCard extends QsCardBase {
           // Override soc for display
           soc = Math.max(0, Math.min(100, socPct));
       } else {
+          // QS-281 — normal percent path: prefer the live best-estimated SOC
+          // (both while charging AND idle) whenever it is numeric, so the slow
+          // car API no longer makes the gauge look stuck. Fall back to the raw
+          // `rawSoc` when the best-estimate entity is unavailable.
+          const bestSocNumeric = isNumberLike(sBestSoc?.state);
+          const bestSocVal = bestSocNumeric ? this._percent(sBestSoc.state) : rawSoc;
+          soc = bestSocVal;
+          // The asterisk marks a live extrapolation running ahead of the API:
+          // shown iff the integer part of the estimate differs from the raw
+          // value (mirroring the per-cycle re-anchor's integer compare). It is
+          // purely visual and must not stack with QS-243's `hasSocEstimate`
+          // asterisk — at most a single `*` is ever shown.
+          const showEstimateStar = bestSocNumeric && Math.trunc(bestSocVal) !== Math.trunc(rawSoc);
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
           displayTargetValue = `${this._fmt(targetPct ?? soc)}%`;
-          // QS-243 — append an asterisk when the SOC is estimated rather
-          // than read live from the car's sensor.
-          displaySocValue = `${this._fmt(soc)}%${hasSocEstimate ? '*' : ''}`;
+          displaySocValue = `${this._fmt(soc)}%${(hasSocEstimate || showEstimateStar) ? '*' : ''}`;
       }
 
       // QS-199 review-fix #02 S2 — use the inherited hardened

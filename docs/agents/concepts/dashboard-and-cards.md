@@ -893,6 +893,18 @@ SOC number is clickable → a popup with an integer 0–100 input and **Save**
 `manual_soc`, and `reset_soc` into the card. See
 [car-soc-estimation.md](car-soc-estimation.md) for the backing model.
 
+**Live best-estimated SOC (QS-281).** On the **normal percent path** (not
+energy / not stale-percent mode) the card now reads the `best_soc` entity
+(sensor `car_best_estimated_soc_percentage`) and uses it for both the displayed
+SOC value and the ring fill whenever numeric — **both while charging and
+idle** — so the slow car API no longer makes the gauge look stuck. It falls
+back to the raw SOC (`rawSoc`, captured *before* any reassignment) when
+`best_soc` is non-numeric. A purely **visual** `*` is appended iff the integer
+part of the estimate differs from the raw value
+(`Math.trunc(bestSocVal) !== Math.trunc(rawSoc)`) — it is OR-combined with the
+QS-243 `hasSocEstimate` asterisk so at most one `*` shows, and it does **not**
+touch `is_soc_estimated` or the degraded-box logic.
+
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is
 explicitly excluded; the card-level pinkish `.off-grid` CSS class

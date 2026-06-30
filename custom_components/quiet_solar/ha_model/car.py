@@ -642,6 +642,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await super().update_states(time)
         self._update_car_api_staleness(time)
         self._update_soc_estimation(time)
+        self._capture_last_valid_base_soc(time)
         await self._check_departure_auto_reset(time)
 
     async def _check_departure_auto_reset(self, time: datetime) -> None:
@@ -860,13 +861,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return ", ".join(parts)
 
     def _exit_stale_mode(self, preserve_inferred: bool = False) -> None:
-        """Clear all stale flags and exit stale-percent mode.
+        """Clear the stale flags and exit stale-percent mode.
 
-        Also clears the system-captured SOC base. When there is NO user
-        override, it clears the accumulator + cursor too so the live sensor
-        takes over. When a user override IS active, the override owns its own
-        accumulator lifecycle (the case-1/2 recovery in `_update_soc_estimation`),
-        so a transient stale blip must not wipe its accumulated delta.
+        QS-281: this clears ONLY genuinely stale-specific state. The SOC base
+        (`_last_valid_base_soc_value`) is no longer stale-specific — it is the
+        "last known good raw value" maintained every cycle by the re-anchor
+        (`_capture_last_valid_base_soc`), so exiting stale mode must not wipe it
+        nor the accumulator/cursor. On a real stale→healthy exit the SOC sensor
+        is fresh (that is why we exit), so the same-cycle re-anchor snaps the
+        base to the fresh raw and resets the delta only when it genuinely
+        differs — a real charge delta now survives stale-exit unless the API
+        reports a different value.
 
         ``preserve_inferred`` keeps the manual inferred home/plug override in
         place so the immediately-following per-cycle reconciliation
@@ -881,10 +886,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._car_api_inferred_home = False
             self._car_api_inferred_plugged = False
         self._car_api_stale_since = None
-        self._last_valid_base_soc_value = None
-        if self._user_base_soc_value is None:
-            self._computed_added_delta_soc_percent = None
-            self._delta_soc_last_integration_time = None
 
     def reset_car_api_stale_detection(self) -> None:
         """Reset the detected stale state so the live API gets a fresh chance.
@@ -1632,6 +1633,33 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self._estimated_soc_percent
         return self.get_car_charge_percent_raw_sensor(time, tolerance_seconds)
 
+    def get_best_estimated_car_charge_percent(self, time: datetime | None = None) -> float | None:
+        """Return the freshest SOC for display (QS-281) — a pure read, no mutation.
+
+        While the slow car APIs lag during a charge, this surfaces a live
+        estimate (`last known good raw value + charge added since`) that
+        re-anchors when the API finally delivers a fresh value:
+
+        1. while estimating (stale / no-sensor / manual override) → the existing
+           estimate `_estimated_soc_percent` (parity with `get_car_charge_percent`,
+           may be `None` for the pure-delta case);
+        2. else when a system base exists → `self._estimated_soc_percent`
+           (the canonical `clamp(base + delta, 0, 100)`);
+        3. else → the plain raw sensor value.
+
+        No "actively charging" check is needed: the delta only ever grows while
+        the charger callback runs, so when idle `base + delta` simply holds the
+        last accurate value until a genuinely different raw API reading
+        re-anchors it (the re-anchor lives in `update_states`, not here).
+        """
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+        if self.is_in_soc_estimation_mode(time):
+            return self._estimated_soc_percent
+        if self._last_valid_base_soc_value is not None:
+            return self._estimated_soc_percent
+        return self.get_car_charge_percent_raw_sensor(time)
+
     def _update_soc_estimation(self, time: datetime) -> None:
         """Per-cycle recovery for a user manual override (4-case, keyed on entry state).
 
@@ -1680,25 +1708,39 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.reset_soc_estimate()
 
     def _capture_last_valid_base_soc(self, time: datetime) -> None:
-        """Capture the last valid sensor value as the system base at a fresh→stale edge."""
-        if self._user_base_soc_value is not None or self._last_valid_base_soc_value is not None:
+        """Re-anchor the SOC base to the last known good raw value (QS-281).
+
+        Runs once per cycle from `update_states`, independent of stale state.
+        `_last_valid_base_soc_value` tracks the freshest raw SOC the API has
+        reported. When the raw value genuinely *changes* — detected by an
+        **integer** comparison (mirroring the card's `Math.trunc`, so a
+        same-integer heartbeat does NOT re-anchor and float noise can't cause a
+        spurious reset) — the accumulated delta is reset to `0.0` and the
+        integration cursor re-anchored, so the live estimate snaps back to the
+        truth the API just reported.
+
+        No-op when the raw value is `None` (no reading yet / no-sensor car) and
+        skipped entirely when a manual override is active — that override owns
+        its delta lifecycle via `_update_soc_estimation`.
+        """
+        if self._user_base_soc_value is not None:
             return
         raw = self.get_car_charge_percent_raw_sensor(time)
-        if raw is not None:
+        if raw is None:
+            return
+        if self._last_valid_base_soc_value is None or int(raw) != int(self._last_valid_base_soc_value):
             self._last_valid_base_soc_value = raw
             self._computed_added_delta_soc_percent = 0.0
             self._delta_soc_last_integration_time = None
 
     def _enter_stale_percent_mode(self, time: datetime | None, for_init: bool = False) -> None:
-        """Set stale-percent mode and capture the last valid base on a genuine edge.
+        """Set stale-percent mode.
 
-        The `for_init` restore path must not capture — the persisted value is
-        the source of truth.
+        QS-281: the system base is now maintained every cycle by the per-cycle
+        re-anchor (`_capture_last_valid_base_soc`), so this no longer captures
+        the base on the stale edge — it just flips the mode flag.
         """
         self.car_api_stale_percent_mode = True
-        if for_init or time is None:
-            return
-        self._capture_last_valid_base_soc(time)
 
     async def user_set_manual_soc_percent(self, value: float, for_init: bool = False) -> None:
         """Set a manual SOC baseline. `for_init` (entity restore) is a no-op."""

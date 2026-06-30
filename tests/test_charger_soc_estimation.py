@@ -271,3 +271,28 @@ async def test_real_efficiency_integral_within_1pct():
     assert abs(car._computed_added_delta_soc_percent - expected_delta) <= 0.01
 
 
+async def test_callback_constraint_value_unchanged_with_healthy_accumulator():
+    """QS-281 — the hoisted `accumulate_soc_delta` call must NOT change the
+    constraint value on the non-estimating (healthy sensor) branch, yet it must
+    advance the accumulator (proving the single hoisted call ran)."""
+    charger, car, now = _build_charger_and_car(no_sensor=False)
+    car._entity_probed_last_valid_state[car.car_charge_percent_sensor] = (now, 47.0, {})
+    car._last_valid_base_soc_value = 47.0
+    car._computed_added_delta_soc_percent = 0.0
+    car._delta_soc_last_integration_time = now - timedelta(minutes=15)
+    charger._compute_added_charge_update = MagicMock(return_value=2.0)
+    assert car.is_in_soc_estimation_mode(now) is False
+
+    # A zero-length window keeps the result equal to the raw sensor value — the
+    # deterministic pre-change baseline for the constraint return.
+    ct = _Ct(now, current_value=40.0, target_value=80.0)
+    ct.first_value_update = now
+
+    result, _cont = await charger.constraint_update_value_callback_soc(ct, now, is_target_percent=True)
+
+    # constraint value byte-identical to the sensor-driven baseline …
+    assert result == 47.0
+    # … and the hoisted accumulate advanced the accumulator by inc = 2.0.
+    assert car._computed_added_delta_soc_percent == pytest.approx(2.0)
+
+

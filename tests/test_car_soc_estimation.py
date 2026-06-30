@@ -501,31 +501,33 @@ def test_recovery_raw_none_skips(est_car, current_time):
 
 
 def test_capture_last_valid_base(est_car, current_time):
+    """QS-281 — the per-cycle re-anchor captures the raw value as the base."""
     _set_soc(est_car, 64.0, current_time)
-    est_car._enter_stale_percent_mode(current_time)
-    assert est_car.car_api_stale_percent_mode is True
+    est_car._capture_last_valid_base_soc(current_time)
     assert est_car._last_valid_base_soc_value == 64.0
     assert est_car._computed_added_delta_soc_percent == 0.0
     assert est_car._delta_soc_last_integration_time is None
 
 
-def test_capture_skipped_when_user_base(est_car, current_time):
+def test_enter_stale_no_longer_captures(est_car, current_time):
+    """QS-281 — `_enter_stale_percent_mode` only flips the flag now; the base
+    is maintained every cycle by the re-anchor, not on the stale edge."""
     _set_soc(est_car, 64.0, current_time)
-    est_car._user_base_soc_value = 80.0
     est_car._enter_stale_percent_mode(current_time)
+    assert est_car.car_api_stale_percent_mode is True
     assert est_car._last_valid_base_soc_value is None
 
 
-def test_capture_skipped_when_system_base_exists(est_car, current_time):
+def test_reanchor_skipped_when_user_base(est_car, current_time):
     _set_soc(est_car, 64.0, current_time)
-    est_car._last_valid_base_soc_value = 30.0
-    est_car._enter_stale_percent_mode(current_time)
-    assert est_car._last_valid_base_soc_value == 30.0
+    est_car._user_base_soc_value = 80.0
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value is None
 
 
-def test_capture_skipped_when_raw_none(est_car, current_time):
+def test_reanchor_skipped_when_raw_none(est_car, current_time):
     est_car._entity_probed_last_valid_state[est_car.car_charge_percent_sensor] = None
-    est_car._enter_stale_percent_mode(current_time)
+    est_car._capture_last_valid_base_soc(current_time)
     assert est_car._last_valid_base_soc_value is None
 
 
@@ -540,9 +542,10 @@ def test_enter_stale_for_init_no_capture(est_car, current_time):
 
 
 def test_end_to_end_stale_capture_and_recovery(est_car, current_time):
-    """Drive `_update_car_api_staleness` across a full fresh→stale→recover cycle:
-    capture fires exactly once on the genuine edge, then recovery hands SOC back
-    to the live sensor."""
+    """QS-281 — drive the full fresh→stale→recover cycle with the per-cycle
+    re-anchor: the base tracks the last known good raw value, is dormant while
+    the sensor is not fresh (stale), and re-anchors on the first genuinely
+    different healthy reading (a real charge delta survives until then)."""
     tracker = est_car.car_tracker
     plugged = est_car.car_plugged
     soc = est_car.car_charge_percent_sensor
@@ -551,56 +554,69 @@ def test_end_to_end_stale_capture_and_recovery(est_car, current_time):
         est_car._entity_probed_last_valid_state[tracker] = (t, "home", {})
         est_car._entity_probed_last_valid_state[plugged] = (t, "on", {})
 
-    # 1) Everything fresh, SOC = 60 → not stale.
+    def _cycle(t):
+        # Mirror update_states order: staleness, then the per-cycle re-anchor.
+        est_car._update_car_api_staleness(t)
+        est_car._capture_last_valid_base_soc(t)
+
+    # 1) Everything fresh, SOC = 60 → not stale; re-anchor sets base = 60.
     _fresh_non_soc(current_time)
     est_car._entity_probed_last_valid_state[soc] = (current_time, 60.0, {})
-    est_car._update_car_api_staleness(current_time)
+    _cycle(current_time)
     assert est_car.car_api_stale_percent_mode is False
+    assert est_car._last_valid_base_soc_value == 60.0
     assert est_car.get_car_charge_percent(current_time) == 60.0
 
-    # 2) SOC sensor goes stale (others fresh) → SOC-only stale edge captures L=60.
+    # 2) SOC sensor goes stale (others fresh): the re-anchor reads the same last
+    #    value → dormant, base stays 60, estimate = base + 0 delta = 60.
     stale_time = current_time - timedelta(seconds=CAR_SOC_STALE_THRESHOLD_S + 1)
     est_car._entity_probed_last_valid_state[soc] = (stale_time, 60.0, {})
     _fresh_non_soc(current_time)
-    est_car._update_car_api_staleness(current_time)
+    _cycle(current_time)
     assert est_car.car_api_stale_percent_mode is True
     assert est_car._last_valid_base_soc_value == 60.0
     assert est_car._computed_added_delta_soc_percent == 0.0
     assert est_car.get_car_charge_percent(current_time) == 60.0  # base + 0 delta
 
-    # 3) A second stale cycle must NOT re-capture (genuine-edge guard).
-    est_car._last_valid_base_soc_value = 999.0  # sentinel — must be left untouched
-    est_car._update_car_api_staleness(current_time)
-    assert est_car._last_valid_base_soc_value == 999.0
-    est_car._last_valid_base_soc_value = 60.0
+    # 3) A second stale cycle with the same value → no re-anchor (heartbeat); a
+    #    charge delta that accrued mid-stale survives.
+    est_car._computed_added_delta_soc_percent = 5.0
+    _cycle(current_time)
+    assert est_car._last_valid_base_soc_value == 60.0
+    assert est_car._computed_added_delta_soc_percent == 5.0
 
-    # 4) API recovers: SOC fresh again with a new value → live sensor takes over.
+    # 4) API recovers: SOC fresh with a DIFFERENT value → re-anchor snaps the
+    #    base to 65 and resets the delta; the live sensor takes over.
     recover_time = current_time + timedelta(seconds=10)
     _fresh_non_soc(recover_time)
     est_car._entity_probed_last_valid_state[soc] = (recover_time, 65.0, {})
-    est_car._update_car_api_staleness(recover_time)
+    _cycle(recover_time)
     assert est_car.car_api_stale_percent_mode is False
-    assert est_car._last_valid_base_soc_value is None
+    assert est_car._last_valid_base_soc_value == 65.0
+    assert est_car._computed_added_delta_soc_percent == 0.0
     assert est_car.get_car_charge_percent(recover_time) == 65.0
 
 
-# ── _exit_stale_mode clears system base ──────────────────────────────────
+# ── _exit_stale_mode no longer touches the base/accumulator (QS-281) ──────
 
 
-def test_exit_stale_clears_system_base_no_user_override(est_car):
-    # No user override: the system-base recovery clears base + accumulator.
+def test_exit_stale_preserves_base_no_user_override(est_car):
+    """QS-281 — exiting stale mode clears ONLY stale flags; the base/accumulator
+    are now owned by the per-cycle re-anchor and must survive a stale-exit."""
     est_car.car_api_stale_percent_mode = True
     est_car._last_valid_base_soc_value = 40.0
     est_car._computed_added_delta_soc_percent = 6.0
     est_car._delta_soc_last_integration_time = "x"
     est_car._exit_stale_mode()
-    assert est_car._last_valid_base_soc_value is None
-    assert est_car._computed_added_delta_soc_percent is None
-    assert est_car._delta_soc_last_integration_time is None
+    assert est_car.car_api_stale_percent_mode is False
+    assert est_car._last_valid_base_soc_value == 40.0
+    assert est_car._computed_added_delta_soc_percent == 6.0
+    assert est_car._delta_soc_last_integration_time == "x"
 
 
 def test_exit_stale_preserves_accumulator_with_user_override(est_car):
-    # M1 defect 2: a transient stale blip must NOT wipe an override's delta.
+    # M1 defect 2: a transient stale blip must NOT wipe an override's delta;
+    # QS-281: the system base is preserved too (re-anchor owns it).
     est_car.car_api_stale_percent_mode = True
     est_car._last_valid_base_soc_value = 40.0
     est_car._computed_added_delta_soc_percent = 6.0
@@ -610,9 +626,9 @@ def test_exit_stale_preserves_accumulator_with_user_override(est_car):
     # the override owns its accumulator lifecycle → delta + cursor preserved
     assert est_car._computed_added_delta_soc_percent == 6.0
     assert est_car._delta_soc_last_integration_time == "x"
-    # user base untouched; system base cleared
+    # user base untouched; system base now preserved (QS-281)
     assert est_car._user_base_soc_value == 88.0
-    assert est_car._last_valid_base_soc_value is None
+    assert est_car._last_valid_base_soc_value == 40.0
 
 
 # ── AC12: orthogonality ──────────────────────────────────────────────────

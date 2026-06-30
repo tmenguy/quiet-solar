@@ -16,6 +16,23 @@
     'state': 'unknown',
   })
 # ---
+# name: test_car_sensors[sensor.car_test_car_best_estimated_soc-state]
+  StateSnapshot({
+    'attributes': ReadOnlyDict({
+      'attribution': 'Data provided by QuietSolarAbstraction',
+      'device_class': 'battery',
+      'friendly_name': 'car Test Car Best estimated SOC',
+      'state_class': <SensorStateClass.MEASUREMENT: 'measurement'>,
+      'unit_of_measurement': '%',
+    }),
+    'context': <ANY>,
+    'entity_id': 'sensor.car_test_car_best_estimated_soc',
+    'last_changed': <ANY>,
+    'last_reported': <ANY>,
+    'last_updated': <ANY>,
+    'state': 'unknown',
+  })
+# ---
 # name: test_car_sensors[sensor.car_test_car_charge_eta-state]
   StateSnapshot({
     'attributes': ReadOnlyDict({

@@ -1,0 +1,233 @@
+"""Tests for the live best-estimated SOC display model (Story QS-281).
+
+Covers the pure-read accessor `get_best_estimated_car_charge_percent` (every
+AC2/AC7 branch), and the per-cycle re-anchor refactor of
+`_capture_last_valid_base_soc`: genuine-change up/down, same-integer heartbeat,
+`None`-raw no-op, manual-override guard, idle hold, and the stale→healthy
+recovery transition.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+from unittest.mock import MagicMock
+
+import pytest
+
+from custom_components.quiet_solar.const import CONF_CAR_CHARGE_PERCENT_SENSOR
+from custom_components.quiet_solar.ha_model.car import QSCar
+
+
+def _make_car(fake_hass, mock_data_handler, **overrides) -> QSCar:
+    from tests.ha_tests.const import MOCK_CAR_CONFIG
+
+    config = {
+        **MOCK_CAR_CONFIG,
+        "hass": fake_hass,
+        "config_entry": MagicMock(),
+        "data_handler": mock_data_handler,
+        "home": mock_data_handler.home,
+    }
+    config.update(overrides)
+    return QSCar(**config)
+
+
+@pytest.fixture
+def est_car(fake_hass, mock_data_handler, current_time):
+    """A normal car: SOC sensor + battery capacity, not invited."""
+    return _make_car(fake_hass, mock_data_handler)
+
+
+@pytest.fixture
+def est_car_no_sensor(fake_hass, mock_data_handler, current_time):
+    """A real car with a true capacity but no SOC sensor."""
+    return _make_car(fake_hass, mock_data_handler, **{CONF_CAR_CHARGE_PERCENT_SENSOR: None})
+
+
+def _set_soc(car: QSCar, value, time):
+    car._entity_probed_last_valid_state[car.car_charge_percent_sensor] = (time, value, {})
+
+
+# ── get_best_estimated_car_charge_percent — AC2 / AC7 branches ───────────────
+
+
+def test_best_estimate_estimation_mode_returns_estimate(est_car, current_time):
+    """Branch 1 — while estimating, parity with `get_car_charge_percent`."""
+    est_car.car_api_stale_percent_mode = True  # → estimating
+    est_car._last_valid_base_soc_value = 40.0
+    est_car._computed_added_delta_soc_percent = 7.0
+    assert est_car.is_in_soc_estimation_mode(current_time) is True
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == pytest.approx(47.0)
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == est_car.get_car_charge_percent(current_time)
+
+
+def test_best_estimate_estimation_mode_pure_delta_none(est_car_no_sensor, current_time):
+    """Branch 1, pure-delta — no base while estimating → None (card falls back)."""
+    assert est_car_no_sensor.is_in_soc_estimation_mode(current_time) is True
+    est_car_no_sensor._last_valid_base_soc_value = None
+    est_car_no_sensor._computed_added_delta_soc_percent = 5.0
+    assert est_car_no_sensor.get_best_estimated_car_charge_percent(current_time) is None
+
+
+def test_best_estimate_base_plus_delta_when_not_estimating(est_car, current_time):
+    """Branch 2 — healthy sensor, a base exists → clamp(base + delta)."""
+    _set_soc(est_car, 45.0, current_time)
+    assert est_car.is_in_soc_estimation_mode(current_time) is False
+    est_car._last_valid_base_soc_value = 45.0
+    est_car._computed_added_delta_soc_percent = 2.5
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == pytest.approx(47.5)
+
+
+def test_best_estimate_clamped_at_100(est_car, current_time):
+    """Branch 2 — base + delta clamps to 100 (reuses `_estimated_soc_percent`)."""
+    _set_soc(est_car, 98.0, current_time)
+    est_car._last_valid_base_soc_value = 98.0
+    est_car._computed_added_delta_soc_percent = 10.0
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == 100.0
+
+
+def test_best_estimate_no_base_returns_raw(est_car, current_time):
+    """Branch 3 — healthy sensor, no base → the plain raw sensor value."""
+    _set_soc(est_car, 53.0, current_time)
+    est_car._last_valid_base_soc_value = None
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == 53.0
+
+
+def test_best_estimate_no_base_raw_none(est_car, current_time):
+    """Branch 3 — no base and the raw sensor itself is None → None."""
+    est_car._entity_probed_last_valid_state[est_car.car_charge_percent_sensor] = None
+    est_car._last_valid_base_soc_value = None
+    assert est_car.get_best_estimated_car_charge_percent(current_time) is None
+
+
+def test_best_estimate_time_none_resolves_to_now(est_car):
+    """`time=None` resolves to now inside the accessor (no exception, returns raw)."""
+    import pytz
+
+    now = __import__("datetime").datetime.now(tz=pytz.UTC)
+    _set_soc(est_car, 61.0, now)
+    est_car._last_valid_base_soc_value = None
+    assert est_car.get_best_estimated_car_charge_percent() == 61.0
+
+
+def test_best_estimate_is_a_pure_read(est_car, current_time):
+    """AC2 — the accessor must NOT mutate any estimate field."""
+    _set_soc(est_car, 50.0, current_time)
+    est_car._last_valid_base_soc_value = 50.0
+    est_car._computed_added_delta_soc_percent = 3.0
+    est_car._delta_soc_last_integration_time = current_time
+    snapshot = (
+        est_car._last_valid_base_soc_value,
+        est_car._computed_added_delta_soc_percent,
+        est_car._delta_soc_last_integration_time,
+        est_car._user_base_soc_value,
+    )
+    est_car.get_best_estimated_car_charge_percent(current_time)
+    assert (
+        est_car._last_valid_base_soc_value,
+        est_car._computed_added_delta_soc_percent,
+        est_car._delta_soc_last_integration_time,
+        est_car._user_base_soc_value,
+    ) == snapshot
+
+
+# ── per-cycle re-anchor (_capture_last_valid_base_soc) ───────────────────────
+
+
+def test_reanchor_genuine_change_up(est_car, current_time):
+    """A genuinely higher raw value re-anchors the base and resets the delta."""
+    est_car._last_valid_base_soc_value = 40.0
+    est_car._computed_added_delta_soc_percent = 6.0
+    est_car._delta_soc_last_integration_time = current_time
+    _set_soc(est_car, 45.0, current_time)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 45.0
+    assert est_car._computed_added_delta_soc_percent == 0.0
+    assert est_car._delta_soc_last_integration_time is None
+
+
+def test_reanchor_genuine_change_down(est_car, current_time):
+    """A genuine API change is trusted and may move the value DOWN (estimate ran
+    ahead, API corrects it)."""
+    est_car._last_valid_base_soc_value = 47.0
+    est_car._computed_added_delta_soc_percent = 3.0
+    _set_soc(est_car, 45.0, current_time)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 45.0
+    assert est_car._computed_added_delta_soc_percent == 0.0
+
+
+def test_reanchor_same_integer_heartbeat_no_reset(est_car, current_time):
+    """A same-integer reading (float noise / heartbeat) must NOT re-anchor."""
+    est_car._last_valid_base_soc_value = 50.0
+    est_car._computed_added_delta_soc_percent = 4.0
+    est_car._delta_soc_last_integration_time = current_time
+    _set_soc(est_car, 50.4, current_time)  # int(50.4) == int(50.0)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 50.0
+    assert est_car._computed_added_delta_soc_percent == 4.0
+    assert est_car._delta_soc_last_integration_time == current_time
+
+
+def test_reanchor_first_base_from_none(est_car, current_time):
+    """With no base yet, the first raw reading sets the base (delta cleared)."""
+    est_car._last_valid_base_soc_value = None
+    est_car._computed_added_delta_soc_percent = 9.0
+    _set_soc(est_car, 33.0, current_time)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 33.0
+    assert est_car._computed_added_delta_soc_percent == 0.0
+
+
+def test_reanchor_noop_when_raw_none(est_car, current_time):
+    """No reading yet → no-op: base stays, delta untouched (AC3)."""
+    est_car._last_valid_base_soc_value = 40.0
+    est_car._computed_added_delta_soc_percent = 6.0
+    est_car._entity_probed_last_valid_state[est_car.car_charge_percent_sensor] = None
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 40.0
+    assert est_car._computed_added_delta_soc_percent == 6.0
+
+
+def test_reanchor_skips_when_user_override(est_car, current_time):
+    """Manual override owns its delta — the re-anchor must NOT zero it."""
+    est_car._user_base_soc_value = 70.0
+    est_car._last_valid_base_soc_value = 40.0
+    est_car._computed_added_delta_soc_percent = 6.0
+    est_car._delta_soc_last_integration_time = current_time
+    _set_soc(est_car, 55.0, current_time)  # would re-anchor if unguarded
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 40.0
+    assert est_car._computed_added_delta_soc_percent == 6.0
+    assert est_car._delta_soc_last_integration_time == current_time
+
+
+def test_reanchor_idle_holds_value(est_car, current_time):
+    """Idle (no charge → delta does not grow): repeated equal readings hold the
+    base + delta unchanged; only the charger callback grows the delta."""
+    est_car._last_valid_base_soc_value = 60.0
+    est_car._computed_added_delta_soc_percent = 5.0  # accrued during the prior charge
+    _set_soc(est_car, 60.0, current_time)
+    for _ in range(3):
+        est_car._capture_last_valid_base_soc(current_time)
+    # held: no re-anchor (same int), and the re-anchor never grows the delta
+    assert est_car._last_valid_base_soc_value == 60.0
+    assert est_car._computed_added_delta_soc_percent == 5.0
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == pytest.approx(65.0)
+
+
+def test_reanchor_stale_to_healthy_recovery(est_car, current_time):
+    """Stale→healthy: a retained delta survives until the first DIFFERENT
+    healthy reading re-anchors; an equal reading does not (AC3a)."""
+    est_car._last_valid_base_soc_value = 60.0
+    est_car._computed_added_delta_soc_percent = 4.0
+    # equal reading on recovery → delta survives
+    _set_soc(est_car, 60.0, current_time)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._computed_added_delta_soc_percent == 4.0
+    # first genuinely different healthy reading → re-anchor
+    later = current_time + timedelta(seconds=30)
+    _set_soc(est_car, 63.0, later)
+    est_car._capture_last_valid_base_soc(later)
+    assert est_car._last_valid_base_soc_value == 63.0
+    assert est_car._computed_added_delta_soc_percent == 0.0

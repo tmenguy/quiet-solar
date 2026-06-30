@@ -351,6 +351,9 @@ class TestDashboardTemplateRendering:
         assert entities["is_soc_estimated"].startswith("binary_sensor.")
         assert entities["manual_soc"].startswith("number.")
         assert entities["reset_soc"].startswith("button.")
+        # QS-281 — the live best-estimated SOC sensor is wired via its sensor key.
+        assert entities["best_soc"].startswith("sensor.")
+        assert 'ha.get("car_best_estimated_soc_percentage")' in template_content
 
         # N5 — the template resolves those entities via the const.py keys
         # (never hardcoded ha.get("qs_car_...") string literals in the source).
@@ -367,6 +370,22 @@ class TestDashboardTemplateRendering:
         assert "e.reset_soc" in source
         # The asterisk gating must be present.
         assert "hasSocEstimate" in source
+
+    def test_car_card_uses_best_soc_on_normal_percent_path(self):
+        """QS-281 — the card reads the `best_soc` entity, captures the raw SOC
+        before any reassignment, substitutes the best-estimate on the normal
+        percent path, and renders the integer-diff asterisk without stacking it
+        on top of the existing `hasSocEstimate` asterisk."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        # Reads the new entity and captures the raw value up front (N2).
+        assert "e.best_soc" in source
+        assert "const rawSoc = this._percent(sSoc?.state);" in source
+        # Substitutes best_soc on the normal percent path, falling back to rawSoc.
+        assert "const bestSocVal = bestSocNumeric ? this._percent(sBestSoc.state) : rawSoc;" in source
+        # Integer-diff asterisk compares the estimate against the captured raw.
+        assert "Math.trunc(bestSocVal) !== Math.trunc(rawSoc)" in source
+        # Single asterisk — the new flag is OR-combined, never stacked.
+        assert "(hasSocEstimate || showEstimateStar) ? '*' : ''" in source
 
     def test_car_card_soc_editable_pointer_events(self):
         """QS-243 #02 M1 — the editable SOC re-enables pointer events (it sits

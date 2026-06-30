@@ -4704,20 +4704,28 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
             total_charge_duration = (ct.last_value_update - ct.first_value_update).total_seconds()
 
-            if estimating:
-                # Car-level float accumulator with a dedicated integration cursor:
-                # advances every cycle so sub-1%/cycle slices are never lost and
-                # never double-counted across solver / constraint churn. The car
-                # owns the running value; this callback is its sole writer and
-                # drives it through the car's public accessors.
-                cursor = self.car.soc_integration_cursor
-                if cursor is None:
-                    # first cycle / post-reboot / post-base-set: anchor only.
-                    inc = None
-                else:
-                    inc = self._compute_added_charge_update(start_time=cursor, end_time=time, is_target_percent=True)
-                result_calculus = self.car.accumulate_soc_delta(inc, time)
+            # QS-281: advance the unified SOC accumulator exactly ONCE per
+            # callback, hoisted out of the estimating-only branch so the car's
+            # live best-estimate tracks a HEALTHY charge too (not just the
+            # stale / no-sensor / manual-override "estimating" cases). The car
+            # owns the running value; this callback is its sole writer. The
+            # cursor advances on every call so a same-cycle re-entry integrates
+            # a zero slice — no loss, no double-count across solver / constraint
+            # churn or across a healthy↔stale mid-charge transition.
+            cursor = self.car.soc_integration_cursor
+            if cursor is None:
+                # first cycle / post-reboot / post-base-set: anchor only.
+                inc = None
             else:
+                inc = self._compute_added_charge_update(start_time=cursor, end_time=time, is_target_percent=True)
+            accumulator_estimate = self.car.accumulate_soc_delta(inc, time)
+
+            if estimating:
+                result_calculus = accumulator_estimate
+            else:
+                # Non-estimating (healthy sensor): the accumulator return is
+                # DISCARDED — the constraint value stays driven by the raw
+                # sensor / `delta_added` and is byte-identical to before QS-281.
                 delta_added = self._compute_added_charge_update(
                     start_time=ct.last_value_change_update, end_time=time, is_target_percent=is_target_percent
                 )

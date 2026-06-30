@@ -150,7 +150,10 @@ apply_budget_strategy()
 - [car-soc-estimation.md](car-soc-estimation.md) — `constraint_update_value_callback_soc`
   is the **sole writer** of the car's float SOC accumulator (QS-243); while
   the car is estimating it bypasses the raw sensor and seeds the constraint
-  from the effective estimate instead of a forced `0.0`. It drives the
+  from the effective estimate instead of a forced `0.0`. **QS-281** hoisted the
+  `accumulate_soc_delta` call to exactly one per callback so the accumulator
+  advances during a **healthy** charge too (return discarded on the
+  non-estimating branch — the constraint value is byte-identical). It drives the
   accumulator through the car's public `soc_integration_cursor` /
   `accumulate_soc_delta` accessors (no underscore reach-in), and gates the
   zero-power hardware-fault check on `car.is_soc_sensor_distrusted()` (stale /
