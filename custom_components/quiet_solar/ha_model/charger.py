@@ -4705,20 +4705,29 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             total_charge_duration = (ct.last_value_update - ct.first_value_update).total_seconds()
 
             # QS-281: advance the unified SOC accumulator exactly ONCE per
-            # callback, hoisted out of the estimating-only branch so the car's
-            # live best-estimate tracks a HEALTHY charge too (not just the
+            # PERCENT callback, hoisted out of the estimating-only branch so the
+            # car's live best-estimate tracks a HEALTHY charge too (not just the
             # stale / no-sensor / manual-override "estimating" cases). The car
             # owns the running value; this callback is its sole writer. The
             # cursor advances on every call so a same-cycle re-entry integrates
             # a zero slice — no loss, no double-count across solver / constraint
             # churn or across a healthy↔stale mid-charge transition.
-            cursor = self.car.soc_integration_cursor
-            if cursor is None:
-                # first cycle / post-reboot / post-base-set: anchor only.
-                inc = None
-            else:
-                inc = self._compute_added_charge_update(start_time=cursor, end_time=time, is_target_percent=True)
-            accumulator_estimate = self.car.accumulate_soc_delta(inc, time)
+            #
+            # The `is_target_percent` guard (fix-plan #02 #05) keeps the SOC
+            # accumulator out of the energy-mode callback. The `inc` is a SOC
+            # PERCENT slice; advancing it from the energy callback relied
+            # implicitly on `can_use_charge_percent_constraints()` ⇒ a usable
+            # battery capacity ⇒ `inc=None`, so the guard makes the safety
+            # explicit rather than coupling-dependent (no phantom SOC delta).
+            accumulator_estimate = None
+            if is_target_percent:
+                cursor = self.car.soc_integration_cursor
+                if cursor is None:
+                    # first cycle / post-reboot / post-base-set: anchor only.
+                    inc = None
+                else:
+                    inc = self._compute_added_charge_update(start_time=cursor, end_time=time, is_target_percent=True)
+                accumulator_estimate = self.car.accumulate_soc_delta(inc, time)
 
             if estimating:
                 result_calculus = accumulator_estimate

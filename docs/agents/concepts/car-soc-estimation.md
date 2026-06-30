@@ -64,7 +64,10 @@ runtime reset (plug-in / reset button / recovery) is reflected in the card.
 - `get_best_estimated_car_charge_percent(time=None)` (QS-281) — a **pure read**
   for display: while estimating → `_estimated_soc_percent` (parity with
   `get_car_charge_percent`); else when a system base exists →
-  `_estimated_soc_percent` (reusing the canonical clamp); else the raw sensor.
+  `_estimated_soc_percent` (reusing the canonical clamp — a computed-on-read
+  property, so a re-anchor that zeroes the delta is reflected immediately, no
+  stale one-cycle value); else the raw sensor read with the default tolerance
+  (`None`), identical to the canonical `get_car_charge_percent()` value_fn.
   No "actively charging" check — the delta only grows in the charger callback,
   so `base + delta` self-holds when idle until a genuinely different raw value
   re-anchors it. `time=None` resolves to now; stays synchronous (sensor

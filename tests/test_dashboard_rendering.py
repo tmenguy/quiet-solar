@@ -394,6 +394,11 @@ class TestDashboardTemplateRendering:
         # (Math.round), not Math.trunc, so a 45.6→46 estimate is flagged vs 45.
         assert "Math.round(bestSocVal) !== Math.round(rawSoc)" in source
         assert "Math.trunc(bestSocVal)" not in source  # old mismatched gate removed
+        # Fix-plan #02 #04 — the asterisk is suppressed when the raw SOC state
+        # is not genuinely numeric (an unavailable raw coerces to rawSoc=0,
+        # which would otherwise light a misleading `*` on a sensor dropout).
+        assert "const rawSocNumeric = isNumberLike(sSoc?.state);" in source
+        assert "bestSocUsable && rawSocNumeric && Math.round(bestSocVal) !== Math.round(rawSoc)" in source
         # Single asterisk — the new flag is OR-combined, never stacked.
         assert "(hasSocEstimate || showEstimateStar) ? '*' : ''" in source
 

@@ -1655,8 +1655,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if time is None:
             time = datetime.now(tz=pytz.UTC)
         # Estimating (stale / no-sensor / manual override) OR a healthy sensor
-        # that already has a system base → the canonical clamped estimate (which
-        # is `None` only in the pure-delta no-base case). Otherwise the plain raw.
+        # that already has a system base → the canonical clamped estimate. The
+        # two cases share a return because `_estimated_soc_percent` is a
+        # computed-on-read property (`clamp(base + delta)`), so a re-anchor that
+        # zeroes the delta is reflected immediately — there is no stored value
+        # that could surface a stale one-cycle display. It is `None` only in the
+        # pure-delta no-base case. Otherwise the plain raw sensor value, read
+        # with the default tolerance (`None`) — identical to the canonical
+        # `get_car_charge_percent()` value_fn, which also passes no tolerance.
         if self.is_in_soc_estimation_mode(time) or self._last_valid_base_soc_value is not None:
             return self._estimated_soc_percent
         return self.get_car_charge_percent_raw_sensor(time)

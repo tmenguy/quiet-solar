@@ -296,3 +296,26 @@ async def test_callback_constraint_value_unchanged_with_healthy_accumulator():
     assert car._computed_added_delta_soc_percent == pytest.approx(2.0)
 
 
+async def test_energy_callback_does_not_advance_soc_accumulator():
+    """QS-281 fix-plan #02 #05 — the SOC accumulator is advanced only on the
+    PERCENT callback. The energy-mode callback (`is_target_percent=False`) must
+    leave `_computed_added_delta_soc_percent` and its cursor untouched, so the
+    guard makes the no-phantom-delta safety explicit rather than relying on the
+    `can_use_charge_percent_constraints()` ⇒ capacity coupling."""
+    charger, car, now = _build_charger_and_car(no_sensor=False)
+    car._entity_probed_last_valid_state[car.car_charge_percent_sensor] = (now, 50.0, {})
+    car._last_valid_base_soc_value = 50.0
+    car._computed_added_delta_soc_percent = 0.0
+    anchor = now - timedelta(minutes=15)
+    car._delta_soc_last_integration_time = anchor
+    # A positive slice would advance the accumulator IF accumulate were called.
+    charger._compute_added_charge_update = MagicMock(return_value=2.0)
+
+    t1 = now + timedelta(minutes=15)
+    await charger.constraint_update_value_callback_soc(_Ct(t1), t1, is_target_percent=False)
+
+    # The energy callback never touches the SOC accumulator or its cursor.
+    assert car._computed_added_delta_soc_percent == 0.0
+    assert car._delta_soc_last_integration_time == anchor
+
+

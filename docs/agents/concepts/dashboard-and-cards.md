@@ -905,9 +905,13 @@ A purely **visual** `*` is appended iff the estimate and the raw value differ
 once rounded the **same way the gauge displays them** —
 `Math.round(bestSocVal) !== Math.round(rawSoc)`, matching `_fmt`'s `Math.round`
 so a `45.6`→`46` estimate is correctly flagged against a raw `45` (an earlier
-`Math.trunc` gate mismatched the displayed rounding). It is OR-combined with
-the QS-243 `hasSocEstimate` asterisk so at most one `*` shows, and it does
-**not** touch `is_soc_estimated` or the degraded-box logic.
+`Math.trunc` gate mismatched the displayed rounding). It is additionally gated
+on a genuinely numeric raw state (`rawSocNumeric = isNumberLike(sSoc?.state)`):
+an unavailable raw coerces to `rawSoc=0` via `_percent`, which would otherwise
+light a misleading `*` on a transient SOC-sensor dropout even though the API is
+merely unavailable, not lagging. It is OR-combined with the QS-243
+`hasSocEstimate` asterisk so at most one `*` shows, and it does **not** touch
+`is_soc_estimated` or the degraded-box logic.
 
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is

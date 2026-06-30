@@ -1005,9 +1005,14 @@ class QsCarCard extends QsCardBase {
           // shown iff the estimate and the raw value differ once rounded the
           // SAME way the gauge displays them (`_fmt` = `Math.round`), so a value
           // like 45.6 that displays as 46 is correctly flagged against a raw 45.
+          // Gated on a genuinely numeric raw state (fix-plan #02 #04): an
+          // unavailable/non-numeric raw coerces to `rawSoc=0` via `_percent`,
+          // which would otherwise light a misleading `*` on a transient SOC
+          // dropout even though the API is merely unavailable, not lagging.
           // Purely visual; must not stack with QS-243's `hasSocEstimate`
           // asterisk — at most a single `*` is ever shown.
-          const showEstimateStar = bestSocUsable && Math.round(bestSocVal) !== Math.round(rawSoc);
+          const rawSocNumeric = isNumberLike(sSoc?.state);
+          const showEstimateStar = bestSocUsable && rawSocNumeric && Math.round(bestSocVal) !== Math.round(rawSoc);
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
           displayTargetValue = `${this._fmt(targetPct ?? soc)}%`;
