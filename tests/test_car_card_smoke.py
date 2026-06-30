@@ -87,5 +87,13 @@ def test_bare_as_fast_comparison_no_longer_gates(card_source: str) -> None:
     Both the rabbit lit-class site and the ``isAlreadyForcing`` gate
     previously compared ``sChargeType?.state === 'As Fast As Possible'``,
     which missed the ``"Manual As Fast As Possible"`` user-force variant.
+
+    NOTE: this matches the *full* comparison expression (with ``=== ``), not
+    the bare ``'As Fast As Possible'`` literal — that literal legitimately
+    still appears in the ``AS_FAST_STATES`` set and in the explanatory card
+    comment, so asserting its absence would be wrong. The companion assertion
+    below pins that the literal *is* still present (in the set), making the
+    intent explicit and guarding against a future misedit that drops it.
     """
     assert "sChargeType?.state === 'As Fast As Possible'" not in card_source
+    assert "'As Fast As Possible'" in card_source
