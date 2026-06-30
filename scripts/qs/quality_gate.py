@@ -1102,6 +1102,17 @@ def _ensure_testmon_db_safe() -> None:
     anyway). Only a genuine corruption or a confirmed schema mismatch purges.
     """
     if not TESTMON_DATA.exists():
+        # QS-283 A2: the primary is gone but its `-wal`/`-shm` sidecars may
+        # linger — a tool-reachable state, NOT just a manual-`rm` artifact:
+        # `_purge_testmon_db` unlinks the primary BEFORE its sidecars, so a
+        # run killed mid-purge leaves exactly absent-primary + orphan-sidecar.
+        # testmon would then reopen an empty DB against a stale WAL and select
+        # `0 tests` (the QS_281 dead end). Unlink the orphans so the next
+        # `pytest --testmon` rebuilds cleanly (select-all). Reuse the same
+        # suffix loop as `_purge_testmon_db`; `missing_ok=True` (N6) tolerates
+        # a sidecar vanishing under a concurrent run.
+        for suffix in ("-wal", "-shm"):
+            (TESTMON_DATA.parent / (TESTMON_DATA.name + suffix)).unlink(missing_ok=True)
         return
     try:
         conn = sqlite3.connect(str(TESTMON_DATA))
@@ -1144,6 +1155,48 @@ def _reset_coverage_data() -> None:
     COVERAGE_DATA.unlink(missing_ok=True)
     for shard in COVERAGE_DATA.parent.glob(COVERAGE_DATA.name + ".*"):
         shard.unlink(missing_ok=True)
+
+
+def _clean_orphan_cov_shards() -> None:
+    """Remove pre-existing `.coverage.*` xdist shards (NEVER the combined
+    `.coverage`) at the top of the normal incremental `--impacted` path.
+
+    QS-283 A1: a killed / crashed `--impacted` run leaves per-worker coverage
+    shards (`.coverage.<host>.<pid>.*`) that never got combined into the
+    primary `.coverage`. The next `--cov-append` run would fold those STALE
+    fragments into `coverage.xml`, so a line covered only by an old branch
+    state appears "covered" now ("partial coverage appears" in the QS_281
+    transcript). Reaping the orphan shards before the run removes that false
+    signal while preserving the combined `.coverage` so the warm-baseline
+    accumulation model (QS-278) still works.
+
+    Reuses the SAME glob expression as `_reset_coverage_data`
+    (`COVERAGE_DATA.parent.glob(COVERAGE_DATA.name + ".*")`) so the two helpers
+    never drift into divergent shard-matching rules — they differ ONLY in
+    whether the primary `.coverage` is also unlinked (here it is not). The
+    glob `.coverage.*` does not match the bare `.coverage`, so the combined
+    file always survives. Called BEFORE the testmon/cov pytest subprocess
+    spawns, so it can never reap a live worker's shard mid-run (single-writer
+    assumption, same as `_reset_coverage_data` / `COVERAGE_XML`).
+    """
+    for shard in COVERAGE_DATA.parent.glob(COVERAGE_DATA.name + ".*"):
+        shard.unlink(missing_ok=True)
+
+
+def _rebuild_testmon_baseline() -> None:
+    """Purge `.testmondata` (+WAL/SHM) AND clear accumulated coverage so the
+    next `pytest --testmon` pass is a clean from-scratch select-all.
+
+    QS-283: the shared rebuild used by BOTH `seed_testmon` (A3) and the
+    `check_impacted` self-heal retry (A4). Spelling the rebuild — purge +
+    coverage reset + shard clear — once guarantees the two callers can never
+    diverge. `_reset_coverage_data()` already unlinks the combined `.coverage`
+    AND globs/unlinks its `.coverage.*` shards, so after this helper the next
+    select-all run `--cov-append`s onto an empty store: no orphan shard can
+    re-fold in, and a stale baseline cannot survive to under-select.
+    """
+    _purge_testmon_db("rebuilding testmon baseline")
+    _reset_coverage_data()
 
 
 def _build_testmon_cmd() -> list[str]:
@@ -1240,33 +1293,28 @@ def _emit_reseed_guidance() -> None:
     )
 
 
-def check_impacted() -> int:
-    """Run the `--impacted` inner-loop gate; return the process exit code.
+# QS-283 A4: verdicts returned by `_run_impacted_pass`. Only
+# `changed_lines_uncovered` on an incremental run is self-heal-retriable;
+# every other non-pass verdict is a genuine, non-retriable failure.
+_IMPACTED_PASS = "pass"
+_IMPACTED_TESTS_FAILED = "tests_failed"
+_IMPACTED_NO_COVERAGE_XML = "no_coverage_xml"
+_IMPACTED_DIFF_COVER_TIMEOUT = "diff_cover_timeout"
+_IMPACTED_CHANGED_LINES_UNCOVERED = "changed_lines_uncovered"
 
-    Pipeline: tooling probe → diff-base ladder → testmon-selected tests
-    under `--cov` (writes coverage.xml) → diff-cover --fail-under=100 on
-    the changed lines.
 
-    Exit codes: 0 pass · 1 selected-test failure OR diff-coverage <100% ·
-    3 testmon / diff-cover not importable · 4 no diff base resolvable in
-    CI (warn-and-skip → 0 locally so an offline dev isn't blocked).
+def _run_impacted_pass(base: str) -> str:
+    """Run ONE testmon-selected pass against `base`; return a verdict string.
 
-    Fail-safe: a corrupt / schema-incompatible `.testmondata` makes
-    testmon select *all* tests (its native recovery), never silently
-    under-select.
+    Pipeline: DB hygiene → fresh-baseline coverage reset → testmon-selected
+    tests under `--cov` (writes coverage.xml) → diff-cover --fail-under=100 on
+    the changed lines. Factored out of `check_impacted` (QS-283 A4) so the
+    self-heal retry can re-run the SAME pass against the already-resolved base
+    — no second `git fetch` / tooling probe.
+
+    Returns one of the `_IMPACTED_*` verdicts. `check_impacted` maps these to
+    exit codes and decides whether to self-heal.
     """
-    if not _impacted_tooling_available():
-        _emit("impacted", "pytest-testmon / diff-cover not importable — install requirements_test.txt")
-        return 3
-
-    base = _resolve_diff_base()
-    if base is None:
-        if _is_ci():
-            _emit("impacted", "no diff base (origin/main) resolvable in CI")
-            return 4
-        _emit("impacted", "no diff base resolvable — skipping diff-coverage check (offline/fresh worktree)")
-        return 0
-
     _ensure_testmon_db_safe()
     # QS-278: a missing `.testmondata` here (first-ever run, or just purged
     # as corrupt) means testmon is about to select ALL tests — a fresh
@@ -1285,7 +1333,7 @@ def check_impacted() -> int:
     result = _stream_pytest(_build_testmon_cmd())
     if not result["passed"]:
         _emit("impacted", "FAIL (selected tests failed)")
-        return 1
+        return _IMPACTED_TESTS_FAILED
 
     # QS-276 review-fix N7: pytest-cov writes coverage.xml even on a
     # zero-collection run (verified for the pinned version), but guard
@@ -1294,7 +1342,7 @@ def check_impacted() -> int:
     # pre-delete above, a fresh report is guaranteed or we fail loudly.
     if not COVERAGE_XML.exists():
         _emit("impacted", f"FAIL (coverage report not written: {COVERAGE_XML})")
-        return 1
+        return _IMPACTED_NO_COVERAGE_XML
 
     # NH1: bound diff-cover so a hang can't break the sub-15s promise.
     dc = _run(_build_diff_cover_cmd(base), timeout=_DIFF_COVER_TIMEOUT_SECONDS)
@@ -1308,7 +1356,7 @@ def check_impacted() -> int:
         _emit("impacted", f"FAIL (diff-cover timed out after {_DIFF_COVER_TIMEOUT_SECONDS}s)")
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
-        return 1
+        return _IMPACTED_DIFF_COVER_TIMEOUT
 
     sys.stdout.write(dc.stdout)
     sys.stdout.flush()
@@ -1316,14 +1364,79 @@ def check_impacted() -> int:
         # SF-B (#04): the "baseline stale" branch was removed (diff-cover's
         # three-dot range means an advanced origin/main can't inflate the
         # changed-line set, so that scenario never occurs). A non-zero,
-        # non-timeout diff-cover is a genuine changed-line coverage gap.
+        # non-timeout diff-cover is a changed-line coverage gap — possibly a
+        # testmon/coverage desync (self-heal-retriable) or a genuine gap.
         _emit("impacted", "FAIL (changed lines <100% covered)")
         _emit_reseed_guidance()
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
-        return 1
+        return _IMPACTED_CHANGED_LINES_UNCOVERED
     _emit("impacted", "PASS (changed lines 100% covered)")
-    return 0
+    return _IMPACTED_PASS
+
+
+def check_impacted(*, allow_self_heal: bool = True) -> int:
+    """Run the `--impacted` inner-loop gate; return the process exit code.
+
+    Pipeline: tooling probe → diff-base ladder → orphan-shard hygiene →
+    one `_run_impacted_pass` → (on an incremental changed-line FAIL) exactly
+    one self-heal rebuild + retry.
+
+    Exit codes: 0 pass · 1 selected-test failure OR diff-coverage <100% ·
+    3 testmon / diff-cover not importable · 4 no diff base resolvable in
+    CI (warn-and-skip → 0 locally so an offline dev isn't blocked).
+
+    Fail-safe: a corrupt / schema-incompatible `.testmondata` makes
+    testmon select *all* tests (its native recovery), never silently
+    under-select.
+
+    QS-283 A4 self-heal: when `allow_self_heal` is set and an INCREMENTAL
+    run (`was_incremental` — `.testmondata` present and non-empty, captured
+    BEFORE any purge) reports changed lines <100%, the desync killer fires:
+    rebuild the testmon baseline (purge + coverage reset + shard clear) and
+    re-run the SAME pass once as a clean select-all. A false FAIL (a covering
+    test wrongly deselected) recovers to PASS; a genuine gap still exits 1.
+    The retry runs with `allow_self_heal=False` via the inner pass, so it can
+    never recurse. A select-all run (fresh/purged baseline) skips the retry —
+    its FAIL is already ground truth.
+    """
+    if not _impacted_tooling_available():
+        _emit("impacted", "pytest-testmon / diff-cover not importable — install requirements_test.txt")
+        return 3
+
+    base = _resolve_diff_base()
+    if base is None:
+        if _is_ci():
+            _emit("impacted", "no diff base (origin/main) resolvable in CI")
+            return 4
+        _emit("impacted", "no diff base resolvable — skipping diff-coverage check (offline/fresh worktree)")
+        return 0
+
+    # QS-283 A4 trigger gate: capture the incremental signal BEFORE any
+    # hygiene step can purge the DB. A non-empty `.testmondata` means testmon
+    # has a warm baseline and is about to INCREMENTALLY select a subset — the
+    # only case where a changed-line FAIL might be a testmon/coverage desync
+    # worth self-healing. An absent/empty DB means this run already select-alls
+    # (ground truth), so a FAIL is genuine and the retry is skipped — no wasted
+    # select-all on the normal TDD-red case.
+    was_incremental = TESTMON_DATA.exists() and TESTMON_DATA.stat().st_size > 0
+
+    # QS-283 A1: reap orphaned `.coverage.*` shards from a killed prior run
+    # before the cov pass, so stale fragments can't `--cov-append` into this
+    # run's coverage.xml. The combined `.coverage` survives (warm baseline).
+    _clean_orphan_cov_shards()
+
+    verdict = _run_impacted_pass(base)
+    if verdict == _IMPACTED_PASS:
+        return 0
+    if verdict == _IMPACTED_CHANGED_LINES_UNCOVERED and allow_self_heal and was_incremental:
+        _emit(
+            "impacted",
+            "rebuilding testmon baseline and re-checking (changed lines <100% on an incremental run)",
+        )
+        _rebuild_testmon_baseline()
+        return 0 if _run_impacted_pass(base) == _IMPACTED_PASS else 1
+    return 1
 
 
 def seed_testmon() -> int:
@@ -1340,6 +1453,14 @@ def seed_testmon() -> int:
     if not _testmon_available():
         _emit("seed-testmon", "pytest-testmon not importable — skipping")
         return 3
+    # QS-283 A3: rebuild from scratch. The old code ran `pytest --testmon`
+    # against the EXISTING DB, so an already-advanced baseline yielded
+    # "0 changed" and the reseed did nothing — the QS_281 recovery dead end.
+    # Purging first (+ clearing accumulated coverage, since seeding
+    # establishes the baseline the NEXT `--impacted` accumulates onto) forces
+    # a true full re-fingerprint (select-all) and prevents a stale `.coverage`
+    # from re-introducing the desync A1 fixes.
+    _rebuild_testmon_baseline()
     _emit("seed-testmon", "refreshing .testmondata (pytest --testmon)")
     result = _stream_pytest(_build_seed_testmon_cmd())
     # QS-276 review-fix NH4 (#03): a pytest exit code >= 2 means a

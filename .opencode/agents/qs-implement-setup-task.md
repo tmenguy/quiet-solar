@@ -131,21 +131,23 @@ Present a summary, ask "Ready to run the quality gate?". Wait.
 
 ### 4. Quality gate (impacted inner loop)
 
-Default to the **impacted** gate before commit/PR:
+**ALWAYS** run the impacted gate before commit/PR. Do **not** run, or
+substitute, the full gate locally:
 
 ```bash
 python scripts/qs/quality_gate.py --impacted
 ```
 
 It runs the testmon-selected tests and verifies any changed lines
-under `custom_components/quiet_solar/` are 100% covered. Dev-only
-changes (`scripts/`, `docs/`, agent files) carry no production-coverage
-delta, so `--impacted` just runs the impacted tests fast. The
-whole-repo 100% gate is enforced in **CI** on every PR; run it locally
-only on explicit request:
+under `custom_components/quiet_solar/` are 100% covered, self-healing a
+drifted testmon baseline automatically (no manual file deletion ever).
+Dev-only changes (`scripts/`, `docs/`, agent files) carry no
+production-coverage delta, so `--impacted` just runs the impacted tests
+fast. The whole-repo 100% gate is enforced in **CI** on every PR — the
+only local full-gate run is an explicit user request:
 
 ```bash
-python scripts/qs/quality_gate.py        # full gate, on request
+python scripts/qs/quality_gate.py        # full gate, on EXPLICIT request only
 ```
 
 Pass on a green gate; fix on red.

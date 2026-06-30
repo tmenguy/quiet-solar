@@ -107,13 +107,17 @@ auto-commits, pushes, opens PR after green quality gate.
 2. TDD: write failing tests → implement minimum code → refactor.
 3. Present implementation summary (files modified, design decisions,
    risks). Ask "Ready to run the quality gate?".
-4. Run the impacted inner-loop gate
+4. **ALWAYS** run the impacted inner-loop gate
    (`python scripts/qs/quality_gate.py --impacted`) before commit/PR —
-   it proves the *changed lines* are 100% covered in seconds. The
-   whole-repo 100% gate runs authoritatively in **CI** on every PR; run
-   the full gate locally only on explicit request or when coverage may
-   have been lost in *unchanged* code (which `--impacted` cannot see).
-   Fix autonomously on failure; escalate only after 2–3 attempts.
+   it proves the *changed lines* are 100% covered in seconds and
+   self-heals a drifted testmon baseline automatically (no manual file
+   deletion ever). Do **not** run, or substitute, the full gate
+   locally: the whole-repo 100% gate runs authoritatively in **CI** on
+   every PR, and detecting coverage lost in *unchanged* code is **CI's
+   exclusive job**. The only local full-gate run is an explicit user
+   request. On an `--impacted` failure, fix the **code/tests** — never
+   reach for the full gate to diagnose; escalate only after 2–3
+   attempts.
 5. Auto-commit, push, open PR. No confirmation prompt — authorized by
    the workflow.
 

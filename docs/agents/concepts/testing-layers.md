@@ -67,8 +67,10 @@ the dev loop: `python scripts/qs/quality_gate.py --impacted`. It uses
 `pytest-testmon` to run **only the tests impacted by your change set**
 (across both layers), under `--cov=custom_components/quiet_solar`, then
 `diff-cover --fail-under=100` asserts the **lines you changed** are
-100% covered. On a small diff this is seconds instead of minutes, so it
-is the implement-phase default before commit/PR.
+100% covered. On a small diff this is seconds instead of minutes. The
+implement phase ALWAYS runs it before commit/PR and never substitutes
+the full gate locally — the only local full-gate run is an explicit
+user request.
 
 **The split that makes this safe.** Whole-repo "100% on every PR" is
 NON-NEGOTIABLE — and a test-impact subset can never prove it. So the
@@ -87,6 +89,23 @@ Fail-safe: a corrupt / non-SQLite `.testmondata` makes the gate select
 worktrees seed `.testmondata` + `.mypy_cache` from the main worktree
 (`worktree-setup.sh`); `finish-task` refreshes the main baseline via
 `--seed-testmon` after a merge.
+
+**Self-healing reliability (QS-283).** A killed/crashed `--impacted`
+run can leave the testmon DB and the accumulated coverage out of sync —
+orphaned per-worker `.coverage.*` shards that never got combined, a
+dirty `.testmondata` WAL/SHM, or a baseline that records a covering
+test as "seen" while its coverage was lost. Left unhandled this is a
+false FAIL with no recovery short of manually deleting files. `--impacted`
+now repairs all of it automatically: it reaps orphaned `.coverage.*`
+shards (never the combined `.coverage`) and stale WAL/SHM sidecars on
+entry, and on a changed-line miss from an **incremental** run it rebuilds
+the baseline from scratch (purge + coverage reset) and re-checks **once**
+as a clean select-all. A false FAIL recovers to PASS; a genuine gap still
+FAILs (no false PASS). A select-all run's FAIL is already ground truth, so
+no wasted retry fires there. `--seed-testmon` is likewise a true
+from-scratch rebuild, so a reseed against an advanced baseline fully
+re-fingerprints instead of finding "0 changed". **Manual file deletion is
+never required.**
 
 **Keeping the testmon SELF-tests out of the fast loop (QS-276).** The
 only tests the `--impacted` loop excludes are the slow real-subprocess

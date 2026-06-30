@@ -87,26 +87,33 @@ Then ask: **"Ready to run the quality gate?"** Wait for confirmation.
 
 ### 4. Quality gate (non-negotiable)
 
-Default to the **impacted** inner-loop gate before commit/PR:
+**ALWAYS** run the impacted inner-loop gate before commit/PR. Do
+**not** run, or substitute, the full gate locally:
 
 ```bash
 python scripts/qs/quality_gate.py --impacted
 ```
 
 `--impacted` runs the testmon-selected tests and verifies the lines
-**you changed** are 100% covered (exit 0 required). The whole-repo
-100% gate (pytest + ruff + mypy + translations) stays authoritative in
-**CI** on every PR — that is what guarantees full coverage, not a local
-full run. Run the full gate locally only on explicit request, or when
-you suspect coverage lost in *unchanged* code (which `--impacted`
-cannot see):
+**you changed** are 100% covered (exit 0 required). It self-heals a
+drifted testmon baseline automatically (purges + rebuilds + re-checks
+on a changed-line miss) — no manual file deletion is ever required.
+The whole-repo 100% gate (pytest + ruff + mypy + translations) stays
+authoritative in **CI** on every PR — that is what guarantees full
+coverage, including any coverage lost in *unchanged* code, which is
+**CI's exclusive job**. The only local full-gate run is an explicit
+user request:
 
 ```bash
-python scripts/qs/quality_gate.py        # full gate, on request
+python scripts/qs/quality_gate.py        # full gate, on EXPLICIT request only
 ```
 
-If the gate fails, fix autonomously and re-run. Only ask the user for
-direction after 2–3 unsuccessful attempts.
+If `--impacted` fails, fix the **code/tests** — never switch to the
+full gate to diagnose. `--impacted` self-heals; a manual
+`--seed-testmon` + re-run is an escalation-only last resort for the
+residual case (e.g. two consecutive killed runs), after which escalate
+to the user. The full gate is not an inner-loop debugging tool. Only
+ask the user for direction after 2–3 unsuccessful attempts.
 
 **Doc-maintenance pre-commit sub-step.** After staging your
 intended changes (`git add` first so the diff is populated), run
