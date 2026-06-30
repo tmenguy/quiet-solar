@@ -885,6 +885,16 @@ class QsCarCard extends QsCardBase {
           "Person Automated": "mdi:account-clock",
       };
       const iconForChargeType = (str) => carChargeTypeIcons[str];
+      // QS-280: the rabbit (charge-as-fast-as-possible) button covers both
+      // as-fast charge-type strings — solver-driven "As Fast As Possible" and
+      // user-force "Manual As Fast As Possible" (what get_charge_type() returns
+      // after a user press). The set is matched directly here, decoupled from
+      // the icon map, so the icon for either state can change independently
+      // without silently breaking the button's lit state or its Stop dialog.
+      // These are the rendered values of the CAR_CHARGE_TYPE_*AS_FAST_AS_POSSIBLE
+      // constants in const.py and must stay in sync with them.
+      const AS_FAST_STATES = ['As Fast As Possible', 'Manual As Fast As Possible'];
+      const isAsFastState = (s) => AS_FAST_STATES.includes(s);
       const chargeIcon = iconForChargeType(sChargeType?.state);
       const chargeTime = sChargeTime?.state || '';
       const chargeIconLabel = 'Mode';
@@ -1387,7 +1397,7 @@ class QsCarCard extends QsCardBase {
                   <div class="mini-title">${useEnergyMode ? 'Target Energy' : 'Target SOC'}</div>
                   <div class="mini-title">${chargeTimeLabel}</div>
 
-                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${sChargeType?.state === 'As Fast As Possible' ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Charge as fast as possible"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
+                  ${e.force_now ? `<div id="rabbit_btn" class="rabbit-btn ${isAsFastState(sChargeType?.state) ? 'on' : ''}" role="button" ${ctrlTabAttrs} aria-label="Charge as fast as possible"><ha-icon icon="mdi:rabbit"></ha-icon></div>` : ''}
                   <div class="target-cell">
                     <div id="target_value" class="target-value">${displayTargetValue}</div>
                     ${useEnergyMode ? '' : `<div class="mini-range-target" aria-label="range at target">${rangeTargetStr}</div>`}
@@ -1663,7 +1673,7 @@ class QsCarCard extends QsCardBase {
                   if (this._root?.querySelector('.disabled')) return;
 
                   // Check if already in "As Fast As Possible" mode
-                  const isAlreadyForcing = sChargeType?.state === 'As Fast As Possible';
+                  const isAlreadyForcing = isAsFastState(sChargeType?.state);
 
                   if (isAlreadyForcing && e.clean_constraints) {
                       this._showDialog({

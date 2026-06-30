@@ -48,3 +48,52 @@ def test_charge_origin_wired_into_context_row(card_source: str) -> None:
 def test_forecast_prefix_dropped(card_source: str) -> None:
     """The old ``Forecast:`` prefix is no longer rendered."""
     assert "Forecast: ${forecastDisplay}" not in card_source
+
+
+def test_is_as_fast_state_predicate_defined(card_source: str) -> None:
+    """QS-280: the as-fast predicate checks the charge-type strings directly.
+
+    It is backed by an explicit ``AS_FAST_STATES`` set of both as-fast
+    charge-type strings, so the icon mapping can change independently without
+    silently breaking the rabbit button. The single-quoted literals here are
+    distinct from the double-quoted ``carChargeTypeIcons`` keys, so this is
+    not satisfied by the icon map alone.
+    """
+    assert "const isAsFastState" in card_source
+    assert "const AS_FAST_STATES" in card_source
+    assert "'As Fast As Possible'" in card_source
+    assert "'Manual As Fast As Possible'" in card_source
+
+
+def test_rabbit_lit_class_uses_predicate(card_source: str) -> None:
+    """QS-280: the rabbit lit ``on`` class is gated by ``isAsFastState``."""
+    assert (
+        "class=\"rabbit-btn ${isAsFastState(sChargeType?.state) ? 'on' : ''}\""
+        in card_source
+    )
+
+
+def test_is_already_forcing_uses_predicate(card_source: str) -> None:
+    """QS-280: the Stop-vs-Start gate is driven by ``isAsFastState``."""
+    assert (
+        "const isAlreadyForcing = isAsFastState(sChargeType?.state);"
+        in card_source
+    )
+
+
+def test_bare_as_fast_comparison_no_longer_gates(card_source: str) -> None:
+    """QS-280: the bare display-literal comparison is gone from both sites.
+
+    Both the rabbit lit-class site and the ``isAlreadyForcing`` gate
+    previously compared ``sChargeType?.state === 'As Fast As Possible'``,
+    which missed the ``"Manual As Fast As Possible"`` user-force variant.
+
+    NOTE: this matches the *full* comparison expression (with ``=== ``), not
+    the bare ``'As Fast As Possible'`` literal — that literal legitimately
+    still appears in the ``AS_FAST_STATES`` set and in the explanatory card
+    comment, so asserting its absence would be wrong. The companion assertion
+    below pins that the literal *is* still present (in the set), making the
+    intent explicit and guarding against a future misedit that drops it.
+    """
+    assert "sChargeType?.state === 'As Fast As Possible'" not in card_source
+    assert "'As Fast As Possible'" in card_source

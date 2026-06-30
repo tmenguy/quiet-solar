@@ -17,7 +17,7 @@ covers:
   - custom_components/quiet_solar/ui/resources/shared/qs-ring-duration-base.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-flame.js
   - custom_components/quiet_solar/ui/resources/shared/qs-anim-wave.js
-last_verified: 2026-06-18
+last_verified: 2026-06-30
 ---
 
 # Dashboard generation and JS Lovelace cards
@@ -420,8 +420,8 @@ origin-aware charge types:
 
 | charge type (sensor state) | icon |
 |---|---|
-| `As Fast As Possible` | `mdi:rabbit` |
-| `Manual As Fast As Possible` | `mdi:rabbit` (the context row differentiates user vs automation) |
+| `As Fast As Possible` | `mdi:rabbit` (solver-driven as-fast) |
+| `Manual As Fast As Possible` | `mdi:rabbit` (user-force; context row differentiates user vs automation) |
 | `Manual` | `mdi:hand-back-right` |
 | `Calendar` | `mdi:calendar` |
 | `Person Automated` | `mdi:account-clock` |
@@ -433,6 +433,24 @@ origin-aware charge types:
 old `mdi:auto-fix` person icon were **removed**. The JS map keys are the
 rendered string values of the `CAR_CHARGE_TYPE_*` constants — they must
 stay in sync with `const.py`.
+
+**QS-280 — rabbit button covers both as-fast states.** There are two
+distinct as-fast charge types: solver-driven `"As Fast As Possible"` and
+user-force `"Manual As Fast As Possible"` (the latter is what
+`get_charge_type()` returns after a user presses the rabbit). The rabbit
+button's lit `on` class and the Stop-vs-Start dialog gate
+(`isAlreadyForcing`) now test against an explicit
+`const AS_FAST_STATES = ['As Fast As Possible', 'Manual As Fast As Possible']`
+set via a render-local predicate
+`const isAsFastState = (s) => AS_FAST_STATES.includes(s)`, rather than the
+old bare `=== 'As Fast As Possible'` literal that missed the manual
+variant. The set is matched **directly on the charge-type strings**
+(decoupled from `carChargeTypeIcons`) so the icon for either state can be
+changed independently without breaking the button. `AS_FAST_STATES` mirrors
+the `CAR_CHARGE_TYPE_*AS_FAST_AS_POSSIBLE` constants and must stay in sync
+with `const.py`. This fixes the bug where a user-pressed rabbit
+(`"Manual As Fast As Possible"`) left the button unlit and offered Start
+instead of Stop.
 
 The card's `.forecast-row` is now an **origin context row**: it renders
 the new `qs_car_charge_origin` sensor (wired through the template as
