@@ -899,8 +899,10 @@ energy / not stale-percent mode) the card now reads the `best_soc` entity
 SOC value and the ring fill whenever numeric — **both while charging and
 idle** — so the slow car API no longer makes the gauge look stuck. It falls
 back to the raw SOC (`rawSoc`, captured *before* any reassignment) when
-`best_soc` is non-numeric **or** numeric-but-non-finite (the `isNumberLike` /
-`_percent` helpers can disagree, so a bad estimate never poisons the display).
+`best_soc` is non-numeric **or** numeric-but-non-finite — the latter is a
+belt-and-suspenders guard, since `_percent` already maps `NaN`→`0` and clamps
+to `[0,100]`, kept only to survive a future `_percent` change. The j2 reads the
+sensor into a dedicated `best_e` lookup variable (not the reused `e`).
 A purely **visual** `*` is appended iff the estimate and the raw value differ
 once rounded the **same way the gauge displays them** —
 `Math.round(bestSocVal) !== Math.round(rawSoc)`, matching `_fmt`'s `Math.round`

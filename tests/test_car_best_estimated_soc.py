@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.quiet_solar.const import CONF_CAR_CHARGE_PERCENT_SENSOR
-from custom_components.quiet_solar.ha_model.car import QSCar
+from custom_components.quiet_solar.ha_model.car import QSCar, _finite_soc_or_none
 
 
 def _make_car(fake_hass, mock_data_handler, **overrides) -> QSCar:
@@ -272,3 +272,61 @@ def test_reanchor_stale_to_healthy_recovery(est_car, current_time):
     est_car._capture_last_valid_base_soc(later)
     assert est_car._last_valid_base_soc_value == 63.0
     assert est_car._computed_added_delta_soc_percent == 0.0
+
+
+# ── Legacy/corrupt persisted-base sanitization (fix-plan #03 #01) ─────────────
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (55.0, 55.0),
+        (40, 40.0),
+        (None, None),
+        (float("nan"), None),
+        (float("inf"), None),
+        (float("-inf"), None),
+        ("55.0", None),  # numeric-looking string is still rejected
+        ("unavailable", None),
+        (True, None),  # bool is not a valid SOC numeric
+    ],
+)
+def test_finite_soc_or_none(value, expected):
+    """`_finite_soc_or_none` keeps only finite real numbers, else `None`."""
+    assert _finite_soc_or_none(value) == expected
+
+
+@pytest.mark.parametrize("bad_base", [float("nan"), float("inf"), "corrupt", "55.0"])
+def test_load_sanitizes_non_finite_persisted_base(est_car, current_time, bad_base):
+    """A legacy/corrupt persisted base is coerced to `None` on load, so the
+    healthy-path accessor can never crash or emit nan/inf (fix-plan #03 #01)."""
+    est_car.use_saved_extra_device_info(
+        {
+            "last_valid_base_soc_value": bad_base,
+            "computed_added_delta_soc_percent": float("inf"),
+            "user_base_soc_value": "bad",
+            "user_base_soc_entry_sensor_value": float("nan"),
+        }
+    )
+    assert est_car._last_valid_base_soc_value is None
+    assert est_car._computed_added_delta_soc_percent is None
+    assert est_car._user_base_soc_value is None
+    assert est_car._user_base_soc_entry_sensor_value is None
+    # The accessor (and thus the sensor value_fn) must not raise — a healthy raw
+    # sensor is present, so it falls back to the raw value.
+    _set_soc(est_car, 53.0, current_time)
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == 53.0
+
+
+def test_reset_soc_estimate_clears_unified_base_accumulator_cursor(est_car):
+    """AC6 — `reset_soc_estimate` zeroes the unified base + accumulator + cursor
+    in one shot (fix-plan #03 #02 traceability). The "persisted base survives a
+    reboot re-attach" half of AC6 is covered by the QS-243 serialize round-trip
+    test (`test_persistence_round_trip` in `test_car_soc_estimation.py`)."""
+    est_car._last_valid_base_soc_value = 47.0
+    est_car._computed_added_delta_soc_percent = 5.0
+    est_car._delta_soc_last_integration_time = "cursor"
+    est_car.reset_soc_estimate()
+    assert est_car._last_valid_base_soc_value is None
+    assert est_car._computed_added_delta_soc_percent is None
+    assert est_car._delta_soc_last_integration_time is None

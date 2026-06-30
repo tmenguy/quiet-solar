@@ -79,6 +79,20 @@ def _round_half_up(value: float) -> int:
     return int(math.floor(value + 0.5))
 
 
+def _finite_soc_or_none(value: Any) -> float | None:
+    """Coerce a persisted SOC numeric to a finite float, or `None` (QS-281).
+
+    A legacy/corrupt blob can hold a non-numeric (`str`) or non-finite
+    (`nan`/`inf`) value. QS-281's healthy-path accessor reads the base
+    directly, so an unsanitized value would crash the new
+    `car_best_estimated_soc_percentage` sensor's `value_fn` or emit `nan`/`inf`
+    to HA. Mirrors the finite guard in `_capture_last_valid_base_soc`.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return None
+
+
 class QSCar(HADeviceMixin, AbstractDevice):
     conf_type_name = CONF_TYPE_NAME_QSCar
 
@@ -331,10 +345,19 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         # Estimated-SOC model (Story QS-243). Pre-QS-243 saved blobs lack
         # these keys and default to None (all-None defaults, no exception).
-        self._user_base_soc_value = stored_load_info.get("user_base_soc_value", None)
-        self._last_valid_base_soc_value = stored_load_info.get("last_valid_base_soc_value", None)
-        self._computed_added_delta_soc_percent = stored_load_info.get("computed_added_delta_soc_percent", None)
-        self._user_base_soc_entry_sensor_value = stored_load_info.get("user_base_soc_entry_sensor_value", None)
+        # QS-281: the numeric SOC fields are sanitized through `_finite_soc_or_none`
+        # so a legacy/corrupt blob holding a `str`/`nan`/`inf` can never reach
+        # the healthy-path accessor's `base + delta` read (crash / `nan` emit).
+        self._user_base_soc_value = _finite_soc_or_none(stored_load_info.get("user_base_soc_value", None))
+        self._last_valid_base_soc_value = _finite_soc_or_none(
+            stored_load_info.get("last_valid_base_soc_value", None)
+        )
+        self._computed_added_delta_soc_percent = _finite_soc_or_none(
+            stored_load_info.get("computed_added_delta_soc_percent", None)
+        )
+        self._user_base_soc_entry_sensor_value = _finite_soc_or_none(
+            stored_load_info.get("user_base_soc_entry_sensor_value", None)
+        )
         self._user_base_soc_entry_api_stale = stored_load_info.get("user_base_soc_entry_api_stale", None)
         # Re-anchor the integration cursor so the next charge cycle does not
         # integrate energy "delivered" during downtime.
@@ -1634,23 +1657,12 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return self.get_car_charge_percent_raw_sensor(time, tolerance_seconds)
 
     def get_best_estimated_car_charge_percent(self, time: datetime | None = None) -> float | None:
-        """Return the freshest SOC for display (QS-281) — a pure read, no mutation.
+        """Return the freshest SOC for display (QS-281) — a **pure read**.
 
-        While the slow car APIs lag during a charge, this surfaces a live
-        estimate (`last known good raw value + charge added since`) that
-        re-anchors when the API finally delivers a fresh value:
-
-        1. while estimating (stale / no-sensor / manual override) → the existing
-           estimate `_estimated_soc_percent` (parity with `get_car_charge_percent`,
-           may be `None` for the pure-delta case);
-        2. else when a system base exists → `self._estimated_soc_percent`
-           (the canonical `clamp(base + delta, 0, 100)`);
-        3. else → the plain raw sensor value.
-
-        No "actively charging" check is needed: the delta only ever grows while
-        the charger callback runs, so when idle `base + delta` simply holds the
-        last accurate value until a genuinely different raw API reading
-        re-anchors it (the re-anchor lives in `update_states`, not here).
+        The estimate while estimating or when a system base exists (parity with
+        `get_car_charge_percent` for the pure-delta `None` case), otherwise the
+        raw sensor. The re-anchor and accumulator updates live elsewhere; see
+        `docs/agents/concepts/car-soc-estimation.md` for the full rationale.
         """
         if time is None:
             time = datetime.now(tz=pytz.UTC)

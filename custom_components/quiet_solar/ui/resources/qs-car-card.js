@@ -998,6 +998,11 @@ class QsCarCard extends QsCardBase {
           // best-estimate never poisons the displayed value.
           const bestSocNumeric = isNumberLike(sBestSoc?.state);
           const bestSocCandidate = bestSocNumeric ? this._percent(sBestSoc.state) : rawSoc;
+          // `_percent` already maps NaN→0 and clamps to [0,100], so the
+          // `Number.isFinite` guard is belt-and-suspenders today (it cannot
+          // currently fire when `bestSocNumeric` is true); it is kept so a
+          // future `_percent` change that could yield a non-finite value still
+          // falls back to `rawSoc` rather than poisoning the display.
           const bestSocUsable = bestSocNumeric && Number.isFinite(bestSocCandidate);
           const bestSocVal = bestSocUsable ? bestSocCandidate : rawSoc;
           soc = bestSocVal;

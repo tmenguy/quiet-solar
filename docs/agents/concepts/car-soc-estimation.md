@@ -38,7 +38,10 @@ the car card — the solver/constraint path is untouched.
 - `_user_base_soc_value` — manually-entered baseline.
 - `_last_valid_base_soc_value` — the **last known good raw value** (QS-281),
   independent of stale state. Maintained **every cycle** by the re-anchor
-  (`_capture_last_valid_base_soc`), not just at the fresh→stale edge.
+  (`_capture_last_valid_base_soc`), not just at the fresh→stale edge. On load
+  the persisted numeric SOC fields are sanitized through `_finite_soc_or_none`
+  (coerce a legacy/corrupt `str`/`nan`/`inf` → `None`), so the QS-281 healthy-
+  path accessor that reads the base directly can never crash or emit `nan`.
 - `_computed_added_delta_soc_percent` — accumulated, efficiency-aware
   percent added during the current plugged session (a **float**).
 - `_user_base_soc_entry_sensor_value` — raw sensor value at the instant the
