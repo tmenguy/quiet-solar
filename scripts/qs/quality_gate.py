@@ -1303,25 +1303,35 @@ _IMPACTED_DIFF_COVER_TIMEOUT = "diff_cover_timeout"
 _IMPACTED_CHANGED_LINES_UNCOVERED = "changed_lines_uncovered"
 
 
-def _run_impacted_pass(base: str) -> str:
-    """Run ONE testmon-selected pass against `base`; return a verdict string.
+def _run_impacted_pass(base: str) -> tuple[str, bool]:
+    """Run ONE testmon-selected pass against `base`; return `(verdict, ran_select_all)`.
 
-    Pipeline: DB hygiene → fresh-baseline coverage reset → testmon-selected
-    tests under `--cov` (writes coverage.xml) → diff-cover --fail-under=100 on
-    the changed lines. Factored out of `check_impacted` (QS-283 A4) so the
-    self-heal retry can re-run the SAME pass against the already-resolved base
-    — no second `git fetch` / tooling probe.
+    Pipeline: DB hygiene (`_ensure_testmon_db_safe`, which may purge a corrupt /
+    schema-mismatched baseline) → reset accumulated coverage iff the baseline is
+    now absent (so the pass starts clean) → testmon-selected tests under `--cov`
+    (writes coverage.xml) → diff-cover --fail-under=100 on the changed lines.
+    Factored out of `check_impacted` (QS-283 A4) so the self-heal retry can
+    re-run the SAME pass against the already-resolved base — no second
+    `git fetch` / tooling probe.
 
-    Returns one of the `_IMPACTED_*` verdicts. `check_impacted` maps these to
-    exit codes and decides whether to self-heal.
+    `ran_select_all` reports whether THIS pass ran as a select-all: it is the
+    post-hygiene `.testmondata` absence, so it is True both for a genuinely
+    fresh baseline AND when hygiene just purged a corrupt/schema-mismatched DB
+    mid-pass. `check_impacted` uses it to suppress a pointless self-heal retry
+    when the first pass already select-all'd (review fix #01). Returns one of
+    the `_IMPACTED_*` verdicts paired with that flag.
     """
     _ensure_testmon_db_safe()
-    # QS-278: a missing `.testmondata` here (first-ever run, or just purged
-    # as corrupt) means testmon is about to select ALL tests — a fresh
-    # baseline. Reset the accumulated `--cov-append` coverage data so it
-    # reflects only this clean full run, never stale lines from an earlier
-    # branch state. When the DB exists, accumulation is intentional.
-    if not TESTMON_DATA.exists():
+    # QS-278: a missing `.testmondata` here (first-ever run, or just purged by
+    # the hygiene above as corrupt/schema-mismatched) means testmon is about to
+    # select ALL tests — a fresh baseline. Reset the accumulated `--cov-append`
+    # coverage data so it reflects only this clean full run, never stale lines
+    # from an earlier branch state. When the DB exists, accumulation is
+    # intentional. `ran_select_all` records this select-all decision for the
+    # caller's self-heal gate (review fix #01: a baseline purged mid-pass means
+    # this pass IS the clean select-all, so no retry can improve on it).
+    ran_select_all = not TESTMON_DATA.exists()
+    if ran_select_all:
         _reset_coverage_data()
     # QS-276 review-fix SF1 (#05): delete any stale coverage.xml from a
     # previous run BEFORE the testmon/cov pass. Otherwise a pytest-cov
@@ -1333,7 +1343,7 @@ def _run_impacted_pass(base: str) -> str:
     result = _stream_pytest(_build_testmon_cmd())
     if not result["passed"]:
         _emit("impacted", "FAIL (selected tests failed)")
-        return _IMPACTED_TESTS_FAILED
+        return _IMPACTED_TESTS_FAILED, ran_select_all
 
     # QS-276 review-fix N7: pytest-cov writes coverage.xml even on a
     # zero-collection run (verified for the pinned version), but guard
@@ -1342,7 +1352,7 @@ def _run_impacted_pass(base: str) -> str:
     # pre-delete above, a fresh report is guaranteed or we fail loudly.
     if not COVERAGE_XML.exists():
         _emit("impacted", f"FAIL (coverage report not written: {COVERAGE_XML})")
-        return _IMPACTED_NO_COVERAGE_XML
+        return _IMPACTED_NO_COVERAGE_XML, ran_select_all
 
     # NH1: bound diff-cover so a hang can't break the sub-15s promise.
     dc = _run(_build_diff_cover_cmd(base), timeout=_DIFF_COVER_TIMEOUT_SECONDS)
@@ -1356,7 +1366,7 @@ def _run_impacted_pass(base: str) -> str:
         _emit("impacted", f"FAIL (diff-cover timed out after {_DIFF_COVER_TIMEOUT_SECONDS}s)")
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
-        return _IMPACTED_DIFF_COVER_TIMEOUT
+        return _IMPACTED_DIFF_COVER_TIMEOUT, ran_select_all
 
     sys.stdout.write(dc.stdout)
     sys.stdout.flush()
@@ -1370,9 +1380,9 @@ def _run_impacted_pass(base: str) -> str:
         _emit_reseed_guidance()
         sys.stderr.write(dc.stderr)
         sys.stderr.flush()
-        return _IMPACTED_CHANGED_LINES_UNCOVERED
+        return _IMPACTED_CHANGED_LINES_UNCOVERED, ran_select_all
     _emit("impacted", "PASS (changed lines 100% covered)")
-    return _IMPACTED_PASS
+    return _IMPACTED_PASS, ran_select_all
 
 
 def check_impacted(*, allow_self_heal: bool = True) -> int:
@@ -1392,13 +1402,18 @@ def check_impacted(*, allow_self_heal: bool = True) -> int:
 
     QS-283 A4 self-heal: when `allow_self_heal` is set and an INCREMENTAL
     run (`was_incremental` — `.testmondata` present and non-empty, captured
-    BEFORE any purge) reports changed lines <100%, the desync killer fires:
-    rebuild the testmon baseline (purge + coverage reset + shard clear) and
-    re-run the SAME pass once as a clean select-all. A false FAIL (a covering
-    test wrongly deselected) recovers to PASS; a genuine gap still exits 1.
-    The retry runs with `allow_self_heal=False` via the inner pass, so it can
-    never recurse. A select-all run (fresh/purged baseline) skips the retry —
-    its FAIL is already ground truth.
+    BEFORE any purge — AND the first pass did not itself select-all) reports
+    changed lines <100%, the desync killer fires: rebuild the testmon baseline
+    (purge + coverage reset + shard clear) and re-run the SAME pass once as a
+    clean select-all. A false FAIL (a covering test wrongly deselected)
+    recovers to PASS; a genuine gap still exits 1. The retry calls
+    `_run_impacted_pass` directly (not `check_impacted`), so it cannot recurse.
+    A select-all run skips the retry — its FAIL is already ground truth. The
+    select-all signal is the pass's own `ran_select_all` (post-hygiene), so a
+    baseline that hygiene purged mid-pass (corrupt/schema-mismatched) is
+    correctly treated as non-incremental and never triggers a wasted retry
+    (review fix #01). The retry's own per-verdict diagnostics are emitted by
+    `_run_impacted_pass` itself before the exit code is collapsed.
     """
     if not _impacted_tooling_available():
         _emit("impacted", "pytest-testmon / diff-cover not importable — install requirements_test.txt")
@@ -1426,16 +1441,30 @@ def check_impacted(*, allow_self_heal: bool = True) -> int:
     # run's coverage.xml. The combined `.coverage` survives (warm baseline).
     _clean_orphan_cov_shards()
 
-    verdict = _run_impacted_pass(base)
+    verdict, ran_select_all = _run_impacted_pass(base)
     if verdict == _IMPACTED_PASS:
         return 0
-    if verdict == _IMPACTED_CHANGED_LINES_UNCOVERED and allow_self_heal and was_incremental:
+    # Self-heal only a genuine INCREMENTAL desync. Three conditions must hold:
+    # the verdict is a changed-line miss; self-heal is enabled; and the run was
+    # truly incremental — the pre-hygiene baseline was warm (`was_incremental`)
+    # AND the first pass did not itself select-all (`not ran_select_all`).
+    # Review fix #01: a corrupt/schema-mismatched `.testmondata` is warm
+    # pre-hygiene but gets purged inside the first pass, which then select-alls;
+    # without the `ran_select_all` guard a genuine gap there would fire a
+    # pointless rebuild + second full select-all and emit a misleading notice.
+    if (
+        verdict == _IMPACTED_CHANGED_LINES_UNCOVERED
+        and allow_self_heal
+        and was_incremental
+        and not ran_select_all
+    ):
         _emit(
             "impacted",
             "rebuilding testmon baseline and re-checking (changed lines <100% on an incremental run)",
         )
         _rebuild_testmon_baseline()
-        return 0 if _run_impacted_pass(base) == _IMPACTED_PASS else 1
+        retry_verdict, _ = _run_impacted_pass(base)
+        return 0 if retry_verdict == _IMPACTED_PASS else 1
     return 1
 
 

@@ -2871,9 +2871,21 @@ class TestCheckImpactedSelfHeal:
     PASS = quality_gate._IMPACTED_PASS
     TESTS_FAILED = quality_gate._IMPACTED_TESTS_FAILED
 
-    def _run(self, *, db: Path, verdicts: list[str], allow_self_heal: bool = True):
-        """Drive `check_impacted` with a mocked `_run_impacted_pass`."""
-        mock_pass = MagicMock(side_effect=verdicts)
+    def _run(
+        self,
+        *,
+        db: Path,
+        verdicts: list[str],
+        allow_self_heal: bool = True,
+        select_all: list[bool] | None = None,
+    ):
+        """Drive `check_impacted` with a mocked `_run_impacted_pass`.
+
+        `_run_impacted_pass` returns `(verdict, ran_select_all)`; `select_all`
+        supplies the per-call `ran_select_all` flag (defaults to all False —
+        an incremental selection)."""
+        flags = select_all if select_all is not None else [False] * len(verdicts)
+        mock_pass = MagicMock(side_effect=list(zip(verdicts, flags)))
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
@@ -2964,6 +2976,54 @@ class TestCheckImpactedSelfHeal:
         assert rc == 1
         mock_rebuild.assert_not_called()
         assert mock_pass.call_count == 1
+
+    def test_first_pass_select_alled_suppresses_retry(self, tmp_path: Path) -> None:
+        """Review fix #01: even with a warm pre-hygiene baseline
+        (`was_incremental` True), if the FIRST pass itself select-all'd
+        (`ran_select_all` True — hygiene purged a corrupt/schema-mismatched DB
+        mid-pass) the changed-line FAIL is ground truth, so no retry fires."""
+        rc, mock_rebuild, mock_pass = self._run(
+            db=self._incremental_db(tmp_path), verdicts=[self.CHANGED], select_all=[True]
+        )
+        assert rc == 1
+        mock_rebuild.assert_not_called()
+        assert mock_pass.call_count == 1
+
+    def test_corrupt_baseline_purged_midpass_does_not_self_heal(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review fix #01 (real path, no mock of `_run_impacted_pass`): a
+        present+non-empty but CORRUPT `.testmondata` makes `was_incremental`
+        True, yet `_ensure_testmon_db_safe` purges it inside the first pass so
+        that pass select-alls. A genuine changed-line gap must run EXACTLY one
+        pass, emit NO self-heal notice, and exit 1 — not waste a second
+        full-suite select-all."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"not a sqlite database")  # warm pre-hygiene, purged as corrupt
+        xml = tmp_path / "coverage.xml"
+
+        def _emit_xml(*_a: object, **_k: object) -> dict:
+            xml.write_text("<coverage/>")
+            return {"name": "pytest", "passed": True}
+
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            # _ensure_testmon_db_safe runs for REAL → detects corruption → purges
+            # db → the pass select-alls (ran_select_all True).
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml) as mock_stream,
+            patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="gap")),
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+        ):
+            assert quality_gate.check_impacted() == 1
+        assert not db.exists(), "the corrupt baseline must have been purged by hygiene"
+        mock_rebuild.assert_not_called()
+        assert mock_stream.call_count == 1, "exactly one pass — no wasted self-heal retry"
+        assert "rebuilding testmon baseline" not in capsys.readouterr().err
 
 
 class TestTestmonAvailable:
