@@ -1659,25 +1659,36 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def get_best_estimated_car_charge_percent(self, time: datetime | None = None) -> float | None:
         """Return the freshest SOC for display (QS-281) — a **pure read**.
 
-        The estimate while estimating or when a system base exists (parity with
-        `get_car_charge_percent` for the pure-delta `None` case), otherwise the
-        raw sensor. The re-anchor and accumulator updates live elsewhere; see
-        `docs/agents/concepts/car-soc-estimation.md` for the full rationale.
+        - **Estimating** (stale / no-sensor / manual override): the pure
+          `_estimated_soc_percent` (parity with `get_car_charge_percent`; the
+          raw sensor is distrusted here so it must NOT clamp to it). `None` in
+          the pure-delta no-base case.
+        - **Healthy sensor with a system base**: the canonical estimate
+          (`clamp(base + delta)`, a computed-on-read property), but **never
+          below the genuine live raw** — the integer re-anchor de-bounce can
+          leave `base + delta` a hair behind a sub-integer API increase (base
+          `45.0` vs raw `45.9`), and the estimate is meant to *lead* the API,
+          never lag it (fix-plan #04 #02).
+        - **No base**: the raw sensor value, sanitized through
+          `_finite_soc_or_none` so a `str`/`nan`/`inf` live read never reaches
+          the BATTERY/MEASUREMENT sensor (fix-plan #04 #05) — consistent with
+          the load-path guard.
+
+        See `docs/agents/concepts/car-soc-estimation.md` for the full rationale.
         """
         if time is None:
             time = datetime.now(tz=pytz.UTC)
-        # Estimating (stale / no-sensor / manual override) OR a healthy sensor
-        # that already has a system base → the canonical clamped estimate. The
-        # two cases share a return because `_estimated_soc_percent` is a
-        # computed-on-read property (`clamp(base + delta)`), so a re-anchor that
-        # zeroes the delta is reflected immediately — there is no stored value
-        # that could surface a stale one-cycle display. It is `None` only in the
-        # pure-delta no-base case. Otherwise the plain raw sensor value, read
-        # with the default tolerance (`None`) — identical to the canonical
-        # `get_car_charge_percent()` value_fn, which also passes no tolerance.
-        if self.is_in_soc_estimation_mode(time) or self._last_valid_base_soc_value is not None:
+        if self.is_in_soc_estimation_mode(time):
             return self._estimated_soc_percent
-        return self.get_car_charge_percent_raw_sensor(time)
+        # Read with the default tolerance (`None`) — identical to the canonical
+        # `get_car_charge_percent()` value_fn, which also passes no tolerance.
+        raw = _finite_soc_or_none(self.get_car_charge_percent_raw_sensor(time))
+        if self._last_valid_base_soc_value is not None:
+            est = self._estimated_soc_percent
+            if est is not None and raw is not None and raw > est:
+                return raw
+            return est
+        return raw
 
     def _update_soc_estimation(self, time: datetime) -> None:
         """Per-cycle recovery for a user manual override (4-case, keyed on entry state).
@@ -1731,13 +1742,18 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         Runs once per cycle from `update_states`, independent of stale state.
         `_last_valid_base_soc_value` tracks the freshest raw SOC the API has
-        reported. When the raw value changes at the **integer** level (mirroring
-        the card's `Math.trunc`, so a same-integer heartbeat does NOT re-anchor),
-        the accumulated delta is reset to `0.0` and the integration cursor
-        re-anchored, so the live estimate snaps back to the truth the API just
-        reported. (Sub-integer jitter is absorbed, but a raw oscillating across
-        an integer boundary — e.g. `44.9`↔`45.1` — will re-anchor on each flip;
-        the integer compare is a coarse de-bounce, not full hysteresis.)
+        reported. The re-anchor fires when the raw value changes at the
+        **integer-truncation** (`int()`) level: a same-integer heartbeat does
+        NOT re-anchor (so a stuck-but-pinging slow API keeps the accumulated
+        delta), and on a genuine change the delta is reset to `0.0` and the
+        cursor re-anchored so the estimate snaps back to the truth the API just
+        reported. This `int()` de-bounce is purely a Python-side heartbeat
+        guard — it is **independent of** the card's display asterisk, which
+        uses `Math.round` (fix-plan #01 #03). It is coarse, not full hysteresis:
+        a raw oscillating across an integer boundary (`44.9`↔`45.1`) re-anchors
+        on each flip, and a sub-integer increase within the same integer does
+        not re-anchor — the display accessor clamps `>= raw` so the estimate
+        still never lags the live API (fix-plan #04 #02).
 
         No-op when the raw value is `None` (no reading yet / no-sensor car) or
         **non-finite** (`nan`/`inf` — a misbehaving template/SOC sensor whose
@@ -1766,7 +1782,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         QS-281: the system base is now maintained every cycle by the per-cycle
         re-anchor (`_capture_last_valid_base_soc`), so this no longer captures
-        the base on the stale edge — it just flips the mode flag.
+        the base on the stale edge — it just flips the mode flag. `time` and
+        `for_init` are now unused but **retained for call-site compatibility**:
+        callers still pass them (`_enter_stale_percent_mode(time)` and
+        `(None, for_init=True)`), and `for_init` is passed by keyword so it
+        cannot be renamed/dropped without touching those sites.
         """
         self.car_api_stale_percent_mode = True
 

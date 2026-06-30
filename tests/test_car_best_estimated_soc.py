@@ -92,11 +92,56 @@ def test_best_estimate_clamped_at_100(est_car, current_time):
     assert est_car.get_best_estimated_car_charge_percent(current_time) == 100.0
 
 
+def test_best_estimate_never_below_raw_on_sub_integer_increase(est_car, current_time):
+    """fix-plan #04 #02 — base re-anchored at 45.0 (delta 0); a genuine slow-API
+    advance to 45.9 is swallowed by the integer de-bounce (no re-anchor), but
+    the display accessor must clamp `>= raw` so the estimate never lags the live
+    API (and no behind-the-API `*`)."""
+    est_car._last_valid_base_soc_value = 45.0
+    est_car._computed_added_delta_soc_percent = 0.0
+    _set_soc(est_car, 45.9, current_time)
+    # the per-cycle re-anchor does NOT fire: int(45.9) == int(45.0)
+    est_car._capture_last_valid_base_soc(current_time)
+    assert est_car._last_valid_base_soc_value == 45.0
+    # …but the display accessor clamps up to the genuine raw value
+    best = est_car.get_best_estimated_car_charge_percent(current_time)
+    assert best == 45.9
+    assert best >= est_car.get_car_charge_percent_raw_sensor(current_time)
+
+
+def test_best_estimate_ahead_of_raw_when_api_lags(est_car, current_time):
+    """The complement of the clamp: when the estimate genuinely LEADS the
+    (lagging) raw API, the estimate stands (no down-clamp to raw)."""
+    est_car._last_valid_base_soc_value = 45.0
+    est_car._computed_added_delta_soc_percent = 2.5  # charge added while API stuck
+    _set_soc(est_car, 45.0, current_time)
+    assert est_car.is_in_soc_estimation_mode(current_time) is False
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == pytest.approx(47.5)
+
+
+def test_best_estimate_base_with_non_numeric_raw_returns_estimate(est_car, current_time):
+    """Branch 2 with a non-numeric/unavailable raw → the estimate stands (the
+    raw clamp is skipped and no `str` leaks into the comparison)."""
+    _set_soc(est_car, "unknown", current_time)
+    est_car._last_valid_base_soc_value = 50.0
+    est_car._computed_added_delta_soc_percent = 4.0
+    assert est_car.is_in_soc_estimation_mode(current_time) is False
+    assert est_car.get_best_estimated_car_charge_percent(current_time) == pytest.approx(54.0)
+
+
 def test_best_estimate_no_base_returns_raw(est_car, current_time):
     """Branch 3 — healthy sensor, no base → the plain raw sensor value."""
     _set_soc(est_car, 53.0, current_time)
     est_car._last_valid_base_soc_value = None
     assert est_car.get_best_estimated_car_charge_percent(current_time) == 53.0
+
+
+def test_best_estimate_no_base_str_raw_returns_none(est_car, current_time):
+    """Branch 3 — fix-plan #04 #05: a non-numeric raw live read is sanitized to
+    `None`, so the BATTERY/MEASUREMENT sensor never receives a `str`."""
+    _set_soc(est_car, "unavailable", current_time)
+    est_car._last_valid_base_soc_value = None
+    assert est_car.get_best_estimated_car_charge_percent(current_time) is None
 
 
 def test_best_estimate_no_base_raw_none(est_car, current_time):
