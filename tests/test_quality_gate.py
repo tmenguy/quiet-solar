@@ -3038,6 +3038,56 @@ class TestCheckImpactedSelfHeal:
         assert mock_stream.call_count == 1, "exactly one pass — no wasted self-heal retry"
         assert "rebuilding testmon baseline" not in capsys.readouterr().err
 
+    def test_retry_non_coverage_failure_surfaces_its_diagnostic(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review fix #03 (real `_run_impacted_pass`): a self-heal retry whose
+        SECOND pass fails for a non-coverage reason (selected tests failed)
+        exits 1 AND still surfaces that pass's per-verdict diagnostic on stderr
+        — the collapse to exit 1 does not swallow the message (the fix-#01
+        claim, now under test).
+
+        First pass: warm incremental baseline → changed-line miss (triggers
+        self-heal). Second pass (post-rebuild): selected tests fail."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"warm-baseline")  # present + non-empty → was_incremental True
+        xml = tmp_path / "coverage.xml"
+
+        def _stream(*_a: object, **_k: object) -> dict:
+            # Call 1 (first pass): write coverage.xml and pass so diff-cover runs.
+            # Call 2 (retry pass): selected tests fail → _IMPACTED_TESTS_FAILED.
+            if _stream.calls == 0:
+                xml.write_text("<coverage/>")
+                _stream.calls += 1
+                return {"name": "pytest", "passed": True}
+            _stream.calls += 1
+            return {"name": "pytest", "passed": False}
+
+        _stream.calls = 0  # type: ignore[attr-defined]
+
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            # No-op hygiene so the warm DB stays present → both passes incremental.
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_stream),
+            # First pass diff-cover → non-zero (changed lines uncovered).
+            patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="gap")),
+            # Rebuild is a no-op (keeps db present) so the retry runs the real pass.
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+        ):
+            assert quality_gate.check_impacted() == 1
+        mock_rebuild.assert_called_once()  # self-heal fired
+        err = capsys.readouterr().err
+        assert "rebuilding testmon baseline" in err
+        # The retry's own per-verdict diagnostic must still surface.
+        assert "FAIL (selected tests failed)" in err
+
 
 class TestTestmonAvailable:
     """review-fix S2: `_testmon_available` probes ONLY testmon, never diff-cover."""
@@ -3391,6 +3441,19 @@ class TestImplementAgentsDefaultImpacted:
         # B3: the "fix autonomously and re-run" nudge to the full gate is gone.
         assert "fix autonomously and re-run" not in flat
         assert "never switch to the full gate to diagnose" in flat
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_implement_task_intro_names_impacted_not_full_gate(self, harness: str) -> None:
+        """Review fix #03: the intro summary line and frontmatter description
+        must NOT instruct running the full gate locally (the QS-283 regression
+        class) — they name the impacted gate as the inner-loop command."""
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-implement-task.md").read_text()
+        flat = " ".join(body.split())
+        # The self-contradictory stale phrasing must never reappear.
+        assert "run the full quality gate, and open a PR" not in flat
+        assert "must pass the full quality gate" not in flat
+        # The intro/description names the impacted gate instead.
+        assert "impacted quality gate" in flat
 
     @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
     def test_review_task_untouched_by_impacted(self, harness: str) -> None:

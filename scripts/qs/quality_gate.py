@@ -1442,7 +1442,9 @@ def check_impacted() -> int:
     # non-incremental, matching the module's tolerate-vanish concurrency model.
     try:
         was_incremental = TESTMON_DATA.stat().st_size > 0
-    except (FileNotFoundError, OSError):
+    except OSError:
+        # OSError covers FileNotFoundError (vanished baseline) plus any other
+        # transient stat failure — treat all as non-incremental.
         was_incremental = False
 
     # QS-283 A1: reap orphaned `.coverage.*` shards from a killed prior run

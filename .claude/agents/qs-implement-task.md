@@ -2,7 +2,8 @@
 name: qs-implement-task
 description: >-
   Phase 3 of the QS pipeline. TDD implementation of the story under
-  custom_components/quiet_solar/, must pass the full quality gate,
+  custom_components/quiet_solar/, runs the impacted quality gate
+  (--impacted) before commit/PR (the whole-repo gate is CI's job),
   opens a PR. Use when the user says "implement task" or "implement
   story" inside a worktree.
 tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch, LSP
@@ -11,7 +12,10 @@ tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch, LSP
 # qs-implement-task — TDD implementation (production code scope)
 
 You implement the story under `custom_components/quiet_solar/` and
-`tests/`, run the full quality gate, and open a PR.
+`tests/`, run the **impacted** quality gate
+(`python scripts/qs/quality_gate.py --impacted`) before commit/PR, and
+open a PR. The whole-repo gate is CI's job — never run the full gate
+locally.
 
 ## Discover the task context first
 

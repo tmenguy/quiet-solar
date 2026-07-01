@@ -141,9 +141,11 @@ python scripts/qs/quality_gate.py --impacted
 It runs the testmon-selected tests and verifies any changed lines
 under `custom_components/quiet_solar/` are 100% covered, self-healing a
 drifted testmon baseline automatically (no manual file deletion ever).
-Dev-only changes (`scripts/`, `docs/`, agent files) carry no
-production-coverage delta, so `--impacted` just runs the impacted tests
-fast. The whole-repo 100% gate is enforced in **CI** on every PR — the
+Dev-only changes (`scripts/`, `docs/`, agent files) carry no delta to
+`custom_components/quiet_solar/` coverage specifically, so that side of
+`--impacted` is a fast no-op — but the gate/tooling's own correctness is
+still guarded by its testmon-selected tests under `--impacted` (and the
+whole-repo gate in CI). The whole-repo 100% gate is enforced in **CI** on every PR — the
 only local full-gate run is an explicit user request:
 
 ```bash
