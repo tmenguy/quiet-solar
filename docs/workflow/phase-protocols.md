@@ -212,7 +212,11 @@ as alternatives (see QS-175 OUT OF SCOPE).
    --ff-only`), then refresh the testmon DB via
    `quality_gate.py --seed-testmon` — detached/best-effort, never
    blocking cleanup. A failure or stale baseline is safe (new worktrees
-   just run more tests).
+   just run more tests). QS-286: the detached run now emits a completion
+   signal — it redirects to `.testmondata.seed.log` and writes a
+   `.testmondata.seed-status` marker when done; poll it from the main
+   checkout with `quality_gate.py --seed-testmon-status` (0 = safe to
+   close, 4 = still running, 1 = rerun, 3 = no readable status).
 6. Delete remote branch (safety check: refuse if branch is
    `main` / `master`).
 7. Run `python scripts/qs/cleanup_worktree.py --work-dir <wd>

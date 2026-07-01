@@ -51,6 +51,9 @@ coverage.xml
 .testmondata
 .testmondata-wal
 .testmondata-shm
+# QS-286: sidecar completion marker for the detached --seed-testmon refresh.
+# (.testmondata.seed.log is already covered by the *.log rule below.)
+.testmondata.seed-status
 *.cover
 *.py,cover
 .hypothesis/

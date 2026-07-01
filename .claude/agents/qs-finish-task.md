@@ -148,9 +148,20 @@ The standard merge flow.
    QG_PY="$MAIN_DIR/venv/bin/python"
    [ -x "$QG_PY" ] || QG_PY="$(command -v python3 || command -v python || true)"
    if [ -n "$QG_PY" ]; then
+       # QS-286: delete any stale marker BEFORE launch (so a prior run's
+       # `ok` cannot survive into a run that dies before writing `running`),
+       # then run detached, redirecting (truncate) to a log the user can
+       # inspect. The run writes .testmondata.seed-status when done.
+       rm -f "$MAIN_DIR/.testmondata.seed-status"
        ( cd "$MAIN_DIR" && nohup "$QG_PY" \
-           scripts/qs/quality_gate.py --seed-testmon >/dev/null 2>&1 & )
+           scripts/qs/quality_gate.py --seed-testmon \
+           >"$MAIN_DIR/.testmondata.seed.log" 2>&1 & )
        echo "Baseline refresh started (detached, best-effort)."
+       echo "It writes .testmondata.seed-status when done; check status with:"
+       echo "  python scripts/qs/quality_gate.py --seed-testmon-status"
+       echo "  (run from the main checkout, $MAIN_DIR)"
+       echo "It is safe to close this terminal once that reports OK; the log"
+       echo "is at $MAIN_DIR/.testmondata.seed.log."
    else
        echo "Warning: no usable Python interpreter found — skipping baseline refresh."
    fi

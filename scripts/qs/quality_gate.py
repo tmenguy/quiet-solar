@@ -51,6 +51,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -902,6 +903,12 @@ def _output_results(
 # per-run temp path.
 COVERAGE_XML = REPO_ROOT / "coverage.xml"
 TESTMON_DATA = REPO_ROOT / ".testmondata"
+# QS-286: sidecar completion marker for the detached `--seed-testmon` run.
+# REPO_ROOT is `__file__`-relative (cwd- and symlink-resolved), so the marker
+# always lands beside the main worktree's `.testmondata` regardless of the
+# detached process's cwd — a later `--seed-testmon-status` query from
+# $MAIN_DIR reads the same file.
+SEED_STATUS = REPO_ROOT / ".testmondata.seed-status"
 # QS-278: the persistent coverage DATA file (coverage.py's default). The
 # `--impacted` gate runs testmon-selected tests with `--cov-append` so
 # coverage ACCUMULATES across inner-loop invocations. testmon 2.2.0
@@ -1478,6 +1485,41 @@ def check_impacted() -> int:
     return 1
 
 
+def _write_seed_status(state: str, **fields: object) -> None:
+    """Write the `SEED_STATUS` marker atomically (temp sibling + os.replace),
+    best-effort (swallow any error so a write failure never aborts the
+    detached rebuild), cleaning up the temp file in a `finally`. No `fsync`.
+    """
+    tmp = SEED_STATUS.with_suffix(SEED_STATUS.suffix + ".tmp")
+    try:
+        tmp.write_text(json.dumps({"state": state, **fields}), encoding="utf-8")
+        os.replace(tmp, SEED_STATUS)
+    except Exception as exc:  # noqa: BLE001 — courtesy marker; never abort the rebuild
+        # Best-effort still emits one diagnostic line so a marker that never
+        # appears is traceable (review-fix #02) — contract unchanged: no raise.
+        _emit("seed-testmon", f"warning: could not write status marker ({state}): {exc}")
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return True if `pid` is a live process (QS-286).
+
+    `os.kill(pid, 0)` sends no signal but validates the target:
+    `ProcessLookupError` → the pid is gone (dead); `PermissionError` → the
+    pid exists but is owned by another user (alive-but-not-ours → alive);
+    success → alive. Extracted as a patchable seam so the status reader's
+    `running` branches are coverable without spawning real processes.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def seed_testmon() -> int:
     """Refresh `.testmondata` via `pytest --testmon`; no coverage, no verdict.
 
@@ -1486,11 +1528,18 @@ def seed_testmon() -> int:
     baseline after a merge. Returns 0 once the selection completes (a
     failing test still updates the DB — there is no pass/fail verdict);
     returns 3 when testmon is not importable.
+
+    QS-286: writes the `SEED_STATUS` completion marker so the detached
+    run (launched by `finish-task`) has a pollable signal — see
+    `seed_testmon_status`. The marker writes are the only additions here;
+    the best-effort return semantics are unchanged.
     """
     # QS-276 review-fix S2: probe ONLY testmon — seeding never invokes
     # diff-cover, so a missing diff-cover must not block the refresh.
     if not _testmon_available():
         _emit("seed-testmon", "pytest-testmon not importable — skipping")
+        # QS-286: record the skip (no `running` marker on this path).
+        _write_seed_status("skipped", reason="pytest-testmon not importable")
         return 3
     # QS-283 A3: rebuild from scratch. The old code ran `pytest --testmon`
     # against the EXISTING DB, so an already-advanced baseline yielded
@@ -1499,6 +1548,10 @@ def seed_testmon() -> int:
     # establishes the baseline the NEXT `--impacted` accumulates onto) forces
     # a true full re-fingerprint (select-all) and prevents a stale `.coverage`
     # from re-introducing the desync A1 fixes.
+    # QS-286: mark the run as started (after the probe, before the pytest
+    # pass) so a status query mid-run reports "still running".
+    started = time.time()
+    _write_seed_status("running", pid=os.getpid(), started=started)
     _rebuild_testmon_baseline()
     _emit("seed-testmon", "refreshing .testmondata (pytest --testmon)")
     result = _stream_pytest(_build_seed_testmon_cmd())
@@ -1511,6 +1564,17 @@ def seed_testmon() -> int:
     rc = result.get("returncode", 0)
     if rc >= 2:
         _emit("seed-testmon", f"warning: pytest exited {rc} (collection error/crash) — .testmondata may be incomplete")
+    # QS-286: overwrite the marker on completion. rc < 2 means testmon wrote
+    # `.testmondata` (0 = clean, 1 = failures but DB persisted — "ok" means
+    # "baseline written", NOT "tests passed"); rc >= 2 (usage/collection
+    # error, crash, or no-tests) means the baseline is suspect → "incomplete".
+    _write_seed_status(
+        "ok" if rc < 2 else "incomplete",
+        pid=os.getpid(),
+        started=started,
+        finished=time.time(),
+        returncode=rc,
+    )
     return 0
 
 
@@ -1536,6 +1600,95 @@ def _build_seed_testmon_cmd() -> list[str]:
         if workers is not None:
             cmd.extend(["-n", workers])
     return cmd
+
+
+def _fmt_seed_time(value: object) -> str:
+    """Render a marker epoch timestamp as a readable UTC ISO string (QS-286).
+
+    `started`/`finished` are stored as raw `time.time()` floats; format them
+    for display only (the stored marker format is unchanged). A missing or
+    non-numeric value (torn/hand-edited marker) yields the readable
+    "an unknown time" placeholder rather than a bare float or `None`.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(value, tz=UTC).isoformat(timespec="seconds")
+    return "an unknown time"
+
+
+def seed_testmon_status() -> int:
+    """Report the detached `--seed-testmon` run's status (QS-286).
+
+    Read-only non-gate subcommand — invokes NO pytest, coverage, or testmon
+    import; it only stat/reads the `SEED_STATUS` marker and checks PID
+    liveness. Prints a human answer and returns a scriptable exit code on a
+    deliberately small 4-code contract: 0 = ok / safe to close; 4 = still
+    running / keep the terminal open; 1 = not trustworthy, rerun (interrupted,
+    incomplete, or skipped); 3 = no readable status (missing or unparseable).
+
+    The reader TRUSTS the marker (best-effort) — it does not cross-check that
+    `.testmondata` still exists for an `ok` verdict. It defends against a
+    malformed marker (review-fix #01): a non-`dict` payload, an unrecognized
+    `state`, or a `running` marker whose `pid` is missing/non-int all route to
+    the "unreadable → 3" path rather than crashing, and display-only fields
+    that are absent print a readable placeholder instead of `None`.
+    """
+    def _unreadable() -> int:
+        print("The baseline refresh status is unreadable.")
+        return 3
+
+    if not SEED_STATUS.exists():
+        print("No baseline refresh has been recorded.")
+        return 3
+    try:
+        marker = json.loads(SEED_STATUS.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return _unreadable()
+    # A parseable-but-non-object payload (`[1]`, `5`, `null`, `"x"`) has no
+    # `.get`; treat it as unreadable rather than letting `.get` raise.
+    if not isinstance(marker, dict):
+        return _unreadable()
+
+    state = marker.get("state")
+    if state == "ok":
+        print(
+            f"Baseline written at {_fmt_seed_time(marker.get('finished'))} "
+            "(tests may have failed) — safe to close this terminal."
+        )
+        return 0
+    if state == "running":
+        pid = marker.get("pid")
+        # `_pid_alive` calls `os.kill(pid, 0)`; a `running` marker whose pid is
+        # not a positive, non-bool int is unreadable. Excluding bool (an int
+        # subclass) and pid <= 0 is deliberate: `os.kill(0, 0)` targets the
+        # caller's process group and `os.kill(-1, 0)` every signalable process
+        # — both would spuriously report "still running" (review-fix #02).
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+            return _unreadable()
+        if _pid_alive(pid):
+            print(
+                f"Still running (pid {pid}, started {_fmt_seed_time(marker.get('started'))}) "
+                "— keep this terminal open."
+            )
+            return 4
+        print(
+            f"Interrupted (pid {pid} no longer running) — `.testmondata` "
+            "may be partial; rerun the refresh."
+        )
+        return 1
+    if state == "incomplete":
+        print(
+            f"Finished with errors (exit {marker.get('returncode', 'unknown')}) — "
+            "`.testmondata` may be partial; rerun the refresh."
+        )
+        return 1
+    if state == "skipped":
+        print(
+            f"Refresh was skipped ({marker.get('reason', 'unknown reason')}) — no baseline was "
+            "written; rerun if needed."
+        )
+        return 1
+    # Any other/absent state value is an unreadable status.
+    return _unreadable()
 
 
 def main() -> None:
@@ -1572,6 +1725,16 @@ def main() -> None:
             "Mutex with --impacted/--quick/--cache/--no-cache/--full/--fix."
         ),
     )
+    parser.add_argument(
+        "--seed-testmon-status",
+        action="store_true",
+        help=(
+            "Report the detached --seed-testmon run's completion status "
+            "(read-only; no pytest). Exit 0=ok/safe to close, 4=still running, "
+            "1=rerun, 3=no readable status. Mutex with the same modes as "
+            "--seed-testmon."
+        ),
+    )
     args = parser.parse_args()
 
     # --quick is mutually exclusive with cache/full/fix. argparse's nargs="+"
@@ -1602,6 +1765,23 @@ def main() -> None:
         parser.error(
             "you cannot combine --seed-testmon with --impacted, --quick, --cache, "
             "--no-cache, --full, or --fix"
+        )
+
+    # QS-286: --seed-testmon-status is a read-only query subcommand, not a
+    # gate mode. Mirror the --seed-testmon mutex so combining it with any
+    # execution mode (or the seed itself) is an explicit usage error.
+    if args.seed_testmon_status and (
+        args.impacted
+        or args.quick
+        or args.cache
+        or args.no_cache
+        or args.full
+        or args.fix
+        or args.seed_testmon
+    ):
+        parser.error(
+            "you cannot combine --seed-testmon-status with --impacted, --quick, "
+            "--cache, --no-cache, --full, --fix, or --seed-testmon"
         )
 
     # Review-fix #01 finding 8 — `--quick ""` would otherwise resolve to
@@ -1648,6 +1828,11 @@ def main() -> None:
     # and exit, never touching scope detection or the coverage gate.
     if args.seed_testmon:
         sys.exit(seed_testmon())
+
+    # QS-286: --seed-testmon-status is a read-only query — short-circuit
+    # before cache/scope detection like the other subcommands.
+    if args.seed_testmon_status:
+        sys.exit(seed_testmon_status())
 
     use_cache = args.cache and not args.fix and not args.no_cache
 
