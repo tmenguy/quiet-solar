@@ -1385,7 +1385,7 @@ def _run_impacted_pass(base: str) -> tuple[str, bool]:
     return _IMPACTED_PASS, ran_select_all
 
 
-def check_impacted(*, allow_self_heal: bool = True) -> int:
+def check_impacted() -> int:
     """Run the `--impacted` inner-loop gate; return the process exit code.
 
     Pipeline: tooling probe → diff-base ladder → orphan-shard hygiene →
@@ -1400,14 +1400,14 @@ def check_impacted(*, allow_self_heal: bool = True) -> int:
     testmon select *all* tests (its native recovery), never silently
     under-select.
 
-    QS-283 A4 self-heal: when `allow_self_heal` is set and an INCREMENTAL
-    run (`was_incremental` — `.testmondata` present and non-empty, captured
-    BEFORE any purge — AND the first pass did not itself select-all) reports
-    changed lines <100%, the desync killer fires: rebuild the testmon baseline
-    (purge + coverage reset + shard clear) and re-run the SAME pass once as a
-    clean select-all. A false FAIL (a covering test wrongly deselected)
-    recovers to PASS; a genuine gap still exits 1. The retry calls
-    `_run_impacted_pass` directly (not `check_impacted`), so it cannot recurse.
+    QS-283 A4 self-heal: on an INCREMENTAL run (`was_incremental` —
+    `.testmondata` present and non-empty, captured BEFORE any purge — AND the
+    first pass did not itself select-all) that reports changed lines <100%, the
+    desync killer fires: rebuild the testmon baseline (purge + coverage reset +
+    shard clear) and re-run the SAME pass once as a clean select-all. A false
+    FAIL (a covering test wrongly deselected) recovers to PASS; a genuine gap
+    still exits 1. The retry calls `_run_impacted_pass` directly (not
+    `check_impacted`), so it cannot recurse.
     A select-all run skips the retry — its FAIL is already ground truth. The
     select-all signal is the pass's own `ran_select_all` (post-hygiene), so a
     baseline that hygiene purged mid-pass (corrupt/schema-mismatched) is
@@ -1434,7 +1434,16 @@ def check_impacted(*, allow_self_heal: bool = True) -> int:
     # worth self-healing. An absent/empty DB means this run already select-alls
     # (ground truth), so a FAIL is genuine and the retry is skipped — no wasted
     # select-all on the normal TDD-red case.
-    was_incremental = TESTMON_DATA.exists() and TESTMON_DATA.stat().st_size > 0
+    #
+    # Review fix #02: derive existence AND size from a SINGLE `stat()` inside a
+    # try/except so the file vanishing (a concurrent `--seed-testmon`/`--impacted`
+    # run, another worktree, or a mid-`_purge_testmon_db`) between a probe and a
+    # read cannot crash the gate — a vanished/unreadable baseline is treated as
+    # non-incremental, matching the module's tolerate-vanish concurrency model.
+    try:
+        was_incremental = TESTMON_DATA.stat().st_size > 0
+    except (FileNotFoundError, OSError):
+        was_incremental = False
 
     # QS-283 A1: reap orphaned `.coverage.*` shards from a killed prior run
     # before the cov pass, so stale fragments can't `--cov-append` into this
@@ -1444,17 +1453,16 @@ def check_impacted(*, allow_self_heal: bool = True) -> int:
     verdict, ran_select_all = _run_impacted_pass(base)
     if verdict == _IMPACTED_PASS:
         return 0
-    # Self-heal only a genuine INCREMENTAL desync. Three conditions must hold:
-    # the verdict is a changed-line miss; self-heal is enabled; and the run was
-    # truly incremental — the pre-hygiene baseline was warm (`was_incremental`)
-    # AND the first pass did not itself select-all (`not ran_select_all`).
-    # Review fix #01: a corrupt/schema-mismatched `.testmondata` is warm
-    # pre-hygiene but gets purged inside the first pass, which then select-alls;
-    # without the `ran_select_all` guard a genuine gap there would fire a
-    # pointless rebuild + second full select-all and emit a misleading notice.
+    # Self-heal only a genuine INCREMENTAL desync. Two conditions must hold:
+    # the verdict is a changed-line miss, and the run was truly incremental —
+    # the pre-hygiene baseline was warm (`was_incremental`) AND the first pass
+    # did not itself select-all (`not ran_select_all`). Review fix #01: a
+    # corrupt/schema-mismatched `.testmondata` is warm pre-hygiene but gets
+    # purged inside the first pass, which then select-alls; without the
+    # `ran_select_all` guard a genuine gap there would fire a pointless rebuild
+    # + second full select-all and emit a misleading notice.
     if (
         verdict == _IMPACTED_CHANGED_LINES_UNCOVERED
-        and allow_self_heal
         and was_incremental
         and not ran_select_all
     ):

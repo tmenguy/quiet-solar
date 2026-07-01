@@ -2876,7 +2876,6 @@ class TestCheckImpactedSelfHeal:
         *,
         db: Path,
         verdicts: list[str],
-        allow_self_heal: bool = True,
         select_all: list[bool] | None = None,
     ):
         """Drive `check_impacted` with a mocked `_run_impacted_pass`.
@@ -2894,7 +2893,7 @@ class TestCheckImpactedSelfHeal:
             patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
             patch.object(quality_gate, "_run_impacted_pass", mock_pass),
         ):
-            rc = quality_gate.check_impacted(allow_self_heal=allow_self_heal)
+            rc = quality_gate.check_impacted()
         return rc, mock_rebuild, mock_pass
 
     @staticmethod
@@ -2944,15 +2943,29 @@ class TestCheckImpactedSelfHeal:
         mock_rebuild.assert_not_called()
         assert mock_pass.call_count == 1
 
-    def test_allow_self_heal_false_suppresses_retry(self, tmp_path: Path) -> None:
-        """`allow_self_heal=False` (the flag the inner pass would carry) means
-        no retry even on an incremental FAIL — the guarantee of no recursion."""
-        rc, mock_rebuild, mock_pass = self._run(
-            db=self._incremental_db(tmp_path), verdicts=[self.CHANGED], allow_self_heal=False
-        )
-        assert rc == 1
-        mock_rebuild.assert_not_called()
+    def test_testmondata_vanishing_before_stat_is_non_incremental(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review fix #02: if `.testmondata` is unlinked (concurrent run / other
+        worktree / mid-purge) so `TESTMON_DATA.stat()` raises `FileNotFoundError`,
+        `check_impacted` must NOT crash — it treats the run as non-incremental
+        (was_incremental False), so a changed-line FAIL exits 1 with no retry."""
+        fake_db = MagicMock()
+        fake_db.stat.side_effect = FileNotFoundError  # vanished between probe and read
+        mock_pass = MagicMock(side_effect=[(self.CHANGED, False)])
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "TESTMON_DATA", fake_db),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+            patch.object(quality_gate, "_run_impacted_pass", mock_pass),
+        ):
+            assert quality_gate.check_impacted() == 1  # must not raise
+        fake_db.stat.assert_called_once()
+        mock_rebuild.assert_not_called()  # non-incremental → no self-heal retry
         assert mock_pass.call_count == 1
+        assert "rebuilding testmon baseline" not in capsys.readouterr().err
 
     def test_first_pass_success_never_rebuilds_or_emits_notice(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
