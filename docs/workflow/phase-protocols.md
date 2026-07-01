@@ -1,7 +1,8 @@
 # Phase protocols
 
-Each phase has a static agent under `.claude/agents/` (and
-`.cursor/agents/`). Agents discover task context at runtime via
+Each phase has a static agent under `.claude/agents/` (mirrored in
+`.cursor/agents/` and `.opencode/agents/`). Agents discover task
+context at runtime via
 `python scripts/qs/context.py`. This document captures the contract for
 each phase — inputs, outputs, hand-off, hard rules.
 
@@ -32,7 +33,9 @@ the user runs to open a new session on the worktree.
   through to the GitHub issue verbatim. Deep analysis is `/create-plan`'s
   job.
 - Do NOT switch the main checkout's branch.
-- Do NOT commit or push — only branch/worktree creation.
+- Do NOT commit or push manually — setup only creates the branch and
+  worktree (`scripts/worktree-setup.sh` itself publishes the branch
+  via `git push -u`; that script-driven push is expected).
 
 ---
 
@@ -188,7 +191,9 @@ findings, same rule as `/create-plan`) — with `/implement-task` or
 ## `finish-task` (agent: `qs-finish-task`)
 
 **Runs on**: worktree (until cleanup, then transitions out).
-**Inputs**: PR number.
+**Inputs**: PR number if one exists — `pr_number` may be null (the
+no-PR abandon/cleanup path, Case A in the agent), in which case merge
+logic is skipped entirely.
 **Side effects**: merges PR, deletes branch on origin, removes worktree.
 **Output**: confirmation; user is directed to `/release` if appropriate.
 **Next phase**: `/release` from the main checkout (independent), or
