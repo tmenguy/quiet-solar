@@ -27,11 +27,13 @@ and scope detection. Raw `pytest` bypasses all four; use it only for
 ad-hoc single-node debugging (positional must contain `::`).
 
 ```bash
-python scripts/qs/quality_gate.py          # full gate (cov + ruff + mypy + translations)
-python scripts/qs/quality_gate.py --cache  # skip if git state matches last pass
+python scripts/qs/quality_gate.py --impacted  # MANDATORY pre-commit gate (QS-276): testmon-selected tests + changed-line 100% cov, self-healing
+python scripts/qs/quality_gate.py --quick tests/test_solver.py  # fast TDD inner loop on an explicit path
+python scripts/qs/quality_gate.py          # full gate (cov + ruff + mypy + translations) — EXPLICIT user request only; CI owns it
+python scripts/qs/quality_gate.py --cache  # skip repeated FULL-gate runs if git state matches last pass
 python scripts/qs/quality_gate.py --fix    # auto-fix ruff format / lint
-python scripts/qs/quality_gate.py --quick tests/test_solver.py  # fast TDD inner loop
 python scripts/qs/quality_gate.py --json   # JSON output for scripts
+python scripts/qs/quality_gate.py --seed-testmon  # refresh the testmon baseline (non-gate; used by finish-task)
 ```
 
 ## Architecture constraints
@@ -75,8 +77,10 @@ surface, so `.opencode/commands/` is intentionally absent.
 
 ## Quality gate
 
-`python scripts/qs/quality_gate.py` (full) or `--quick PATH` (fast
-TDD inner loop) — see the Commands section above for the full grammar.
+`python scripts/qs/quality_gate.py --impacted` is the mandatory
+pre-commit gate; `--quick PATH` is the fast TDD inner loop; the bare
+full gate runs authoritatively in CI (local runs only on explicit user
+request) — see the Commands section above for the full grammar.
 
 ## Legacy
 
