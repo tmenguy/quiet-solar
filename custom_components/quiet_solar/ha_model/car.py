@@ -349,9 +349,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         # so a legacy/corrupt blob holding a `str`/`nan`/`inf` can never reach
         # the healthy-path accessor's `base + delta` read (crash / `nan` emit).
         self._user_base_soc_value = _finite_soc_or_none(stored_load_info.get("user_base_soc_value", None))
-        self._last_valid_base_soc_value = _finite_soc_or_none(
-            stored_load_info.get("last_valid_base_soc_value", None)
-        )
+        self._last_valid_base_soc_value = _finite_soc_or_none(stored_load_info.get("last_valid_base_soc_value", None))
         self._computed_added_delta_soc_percent = _finite_soc_or_none(
             stored_load_info.get("computed_added_delta_soc_percent", None)
         )
