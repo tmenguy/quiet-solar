@@ -37,9 +37,10 @@ calls, entity registries, and state changes. The domain class is the
 other half — it knows about the solver, constraints, and commands.
 The mixin's job is to translate between them:
 
-- **State in**: `add_to_history(entity_id, time, state)` appends the
-  entity's state to a plain-list time series (trimmed with `pop(0)`
-  to 3 days). Used by the solver for "what's happened recently".
+- **State in**: `add_to_history(entity_id, time=None, state=None, ...)`
+  appends the entity's state to a plain-list time series (trimmed with
+  `pop(0)` to 3 days). Used by the solver for "what's happened
+  recently".
 - **State probing**: `attach_ha_state_to_probe(entity_id,
   is_numerical=..., transform_fn=..., conversion_fn=...,
   non_ha_entity_get_state=...)` — declarative wiring of one HA

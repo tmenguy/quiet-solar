@@ -38,10 +38,12 @@ signals); commands flow out through `execute_command()` →
 `hass.services.async_call(...)`. The probe-update cycle handles
 external state changes: if a human changes the inverter settings
 externally, `probe_if_command_set()` reads the HA entities and returns
-whether the currently-expected command is actually in effect (a plain
-bool — `QSBattery` has no `external_user_initiated_state`; that
-attribute belongs to `AbstractLoad`, which `QSBattery` does not
-inherit from).
+whether the currently-expected command is actually in effect —
+`bool | None`, where `None` means a required entity state could not be
+read (HA cold start, inverter offline, unconfigured entity), i.e.
+"inconclusive", not "command absent". `QSBattery` has no
+`external_user_initiated_state`; that attribute belongs to
+`AbstractLoad`, which `QSBattery` does not inherit from.
 
 ## Key types / structures
 
