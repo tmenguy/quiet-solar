@@ -4,7 +4,7 @@ slug: ha-device-mixin
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/device.py
-last_verified: 2026-05-19
+last_verified: 2026-07-02
 ---
 
 # HADeviceMixin — the bridge layer
@@ -14,9 +14,10 @@ last_verified: 2026-05-19
 `HADeviceMixin` is the bridge between HA entities and quiet-solar's
 domain model. Every HA device class inherits from `HADeviceMixin`
 plus a domain class (e.g., `QSBattery(HADeviceMixin, Battery)`). It
-owns: HA entity probing (`attach_ha_state_to_probe()` with numerical
-conversion and custom getters), time-series history (auto-trimmed to
-3 days), power-to-energy conversion via Riemann sum, and a reverse
+owns: HA entity probing (`attach_ha_state_to_probe()` with
+`is_numerical` / `transform_fn` / `conversion_fn` wiring),
+time-series history (auto-trimmed to 3 days), power-to-energy
+conversion via Riemann sum, and a reverse
 index of HA entities by description key (`ha_entities` dict) that
 the dashboard templates query.
 
@@ -36,12 +37,14 @@ calls, entity registries, and state changes. The domain class is the
 other half — it knows about the solver, constraints, and commands.
 The mixin's job is to translate between them:
 
-- **State in**: `add_to_history(time, value)` appends to a numpy
-  ring buffer; trimmed to 3 days. Used by the solver for "what's
-  happened recently".
-- **State probing**: `attach_ha_state_to_probe(entity_id, key,
-  getter=..., transform=..., numerical_conversion=True)` —
-  declarative wiring of one HA entity → one tracked state.
+- **State in**: `add_to_history(entity_id, time=None, state=None, ...)`
+  appends the entity's state to a plain-list time series (trimmed with
+  `pop(0)` to 3 days). Used by the solver for "what's happened
+  recently".
+- **State probing**: `attach_ha_state_to_probe(entity_id,
+  is_numerical=..., transform_fn=..., conversion_fn=...,
+  non_ha_entity_get_state=...)` — declarative wiring of one HA
+  entity → one tracked state.
 - **Commands out**: the domain class (`AbstractDevice`) calls
   `execute_command()`; the device-specific subclass translates to
   `hass.services.async_call(...)`.
@@ -54,7 +57,8 @@ The mixin's job is to translate between them:
 
 - `HADeviceMixin` — the mixin.
 - `attach_ha_state_to_probe(...)` — declarative entity wiring.
-- `add_to_history(time, value)` — numpy-backed time series.
+- `add_to_history(entity_id, time=None, state=None, ...)` —
+  plain-list time series.
 - `ha_entities` dict — reverse index from description key → entity.
 - Riemann-sum energy helpers (power → energy over a time window).
 
@@ -65,10 +69,12 @@ The mixin's job is to translate between them:
 - Forgetting to register a description key in `ha_entities` — the
   entity exists but the dashboard can't find it.
 - Treating the 3-day history as authoritative for long-term analysis.
-  It's deliberately short-lived; persistent history lives in the
-  numpy ring buffer (separate concept).
+  It's deliberately short-lived — in-memory lists trimmed to
+  `MAX_STATE_HISTORY_S` (3 days); there is no separate persistent
+  ring buffer.
 - Doing custom transforms in the dashboard template. All conversion
-  happens in `attach_ha_state_to_probe` via `transform=...`.
+  happens in `attach_ha_state_to_probe` via `transform_fn=` /
+  `conversion_fn=`.
 
 ## See also
 

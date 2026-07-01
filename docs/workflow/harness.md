@@ -9,9 +9,15 @@ The pipeline runs across four harnesses with different mechanics:
 | OpenCode        | `.opencode/agents/`| UI agent picker    | HTTP API: POST /session + POST /session/<id>/prompt_async (no reload) | `permission:` block   |
 | Codex (future)  | `.codex/agents/`   | TBD                | TBD                           | TBD                   |
 
-The agent **bodies** are identical across harnesses (same protocol, same
-hard rules). Only the **frontmatter** differs and the **handoff
-mechanics** are isolated in Python.
+Each agent's **core protocol** (phase steps, quality-gate rules, hard
+rules) MUST stay aligned across harnesses. The **frontmatter** and the
+**declared harness-specific sections** legitimately differ, per
+[project-rules.md](project-rules.md) § "Harness sync": handoff /
+session-spawn blocks (Claude prints launchers for the user; OpenCode
+runs `spawn_session.py` in-band), the per-harness "Code intelligence
+(LSP)" sections, slash-form vs bare phase references, and tool-guard
+prose matching each harness's permission model. The mechanical handoff
+logic itself is isolated in Python (`scripts/qs/launchers/`).
 
 ## Code intelligence (LSP)
 
@@ -40,7 +46,8 @@ jedi-via-MCP plan live in
 ## Detection — `scripts/qs/harness.py`
 
 `harness.detect()` returns one of `claude-code` / `cursor` / `opencode` /
-`codex` / `unknown`. Order of resolution:
+`codex` (there is no `unknown` — detection falls back to `claude-code`).
+Order of resolution:
 
 1. `QS_HARNESS` env var (explicit override).
 2. `CLAUDECODE=1` → `claude-code`.
@@ -103,18 +110,21 @@ All launchers return a dict with at minimum:
 - `same_context` (string, slash-form fallback command)
 - `new_context` (string, shell command to spawn a fresh session)
 
-The **Claude** and **Cursor** launchers additionally emit `agent` (the
-resolved `qs-<phase>` name). The **Codex** and **OpenCode** launchers
-do NOT emit `agent` because they accept free-form `--next-cmd` values
-that may not map to a static phase — see
+The **Claude**, **Cursor**, and **OpenCode** launchers additionally
+emit `agent` (the resolved `qs-<phase>` name — all three resolve
+`--next-cmd` strictly via `PHASE_TO_AGENT`). Only **Codex** payloads
+carry no `agent` key: the codex launcher accepts free-form `--next-cmd`
+values that may not map to a static phase — see
 `tests/qs/launchers/test_next_step_cli.py::test_codex_passes_known_phase_through_unchanged`
-for the grep-able contract pin.
+for the grep-able contract pin. (The pre-QS-177 pipeline treated
+opencode as free-form too; the static-agent pipeline made it strict.)
 
-**Whitespace in `--next-cmd`** (review-fix #03 NTH7): codex/opencode
-treat `--next-cmd` as a free-form string, so trailing or leading
-whitespace inside an otherwise-non-empty value is preserved verbatim
+**Whitespace in `--next-cmd`** (review-fix #03 NTH7): codex treats
+`--next-cmd` as a free-form string, so trailing or leading whitespace
+inside an otherwise-non-empty value is preserved verbatim
 (`--next-cmd "create-plan "` → `same_context: "create-plan "`). This is
-intentional — explicit free-form is a feature, not a bug. The
+intentional — explicit free-form is a feature, not a bug. Claude,
+cursor, and opencode resolve strictly and reject unknown values. The
 empty / whitespace-only case is rejected for all harnesses by
 `next_step.main()` after `parse_args()` returns.
 
@@ -129,12 +139,14 @@ Two approaches were considered:
 - **Generate `.cursor/agents/` from `.claude/agents/` at build time**
   — saves duplicate writes but adds a sync step and breaks if anyone
   edits cursor agents directly.
-- **Hand-maintain both directories** — duplicates content but keeps
-  each harness's agents directly editable.
+- **Hand-maintain all harness directories** — duplicates content but
+  keeps each harness's agents directly editable.
 
 We chose hand-maintained. Agent bodies are stable; the marginal cost of
-two copies is low; the cost of a missed sync is high. A diff lint script
-(`scripts/qs/lint_agents.py`, future) can verify the bodies stay
+three copies is low; the cost of a missed sync is high.
+`check_doc_drift.py` enforces co-modification only; a content-level
+sync checker (`scripts/qs/lint_agents.py` — not yet built; a candidate
+follow-up, not yet filed) could verify the aligned sections stay
 aligned.
 
 ## Adding a new harness

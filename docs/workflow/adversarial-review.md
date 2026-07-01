@@ -32,7 +32,8 @@ concurrently.
 In Cursor: emit one message that invokes the four subagents (Cursor
 supports this natively as of 2.4).
 
-In OpenCode (legacy pipeline): four parallel `Task` calls in one message.
+In OpenCode: the same fan-out — all of the round's reviewers invoked in
+parallel in one message.
 
 ## Plan reviewers (used by `qs-create-plan`)
 
@@ -73,7 +74,8 @@ between the previously-reviewed plan and the current plan (computed
 round's accepted findings. **Looks for**: (a) whether each prior
 accepted finding was actually resolved by the edits, and (b) new
 contradictions, regressions, or scope drift the edits introduced.
-**Hard rule**: `tools: Read` only; never diffs anything itself, never
+**Hard rule**: operates purely on the prompt input (read-only tooling —
+e.g. `tools: Read` on Claude); never diffs anything itself, never
 reads repo files, stays strictly on the delta (the global four own
 whole-plan coverage). Returns "No delta to review." on an empty diff.
 
