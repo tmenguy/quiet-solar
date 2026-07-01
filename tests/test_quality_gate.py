@@ -3287,9 +3287,12 @@ class TestWriteSeedStatus:
             quality_gate._write_seed_status("ok", returncode=0)
         mock_replace.assert_called_once()
 
-    def test_best_effort_swallows_and_cleans_up_on_failure(self) -> None:
+    def test_best_effort_swallows_and_cleans_up_on_failure(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """A write failure must NOT raise (never abort the detached rebuild),
-        and the temp file must still be unlinked by the `finally`."""
+        the temp file must still be unlinked by the `finally`, AND a single
+        diagnostic line is emitted (review-fix #02)."""
 
         def raiser(*_a, **_k):
             raise OSError("boom")
@@ -3299,6 +3302,9 @@ class TestWriteSeedStatus:
         tmp = quality_gate.SEED_STATUS.with_suffix(quality_gate.SEED_STATUS.suffix + ".tmp")
         assert not tmp.exists()
         assert not quality_gate.SEED_STATUS.exists()  # replace never happened
+        err = capsys.readouterr().err
+        assert "could not write status marker" in err
+        assert "boom" in err  # the swallowed exception is surfaced for tracing
 
 
 class TestPidAlive:
@@ -3318,6 +3324,22 @@ class TestPidAlive:
         mock_kill.assert_called_once_with(1234, 0)
 
 
+class TestFmtSeedTime:
+    """QS-286 review-fix #02: epoch marker fields render as readable UTC ISO."""
+
+    def test_numeric_renders_utc_iso(self) -> None:
+        # 1_700_000_000 == 2023-11-14T22:13:20+00:00 (UTC, seconds precision).
+        assert quality_gate._fmt_seed_time(1_700_000_000) == "2023-11-14T22:13:20+00:00"
+
+    def test_float_renders_seconds_precision(self) -> None:
+        out = quality_gate._fmt_seed_time(1_700_000_000.987654)
+        assert out == "2023-11-14T22:13:20+00:00"  # sub-second truncated
+
+    @pytest.mark.parametrize("value", [None, "x", True], ids=["none", "str", "bool"])
+    def test_non_numeric_is_placeholder(self, value: object) -> None:
+        assert quality_gate._fmt_seed_time(value) == "an unknown time"
+
+
 class TestSeedTestmonStatus:
     """QS-286 AC#4: `seed_testmon_status` — distinct message + 4-code exit
     for every originating marker condition. Read-only."""
@@ -3333,13 +3355,20 @@ class TestSeedTestmonStatus:
     def test_ok_exits_0(self, capsys: pytest.CaptureFixture[str]) -> None:
         self._write({"state": "ok", "finished": 100.0})
         assert quality_gate.seed_testmon_status() == 0
-        assert "safe to close" in capsys.readouterr().out.lower()
+        out = capsys.readouterr().out
+        assert "safe to close" in out.lower()
+        # review-fix #02: epoch is rendered as a readable UTC ISO string, not
+        # the raw float.
+        assert "100.0" not in out
+        assert quality_gate._fmt_seed_time(100.0) in out
 
     def test_running_alive_exits_4(self, capsys: pytest.CaptureFixture[str]) -> None:
         self._write({"state": "running", "pid": 42, "started": 1.0})
         with patch.object(quality_gate, "_pid_alive", return_value=True):
             assert quality_gate.seed_testmon_status() == 4
-        assert "still running" in capsys.readouterr().out.lower()
+        out = capsys.readouterr().out
+        assert "still running" in out.lower()
+        assert quality_gate._fmt_seed_time(1.0) in out  # started rendered readably
 
     def test_running_dead_exits_1_interrupted(self, capsys: pytest.CaptureFixture[str]) -> None:
         self._write({"state": "running", "pid": 42, "started": 1.0})
@@ -3388,6 +3417,11 @@ class TestSeedTestmonStatus:
         assert quality_gate.seed_testmon_status() == 3  # no AttributeError
         assert "unreadable" in capsys.readouterr().out.lower()
 
+    # review-fix #01 must-fix + #02 should-fix: a `running` marker whose pid is
+    # not a positive, non-bool int is unreadable → 3, and must never reach the
+    # `os.kill` seam. Covers missing/null/str/float pids (would TypeError) AND
+    # pid 0 / -1 / bool (would target the process group / all processes and
+    # spuriously report "still running").
     @pytest.mark.parametrize(
         "marker",
         [
@@ -3395,18 +3429,25 @@ class TestSeedTestmonStatus:
             {"state": "running", "pid": None},
             {"state": "running", "pid": "x"},
             {"state": "running", "pid": 1.5},
+            {"state": "running", "pid": 0},
+            {"state": "running", "pid": -1},
+            {"state": "running", "pid": True},
         ],
-        ids=["no-pid", "pid-null", "pid-str", "pid-float"],
+        ids=["no-pid", "pid-null", "pid-str", "pid-float", "pid-zero", "pid-neg", "pid-bool"],
     )
     def test_running_with_bad_pid_exits_3(
         self, marker: dict, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """A `running` marker without an int pid is unreadable — never reaches
-        `_pid_alive` (which would `os.kill(None/str, 0)` → TypeError)."""
+        """A `running` marker without a positive, non-bool int pid is
+        unreadable — never reaches `_pid_alive`/`os.kill`."""
         self._write(marker)
-        with patch.object(quality_gate, "_pid_alive") as mock_alive:
-            assert quality_gate.seed_testmon_status() == 3  # no TypeError
+        with (
+            patch.object(quality_gate, "_pid_alive") as mock_alive,
+            patch.object(quality_gate.os, "kill") as mock_kill,
+        ):
+            assert quality_gate.seed_testmon_status() == 3  # no TypeError, no false "running"
         mock_alive.assert_not_called()  # bad pid never hits the syscall seam
+        mock_kill.assert_not_called()
         assert "unreadable" in capsys.readouterr().out.lower()
 
     # review-fix #01 nice-to-have: a marker missing a display-only field prints

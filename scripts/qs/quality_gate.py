@@ -1494,8 +1494,10 @@ def _write_seed_status(state: str, **fields: object) -> None:
     try:
         tmp.write_text(json.dumps({"state": state, **fields}), encoding="utf-8")
         os.replace(tmp, SEED_STATUS)
-    except Exception:  # noqa: BLE001 — courtesy marker; never abort the rebuild
-        pass
+    except Exception as exc:  # noqa: BLE001 — courtesy marker; never abort the rebuild
+        # Best-effort still emits one diagnostic line so a marker that never
+        # appears is traceable (review-fix #02) — contract unchanged: no raise.
+        _emit("seed-testmon", f"warning: could not write status marker ({state}): {exc}")
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -1600,6 +1602,19 @@ def _build_seed_testmon_cmd() -> list[str]:
     return cmd
 
 
+def _fmt_seed_time(value: object) -> str:
+    """Render a marker epoch timestamp as a readable UTC ISO string (QS-286).
+
+    `started`/`finished` are stored as raw `time.time()` floats; format them
+    for display only (the stored marker format is unchanged). A missing or
+    non-numeric value (torn/hand-edited marker) yields the readable
+    "an unknown time" placeholder rather than a bare float or `None`.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(value, tz=UTC).isoformat(timespec="seconds")
+    return "an unknown time"
+
+
 def seed_testmon_status() -> int:
     """Report the detached `--seed-testmon` run's status (QS-286).
 
@@ -1636,19 +1651,22 @@ def seed_testmon_status() -> int:
     state = marker.get("state")
     if state == "ok":
         print(
-            f"Baseline written at {marker.get('finished', 'an unknown time')} "
+            f"Baseline written at {_fmt_seed_time(marker.get('finished'))} "
             "(tests may have failed) — safe to close this terminal."
         )
         return 0
     if state == "running":
         pid = marker.get("pid")
-        # `_pid_alive` calls `os.kill(pid, 0)`, which raises TypeError on a
-        # non-int; a `running` marker without a usable pid is unreadable.
-        if not isinstance(pid, int):
+        # `_pid_alive` calls `os.kill(pid, 0)`; a `running` marker whose pid is
+        # not a positive, non-bool int is unreadable. Excluding bool (an int
+        # subclass) and pid <= 0 is deliberate: `os.kill(0, 0)` targets the
+        # caller's process group and `os.kill(-1, 0)` every signalable process
+        # — both would spuriously report "still running" (review-fix #02).
+        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             return _unreadable()
         if _pid_alive(pid):
             print(
-                f"Still running (pid {pid}, started {marker.get('started', 'an unknown time')}) "
+                f"Still running (pid {pid}, started {_fmt_seed_time(marker.get('started'))}) "
                 "— keep this terminal open."
             )
             return 4
