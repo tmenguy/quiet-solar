@@ -20,21 +20,28 @@ it owns the cache, `pytest-xdist` parallelization,
 all four; use it only for ad-hoc single-node debugging.
 
 ```bash
-# Impacted-tests inner loop (QS-276) — the implement-phase default
-# before commit/PR. Runs only the testmon-selected tests under
-# --cov=<package>, then diff-cover --fail-under=100 on the CHANGED
-# lines. Guarantees the lines YOU changed are 100% covered in ~seconds.
-# QS-278: coverage ACCUMULATES across runs (--cov-append), so a no-op
-# re-run (testmon selects 0 tests) or a single-file edit (small subset)
-# still has every changed-vs-origin line covered — no spurious FAIL, and
-# the run stays fast. The accumulated data is reset only on a fresh
-# select-all baseline (missing/rebuilt .testmondata).
+# Impacted-tests inner loop (QS-276) — the implement-phase pre-commit
+# gate. The implement phase ALWAYS runs it before commit/PR and never
+# substitutes the full gate locally. Runs only the testmon-selected
+# tests under --cov=<package>, then diff-cover --fail-under=100 on the
+# CHANGED lines. Guarantees the lines YOU changed are 100% covered in
+# ~seconds. QS-278: coverage ACCUMULATES across runs (--cov-append), so
+# a no-op re-run (testmon selects 0 tests) or a single-file edit (small
+# subset) still has every changed-vs-origin line covered — no spurious
+# FAIL, and the run stays fast. The accumulated data is reset only on a
+# fresh select-all baseline (missing/rebuilt .testmondata).
+# QS-283: --impacted is self-healing. It reaps orphaned .coverage.*
+# shards and stale .testmondata WAL/SHM sidecars on entry, and on a
+# changed-line miss from an INCREMENTAL run it automatically rebuilds
+# the baseline and re-checks once — recovering from a drifted baseline
+# left by a killed run with NO manual file deletion ever required.
 python scripts/qs/quality_gate.py --impacted
 
 # Full quality gate (pytest 100% cov + ruff + mypy + translations).
-# Authoritative whole-repo gate — enforced in CI on every PR; run
-# locally on explicit request or when you suspect coverage lost in
-# UNCHANGED code (which --impacted cannot see).
+# Authoritative whole-repo gate — enforced in CI on every PR; the only
+# local run is an EXPLICIT user request. Detecting coverage lost in
+# UNCHANGED code is CI's exclusive job (--impacted cannot see it); never
+# reach for the full gate locally as an inner-loop diagnostic.
 python scripts/qs/quality_gate.py
 
 # Caching for repeated FULL-gate runs — skips gates when git state
@@ -57,7 +64,10 @@ python scripts/qs/quality_gate.py --quick tests/ha_tests
 python scripts/qs/quality_gate.py --quick tests/test_solver.py tests/test_constraints.py
 
 # Refresh the testmon baseline (no coverage, no verdict). Sanctioned
-# non-gate subcommand — used by finish-task after a merge.
+# non-gate subcommand — used by finish-task after a merge. QS-283: a
+# true from-scratch rebuild — purges .testmondata (+WAL/SHM) and clears
+# the accumulated coverage data first, so a reseed against an advanced
+# baseline fully re-fingerprints (never a "0 changed" dead end).
 python scripts/qs/quality_gate.py --seed-testmon
 
 # Ad-hoc single-node pytest — debugging only.
@@ -67,9 +77,12 @@ source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 **Local-vs-CI coverage invariant (QS-276).** Local commits run
 `--impacted` (the lines you changed are 100% covered); the **whole-repo
 100% coverage** requirement is enforced in **CI on every PR** and is
-what actually guarantees full coverage. The three iteration commands
-relate as: `--impacted` is the pre-commit default (finds + runs the
-impacted tests, checks changed-line coverage); `--quick` is for hammering
+what actually guarantees full coverage. The implement phase ALWAYS
+runs `--impacted` before commit/PR and never substitutes the full gate
+locally (the only local full-gate run is an explicit user request). The
+three iteration commands relate as: `--impacted` is the mandatory
+pre-commit gate (finds + runs the impacted tests, checks changed-line
+coverage, self-heals a drifted baseline); `--quick` is for hammering
 an explicit test path you already know; `--cache` accelerates repeated
 *full*-gate runs. `--impacted` is mutually exclusive with
 `--quick`/`--cache`/`--no-cache`/`--full`/`--fix`.

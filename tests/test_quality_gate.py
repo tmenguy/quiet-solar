@@ -2343,6 +2343,30 @@ class TestEnsureTestmonDbSafe:
             quality_gate._ensure_testmon_db_safe()  # must not raise
         assert not db.exists()
 
+    def test_ensure_safe_removes_orphan_sidecars_when_primary_absent(self, tmp_path: Path) -> None:
+        """QS-283 A2 (AC#2): primary `.testmondata` gone but `-wal`/`-shm`
+        linger (a run killed mid-`_purge_testmon_db`, which unlinks the primary
+        first). Without cleanup, testmon reopens an empty DB against the stale
+        WAL and selects `0 tests`. `_ensure_testmon_db_safe` must unlink the
+        orphan sidecars so the next run rebuilds cleanly (select-all)."""
+        db = tmp_path / ".testmondata"  # absent (never created)
+        wal = tmp_path / ".testmondata-wal"
+        wal.write_bytes(b"orphan-wal")
+        shm = tmp_path / ".testmondata-shm"
+        shm.write_bytes(b"orphan-shm")
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            quality_gate._ensure_testmon_db_safe()
+        assert not db.exists()
+        assert not wal.exists() and not shm.exists(), "orphan WAL/SHM sidecars must be removed"
+
+    def test_ensure_safe_absent_primary_no_sidecars_is_noop(self, tmp_path: Path) -> None:
+        """QS-283 A2: absent primary with NO sidecars must not raise (the
+        ordinary first-ever-run case); `missing_ok=True` tolerates it."""
+        db = tmp_path / ".testmondata"
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            quality_gate._ensure_testmon_db_safe()  # must not raise
+        assert not db.exists()
+
     def test_valid_sqlite_matching_schema_is_kept(self, tmp_path: Path) -> None:
         db = tmp_path / ".testmondata"
         conn = sqlite3.connect(str(db))
@@ -2519,10 +2543,18 @@ class TestCheckImpacted:
         fresh-baseline branch (which resets the real `.coverage` via
         `--cov-append`) never fires against the real FS during these
         mocked-seam tests. Dedicated tests below re-patch it to exercise the
-        branch explicitly."""
-        db = tmp_path_factory.mktemp("tmdb") / ".testmondata"
+        branch explicitly.
+
+        QS-283 A1: also point `COVERAGE_DATA` at a tmp file so the orphan-shard
+        glob `check_impacted` now runs at the top can never reap the real
+        repo's `.coverage.*` shards mid-suite."""
+        root = tmp_path_factory.mktemp("tmdb")
+        db = root / ".testmondata"
         db.write_bytes(b"x")
-        with patch.object(quality_gate, "TESTMON_DATA", db):
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "COVERAGE_DATA", root / ".coverage"),
+        ):
             yield
 
     def test_tooling_missing_returns_3(self) -> None:
@@ -2563,6 +2595,7 @@ class TestCheckImpacted:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         xml = tmp_path / "coverage.xml"
+        absent_db = tmp_path / ".testmondata"  # never created → select-all, no self-heal
 
         def _emit_xml(*_a: object, **_k: object) -> dict:
             xml.write_text("<coverage/>")  # simulate pytest-cov writing a fresh report
@@ -2572,6 +2605,10 @@ class TestCheckImpacted:
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            # QS-283 A4: an absent DB → select-all (was_incremental False), so a
+            # changed-line FAIL is ground truth and the self-heal retry is skipped.
+            patch.object(quality_gate, "TESTMON_DATA", absent_db),
+            patch.object(quality_gate, "_reset_coverage_data"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
             patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
             patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml),
@@ -2763,6 +2800,295 @@ class TestResetCoverageData:
         quality_gate._reset_coverage_data()  # must not raise
 
 
+class TestCleanOrphanCovShards:
+    """QS-283 A1 (AC#1): `_clean_orphan_cov_shards` reaps only `.coverage.*`
+    shards; the combined `.coverage` survives."""
+
+    def test_removes_shard_but_keeps_combined_coverage(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        combined = tmp_path / ".coverage"
+        combined.write_text("combined")
+        shard = tmp_path / ".coverage.host.4242.XYZ"
+        shard.write_text("orphan shard")
+        monkeypatch.setattr(quality_gate, "COVERAGE_DATA", combined)
+
+        quality_gate._clean_orphan_cov_shards()
+
+        assert combined.exists(), "the combined .coverage must survive (warm baseline)"
+        assert not shard.exists(), "a pre-existing orphan shard must be removed"
+
+    def test_is_noop_when_no_shards_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        combined = tmp_path / ".coverage"
+        combined.write_text("combined")
+        monkeypatch.setattr(quality_gate, "COVERAGE_DATA", combined)
+        quality_gate._clean_orphan_cov_shards()  # must not raise
+        assert combined.exists()
+
+    def test_uses_same_glob_as_reset_coverage_data(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The two helpers must share the shard-matching rule (they differ
+        ONLY in whether the primary `.coverage` is also unlinked)."""
+        combined = tmp_path / ".coverage"
+        combined.write_text("combined")
+        for name in (".coverage.a.1", ".coverage.b.2"):
+            (tmp_path / name).write_text("shard")
+        monkeypatch.setattr(quality_gate, "COVERAGE_DATA", combined)
+
+        quality_gate._clean_orphan_cov_shards()
+        remaining = sorted(p.name for p in tmp_path.glob(".coverage*"))
+        assert remaining == [".coverage"], remaining
+
+
+class TestRebuildTestmonBaseline:
+    """QS-283: `_rebuild_testmon_baseline` purges the DB AND clears coverage."""
+
+    def test_purges_db_and_resets_coverage(self) -> None:
+        with (
+            patch.object(quality_gate, "_purge_testmon_db") as mock_purge,
+            patch.object(quality_gate, "_reset_coverage_data") as mock_reset,
+        ):
+            quality_gate._rebuild_testmon_baseline()
+        mock_purge.assert_called_once()
+        mock_reset.assert_called_once()
+
+
+class TestCheckImpactedSelfHeal:
+    """QS-283 A4 (AC#4, AC#7): the self-heal retry on an incremental
+    changed-line FAIL.
+
+    The seam: patch `_run_impacted_pass` with a list of verdicts (its two
+    return values drive the retry branch), patch `_rebuild_testmon_baseline`
+    (so the retry touches no disk), patch `_clean_orphan_cov_shards` (so the
+    real `.coverage` dir is never globbed), and control `was_incremental` by
+    seeding / clearing `.testmondata` under `tmp_path`.
+    """
+
+    CHANGED = quality_gate._IMPACTED_CHANGED_LINES_UNCOVERED
+    PASS = quality_gate._IMPACTED_PASS
+    TESTS_FAILED = quality_gate._IMPACTED_TESTS_FAILED
+
+    def _run(
+        self,
+        *,
+        db: Path,
+        verdicts: list[str],
+        select_all: list[bool] | None = None,
+    ):
+        """Drive `check_impacted` with a mocked `_run_impacted_pass`.
+
+        `_run_impacted_pass` returns `(verdict, ran_select_all)`; `select_all`
+        supplies the per-call `ran_select_all` flag (defaults to all False —
+        an incremental selection)."""
+        flags = select_all if select_all is not None else [False] * len(verdicts)
+        mock_pass = MagicMock(side_effect=list(zip(verdicts, flags)))
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+            patch.object(quality_gate, "_run_impacted_pass", mock_pass),
+        ):
+            rc = quality_gate.check_impacted()
+        return rc, mock_rebuild, mock_pass
+
+    @staticmethod
+    def _incremental_db(tmp_path: Path) -> Path:
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"warm-baseline")  # present + non-empty → was_incremental True
+        return db
+
+    def test_incremental_false_fail_recovers_to_pass(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """An incremental changed-line FAIL that is a desync recovers to PASS
+        after exactly one rebuild + retry; the self-heal notice is emitted."""
+        rc, mock_rebuild, mock_pass = self._run(
+            db=self._incremental_db(tmp_path), verdicts=[self.CHANGED, self.PASS]
+        )
+        assert rc == 0
+        mock_rebuild.assert_called_once()
+        assert mock_pass.call_count == 2, "exactly one rebuild + one retry"
+        assert "rebuilding testmon baseline" in capsys.readouterr().err
+
+    def test_incremental_genuine_gap_still_exits_1(self, tmp_path: Path) -> None:
+        """A genuine gap fails the retry too → exit 1 (one rebuild, one retry)."""
+        rc, mock_rebuild, mock_pass = self._run(
+            db=self._incremental_db(tmp_path), verdicts=[self.CHANGED, self.CHANGED]
+        )
+        assert rc == 1
+        mock_rebuild.assert_called_once()
+        assert mock_pass.call_count == 2
+
+    def test_select_all_fail_does_not_retry(self, tmp_path: Path) -> None:
+        """A select-all run (absent DB → was_incremental False) FAILs as ground
+        truth — no wasted rebuild/retry on the normal TDD-red case."""
+        absent = tmp_path / ".testmondata"  # never created
+        rc, mock_rebuild, mock_pass = self._run(db=absent, verdicts=[self.CHANGED])
+        assert rc == 1
+        mock_rebuild.assert_not_called()
+        assert mock_pass.call_count == 1
+
+    def test_empty_db_is_not_incremental_so_no_retry(self, tmp_path: Path) -> None:
+        """A present-but-empty `.testmondata` (size 0) is select-all, not
+        incremental — `was_incremental` keys on size>0, so no retry fires."""
+        empty = tmp_path / ".testmondata"
+        empty.write_bytes(b"")  # present but zero-length
+        rc, mock_rebuild, mock_pass = self._run(db=empty, verdicts=[self.CHANGED])
+        assert rc == 1
+        mock_rebuild.assert_not_called()
+        assert mock_pass.call_count == 1
+
+    def test_testmondata_vanishing_before_stat_is_non_incremental(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review fix #02: if `.testmondata` is unlinked (concurrent run / other
+        worktree / mid-purge) so `TESTMON_DATA.stat()` raises `FileNotFoundError`,
+        `check_impacted` must NOT crash — it treats the run as non-incremental
+        (was_incremental False), so a changed-line FAIL exits 1 with no retry."""
+        fake_db = MagicMock()
+        fake_db.stat.side_effect = FileNotFoundError  # vanished between probe and read
+        mock_pass = MagicMock(side_effect=[(self.CHANGED, False)])
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "TESTMON_DATA", fake_db),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+            patch.object(quality_gate, "_run_impacted_pass", mock_pass),
+        ):
+            assert quality_gate.check_impacted() == 1  # must not raise
+        fake_db.stat.assert_called_once()
+        mock_rebuild.assert_not_called()  # non-incremental → no self-heal retry
+        assert mock_pass.call_count == 1
+        assert "rebuilding testmon baseline" not in capsys.readouterr().err
+
+    def test_first_pass_success_never_rebuilds_or_emits_notice(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A never-failed PASS is distinguishable from a recovered PASS: no
+        rebuild, no self-heal notice."""
+        rc, mock_rebuild, mock_pass = self._run(
+            db=self._incremental_db(tmp_path), verdicts=[self.PASS]
+        )
+        assert rc == 0
+        mock_rebuild.assert_not_called()
+        assert mock_pass.call_count == 1
+        assert "rebuilding testmon baseline" not in capsys.readouterr().err
+
+    def test_non_retriable_verdict_exits_1_without_retry(self, tmp_path: Path) -> None:
+        """A non-changed-line failure (e.g. selected tests failed) is genuine
+        even on an incremental run — it must not trigger the self-heal."""
+        rc, mock_rebuild, mock_pass = self._run(
+            db=self._incremental_db(tmp_path), verdicts=[self.TESTS_FAILED]
+        )
+        assert rc == 1
+        mock_rebuild.assert_not_called()
+        assert mock_pass.call_count == 1
+
+    def test_first_pass_select_alled_suppresses_retry(self, tmp_path: Path) -> None:
+        """Review fix #01: even with a warm pre-hygiene baseline
+        (`was_incremental` True), if the FIRST pass itself select-all'd
+        (`ran_select_all` True — hygiene purged a corrupt/schema-mismatched DB
+        mid-pass) the changed-line FAIL is ground truth, so no retry fires."""
+        rc, mock_rebuild, mock_pass = self._run(
+            db=self._incremental_db(tmp_path), verdicts=[self.CHANGED], select_all=[True]
+        )
+        assert rc == 1
+        mock_rebuild.assert_not_called()
+        assert mock_pass.call_count == 1
+
+    def test_corrupt_baseline_purged_midpass_does_not_self_heal(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review fix #01 (real path, no mock of `_run_impacted_pass`): a
+        present+non-empty but CORRUPT `.testmondata` makes `was_incremental`
+        True, yet `_ensure_testmon_db_safe` purges it inside the first pass so
+        that pass select-alls. A genuine changed-line gap must run EXACTLY one
+        pass, emit NO self-heal notice, and exit 1 — not waste a second
+        full-suite select-all."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"not a sqlite database")  # warm pre-hygiene, purged as corrupt
+        xml = tmp_path / "coverage.xml"
+
+        def _emit_xml(*_a: object, **_k: object) -> dict:
+            xml.write_text("<coverage/>")
+            return {"name": "pytest", "passed": True}
+
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            # _ensure_testmon_db_safe runs for REAL → detects corruption → purges
+            # db → the pass select-alls (ran_select_all True).
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_emit_xml) as mock_stream,
+            patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="gap")),
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+        ):
+            assert quality_gate.check_impacted() == 1
+        assert not db.exists(), "the corrupt baseline must have been purged by hygiene"
+        mock_rebuild.assert_not_called()
+        assert mock_stream.call_count == 1, "exactly one pass — no wasted self-heal retry"
+        assert "rebuilding testmon baseline" not in capsys.readouterr().err
+
+    def test_retry_non_coverage_failure_surfaces_its_diagnostic(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review fix #03 (real `_run_impacted_pass`): a self-heal retry whose
+        SECOND pass fails for a non-coverage reason (selected tests failed)
+        exits 1 AND still surfaces that pass's per-verdict diagnostic on stderr
+        — the collapse to exit 1 does not swallow the message (the fix-#01
+        claim, now under test).
+
+        First pass: warm incremental baseline → changed-line miss (triggers
+        self-heal). Second pass (post-rebuild): selected tests fail."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"warm-baseline")  # present + non-empty → was_incremental True
+        xml = tmp_path / "coverage.xml"
+
+        def _stream(*_a: object, **_k: object) -> dict:
+            # Call 1 (first pass): write coverage.xml and pass so diff-cover runs.
+            # Call 2 (retry pass): selected tests fail → _IMPACTED_TESTS_FAILED.
+            if _stream.calls == 0:
+                xml.write_text("<coverage/>")
+                _stream.calls += 1
+                return {"name": "pytest", "passed": True}
+            _stream.calls += 1
+            return {"name": "pytest", "passed": False}
+
+        _stream.calls = 0  # type: ignore[attr-defined]
+
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            # No-op hygiene so the warm DB stays present → both passes incremental.
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_stream_pytest", side_effect=_stream),
+            # First pass diff-cover → non-zero (changed lines uncovered).
+            patch.object(quality_gate, "_run", return_value=_cp(1, stdout="Coverage: 50%", stderr="gap")),
+            # Rebuild is a no-op (keeps db present) so the retry runs the real pass.
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+        ):
+            assert quality_gate.check_impacted() == 1
+        mock_rebuild.assert_called_once()  # self-heal fired
+        err = capsys.readouterr().err
+        assert "rebuilding testmon baseline" in err
+        # The retry's own per-verdict diagnostic must still surface.
+        assert "FAIL (selected tests failed)" in err
+
+
 class TestTestmonAvailable:
     """review-fix S2: `_testmon_available` probes ONLY testmon, never diff-cover."""
 
@@ -2783,6 +3109,15 @@ class TestTestmonAvailable:
 class TestSeedTestmon:
     """`seed_testmon` refreshes the DB with no pass/fail verdict."""
 
+    @pytest.fixture(autouse=True)
+    def _stub_rebuild(self):
+        """QS-283 A3: `seed_testmon` now calls `_rebuild_testmon_baseline`,
+        which purges the real `.testmondata` and `.coverage`. Stub it by
+        default so these mocked-seam tests never touch the real FS; the
+        dedicated ordering test re-patches it with its own spy."""
+        with patch.object(quality_gate, "_rebuild_testmon_baseline"):
+            yield
+
     def test_tooling_missing_returns_3(self) -> None:
         # review-fix S2: gated on the testmon-only probe, NOT the full impacted set.
         with patch.object(quality_gate, "_testmon_available", return_value=False):
@@ -2802,6 +3137,28 @@ class TestSeedTestmon:
         ):
             assert quality_gate.seed_testmon() == 0
         mock_full.assert_not_called()  # the full (diff-cover-inclusive) probe is never consulted
+
+    def test_seed_rebuilds_baseline_before_select_all(self) -> None:
+        """QS-283 A3 (AC#3): `seed_testmon` calls `_rebuild_testmon_baseline`
+        (purge + coverage reset + shard clear) BEFORE the select-all pytest
+        pass, so a reseed against an advanced baseline still fully
+        re-fingerprints (no "0 changed" dead end)."""
+        order: list[str] = []
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(
+                quality_gate, "_rebuild_testmon_baseline", side_effect=lambda: order.append("rebuild")
+            ) as mock_rebuild,
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(
+                quality_gate,
+                "_stream_pytest",
+                side_effect=lambda *_a, **_k: (order.append("pytest"), {"passed": True, "returncode": 0})[1],
+            ),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        mock_rebuild.assert_called_once()
+        assert order == ["rebuild", "pytest"], "rebuild must run before the select-all pass"
 
     def test_success_returns_0_regardless_of_test_outcome(self) -> None:
         # A failing test (rc=1) still updates the DB → seed returns 0, no warning.
@@ -3062,6 +3419,43 @@ class TestImplementAgentsDefaultImpacted:
         assert "quality_gate.py --impacted" in body
 
     @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("agent", ["qs-implement-task", "qs-implement-setup-task"])
+    def test_b1_all_six_agents_mandate_impacted(self, harness: str, agent: str) -> None:
+        """QS-283 B1 (AC#6): all six implement agents mandate `--impacted`
+        before commit/PR and forbid substituting the full gate locally."""
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / f"{agent}.md").read_text()
+        flat = " ".join(body.split())  # normalize markdown line-wrapping
+        assert "**ALWAYS** run the impacted" in flat
+        assert "Do **not** run, or substitute, the full gate locally" in flat
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_b2_b3_implement_task_closes_loophole(self, harness: str) -> None:
+        """QS-283 B2/B3 (AC#6): the three `qs-implement-task.md` copies delete
+        the unchanged-code escape clause (B2) and forbid the full-gate
+        diagnostic escape (B3)."""
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-implement-task.md").read_text()
+        flat = " ".join(body.split())
+        # B2: the "coverage lost in unchanged code" license must be gone.
+        assert "suspect coverage lost" not in flat
+        assert "CI's exclusive job" in flat
+        # B3: the "fix autonomously and re-run" nudge to the full gate is gone.
+        assert "fix autonomously and re-run" not in flat
+        assert "never switch to the full gate to diagnose" in flat
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_implement_task_intro_names_impacted_not_full_gate(self, harness: str) -> None:
+        """Review fix #03: the intro summary line and frontmatter description
+        must NOT instruct running the full gate locally (the QS-283 regression
+        class) — they name the impacted gate as the inner-loop command."""
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-implement-task.md").read_text()
+        flat = " ".join(body.split())
+        # The self-contradictory stale phrasing must never reappear.
+        assert "run the full quality gate, and open a PR" not in flat
+        assert "must pass the full quality gate" not in flat
+        # The intro/description names the impacted gate instead.
+        assert "impacted quality gate" in flat
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
     def test_review_task_untouched_by_impacted(self, harness: str) -> None:
         body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-review-task.md").read_text()
         assert "--impacted" not in body
@@ -3202,6 +3596,130 @@ class TestImpactedIntegrationRealTestmon:
         assert not db.exists()
         # With the corrupt DB gone, testmon rebuilds and selects all tests.
         assert _selected_count(_run_testmon(repo)) == 1
+
+
+@pytest.mark.integration
+class TestImpactedSelfHealIntegration:
+    """QS-283 AC#5: reproduce the killed-run testmon/coverage desync at the
+    real `_run_testmon` + `.testmondata` level, then prove A4's recovery by
+    calling `_rebuild_testmon_baseline` directly with the path constants
+    patched to a throwaway repo — NOT by driving the full `check_impacted()`
+    orchestrator (which would need the import-time `SRC_DIR`/`TESTS_DIR`
+    repointed and plugin autoload disabled, neither expressible here).
+    """
+
+    def _feature_repo(self, tmp_path: Path) -> tuple[Path, str]:
+        """A repo whose HEAD adds a COVERED `feature()` over a base commit.
+
+        Returns `(repo, base_rev)` so diff-cover can score the feature's
+        changed lines against the pre-feature base.
+        """
+        if not quality_gate._impacted_tooling_available():
+            pytest.skip("pytest-testmon / diff-cover not importable")
+        repo = tmp_path / "repo"
+        (repo / "pkg").mkdir(parents=True)
+        (repo / "tests").mkdir()
+        (repo / "pkg" / "__init__.py").write_text("")
+        (repo / "pkg" / "calc.py").write_text("def add(a, b):\n    return a + b\n")
+        (repo / "tests" / "test_calc.py").write_text(
+            "from pkg.calc import add\n\n\ndef test_add():\n    assert add(1, 2) == 3\n"
+        )
+        for args in (
+            ["init", "-q"],
+            ["config", "user.email", "t@t.co"],
+            ["config", "user.name", "t"],
+            ["add", "-A"],
+            ["commit", "-qm", "base"],
+        ):
+            subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True, text=True)
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(repo), check=True, capture_output=True, text=True
+        ).stdout.strip()
+        # Add a COVERED feature + its test, then commit it.
+        (repo / "pkg" / "calc.py").write_text(
+            "def add(a, b):\n    return a + b\n\n\ndef feature(z):\n    return z * 2\n"
+        )
+        (repo / "tests" / "test_calc.py").write_text(
+            "from pkg.calc import add, feature\n\n\n"
+            "def test_add():\n    assert add(1, 2) == 3\n\n\n"
+            "def test_feature():\n    assert feature(3) == 6\n"
+        )
+        for args in (["add", "-A"], ["commit", "-qm", "feature"]):
+            subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True, text=True)
+        return repo, base
+
+    @staticmethod
+    def _diff_cover(repo: Path, xml: Path, base: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                quality_gate._venv_tool("diff-cover"),
+                str(xml),
+                f"--compare-branch={base}",
+                "--include-untracked",
+                "--fail-under=100",
+            ],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+        )
+
+    def test_desync_deadlocks_then_self_heal_recovers(self, tmp_path: Path) -> None:
+        repo, base = self._feature_repo(tmp_path)
+        xml = repo / "coverage.xml"
+        # Seed the warm baseline: testmon records both tests + their coverage.
+        assert _selected_count(_run_testmon(repo)) == 2
+
+        # DESYNC: testmon is warm (thinks nothing changed) so a re-run selects
+        # ZERO tests — but the coverage measured by that 0-test run does NOT
+        # cover the committed `feature()` lines. diff-cover vs base therefore
+        # FAILs, and testmon refuses to reselect: the deadlock a killed run
+        # leaves behind (advanced .testmondata, lost coverage).
+        deadlock = _run_testmon(repo, cov=True, xml=xml)
+        assert _selected_count(deadlock) == 0, "warm baseline must select zero"
+        assert xml.exists()
+        assert self._diff_cover(repo, xml, base).returncode != 0, (
+            "the desync must FAIL diff-cover (changed feature lines uncovered)"
+        )
+
+        # RECOVERY: A4's shared helper — purge the testmon DB + clear coverage
+        # — with the path constants patched to this repo. Then a re-run
+        # select-alls, re-covers the feature, and diff-cover PASSes.
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", repo / ".testmondata"),
+            patch.object(quality_gate, "COVERAGE_DATA", repo / ".coverage"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+        ):
+            quality_gate._rebuild_testmon_baseline()
+        recovered = _run_testmon(repo, cov=True, xml=xml)
+        assert _selected_count(recovered) == 2, "purged baseline must select-all"
+        assert self._diff_cover(repo, xml, base).returncode == 0, (
+            "after the rebuild the feature lines are covered → diff-cover PASS"
+        )
+
+    def test_genuinely_untested_function_still_fails_after_rebuild(self, tmp_path: Path) -> None:
+        """A real coverage gap is NOT masked by the recovery: a committed
+        function with no covering test still FAILs diff-cover after a rebuild +
+        select-all (no false PASS)."""
+        repo, base = self._feature_repo(tmp_path)
+        xml = repo / "coverage.xml"
+        # Add a genuinely UNTESTED function on top of the feature and commit it.
+        (repo / "pkg" / "calc.py").write_text(
+            "def add(a, b):\n    return a + b\n\n\n"
+            "def feature(z):\n    return z * 2\n\n\n"
+            "def untested(q):\n    return q - 1\n"
+        )
+        for args in (["add", "-A"], ["commit", "-qm", "untested"]):
+            subprocess.run(["git", *args], cwd=str(repo), check=True, capture_output=True, text=True)
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", repo / ".testmondata"),
+            patch.object(quality_gate, "COVERAGE_DATA", repo / ".coverage"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+        ):
+            quality_gate._rebuild_testmon_baseline()
+        assert _selected_count(_run_testmon(repo, cov=True, xml=xml)) == 2
+        assert self._diff_cover(repo, xml, base).returncode != 0, (
+            "a genuinely untested function must still FAIL after the rebuild"
+        )
 
 
 @pytest.mark.integration
