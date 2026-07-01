@@ -79,6 +79,20 @@ def _round_half_up(value: float) -> int:
     return int(math.floor(value + 0.5))
 
 
+def _finite_soc_or_none(value: Any) -> float | None:
+    """Coerce a persisted SOC numeric to a finite float, or `None` (QS-281).
+
+    A legacy/corrupt blob can hold a non-numeric (`str`) or non-finite
+    (`nan`/`inf`) value. QS-281's healthy-path accessor reads the base
+    directly, so an unsanitized value would crash the new
+    `car_best_estimated_soc_percentage` sensor's `value_fn` or emit `nan`/`inf`
+    to HA. Mirrors the finite guard in `_capture_last_valid_base_soc`.
+    """
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+        return float(value)
+    return None
+
+
 class QSCar(HADeviceMixin, AbstractDevice):
     conf_type_name = CONF_TYPE_NAME_QSCar
 
@@ -331,10 +345,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         # Estimated-SOC model (Story QS-243). Pre-QS-243 saved blobs lack
         # these keys and default to None (all-None defaults, no exception).
-        self._user_base_soc_value = stored_load_info.get("user_base_soc_value", None)
-        self._last_valid_base_soc_value = stored_load_info.get("last_valid_base_soc_value", None)
-        self._computed_added_delta_soc_percent = stored_load_info.get("computed_added_delta_soc_percent", None)
-        self._user_base_soc_entry_sensor_value = stored_load_info.get("user_base_soc_entry_sensor_value", None)
+        # QS-281: the numeric SOC fields are sanitized through `_finite_soc_or_none`
+        # so a legacy/corrupt blob holding a `str`/`nan`/`inf` can never reach
+        # the healthy-path accessor's `base + delta` read (crash / `nan` emit).
+        self._user_base_soc_value = _finite_soc_or_none(stored_load_info.get("user_base_soc_value", None))
+        self._last_valid_base_soc_value = _finite_soc_or_none(stored_load_info.get("last_valid_base_soc_value", None))
+        self._computed_added_delta_soc_percent = _finite_soc_or_none(
+            stored_load_info.get("computed_added_delta_soc_percent", None)
+        )
+        self._user_base_soc_entry_sensor_value = _finite_soc_or_none(
+            stored_load_info.get("user_base_soc_entry_sensor_value", None)
+        )
         self._user_base_soc_entry_api_stale = stored_load_info.get("user_base_soc_entry_api_stale", None)
         # Re-anchor the integration cursor so the next charge cycle does not
         # integrate energy "delivered" during downtime.
@@ -642,6 +663,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         await super().update_states(time)
         self._update_car_api_staleness(time)
         self._update_soc_estimation(time)
+        self._capture_last_valid_base_soc(time)
         await self._check_departure_auto_reset(time)
 
     async def _check_departure_auto_reset(self, time: datetime) -> None:
@@ -860,13 +882,17 @@ class QSCar(HADeviceMixin, AbstractDevice):
         return ", ".join(parts)
 
     def _exit_stale_mode(self, preserve_inferred: bool = False) -> None:
-        """Clear all stale flags and exit stale-percent mode.
+        """Clear the stale flags and exit stale-percent mode.
 
-        Also clears the system-captured SOC base. When there is NO user
-        override, it clears the accumulator + cursor too so the live sensor
-        takes over. When a user override IS active, the override owns its own
-        accumulator lifecycle (the case-1/2 recovery in `_update_soc_estimation`),
-        so a transient stale blip must not wipe its accumulated delta.
+        QS-281: this clears ONLY genuinely stale-specific state. The SOC base
+        (`_last_valid_base_soc_value`) is no longer stale-specific — it is the
+        "last known good raw value" maintained every cycle by the re-anchor
+        (`_capture_last_valid_base_soc`), so exiting stale mode must not wipe it
+        nor the accumulator/cursor. On a real stale→healthy exit the SOC sensor
+        is fresh (that is why we exit), so the same-cycle re-anchor snaps the
+        base to the fresh raw and resets the delta only when it genuinely
+        differs — a real charge delta now survives stale-exit unless the API
+        reports a different value.
 
         ``preserve_inferred`` keeps the manual inferred home/plug override in
         place so the immediately-following per-cycle reconciliation
@@ -881,10 +907,6 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self._car_api_inferred_home = False
             self._car_api_inferred_plugged = False
         self._car_api_stale_since = None
-        self._last_valid_base_soc_value = None
-        if self._user_base_soc_value is None:
-            self._computed_added_delta_soc_percent = None
-            self._delta_soc_last_integration_time = None
 
     def reset_car_api_stale_detection(self) -> None:
         """Reset the detected stale state so the live API gets a fresh chance.
@@ -1632,6 +1654,40 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return self._estimated_soc_percent
         return self.get_car_charge_percent_raw_sensor(time, tolerance_seconds)
 
+    def get_best_estimated_car_charge_percent(self, time: datetime | None = None) -> float | None:
+        """Return the freshest SOC for display (QS-281) — a **pure read**.
+
+        - **Estimating** (stale / no-sensor / manual override): the pure
+          `_estimated_soc_percent` (parity with `get_car_charge_percent`; the
+          raw sensor is distrusted here so it must NOT clamp to it). `None` in
+          the pure-delta no-base case.
+        - **Healthy sensor with a system base**: the canonical estimate
+          (`clamp(base + delta)`, a computed-on-read property), but **never
+          below the genuine live raw** — the integer re-anchor de-bounce can
+          leave `base + delta` a hair behind a sub-integer API increase (base
+          `45.0` vs raw `45.9`), and the estimate is meant to *lead* the API,
+          never lag it (fix-plan #04 #02).
+        - **No base**: the raw sensor value, sanitized through
+          `_finite_soc_or_none` so a `str`/`nan`/`inf` live read never reaches
+          the BATTERY/MEASUREMENT sensor (fix-plan #04 #05) — consistent with
+          the load-path guard.
+
+        See `docs/agents/concepts/car-soc-estimation.md` for the full rationale.
+        """
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+        if self.is_in_soc_estimation_mode(time):
+            return self._estimated_soc_percent
+        # Read with the default tolerance (`None`) — identical to the canonical
+        # `get_car_charge_percent()` value_fn, which also passes no tolerance.
+        raw = _finite_soc_or_none(self.get_car_charge_percent_raw_sensor(time))
+        if self._last_valid_base_soc_value is not None:
+            est = self._estimated_soc_percent
+            if est is not None and raw is not None and raw > est:
+                return raw
+            return est
+        return raw
+
     def _update_soc_estimation(self, time: datetime) -> None:
         """Per-cycle recovery for a user manual override (4-case, keyed on entry state).
 
@@ -1680,25 +1736,57 @@ class QSCar(HADeviceMixin, AbstractDevice):
             self.reset_soc_estimate()
 
     def _capture_last_valid_base_soc(self, time: datetime) -> None:
-        """Capture the last valid sensor value as the system base at a fresh→stale edge."""
-        if self._user_base_soc_value is not None or self._last_valid_base_soc_value is not None:
+        """Re-anchor the SOC base to the last known good raw value (QS-281).
+
+        Runs once per cycle from `update_states`, independent of stale state.
+        `_last_valid_base_soc_value` tracks the freshest raw SOC the API has
+        reported. The re-anchor fires when the raw value changes at the
+        **integer-truncation** (`int()`) level: a same-integer heartbeat does
+        NOT re-anchor (so a stuck-but-pinging slow API keeps the accumulated
+        delta), and on a genuine change the delta is reset to `0.0` and the
+        cursor re-anchored so the estimate snaps back to the truth the API just
+        reported. This `int()` de-bounce is purely a Python-side heartbeat
+        guard — it is **independent of** the card's display asterisk, which
+        uses `Math.round` (fix-plan #01 #03). It is coarse, not full hysteresis:
+        a raw oscillating across an integer boundary (`44.9`↔`45.1`) re-anchors
+        on each flip, and a sub-integer increase within the same integer does
+        not re-anchor — the display accessor clamps `>= raw` so the estimate
+        still never lags the live API (fix-plan #04 #02).
+
+        No-op when the raw value is `None` (no reading yet / no-sensor car) or
+        **non-finite** (`nan`/`inf` — a misbehaving template/SOC sensor whose
+        literal `"nan"`/`"inf"` survives numeric coercion: `int()` on those
+        raises, so the per-cycle `update_states` must not crash). Skipped
+        entirely when a manual override is active — that override owns its delta
+        lifecycle via `_update_soc_estimation`.
+        """
+        if self._user_base_soc_value is not None:
             return
         raw = self.get_car_charge_percent_raw_sensor(time)
-        if raw is not None:
+        # No-op unless `raw` is a finite real number: `None` (no reading), a
+        # non-numeric sensor state (the raw read is typed `str | float | None`),
+        # or a non-finite `nan`/`inf` must never reach `int()` — it would raise
+        # and crash the per-cycle `update_states`.
+        if not isinstance(raw, (int, float)) or not math.isfinite(raw):
+            return
+        base = self._last_valid_base_soc_value
+        if not isinstance(base, (int, float)) or not math.isfinite(base) or int(raw) != int(base):
             self._last_valid_base_soc_value = raw
             self._computed_added_delta_soc_percent = 0.0
             self._delta_soc_last_integration_time = None
 
     def _enter_stale_percent_mode(self, time: datetime | None, for_init: bool = False) -> None:
-        """Set stale-percent mode and capture the last valid base on a genuine edge.
+        """Set stale-percent mode.
 
-        The `for_init` restore path must not capture — the persisted value is
-        the source of truth.
+        QS-281: the system base is now maintained every cycle by the per-cycle
+        re-anchor (`_capture_last_valid_base_soc`), so this no longer captures
+        the base on the stale edge — it just flips the mode flag. `time` and
+        `for_init` are now unused but **retained for call-site compatibility**:
+        callers still pass them (`_enter_stale_percent_mode(time)` and
+        `(None, for_init=True)`), and `for_init` is passed by keyword so it
+        cannot be renamed/dropped without touching those sites.
         """
         self.car_api_stale_percent_mode = True
-        if for_init or time is None:
-            return
-        self._capture_last_valid_base_soc(time)
 
     async def user_set_manual_soc_percent(self, value: float, for_init: bool = False) -> None:
         """Set a manual SOC baseline. `for_init` (entity restore) is a no-op."""

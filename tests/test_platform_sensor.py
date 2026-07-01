@@ -66,6 +66,35 @@ def test_create_ha_sensor_for_car():
     assert any("car_autonomy_to_target_soc_km" in e.entity_description.key for e in entities)
 
 
+def test_create_ha_sensor_for_car_best_estimated_soc():
+    """QS-281 — the best-estimated SOC sensor is registered with battery device
+    class, `%` unit, MEASUREMENT state class, and a value_fn wired to the
+    `get_best_estimated_car_charge_percent` accessor."""
+    from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass
+    from homeassistant.const import PERCENTAGE
+
+    from custom_components.quiet_solar.const import SENSOR_CAR_BEST_ESTIMATED_SOC_PERCENT
+
+    mock_car = create_mock_device("car", name="Test Car")
+    mock_car.data_handler = MagicMock()
+    mock_car.charger = None
+    mock_car.get_car_charge_percent = MagicMock(return_value=80)
+    mock_car.get_best_estimated_car_charge_percent = MagicMock(return_value=82.5)
+    mock_car.get_car_charge_type = MagicMock(return_value="Solar")
+    mock_car.get_car_charge_time_readable_name = MagicMock(return_value="2 hours")
+    mock_car.get_estimated_range_km = MagicMock(return_value=260)
+    mock_car.get_autonomy_to_target_soc_km = MagicMock(return_value=50)
+
+    entities = create_ha_sensor_for_QSCar(mock_car)
+    best = next(e for e in entities if e.entity_description.key == "car_best_estimated_soc_percentage")
+    desc = best.entity_description
+    assert desc.translation_key == SENSOR_CAR_BEST_ESTIMATED_SOC_PERCENT
+    assert desc.device_class == SensorDeviceClass.BATTERY
+    assert desc.native_unit_of_measurement == PERCENTAGE
+    assert desc.state_class == SensorStateClass.MEASUREMENT
+    assert desc.value_fn(mock_car, desc.key) == 82.5
+
+
 def test_create_ha_sensor_for_load():
     """Test creating sensors for load device."""
     from custom_components.quiet_solar.ha_model.device import HADeviceMixin

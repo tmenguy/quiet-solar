@@ -37,6 +37,7 @@ from .const import (
     SENSOR_BISTATE_CURRENT_DURATION_H,
     SENSOR_BISTATE_CURRENT_ON_H,
     SENSOR_CAR_AUTONOMY_TO_TARGET_SOC_KM,
+    SENSOR_CAR_BEST_ESTIMATED_SOC_PERCENT,
     SENSOR_CAR_CHARGE_ORIGIN,
     SENSOR_CAR_CHARGE_TIME,
     SENSOR_CAR_CHARGE_TYPE,
@@ -157,6 +158,18 @@ def create_ha_sensor_for_QSCar(device: QSCar):
             value_fn=lambda device, key: device.get_car_charge_percent(),
         )
         entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=load_current_command))
+
+        # QS-281 — live best-estimated SOC: re-anchors on each fresh raw value
+        # but extrapolates `base + charge added` while the slow API lags.
+        best_estimated_soc = QSSensorEntityDescription(
+            key="car_best_estimated_soc_percentage",
+            translation_key=SENSOR_CAR_BEST_ESTIMATED_SOC_PERCENT,
+            native_unit_of_measurement=PERCENTAGE,
+            device_class=SensorDeviceClass.BATTERY,
+            state_class=SensorStateClass.MEASUREMENT,
+            value_fn=lambda device, key: device.get_best_estimated_car_charge_percent(),
+        )
+        entities.append(QSBaseSensor(data_handler=device.data_handler, device=device, description=best_estimated_soc))
 
         # Estimated remaining range now
         load_current_command = QSSensorEntityDescription(

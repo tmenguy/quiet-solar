@@ -261,6 +261,7 @@ SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_START = "qs_next_or_current_constraint_
 SENSOR_CONSTRAINT_SENSOR_NEXT_OR_CURRENT_END = "qs_next_or_current_constraint_end_time"
 
 SENSOR_CAR_SOC_PERCENT = "qs_car_soc_percent"
+SENSOR_CAR_BEST_ESTIMATED_SOC_PERCENT = "qs_car_best_estimated_soc_percent"
 SENSOR_CAR_CHARGE_TYPE = "qs_car_charge_type"
 SENSOR_CAR_CHARGE_TIME = "qs_car_charge_time"
 SENSOR_CAR_PERSON_FORECAST = "qs_car_person_forecast"

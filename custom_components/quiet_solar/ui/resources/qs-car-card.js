@@ -836,6 +836,9 @@ class QsCarCard extends QsCardBase {
       // number entity (popup prefill + write target), and the reset button.
       const sIsSocEstimated = this._entity(e.is_soc_estimated);
       const sManualSoc = this._entity(e.manual_soc);
+      // QS-281 — live best-estimated SOC (re-anchors on each fresh raw value,
+      // extrapolates `base + charge added` while the slow car API lags).
+      const sBestSoc = this._entity(e.best_soc);
 
       const title = (cfg.title || cfg.name) || (sSoc ? (sSoc.attributes.friendly_name || sSoc.entity_id) : "Car");
 
@@ -844,6 +847,11 @@ class QsCarCard extends QsCardBase {
       // Check if car API data is stale
       const isStale = sCarIsStale?.state === 'on';
       let soc = this._percent(sSoc?.state);
+      // QS-281 N2 — capture the RAW SOC up front, before `soc` can be
+      // reassigned to the best-estimate below: the asterisk compares the
+      // estimate against this raw value, so it must never be the (possibly
+      // overwritten) display variable.
+      const rawSoc = this._percent(sSoc?.state);
       // QS-235 AC6 — guard-shaped sensor read via the shared `_safeNumber`
       // (trims, rejects unknown/unavailable/±Infinity) instead of the raw
       // `Number(sPower?.state || "0")` pattern.
@@ -991,12 +999,39 @@ class QsCarCard extends QsCardBase {
           // Override soc for display
           soc = Math.max(0, Math.min(100, socPct));
       } else {
+          // QS-281 — normal percent path: prefer the live best-estimated SOC
+          // (both while charging AND idle) whenever it is numeric, so the slow
+          // car API no longer makes the gauge look stuck. Fall back to the raw
+          // `rawSoc` when the best-estimate entity is unavailable — OR when it
+          // is "numeric" per `isNumberLike` yet `_percent` yields a non-finite
+          // value (the two helpers can disagree on range/format), so a bad
+          // best-estimate never poisons the displayed value.
+          const bestSocNumeric = isNumberLike(sBestSoc?.state);
+          const bestSocCandidate = bestSocNumeric ? this._percent(sBestSoc.state) : rawSoc;
+          // `_percent` already maps NaN→0 and clamps to [0,100], so the
+          // `Number.isFinite` guard is belt-and-suspenders today (it cannot
+          // currently fire when `bestSocNumeric` is true); it is kept so a
+          // future `_percent` change that could yield a non-finite value still
+          // falls back to `rawSoc` rather than poisoning the display.
+          const bestSocUsable = bestSocNumeric && Number.isFinite(bestSocCandidate);
+          const bestSocVal = bestSocUsable ? bestSocCandidate : rawSoc;
+          soc = bestSocVal;
+          // The asterisk marks a live extrapolation running ahead of the API:
+          // shown iff the estimate and the raw value differ once rounded the
+          // SAME way the gauge displays them (`_fmt` = `Math.round`), so a value
+          // like 45.6 that displays as 46 is correctly flagged against a raw 45.
+          // Gated on a genuinely numeric raw state (fix-plan #02 #04): an
+          // unavailable/non-numeric raw coerces to `rawSoc=0` via `_percent`,
+          // which would otherwise light a misleading `*` on a transient SOC
+          // dropout even though the API is merely unavailable, not lagging.
+          // Purely visual; must not stack with QS-243's `hasSocEstimate`
+          // asterisk — at most a single `*` is ever shown.
+          const rawSocNumeric = isNumberLike(sSoc?.state);
+          const showEstimateStar = bestSocUsable && rawSocNumeric && Math.round(bestSocVal) !== Math.round(rawSoc);
           targetPct = parseTargetPercent(target);
           maxCircleValue = 100;
           displayTargetValue = `${this._fmt(targetPct ?? soc)}%`;
-          // QS-243 — append an asterisk when the SOC is estimated rather
-          // than read live from the car's sensor.
-          displaySocValue = `${this._fmt(soc)}%${hasSocEstimate ? '*' : ''}`;
+          displaySocValue = `${this._fmt(soc)}%${(hasSocEstimate || showEstimateStar) ? '*' : ''}`;
       }
 
       // QS-199 review-fix #02 S2 — use the inherited hardened

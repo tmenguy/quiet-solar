@@ -27,7 +27,6 @@ from custom_components.quiet_solar.const import (
     BUTTON_CAR_RESET_SOC_ESTIMATE,
     CONF_POOL_TEMPERATURE_SENSOR,
     CONF_POWER,
-    NUMBER_CAR_MANUAL_SOC_PERCENT,
     CONF_SOLAR_FORECAST_PROVIDERS,
     CONF_SOLAR_PROVIDER_DOMAIN,
     CONF_SOLAR_PROVIDER_NAME,
@@ -37,6 +36,7 @@ from custom_components.quiet_solar.const import (
     DEVICE_TYPE,
     DOMAIN,
     LOAD_TYPE_DASHBOARD_DEFAULT_SECTION,
+    NUMBER_CAR_MANUAL_SOC_PERCENT,
     SOLCAST_SOLAR_DOMAIN,
     CONF_TYPE_NAME_QSPool,
 )
@@ -351,6 +351,14 @@ class TestDashboardTemplateRendering:
         assert entities["is_soc_estimated"].startswith("binary_sensor.")
         assert entities["manual_soc"].startswith("number.")
         assert entities["reset_soc"].startswith("button.")
+        # QS-281 — the live best-estimated SOC sensor is wired via its sensor
+        # key. This parsed end-to-end check (real sensor registration →
+        # `ha_entities` → j2 render) is intentionally NOT a hardcoded
+        # `ha.get("...")` literal: a rename of either the sensor `key` or the
+        # j2 lookup drops `best_soc` from the rendered card, so this `entities`
+        # subscript would raise — catching any desync without a brittle string
+        # (fix-plan #01, finding #8).
+        assert entities["best_soc"].startswith("sensor.")
 
         # N5 — the template resolves those entities via the const.py keys
         # (never hardcoded ha.get("qs_car_...") string literals in the source).
@@ -367,6 +375,32 @@ class TestDashboardTemplateRendering:
         assert "e.reset_soc" in source
         # The asterisk gating must be present.
         assert "hasSocEstimate" in source
+
+    def test_car_card_uses_best_soc_on_normal_percent_path(self):
+        """QS-281 — the card reads the `best_soc` entity, captures the raw SOC
+        before any reassignment, substitutes the best-estimate on the normal
+        percent path (with a non-finite fallback), and renders the asterisk
+        rounded the same way the gauge displays it, without stacking it on top
+        of the existing `hasSocEstimate` asterisk."""
+        source = (COMPONENT_ROOT / "ui" / "resources" / "qs-car-card.js").read_text()
+        # Reads the new entity and captures the raw value up front (N2).
+        assert "e.best_soc" in source
+        assert "const rawSoc = this._percent(sSoc?.state);" in source
+        # Fix-plan #01 #02 — falls back to rawSoc when best_soc is non-numeric
+        # OR numeric-but-non-finite (the two helpers can disagree).
+        assert "const bestSocUsable = bestSocNumeric && Number.isFinite(bestSocCandidate);" in source
+        assert "const bestSocVal = bestSocUsable ? bestSocCandidate : rawSoc;" in source
+        # Fix-plan #01 #03 — asterisk gate rounds the SAME way `_fmt` displays
+        # (Math.round), not Math.trunc, so a 45.6→46 estimate is flagged vs 45.
+        assert "Math.round(bestSocVal) !== Math.round(rawSoc)" in source
+        assert "Math.trunc(bestSocVal)" not in source  # old mismatched gate removed
+        # Fix-plan #02 #04 — the asterisk is suppressed when the raw SOC state
+        # is not genuinely numeric (an unavailable raw coerces to rawSoc=0,
+        # which would otherwise light a misleading `*` on a sensor dropout).
+        assert "const rawSocNumeric = isNumberLike(sSoc?.state);" in source
+        assert "bestSocUsable && rawSocNumeric && Math.round(bestSocVal) !== Math.round(rawSoc)" in source
+        # Single asterisk — the new flag is OR-combined, never stacked.
+        assert "(hasSocEstimate || showEstimateStar) ? '*' : ''" in source
 
     def test_car_card_soc_editable_pointer_events(self):
         """QS-243 #02 M1 — the editable SOC re-enables pointer events (it sits

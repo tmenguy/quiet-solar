@@ -15,8 +15,16 @@ A car's *effective* SOC is unified behind one accessor,
 `QSCar.get_car_charge_percent`. When the SOC API is **failed**,
 **inaccurate**, or **absent**, the car estimates SOC as `base + charged
 energy since`, where the base is either a **manual entry** or the **last
-valid sensor reading** captured at the fresh→stale edge. A genuine new
-sensor reading always wins and clears the estimate.
+known good raw value**. A genuine new sensor reading always wins and
+re-anchors the estimate.
+
+**QS-281 — live best-estimate for slow-but-healthy APIs.** Renault / VW /
+Tesla SOC APIs lag during a charge, so the raw reading looks stuck. The
+**display-only** accessor `get_best_estimated_car_charge_percent` (a pure
+read) surfaces a live `base + charge added` estimate **even on a healthy
+API** and re-anchors whenever the API finally delivers a genuinely different
+value. It feeds a dedicated sensor (`car_best_estimated_soc_percentage`) and
+the car card — the solver/constraint path is untouched.
 
 ## When you need this concept
 
@@ -28,8 +36,12 @@ sensor reading always wins and clears the estimate.
 ## State model (persisted on `QSCar`)
 
 - `_user_base_soc_value` — manually-entered baseline.
-- `_last_valid_base_soc_value` — last valid real sensor value, captured at
-  the fresh→stale transition (only when no user base exists).
+- `_last_valid_base_soc_value` — the **last known good raw value** (QS-281),
+  independent of stale state. Maintained **every cycle** by the re-anchor
+  (`_capture_last_valid_base_soc`), not just at the fresh→stale edge. On load
+  the persisted numeric SOC fields are sanitized through `_finite_soc_or_none`
+  (coerce a legacy/corrupt `str`/`nan`/`inf` → `None`), so the QS-281 healthy-
+  path accessor that reads the base directly can never crash or emit `nan`.
 - `_computed_added_delta_soc_percent` — accumulated, efficiency-aware
   percent added during the current plugged session (a **float**).
 - `_user_base_soc_entry_sensor_value` — raw sensor value at the instant the
@@ -52,6 +64,21 @@ runtime reset (plug-in / reset button / recovery) is reflected in the card.
   learning and the charge callback use this so they never see the estimate.
 - `_estimated_soc_percent` — `clamp(base + delta, 0, 100)`, or `None` with no
   base (pure-delta `+XX%`).
+- `get_best_estimated_car_charge_percent(time=None)` (QS-281) — a **pure read**
+  for display: while estimating → `_estimated_soc_percent` (parity with
+  `get_car_charge_percent`, raw distrusted so no clamp to it); else when a
+  system base exists → `_estimated_soc_percent` (the canonical clamp — a
+  computed-on-read property, so a re-anchor that zeroes the delta is reflected
+  immediately) **clamped `>= the live raw`** so the estimate is never displayed
+  *below* a genuine sub-integer API increase the integer re-anchor de-bounce
+  swallowed (`base 45.0` vs `raw 45.9` → returns `45.9`); else the raw sensor,
+  **sanitized through `_finite_soc_or_none`** so a `str`/`nan`/`inf` live read
+  never reaches the BATTERY/MEASUREMENT sensor. Read with the default tolerance
+  (`None`), identical to the canonical `get_car_charge_percent()` value_fn.
+  No "actively charging" check — the delta only grows in the charger callback,
+  so `base + delta` self-holds when idle until a genuinely different raw value
+  re-anchors it. `time=None` resolves to now; stays synchronous (sensor
+  `value_fn`).
 - `is_in_soc_estimation_mode` — True for a no-sensor car, in stale-percent
   mode, or with a manual base on a healthy API. **Drives the `*` /
   `is_soc_estimated` binary sensor**: the asterisk means "the SOC number is
@@ -75,6 +102,14 @@ first cycle (or post-reboot / post-base-set) only **anchors** the cursor. The
 charger computes `inc` from `soc_integration_cursor` then calls
 `accumulate_soc_delta(inc, time)`.
 
+**QS-281** hoisted this `accumulate_soc_delta` call to **exactly one per
+callback**, out of the `estimating`-only branch, so the accumulator advances
+during a **healthy** charge too (powering the live best-estimate). On the
+non-estimating branch the return is **discarded** — the constraint value stays
+sensor/`delta_added`-driven and byte-identical to before. Because there is one
+unified base + accumulator + cursor and one call site, the healthy↔stale
+mid-charge transition is a non-event (no double-advance).
+
 ## Recovery and orthogonality
 
 - **User-base recovery** (`_update_soc_estimation`, per cycle) is a 4-case
@@ -89,11 +124,16 @@ charger computes `inc` from `soc_integration_cursor` then calls
     when the SOC sensor is time-stale (the user has asserted it is reliable).
   The tolerant compare uses half-away-from-zero rounding (`_round_half_up`), not
   Python's banker's rounding, so an exact `.5` reading is not mis-binned.
-- **System-base recovery**: `_exit_stale_mode` clears the system base. It also
-  clears the accumulator + cursor **only when no user override is active** — an
-  override owns its own accumulator lifecycle, so a transient stale blip must
-  not wipe its accumulated delta. The user base is never cleared by stale-mode
-  exit.
+- **System-base recovery (QS-281)**: the per-cycle re-anchor is now the single
+  delta-reset mechanism. `_exit_stale_mode` clears **only** stale-specific state
+  (`_car_api_stale`, `car_api_stale_percent_mode`, `_car_api_stale_since`,
+  inferred flags) — it no longer touches the base / accumulator / cursor. On a
+  stale→healthy exit the SOC sensor is fresh, so the same-cycle re-anchor snaps
+  the base to the fresh raw and resets the delta only when it genuinely differs
+  (a real charge delta now survives stale-exit unless the API reports a
+  different value). Whether we are in/out of stale mode is read from
+  `car_api_stale_percent_mode` / the override — never inferred from whether a
+  base is set (staleness logic never reads the base).
 - **Manual stale-detection reset** (`reset_car_api_stale_detection`): three
   manual user actions give the live API a fresh chance by calling
   `_exit_stale_mode` and clearing `_was_car_api_stale` (the *detected* state
@@ -166,12 +206,28 @@ sensor reports unplugged) while the SOC sensor is live:
   that override is active — the manual home/plug override never outlives an
   explicit Force-Not-Stale, even for a never-stale car (R3-SF1).
 
-## Capture at the fresh→stale edge
+## Per-cycle re-anchor (QS-281)
 
-`_enter_stale_percent_mode(time)` wraps every stale-percent write site and
-captures the last valid raw SOC into `_last_valid_base_soc_value` (zeroing
-the accumulator) only on a genuine edge and only when no base exists. The
-`for_init` restore path never captures — the persisted value is the truth.
+`_capture_last_valid_base_soc(time)` runs **once per cycle** from
+`update_states` (beside `_update_soc_estimation`), independent of stale state.
+It anchors `_last_valid_base_soc_value` to the last known good raw value; on a
+raw value that differs at the **integer** level (`int(raw) != int(base)`,
+mirroring the card's `Math.trunc` so a same-integer heartbeat does NOT
+re-anchor; sub-integer jitter is absorbed but a value oscillating across an
+integer boundary still re-anchors on each flip — a coarse de-bounce, not full
+hysteresis) — it resets the delta to `0.0` and re-anchors the cursor, so the
+estimate snaps back to the truth the API just reported. It is a **no-op when
+raw is `None`, non-numeric, or non-finite** (`nan`/`inf`: `int()` would raise
+and crash the per-cycle `update_states`, so they are skipped like a `None`
+read) and is **skipped entirely when a manual override is active**
+(`_user_base_soc_value is not None`) — that override owns its delta lifecycle
+via `_update_soc_estimation`, so the re-anchor must not zero it. A genuine API
+change is trusted and may move the displayed value up **or** down; the only
+invariant is that it never decreases due to accumulation alone between real API
+updates.
+
+`_enter_stale_percent_mode` now only flips the mode flag — it no longer
+captures the base (the re-anchor maintains it every cycle).
 
 ## Gotchas
 

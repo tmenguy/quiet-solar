@@ -870,6 +870,9 @@
       "qs_car_soc_percent": {
         "name": "Current Charge"
       },
+      "qs_car_best_estimated_soc_percent": {
+        "name": "Best estimated SOC"
+      },
       "qs_car_charge_type": {
         "name": "Charge Type"
       },

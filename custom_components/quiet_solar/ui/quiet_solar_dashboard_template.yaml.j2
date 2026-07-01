@@ -88,6 +88,8 @@ views:
               {%-    set badges_list.badges = badges_list.badges + [(e.entity_id, device.name)] %}
               {{ "soc: " + e.entity_id }}
               {%- endif %}
+              {%- set best_e = ha.get("car_best_estimated_soc_percentage") %}
+              {% if best_e %}best_soc: {{ best_e.entity_id }}{% endif %}
               {% if ha.get("current_constraint_current_energy") %}current_inputed_energy: {{ ha.get("current_constraint_current_energy").entity_id }}{% endif %}
               {% if device.car_battery_capacity %}car_battery_capacity_kwh: {{ (device.car_battery_capacity / 1000)|round(1) }}{% endif %}
               {% if ha.get("best_power_value") %}power: {{ ha.get("best_power_value").entity_id }}{% endif %}

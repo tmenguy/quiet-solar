@@ -2190,14 +2190,21 @@ class TestStaleResetTriggers:
 
     @staticmethod
     def _assert_detected_cleared(car):
-        """Assert all detected stale fields are reset (AC1 field set)."""
+        """Assert all detected stale fields are reset (AC1 field set).
+
+        QS-281: the SOC base (`_last_valid_base_soc_value`) is no longer a
+        *detected stale field* — it is the "last known good raw value"
+        maintained by the per-cycle re-anchor and its lifecycle is owned by
+        `reset_soc_estimate`, not by stale-detection clearance. The base
+        expectation therefore depends on the reset path and is asserted
+        explicitly by the individual tests, not here.
+        """
         assert car._car_api_stale is False
         assert car.car_api_stale_percent_mode is False
         assert car._car_api_stale_since is None
         assert car._was_car_api_stale is False
         assert car._car_api_inferred_home is False
         assert car._car_api_inferred_plugged is False
-        assert car._last_valid_base_soc_value is None
 
     @staticmethod
     def _make_charger_with_attached(car):
@@ -2233,6 +2240,8 @@ class TestStaleResetTriggers:
         await real_car.user_set_selected_charger_by_name(FORCE_CAR_NO_CHARGER_CONNECTED)
 
         self._assert_detected_cleared(real_car)
+        # QS-281 — a stale-detection-only reset preserves the SOC base.
+        assert real_car._last_valid_base_soc_value == 55.0
         assert real_car.is_car_effectively_stale(current_time) is False
 
     @pytest.mark.parametrize(
@@ -2257,6 +2266,8 @@ class TestStaleResetTriggers:
         await real_car.user_clean_and_reset()
 
         self._assert_detected_cleared(real_car)
+        # QS-281 — a full clean-and-reset clears the SOC base (reset_soc_estimate).
+        assert real_car._last_valid_base_soc_value is None
         assert real_car.is_car_effectively_stale(current_time) is False
 
     async def test_departure_auto_reset_resets_stale_detection(self, real_car, current_time):

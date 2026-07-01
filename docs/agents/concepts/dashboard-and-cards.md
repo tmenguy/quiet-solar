@@ -911,6 +911,28 @@ SOC number is clickable → a popup with an integer 0–100 input and **Save**
 `manual_soc`, and `reset_soc` into the card. See
 [car-soc-estimation.md](car-soc-estimation.md) for the backing model.
 
+**Live best-estimated SOC (QS-281).** On the **normal percent path** (not
+energy / not stale-percent mode) the card now reads the `best_soc` entity
+(sensor `car_best_estimated_soc_percentage`) and uses it for both the displayed
+SOC value and the ring fill whenever numeric — **both while charging and
+idle** — so the slow car API no longer makes the gauge look stuck. It falls
+back to the raw SOC (`rawSoc`, captured *before* any reassignment) when
+`best_soc` is non-numeric **or** numeric-but-non-finite — the latter is a
+belt-and-suspenders guard, since `_percent` already maps `NaN`→`0` and clamps
+to `[0,100]`, kept only to survive a future `_percent` change. The j2 reads the
+sensor into a dedicated `best_e` lookup variable (not the reused `e`).
+A purely **visual** `*` is appended iff the estimate and the raw value differ
+once rounded the **same way the gauge displays them** —
+`Math.round(bestSocVal) !== Math.round(rawSoc)`, matching `_fmt`'s `Math.round`
+so a `45.6`→`46` estimate is correctly flagged against a raw `45` (an earlier
+`Math.trunc` gate mismatched the displayed rounding). It is additionally gated
+on a genuinely numeric raw state (`rawSocNumeric = isNumberLike(sSoc?.state)`):
+an unavailable raw coerces to `rawSoc=0` via `_percent`, which would otherwise
+light a misleading `*` on a transient SOC-sensor dropout even though the API is
+merely unavailable, not lagging. It is OR-combined with the QS-243
+`hasSocEstimate` asterisk so at most one `*` shows, and it does **not** touch
+`is_soc_estimated` or the degraded-box logic.
+
 **Degraded state CSS filter.** When `degraded === true` (computed
 as `isDisconnected || isFaulted || isStale` — `isOffGrid` is
 explicitly excluded; the card-level pinkish `.off-grid` CSS class
