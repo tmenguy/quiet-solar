@@ -3110,13 +3110,76 @@ class TestSeedTestmon:
     """`seed_testmon` refreshes the DB with no pass/fail verdict."""
 
     @pytest.fixture(autouse=True)
-    def _stub_rebuild(self):
+    def _stub_rebuild(self, tmp_path: Path):
         """QS-283 A3: `seed_testmon` now calls `_rebuild_testmon_baseline`,
         which purges the real `.testmondata` and `.coverage`. Stub it by
         default so these mocked-seam tests never touch the real FS; the
-        dedicated ordering test re-patches it with its own spy."""
-        with patch.object(quality_gate, "_rebuild_testmon_baseline"):
+        dedicated ordering test re-patches it with its own spy.
+
+        QS-286: also redirect `SEED_STATUS` to a tmp sibling so the marker
+        writes never pollute the repo root, and tests can read it back."""
+        with (
+            patch.object(quality_gate, "_rebuild_testmon_baseline"),
+            patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"),
+        ):
             yield
+
+    def _marker(self) -> dict:
+        return json.loads(quality_gate.SEED_STATUS.read_text())
+
+    def test_running_marker_written_after_probe_before_pytest(self) -> None:
+        """AC#1: a `running` marker (with pid + started) exists by the time
+        the pytest pass runs — captured here from inside `_stream_pytest`."""
+        seen: dict = {}
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(
+                quality_gate,
+                "_stream_pytest",
+                side_effect=lambda *_a, **_k: (seen.update(self._marker()), {"returncode": 0})[1],
+            ),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        assert seen["state"] == "running"
+        assert seen["pid"] == os.getpid()
+        assert "started" in seen
+
+    @pytest.mark.parametrize("rc", [0, 1], ids=["clean", "test-failures"])
+    def test_ok_marker_on_rc_lt_2(self, rc: int) -> None:
+        """AC#1: rc < 2 (DB written) → final marker state=ok with returncode/finished."""
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": rc}),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        marker = self._marker()
+        assert marker["state"] == "ok"
+        assert marker["returncode"] == rc
+        assert "finished" in marker and "started" in marker
+
+    def test_incomplete_marker_on_rc_ge_2(self) -> None:
+        """AC#1: rc >= 2 (suspect DB) → final marker state=incomplete."""
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": 2}),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        marker = self._marker()
+        assert marker["state"] == "incomplete"
+        assert marker["returncode"] == 2
+
+    def test_skipped_marker_and_no_running_when_tooling_missing(self) -> None:
+        """AC#2: not-importable writes a `skipped` marker (with reason) and
+        returns 3; NO `running` marker is written on that path."""
+        with patch.object(quality_gate, "_testmon_available", return_value=False):
+            assert quality_gate.seed_testmon() == 3
+        marker = self._marker()
+        assert marker["state"] == "skipped"
+        assert "not importable" in marker["reason"]
+        assert "pid" not in marker  # never reached the `running` write
 
     def test_tooling_missing_returns_3(self) -> None:
         # review-fix S2: gated on the testmon-only probe, NOT the full impacted set.
@@ -3202,6 +3265,128 @@ class TestSeedTestmon:
         with patch.object(quality_gate, "_pytest_workers", return_value=None):
             cmd = quality_gate._build_seed_testmon_cmd()
         assert "-n" not in cmd
+
+
+class TestWriteSeedStatus:
+    """QS-286 AC#3: `_write_seed_status` is atomic + best-effort."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def test_writes_state_and_fields_no_temp_leftover(self) -> None:
+        quality_gate._write_seed_status("running", pid=7, started=1.5)
+        marker = json.loads(quality_gate.SEED_STATUS.read_text())
+        assert marker == {"state": "running", "pid": 7, "started": 1.5}
+        tmp = quality_gate.SEED_STATUS.with_suffix(quality_gate.SEED_STATUS.suffix + ".tmp")
+        assert not tmp.exists(), "temp sibling must be cleaned up after a successful write"
+
+    def test_uses_atomic_os_replace(self) -> None:
+        with patch.object(quality_gate.os, "replace") as mock_replace:
+            quality_gate._write_seed_status("ok", returncode=0)
+        mock_replace.assert_called_once()
+
+    def test_best_effort_swallows_and_cleans_up_on_failure(self) -> None:
+        """A write failure must NOT raise (never abort the detached rebuild),
+        and the temp file must still be unlinked by the `finally`."""
+
+        def raiser(*_a, **_k):
+            raise OSError("boom")
+
+        with patch.object(quality_gate.os, "replace", side_effect=raiser):
+            quality_gate._write_seed_status("ok", returncode=0)  # must not raise
+        tmp = quality_gate.SEED_STATUS.with_suffix(quality_gate.SEED_STATUS.suffix + ".tmp")
+        assert not tmp.exists()
+        assert not quality_gate.SEED_STATUS.exists()  # replace never happened
+
+
+class TestPidAlive:
+    """QS-286: `_pid_alive` maps os.kill(pid, 0) outcomes to liveness."""
+
+    def test_dead_when_process_lookup_error(self) -> None:
+        with patch.object(quality_gate.os, "kill", side_effect=ProcessLookupError):
+            assert quality_gate._pid_alive(999999) is False
+
+    def test_alive_when_permission_error(self) -> None:
+        with patch.object(quality_gate.os, "kill", side_effect=PermissionError):
+            assert quality_gate._pid_alive(1) is True
+
+    def test_alive_on_success(self) -> None:
+        with patch.object(quality_gate.os, "kill", return_value=None) as mock_kill:
+            assert quality_gate._pid_alive(1234) is True
+        mock_kill.assert_called_once_with(1234, 0)
+
+
+class TestSeedTestmonStatus:
+    """QS-286 AC#4: `seed_testmon_status` — distinct message + 4-code exit
+    for every originating marker condition. Read-only."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def _write(self, marker: object) -> None:
+        quality_gate.SEED_STATUS.write_text(json.dumps(marker))
+
+    def test_ok_exits_0(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "ok", "finished": 100.0})
+        assert quality_gate.seed_testmon_status() == 0
+        assert "safe to close" in capsys.readouterr().out.lower()
+
+    def test_running_alive_exits_4(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "running", "pid": 42, "started": 1.0})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate.seed_testmon_status() == 4
+        assert "still running" in capsys.readouterr().out.lower()
+
+    def test_running_dead_exits_1_interrupted(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "running", "pid": 42, "started": 1.0})
+        with patch.object(quality_gate, "_pid_alive", return_value=False):
+            assert quality_gate.seed_testmon_status() == 1
+        assert "interrupted" in capsys.readouterr().out.lower()
+
+    def test_incomplete_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "incomplete", "returncode": 2})
+        assert quality_gate.seed_testmon_status() == 1
+        assert "finished with errors" in capsys.readouterr().out.lower()
+
+    def test_skipped_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "skipped", "reason": "pytest-testmon not importable"})
+        assert quality_gate.seed_testmon_status() == 1
+        out = capsys.readouterr().out.lower()
+        assert "skipped" in out and "no baseline was written" in out
+
+    def test_missing_marker_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert not quality_gate.SEED_STATUS.exists()
+        assert quality_gate.seed_testmon_status() == 3
+        assert "no baseline refresh" in capsys.readouterr().out.lower()
+
+    def test_unparseable_marker_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        quality_gate.SEED_STATUS.write_text("{not json")
+        assert quality_gate.seed_testmon_status() == 3
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    def test_unknown_state_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """A parseable marker with an unexpected state is treated as unreadable."""
+        self._write({"state": "bogus"})
+        assert quality_gate.seed_testmon_status() == 3
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    def test_reader_is_read_only(self) -> None:
+        """AC#4: no pytest / coverage / testmon import — the reader touches
+        none of the heavy seams."""
+        self._write({"state": "ok", "finished": 1.0})
+        with (
+            patch.object(quality_gate, "_stream_pytest") as mock_stream,
+            patch.object(quality_gate, "_testmon_available") as mock_probe,
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+        ):
+            quality_gate.seed_testmon_status()
+        mock_stream.assert_not_called()
+        mock_probe.assert_not_called()
+        mock_rebuild.assert_not_called()
 
 
 class TestImpactedCli:
@@ -3292,6 +3477,50 @@ class TestImpactedCli:
         mock_seed.assert_called_once_with()
         mock_scope.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "conflict",
+        [
+            ["--seed-testmon"],
+            ["--impacted"],
+            ["--cache"],
+            ["--no-cache"],
+            ["--full"],
+            ["--fix"],
+            ["--quick", "tests/test_x.py"],
+        ],
+        ids=["seed", "impacted", "cache", "no-cache", "full", "fix", "quick"],
+    )
+    def test_seed_testmon_status_mutex_exits_2(
+        self, conflict: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC#5: --seed-testmon-status combined with any mode is a usage error."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-status", *conflict]),
+            patch.object(quality_gate, "seed_testmon_status") as mock_status,
+            patch.object(quality_gate, "seed_testmon") as mock_seed,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        assert "you cannot combine --seed-testmon-status with" in capsys.readouterr().err
+        mock_status.assert_not_called()
+        mock_seed.assert_not_called()
+
+    @pytest.mark.parametrize("status_code", [0, 1, 3, 4], ids=["ok", "rerun", "no-status", "running"])
+    def test_seed_testmon_status_cli_passthrough(self, status_code: int) -> None:
+        """AC#4: --seed-testmon-status short-circuits before scope, returning
+        the reader's exit code verbatim."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-status"]),
+            patch.object(quality_gate, "seed_testmon_status", return_value=status_code) as mock_status,
+            patch.object(quality_gate, "_detect_scope") as mock_scope,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == status_code
+        mock_status.assert_called_once_with()
+        mock_scope.assert_not_called()
+
 
 class TestImpactedDeps:
     """Regression guards for requirements_test.txt + .gitignore (AC#1)."""
@@ -3304,6 +3533,12 @@ class TestImpactedDeps:
     def test_testmondata_gitignored(self) -> None:
         gi = (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
         assert any(line.strip() == ".testmondata" for line in gi.splitlines())
+
+    def test_seed_status_gitignored(self) -> None:
+        """QS-286 AC#8: exact `.testmondata.seed-status` line (matches the
+        exact-match `.testmondata` convention, not a glob)."""
+        gi = (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
+        assert any(line.strip() == ".testmondata.seed-status" for line in gi.splitlines())
 
 
 class TestProjectRulesDocGuards:
@@ -3400,6 +3635,31 @@ class TestFinishTaskRefreshesBaseline:
         assert "--seed-testmon" in body
         assert "git worktree list --porcelain" in body  # MAIN_DIR captured before cleanup
         assert "nohup" in body  # detached / best-effort
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_completion_signal_present(self, harness: str) -> None:
+        """QS-286 AC#7: the detached refresh deletes the stale marker, logs to
+        `.testmondata.seed.log`, and points the user at --seed-testmon-status."""
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        assert 'rm -f "$MAIN_DIR/.testmondata.seed-status"' in body  # stale-marker guard
+        assert '>"$MAIN_DIR/.testmondata.seed.log" 2>&1' in body  # truncate redirect
+        assert "--seed-testmon-status" in body  # how to check
+        assert "safe to close this terminal" in body
+        # the old silent seed redirect is gone (other >/dev/null uses remain)
+        assert "--seed-testmon >/dev/null 2>&1" not in body
+
+    def test_seed_launch_block_byte_identical_across_harnesses(self) -> None:
+        """Harness-sync: the QS-286 completion-signal block is identical in
+        all three finish-task copies."""
+        blocks = []
+        for harness in (".claude", ".cursor", ".opencode"):
+            body = (
+                Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md"
+            ).read_text()
+            start = body.index('rm -f "$MAIN_DIR/.testmondata.seed-status"')
+            end = body.index(".testmondata.seed.log.", start)
+            blocks.append(body[start:end])
+        assert blocks[0] == blocks[1] == blocks[2]
 
     @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
     def test_interpreter_is_probed_not_hardcoded(self, harness: str) -> None:
