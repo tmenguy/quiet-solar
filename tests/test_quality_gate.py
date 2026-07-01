@@ -3374,6 +3374,59 @@ class TestSeedTestmonStatus:
         assert quality_gate.seed_testmon_status() == 3
         assert "unreadable" in capsys.readouterr().out.lower()
 
+    # review-fix #01 must-fix: malformed-but-parseable markers must route to
+    # the unreadable→3 path, never crash the read-only status command.
+    @pytest.mark.parametrize(
+        "payload",
+        [5, "x", None, [1], 3.14],
+        ids=["int", "str", "null", "array", "float"],
+    )
+    def test_non_dict_payload_exits_3(
+        self, payload: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write(payload)
+        assert quality_gate.seed_testmon_status() == 3  # no AttributeError
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            {"state": "running"},
+            {"state": "running", "pid": None},
+            {"state": "running", "pid": "x"},
+            {"state": "running", "pid": 1.5},
+        ],
+        ids=["no-pid", "pid-null", "pid-str", "pid-float"],
+    )
+    def test_running_with_bad_pid_exits_3(
+        self, marker: dict, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A `running` marker without an int pid is unreadable — never reaches
+        `_pid_alive` (which would `os.kill(None/str, 0)` → TypeError)."""
+        self._write(marker)
+        with patch.object(quality_gate, "_pid_alive") as mock_alive:
+            assert quality_gate.seed_testmon_status() == 3  # no TypeError
+        mock_alive.assert_not_called()  # bad pid never hits the syscall seam
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    # review-fix #01 nice-to-have: a marker missing a display-only field prints
+    # a readable placeholder, not literal "None" — and keeps its exit code.
+    def test_ok_missing_finished_prints_placeholder(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "ok"})
+        assert quality_gate.seed_testmon_status() == 0
+        out = capsys.readouterr().out
+        assert "None" not in out
+        assert "an unknown time" in out
+
+    def test_incomplete_missing_returncode_prints_placeholder(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write({"state": "incomplete"})
+        assert quality_gate.seed_testmon_status() == 1
+        out = capsys.readouterr().out
+        assert "None" not in out
+        assert "exit unknown" in out
+
     def test_reader_is_read_only(self) -> None:
         """AC#4: no pytest / coverage / testmon import — the reader touches
         none of the heavy seams."""
@@ -3559,6 +3612,13 @@ class TestProjectRulesDocGuards:
         assert "Local-vs-CI coverage invariant" in rules
         assert "`--impacted` is mutually exclusive" in rules
 
+    def test_seed_testmon_status_command_reference_present(self) -> None:
+        """review-fix #01 (AC#9): pin the --seed-testmon-status command-reference
+        addition, mirroring test_seed_status_gitignored's exact-line guard."""
+        rules = self._rules()
+        assert "quality_gate.py --seed-testmon-status" in rules
+        assert "companion" in rules  # documented as the --seed-testmon companion
+
 
 class TestWorktreeSetupSeedsCaches:
     """AC#8: worktree-setup.sh copies (never symlinks) .testmondata + .mypy_cache."""
@@ -3656,8 +3716,13 @@ class TestFinishTaskRefreshesBaseline:
             body = (
                 Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md"
             ).read_text()
+            # review-fix #01 nice-to-have: anchor the slice on code-adjacent
+            # markers (the stale-marker rm and the exact redirect line), not on
+            # prose ending in a literal period, so added narrative can't
+            # truncate the slice inconsistently.
             start = body.index('rm -f "$MAIN_DIR/.testmondata.seed-status"')
-            end = body.index(".testmondata.seed.log.", start)
+            redirect = '>"$MAIN_DIR/.testmondata.seed.log" 2>&1'
+            end = body.index(redirect, start) + len(redirect)
             blocks.append(body[start:end])
         assert blocks[0] == blocks[1] == blocks[2]
 

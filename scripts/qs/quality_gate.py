@@ -1486,17 +1486,9 @@ def check_impacted() -> int:
 
 
 def _write_seed_status(state: str, **fields: object) -> None:
-    """Write the `--seed-testmon` completion marker atomically, best-effort.
-
-    QS-286: serializes ``{"state": state, **fields}`` to a temp sibling and
-    ``os.replace()``s it over `SEED_STATUS` (atomic rename — a concurrent
-    reader never sees a torn file). The whole body is best-effort: a write
-    failure must NEVER abort the detached baseline rebuild (the sanctioned
-    `--seed-testmon` carve-out), so it swallows and continues, with a
-    `finally` that unlinks the temp file. No `fsync` — the marker is read
-    after the process exits in the common case, and the reader's
-    `unparseable → 3` branch is the torn-write backstop; fsync durability
-    would be mechanization inconsistent with a best-effort signal.
+    """Write the `SEED_STATUS` marker atomically (temp sibling + os.replace),
+    best-effort (swallow any error so a write failure never aborts the
+    detached rebuild), cleaning up the temp file in a `finally`. No `fsync`.
     """
     tmp = SEED_STATUS.with_suffix(SEED_STATUS.suffix + ".tmp")
     try:
@@ -1619,29 +1611,44 @@ def seed_testmon_status() -> int:
     incomplete, or skipped); 3 = no readable status (missing or unparseable).
 
     The reader TRUSTS the marker (best-effort) — it does not cross-check that
-    `.testmondata` still exists for an `ok` verdict.
+    `.testmondata` still exists for an `ok` verdict. It defends against a
+    malformed marker (review-fix #01): a non-`dict` payload, an unrecognized
+    `state`, or a `running` marker whose `pid` is missing/non-int all route to
+    the "unreadable → 3" path rather than crashing, and display-only fields
+    that are absent print a readable placeholder instead of `None`.
     """
+    def _unreadable() -> int:
+        print("The baseline refresh status is unreadable.")
+        return 3
+
     if not SEED_STATUS.exists():
         print("No baseline refresh has been recorded.")
         return 3
     try:
         marker = json.loads(SEED_STATUS.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        print("The baseline refresh status is unreadable.")
-        return 3
+        return _unreadable()
+    # A parseable-but-non-object payload (`[1]`, `5`, `null`, `"x"`) has no
+    # `.get`; treat it as unreadable rather than letting `.get` raise.
+    if not isinstance(marker, dict):
+        return _unreadable()
 
     state = marker.get("state")
     if state == "ok":
         print(
-            f"Baseline written at {marker.get('finished')} "
+            f"Baseline written at {marker.get('finished', 'an unknown time')} "
             "(tests may have failed) — safe to close this terminal."
         )
         return 0
     if state == "running":
         pid = marker.get("pid")
+        # `_pid_alive` calls `os.kill(pid, 0)`, which raises TypeError on a
+        # non-int; a `running` marker without a usable pid is unreadable.
+        if not isinstance(pid, int):
+            return _unreadable()
         if _pid_alive(pid):
             print(
-                f"Still running (pid {pid}, started {marker.get('started')}) "
+                f"Still running (pid {pid}, started {marker.get('started', 'an unknown time')}) "
                 "— keep this terminal open."
             )
             return 4
@@ -1652,19 +1659,18 @@ def seed_testmon_status() -> int:
         return 1
     if state == "incomplete":
         print(
-            f"Finished with errors (exit {marker.get('returncode')}) — "
+            f"Finished with errors (exit {marker.get('returncode', 'unknown')}) — "
             "`.testmondata` may be partial; rerun the refresh."
         )
         return 1
     if state == "skipped":
         print(
-            f"Refresh was skipped ({marker.get('reason')}) — no baseline was "
+            f"Refresh was skipped ({marker.get('reason', 'unknown reason')}) — no baseline was "
             "written; rerun if needed."
         )
         return 1
     # Any other/absent state value is an unreadable status.
-    print("The baseline refresh status is unreadable.")
-    return 3
+    return _unreadable()
 
 
 def main() -> None:
