@@ -19,8 +19,9 @@ subagent discovers task context from the branch name.
 
 Expected outcome:
 - TDD-implemented changes scoped strictly to dev-environment paths.
-- `python scripts/qs/quality_gate.py` passes (dev-only fast path:
-  modified test files only; ruff/mypy/coverage skipped).
+- `python scripts/qs/quality_gate.py --impacted` passes (dev-only
+  changes carry no product-coverage delta, so that side is a fast
+  no-op; the tooling's own testmon-selected tests still run).
 - Auto-committed, pushed, PR opened.
 - Next-phase command printed: launcher form (`claude --agent
   qs-review-task`) plus slash-command fallback (`/review-task`).
