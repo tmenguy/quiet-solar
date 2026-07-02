@@ -21,7 +21,8 @@ Expected outcome:
 - TDD-implemented code under `custom_components/quiet_solar/` and tests.
 - `python scripts/qs/quality_gate.py --impacted` passes (changed lines
   100% covered; the whole-suite gate — pytest 100% cov + ruff + mypy +
-  translations — runs authoritatively in CI on every PR).
+  translations — runs authoritatively in CI on every PR; translations
+  value-check is local-full-gate only until #292 lands).
 - Auto-committed, pushed, PR opened.
 - Next-phase command printed: launcher form (`claude --agent
   qs-review-task`) plus slash-command fallback (`/review-task`).

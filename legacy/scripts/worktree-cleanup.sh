@@ -2,11 +2,15 @@
 # RETIRED (QS-288 D-16) — superseded by scripts/qs/cleanup_worktree.py.
 # Do not run: kept as frozen historical reference only. Unlike its
 # successor, this script also deletes the LOCAL branch.
+echo "RETIRED (QS-288) — use: python scripts/qs/cleanup_worktree.py" >&2
+exit 1
+
+# --- Frozen historical body below (never reached) ---
 # Removes a git worktree after a story/bugfix is merged.
 # Symlinks inside the worktree are removed with the directory.
 # The targets (main venv, config, custom_components) are NOT affected.
 #
-# Usage: bash scripts/worktree-cleanup.sh <issue_number>
+# Usage (historical): bash legacy/scripts/worktree-cleanup.sh <issue_number>
 
 set -euo pipefail
 

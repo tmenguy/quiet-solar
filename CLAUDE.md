@@ -46,8 +46,9 @@ at runtime via `python scripts/qs/context.py` (no per-task rendering).
 translations. Smart scope detection skips the full suite when only
 dev-infrastructure files changed. The mandatory pre-commit form is
 `python scripts/qs/quality_gate.py --impacted` (testmon-selected tests
-+ changed-line 100% coverage, self-healing); the whole-suite gate runs
-authoritatively in CI on every PR.
+plus changed-line 100% coverage, self-healing); the whole-suite gate
+runs authoritatively in CI on every PR (translations value-check is
+local-full-gate only until #292 lands).
 
 ## Legacy OpenCode pipeline
 
