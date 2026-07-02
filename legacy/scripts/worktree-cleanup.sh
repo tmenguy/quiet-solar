@@ -1,9 +1,12 @@
 #!/bin/bash
 # RETIRED (QS-288 D-16) — superseded by scripts/qs/cleanup_worktree.py.
 # Do not run: kept as frozen historical reference only. Unlike its
-# successor, this script also deletes the LOCAL branch.
+# successor, this script also deletes the LOCAL branch. The exec bit is
+# intentionally stripped (QS-288 H13): direct ./path execution is
+# denied by the shell; `bash <path>` or `source <path>` hits the guard
+# below instead.
 echo "RETIRED (QS-288) — use: python scripts/qs/cleanup_worktree.py" >&2
-exit 1
+return 1 2>/dev/null || exit 1
 
 # --- Frozen historical body below (never reached) ---
 # Removes a git worktree after a story/bugfix is merged.

@@ -29,8 +29,8 @@ In Claude Code: emit one assistant message with four `Agent` tool calls,
 each with a different `subagent_type`. The harness runs them
 concurrently.
 
-In Cursor: emit one message that invokes the four subagents (Cursor
-supports this natively as of 2.4).
+In Cursor: emit one message that invokes the round's reviewer
+subagents (Cursor supports this natively as of 2.4).
 
 In OpenCode: the same fan-out — all of the round's reviewers invoked in
 parallel in one message.

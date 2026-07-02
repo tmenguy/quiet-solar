@@ -34,6 +34,7 @@ python scripts/qs/quality_gate.py --cache  # skip repeated FULL-gate runs if git
 python scripts/qs/quality_gate.py --fix    # auto-fix ruff format / lint
 python scripts/qs/quality_gate.py --json   # JSON output for scripts
 python scripts/qs/quality_gate.py --seed-testmon  # refresh the testmon baseline (non-gate; used by finish-task)
+python scripts/qs/quality_gate.py --seed-testmon-status  # read-only: report the detached --seed-testmon run's completion (0 = ok, 4 = running, 1 = rerun, 3 = no status)
 ```
 
 ## Architecture constraints

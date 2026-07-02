@@ -145,9 +145,9 @@ Two approaches were considered:
 We chose hand-maintained. Agent bodies are stable; the marginal cost of
 three copies is low; the cost of a missed sync is high.
 `check_doc_drift.py` enforces co-modification only; a content-level
-sync checker (`scripts/qs/lint_agents.py` — not yet built; a candidate
-follow-up, not yet filed) could verify the aligned sections stay
-aligned.
+sync checker (`scripts/qs/lint_agents.py` — not yet built; folded into
+follow-up [#289](https://github.com/tmenguy/quiet-solar/issues/289))
+could verify the aligned sections stay aligned.
 
 ## Adding a new harness
 
