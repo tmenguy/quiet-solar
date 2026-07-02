@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import sqlite3
@@ -1609,9 +1610,21 @@ def _fmt_seed_time(value: object) -> str:
     for display only (the stored marker format is unchanged). A missing or
     non-numeric value (torn/hand-edited marker) yields the readable
     "an unknown time" placeholder rather than a bare float or `None`.
+
+    Non-finite (`inf`/`-inf`/`NaN` — `json.loads` accepts these literals) and
+    out-of-range epochs are also placeholdered rather than crashing the
+    read-only query: `math.isfinite` rejects the former and the `try/except`
+    catches `datetime.fromtimestamp` overflow on a huge finite magnitude
+    (review-fix #03).
     """
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return datetime.fromtimestamp(value, tz=UTC).isoformat(timespec="seconds")
+        try:
+            # `math.isfinite` itself overflows on a huge int (10**400 → float),
+            # so it lives inside the guard, not as a short-circuit condition.
+            if math.isfinite(value):
+                return datetime.fromtimestamp(value, tz=UTC).isoformat(timespec="seconds")
+        except (OverflowError, ValueError, OSError):
+            pass
     return "an unknown time"
 
 

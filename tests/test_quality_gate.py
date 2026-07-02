@@ -3339,6 +3339,16 @@ class TestFmtSeedTime:
     def test_non_numeric_is_placeholder(self, value: object) -> None:
         assert quality_gate._fmt_seed_time(value) == "an unknown time"
 
+    # review-fix #03: non-finite / out-of-range epochs must not raise
+    # (json.loads accepts Infinity/-Infinity/NaN); they placeholder instead.
+    @pytest.mark.parametrize(
+        "value",
+        [float("inf"), float("-inf"), float("nan"), 1e400, 10**400, -(10**400)],
+        ids=["inf", "-inf", "nan", "1e400", "huge-int", "huge-neg-int"],
+    )
+    def test_non_finite_or_out_of_range_is_placeholder(self, value: object) -> None:
+        assert quality_gate._fmt_seed_time(value) == "an unknown time"
+
 
 class TestSeedTestmonStatus:
     """QS-286 AC#4: `seed_testmon_status` — distinct message + 4-code exit
@@ -3457,6 +3467,39 @@ class TestSeedTestmonStatus:
         assert quality_gate.seed_testmon_status() == 0
         out = capsys.readouterr().out
         assert "None" not in out
+        assert "an unknown time" in out
+
+    # review-fix #03 must-fix: a non-finite / out-of-range epoch in a marker
+    # must not crash the read-only status query — it placeholders and keeps
+    # its exit code. json.dumps emits Infinity/-Infinity/NaN literals that
+    # json.loads accepts, mirroring a torn / hand-edited marker.
+    @pytest.mark.parametrize(
+        "finished",
+        [float("inf"), float("-inf"), float("nan"), 10**400],
+        ids=["inf", "-inf", "nan", "huge-int"],
+    )
+    def test_ok_with_bad_epoch_placeholders_no_crash(
+        self, finished: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write({"state": "ok", "finished": finished})
+        assert quality_gate.seed_testmon_status() == 0  # no OverflowError/ValueError
+        out = capsys.readouterr().out
+        assert "safe to close" in out.lower()
+        assert "an unknown time" in out
+
+    @pytest.mark.parametrize(
+        "started",
+        [float("inf"), float("-inf"), float("nan"), 10**400],
+        ids=["inf", "-inf", "nan", "huge-int"],
+    )
+    def test_running_with_bad_epoch_placeholders_no_crash(
+        self, started: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write({"state": "running", "pid": 42, "started": started})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate.seed_testmon_status() == 4  # no crash before exit 4
+        out = capsys.readouterr().out
+        assert "still running" in out.lower()
         assert "an unknown time" in out
 
     def test_incomplete_missing_returncode_prints_placeholder(
