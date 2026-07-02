@@ -70,6 +70,11 @@ python scripts/qs/quality_gate.py --quick tests/test_solver.py tests/test_constr
 # baseline fully re-fingerprints (never a "0 changed" dead end).
 python scripts/qs/quality_gate.py --seed-testmon
 
+# QS-286: companion read-only query — report the detached --seed-testmon
+# run's completion status (no pytest/coverage/testmon import). Exit codes:
+# 0 = ok/safe to close, 4 = still running, 1 = rerun, 3 = no readable status.
+python scripts/qs/quality_gate.py --seed-testmon-status
+
 # Ad-hoc single-node pytest — debugging only.
 source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 ```
@@ -100,7 +105,11 @@ whole-suite-ish `pytest --testmon` invocation is routed through
 `quality_gate.py` the single pytest owner: it only refreshes
 `.testmondata` (no coverage, no pass/fail verdict) and is invoked
 detached/best-effort by `finish-task` to rebuild the main baseline
-after a merge. A bare `pytest --testmon` remains forbidden.
+after a merge. A bare `pytest --testmon` remains forbidden. QS-286: its
+companion `--seed-testmon-status` is the sanctioned **read-only** query
+subcommand (no pytest/coverage/testmon import) — it reads the
+`.testmondata.seed-status` marker the detached run writes and reports
+whether it is safe to close the terminal.
 
 **UI-only fast path.** When only `custom_components/quiet_solar/ui/*.j2`
 templates and `custom_components/quiet_solar/ui/resources/**` assets

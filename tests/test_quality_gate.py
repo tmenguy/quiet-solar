@@ -3110,13 +3110,78 @@ class TestSeedTestmon:
     """`seed_testmon` refreshes the DB with no pass/fail verdict."""
 
     @pytest.fixture(autouse=True)
-    def _stub_rebuild(self):
+    def _stub_rebuild(self, tmp_path: Path):
         """QS-283 A3: `seed_testmon` now calls `_rebuild_testmon_baseline`,
         which purges the real `.testmondata` and `.coverage`. Stub it by
         default so these mocked-seam tests never touch the real FS; the
-        dedicated ordering test re-patches it with its own spy."""
-        with patch.object(quality_gate, "_rebuild_testmon_baseline"):
+        dedicated ordering test re-patches it with its own spy.
+
+        QS-286: also redirect `SEED_STATUS` to a tmp sibling so the marker
+        writes never pollute the repo root, and tests can read it back."""
+        with (
+            patch.object(quality_gate, "_rebuild_testmon_baseline"),
+            patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"),
+        ):
             yield
+
+    def _marker(self) -> dict:
+        return json.loads(quality_gate.SEED_STATUS.read_text())
+
+    def test_running_marker_written_after_probe_before_pytest(self) -> None:
+        """AC#1: a `running` marker (with pid + started) exists by the time
+        the pytest pass runs — captured here from inside `_stream_pytest`."""
+        seen: dict = {}
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(
+                quality_gate,
+                "_stream_pytest",
+                side_effect=lambda *_a, **_k: (seen.update(self._marker()), {"returncode": 0})[1],
+            ),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        assert seen["state"] == "running"
+        assert seen["pid"] == os.getpid()
+        assert "started" in seen
+
+    @pytest.mark.parametrize("rc", [0, 1], ids=["clean", "test-failures"])
+    def test_ok_marker_on_rc_lt_2(self, rc: int) -> None:
+        """AC#1: rc < 2 (DB written) → final marker state=ok with returncode/finished."""
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": rc}),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        marker = self._marker()
+        assert marker["state"] == "ok"
+        assert marker["returncode"] == rc
+        assert "finished" in marker and "started" in marker
+        assert "pid" not in marker  # review-fix #04: dropped from completion marker
+
+    def test_incomplete_marker_on_rc_ge_2(self) -> None:
+        """AC#1: rc >= 2 (suspect DB) → final marker state=incomplete."""
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["SEED_CMD"]),
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": 2}),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        marker = self._marker()
+        assert marker["state"] == "incomplete"
+        assert marker["returncode"] == 2
+        assert "pid" not in marker  # review-fix #04: dropped from completion marker
+
+    def test_skipped_marker_and_no_running_when_tooling_missing(self) -> None:
+        """AC#2: not-importable writes a `skipped` marker (with reason) and
+        returns 3; NO `running` marker is written on that path."""
+        with patch.object(quality_gate, "_testmon_available", return_value=False):
+            assert quality_gate.seed_testmon() == 3
+        marker = self._marker()
+        assert marker["state"] == "skipped"
+        assert "not importable" in marker["reason"]
+        assert "pid" not in marker  # never reached the `running` write
 
     def test_tooling_missing_returns_3(self) -> None:
         # review-fix S2: gated on the testmon-only probe, NOT the full impacted set.
@@ -3202,6 +3267,290 @@ class TestSeedTestmon:
         with patch.object(quality_gate, "_pytest_workers", return_value=None):
             cmd = quality_gate._build_seed_testmon_cmd()
         assert "-n" not in cmd
+
+
+class TestWriteSeedStatus:
+    """QS-286 AC#3: `_write_seed_status` is atomic + best-effort."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def test_writes_state_and_fields_no_temp_leftover(self) -> None:
+        quality_gate._write_seed_status("running", pid=7, started=1.5)
+        marker = json.loads(quality_gate.SEED_STATUS.read_text())
+        assert marker == {"state": "running", "pid": 7, "started": 1.5}
+        tmp = quality_gate.SEED_STATUS.with_suffix(quality_gate.SEED_STATUS.suffix + ".tmp")
+        assert not tmp.exists(), "temp sibling must be cleaned up after a successful write"
+
+    def test_uses_atomic_os_replace(self) -> None:
+        with patch.object(quality_gate.os, "replace") as mock_replace:
+            quality_gate._write_seed_status("ok", returncode=0)
+        mock_replace.assert_called_once()
+
+    def test_best_effort_swallows_and_cleans_up_on_failure(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A write failure must NOT raise (never abort the detached rebuild),
+        the temp file must still be unlinked by the `finally`, AND a single
+        diagnostic line is emitted (review-fix #02)."""
+
+        def raiser(*_a, **_k):
+            raise OSError("boom")
+
+        with patch.object(quality_gate.os, "replace", side_effect=raiser):
+            quality_gate._write_seed_status("ok", returncode=0)  # must not raise
+        tmp = quality_gate.SEED_STATUS.with_suffix(quality_gate.SEED_STATUS.suffix + ".tmp")
+        assert not tmp.exists()
+        assert not quality_gate.SEED_STATUS.exists()  # replace never happened
+        err = capsys.readouterr().err
+        assert "could not write status marker" in err
+        assert "boom" in err  # the swallowed exception is surfaced for tracing
+
+
+class TestPidAlive:
+    """QS-286: `_pid_alive` maps os.kill(pid, 0) outcomes to liveness."""
+
+    def test_dead_when_process_lookup_error(self) -> None:
+        with patch.object(quality_gate.os, "kill", side_effect=ProcessLookupError):
+            assert quality_gate._pid_alive(999999) is False
+
+    def test_alive_when_permission_error(self) -> None:
+        with patch.object(quality_gate.os, "kill", side_effect=PermissionError):
+            assert quality_gate._pid_alive(1) is True
+
+    def test_alive_on_success(self) -> None:
+        with patch.object(quality_gate.os, "kill", return_value=None) as mock_kill:
+            assert quality_gate._pid_alive(1234) is True
+        mock_kill.assert_called_once_with(1234, 0)
+
+    # review-fix #04: `_pid_alive` is total — an untrusted pid that makes
+    # os.kill raise anything other than PermissionError is treated as dead,
+    # never propagating out of the read-only status query.
+    @pytest.mark.parametrize(
+        "exc", [OverflowError, ValueError, TypeError], ids=["overflow", "value", "type"]
+    )
+    def test_dead_on_other_os_kill_errors(self, exc: type[Exception]) -> None:
+        with patch.object(quality_gate.os, "kill", side_effect=exc):
+            assert quality_gate._pid_alive(10**19) is False
+
+    def test_out_of_range_pid_is_dead_no_raise(self) -> None:
+        """Real os.kill: a pid beyond pid_t (10**19) raises OverflowError, which
+        `_pid_alive` swallows → dead (no patching of the syscall)."""
+        assert quality_gate._pid_alive(10**19) is False
+
+
+class TestFmtSeedTime:
+    """QS-286 review-fix #02: epoch marker fields render as readable UTC ISO."""
+
+    def test_numeric_renders_utc_iso(self) -> None:
+        # 1_700_000_000 == 2023-11-14T22:13:20+00:00 (UTC, seconds precision).
+        assert quality_gate._fmt_seed_time(1_700_000_000) == "2023-11-14T22:13:20+00:00"
+
+    def test_float_renders_seconds_precision(self) -> None:
+        out = quality_gate._fmt_seed_time(1_700_000_000.987654)
+        assert out == "2023-11-14T22:13:20+00:00"  # sub-second truncated
+
+    @pytest.mark.parametrize("value", [None, "x", True], ids=["none", "str", "bool"])
+    def test_non_numeric_is_placeholder(self, value: object) -> None:
+        assert quality_gate._fmt_seed_time(value) == "an unknown time"
+
+    # review-fix #03: non-finite / out-of-range epochs must not raise
+    # (json.loads accepts Infinity/-Infinity/NaN); they placeholder instead.
+    @pytest.mark.parametrize(
+        "value",
+        [float("inf"), float("-inf"), float("nan"), 1e400, 10**400, -(10**400)],
+        ids=["inf", "-inf", "nan", "1e400", "huge-int", "huge-neg-int"],
+    )
+    def test_non_finite_or_out_of_range_is_placeholder(self, value: object) -> None:
+        assert quality_gate._fmt_seed_time(value) == "an unknown time"
+
+
+class TestSeedTestmonStatus:
+    """QS-286 AC#4: `seed_testmon_status` — distinct message + 4-code exit
+    for every originating marker condition. Read-only."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def _write(self, marker: object) -> None:
+        quality_gate.SEED_STATUS.write_text(json.dumps(marker))
+
+    def test_ok_exits_0(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "ok", "finished": 100.0})
+        assert quality_gate.seed_testmon_status() == 0
+        out = capsys.readouterr().out
+        assert "safe to close" in out.lower()
+        # review-fix #02: epoch is rendered as a readable UTC ISO string, not
+        # the raw float.
+        assert "100.0" not in out
+        assert quality_gate._fmt_seed_time(100.0) in out
+
+    def test_running_alive_exits_4(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "running", "pid": 42, "started": 1.0})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate.seed_testmon_status() == 4
+        out = capsys.readouterr().out
+        assert "still running" in out.lower()
+        assert quality_gate._fmt_seed_time(1.0) in out  # started rendered readably
+
+    def test_running_dead_exits_1_interrupted(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "running", "pid": 42, "started": 1.0})
+        with patch.object(quality_gate, "_pid_alive", return_value=False):
+            assert quality_gate.seed_testmon_status() == 1
+        assert "interrupted" in capsys.readouterr().out.lower()
+
+    def test_incomplete_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "incomplete", "returncode": 2})
+        assert quality_gate.seed_testmon_status() == 1
+        assert "finished with errors" in capsys.readouterr().out.lower()
+
+    def test_skipped_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "skipped", "reason": "pytest-testmon not importable"})
+        assert quality_gate.seed_testmon_status() == 1
+        out = capsys.readouterr().out.lower()
+        assert "skipped" in out and "no baseline was written" in out
+
+    def test_missing_marker_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert not quality_gate.SEED_STATUS.exists()
+        assert quality_gate.seed_testmon_status() == 3
+        assert "no baseline refresh" in capsys.readouterr().out.lower()
+
+    def test_unparseable_marker_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        quality_gate.SEED_STATUS.write_text("{not json")
+        assert quality_gate.seed_testmon_status() == 3
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    def test_unknown_state_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """A parseable marker with an unexpected state is treated as unreadable."""
+        self._write({"state": "bogus"})
+        assert quality_gate.seed_testmon_status() == 3
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    # review-fix #01 must-fix: malformed-but-parseable markers must route to
+    # the unreadable→3 path, never crash the read-only status command.
+    @pytest.mark.parametrize(
+        "payload",
+        [5, "x", None, [1], 3.14],
+        ids=["int", "str", "null", "array", "float"],
+    )
+    def test_non_dict_payload_exits_3(
+        self, payload: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write(payload)
+        assert quality_gate.seed_testmon_status() == 3  # no AttributeError
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    # review-fix #01 must-fix + #02 should-fix: a `running` marker whose pid is
+    # not a positive, non-bool int is unreadable → 3, and must never reach the
+    # `os.kill` seam. Covers missing/null/str/float pids (would TypeError) AND
+    # pid 0 / -1 / bool (would target the process group / all processes and
+    # spuriously report "still running").
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            {"state": "running"},
+            {"state": "running", "pid": None},
+            {"state": "running", "pid": "x"},
+            {"state": "running", "pid": 1.5},
+            {"state": "running", "pid": 0},
+            {"state": "running", "pid": -1},
+            {"state": "running", "pid": True},
+        ],
+        ids=["no-pid", "pid-null", "pid-str", "pid-float", "pid-zero", "pid-neg", "pid-bool"],
+    )
+    def test_running_with_bad_pid_exits_3(
+        self, marker: dict, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A `running` marker without a positive, non-bool int pid is
+        unreadable — never reaches `_pid_alive`/`os.kill`."""
+        self._write(marker)
+        with (
+            patch.object(quality_gate, "_pid_alive") as mock_alive,
+            patch.object(quality_gate.os, "kill") as mock_kill,
+        ):
+            assert quality_gate.seed_testmon_status() == 3  # no TypeError, no false "running"
+        mock_alive.assert_not_called()  # bad pid never hits the syscall seam
+        mock_kill.assert_not_called()
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    def test_running_out_of_range_pid_interrupted_no_crash(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix #04 must-fix: a positive pid beyond pid_t (10**19) passes
+        the positivity guard, reaches the real os.kill (→ OverflowError), and is
+        treated as dead → interrupted (exit 1), never crashing the query."""
+        self._write({"state": "running", "pid": 10**19, "started": 1.0})
+        assert quality_gate.seed_testmon_status() == 1  # no OverflowError
+        assert "interrupted" in capsys.readouterr().out.lower()
+
+    # review-fix #01 nice-to-have: a marker missing a display-only field prints
+    # a readable placeholder, not literal "None" — and keeps its exit code.
+    def test_ok_missing_finished_prints_placeholder(self, capsys: pytest.CaptureFixture[str]) -> None:
+        self._write({"state": "ok"})
+        assert quality_gate.seed_testmon_status() == 0
+        out = capsys.readouterr().out
+        assert "None" not in out
+        assert "an unknown time" in out
+
+    # review-fix #03 must-fix: a non-finite / out-of-range epoch in a marker
+    # must not crash the read-only status query — it placeholders and keeps
+    # its exit code. json.dumps emits Infinity/-Infinity/NaN literals that
+    # json.loads accepts, mirroring a torn / hand-edited marker.
+    @pytest.mark.parametrize(
+        "finished",
+        [float("inf"), float("-inf"), float("nan"), 10**400],
+        ids=["inf", "-inf", "nan", "huge-int"],
+    )
+    def test_ok_with_bad_epoch_placeholders_no_crash(
+        self, finished: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write({"state": "ok", "finished": finished})
+        assert quality_gate.seed_testmon_status() == 0  # no OverflowError/ValueError
+        out = capsys.readouterr().out
+        assert "safe to close" in out.lower()
+        assert "an unknown time" in out
+
+    @pytest.mark.parametrize(
+        "started",
+        [float("inf"), float("-inf"), float("nan"), 10**400],
+        ids=["inf", "-inf", "nan", "huge-int"],
+    )
+    def test_running_with_bad_epoch_placeholders_no_crash(
+        self, started: object, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write({"state": "running", "pid": 42, "started": started})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate.seed_testmon_status() == 4  # no crash before exit 4
+        out = capsys.readouterr().out
+        assert "still running" in out.lower()
+        assert "an unknown time" in out
+
+    def test_incomplete_missing_returncode_prints_placeholder(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._write({"state": "incomplete"})
+        assert quality_gate.seed_testmon_status() == 1
+        out = capsys.readouterr().out
+        assert "None" not in out
+        assert "exit unknown" in out
+
+    def test_reader_is_read_only(self) -> None:
+        """AC#4: no pytest / coverage / testmon import — the reader touches
+        none of the heavy seams."""
+        self._write({"state": "ok", "finished": 1.0})
+        with (
+            patch.object(quality_gate, "_stream_pytest") as mock_stream,
+            patch.object(quality_gate, "_testmon_available") as mock_probe,
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+        ):
+            quality_gate.seed_testmon_status()
+        mock_stream.assert_not_called()
+        mock_probe.assert_not_called()
+        mock_rebuild.assert_not_called()
 
 
 class TestImpactedCli:
@@ -3292,6 +3641,50 @@ class TestImpactedCli:
         mock_seed.assert_called_once_with()
         mock_scope.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "conflict",
+        [
+            ["--seed-testmon"],
+            ["--impacted"],
+            ["--cache"],
+            ["--no-cache"],
+            ["--full"],
+            ["--fix"],
+            ["--quick", "tests/test_x.py"],
+        ],
+        ids=["seed", "impacted", "cache", "no-cache", "full", "fix", "quick"],
+    )
+    def test_seed_testmon_status_mutex_exits_2(
+        self, conflict: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC#5: --seed-testmon-status combined with any mode is a usage error."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-status", *conflict]),
+            patch.object(quality_gate, "seed_testmon_status") as mock_status,
+            patch.object(quality_gate, "seed_testmon") as mock_seed,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        assert "you cannot combine --seed-testmon-status with" in capsys.readouterr().err
+        mock_status.assert_not_called()
+        mock_seed.assert_not_called()
+
+    @pytest.mark.parametrize("status_code", [0, 1, 3, 4], ids=["ok", "rerun", "no-status", "running"])
+    def test_seed_testmon_status_cli_passthrough(self, status_code: int) -> None:
+        """AC#4: --seed-testmon-status short-circuits before scope, returning
+        the reader's exit code verbatim."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-status"]),
+            patch.object(quality_gate, "seed_testmon_status", return_value=status_code) as mock_status,
+            patch.object(quality_gate, "_detect_scope") as mock_scope,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == status_code
+        mock_status.assert_called_once_with()
+        mock_scope.assert_not_called()
+
 
 class TestImpactedDeps:
     """Regression guards for requirements_test.txt + .gitignore (AC#1)."""
@@ -3304,6 +3697,23 @@ class TestImpactedDeps:
     def test_testmondata_gitignored(self) -> None:
         gi = (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
         assert any(line.strip() == ".testmondata" for line in gi.splitlines())
+
+    def test_seed_status_gitignored(self) -> None:
+        """QS-286 AC#8: exact `.testmondata.seed-status` line (matches the
+        exact-match `.testmondata` convention, not a glob)."""
+        gi = (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
+        assert any(line.strip() == ".testmondata.seed-status" for line in gi.splitlines())
+
+    def test_seed_status_path_is_repo_root_relative(self) -> None:
+        """QS-286 AC#6 (review-fix #04): the marker constant is anchored under
+        REPO_ROOT (`__file__`-relative, cwd-independent), mirroring TESTMON_DATA
+        — so the detached run and a later status query resolve the same file."""
+        assert quality_gate.SEED_STATUS == quality_gate.REPO_ROOT / ".testmondata.seed-status"
+        assert quality_gate.SEED_STATUS.parent == quality_gate.REPO_ROOT
+        assert quality_gate.SEED_STATUS.is_absolute()
+        # Shares the main worktree's .testmondata directory (same relocation
+        # invariant as the testmon DB).
+        assert quality_gate.SEED_STATUS.parent == quality_gate.TESTMON_DATA.parent
 
 
 class TestProjectRulesDocGuards:
@@ -3323,6 +3733,23 @@ class TestProjectRulesDocGuards:
         rules = self._rules()
         assert "Local-vs-CI coverage invariant" in rules
         assert "`--impacted` is mutually exclusive" in rules
+
+    def test_seed_testmon_status_command_reference_present(self) -> None:
+        """review-fix #01 (AC#9): pin the --seed-testmon-status command-reference
+        addition, mirroring test_seed_status_gitignored's exact-line guard."""
+        rules = self._rules()
+        assert "quality_gate.py --seed-testmon-status" in rules
+        assert "companion" in rules  # documented as the --seed-testmon companion
+
+    def test_phase_protocols_step5_completion_signal_present(self) -> None:
+        """review-fix #04 (AC#9): pin the phase-protocols.md step-5 completion
+        -signal note, symmetric to the project-rules guard above so a drift /
+        revert of the step-5 line is caught."""
+        proto = (
+            Path(__file__).resolve().parent.parent / "docs" / "workflow" / "phase-protocols.md"
+        ).read_text()
+        assert "quality_gate.py --seed-testmon-status" in proto
+        assert ".testmondata.seed.log" in proto
 
 
 class TestWorktreeSetupSeedsCaches:
@@ -3400,6 +3827,36 @@ class TestFinishTaskRefreshesBaseline:
         assert "--seed-testmon" in body
         assert "git worktree list --porcelain" in body  # MAIN_DIR captured before cleanup
         assert "nohup" in body  # detached / best-effort
+
+    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    def test_completion_signal_present(self, harness: str) -> None:
+        """QS-286 AC#7: the detached refresh deletes the stale marker, logs to
+        `.testmondata.seed.log`, and points the user at --seed-testmon-status."""
+        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        assert 'rm -f "$MAIN_DIR/.testmondata.seed-status"' in body  # stale-marker guard
+        assert '>"$MAIN_DIR/.testmondata.seed.log" 2>&1' in body  # truncate redirect
+        assert "--seed-testmon-status" in body  # how to check
+        assert "safe to close this terminal" in body
+        # the old silent seed redirect is gone (other >/dev/null uses remain)
+        assert "--seed-testmon >/dev/null 2>&1" not in body
+
+    def test_seed_launch_block_byte_identical_across_harnesses(self) -> None:
+        """Harness-sync: the QS-286 completion-signal block is identical in
+        all three finish-task copies."""
+        blocks = []
+        for harness in (".claude", ".cursor", ".opencode"):
+            body = (
+                Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md"
+            ).read_text()
+            # review-fix #01 nice-to-have: anchor the slice on code-adjacent
+            # markers (the stale-marker rm and the exact redirect line), not on
+            # prose ending in a literal period, so added narrative can't
+            # truncate the slice inconsistently.
+            start = body.index('rm -f "$MAIN_DIR/.testmondata.seed-status"')
+            redirect = '>"$MAIN_DIR/.testmondata.seed.log" 2>&1'
+            end = body.index(redirect, start) + len(redirect)
+            blocks.append(body[start:end])
+        assert blocks[0] == blocks[1] == blocks[2]
 
     @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
     def test_interpreter_is_probed_not_hardcoded(self, harness: str) -> None:
