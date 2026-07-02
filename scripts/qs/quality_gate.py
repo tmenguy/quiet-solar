@@ -1511,13 +1511,20 @@ def _pid_alive(pid: int) -> bool:
     pid exists but is owned by another user (alive-but-not-ours → alive);
     success → alive. Extracted as a patchable seam so the status reader's
     `running` branches are coverable without spawning real processes.
+
+    Total by design (review-fix #04): the pid comes from an untrusted marker,
+    so an out-of-`pid_t`-range value (`10**19` → `OverflowError`) or any other
+    bad input (`ValueError`/`TypeError`) is treated as dead rather than
+    escaping and crashing the read-only status query. An out-of-range pid is
+    unambiguously not a live process, so "dead" (→ interrupted, exit 1) is the
+    correct verdict.
     """
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
     except PermissionError:
         return True
+    except (ProcessLookupError, OverflowError, ValueError, TypeError):
+        return False
     return True
 
 
@@ -1569,9 +1576,11 @@ def seed_testmon() -> int:
     # `.testmondata` (0 = clean, 1 = failures but DB persisted — "ok" means
     # "baseline written", NOT "tests passed"); rc >= 2 (usage/collection
     # error, crash, or no-tests) means the baseline is suspect → "incomplete".
+    # No `pid` in the completion marker: the process is finishing, so the
+    # reader's liveness check only ever consumes the `running` marker's pid
+    # (review-fix #04).
     _write_seed_status(
         "ok" if rc < 2 else "incomplete",
-        pid=os.getpid(),
         started=started,
         finished=time.time(),
         returncode=rc,
@@ -1619,8 +1628,9 @@ def _fmt_seed_time(value: object) -> str:
     """
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         try:
-            # `math.isfinite` itself overflows on a huge int (10**400 → float),
-            # so it lives inside the guard, not as a short-circuit condition.
+            # A huge int raises `OverflowError` in `math.isfinite` itself
+            # (caught below), so the finiteness check lives inside the
+            # try/except rather than as a short-circuit guard condition.
             if math.isfinite(value):
                 return datetime.fromtimestamp(value, tz=UTC).isoformat(timespec="seconds")
         except (OverflowError, ValueError, OSError):

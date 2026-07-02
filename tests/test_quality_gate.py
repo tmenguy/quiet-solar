@@ -3158,6 +3158,7 @@ class TestSeedTestmon:
         assert marker["state"] == "ok"
         assert marker["returncode"] == rc
         assert "finished" in marker and "started" in marker
+        assert "pid" not in marker  # review-fix #04: dropped from completion marker
 
     def test_incomplete_marker_on_rc_ge_2(self) -> None:
         """AC#1: rc >= 2 (suspect DB) → final marker state=incomplete."""
@@ -3170,6 +3171,7 @@ class TestSeedTestmon:
         marker = self._marker()
         assert marker["state"] == "incomplete"
         assert marker["returncode"] == 2
+        assert "pid" not in marker  # review-fix #04: dropped from completion marker
 
     def test_skipped_marker_and_no_running_when_tooling_missing(self) -> None:
         """AC#2: not-importable writes a `skipped` marker (with reason) and
@@ -3323,6 +3325,21 @@ class TestPidAlive:
             assert quality_gate._pid_alive(1234) is True
         mock_kill.assert_called_once_with(1234, 0)
 
+    # review-fix #04: `_pid_alive` is total — an untrusted pid that makes
+    # os.kill raise anything other than PermissionError is treated as dead,
+    # never propagating out of the read-only status query.
+    @pytest.mark.parametrize(
+        "exc", [OverflowError, ValueError, TypeError], ids=["overflow", "value", "type"]
+    )
+    def test_dead_on_other_os_kill_errors(self, exc: type[Exception]) -> None:
+        with patch.object(quality_gate.os, "kill", side_effect=exc):
+            assert quality_gate._pid_alive(10**19) is False
+
+    def test_out_of_range_pid_is_dead_no_raise(self) -> None:
+        """Real os.kill: a pid beyond pid_t (10**19) raises OverflowError, which
+        `_pid_alive` swallows → dead (no patching of the syscall)."""
+        assert quality_gate._pid_alive(10**19) is False
+
 
 class TestFmtSeedTime:
     """QS-286 review-fix #02: epoch marker fields render as readable UTC ISO."""
@@ -3459,6 +3476,16 @@ class TestSeedTestmonStatus:
         mock_alive.assert_not_called()  # bad pid never hits the syscall seam
         mock_kill.assert_not_called()
         assert "unreadable" in capsys.readouterr().out.lower()
+
+    def test_running_out_of_range_pid_interrupted_no_crash(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix #04 must-fix: a positive pid beyond pid_t (10**19) passes
+        the positivity guard, reaches the real os.kill (→ OverflowError), and is
+        treated as dead → interrupted (exit 1), never crashing the query."""
+        self._write({"state": "running", "pid": 10**19, "started": 1.0})
+        assert quality_gate.seed_testmon_status() == 1  # no OverflowError
+        assert "interrupted" in capsys.readouterr().out.lower()
 
     # review-fix #01 nice-to-have: a marker missing a display-only field prints
     # a readable placeholder, not literal "None" — and keeps its exit code.
@@ -3677,6 +3704,17 @@ class TestImpactedDeps:
         gi = (Path(__file__).resolve().parent.parent / ".gitignore").read_text()
         assert any(line.strip() == ".testmondata.seed-status" for line in gi.splitlines())
 
+    def test_seed_status_path_is_repo_root_relative(self) -> None:
+        """QS-286 AC#6 (review-fix #04): the marker constant is anchored under
+        REPO_ROOT (`__file__`-relative, cwd-independent), mirroring TESTMON_DATA
+        — so the detached run and a later status query resolve the same file."""
+        assert quality_gate.SEED_STATUS == quality_gate.REPO_ROOT / ".testmondata.seed-status"
+        assert quality_gate.SEED_STATUS.parent == quality_gate.REPO_ROOT
+        assert quality_gate.SEED_STATUS.is_absolute()
+        # Shares the main worktree's .testmondata directory (same relocation
+        # invariant as the testmon DB).
+        assert quality_gate.SEED_STATUS.parent == quality_gate.TESTMON_DATA.parent
+
 
 class TestProjectRulesDocGuards:
     """review-fix N2: content guard for the AC#12 doc edits (not just drift-checker)."""
@@ -3702,6 +3740,16 @@ class TestProjectRulesDocGuards:
         rules = self._rules()
         assert "quality_gate.py --seed-testmon-status" in rules
         assert "companion" in rules  # documented as the --seed-testmon companion
+
+    def test_phase_protocols_step5_completion_signal_present(self) -> None:
+        """review-fix #04 (AC#9): pin the phase-protocols.md step-5 completion
+        -signal note, symmetric to the project-rules guard above so a drift /
+        revert of the step-5 line is caught."""
+        proto = (
+            Path(__file__).resolve().parent.parent / "docs" / "workflow" / "phase-protocols.md"
+        ).read_text()
+        assert "quality_gate.py --seed-testmon-status" in proto
+        assert ".testmondata.seed.log" in proto
 
 
 class TestWorktreeSetupSeedsCaches:
