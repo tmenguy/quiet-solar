@@ -32,7 +32,7 @@ from custom_components.quiet_solar.const import (
     CONF_PERSON_PREFERRED_CAR,
     DATA_HANDLER,
     DOMAIN,
-    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
 )
 from custom_components.quiet_solar.ha_model.person import (
@@ -162,18 +162,18 @@ class TestQSPersonMileageHistory:
         assert person.historical_mileage_data[2][1] == 75.0
 
     def test_add_to_mileage_history_limits_size(self, create_person):
-        """Test history is limited to MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS."""
+        """Test history is limited to MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS."""
         person = create_person()
 
         base = datetime.datetime(2024, 1, 1, 0, 0, 0, tzinfo=pytz.UTC)
         leave = datetime.datetime(2024, 1, 1, 8, 0, 0, tzinfo=pytz.UTC)
 
         # Add more than the maximum
-        for i in range(MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS + 5):
+        for i in range(MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS + 5):
             day = base + timedelta(days=i)
             person.add_to_mileage_history(day, float(i * 10), leave + timedelta(days=i))
 
-        assert len(person.historical_mileage_data) <= MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+        assert len(person.historical_mileage_data) <= MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS
 
     def test_add_to_mileage_history_none_leave_time(self, create_person):
         """Test handling of None leave time."""

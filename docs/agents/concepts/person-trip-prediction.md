@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-07-04
+last_verified: 2026-07-05
 ---
 
 # Person, Car, and trip prediction
@@ -37,7 +37,7 @@ tomorrow's predicted trips with margin.
 
 - GPS-based presence detection (home / away / commuting).
 - Mileage history (count cap of 90 records via
-  `MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS`, sensor-attribute restored;
+  `MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS`, sensor-attribute restored;
   boot-time recorder backfill uses the separate
   `PERSON_HISTORY_BACKFILL_DAYS = 30` so a larger retention never
   inflates the per-day recorder queries) → **outlier-resistant**
@@ -67,11 +67,18 @@ tomorrow's predicted trips with margin.
   when it is one of the **2 most recent** records of its weekday bucket
   and that last-2 pair is a *live pattern* — BOTH suspicious, mutually
   similar (`abs(older − newest) ≤ PERSON_MILEAGE_RECURRENCE_TOLERANCE
-  (0.2) × newest`), and within
+  (0.2) × max(older, newest)` — a **symmetric** denominator matching the
+  "mutually similar" wording), within
   `PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS = 21` days of each other
-  (inclusive). This keeps a genuine weekly far commute while rejecting a
-  one-off. A single normal day in the bucket breaks liveness and reverts
-  the prediction immediately (minority regime).
+  (inclusive), **and** the pair's newest record itself within that same
+  window of the prediction time (*now*). The recency-vs-now clause stops
+  a dead habit — two similar long trips then that weekday goes
+  driving-silent (no records are ever written for zero-mileage days) —
+  from predicting stale ~400 km indefinitely; the prediction reverts to
+  the non-outlier records once the pair ages past the window. This keeps
+  a genuine weekly far commute while rejecting a one-off. A single normal
+  day in the bucket breaks liveness and reverts the prediction
+  immediately (minority regime).
 - **Documented trade-offs**: the *first* occurrence of a new recurring
   long trip is rejected (bounded to one mispredicted week, until the
   second occurrence makes the pattern live); non-weekly / alternating /

@@ -438,8 +438,8 @@ SOLAR_DUSK_EARLIEST_LOCAL_HOUR = 15
 SOLAR_DUSK_SUSTAIN_S = 90 * 60
 # 90 min sustained low-pv to commit dusk (filters cloud transients).
 
-MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 90  # count cap: keep at most 90 mileage records
-PERSON_HISTORY_BACKFILL_DAYS = 30  # boot-time recorder backfill depth (one query per day)
+MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS = 90  # count cap: max mileage records retained
+PERSON_HISTORY_BACKFILL_DAYS = 30  # boot-time recorder backfill depth in days
 
 # Outlier-resistant trip prediction tunables (defaults chosen in planning, not
 # user-validated — see docs/stories/QS-298.story.md Design §2).

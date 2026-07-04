@@ -20,7 +20,7 @@ from custom_components.quiet_solar.const import (
     CONF_PERSON_PERSON_ENTITY,
     CONF_PERSON_PREFERRED_CAR,
     DOMAIN,
-    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER,
 )
@@ -133,12 +133,12 @@ def test_add_to_mileage_history_insert_update_and_trim(hass: HomeAssistant) -> N
     assert len(person.historical_mileage_data) == 3
     assert person.historical_mileage_data[1][1] == 15.0
 
-    for idx in range(MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS + 1):
+    for idx in range(MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS + 1):
         day = base + timedelta(days=3 + idx)
         person.add_to_mileage_history(day, 1.0, day + timedelta(hours=8))
 
-    assert len(person.historical_mileage_data) == MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
-    assert len(person.serializable_historical_data) == MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+    assert len(person.historical_mileage_data) == MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS
+    assert len(person.serializable_historical_data) == MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS
 
 
 def test_should_recompute_history_empty_authorized_cars(hass: HomeAssistant) -> None:
@@ -247,6 +247,36 @@ async def test_device_post_home_init_restores_history(hass: HomeAssistant) -> No
 
     assert len(person.historical_mileage_data) == 1
     assert person.has_been_initialized is True
+
+
+async def test_device_post_home_init_preserves_old_records_and_prediction(hass: HomeAssistant) -> None:
+    """Restore >30-day-old records through the real sensor-attribute round-trip
+    (device_post_home_init): history length and prediction are preserved and an
+    initialized person never triggers recompute (QS-298 AC 7, N9)."""
+    hass, _, person = _make_person(hass, person_authorized_cars=["Car A"])
+    person.ha_entities["person_mileage_prediction"] = SimpleNamespace(entity_id="sensor.person_mileage_prediction")
+
+    now = datetime(2026, 4, 1, 6, 0, tzinfo=pytz.UTC)
+    base = now - timedelta(days=MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS - 1)  # spans > 30 days
+
+    _, _, source = _make_person(hass, person_authorized_cars=["Car A"])
+    for i in range(MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS):
+        d = base + timedelta(days=i)
+        source.add_to_mileage_history(d, 40.0 + (i % 3) * 5.0, d + timedelta(hours=8))
+    serialized = list(source.serializable_historical_data)
+    source_pred = source._get_best_week_day_guess(now.weekday(), now.astimezone(tz=None))
+
+    hass.states.async_set(
+        "sensor.person_mileage_prediction",
+        "ok",
+        {"historical_data": serialized, "has_been_initialized": True},
+    )
+
+    person.device_post_home_init(now)
+
+    assert len(person.historical_mileage_data) == MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS
+    assert person.should_recompute_history(now) is False
+    assert person._get_best_week_day_guess(now.weekday(), now.astimezone(tz=None)) == source_pred
 
 
 def test_device_post_home_init_missing_sensor_entity(hass: HomeAssistant) -> None:
