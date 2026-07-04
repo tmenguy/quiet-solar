@@ -22,10 +22,12 @@ Expected outcome:
 - `python scripts/qs/quality_gate.py --impacted` passes (dev-only
   changes carry no product-coverage delta, so that side is a fast
   no-op; the tooling's own testmon-selected tests still run).
-- For md-only edits pinned by `tests/qs`,
+- For change sets touching any `tests/qs`-pinned non-Python file
+  (agent files, commands, workflow docs, `.claude/settings.json`) —
+  even when Python files changed too —
   `python scripts/qs/quality_gate.py --quick tests/qs` also passes
-  before commit (testmon cannot select doc-pinning tests for markdown
-  changes, so `--impacted` alone is vacuous there).
+  before commit (testmon cannot see non-Python files, so `--impacted`
+  alone is blind there).
 - Auto-committed, pushed, PR opened.
 - Next-phase command printed: launcher form (`claude --agent
   qs-review-task`) plus slash-command fallback (`/review-task`).
