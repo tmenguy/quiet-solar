@@ -100,6 +100,18 @@ python scripts/qs/quality_gate.py        # full gate, on EXPLICIT request only
 
 Pass on a green gate; fix on red.
 
+**Md-only edits pinned by `tests/qs`.** For markdown-only change sets
+(agent files, commands, workflow docs) also run
+
+```bash
+python scripts/qs/quality_gate.py --quick tests/qs
+```
+
+before commit — testmon traces Python execution and cannot select the
+doc-pinning tests (slash-command preambles, workflow-doc markers) for
+markdown changes, so `--impacted` alone is vacuous there; the first
+failure would otherwise surface only in CI.
+
 **Doc-maintenance pre-commit sub-step.** After staging your
 intended changes (`git add` first so the diff is populated), run
 

@@ -16,9 +16,10 @@ last_verified: 2026-07-02
 ([home-model-battery.md](home-model-battery.md)) and translates the
 solver's `LoadCommand`s into HA service calls: set max-charge /
 max-discharge **power** via HA number entities and toggle the single
-charge-from-grid switch. Discharge is disabled by driving
-`max_discharging_power` to 0 — there is no discharge-enable switch and
-no SOC-setpoint number. It attaches HA state probes for SOC
+charge-from-grid switch. Discharge is disabled by driving the
+`max_discharging_power` domain attribute to 0 (surfaced as the
+`max_discharge_number` HA entity) — there is no discharge-enable
+switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.
 
