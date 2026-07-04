@@ -86,7 +86,12 @@ source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 enforced in **CI on every PR** and is
 what actually guarantees full coverage. The implement phase ALWAYS
 runs `--impacted` before commit/PR and never substitutes the full gate
-locally (the only local full-gate run is an explicit user request). The
+locally (the only local full-gate run is an explicit user request). For
+change sets touching any `tests/qs`-pinned non-Python file (agent
+files, commands, workflow docs, `.claude/settings.json`) — even when
+Python files changed too — also run
+`python scripts/qs/quality_gate.py --quick tests/qs` before commit
+(testmon cannot see non-Python files). The
 three iteration commands relate as: `--impacted` is the mandatory
 pre-commit gate (finds + runs the impacted tests, checks changed-line
 coverage, self-heals a drifted baseline); `--quick` is for hammering

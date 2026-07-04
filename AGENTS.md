@@ -28,7 +28,7 @@ ad-hoc single-node debugging (positional must contain `::`).
 
 ```bash
 python scripts/qs/quality_gate.py --impacted  # MANDATORY pre-commit gate (QS-276): testmon-selected tests + changed-line 100% cov, self-healing
-python scripts/qs/quality_gate.py --quick tests/qs  # REQUIRED supplement when the change set touches tests/qs-pinned non-Python files (testmon cannot see non-Python files)
+python scripts/qs/quality_gate.py --quick tests/qs  # REQUIRED supplement when the change set touches tests/qs-pinned non-Python files: agent files, commands, workflow docs, .claude/settings.json (testmon cannot see non-Python files)
 python scripts/qs/quality_gate.py --quick tests/test_solver.py  # fast TDD inner loop on an explicit path
 python scripts/qs/quality_gate.py          # full gate (cov + ruff + mypy + translations) — EXPLICIT user request only; CI owns it except the translations value-check (#292)
 python scripts/qs/quality_gate.py --full   # force the full suite regardless of scope detection (a bare run scope-skips on dev-only / ui-only trees)
@@ -82,8 +82,9 @@ surface, so `.opencode/commands/` is intentionally absent.
 
 `python scripts/qs/quality_gate.py --impacted` is the mandatory
 pre-commit gate (for change sets touching `tests/qs`-pinned non-Python
-files, `--quick tests/qs` is a required supplement — testmon cannot
-see non-Python files); `--quick PATH` is the fast TDD inner loop; the
+files — agent files, commands, workflow docs, `.claude/settings.json` —
+`--quick tests/qs` is a required supplement even when Python files
+changed too; testmon cannot see non-Python files); `--quick PATH` is the fast TDD inner loop; the
 bare full gate runs authoritatively in CI (translations value-check
 excepted until #292 lands; local runs only on explicit user request) —
 see the Commands section above for the full grammar.

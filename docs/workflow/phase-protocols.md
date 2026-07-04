@@ -120,7 +120,11 @@ auto-commits, pushes, opens PR after green quality gate.
    exclusive job**. The only local full-gate run is an explicit user
    request. On an `--impacted` failure, fix the **code/tests** — never
    reach for the full gate to diagnose; escalate only after 2–3
-   attempts.
+   attempts. For change sets touching any `tests/qs`-pinned non-Python
+   file (agent files, commands, workflow docs,
+   `.claude/settings.json`) — even when Python files changed too —
+   also run `python scripts/qs/quality_gate.py --quick tests/qs`
+   before commit (testmon cannot see non-Python files).
 5. Auto-commit, push, open PR. No confirmation prompt — authorized by
    the workflow.
 
