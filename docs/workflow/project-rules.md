@@ -75,6 +75,13 @@ python scripts/qs/quality_gate.py --seed-testmon
 # 0 = ok/safe to close, 4 = still running, 1 = rerun, 3 = no readable status.
 python scripts/qs/quality_gate.py --seed-testmon-status
 
+# QS-299: companion read-only FOLLOWER — stream the detached --seed-testmon
+# run's progress inline (a `N/M tests (pct%)` line per poll) until it reaches
+# a terminal state; used by finish-task after a merge. Requires --seed-token.
+# Exit codes: 0 = ok/safe to close, 5 = superseded by a fresher refresh,
+# 1 = rerun, 4 = still running after 45m, 3 = no readable status.
+python scripts/qs/quality_gate.py --seed-testmon-follow --seed-token "$TOKEN"
+
 # Ad-hoc single-node pytest — debugging only.
 source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 ```
@@ -109,7 +116,17 @@ after a merge. A bare `pytest --testmon` remains forbidden. QS-286: its
 companion `--seed-testmon-status` is the sanctioned **read-only** query
 subcommand (no pytest/coverage/testmon import) — it reads the
 `.testmondata.seed-status` marker the detached run writes and reports
-whether it is safe to close the terminal.
+whether it is safe to close the terminal. QS-299: a second companion,
+`--seed-testmon-follow --seed-token <T>`, is the sanctioned **read-only**
+streaming follower (also no pytest/coverage/testmon import) — it tails the
+same marker plus the `.testmondata.seed.log` and prints one progress line
+per poll until a terminal verdict, so finish-task can surface completion
+inline in the same session; its exit code (0 ok / 5 superseded / 4 still
+running / 1 rerun / 3 unreadable) is a **completion signal, not a gate**.
+The detached seed accepts `--detached` (own process group) and
+`--seed-token <T>` (per-run identity); a newer seed automatically preempts
+an earlier still-running one (last-wins), and a stale baseline is always
+safe (new worktrees just over-select tests).
 
 **UI-only fast path.** When only `custom_components/quiet_solar/ui/*.j2`
 templates and `custom_components/quiet_solar/ui/resources/**` assets

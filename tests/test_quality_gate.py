@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -3553,6 +3554,747 @@ class TestSeedTestmonStatus:
         mock_rebuild.assert_not_called()
 
 
+# ---------------------------------------------------------------------------
+# QS-299 — inline follower + last-wins preemption
+# ---------------------------------------------------------------------------
+
+
+import contextlib as _contextlib  # noqa: E402 — local alias for the fake-lock helper
+
+
+@_contextlib.contextmanager
+def _fake_lock(acquired: bool):
+    """A stand-in for `quality_gate._seed_lock()` yielding a fixed acquired flag."""
+    yield acquired
+
+
+def _fake_lock_factory(acquired: bool):
+    """Return a no-arg callable producing a `_fake_lock(acquired)` context manager."""
+    return lambda: _fake_lock(acquired)
+
+
+class TestReadSeedMarker:
+    """QS-299: `_read_seed_marker` — tolerant JSON-object reader (None otherwise)."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def test_missing_returns_none(self) -> None:
+        assert quality_gate._read_seed_marker() is None
+
+    def test_unparseable_returns_none(self) -> None:
+        quality_gate.SEED_STATUS.write_text("{not json")
+        assert quality_gate._read_seed_marker() is None
+
+    @pytest.mark.parametrize("payload", [5, "x", None, [1], 3.14], ids=["int", "str", "null", "arr", "float"])
+    def test_non_dict_returns_none(self, payload: object) -> None:
+        quality_gate.SEED_STATUS.write_text(json.dumps(payload))
+        assert quality_gate._read_seed_marker() is None
+
+    def test_valid_dict_returned(self) -> None:
+        quality_gate.SEED_STATUS.write_text(json.dumps({"state": "ok", "token": "t"}))
+        assert quality_gate._read_seed_marker() == {"state": "ok", "token": "t"}
+
+    def test_status_keeps_distinct_missing_vs_unreadable(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """AC#7: the extraction must NOT collapse the two distinct messages."""
+        assert quality_gate.seed_testmon_status() == 3
+        assert "no baseline refresh" in capsys.readouterr().out.lower()
+        quality_gate.SEED_STATUS.write_text("{not json")
+        assert quality_gate.seed_testmon_status() == 3
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+
+class TestSeedLock:
+    """QS-299: `_seed_lock` — best-effort advisory lock (yields acquired flag)."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def test_lock_path_tracks_seed_status(self) -> None:
+        assert quality_gate._seed_lock_path() == quality_gate.SEED_STATUS.with_suffix(
+            quality_gate.SEED_STATUS.suffix + ".lock"
+        )
+
+    def test_acquires_when_free(self) -> None:
+        with quality_gate._seed_lock() as locked:
+            assert locked is True
+
+    def test_yields_false_when_flock_busy(self) -> None:
+        with (
+            patch.object(quality_gate.fcntl, "flock", side_effect=OSError("busy")),
+            quality_gate._seed_lock() as locked,
+        ):
+            assert locked is False
+
+    def test_yields_false_when_lockfile_unopenable(self, tmp_path: Path) -> None:
+        bad = tmp_path / "nonexistent-dir" / "x.seed-status"
+        with (
+            patch.object(quality_gate, "SEED_STATUS", bad),
+            quality_gate._seed_lock() as locked,
+        ):
+            assert locked is False
+
+    def test_releases_and_propagates_body_exception(self) -> None:
+        """A body exception must propagate (lock still released via finally)."""
+        with pytest.raises(ValueError):  # noqa: PT011
+            with quality_gate._seed_lock() as locked:
+                assert locked is True
+                raise ValueError("boom")
+        # Lock is free again — can re-acquire.
+        with quality_gate._seed_lock() as locked:
+            assert locked is True
+
+
+class TestDetachSession:
+    """QS-299 AC#4: `_detach_session` — setsid + pgid-when-group-leader."""
+
+    def test_records_pgid_on_setsid_success(self) -> None:
+        with (
+            patch.object(quality_gate.os, "setsid") as mock_setsid,
+            patch.object(quality_gate.os, "getpgrp", return_value=4242),
+            patch.object(quality_gate.os, "getpid", return_value=4242),
+        ):
+            assert quality_gate._detach_session() == 4242
+        mock_setsid.assert_called_once_with()
+
+    def test_records_pgid_on_setsid_eperm_already_leader(self) -> None:
+        """setsid raises EPERM when we already lead a group — still record it."""
+        with (
+            patch.object(quality_gate.os, "setsid", side_effect=OSError("EPERM")),
+            patch.object(quality_gate.os, "getpgrp", return_value=99),
+            patch.object(quality_gate.os, "getpid", return_value=99),
+        ):
+            assert quality_gate._detach_session() == 99
+
+    def test_no_pgid_when_not_group_leader(self) -> None:
+        with (
+            patch.object(quality_gate.os, "setsid"),
+            patch.object(quality_gate.os, "getpgrp", return_value=1),
+            patch.object(quality_gate.os, "getpid", return_value=2),
+        ):
+            assert quality_gate._detach_session() is None
+
+
+class TestTerminateProcessGroup:
+    """QS-299 AC#3: `_terminate_process_group` — killpg-when-pgid else kill; best-effort."""
+
+    def test_killpg_when_pgid(self) -> None:
+        with patch.object(quality_gate.os, "killpg") as mock_killpg:
+            quality_gate._terminate_process_group(500, 501)
+        mock_killpg.assert_called_once_with(500, signal.SIGTERM)
+
+    def test_kill_when_no_pgid(self) -> None:
+        with patch.object(quality_gate.os, "kill") as mock_kill:
+            quality_gate._terminate_process_group(None, 777)
+        mock_kill.assert_called_once_with(777, signal.SIGTERM)
+
+    @pytest.mark.parametrize(
+        "exc", [ProcessLookupError, PermissionError, OverflowError, ValueError, TypeError, OSError]
+    )
+    def test_best_effort_never_raises(self, exc: type[Exception]) -> None:
+        with patch.object(quality_gate.os, "killpg", side_effect=exc):
+            quality_gate._terminate_process_group(1, 2)  # must not raise
+        with patch.object(quality_gate.os, "kill", side_effect=exc):
+            quality_gate._terminate_process_group(None, 2)  # must not raise
+
+    def test_emits_one_diagnostic(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(quality_gate.os, "killpg"):
+            quality_gate._terminate_process_group(3, 4)
+        assert "preempting previous baseline refresh" in capsys.readouterr().err
+
+
+class TestFindRunningPredecessor:
+    """QS-299: `_find_running_predecessor` selection rules."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def _write(self, marker: object) -> None:
+        quality_gate.SEED_STATUS.write_text(json.dumps(marker))
+
+    def test_none_when_no_marker(self) -> None:
+        assert quality_gate._find_running_predecessor("me") is None
+
+    def test_live_foreign_running_returns_pid_pgid(self) -> None:
+        self._write({"state": "running", "token": "other", "pid": 42, "pgid": 40})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate._find_running_predecessor("me") == (42, 40)
+
+    def test_no_pgid_field_returns_pid_none(self) -> None:
+        self._write({"state": "running", "token": "other", "pid": 42})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate._find_running_predecessor("me") == (42, None)
+
+    def test_same_token_returns_none(self) -> None:
+        self._write({"state": "running", "token": "me", "pid": 42})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate._find_running_predecessor("me") is None
+
+    def test_dead_pid_returns_none(self) -> None:
+        self._write({"state": "running", "token": "other", "pid": 42})
+        with patch.object(quality_gate, "_pid_alive", return_value=False):
+            assert quality_gate._find_running_predecessor("me") is None
+
+    def test_non_running_state_returns_none(self) -> None:
+        self._write({"state": "ok", "token": "other", "pid": 42})
+        assert quality_gate._find_running_predecessor("me") is None
+
+    @pytest.mark.parametrize("pid", [None, "x", 0, -1, True, 1.5], ids=["none", "str", "zero", "neg", "bool", "float"])
+    def test_bad_pid_returns_none(self, pid: object) -> None:
+        self._write({"state": "running", "token": "other", "pid": pid})
+        assert quality_gate._find_running_predecessor("me") is None
+
+    @pytest.mark.parametrize("pgid", [0, -1, True, "x", 1.5], ids=["zero", "neg", "bool", "str", "float"])
+    def test_bad_pgid_falls_back_to_none(self, pgid: object) -> None:
+        self._write({"state": "running", "token": "other", "pid": 42, "pgid": pgid})
+        with patch.object(quality_gate, "_pid_alive", return_value=True):
+            assert quality_gate._find_running_predecessor("me") == (42, None)
+
+
+class TestClaimAndPreempt:
+    """QS-299 AC#3: read→claim→kill under the lock; lock-fail skips preemption."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def _marker(self) -> dict:
+        return json.loads(quality_gate.SEED_STATUS.read_text())
+
+    def test_claims_and_preempts_in_order(self) -> None:
+        order: list[str] = []
+        with (
+            patch.object(quality_gate, "_seed_lock", _fake_lock_factory(True)),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=(42, 40)),
+            patch.object(
+                quality_gate,
+                "_write_seed_status",
+                side_effect=lambda *a, **k: order.append("claim"),
+            ),
+            patch.object(
+                quality_gate,
+                "_terminate_process_group",
+                side_effect=lambda *a, **k: order.append("kill"),
+            ) as mock_kill,
+        ):
+            quality_gate._claim_and_preempt("me", 100, 90, 1.0)
+        assert order == ["claim", "kill"], "claim must be written BEFORE the kill"
+        mock_kill.assert_called_once_with(40, 42)
+
+    def test_no_predecessor_no_kill(self) -> None:
+        with (
+            patch.object(quality_gate, "_seed_lock", _fake_lock_factory(True)),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=None),
+            patch.object(quality_gate, "_terminate_process_group") as mock_kill,
+        ):
+            quality_gate._claim_and_preempt("me", 100, 90, 1.0)
+        mock_kill.assert_not_called()
+        marker = self._marker()
+        assert marker["state"] == "running" and marker["token"] == "me"
+        assert marker["pid"] == 100 and marker["pgid"] == 90
+
+    def test_no_pgid_field_when_pgid_none(self) -> None:
+        with (
+            patch.object(quality_gate, "_seed_lock", _fake_lock_factory(True)),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=None),
+        ):
+            quality_gate._claim_and_preempt("me", 100, None, 1.0)
+        assert "pgid" not in self._marker()
+
+    def test_lock_busy_skips_preemption_but_claims(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch.object(quality_gate, "_seed_lock", _fake_lock_factory(False)),
+            patch.object(quality_gate, "_find_running_predecessor") as mock_find,
+            patch.object(quality_gate, "_terminate_process_group") as mock_kill,
+        ):
+            quality_gate._claim_and_preempt("me", 100, 90, 1.0)
+        mock_find.assert_not_called()
+        mock_kill.assert_not_called()
+        assert self._marker()["state"] == "running"
+        assert "skipping preemption" in capsys.readouterr().err
+
+
+class TestWriteCompletionIfOwner:
+    """QS-299 AC#5: token-guarded completion write."""
+
+    @pytest.fixture(autouse=True)
+    def _redirect(self, tmp_path: Path):
+        with patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"):
+            yield
+
+    def test_writes_when_token_matches(self) -> None:
+        quality_gate.SEED_STATUS.write_text(json.dumps({"state": "running", "token": "me"}))
+        with patch.object(quality_gate, "_seed_lock", _fake_lock_factory(True)):
+            quality_gate._write_completion_if_owner("me", "ok", returncode=0)
+        marker = json.loads(quality_gate.SEED_STATUS.read_text())
+        assert marker == {"state": "ok", "token": "me", "returncode": 0}
+
+    def test_skips_when_token_differs(self) -> None:
+        quality_gate.SEED_STATUS.write_text(json.dumps({"state": "running", "token": "winner"}))
+        with patch.object(quality_gate, "_seed_lock", _fake_lock_factory(True)):
+            quality_gate._write_completion_if_owner("me", "ok", returncode=0)
+        # Winner's marker untouched.
+        assert json.loads(quality_gate.SEED_STATUS.read_text())["token"] == "winner"
+
+    def test_skips_when_marker_missing(self) -> None:
+        with patch.object(quality_gate, "_seed_lock", _fake_lock_factory(True)):
+            quality_gate._write_completion_if_owner("me", "ok", returncode=0)
+        assert not quality_gate.SEED_STATUS.exists()
+
+
+class TestSeedTestmonTokenPreemption:
+    """QS-299: `seed_testmon(token, detached)` wiring — token invariant,
+    detach gating, preemption, token-guarded completion."""
+
+    @pytest.fixture(autouse=True)
+    def _stub(self, tmp_path: Path):
+        with (
+            patch.object(quality_gate, "_rebuild_testmon_baseline"),
+            patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"),
+            patch.object(quality_gate, "_seed_lock", _fake_lock_factory(True)),
+        ):
+            yield
+
+    def _marker(self) -> dict:
+        return json.loads(quality_gate.SEED_STATUS.read_text())
+
+    def test_uses_given_token_end_to_end(self) -> None:
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["S"]),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=None),
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": 0}),
+        ):
+            assert quality_gate.seed_testmon(token="tok123") == 0
+        assert self._marker()["token"] == "tok123"
+
+    def test_generates_token_when_absent(self) -> None:
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["S"]),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=None),
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": 0}),
+        ):
+            assert quality_gate.seed_testmon() == 0
+        token = self._marker()["token"]
+        assert isinstance(token, str) and len(token) == 32  # uuid4().hex
+
+    def test_skipped_marker_carries_token(self) -> None:
+        with patch.object(quality_gate, "_testmon_available", return_value=False):
+            assert quality_gate.seed_testmon(token="tokX") == 3
+        marker = self._marker()
+        assert marker["state"] == "skipped" and marker["token"] == "tokX"
+
+    def test_detached_true_calls_setsid_and_records_pgid(self) -> None:
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["S"]),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=None),
+            patch.object(quality_gate, "_detach_session", return_value=555) as mock_detach,
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": 0}),
+        ):
+            # capture the running marker mid-pass (completion marker drops pgid).
+            seen: dict = {}
+            with patch.object(
+                quality_gate,
+                "_stream_pytest",
+                side_effect=lambda *a, **k: (seen.update(self._marker()), {"returncode": 0})[1],
+            ):
+                assert quality_gate.seed_testmon(token="t", detached=True) == 0
+        mock_detach.assert_called_once_with()
+        assert seen["pgid"] == 555
+
+    def test_detached_false_skips_setsid(self) -> None:
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["S"]),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=None),
+            patch.object(quality_gate, "_detach_session") as mock_detach,
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": 0}),
+        ):
+            assert quality_gate.seed_testmon(token="t", detached=False) == 0
+        mock_detach.assert_not_called()
+
+    def test_preempts_live_predecessor(self) -> None:
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["S"]),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=(42, 40)),
+            patch.object(quality_gate, "_terminate_process_group") as mock_kill,
+            patch.object(quality_gate, "_stream_pytest", return_value={"returncode": 0}),
+        ):
+            assert quality_gate.seed_testmon(token="t2") == 0
+        mock_kill.assert_called_once_with(40, 42)
+
+    def test_completion_write_is_token_guarded(self) -> None:
+        """AC#5: a preempted run (marker flipped to a foreign token during the
+        pass) must NOT clobber the winner's marker on completion."""
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_build_seed_testmon_cmd", return_value=["S"]),
+            patch.object(quality_gate, "_find_running_predecessor", return_value=None),
+            patch.object(
+                quality_gate,
+                "_stream_pytest",
+                # a fresher seed claims the marker while we run.
+                side_effect=lambda *a, **k: (
+                    quality_gate.SEED_STATUS.write_text(
+                        json.dumps({"state": "running", "token": "winner"})
+                    ),
+                    {"returncode": 0},
+                )[1],
+            ),
+        ):
+            assert quality_gate.seed_testmon(token="loser") == 0
+        assert json.loads(quality_gate.SEED_STATUS.read_text())["token"] == "winner"
+
+
+class TestParseSeedProgress:
+    """QS-299 AC#2: last-match parse of the live `_stream_pytest` progress format."""
+
+    def test_parses_live_captured_format(self) -> None:
+        # The exact line _stream_pytest synthesizes under -n auto (captured live).
+        line = "  pytest: 21% (72/330) | passed=72 failed=0 errors=0\n"
+        assert quality_gate._parse_seed_progress(line) == (21, 72, 330)
+
+    def test_takes_last_match(self) -> None:
+        log = (
+            "  pytest: 21% (72/330) | passed=72 failed=0 errors=0\n"
+            "  pytest: 65% (216/330) | passed=216 failed=0 errors=0\n"
+        )
+        assert quality_gate._parse_seed_progress(log) == (65, 216, 330)
+
+    def test_does_not_match_done_line(self) -> None:
+        assert quality_gate._parse_seed_progress("  pytest: done (330/330) | passed=329\n") is None
+
+    def test_none_when_empty(self) -> None:
+        assert quality_gate._parse_seed_progress("") is None
+
+    def test_production_format_still_parses(self) -> None:
+        """Regression tripwire: if `_stream_pytest`'s format drifts, this breaks."""
+        # Reconstruct the exact production f-string.
+        pct, current, total, lp, lf, le = 43, 144, 330, 144, 0, 0
+        line = f"  pytest: {pct}% ({current}/{total}) | passed={lp} failed={lf} errors={le}\n"
+        assert quality_gate._parse_seed_progress(line) == (43, 144, 330)
+
+
+class TestFmtElapsed:
+    """QS-299: `_fmt_elapsed` renders mm:ss."""
+
+    @pytest.mark.parametrize(
+        ("seconds", "expected"),
+        [(0, "00:00"), (5, "00:05"), (65, "01:05"), (3661, "61:01"), (-3, "00:00")],
+    )
+    def test_formats(self, seconds: float, expected: str) -> None:
+        assert quality_gate._fmt_elapsed(seconds) == expected
+
+
+class TestMarkerElapsed:
+    """QS-299 AC#2: wall-clock elapsed from `started`."""
+
+    def test_now_minus_started(self) -> None:
+        with patch.object(quality_gate.time, "time", return_value=100.0):
+            assert quality_gate._marker_elapsed({"started": 40.0}) == 60.0
+
+    @pytest.mark.parametrize(
+        "started", [None, "x", True, float("inf"), float("nan"), 10**400], ids=["none", "str", "bool", "inf", "nan", "huge"]
+    )
+    def test_bad_started_is_zero(self, started: object) -> None:
+        with patch.object(quality_gate.time, "time", return_value=100.0):
+            assert quality_gate._marker_elapsed({"started": started}) == 0.0
+
+    def test_never_negative(self) -> None:
+        with patch.object(quality_gate.time, "time", return_value=10.0):
+            assert quality_gate._marker_elapsed({"started": 40.0}) == 0.0
+
+
+class TestPrintSeedProgress:
+    """QS-299 AC#2: progress line format + degraded fallback."""
+
+    def test_full_format(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch.object(quality_gate, "_read_seed_log_tail", return_value="  pytest: 21% (72/330) | x\n"),
+            patch.object(quality_gate, "_marker_elapsed", return_value=65.0),
+        ):
+            quality_gate._print_seed_progress({"started": 1.0})
+        out = capsys.readouterr().out
+        assert "refreshing baseline: 72/330 tests (21%) · elapsed 01:05" in out
+
+    def test_degraded_when_unparseable(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch.object(quality_gate, "_read_seed_log_tail", return_value="no progress here"),
+            patch.object(quality_gate, "_marker_elapsed", return_value=5.0),
+        ):
+            quality_gate._print_seed_progress({"started": 1.0})
+        out = capsys.readouterr().out
+        assert "refreshing baseline: elapsed 00:05" in out
+        assert "tests" not in out
+
+
+class TestReadSeedLogTail:
+    """QS-299: `_read_seed_log_tail` — best-effort read."""
+
+    def test_reads_content(self, tmp_path: Path) -> None:
+        log = tmp_path / "seed.log"
+        log.write_text("hello")
+        with patch.object(quality_gate, "SEED_LOG", log):
+            assert quality_gate._read_seed_log_tail() == "hello"
+
+    def test_missing_returns_empty(self, tmp_path: Path) -> None:
+        with patch.object(quality_gate, "SEED_LOG", tmp_path / "nope.log"):
+            assert quality_gate._read_seed_log_tail() == ""
+
+
+class TestSeedTestmonFollow:
+    """QS-299 AC#1/#2: the inline follower's exit table + progress line."""
+
+    @pytest.fixture(autouse=True)
+    def _seams(self, tmp_path: Path):
+        """Redirect SEED_STATUS + neutralize sleep; each test drives the clock
+        and marker reads via its own patches."""
+        with (
+            patch.object(quality_gate, "SEED_STATUS", tmp_path / ".testmondata.seed-status"),
+            patch.object(quality_gate.time, "sleep"),
+            patch.object(quality_gate.time, "monotonic", return_value=0.0),
+        ):
+            yield
+
+    def test_ok_exits_0(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "ok"}):
+            assert quality_gate.seed_testmon_follow("t") == 0
+        assert "safe to close" in capsys.readouterr().out.lower()
+
+    def test_superseded_exits_5(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "other", "state": "running"}):
+            assert quality_gate.seed_testmon_follow("t") == 5
+        out = capsys.readouterr().out.lower()
+        assert "fresher baseline refresh" in out and "safe to close" in out
+
+    def test_incomplete_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "incomplete"}):
+            assert quality_gate.seed_testmon_follow("t") == 1
+        assert "may be partial" in capsys.readouterr().out.lower()
+
+    def test_skipped_exits_1_benign(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(
+            quality_gate,
+            "_read_seed_marker",
+            return_value={"token": "t", "state": "skipped", "reason": "no testmon"},
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 1
+        out = capsys.readouterr().out.lower()
+        assert "skipped" in out and "no baseline was written" in out and "safe to close" in out
+
+    def test_unknown_state_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "bogus"}):
+            assert quality_gate.seed_testmon_follow("t") == 3
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    def test_running_alive_prints_progress_then_completes(self, capsys: pytest.CaptureFixture[str]) -> None:
+        markers = [
+            {"token": "t", "state": "running", "pid": 42, "started": 1.0},
+            {"token": "t", "state": "ok"},
+        ]
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=markers),
+            patch.object(quality_gate, "_pid_alive", return_value=True),
+            patch.object(quality_gate, "_print_seed_progress") as mock_prog,
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 0
+        mock_prog.assert_called_once()
+        assert "safe to close" in capsys.readouterr().out.lower()
+
+    def test_running_past_max_wait_exits_4(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # deadline = monotonic()[0] + MAX_WAIT; make the in-loop check exceed it.
+        with (
+            patch.object(
+                quality_gate.time,
+                "monotonic",
+                side_effect=[0.0, quality_gate._SEED_FOLLOW_MAX_WAIT_S + 1],
+            ),
+            patch.object(
+                quality_gate,
+                "_read_seed_marker",
+                return_value={"token": "t", "state": "running", "pid": 42, "started": 1.0},
+            ),
+            patch.object(quality_gate, "_pid_alive", return_value=True),
+            patch.object(quality_gate, "_print_seed_progress"),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 4
+        out = capsys.readouterr().out.lower()
+        assert "still running after 45m" in out and "--seed-token t" in out
+
+    def test_running_dead_confirmed_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """R1 re-poll: dead pid confirmed on re-read → interrupted."""
+        dead = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[dead, dead]),
+            patch.object(quality_gate, "_pid_alive", return_value=False),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 1
+        assert "may be partial" in capsys.readouterr().out.lower()
+
+    def test_running_dead_then_ok_recovers(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """R1 re-poll: marker flips to ok before we conclude interrupted (the
+        re-poll re-read + the top-of-loop re-classify both read the marker)."""
+        dead = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        ok = {"token": "t", "state": "ok"}
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[dead, ok, ok]),
+            patch.object(quality_gate, "_pid_alive", return_value=False),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 0
+        assert "safe to close" in capsys.readouterr().out.lower()
+
+    def test_running_dead_then_superseded(self) -> None:
+        """R1 re-poll: token flips (superseded) → exit 5, handled at loop top."""
+        dead = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        new = {"token": "new", "state": "running"}
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[dead, new, new]),
+            patch.object(quality_gate, "_pid_alive", return_value=False),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 5
+
+    def test_running_missing_pid_treated_dead(self, capsys: pytest.CaptureFixture[str]) -> None:
+        no_pid = {"token": "t", "state": "running", "started": 1.0}
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[no_pid, no_pid]),
+            patch.object(quality_gate, "_pid_alive") as mock_alive,
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 1
+        # a missing pid never reaches the syscall seam in the first observation.
+        mock_alive.assert_not_called()
+
+    def test_startup_grace_then_exit_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(quality_gate, "_read_seed_marker", return_value=None):
+            # SEED_STATUS never created → missing → grace exhausts → exit 3.
+            assert quality_gate.seed_testmon_follow("t") == 3
+        out = capsys.readouterr().out.lower()
+        assert "waiting for baseline refresh" in out and "unreadable" in out
+
+    def test_startup_grace_then_marker_appears(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with patch.object(quality_gate, "_read_seed_marker", side_effect=[None, {"token": "t", "state": "ok"}]):
+            assert quality_gate.seed_testmon_follow("t") == 0
+        out = capsys.readouterr().out.lower()
+        assert "waiting for baseline refresh" in out and "safe to close" in out
+
+    def test_present_but_unreadable_reread_exits_3(self, capsys: pytest.CaptureFixture[str]) -> None:
+        # marker file exists (so not startup grace) but reads as None twice.
+        quality_gate.SEED_STATUS.write_text("{not json")
+        with patch.object(quality_gate, "_read_seed_marker", return_value=None):
+            assert quality_gate.seed_testmon_follow("t") == 3
+        assert "unreadable" in capsys.readouterr().out.lower()
+
+    def test_present_but_unreadable_then_recovers(self) -> None:
+        quality_gate.SEED_STATUS.write_text("{not json")
+        ok = {"token": "t", "state": "ok"}
+        # None (present→re-read), non-None on re-read, then re-classify at loop top.
+        with patch.object(quality_gate, "_read_seed_marker", side_effect=[None, ok, ok]):
+            assert quality_gate.seed_testmon_follow("t") == 0
+
+    def test_is_read_only(self) -> None:
+        """AC#1: no pytest/coverage/testmon seam is touched."""
+        with (
+            patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "ok"}),
+            patch.object(quality_gate, "_stream_pytest") as mock_stream,
+            patch.object(quality_gate, "_testmon_available") as mock_probe,
+            patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
+        ):
+            quality_gate.seed_testmon_follow("t")
+        mock_stream.assert_not_called()
+        mock_probe.assert_not_called()
+        mock_rebuild.assert_not_called()
+
+
+class TestSeedFollowCli:
+    """QS-299 AC#6: CLI wiring for --seed-testmon-follow/--seed-token/--detached."""
+
+    def test_follow_passthrough(self) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-follow", "--seed-token", "T"]),
+            patch.object(quality_gate, "seed_testmon_follow", return_value=5) as mock_follow,
+            patch.object(quality_gate, "_detect_scope") as mock_scope,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 5
+        mock_follow.assert_called_once_with("T")
+        mock_scope.assert_not_called()
+
+    def test_seed_testmon_threads_token_and_detached(self) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon", "--detached", "--seed-token", "T"]),
+            patch.object(quality_gate, "seed_testmon", return_value=0) as mock_seed,
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        mock_seed.assert_called_once_with(token="T", detached=True)
+
+    def test_follow_requires_token(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-follow"]),
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        assert "--seed-testmon-follow requires --seed-token" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["--seed-token", "T"],
+            ["--seed-token", "T", "--impacted"],
+            ["--detached"],
+            ["--detached", "--seed-testmon-follow", "--seed-token", "T"],
+        ],
+        ids=["stray-token", "token-with-impacted", "stray-detached", "detached-with-follow"],
+    )
+    def test_stray_token_or_detached_exits_2(self, argv: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", *argv]),
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "only valid with" in err
+
+    @pytest.mark.parametrize(
+        "conflict",
+        [
+            ["--seed-testmon"],
+            ["--seed-testmon-status"],
+            ["--impacted"],
+            ["--cache"],
+            ["--no-cache"],
+            ["--full"],
+            ["--fix"],
+            ["--quick", "tests/test_x.py"],
+        ],
+        ids=["seed", "status", "impacted", "cache", "no-cache", "full", "fix", "quick"],
+    )
+    def test_follow_mutex_exits_2(self, conflict: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-follow", "--seed-token", "T", *conflict]),
+            patch.object(quality_gate, "seed_testmon_follow") as mock_follow,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        # the error may come from an earlier subcommand's mutex, but must be a
+        # usage error that prevents the follower from running.
+        assert "you cannot combine" in capsys.readouterr().err
+        mock_follow.assert_not_called()
+
+
 class TestImpactedCli:
     """`main()` wiring: short-circuit, exit-code passthrough, mutex."""
 
@@ -3638,7 +4380,8 @@ class TestImpactedCli:
         ):
             quality_gate.main()
         assert exc.value.code == seed_code
-        mock_seed.assert_called_once_with()
+        # QS-299: token + detached are threaded from the CLI (defaults here).
+        mock_seed.assert_called_once_with(token=None, detached=False)
         mock_scope.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -3751,6 +4494,65 @@ class TestProjectRulesDocGuards:
         assert "quality_gate.py --seed-testmon-status" in proto
         assert ".testmondata.seed.log" in proto
 
+    def test_seed_testmon_follow_documented_in_both_places(self) -> None:
+        """QS-299 AC#10: `--seed-testmon-follow` appears in BOTH the command-help
+        block AND the carve-out prose paragraph."""
+        rules = self._rules()
+        # command-help block (the runnable command line).
+        assert "quality_gate.py --seed-testmon-follow --seed-token" in rules
+        # carve-out prose: named as a read-only companion + exit-5 supersession.
+        assert "streaming follower" in rules
+        assert "superseded" in rules
+
+
+class TestFinishTaskFollowerAgents:
+    """QS-299 AC#9: all three qs-finish-task.md agents launch the tokened
+    detached seed + stream the follower inline, in lockstep."""
+
+    _AGENTS = (
+        ".claude/agents/qs-finish-task.md",
+        ".cursor/agents/qs-finish-task.md",
+        ".opencode/agents/qs-finish-task.md",
+    )
+
+    def _text(self, rel: str) -> str:
+        return (Path(__file__).resolve().parent.parent / rel).read_text()
+
+    @pytest.mark.parametrize("rel", _AGENTS)
+    def test_launches_tokened_detached_seed(self, rel: str) -> None:
+        body = self._text(rel)
+        assert "--seed-testmon --detached --seed-token" in body
+        assert "</dev/null" in body  # fully backgrounded
+
+    @pytest.mark.parametrize("rel", _AGENTS)
+    def test_no_rm_f_marker(self, rel: str) -> None:
+        """The new seed must READ the predecessor marker to preempt it — never rm."""
+        assert "rm -f \"$MAIN_DIR/.testmondata.seed-status\"" not in self._text(rel)
+
+    @pytest.mark.parametrize("rel", _AGENTS)
+    def test_streams_follower_inline(self, rel: str) -> None:
+        body = self._text(rel)
+        assert "--seed-testmon-follow --seed-token" in body
+        # foreground form is labeled conceptual only.
+        assert "conceptual only" in body
+
+    @pytest.mark.parametrize("rel", _AGENTS)
+    def test_follower_exit_is_informational(self, rel: str) -> None:
+        body = self._text(rel)
+        assert "completion signal, not a gate" in body
+
+    @pytest.mark.parametrize("rel", _AGENTS)
+    def test_hard_rules_carveout_names_follower(self, rel: str) -> None:
+        body = self._text(rel)
+        assert "`--seed-testmon-follow` is a read-only" in body
+
+    @pytest.mark.parametrize("rel", _AGENTS)
+    def test_no_residual_primary_status_instruction(self, rel: str) -> None:
+        """The old 'run --seed-testmon-status yourself from the main checkout'
+        primary path must be gone (kept only as an optional scripting fallback)."""
+        body = self._text(rel)
+        assert "run from the main checkout, $MAIN_DIR)" not in body
+
 
 class TestWorktreeSetupSeedsCaches:
     """AC#8: worktree-setup.sh copies (never symlinks) .testmondata + .mypy_cache."""
@@ -3830,30 +4632,33 @@ class TestFinishTaskRefreshesBaseline:
 
     @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
     def test_completion_signal_present(self, harness: str) -> None:
-        """QS-286 AC#7: the detached refresh deletes the stale marker, logs to
-        `.testmondata.seed.log`, and points the user at --seed-testmon-status."""
+        """QS-299 (supersedes QS-286): the detached refresh logs to
+        `.testmondata.seed.log`, streams the follower inline, and culminates in
+        a "safe to close this terminal" verdict — WITHOUT the old rm -f marker
+        or the manual --seed-testmon-status primary path."""
         body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
-        assert 'rm -f "$MAIN_DIR/.testmondata.seed-status"' in body  # stale-marker guard
-        assert '>"$MAIN_DIR/.testmondata.seed.log" 2>&1' in body  # truncate redirect
-        assert "--seed-testmon-status" in body  # how to check
+        assert '>"$MAIN_DIR/.testmondata.seed.log" 2>&1' in body  # log redirect
+        assert "--seed-testmon-follow --seed-token" in body  # inline streaming
         assert "safe to close this terminal" in body
+        # QS-299: the stale-marker rm is gone (it would blind preemption).
+        assert 'rm -f "$MAIN_DIR/.testmondata.seed-status"' not in body
         # the old silent seed redirect is gone (other >/dev/null uses remain)
         assert "--seed-testmon >/dev/null 2>&1" not in body
 
     def test_seed_launch_block_byte_identical_across_harnesses(self) -> None:
-        """Harness-sync: the QS-286 completion-signal block is identical in
-        all three finish-task copies."""
+        """Harness-sync: the QS-299 tokened-detached seed LAUNCH block (bash) is
+        byte-identical in all three finish-task copies (the per-harness
+        background+monitor prose is allowed to differ)."""
         blocks = []
         for harness in (".claude", ".cursor", ".opencode"):
             body = (
                 Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md"
             ).read_text()
-            # review-fix #01 nice-to-have: anchor the slice on code-adjacent
-            # markers (the stale-marker rm and the exact redirect line), not on
-            # prose ending in a literal period, so added narrative can't
-            # truncate the slice inconsistently.
-            start = body.index('rm -f "$MAIN_DIR/.testmondata.seed-status"')
-            redirect = '>"$MAIN_DIR/.testmondata.seed.log" 2>&1'
+            # Anchor on the token generation and the exact detached-launch
+            # redirect line — both code-adjacent, so per-harness follower prose
+            # after the fence can't truncate the slice inconsistently.
+            start = body.index('SEED_TOKEN="$("$QG_PY"')
+            redirect = '</dev/null >"$MAIN_DIR/.testmondata.seed.log" 2>&1 & )'
             end = body.index(redirect, start) + len(redirect)
             blocks.append(body[start:end])
         assert blocks[0] == blocks[1] == blocks[2]

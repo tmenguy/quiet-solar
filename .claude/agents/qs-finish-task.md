@@ -128,11 +128,12 @@ The standard merge flow.
    If the PR was already merged externally between steps 2 and 5, treat
    as success.
 
-6. Refresh the `--impacted` baseline on the main worktree (QS-276). The
-   merged code is now on the true `main`, so rebuild the testmon
+6. Refresh the `--impacted` baseline on the main worktree (QS-276/QS-299).
+   The merged code is now on the true `main`, so rebuild the testmon
    baseline **there** — the worktree's own `.testmondata` reflects its
    (possibly stale) base and is unsafe to copy back. Capture `MAIN_DIR`
-   **before** cleanup removes this worktree (it is NOT in `context.py`):
+   **before** cleanup removes this worktree (it is NOT in `context.py`),
+   then launch a **tokened, detached** seed:
    ```bash
    MAIN_DIR="$(git worktree list --porcelain | head -1 | sed 's/^worktree //')"
    git -C "$MAIN_DIR" fetch origin
@@ -148,28 +149,46 @@ The standard merge flow.
    QG_PY="$MAIN_DIR/venv/bin/python"
    [ -x "$QG_PY" ] || QG_PY="$(command -v python3 || command -v python || true)"
    if [ -n "$QG_PY" ]; then
-       # QS-286: delete any stale marker BEFORE launch (so a prior run's
-       # `ok` cannot survive into a run that dies before writing `running`),
-       # then run detached, redirecting (truncate) to a log the user can
-       # inspect. The run writes .testmondata.seed-status when done.
-       rm -f "$MAIN_DIR/.testmondata.seed-status"
-       ( cd "$MAIN_DIR" && nohup "$QG_PY" \
-           scripts/qs/quality_gate.py --seed-testmon \
-           >"$MAIN_DIR/.testmondata.seed.log" 2>&1 & )
-       echo "Baseline refresh started (detached, best-effort)."
-       echo "It writes .testmondata.seed-status when done; check status with:"
-       echo "  python scripts/qs/quality_gate.py --seed-testmon-status"
-       echo "  (run from the main checkout, $MAIN_DIR)"
-       echo "It is safe to close this terminal once that reports OK; the log"
-       echo "is at $MAIN_DIR/.testmondata.seed.log."
+       # QS-299: generate a per-run token, then launch the seed DETACHED
+       # (its own process group, so a later task's finish preempts the
+       # whole pytest tree) with </dev/null so it fully backgrounds. Do
+       # NOT `rm -f` the marker — the new seed must READ the predecessor's
+       # marker to preempt it; deleting it would blind the last-wins handoff.
+       SEED_TOKEN="$("$QG_PY" -c 'import uuid; print(uuid.uuid4().hex)')"
+       ( cd "$MAIN_DIR" && nohup "$QG_PY" scripts/qs/quality_gate.py \
+           --seed-testmon --detached --seed-token "$SEED_TOKEN" \
+           </dev/null >"$MAIN_DIR/.testmondata.seed.log" 2>&1 & )
+       echo "Baseline refresh started (detached, token $SEED_TOKEN)."
    else
        echo "Warning: no usable Python interpreter found — skipping baseline refresh."
+       SEED_TOKEN=""
    fi
    ```
-   A failure or timeout here is harmless — a stale baseline is still
-   safe (new worktrees just run more tests). Proceed regardless. The
-   first refresh after a large merge may approach a near-full run;
-   acceptable because it is detached.
+   Then, **in this same session**, stream the follower until it exits. The
+   foreground form below is **conceptual only** — never run it foreground,
+   a full seed can exceed the foreground Bash cap:
+   ```bash
+   # conceptual only — wrap in the background+monitor mechanism below:
+   cd "$MAIN_DIR" && "$QG_PY" scripts/qs/quality_gate.py \
+       --seed-testmon-follow --seed-token "$SEED_TOKEN"
+   ```
+   **Run it (this harness):** launch that `--seed-testmon-follow` command
+   with `run_in_background`, then Monitor it on a ~15 s cadence
+   (deliberately ≥ the follower's 5 s poll — latest-line-wins, so
+   intermediate progress lines may be coalesced), relaying the latest
+   progress line inline. When the background task exits, report the
+   follower's final verdict line and move on. Skip both the seed launch and
+   the follower when `$SEED_TOKEN` is empty (no interpreter).
+
+   **The follower's exit code is a completion signal, not a gate.** Cleanup
+   already finished before seeding, so relay the final line and continue
+   normally **regardless of exit code** (0/5 → safe to close this terminal; 4 → keep open
+   or re-attach with the printed `--seed-testmon-follow --seed-token …`;
+   1/3 → advisory only). Never surface a non-zero follower exit as a failed
+   step. A failure or timeout here is harmless — a stale baseline is still
+   safe (new worktrees just run more tests). Proceed regardless. As an
+   optional scripting fallback, `--seed-testmon-status` (run from
+   `$MAIN_DIR`) gives a one-shot status without streaming.
 
 7. Delete the remote branch. The guard refuses `main` / `master` at
    the shell level — never rely on the agent alone:
@@ -213,7 +232,9 @@ The standard merge flow.
 - **Never run the quality gate.** Cleanup must succeed even if tests
   would fail. (Carve-out: the post-merge `--seed-testmon` baseline
   refresh in Case B step 6 is a non-gate DB refresh — no coverage, no
-  pass/fail verdict — run detached/best-effort. It is not the gate.)
+  pass/fail verdict — run detached/best-effort; and its companion
+  `--seed-testmon-follow` is a read-only, no-pytest streaming status
+  query whose exit code is informational only. Neither is the gate.)
 - No merge without explicit user authorization in this turn.
 - Never auto-chain to `/release` — it's a separate decision.
 - Refuse to delete `main` / `master` even if asked.
