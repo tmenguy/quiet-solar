@@ -1,5 +1,5 @@
 ---
-description: TDD implementation of the story under custom_components/quiet_solar/, pass full quality gate, open PR.
+description: TDD implementation of the story under custom_components/quiet_solar/, pass the impacted quality gate (--impacted), open PR.
 ---
 
 > **Preferred entry**: open a fresh terminal in the worktree and run
@@ -19,8 +19,16 @@ discovers task context from the branch name.
 
 Expected outcome:
 - TDD-implemented code under `custom_components/quiet_solar/` and tests.
-- `python scripts/qs/quality_gate.py` passes (pytest 100% cov + ruff +
-  mypy + translations).
+- `python scripts/qs/quality_gate.py --impacted` passes (changed lines
+  100% covered; the whole-suite gate — pytest 100% cov + ruff + mypy +
+  translations — runs authoritatively in CI on every PR; translations
+  value-check is local-full-gate only until #292 lands).
+- For change sets touching any `tests/qs`-pinned non-Python file
+  (agent files, commands, workflow docs, `.claude/settings.json`) —
+  even when Python files changed too —
+  `python scripts/qs/quality_gate.py --quick tests/qs` also passes
+  before commit (testmon cannot see non-Python files, so `--impacted`
+  alone is blind there).
 - Auto-committed, pushed, PR opened.
 - Next-phase command printed: launcher form (`claude --agent
   qs-review-task`) plus slash-command fallback (`/review-task`).

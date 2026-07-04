@@ -120,6 +120,19 @@ residual case (e.g. two consecutive killed runs), after which escalate
 to the user. The full gate is not an inner-loop debugging tool. Only
 ask the user for direction after 2–3 unsuccessful attempts.
 
+**Changes to `tests/qs`-pinned non-Python files.** For change sets
+touching any `tests/qs`-pinned non-Python file (agent files, commands,
+workflow docs, `.claude/settings.json`) — even when Python files
+changed too — also run
+
+```bash
+python scripts/qs/quality_gate.py --quick tests/qs
+```
+
+before commit — testmon cannot see non-Python files (its blindness is
+per-file, not per-changeset), so `--impacted` alone is blind there;
+the first failure would otherwise surface only in CI.
+
 **Doc-maintenance pre-commit sub-step.** After staging your
 intended changes (`git add` first so the diff is populated), run
 

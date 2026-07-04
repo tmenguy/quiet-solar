@@ -1,5 +1,5 @@
 ---
-description: TDD implementation for dev-environment changes (scripts/, .claude/, .cursor/, .opencode/, legacy/, docs/, .github/, top-level config). Quality gate runs in dev-only fast path.
+description: TDD implementation for dev-environment changes (scripts/, .claude/, .cursor/, .opencode/, legacy/, docs/, .github/, top-level config). Pass the impacted quality gate (--impacted; coverage-vacuous on dev-only trees), open PR.
 ---
 
 > **Preferred entry**: open a fresh terminal in the worktree and run
@@ -19,8 +19,15 @@ subagent discovers task context from the branch name.
 
 Expected outcome:
 - TDD-implemented changes scoped strictly to dev-environment paths.
-- `python scripts/qs/quality_gate.py` passes (dev-only fast path:
-  modified test files only; ruff/mypy/coverage skipped).
+- `python scripts/qs/quality_gate.py --impacted` passes (dev-only
+  changes carry no product-coverage delta, so that side is a fast
+  no-op; the tooling's own testmon-selected tests still run).
+- For change sets touching any `tests/qs`-pinned non-Python file
+  (agent files, commands, workflow docs, `.claude/settings.json`) —
+  even when Python files changed too —
+  `python scripts/qs/quality_gate.py --quick tests/qs` also passes
+  before commit (testmon cannot see non-Python files, so `--impacted`
+  alone is blind there).
 - Auto-committed, pushed, PR opened.
 - Next-phase command printed: launcher form (`claude --agent
   qs-review-task`) plus slash-command fallback (`/review-task`).

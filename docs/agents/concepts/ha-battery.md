@@ -4,7 +4,7 @@ slug: ha-battery
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/battery.py
-last_verified: 2026-05-19
+last_verified: 2026-07-02
 ---
 
 # QSBattery (ha_model) — HA-facing battery integration
@@ -14,16 +14,20 @@ last_verified: 2026-05-19
 `QSBattery` is the HA-side battery class. It inherits
 `HADeviceMixin` plus the pure-domain `home_model/battery.py` model
 ([home-model-battery.md](home-model-battery.md)) and translates the
-solver's `LoadCommand`s into HA service calls (write SOC setpoint via
-an HA number entity, toggle charge/discharge enable via switch
-entities). It attaches HA state probes for SOC, charge power, and
-discharge power so the solver always sees fresh state.
+solver's `LoadCommand`s into HA service calls: set max-charge /
+max-discharge **power** via HA number entities and toggle the single
+charge-from-grid switch. Discharge is disabled by driving the
+`max_discharging_power` domain attribute to 0 (surfaced as the
+`max_discharge_number` HA entity) — there is no discharge-enable
+switch and no SOC-setpoint number. It attaches HA state probes for SOC
+(`charge_percent_sensor`) and the combined charge/discharge power
+sensor so the solver always sees fresh state.
 
 ## When you need this concept
 
 - Integrating a new battery vendor (e.g., a new inverter brand).
 - Changing how SOC / power are read from HA entities.
-- Modifying the discharge-enable / charge-enable switch wiring.
+- Modifying the max-power number / charge-from-grid switch wiring.
 - Debugging "the battery isn't following the plan" issues.
 
 ## Core idea
@@ -33,9 +37,17 @@ The `HADeviceMixin` bridge pattern: `QSBattery` extends both
 through `HADeviceMixin.add_to_history()` (SOC, power, capacity-derived
 signals); commands flow out through `execute_command()` →
 `hass.services.async_call(...)`. The probe-update cycle handles
-external state changes: if a human turns off discharge via the
-inverter UI, `probe_if_command_set()` detects the discrepancy and the
-device's `external_user_initiated_state` is updated.
+external state changes: if a human changes the inverter settings
+externally, `probe_if_command_set()` reads the HA entities and returns
+whether the currently-expected command is actually in effect —
+`bool | None`, where `None` means a *configured* entity's state could
+not be read (HA cold start, inverter offline), i.e. "inconclusive",
+not "command absent". Unconfigured entities are excluded from the
+check entirely — `_command_to_values` nulls their expected value, so
+they match vacuously (a fully-unconfigured battery probes `True`, not
+`None`). `QSBattery` has no
+`external_user_initiated_state`; that attribute belongs to
+`AbstractLoad`, which `QSBattery` does not inherit from.
 
 ## Key types / structures
 
@@ -44,8 +56,12 @@ device's `external_user_initiated_state` is updated.
   `hass.services.async_call(number/switch)`.
 - `probe_if_command_set(time, command)` — reads HA entity state to
   verify command landed.
-- HA entities attached: SOC sensor, charge/discharge power sensors,
-  charge enable + discharge enable switches, target-SOC number.
+- HA entities wired: **probed** — `charge_percent_sensor` (SOC) and
+  `charge_discharge_sensor` (combined power); **read on demand** —
+  `max_charge_number` + `max_discharge_number` (max-power numbers) and
+  `charge_from_grid_switch` (the only switch), bare entity IDs read
+  via `hass.states.get` and never entering the probe/history
+  machinery.
 
 ## Lifecycle
 

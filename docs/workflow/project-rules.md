@@ -37,8 +37,9 @@ all four; use it only for ad-hoc single-node debugging.
 # left by a killed run with NO manual file deletion ever required.
 python scripts/qs/quality_gate.py --impacted
 
-# Full quality gate (pytest 100% cov + ruff + mypy + translations).
-# Authoritative whole-repo gate — enforced in CI on every PR; the only
+# Full quality gate (pytest 100% cov + ruff + mypy + translations;
+# the translations value-check is local-full-gate only until #292 lands).
+# Authoritative full-suite gate — enforced in CI on every PR; the only
 # local run is an EXPLICIT user request. Detecting coverage lost in
 # UNCHANGED code is CI's exclusive job (--impacted cannot see it); never
 # reach for the full gate locally as an inner-loop diagnostic.
@@ -80,11 +81,17 @@ source venv/bin/activate && pytest tests/test_solver.py::test_function_name -v
 ```
 
 **Local-vs-CI coverage invariant (QS-276).** Local commits run
-`--impacted` (the lines you changed are 100% covered); the **whole-repo
-100% coverage** requirement is enforced in **CI on every PR** and is
+`--impacted` (the lines you changed are 100% covered); the **full-suite
+100% coverage of `custom_components/quiet_solar/`** requirement is
+enforced in **CI on every PR** and is
 what actually guarantees full coverage. The implement phase ALWAYS
 runs `--impacted` before commit/PR and never substitutes the full gate
-locally (the only local full-gate run is an explicit user request). The
+locally (the only local full-gate run is an explicit user request). For
+change sets touching any `tests/qs`-pinned non-Python file (agent
+files, commands, workflow docs, `.claude/settings.json`) — even when
+Python files changed too — also run
+`python scripts/qs/quality_gate.py --quick tests/qs` before commit
+(testmon cannot see non-Python files). The
 three iteration commands relate as: `--impacted` is the mandatory
 pre-commit gate (finds + runs the impacted tests, checks changed-line
 coverage, self-heals a drifted baseline); `--quick` is for hammering

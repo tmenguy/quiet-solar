@@ -27,11 +27,16 @@ and scope detection. Raw `pytest` bypasses all four; use it only for
 ad-hoc single-node debugging (positional must contain `::`).
 
 ```bash
-python scripts/qs/quality_gate.py          # full gate (cov + ruff + mypy + translations)
-python scripts/qs/quality_gate.py --cache  # skip if git state matches last pass
+python scripts/qs/quality_gate.py --impacted  # MANDATORY pre-commit gate (QS-276): testmon-selected tests + changed-line 100% cov, self-healing
+python scripts/qs/quality_gate.py --quick tests/qs  # REQUIRED supplement when the change set touches tests/qs-pinned non-Python files: agent files, commands, workflow docs, .claude/settings.json (testmon cannot see non-Python files)
+python scripts/qs/quality_gate.py --quick tests/test_solver.py  # fast TDD inner loop on an explicit path
+python scripts/qs/quality_gate.py          # full gate (cov + ruff + mypy + translations) — EXPLICIT user request only; CI owns it except the translations value-check (#292)
+python scripts/qs/quality_gate.py --full   # force the full suite regardless of scope detection (a bare run scope-skips on dev-only / ui-only trees)
+python scripts/qs/quality_gate.py --cache  # skip repeated FULL-gate runs if git state matches last pass
 python scripts/qs/quality_gate.py --fix    # auto-fix ruff format / lint
-python scripts/qs/quality_gate.py --quick tests/test_solver.py  # fast TDD inner loop
 python scripts/qs/quality_gate.py --json   # JSON output for scripts
+python scripts/qs/quality_gate.py --seed-testmon  # refresh the testmon baseline (non-gate; used by finish-task)
+python scripts/qs/quality_gate.py --seed-testmon-status  # read-only: report the detached --seed-testmon run's completion (0 = ok, 4 = running, 1 = rerun, 3 = no status)
 ```
 
 ## Architecture constraints
@@ -75,8 +80,14 @@ surface, so `.opencode/commands/` is intentionally absent.
 
 ## Quality gate
 
-`python scripts/qs/quality_gate.py` (full) or `--quick PATH` (fast
-TDD inner loop) — see the Commands section above for the full grammar.
+`python scripts/qs/quality_gate.py --impacted` is the mandatory
+pre-commit gate (for change sets touching `tests/qs`-pinned non-Python
+files — agent files, commands, workflow docs, `.claude/settings.json` —
+`--quick tests/qs` is a required supplement even when Python files
+changed too; testmon cannot see non-Python files); `--quick PATH` is the fast TDD inner loop; the
+bare full gate runs authoritatively in CI (translations value-check
+excepted until #292 lands; local runs only on explicit user request) —
+see the Commands section above for the full grammar.
 
 ## Legacy
 

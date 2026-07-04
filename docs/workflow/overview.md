@@ -27,7 +27,8 @@ the rest run in the worktree.
 ## Static agents — no rendering
 
 There is exactly **one agent file per phase**, checked in to `.claude/agents/`
-(or `.cursor/agents/`). Agents discover task context at runtime via
+(mirrored in `.cursor/agents/` and `.opencode/agents/`). Agents discover
+task context at runtime via
 `python scripts/qs/context.py`, which reads `git branch --show-current`
 (`QS_<N>`) and resolves the issue, title, story file, and PR number from
 there.
@@ -76,8 +77,9 @@ is immutable mid-session). The launcher (`scripts/qs/launchers/`) emits
 a `claude --agent qs-<phase>` invocation in the new_context for exactly
 this reason.
 
-**Sub-agents** are the 4 plan reviewers spawned by `qs-create-plan` and
-the 4 code reviewers spawned by `qs-review-task`. They **stay as
+**Sub-agents** are the plan reviewers spawned by `qs-create-plan` (4;
+5 in round 2+ with the delta-auditor) and the 4 code reviewers spawned
+by `qs-review-task`. They **stay as
 `Agent`-tool fan-out** — non-interactive, parallel, returning a final
 findings report. That's the right shape for them: they're independent
 parallel workers, which is exactly what the `Agent` tool is good at.
@@ -123,9 +125,11 @@ files it expects to touch:
 ## Harness abstraction
 
 Everything harness-specific lives in `scripts/qs/launchers/*.py` and is
-selected by `scripts/qs/harness.py::detect()`. The agent bodies are
-nearly identical across harnesses; only the frontmatter differs
-(`tools:` for Claude Code, `readonly:` for Cursor).
+selected by `scripts/qs/harness.py::detect()`. The agent bodies share
+an aligned core protocol across harnesses; the frontmatter (`tools:`
+for Claude Code, `readonly:` for Cursor, `permission:` for OpenCode)
+and the declared harness-specific sections differ — see
+[harness.md](harness.md).
 
 See [harness.md](harness.md) for how to add a new harness.
 See [project-rules.md](project-rules.md) § "Harness sync" for the cross-harness body-parity rule.

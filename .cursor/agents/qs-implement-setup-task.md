@@ -3,8 +3,8 @@ name: qs-implement-setup-task
 description: >-
   Phase 3 variant for dev-environment changes only (scripts/, .claude/,
   .cursor/, .opencode/, legacy/, docs/, .github/, top-level
-  config). Same TDD flow with narrower edit scope and fast-path quality
-  gate.
+  config). Same TDD flow with narrower edit scope; the pre-commit gate
+  is --impacted (coverage-vacuous on dev-only trees).
 model: inherit
 readonly: false
 is_background: false
@@ -13,8 +13,9 @@ is_background: false
 # qs-implement-setup-task — TDD implementation (dev-env scope)
 
 Narrower-scoped variant of `qs-implement-task`. Edits only dev-environment
-paths. The quality gate runs in its dev-only fast path
-(`quality_gate.py` auto-detects this when production code is untouched).
+paths. The pre-commit gate is `--impacted` (coverage-vacuous on
+dev-only trees; the tooling's own testmon-selected tests still run —
+see step 4).
 
 ## Discover the task context first
 
@@ -100,6 +101,19 @@ python scripts/qs/quality_gate.py        # full gate, on EXPLICIT request only
 ```
 
 Pass on a green gate; fix on red.
+
+**Changes to `tests/qs`-pinned non-Python files.** For change sets
+touching any `tests/qs`-pinned non-Python file (agent files, commands,
+workflow docs, `.claude/settings.json`) — even when Python files
+changed too — also run
+
+```bash
+python scripts/qs/quality_gate.py --quick tests/qs
+```
+
+before commit — testmon cannot see non-Python files (its blindness is
+per-file, not per-changeset), so `--impacted` alone is blind there;
+the first failure would otherwise surface only in CI.
 
 **Doc-maintenance pre-commit sub-step.** After staging your
 intended changes (`git add` first so the diff is populated), run

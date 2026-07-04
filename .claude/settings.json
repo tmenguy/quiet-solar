@@ -33,8 +33,6 @@
       "Bash(python -c *scripts.qs*)",
       "Bash(bash scripts/worktree-setup.sh:*)",
       "Bash(bash **/scripts/worktree-setup.sh:*)",
-      "Bash(bash scripts/worktree-cleanup.sh:*)",
-      "Bash(bash **/scripts/worktree-cleanup.sh:*)",
       "Bash(gh issue:*)",
       "Bash(gh pr:*)",
       "Bash(gh api:*)",
