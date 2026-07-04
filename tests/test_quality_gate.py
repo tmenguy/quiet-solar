@@ -4110,14 +4110,18 @@ class TestSeedTestmonFollow:
                     quality_gate.seed_testmon_follow("t")
                 assert buf.getvalue().isascii(), m
 
-    def test_foreign_marker_past_grace_exits_5(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """review-fix #01 (finding #1): a foreign token that persists the whole
-        startup grace (our seed never claims) → supersession."""
+    def test_foreign_marker_past_grace_exits_5_unconfirmed(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix #01/#02 (findings #1/#3): a foreign token that persists the
+        whole startup grace (our seed never claims) → exit 5 with the SOFTENED
+        "could not confirm" message (it may just be a slow cold-start), not a
+        definite supersession."""
         with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "other", "state": "running"}):
             assert quality_gate.seed_testmon_follow("t") == 5
         out = capsys.readouterr().out.lower()
         assert "waiting for baseline refresh" in out  # grace polled first
-        assert "fresher baseline refresh" in out and "safe to close" in out
+        assert "could not confirm" in out and "--seed-testmon-status" in out
+        assert "safe to close" in out
+        assert out.isascii()
 
     def test_stale_foreign_marker_then_own_claim_streams_progress(
         self, capsys: pytest.CaptureFixture[str]
@@ -4145,17 +4149,39 @@ class TestSeedTestmonFollow:
         assert "safe to close" in out
 
     def test_own_token_then_foreign_exits_5(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """review-fix #01 (finding #1): our token owned the marker, then a newer
-        run replaced it → genuine supersession (exit 5)."""
+        """review-fix #01/#02 (finding #1): our token owned the marker, then a
+        newer run replaced it (still `running`, never our terminal) → genuine
+        supersession (exit 5). The superseded-path re-read (finding #1, #02) also
+        sees the foreign token."""
         mine = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
         newer = {"token": "newer", "state": "running", "pid": 99}
         with (
-            patch.object(quality_gate, "_read_seed_marker", side_effect=[mine, newer]),
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[mine, newer, newer]),
             patch.object(quality_gate, "_pid_alive", return_value=True),
             patch.object(quality_gate, "_print_seed_progress"),
         ):
             assert quality_gate.seed_testmon_follow("t") == 5
         assert "fresher baseline refresh" in capsys.readouterr().out.lower()
+
+    def test_own_token_ok_overwritten_by_foreign_reports_completion(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix #02 (finding #1) SHOULD-FIX: a run that completed `ok(T)`
+        but whose marker was overwritten by a parallel `running(U)` before the
+        next poll must report COMPLETION (exit 0), not "superseded" — the
+        superseded-path re-read observes our own terminal `ok`."""
+        mine_running = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        foreign = {"token": "U", "state": "running", "pid": 99}
+        mine_ok = {"token": "t", "state": "ok"}
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[mine_running, foreign, mine_ok]),
+            patch.object(quality_gate, "_pid_alive", return_value=True),
+            patch.object(quality_gate, "_print_seed_progress"),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 0
+        out = capsys.readouterr().out.lower()
+        assert "safe to close" in out
+        assert "fresher baseline" not in out  # NOT misreported as superseded
 
     def test_incomplete_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "incomplete"}):
@@ -4234,11 +4260,12 @@ class TestSeedTestmonFollow:
         assert "safe to close" in capsys.readouterr().out.lower()
 
     def test_running_dead_then_superseded(self) -> None:
-        """R1 re-poll: token flips (superseded) → exit 5, handled at loop top."""
+        """R1 re-poll: token flips (superseded) → exit 5. Reads: initial dead,
+        R1 re-read (new), loop-top (new), superseded-path re-read (new)."""
         dead = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
         new = {"token": "new", "state": "running"}
         with (
-            patch.object(quality_gate, "_read_seed_marker", side_effect=[dead, new, new]),
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[dead, new, new, new]),
             patch.object(quality_gate, "_pid_alive", return_value=False),
         ):
             assert quality_gate.seed_testmon_follow("t") == 5
@@ -4252,6 +4279,38 @@ class TestSeedTestmonFollow:
             assert quality_gate.seed_testmon_follow("t") == 1
         # a missing pid never reaches the syscall seam in the first observation.
         mock_alive.assert_not_called()
+
+    def test_repoll_running_alive_loops_then_completes(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix #02 (finding #9): the R1 re-poll branch where the re-read is
+        running + my token + pid ALIVE falls through to `continue`; the follower
+        loops once more and then exits 0 on a terminal `ok`."""
+        running = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        ok = {"token": "t", "state": "ok"}
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[running, running, ok]),
+            # initial observation dead → R1 re-poll; re-read alive → continue.
+            patch.object(quality_gate, "_pid_alive", side_effect=[False, True]),
+            patch.object(quality_gate, "_print_seed_progress"),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 0
+        assert "safe to close" in capsys.readouterr().out.lower()
+
+    def test_deadline_enforced_on_all_paths_exits_4(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix #02 (finding #4): the max-wait deadline is checked at the TOP
+        of the loop, so even a flapping marker (None <-> running) that never
+        reaches a terminal state eventually returns exit 4."""
+        running = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        big = quality_gate._SEED_FOLLOW_MAX_WAIT_S + 1
+        with (
+            # deadline calc(0), iter1 top(0), iter2 top(0), iter3 top(big)->exit 4
+            patch.object(quality_gate.time, "monotonic", side_effect=[0.0, 0.0, 0.0, big]),
+            # iter1: running(alive) → progress; iter2: None(owned) → re-read running → continue
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[running, None, running]),
+            patch.object(quality_gate, "_pid_alive", return_value=True),
+            patch.object(quality_gate, "_print_seed_progress"),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 4
+        assert "still running after 45m" in capsys.readouterr().out.lower()
 
     def test_startup_grace_then_exit_3(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(quality_gate, "_read_seed_marker", return_value=None):
@@ -4373,8 +4432,6 @@ class TestSeedFollowCli:
     @pytest.mark.parametrize(
         "conflict",
         [
-            ["--seed-testmon"],
-            ["--seed-testmon-status"],
             ["--impacted"],
             ["--cache"],
             ["--no-cache"],
@@ -4382,9 +4439,11 @@ class TestSeedFollowCli:
             ["--fix"],
             ["--quick", "tests/test_x.py"],
         ],
-        ids=["seed", "status", "impacted", "cache", "no-cache", "full", "fix", "quick"],
+        ids=["impacted", "cache", "no-cache", "full", "fix", "quick"],
     )
     def test_follow_mutex_exits_2(self, conflict: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+        """--seed-testmon-follow vs an execution mode (seed-mode pairs are covered
+        by test_seed_modes_pairwise_mutex_exits_2)."""
         with (
             patch("sys.argv", ["quality_gate.py", "--seed-testmon-follow", "--seed-token", "T", *conflict]),
             patch.object(quality_gate, "seed_testmon_follow") as mock_follow,
@@ -4392,9 +4451,40 @@ class TestSeedFollowCli:
         ):
             quality_gate.main()
         assert exc.value.code == 2
-        # the error may come from an earlier subcommand's mutex, but must be a
-        # usage error that prevents the follower from running.
-        assert "you cannot combine" in capsys.readouterr().err
+        assert "you cannot combine --seed-testmon-follow with" in capsys.readouterr().err
+        mock_follow.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "pair",
+        [
+            ["--seed-testmon", "--seed-testmon-status"],
+            ["--seed-testmon", "--seed-testmon-follow", "--seed-token", "T"],
+            ["--seed-testmon-status", "--seed-testmon-follow", "--seed-token", "T"],
+            # reversed order — the centralized check is order-independent.
+            ["--seed-testmon-status", "--seed-testmon"],
+            ["--seed-testmon-follow", "--seed-token", "T", "--seed-testmon"],
+            ["--seed-testmon-follow", "--seed-token", "T", "--seed-testmon-status"],
+        ],
+        ids=["seed+status", "seed+follow", "status+follow", "status+seed", "follow+seed", "follow+status"],
+    )
+    def test_seed_modes_pairwise_mutex_exits_2(
+        self, pair: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix #02 (finding #2): the three seed subcommands are pairwise
+        mutually exclusive via ONE centralized, order-independent check — neither
+        the seed side nor the follow side silently wins."""
+        with (
+            patch("sys.argv", ["quality_gate.py", *pair]),
+            patch.object(quality_gate, "seed_testmon") as mock_seed,
+            patch.object(quality_gate, "seed_testmon_status") as mock_status,
+            patch.object(quality_gate, "seed_testmon_follow") as mock_follow,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        assert "mutually exclusive" in capsys.readouterr().err
+        mock_seed.assert_not_called()
+        mock_status.assert_not_called()
         mock_follow.assert_not_called()
 
 
@@ -4490,7 +4580,6 @@ class TestImpactedCli:
     @pytest.mark.parametrize(
         "conflict",
         [
-            ["--seed-testmon"],
             ["--impacted"],
             ["--cache"],
             ["--no-cache"],
@@ -4498,12 +4587,13 @@ class TestImpactedCli:
             ["--fix"],
             ["--quick", "tests/test_x.py"],
         ],
-        ids=["seed", "impacted", "cache", "no-cache", "full", "fix", "quick"],
+        ids=["impacted", "cache", "no-cache", "full", "fix", "quick"],
     )
     def test_seed_testmon_status_mutex_exits_2(
         self, conflict: list[str], capsys: pytest.CaptureFixture[str]
     ) -> None:
-        """AC#5: --seed-testmon-status combined with any mode is a usage error."""
+        """AC#5: --seed-testmon-status combined with an execution mode is a usage
+        error (seed-mode pairs → test_seed_modes_pairwise_mutex_exits_2)."""
         with (
             patch("sys.argv", ["quality_gate.py", "--seed-testmon-status", *conflict]),
             patch.object(quality_gate, "seed_testmon_status") as mock_status,

@@ -180,20 +180,24 @@ The standard merge flow.
    # false success.
    QG_PY="$MAIN_DIR/venv/bin/python"
    [ -x "$QG_PY" ] || QG_PY="$(command -v python3 || command -v python || true)"
+   # QS-299: generate a per-run token, then launch the seed DETACHED (its own
+   # process group, so a later task's finish preempts the whole pytest tree)
+   # with </dev/null so it fully backgrounds. Do NOT `rm -f` the marker — the
+   # new seed must READ the predecessor's marker to preempt it; deleting it
+   # would blind the last-wins handoff.
+   SEED_TOKEN=""
    if [ -n "$QG_PY" ]; then
-       # QS-299: generate a per-run token, then launch the seed DETACHED
-       # (its own process group, so a later task's finish preempts the
-       # whole pytest tree) with </dev/null so it fully backgrounds. Do
-       # NOT `rm -f` the marker — the new seed must READ the predecessor's
-       # marker to preempt it; deleting it would blind the last-wins handoff.
        SEED_TOKEN="$("$QG_PY" -c 'import uuid; print(uuid.uuid4().hex)')"
+   else
+       echo "Warning: no usable Python interpreter found — skipping baseline refresh."
+   fi
+   # review-fix #02 (finding #8): only launch with a NON-EMPTY token — the CLI
+   # rejects an empty --seed-token (exit 2), which would be a silent no-op.
+   if [ -n "$SEED_TOKEN" ]; then
        ( cd "$MAIN_DIR" && nohup "$QG_PY" scripts/qs/quality_gate.py \
            --seed-testmon --detached --seed-token "$SEED_TOKEN" \
            </dev/null >"$MAIN_DIR/.testmondata.seed.log" 2>&1 & )
        echo "Baseline refresh started (detached, token $SEED_TOKEN)."
-   else
-       echo "Warning: no usable Python interpreter found — skipping baseline refresh."
-       SEED_TOKEN=""
    fi
    ```
    Then, **in this same session**, stream the follower until it exits. The

@@ -927,6 +927,15 @@ SEED_STATUS = REPO_ROOT / ".testmondata.seed-status"
 # constant the follower reads to synthesize its progress line). Anchored under
 # REPO_ROOT for the same cwd-independent relocation invariant as SEED_STATUS.
 SEED_LOG = REPO_ROOT / ".testmondata.seed.log"
+# QS-299 review-fix #02 (finding #6): named constants for the seed marker's
+# `state` field, shared by every producer (`seed_testmon`) and consumer
+# (`seed_testmon_status`, `seed_testmon_follow`, `_find_running_predecessor`) so
+# a typo can't silently fall through to "unreadable" and the states have one
+# definition.
+_SEED_STATE_RUNNING = "running"
+_SEED_STATE_OK = "ok"
+_SEED_STATE_INCOMPLETE = "incomplete"
+_SEED_STATE_SKIPPED = "skipped"
 # QS-278: the persistent coverage DATA file (coverage.py's default). The
 # `--impacted` gate runs testmon-selected tests with `--cov-append` so
 # coverage ACCUMULATES across inner-loop invocations. testmon 2.2.0
@@ -1666,7 +1675,7 @@ def _find_running_predecessor(my_token: str) -> tuple[int, int | None] | None:
     marker = _read_seed_marker()
     if marker is None:
         return None
-    if marker.get("state") != "running" or marker.get("token") == my_token:
+    if marker.get("state") != _SEED_STATE_RUNNING or marker.get("token") == my_token:
         return None
     pid = marker.get("pid")
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
@@ -1702,10 +1711,10 @@ def _claim_and_preempt(token: str, pid: int, pgid: int | None, started: float) -
     with _seed_lock() as locked:
         if not locked:
             _emit("seed-testmon", "seed lock busy — skipping preemption (best-effort claim)")
-            _write_seed_status("running", **_running_fields(token, pid, pgid, started))
+            _write_seed_status(_SEED_STATE_RUNNING, **_running_fields(token, pid, pgid, started))
             return
         predecessor = _find_running_predecessor(token)
-        _write_seed_status("running", **_running_fields(token, pid, pgid, started))
+        _write_seed_status(_SEED_STATE_RUNNING, **_running_fields(token, pid, pgid, started))
         if predecessor is not None:
             pred_pid, pred_pgid = predecessor
             _terminate_process_group(pred_pgid, pred_pid)
@@ -1756,7 +1765,7 @@ def seed_testmon(token: str | None = None, detached: bool = False) -> int:
         _emit("seed-testmon", "pytest-testmon not importable — skipping")
         # QS-286: record the skip (no `running` marker on this path).
         # QS-299: the skip marker still carries the token (invariant).
-        _write_seed_status("skipped", token=token, reason="pytest-testmon not importable")
+        _write_seed_status(_SEED_STATE_SKIPPED, token=token, reason="pytest-testmon not importable")
         return 3
     # QS-299: detach into our own process group FIRST (only when --detached) so
     # the pgid we record covers the pytest/xdist tree a later preemptor kills.
@@ -1797,7 +1806,7 @@ def seed_testmon(token: str | None = None, detached: bool = False) -> int:
     # token over the live winner's marker.
     _write_completion_if_owner(
         token,
-        "ok" if rc < 2 else "incomplete",
+        _SEED_STATE_OK if rc < 2 else _SEED_STATE_INCOMPLETE,
         started=started,
         finished=time.time(),
         returncode=rc,
@@ -1890,13 +1899,13 @@ def seed_testmon_status() -> int:
         return _unreadable()
 
     state = marker.get("state")
-    if state == "ok":
+    if state == _SEED_STATE_OK:
         print(
             f"Baseline written at {_fmt_seed_time(marker.get('finished'))} "
             "(tests may have failed) — safe to close this terminal."
         )
         return 0
-    if state == "running":
+    if state == _SEED_STATE_RUNNING:
         pid = marker.get("pid")
         # `_pid_alive` calls `os.kill(pid, 0)`; a `running` marker whose pid is
         # not a positive, non-bool int is unreadable. Excluding bool (an int
@@ -1916,13 +1925,13 @@ def seed_testmon_status() -> int:
             "may be partial; rerun the refresh."
         )
         return 1
-    if state == "incomplete":
+    if state == _SEED_STATE_INCOMPLETE:
         print(
             f"Finished with errors (exit {marker.get('returncode', 'unknown')}) — "
             "`.testmondata` may be partial; rerun the refresh."
         )
         return 1
-    if state == "skipped":
+    if state == _SEED_STATE_SKIPPED:
         print(
             f"Refresh was skipped ({marker.get('reason', 'unknown reason')}) — no baseline was "
             "written; rerun if needed."
@@ -2042,6 +2051,51 @@ def _print_seed_progress(marker: dict) -> None:
         print(f"refreshing baseline: elapsed {elapsed}")
 
 
+# QS-299 follower verdict lines (plain ASCII — review-fix #01 finding #2 — so a
+# harness piping stdout under a non-UTF-8 locale never raises UnicodeEncodeError).
+_FOLLOW_MSG_OK = "[OK] baseline refresh complete - safe to close this terminal."
+_FOLLOW_MSG_PARTIAL = "`.testmondata` may be partial - rerun the refresh."
+_FOLLOW_MSG_UNREADABLE = "The baseline refresh status is unreadable."
+_FOLLOW_MSG_SUPERSEDED = (
+    "A fresher baseline refresh is now running - this one was stopped, "
+    "safe to close this terminal."
+)
+# QS-299 review-fix #02 (finding #3): a foreign marker that persists the whole
+# startup grace might just mean this run's seed was slow to claim (saturated
+# parallel cold-start), so the verdict is phrased as uncertainty, not a definite
+# supersession.
+_FOLLOW_MSG_UNCONFIRMED = (
+    "Could not confirm this baseline refresh started; another refresh holds the "
+    "marker - check `python scripts/qs/quality_gate.py --seed-testmon-status`. "
+    "Safe to close this terminal."
+)
+
+
+def _follow_own_terminal_verdict(marker: dict) -> int | None:
+    """Map a MY-token marker in a terminal state to its follower exit code,
+    printing the verdict line; return None for a non-terminal (`running`) or
+    unknown state (QS-299).
+
+    Shared by the main poll and the supersession re-read (review-fix #02 finding
+    #1) so a completed run is never misreported as superseded.
+    """
+    state = marker.get("state")
+    if state == _SEED_STATE_OK:
+        print(_FOLLOW_MSG_OK)
+        return 0
+    if state == _SEED_STATE_INCOMPLETE:
+        print(_FOLLOW_MSG_PARTIAL)
+        return 1
+    if state == _SEED_STATE_SKIPPED:
+        reason = marker.get("reason", "unknown reason")
+        print(
+            f"Refresh was skipped ({reason}) - no baseline was written; "
+            "safe to close this terminal, rerun if needed."
+        )
+        return 1
+    return None
+
+
 def seed_testmon_follow(token: str) -> int:
     """Stream the detached `--seed-testmon` run's progress inline until it reaches
     a terminal state, returning a completion exit code (QS-299).
@@ -2054,51 +2108,57 @@ def seed_testmon_follow(token: str) -> int:
       0  my token `ok`                          - refresh complete, safe to close
       5  supersession (see below)               - a fresher refresh took over
       1  my token `incomplete` / `running`-dead / `skipped`
-      4  my token still `running` past max wait - keep terminal open / re-attach
+      4  no terminal state within max wait      - keep terminal open / re-attach
       3  marker missing/unreadable past the startup grace
 
-    Supersession vs startup (QS-299 review-fix #01, finding #1): tokens are
-    unordered uuid4, so a foreign token is indistinguishable from a genuinely
-    fresher one. Until this follower has observed its OWN token own the marker at
-    least once (`own_token_seen`), a missing OR foreign-token marker just means
-    "my seed hasn't claimed yet" — poll within the startup grace instead of
-    declaring supersession. Exit 5 fires only when either (a) our token was seen
-    and is THEN replaced by a different token, or (b) the startup grace elapses
-    with a foreign token still present.
+    Supersession vs startup (review-fix #01, finding #1): tokens are unordered
+    uuid4, so a foreign token is indistinguishable from a genuinely fresher one.
+    Until this follower has observed its OWN token own the marker at least once
+    (`own_token_seen`), a missing OR foreign-token marker just means "my seed
+    hasn't claimed yet" — poll within the startup grace instead of declaring
+    supersession.
 
-    Every heavy operation (`time.sleep`/`time.monotonic`/`time.time`,
-    `_read_seed_marker`, `_pid_alive`, the log-tail read) is a patchable seam so
-    the whole loop is unit-testable without real processes or sleeps.
+    Completed-not-superseded (review-fix #02, finding #1): a new parallel seed
+    unconditionally re-claims `running(U)`, so it can overwrite this run's
+    `ok(T)` in the ≤5 s gap between polls. Before concluding "superseded" on the
+    own-token path, re-read once and honor a MY-token terminal state, so a run
+    that actually completed reports completion (exit 0), not "stopped".
+
+    The `_SEED_FOLLOW_MAX_WAIT_S` deadline is enforced at the TOP of the loop
+    (review-fix #02, finding #4) so EVERY path — startup wait, no-marker re-poll,
+    running-alive — honors the same upper bound. Every heavy operation
+    (`time.sleep`/`time.monotonic`/`time.time`, `_read_seed_marker`,
+    `_pid_alive`, the log-tail read) is a patchable seam so the whole loop is
+    unit-testable without real processes or sleeps.
     """
-    superseded = (
-        "A fresher baseline refresh is now running - this one was "
-        "stopped, safe to close this terminal."
-    )
-    unreadable = "The baseline refresh status is unreadable."
+
+    def _startup_wait() -> None:
+        """Emit the startup-wait line + sleep one interval (review-fix #02 #5:
+        one definition shared by the foreign- and missing-marker grace paths)."""
+        print("waiting for baseline refresh to start...")
+        time.sleep(_SEED_FOLLOW_INTERVAL_S)
+
     deadline = time.monotonic() + _SEED_FOLLOW_MAX_WAIT_S
     startup_polls = 0
     own_token_seen = False
     while True:
+        # Finding #4: universal upper bound — no path can loop past the deadline.
+        if time.monotonic() >= deadline:
+            print(
+                f"Still running after 45m - keep this terminal open, or re-attach: "
+                f"python scripts/qs/quality_gate.py --seed-testmon-follow --seed-token {token}"
+            )
+            return 4
+
         marker = _read_seed_marker()
 
         # --- The marker carries MY token: I own it now. ---
         if marker is not None and marker.get("token") == token:
             own_token_seen = True
-            state = marker.get("state")
-            if state == "ok":
-                print("[OK] baseline refresh complete - safe to close this terminal.")
-                return 0
-            if state == "incomplete":
-                print("`.testmondata` may be partial - rerun the refresh.")
-                return 1
-            if state == "skipped":
-                reason = marker.get("reason", "unknown reason")
-                print(
-                    f"Refresh was skipped ({reason}) - no baseline was written; "
-                    "safe to close this terminal, rerun if needed."
-                )
-                return 1
-            if state == "running":
+            verdict = _follow_own_terminal_verdict(marker)
+            if verdict is not None:
+                return verdict
+            if marker.get("state") == _SEED_STATE_RUNNING:
                 pid = _marker_pid(marker)
                 if pid is None or not _pid_alive(pid):
                     # R1 re-poll (cosmetic polish): a preemptor claims BEFORE the
@@ -2111,69 +2171,63 @@ def seed_testmon_follow(token: str) -> int:
                         # The marker flipped (superseded / completed / vanished) —
                         # let the top of the loop re-classify it.
                         continue
-                    if repoll.get("state") == "running":
+                    if repoll.get("state") == _SEED_STATE_RUNNING:
                         repoll_pid = _marker_pid(repoll)
                         if repoll_pid is None or not _pid_alive(repoll_pid):
-                            print("`.testmondata` may be partial - rerun the refresh.")
+                            print(_FOLLOW_MSG_PARTIAL)
                             return 1
-                    # State changed to a terminal value under my token — re-loop.
+                    # Still running+alive, or flipped to a terminal state under my
+                    # token — re-loop and let the top re-classify.
                     continue
                 # NOTE (finding #8): `_pid_alive` is pid-based, so in the rare
                 # event the detached seed dies and the OS reuses its pid, this
-                # streams stale "progress" until the 45-min deadline, then exits 4
+                # streams stale "progress" until the deadline, then exits 4
                 # advising re-attach. Benign (advisory only); a pid-generation
                 # guard would be over-engineering for this low-likelihood case.
                 _print_seed_progress(marker)
-                if time.monotonic() >= deadline:
-                    print(
-                        f"Still running after 45m - keep this terminal open, or "
-                        f"re-attach: python scripts/qs/quality_gate.py "
-                        f"--seed-testmon-follow --seed-token {token}"
-                    )
-                    return 4
                 time.sleep(_SEED_FOLLOW_INTERVAL_S)
                 continue
             # Any other/absent state under my token is an unreadable status.
-            print(unreadable)
+            print(_FOLLOW_MSG_UNREADABLE)
             return 3
 
-        # --- A DIFFERENT token owns the marker. ---
-        if marker is not None:
-            if own_token_seen:
-                # We owned the marker and a fresher run has now taken over —
-                # genuine supersession.
-                print(superseded)
-                return 5
-            # Startup: my seed hasn't claimed the marker yet. A stale foreign
-            # marker from a previous task is expected here — wait it out within
-            # the grace window rather than mis-reporting a supersession.
+        # --- Startup phase: our seed hasn't been observed owning the marker. ---
+        if not own_token_seen:
             if startup_polls < _SEED_STARTUP_GRACE_POLLS:
                 startup_polls += 1
-                print("waiting for baseline refresh to start...")
-                time.sleep(_SEED_FOLLOW_INTERVAL_S)
+                _startup_wait()
                 continue
-            # Grace elapsed with a foreign token still present — our seed never
-            # claimed; treat the persistent foreign run as the winner.
-            print(superseded)
+            # Grace elapsed without our claim.
+            if marker is not None:
+                # A foreign token held the marker the whole window: possibly a
+                # genuinely fresher run, possibly just our own slow cold-start.
+                # Report the uncertainty rather than a definite supersession.
+                print(_FOLLOW_MSG_UNCONFIRMED)
+                return 5
+            print(_FOLLOW_MSG_UNREADABLE)
+            return 3
+
+        # --- We owned the marker before; it is no longer ours. ---
+        if marker is not None:
+            # A different token now owns it. Re-read once and honor a MY-token
+            # terminal state (finding #1): a completed run whose `ok(T)` was
+            # overwritten by a parallel `running(U)` must report completion.
+            repoll = _read_seed_marker()
+            if repoll is not None and repoll.get("token") == token:
+                verdict = _follow_own_terminal_verdict(repoll)
+                if verdict is not None:
+                    return verdict
+                # Back to our own running marker — keep following.
+                continue
+            print(_FOLLOW_MSG_SUPERSEDED)
             return 5
 
-        # --- No readable marker (missing or unreadable JSON). ---
-        if own_token_seen:
-            # Our marker vanished/became unreadable after we owned it — re-read
-            # once before concluding.
-            time.sleep(_SEED_FOLLOW_INTERVAL_S)
-            if _read_seed_marker() is None:
-                print(unreadable)
-                return 3
-            continue
-        # Startup: no marker yet — wait within the grace window.
-        if startup_polls < _SEED_STARTUP_GRACE_POLLS:
-            startup_polls += 1
-            print("waiting for baseline refresh to start...")
-            time.sleep(_SEED_FOLLOW_INTERVAL_S)
-            continue
-        print(unreadable)
-        return 3
+        # --- No readable marker after we owned it — re-read once, else exit 3. ---
+        time.sleep(_SEED_FOLLOW_INTERVAL_S)
+        if _read_seed_marker() is None:
+            print(_FOLLOW_MSG_UNREADABLE)
+            return 3
+        continue
 
 
 def main() -> None:
@@ -2270,11 +2324,23 @@ def main() -> None:
             "you cannot combine --impacted with --quick, --cache, --no-cache, --full, or --fix"
         )
 
+    # QS-299 review-fix #02 (finding #2): the three seed subcommands are pairwise
+    # mutually exclusive. ONE centralized, symmetric check (order-independent)
+    # rather than relying on each mode's list happening to name the others — so a
+    # future refactor of any single list can't let one silently win via main()'s
+    # dispatch ordering.
+    if sum((args.seed_testmon, args.seed_testmon_status, args.seed_testmon_follow)) > 1:
+        parser.error(
+            "--seed-testmon, --seed-testmon-status, and --seed-testmon-follow are "
+            "mutually exclusive"
+        )
+
     # --seed-testmon (QS-276 review-fix M1) is a self-contained maintenance
     # subcommand, not a gate mode: combining it with any execution mode
     # silently dropped the seeding request (the main() dispatch order
     # short-circuited --impacted before it, and it before cache/scope/full).
-    # Make the conflict an explicit usage error instead.
+    # Make the conflict an explicit usage error instead. (Cross-seed pairs are
+    # already handled by the centralized check above.)
     if args.seed_testmon and (
         args.impacted or args.quick or args.cache or args.no_cache or args.full or args.fix
     ):
@@ -2284,38 +2350,23 @@ def main() -> None:
         )
 
     # QS-286: --seed-testmon-status is a read-only query subcommand, not a
-    # gate mode. Mirror the --seed-testmon mutex so combining it with any
-    # execution mode (or the seed itself) is an explicit usage error.
+    # gate mode. Mirror the --seed-testmon execution-mode mutex.
     if args.seed_testmon_status and (
-        args.impacted
-        or args.quick
-        or args.cache
-        or args.no_cache
-        or args.full
-        or args.fix
-        or args.seed_testmon
-        or args.seed_testmon_follow
+        args.impacted or args.quick or args.cache or args.no_cache or args.full or args.fix
     ):
         parser.error(
             "you cannot combine --seed-testmon-status with --impacted, --quick, "
-            "--cache, --no-cache, --full, --fix, --seed-testmon, or --seed-testmon-follow"
+            "--cache, --no-cache, --full, or --fix"
         )
 
     # QS-299: --seed-testmon-follow is a read-only streaming query subcommand.
-    # Same mutex family as --seed-testmon-status.
+    # Same execution-mode mutex.
     if args.seed_testmon_follow and (
-        args.impacted
-        or args.quick
-        or args.cache
-        or args.no_cache
-        or args.full
-        or args.fix
-        or args.seed_testmon
-        or args.seed_testmon_status
+        args.impacted or args.quick or args.cache or args.no_cache or args.full or args.fix
     ):
         parser.error(
             "you cannot combine --seed-testmon-follow with --impacted, --quick, "
-            "--cache, --no-cache, --full, --fix, --seed-testmon, or --seed-testmon-status"
+            "--cache, --no-cache, --full, or --fix"
         )
 
     # QS-299: --seed-token is meaningful only with --seed-testmon (identifies the
