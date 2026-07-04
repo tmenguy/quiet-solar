@@ -1,4 +1,5 @@
 import logging
+import statistics
 from bisect import bisect_left
 from datetime import datetime, timedelta
 from datetime import time as dt_time
@@ -18,6 +19,12 @@ from ..const import (
     CONF_PERSON_TRACKER,
     DEVICE_STATUS_CHANGE_NOTIFY,
     MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION,
+    PERSON_MILEAGE_NUM_GOOD_SAMPLES,
+    PERSON_MILEAGE_OUTLIER_FACTOR,
+    PERSON_MILEAGE_OUTLIER_MIN_KM,
+    PERSON_MILEAGE_RECURRENCE_TOLERANCE,
+    PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS,
     PERSON_NO_FORECAST_STRING,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
@@ -140,7 +147,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         while True:
             if (
                 len(self.historical_mileage_data) > MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
-            ):  # keeps only 2 weeks of data
+            ):  # count cap: keep at most MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS records
                 self.historical_mileage_data.pop(0)
             else:
                 break
@@ -154,23 +161,86 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             )
         self.serializable_historical_data = serialized_hist_data
 
+    def _is_suspicious_mileage(
+        self,
+        entry: tuple[datetime, float, datetime, int],
+        bucket: list[tuple[datetime, float, datetime, int]],
+    ) -> bool:
+        """Return True when ``entry`` is far above its same-weekday norm.
+
+        The baseline is the leave-one-out ``statistics.median`` of the bucket
+        mileages, excluding ``entry`` by its day key. Detection is disabled
+        (returns ``False``) when fewer than
+        ``PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION`` other samples
+        remain — identical to today's behavior on sparse buckets.
+        """
+        entry_day = entry[0]
+        others = [e[1] for e in bucket if e[0] != entry_day]
+        if len(others) < PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION:
+            return False
+        baseline = statistics.median(others)
+        return entry[1] > PERSON_MILEAGE_OUTLIER_FACTOR * baseline and entry[1] > PERSON_MILEAGE_OUTLIER_MIN_KM
+
+    def _is_mileage_outlier(self, entry: tuple[datetime, float, datetime, int]) -> bool:
+        """Return True when ``entry`` should be excluded from the prediction.
+
+        A record is an outlier when it is suspicious (magnitude test with its
+        own leave-one-out baseline) unless it is rescued by the live-pattern
+        recurrence rule: rescue applies only to the 2 most recent records of
+        the weekday bucket, and only when BOTH are suspicious, mutually
+        similar, and within ``PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS`` of each
+        other (inclusive).
+        """
+        week_day = entry[3]
+        bucket = [e for e in self.historical_mileage_data if e[3] == week_day]
+
+        if not self._is_suspicious_mileage(entry, bucket):
+            return False
+
+        # A suspicious record implies the bucket has at least
+        # PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION + 1 records, so the
+        # last-2 pair always exists.
+        older, newest = bucket[-2], bucket[-1]
+        if entry[0] != older[0] and entry[0] != newest[0]:
+            return True  # older suspicious record, never rescued
+
+        if not (self._is_suspicious_mileage(newest, bucket) and self._is_suspicious_mileage(older, bucket)):
+            return True  # the last-2 pair is not a live pattern
+
+        if abs(older[1] - newest[1]) > PERSON_MILEAGE_RECURRENCE_TOLERANCE * newest[1]:
+            return True  # not mutually similar
+
+        if abs((newest[0].date() - older[0].date()).days) > PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS:
+            return True  # too far apart to be a live pattern
+
+        return False  # rescued: a live recurring long trip
+
     def _get_best_week_day_guess(self, week_day: int) -> tuple[float | None, dt_time | None]:
-        """Get the best guess for mileage and leave time for a given weekday."""
+        """Get the best guess for mileage and leave time for a given weekday.
+
+        Walks the history most-recent-first, skipping outliers, until
+        ``PERSON_MILEAGE_NUM_GOOD_SAMPLES`` good same-weekday records are
+        collected. Prediction is the max mileage and earliest leave time of
+        the good records (outliers contribute neither).
+        """
         best_mileage = None
         best_leave_time = None
 
-        # Look for the last two entries for the given weekday
-        num_entries = 0
+        num_good = 0
         for entry in reversed(self.historical_mileage_data):
-            if entry[3] == week_day:
-                num_entries += 1
-                if best_mileage is None or entry[1] > best_mileage:
-                    best_mileage = entry[1]
-                if best_leave_time is None or entry[2].time() < best_leave_time:
-                    best_leave_time = entry[2].time()
+            if entry[3] != week_day:
+                continue
+            if self._is_mileage_outlier(entry):
+                continue
 
-                if num_entries >= 2:
-                    break
+            num_good += 1
+            if best_mileage is None or entry[1] > best_mileage:
+                best_mileage = entry[1]
+            if best_leave_time is None or entry[2].time() < best_leave_time:
+                best_leave_time = entry[2].time()
+
+            if num_good >= PERSON_MILEAGE_NUM_GOOD_SAMPLES:
+                break
 
         return best_mileage, best_leave_time
 

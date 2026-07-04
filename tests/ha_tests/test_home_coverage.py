@@ -4136,7 +4136,7 @@ async def test_dump_person_car_data_pickle_save(
     from os.path import join
 
     from custom_components.quiet_solar.ha_model.home import (
-        MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+        PERSON_HISTORY_BACKFILL_DAYS,
     )
 
     await hass.config_entries.async_setup(home_config_entry.entry_id)
@@ -4157,7 +4157,7 @@ async def test_dump_person_car_data_pickle_save(
 
     assert "full_range" in data
     assert "per_day" in data
-    assert len(data["per_day"]) == MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
+    assert len(data["per_day"]) == PERSON_HISTORY_BACKFILL_DAYS
 
 
 async def test_mileage_person_only_pre_start_segments(

@@ -438,7 +438,18 @@ SOLAR_DUSK_EARLIEST_LOCAL_HOUR = 15
 SOLAR_DUSK_SUSTAIN_S = 90 * 60
 # 90 min sustained low-pv to commit dusk (filters cloud transients).
 
-MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 30  # keep last 14 days of data
+MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS = 90  # count cap: keep at most 90 mileage records
+PERSON_HISTORY_BACKFILL_DAYS = 30  # boot-time recorder backfill depth (one query per day)
+
+# Outlier-resistant trip prediction tunables (defaults chosen in planning, not
+# user-validated — see docs/stories/QS-298.story.md Design §2).
+PERSON_MILEAGE_OUTLIER_FACTOR = 2.5
+PERSON_MILEAGE_OUTLIER_MIN_KM = 100.0
+PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS = 21
+PERSON_MILEAGE_RECURRENCE_TOLERANCE = 0.2
+PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION = 4
+PERSON_MILEAGE_NUM_GOOD_SAMPLES = 2
+
 PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS = "charger_constraints"
 PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER = "daily_reminder_no_charger_car"
 PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"

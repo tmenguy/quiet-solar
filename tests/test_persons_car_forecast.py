@@ -15,7 +15,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
     DOMAIN,
-    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    PERSON_HISTORY_BACKFILL_DAYS,
 )
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.home import QSHome, get_time_from_state
@@ -974,7 +974,7 @@ class TestPersonsCarForecast:
             # for d in range(0, 14):
             #     await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
 
-            num_days = min(MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS, len(per_day_data))
+            num_days = min(PERSON_HISTORY_BACKFILL_DAYS, len(per_day_data))
             print(f"\nProcessing {num_days} days with day_shift from 0 to {num_days - 1}:")
 
             local_day_2, local_day_shifted_2, local_day_utc_2, is_passed = (
