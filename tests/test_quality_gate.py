@@ -4025,7 +4025,9 @@ class TestPrintSeedProgress:
         ):
             quality_gate._print_seed_progress({"started": 1.0})
         out = capsys.readouterr().out
-        assert "refreshing baseline: 72/330 tests (21%) · elapsed 01:05" in out
+        # QS-299 review-fix #01 (finding #2): plain-ASCII separator (no `·`).
+        assert "refreshing baseline: 72/330 tests (21%) - elapsed 01:05" in out
+        assert "·" not in out
 
     def test_degraded_when_unparseable(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
@@ -4039,7 +4041,7 @@ class TestPrintSeedProgress:
 
 
 class TestReadSeedLogTail:
-    """QS-299: `_read_seed_log_tail` — best-effort read."""
+    """QS-299: `_read_seed_log_tail` — best-effort TAIL read (review-fix #01 #5)."""
 
     def test_reads_content(self, tmp_path: Path) -> None:
         log = tmp_path / "seed.log"
@@ -4050,6 +4052,25 @@ class TestReadSeedLogTail:
     def test_missing_returns_empty(self, tmp_path: Path) -> None:
         with patch.object(quality_gate, "SEED_LOG", tmp_path / "nope.log"):
             assert quality_gate._read_seed_log_tail() == ""
+
+    def test_reads_only_the_tail(self, tmp_path: Path) -> None:
+        """A large log is not read whole: only ~`_SEED_LOG_TAIL_BYTES` come back,
+        and the freshest progress line (at the end) survives + parses."""
+        log = tmp_path / "seed.log"
+        head = "OLD 0% (0/330)\n" * 5000  # far bigger than the tail window
+        tail_line = "  pytest: 99% (327/330) | passed=327 failed=0 errors=0\n"
+        log.write_text(head + tail_line)
+        with patch.object(quality_gate, "SEED_LOG", log):
+            out = quality_gate._read_seed_log_tail()
+        assert len(out) <= quality_gate._SEED_LOG_TAIL_BYTES
+        assert len(out) < len(head)  # NOT the whole file
+        assert quality_gate._parse_seed_progress(out) == (99, 327, 330)
+
+    def test_tail_smaller_than_window_returns_all(self, tmp_path: Path) -> None:
+        log = tmp_path / "seed.log"
+        log.write_text("short content")
+        with patch.object(quality_gate, "SEED_LOG", log):
+            assert quality_gate._read_seed_log_tail() == "short content"
 
 
 class TestSeedTestmonFollow:
@@ -4069,13 +4090,72 @@ class TestSeedTestmonFollow:
     def test_ok_exits_0(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "ok"}):
             assert quality_gate.seed_testmon_follow("t") == 0
-        assert "safe to close" in capsys.readouterr().out.lower()
+        out = capsys.readouterr().out.lower()
+        assert "safe to close" in out
+        assert out.isascii()  # review-fix #01 (#2): no non-ASCII glyphs
 
-    def test_superseded_exits_5(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_output_is_ascii_only(self) -> None:
+        """review-fix #01 (finding #2): every verdict/progress line is plain
+        ASCII, so piping under a non-UTF-8 locale can never raise."""
+        markers = [
+            {"token": "t", "state": "ok"},
+            {"token": "t", "state": "incomplete"},
+            {"token": "t", "state": "skipped", "reason": "x"},
+            {"token": "other", "state": "running"},
+        ]
+        for m in markers:
+            with patch.object(quality_gate, "_read_seed_marker", return_value=m):
+                buf = io.StringIO()
+                with patch("sys.stdout", buf):
+                    quality_gate.seed_testmon_follow("t")
+                assert buf.getvalue().isascii(), m
+
+    def test_foreign_marker_past_grace_exits_5(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix #01 (finding #1): a foreign token that persists the whole
+        startup grace (our seed never claims) → supersession."""
         with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "other", "state": "running"}):
             assert quality_gate.seed_testmon_follow("t") == 5
         out = capsys.readouterr().out.lower()
+        assert "waiting for baseline refresh" in out  # grace polled first
         assert "fresher baseline refresh" in out and "safe to close" in out
+
+    def test_stale_foreign_marker_then_own_claim_streams_progress(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix #01 (finding #1) MUST-FIX: a stale foreign marker present at
+        startup must NOT trigger a spurious exit 5 — once our own seed claims the
+        marker within the grace window we stream our own progress to completion."""
+        stale = {"token": "prev-task", "state": "running", "pid": 7}
+        mine_running = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        mine_ok = {"token": "t", "state": "ok"}
+        with (
+            patch.object(
+                quality_gate,
+                "_read_seed_marker",
+                side_effect=[stale, stale, mine_running, mine_ok],
+            ),
+            patch.object(quality_gate, "_pid_alive", return_value=True),
+            patch.object(quality_gate, "_print_seed_progress") as mock_prog,
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 0
+        out = capsys.readouterr().out.lower()
+        assert "waiting for baseline refresh" in out  # tolerated the stale marker
+        assert "fresher baseline" not in out  # no spurious supersession
+        mock_prog.assert_called_once()  # streamed our own progress
+        assert "safe to close" in out
+
+    def test_own_token_then_foreign_exits_5(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix #01 (finding #1): our token owned the marker, then a newer
+        run replaced it → genuine supersession (exit 5)."""
+        mine = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
+        newer = {"token": "newer", "state": "running", "pid": 99}
+        with (
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[mine, newer]),
+            patch.object(quality_gate, "_pid_alive", return_value=True),
+            patch.object(quality_gate, "_print_seed_progress"),
+        ):
+            assert quality_gate.seed_testmon_follow("t") == 5
+        assert "fresher baseline refresh" in capsys.readouterr().out.lower()
 
     def test_incomplete_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "incomplete"}):
@@ -4246,6 +4326,29 @@ class TestSeedFollowCli:
             quality_gate.main()
         assert exc.value.code == 2
         assert "--seed-testmon-follow requires --seed-token" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t"], ids=["empty", "spaces", "tab"])
+    @pytest.mark.parametrize(
+        "mode",
+        [["--seed-testmon", "--detached"], ["--seed-testmon-follow"]],
+        ids=["seed", "follow"],
+    )
+    def test_empty_or_whitespace_token_exits_2(
+        self, blank: str, mode: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """review-fix #01 (finding #3): a blank --seed-token is rejected for BOTH
+        subcommands (never silently treated as absent vs literal)."""
+        with (
+            patch("sys.argv", ["quality_gate.py", *mode, "--seed-token", blank]),
+            patch.object(quality_gate, "seed_testmon") as mock_seed,
+            patch.object(quality_gate, "seed_testmon_follow") as mock_follow,
+            pytest.raises(SystemExit) as exc,
+        ):
+            quality_gate.main()
+        assert exc.value.code == 2
+        assert "--seed-token must not be empty or whitespace" in capsys.readouterr().err
+        mock_seed.assert_not_called()
+        mock_follow.assert_not_called()
 
     @pytest.mark.parametrize(
         "argv",

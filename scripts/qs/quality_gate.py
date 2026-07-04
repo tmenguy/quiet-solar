@@ -1549,11 +1549,11 @@ def _read_seed_marker() -> dict | None:
     """Parse the `SEED_STATUS` marker; return the dict, or None when it is
     missing / unreadable / not a JSON object (QS-299).
 
-    Extracted from the inline `json.loads` `seed_testmon_status()` used, so the
-    follower and the preemptor share ONE tolerant reader. Callers that need to
-    tell "missing" apart from "unreadable" (e.g. `seed_testmon_status`'s two
-    distinct messages) re-check `SEED_STATUS.exists()` themselves — this helper
-    deliberately collapses both to None.
+    A single tolerant reader shared by the follower, the preemptor, and
+    `seed_testmon_status` (which previously parsed the marker inline). Callers
+    that need to tell "missing" apart from "unreadable" (e.g.
+    `seed_testmon_status`'s two distinct messages) re-check `SEED_STATUS.exists()`
+    themselves — this helper deliberately collapses both to None.
     """
     try:
         marker = json.loads(SEED_STATUS.read_text(encoding="utf-8"))
@@ -1934,28 +1934,51 @@ def seed_testmon_status() -> int:
 
 # QS-299: inline follower constants (plain module constants — no env knobs).
 _SEED_FOLLOW_INTERVAL_S = 5
+# QS-299 review-fix #01 (findings #1/#7): the startup grace now also covers a
+# stale FOREIGN-token marker left by a previous task — the follower launches
+# right after the seed's `nohup`, but the seed only claims the marker after
+# interpreter start + `import quality_gate` + `_testmon_available()` +
+# `_detach_session()`. Until this follower has observed its OWN token claim the
+# marker at least once, a missing OR foreign-token marker means "my seed hasn't
+# claimed yet" — keep polling within this window rather than mis-reporting a
+# supersession. Widened to 12 polls (~60 s) so a slow interpreter cold-start
+# can't exhaust the grace.
 _SEED_FOLLOW_MAX_WAIT_S = 2700  # 45 min
-# How many missing-marker polls to tolerate before the seed's `running` claim
-# lands (the startup grace window) before concluding "unreadable".
-_SEED_STARTUP_GRACE_POLLS = 6
+_SEED_STARTUP_GRACE_POLLS = 12  # ~60 s at the 5 s poll interval
 # The progress line `_stream_pytest` synthesizes (verified live under `-n auto`):
 #   `  pytest: 21% (72/330) | passed=72 failed=0 errors=0`
 # Capture pct / current / total; deliberately does NOT match the sibling
 # `  pytest: done (…)` completion line.
 _SEED_PROGRESS_RE = re.compile(r"pytest:\s+(\d+)%\s+\((\d+)/(\d+)\)")
+# QS-299 review-fix #01 (finding #5): only the trailing slice of the (possibly
+# large, growing) seed log is scanned each poll — enough to hold the latest
+# `pytest: NN% (…)` milestone line, so the follower stays O(1)-per-poll instead
+# of O(filesize).
+_SEED_LOG_TAIL_BYTES = 8192
 
 
 def _read_seed_log_tail() -> str:
-    """Read the shared `SEED_LOG` (QS-299), best-effort — "" when missing/unreadable.
+    """Read the TAIL of the shared `SEED_LOG` (QS-299), best-effort — "" when
+    missing/unreadable.
 
-    A preempting seed truncates this shared log, but the follower only parses it
-    AFTER confirming the marker still carries its own token, so it never
-    mis-reads a winner's log tail. Patchable seam for tests.
+    Seeks to the last `_SEED_LOG_TAIL_BYTES` and decodes only that slice, so a
+    long full-suite refresh (a log that grows for up to 45 min) does not cost an
+    O(filesize) re-read + re-scan on every 5 s poll. `_parse_seed_progress` takes
+    the last match, and the newest milestone line is always well within the tail,
+    so the trailing window preserves the parse result. A preempting seed
+    truncates this shared log, but the follower only parses it AFTER confirming
+    the marker still carries its own token, so it never mis-reads a winner's log
+    tail. Patchable seam for tests.
     """
     try:
-        return SEED_LOG.read_text(encoding="utf-8", errors="replace")
+        with open(SEED_LOG, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - _SEED_LOG_TAIL_BYTES))
+            data = fh.read()
     except OSError:
         return ""
+    return data.decode("utf-8", "replace")
 
 
 def _parse_seed_progress(log_text: str) -> tuple[int, int, int] | None:
@@ -2003,14 +2026,18 @@ def _marker_pid(marker: dict) -> int | None:
 def _print_seed_progress(marker: dict) -> None:
     """Print one progress line for a `running` poll (QS-299).
 
-    `refreshing baseline: N/M tests (pct%) · elapsed mm:ss` when the log tail is
+    `refreshing baseline: N/M tests (pct%) - elapsed mm:ss` when the log tail is
     parseable, degrading to `refreshing baseline: elapsed mm:ss` otherwise.
+
+    QS-299 review-fix #01 (finding #2): the line is plain ASCII (no `·`) so it
+    can never raise `UnicodeEncodeError` when the harness pipes the follower's
+    stdout under a non-UTF-8 locale (`LANG=C`).
     """
     elapsed = _fmt_elapsed(_marker_elapsed(marker))
     prog = _parse_seed_progress(_read_seed_log_tail())
     if prog is not None:
         pct, current, total = prog
-        print(f"refreshing baseline: {current}/{total} tests ({pct}%) · elapsed {elapsed}")
+        print(f"refreshing baseline: {current}/{total} tests ({pct}%) - elapsed {elapsed}")
     else:
         print(f"refreshing baseline: elapsed {elapsed}")
 
@@ -2020,95 +2047,132 @@ def seed_testmon_follow(token: str) -> int:
     a terminal state, returning a completion exit code (QS-299).
 
     Read-only — NO pytest / coverage / testmon import; it only reads the
-    `SEED_STATUS` marker (`_read_seed_marker`) and the `SEED_LOG` tail. The exit
-    table (`token` = my `--seed-token`):
+    `SEED_STATUS` marker (`_read_seed_marker`) and the `SEED_LOG` tail. All
+    printed lines are plain ASCII so piping under a non-UTF-8 locale can't raise.
+    The exit table (`token` = my `--seed-token`):
 
-      0  my token `ok`                          — refresh complete, safe to close
-      5  marker token ≠ mine (superseded)       — a fresher refresh took over
+      0  my token `ok`                          - refresh complete, safe to close
+      5  supersession (see below)               - a fresher refresh took over
       1  my token `incomplete` / `running`-dead / `skipped`
-      4  my token still `running` past max wait — keep terminal open / re-attach
-      3  marker missing past grace, or unreadable after a one-poll re-read
+      4  my token still `running` past max wait - keep terminal open / re-attach
+      3  marker missing/unreadable past the startup grace
+
+    Supersession vs startup (QS-299 review-fix #01, finding #1): tokens are
+    unordered uuid4, so a foreign token is indistinguishable from a genuinely
+    fresher one. Until this follower has observed its OWN token own the marker at
+    least once (`own_token_seen`), a missing OR foreign-token marker just means
+    "my seed hasn't claimed yet" — poll within the startup grace instead of
+    declaring supersession. Exit 5 fires only when either (a) our token was seen
+    and is THEN replaced by a different token, or (b) the startup grace elapses
+    with a foreign token still present.
 
     Every heavy operation (`time.sleep`/`time.monotonic`/`time.time`,
     `_read_seed_marker`, `_pid_alive`, the log-tail read) is a patchable seam so
     the whole loop is unit-testable without real processes or sleeps.
     """
+    superseded = (
+        "A fresher baseline refresh is now running - this one was "
+        "stopped, safe to close this terminal."
+    )
+    unreadable = "The baseline refresh status is unreadable."
     deadline = time.monotonic() + _SEED_FOLLOW_MAX_WAIT_S
     startup_polls = 0
+    own_token_seen = False
     while True:
         marker = _read_seed_marker()
-        if marker is None:
-            # Distinguish "not written yet" (startup grace) from "unreadable".
-            if not SEED_STATUS.exists():
-                if startup_polls < _SEED_STARTUP_GRACE_POLLS:
-                    startup_polls += 1
-                    print("waiting for baseline refresh to start…")
-                    time.sleep(_SEED_FOLLOW_INTERVAL_S)
-                    continue
-                print("The baseline refresh status is unreadable.")
-                return 3
-            # Present but unreadable — re-read once before concluding.
-            time.sleep(_SEED_FOLLOW_INTERVAL_S)
-            if _read_seed_marker() is None:
-                print("The baseline refresh status is unreadable.")
-                return 3
-            continue
 
-        # A different token means a fresher seed claimed the marker: superseded.
-        if marker.get("token") != token:
-            print(
-                "A fresher baseline refresh is now running — this one was "
-                "stopped, safe to close this terminal."
-            )
+        # --- The marker carries MY token: I own it now. ---
+        if marker is not None and marker.get("token") == token:
+            own_token_seen = True
+            state = marker.get("state")
+            if state == "ok":
+                print("[OK] baseline refresh complete - safe to close this terminal.")
+                return 0
+            if state == "incomplete":
+                print("`.testmondata` may be partial - rerun the refresh.")
+                return 1
+            if state == "skipped":
+                reason = marker.get("reason", "unknown reason")
+                print(
+                    f"Refresh was skipped ({reason}) - no baseline was written; "
+                    "safe to close this terminal, rerun if needed."
+                )
+                return 1
+            if state == "running":
+                pid = _marker_pid(marker)
+                if pid is None or not _pid_alive(pid):
+                    # R1 re-poll (cosmetic polish): a preemptor claims BEFORE the
+                    # kill, so a `running`+dead observation is almost always a
+                    # transient sub-poll race. Sleep one interval and re-read once
+                    # before concluding "interrupted".
+                    time.sleep(_SEED_FOLLOW_INTERVAL_S)
+                    repoll = _read_seed_marker()
+                    if repoll is None or repoll.get("token") != token:
+                        # The marker flipped (superseded / completed / vanished) —
+                        # let the top of the loop re-classify it.
+                        continue
+                    if repoll.get("state") == "running":
+                        repoll_pid = _marker_pid(repoll)
+                        if repoll_pid is None or not _pid_alive(repoll_pid):
+                            print("`.testmondata` may be partial - rerun the refresh.")
+                            return 1
+                    # State changed to a terminal value under my token — re-loop.
+                    continue
+                # NOTE (finding #8): `_pid_alive` is pid-based, so in the rare
+                # event the detached seed dies and the OS reuses its pid, this
+                # streams stale "progress" until the 45-min deadline, then exits 4
+                # advising re-attach. Benign (advisory only); a pid-generation
+                # guard would be over-engineering for this low-likelihood case.
+                _print_seed_progress(marker)
+                if time.monotonic() >= deadline:
+                    print(
+                        f"Still running after 45m - keep this terminal open, or "
+                        f"re-attach: python scripts/qs/quality_gate.py "
+                        f"--seed-testmon-follow --seed-token {token}"
+                    )
+                    return 4
+                time.sleep(_SEED_FOLLOW_INTERVAL_S)
+                continue
+            # Any other/absent state under my token is an unreadable status.
+            print(unreadable)
+            return 3
+
+        # --- A DIFFERENT token owns the marker. ---
+        if marker is not None:
+            if own_token_seen:
+                # We owned the marker and a fresher run has now taken over —
+                # genuine supersession.
+                print(superseded)
+                return 5
+            # Startup: my seed hasn't claimed the marker yet. A stale foreign
+            # marker from a previous task is expected here — wait it out within
+            # the grace window rather than mis-reporting a supersession.
+            if startup_polls < _SEED_STARTUP_GRACE_POLLS:
+                startup_polls += 1
+                print("waiting for baseline refresh to start...")
+                time.sleep(_SEED_FOLLOW_INTERVAL_S)
+                continue
+            # Grace elapsed with a foreign token still present — our seed never
+            # claimed; treat the persistent foreign run as the winner.
+            print(superseded)
             return 5
 
-        state = marker.get("state")
-        if state == "ok":
-            print("✅ baseline refresh complete — safe to close this terminal.")
-            return 0
-        if state == "incomplete":
-            print("`.testmondata` may be partial — rerun the refresh.")
-            return 1
-        if state == "skipped":
-            reason = marker.get("reason", "unknown reason")
-            print(
-                f"Refresh was skipped ({reason}) — no baseline was written; "
-                "safe to close this terminal, rerun if needed."
-            )
-            return 1
-        if state == "running":
-            pid = _marker_pid(marker)
-            if pid is None or not _pid_alive(pid):
-                # R1 re-poll (cosmetic polish): a preemptor claims BEFORE the
-                # kill, so a `running`+dead observation is almost always a
-                # transient sub-poll race. Sleep one interval and re-read once
-                # before concluding "interrupted".
-                time.sleep(_SEED_FOLLOW_INTERVAL_S)
-                repoll = _read_seed_marker()
-                if repoll is None or repoll.get("token") != token:
-                    # The marker flipped (superseded / completed / vanished) —
-                    # let the top of the loop re-classify it.
-                    continue
-                if repoll.get("state") == "running":
-                    repoll_pid = _marker_pid(repoll)
-                    if repoll_pid is None or not _pid_alive(repoll_pid):
-                        print("`.testmondata` may be partial — rerun the refresh.")
-                        return 1
-                # State changed to a terminal value under my token — re-loop.
-                continue
-            _print_seed_progress(marker)
-            if time.monotonic() >= deadline:
-                print(
-                    f"Still running after 45m — keep this terminal open, or "
-                    f"re-attach: python scripts/qs/quality_gate.py "
-                    f"--seed-testmon-follow --seed-token {token}"
-                )
-                return 4
+        # --- No readable marker (missing or unreadable JSON). ---
+        if own_token_seen:
+            # Our marker vanished/became unreadable after we owned it — re-read
+            # once before concluding.
+            time.sleep(_SEED_FOLLOW_INTERVAL_S)
+            if _read_seed_marker() is None:
+                print(unreadable)
+                return 3
+            continue
+        # Startup: no marker yet — wait within the grace window.
+        if startup_polls < _SEED_STARTUP_GRACE_POLLS:
+            startup_polls += 1
+            print("waiting for baseline refresh to start...")
             time.sleep(_SEED_FOLLOW_INTERVAL_S)
             continue
-
-        # Any other/absent state under my token is an unreadable status.
-        print("The baseline refresh status is unreadable.")
+        print(unreadable)
         return 3
 
 
@@ -2261,6 +2325,13 @@ def main() -> None:
     # --seed-testmon (it gates the setsid detach of the seeding process).
     if args.seed_token is not None and not (args.seed_testmon or args.seed_testmon_follow):
         parser.error("--seed-token is only valid with --seed-testmon or --seed-testmon-follow")
+    # QS-299 review-fix #01 (finding #3): reject an empty / whitespace-only token
+    # for BOTH subcommands. `seed_testmon("")` would treat it as absent (fresh
+    # uuid), while `seed_testmon_follow("")` could never match a real uuid marker
+    # — an inconsistency a follower launched with a blank token can never recover
+    # from. Fail loudly at the CLI instead of silently mismatching.
+    if args.seed_token is not None and not args.seed_token.strip():
+        parser.error("--seed-token must not be empty or whitespace")
     if args.seed_testmon_follow and args.seed_token is None:
         parser.error("--seed-testmon-follow requires --seed-token")
     if args.detached and not args.seed_testmon:
