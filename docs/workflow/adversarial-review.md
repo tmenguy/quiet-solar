@@ -25,9 +25,9 @@ a round-2+ plan review), not one-by-one in sequence. Two reasons:
 
 ## How to spawn in parallel
 
-In Claude Code: emit one assistant message with four `Agent` tool calls,
-each with a different `subagent_type`. The harness runs them
-concurrently.
+In Claude Code: emit one assistant message with one `Agent` tool call
+per reviewer, each with a different `subagent_type`. The harness runs
+them concurrently.
 
 In Cursor: emit one message that invokes the round's reviewer
 subagents (Cursor supports this natively as of 2.4).

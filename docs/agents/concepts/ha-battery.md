@@ -55,10 +55,12 @@ they match vacuously (a fully-unconfigured battery probes `True`, not
   `hass.services.async_call(number/switch)`.
 - `probe_if_command_set(time, command)` — reads HA entity state to
   verify command landed.
-- HA entities attached: `charge_percent_sensor` (SOC),
-  `charge_discharge_sensor` (combined power), `max_charge_number` +
-  `max_discharge_number` (max-power numbers), and
-  `charge_from_grid_switch` (the only switch).
+- HA entities wired: **probed** — `charge_percent_sensor` (SOC) and
+  `charge_discharge_sensor` (combined power); **read on demand** —
+  `max_charge_number` + `max_discharge_number` (max-power numbers) and
+  `charge_from_grid_switch` (the only switch), bare entity IDs read
+  via `hass.states.get` and never entering the probe/history
+  machinery.
 
 ## Lifecycle
 

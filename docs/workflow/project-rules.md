@@ -37,7 +37,8 @@ all four; use it only for ad-hoc single-node debugging.
 # left by a killed run with NO manual file deletion ever required.
 python scripts/qs/quality_gate.py --impacted
 
-# Full quality gate (pytest 100% cov + ruff + mypy + translations).
+# Full quality gate (pytest 100% cov + ruff + mypy + translations;
+# the translations value-check is local-full-gate only until #292 lands).
 # Authoritative full-suite gate — enforced in CI on every PR; the only
 # local run is an EXPLICIT user request. Detecting coverage lost in
 # UNCHANGED code is CI's exclusive job (--impacted cannot see it); never
