@@ -789,6 +789,7 @@ class PeriodSolver:
         allow_change_state=True,
         battery_min_wh: float = 0.0,
         battery_commands: list | None = None,
+        fill_order_reverse: bool = False,
     ):
 
         solved = False
@@ -905,6 +906,7 @@ class PeriodSolver:
                         power_headroom=self._max_possible_production - self._total_consumed_power,
                         bat_charge_traj=bat_charge_traj,
                         battery_min_wh=battery_min_wh,
+                        fill_order_reverse=fill_order_reverse,
                     )
                 )
                 if has_changes:
@@ -1579,6 +1581,7 @@ class PeriodSolver:
                                 probe_window_end,
                                 battery_min_wh=floor_wh,
                                 battery_commands=battery_commands,
+                                fill_order_reverse=True,
                             )
                             if has_changed:
                                 _LOGGER.info(

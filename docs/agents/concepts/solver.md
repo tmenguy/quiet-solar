@@ -4,7 +4,7 @@ slug: solver
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/solver.py
-last_verified: 2026-05-19
+last_verified: 2026-07-22
 ---
 
 # PeriodSolver
@@ -50,6 +50,13 @@ Allocation algorithm:
 
 Within each tier, constraints are ordered by score; ties broken by
 constraint-specific criteria (e.g., deadline proximity).
+
+On forecast-proven big-sun days the solver runs an aggressive surplus
+pre-discharge that deliberately over-consumes to free battery headroom
+for tomorrow's surplus. That placement fills latest-first
+(`adapt_repartition(..., fill_order_reverse=True)`) so the deliberate
+depletion hugs the solar-surplus onset — keeping the battery full as a
+buffer through the early night instead of draining it at "now".
 
 ## Key types / structures
 

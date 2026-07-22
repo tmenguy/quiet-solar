@@ -642,6 +642,150 @@ def test_surplus_block_probe_window_reaches_slot_zero():
     assert all(seg_start == 0 for seg_start in surplus_seg_starts)
 
 
+def _big_sun_surplus_scenario() -> tuple[PeriodSolver, TestLoad]:
+    """Build the AC-5 big-sun scenario (mirrors
+    `test_surplus_block_probe_window_reaches_slot_zero`): a forecast-proven
+    heavy-surplus day with an overnight car constraint so the surplus block
+    provably fires with probe_window_start = 0."""
+    start = datetime(2024, 6, 1, 0, 0, tzinfo=pytz.UTC)
+    end = start + timedelta(hours=24)
+
+    pv = []
+    for h in range(24):
+        hour = start + timedelta(hours=h)
+        if 6 <= h < 18:
+            pv.append((hour, 8000.0))
+        else:
+            pv.append((hour, 0.0))
+    ua = _flat_forecast(start, 24, 500.0)
+
+    bat = Battery(name="b")
+    bat.capacity = 10_000
+    bat._current_charge_value = 8_000
+    bat.max_charge_SOC_percent = 90.0
+    bat.min_charge_SOC_percent = 10.0
+
+    car = TestLoad(name="car")
+    car_steps = [copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=a * 3 * 230) for a in range(7, 17)]
+    car.push_live_constraint(
+        start,
+        MultiStepsPowerLoadConstraint(
+            time=start,
+            load=car,
+            type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+            end_of_constraint=start + timedelta(hours=4),
+            initial_value=2000.0,
+            target_value=7000.0,
+            power_steps=car_steps,
+            support_auto=True,
+        ),
+    )
+    s = _make_solver(start=start, end=end, pv=pv, ua=ua, battery=bat, loads=[car])
+    return s, car
+
+
+def _run_surplus_and_capture(
+    force_reverse: bool | None,
+) -> tuple[list[bool], np.ndarray | None]:
+    """Run the big-sun scenario OFF-GRID; capture the `fill_order_reverse`
+    flag the surplus `adapt_repartition` call actually receives, and the
+    FINAL per-slot deliberate-consumption power the surplus block leaves in
+    `actions[car]`.
+
+    Off-grid is required for a fill-order-observable differential: with a
+    grid available the surplus consumption is grid-fed and the whole probe
+    window saturates identically in both directions.  Off-grid, the drain
+    budget is genuinely limited by the battery, so exactly one boundary
+    slot is left below max power — and that partial slot sits at the HIGH
+    end under forward fill vs the LOW end under reverse fill.
+
+    If `force_reverse` is not None, override the flag for the surplus call
+    (so we can compare the SAME scenario under forward vs reverse fill).
+    """
+    from custom_components.quiet_solar.home_model.constraints import (
+        MultiStepsPowerLoadConstraint as _C,
+    )
+
+    s, car = _big_sun_surplus_scenario()
+    real_adapt = _C.adapt_repartition
+    real_constraints_delta = s._constraints_delta
+
+    reverse_flags: list[bool] = []
+    final_actions: dict = {}
+
+    def _capture(self, *args, **kwargs):
+        is_surplus = (
+            kwargs.get("bat_charge_traj") is not None and kwargs.get("battery_min_wh", 0.0) > 0
+        )
+        if is_surplus:
+            reverse_flags.append(bool(kwargs.get("fill_order_reverse", False)))
+            if force_reverse is not None:
+                kwargs["fill_order_reverse"] = force_reverse
+        return real_adapt(self, *args, **kwargs)
+
+    def _track_actions(*args, **kwargs):
+        result = real_constraints_delta(*args, **kwargs)
+        if kwargs.get("battery_min_wh", 0.0) > 0:
+            final_actions["actions"] = args[4]
+        return result
+
+    with patch.object(_C, "adapt_repartition", _capture), patch.object(
+        s, "_constraints_delta", side_effect=_track_actions
+    ):
+        s.solve(is_off_grid=True, with_self_test=False)
+
+    actions = final_actions.get("actions")
+    if actions is None:
+        return reverse_flags, None
+    power = np.array(
+        [float(c.power_consign) if c is not None else 0.0 for c in actions[car]],
+        dtype=np.float64,
+    )
+    return reverse_flags, power
+
+
+def test_surplus_block_passes_fill_order_reverse_true():
+    """AC-4/AC-5: the production surplus pre-discharge `_constraints_delta`
+    call receives `fill_order_reverse=True` (and the block fires)."""
+    reverse_flags, _ = _run_surplus_and_capture(force_reverse=None)
+    assert len(reverse_flags) >= 1, "surplus block must fire for this test to be meaningful"
+    assert all(reverse_flags), "every surplus _constraints_delta call must pass fill_order_reverse=True"
+
+
+def test_surplus_reverse_places_strictly_later_than_forward():
+    """AC-5: running the SAME big-sun scenario forward vs reverse, the
+    reverse fill places the deliberate surplus consumption in strictly
+    later probe slots (hugging the surplus onset), leaving the earliest
+    probe slot below max power instead of the latest."""
+    _, forward_power = _run_surplus_and_capture(force_reverse=False)
+    _, reverse_power = _run_surplus_and_capture(force_reverse=True)
+
+    assert forward_power is not None and reverse_power is not None
+    fwd_slots = np.nonzero(forward_power > 0.0)[0]
+    rev_slots = np.nonzero(reverse_power > 0.0)[0]
+    assert len(fwd_slots) > 0 and len(rev_slots) > 0, "both runs must place deliberate consumption"
+
+    # Power-weighted centroid: reverse concentrates consumption in LATER
+    # slots, so its centroid is strictly higher (the "hug the onset"
+    # property, robust to the exact per-slot values).
+    def _centroid(p: np.ndarray) -> float:
+        idx = np.arange(len(p), dtype=np.float64)
+        return float((idx * p).sum() / p.sum())
+
+    assert _centroid(reverse_power) > _centroid(forward_power), (
+        f"reverse centroid {_centroid(reverse_power):.3f} not later than "
+        f"forward centroid {_centroid(forward_power):.3f}"
+    )
+
+    # Concretely: the single boundary slot left below max power is the
+    # LOWEST filled slot under reverse but the HIGHEST under forward.
+    fwd_partial = int(np.argmin(np.where(forward_power > 0.0, forward_power, np.inf)))
+    rev_partial = int(np.argmin(np.where(reverse_power > 0.0, reverse_power, np.inf)))
+    assert rev_partial < fwd_partial, (
+        f"reverse partial slot {rev_partial} should precede forward partial slot {fwd_partial}"
+    )
+
+
 def test_surplus_block_probe_window_end_is_bounded_by_last_surplus_idx():
     """Given the surplus block fires
     When it calls _constraints_delta
