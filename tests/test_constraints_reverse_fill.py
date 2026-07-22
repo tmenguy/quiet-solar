@@ -48,6 +48,8 @@ def _make_constraint(
     power_steps: list[LoadCommand] | None = None,
     num_slots: int = 6,
 ) -> MultiStepsPowerLoadConstraint:
+    """Build a MultiStepsPowerLoadConstraint on a uniform-headroom window
+    for the reverse-fill unit tests (single load, no on/off cap)."""
     home = MinimalTestHome()
     load = MinimalTestLoad(name=name, home=home)
     load.father_device = TestDynamicGroupDouble(
@@ -70,6 +72,7 @@ def _make_constraint(
 
 
 def _durations(num_slots: int) -> np.ndarray:
+    """Return a uniform per-slot duration array of `num_slots` slots."""
     return np.full(num_slots, float(SOLVER_STEP_S), dtype=np.float64)
 
 
@@ -78,30 +81,26 @@ def _durations(num_slots: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 
-def test_forward_default_equals_kwarg_omitted_baseline():
-    """Given the same scenario run twice — once with the kwarg omitted
-    entirely, once with an explicit `fill_order_reverse=False`
-    When adapt_repartition runs the consume-more branch
-    Then the two placements are byte-identical (the refactor did not drift
-    the existing forward behavior).
+def test_forward_fill_matches_hardcoded_baseline():
+    """Given the SAME scenario as the reverse test (uniform 6-slot window,
+    single 600 W step, 350 Wh partial budget)
+    When adapt_repartition runs forward (fill_order_reverse=False)
+    Then the placement matches a HARD-CODED baseline — the earliest two
+    slots are filled at 600 W, the remaining four stay None, the deltas are
+    [600, 600, 0, 0, 0, 0] and the returned energy_delta is 50 Wh.
+
+    This is a real regression guard on the forward code path (guards the
+    slot_range / directional-cap refactor from silently drifting forward
+    behavior — AC-1's baseline sub-clause).  Asserting against concrete
+    expected values (rather than a second invocation of the same default
+    path) is what makes it non-tautological — QS-302 review fix #01 S3.
     """
     durations = _durations(6)
     existing: list[LoadCommand | None] = [None] * 6
     now = datetime.now(tz=pytz.UTC)
 
-    c_omitted = _make_constraint(name="omitted")
-    _, _, ch_a, _, cmds_a, deltas_a = c_omitted.adapt_repartition(
-        first_slot=0,
-        last_slot=5,
-        energy_delta=350.0,
-        power_slots_duration_s=durations,
-        existing_commands=list(existing),
-        allow_change_state=True,
-        time=now,
-    )
-
-    c_explicit = _make_constraint(name="explicit")
-    _, _, ch_b, _, cmds_b, deltas_b = c_explicit.adapt_repartition(
+    constraint = _make_constraint(name="fwd")
+    _, solved, changed, energy_delta, cmds, deltas = constraint.adapt_repartition(
         first_slot=0,
         last_slot=5,
         energy_delta=350.0,
@@ -112,14 +111,21 @@ def test_forward_default_equals_kwarg_omitted_baseline():
         fill_order_reverse=False,
     )
 
-    assert ch_a == ch_b
-    assert np.allclose(deltas_a, deltas_b)
-    for ca, cb in zip(cmds_a, cmds_b, strict=False):
-        if ca is None or cb is None:
-            assert ca is cb
-        else:
-            assert ca.command == cb.command
-            assert ca.power_consign == cb.power_consign
+    # 600 W over one SOLVER_STEP_S slot = 150 Wh; a 350 Wh budget fills the
+    # first two slots (300 Wh) and breaks before the third (would overshoot).
+    assert changed
+    assert not solved
+    assert float(energy_delta) == 50.0
+
+    # Earliest-first placement: slots 0 and 1 filled, 2..5 untouched.
+    assert cmds[0] is not None and cmds[0].command == "on" and cmds[0].power_consign == 600.0
+    assert cmds[1] is not None and cmds[1].command == "on" and cmds[1].power_consign == 600.0
+    assert cmds[2] is None
+    assert cmds[3] is None
+    assert cmds[4] is None
+    assert cmds[5] is None
+
+    assert [float(x) for x in deltas] == [600.0, 600.0, 0.0, 0.0, 0.0, 0.0]
 
 
 # ---------------------------------------------------------------------------

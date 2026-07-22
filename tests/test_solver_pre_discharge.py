@@ -714,6 +714,7 @@ def _run_surplus_and_capture(
     final_actions: dict = {}
 
     def _capture(self, *args, **kwargs):
+        """Record (and optionally override) the surplus call's fill_order_reverse flag."""
         is_surplus = (
             kwargs.get("bat_charge_traj") is not None and kwargs.get("battery_min_wh", 0.0) > 0
         )
@@ -724,6 +725,7 @@ def _run_surplus_and_capture(
         return real_adapt(self, *args, **kwargs)
 
     def _track_actions(*args, **kwargs):
+        """Snapshot the actions dict from the surplus _constraints_delta call."""
         result = real_constraints_delta(*args, **kwargs)
         if kwargs.get("battery_min_wh", 0.0) > 0:
             final_actions["actions"] = args[4]
@@ -769,6 +771,7 @@ def test_surplus_reverse_places_strictly_later_than_forward():
     # slots, so its centroid is strictly higher (the "hug the onset"
     # property, robust to the exact per-slot values).
     def _centroid(p: np.ndarray) -> float:
+        """Power-weighted mean slot index (higher == consumption placed later)."""
         idx = np.arange(len(p), dtype=np.float64)
         return float((idx * p).sum() / p.sum())
 
