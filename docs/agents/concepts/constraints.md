@@ -4,7 +4,7 @@ slug: constraints
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/constraints.py
-last_verified: 2026-06-05
+last_verified: 2026-07-22
 ---
 
 # LoadConstraint
@@ -71,7 +71,10 @@ The five priority tiers (highest first):
 
 - `LoadConstraint` — base class. Tracks progress and deadline.
 - `MultiStepsPowerLoadConstraint` — power-based with step options
-  (e.g., charger amperage levels).
+  (e.g., charger amperage levels). `adapt_repartition` takes an opt-in
+  `fill_order_reverse` knob (default forward/earliest-first); when
+  `True` the consume-more branch places slots latest-first (used by the
+  surplus pre-discharge to hug the solar-surplus onset).
 - `MultiStepsPowerLoadConstraintChargePercent` — SOC-based; target
   is a battery percentage, not raw kWh.
 - `TimeBasedSimplePowerLoadConstraint` — duration-based (e.g., pool

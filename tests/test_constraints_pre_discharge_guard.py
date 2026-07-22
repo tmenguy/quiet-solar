@@ -1079,3 +1079,76 @@ def test_multi_pass_skip_fires_when_out_commands_already_placed():
     total_state_delta = float(np.sum(deltas * durations / 3600.0))
     actual_drop = 5000.0 - float(bat_traj[-1])
     assert np.isclose(total_state_delta, actual_drop, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# (o) Floor guard under reverse fill — QS-302 AC-6 (adversarial)
+# ---------------------------------------------------------------------------
+
+
+def test_floor_guard_holds_under_reverse_fill_order():
+    """QS-302 AC-6: a scenario whose floor a NAIVE latest-first fill would
+    breach.
+
+    The surplus pre-discharge caller always activates Layer 3
+    (`fill_order_reverse=True` ⇒ `battery_min_wh > 0`), so the guard must
+    hold under REVERSED visit order — this is genuinely new-path coverage,
+    not a happy-path re-run of the forward guard.
+
+    Setup: 4 slots, ladder [400, 1200].  Floor 800 Wh, uniform trajectory
+    at 1400 Wh.  Each 1200 W placement drains 300 Wh (SOLVER_STEP_S slot).
+    A naive fill that placed 1200 W in every slot would drop the tail to
+    1400 - 4*300 = 200 Wh — a hard floor breach.  Layer 3 must clamp/skip
+    the later (in visit order == earlier-indexed) placements so the running
+    charge never dips below the floor.
+    """
+    # Keep the arithmetic honest if SOLVER_STEP_S ever changes.
+    step_h = float(SOLVER_STEP_S) / 3600.0
+    drain_per_full_slot = 1200.0 * step_h
+    assert drain_per_full_slot > 0.0
+    # A naive fill of all 4 slots would breach: 1400 - 4*drain < 800.
+    assert 1400.0 - 4.0 * drain_per_full_slot < 800.0
+
+    constraint = _make_constraint(
+        target_value=50_000.0,
+        power_steps=[
+            LoadCommand(command="on", power_consign=400.0),
+            LoadCommand(command="on", power_consign=1200.0),
+        ],
+        num_slots=4,
+    )
+    durations = _durations(4)
+    bat_traj = np.array([1400.0, 1400.0, 1400.0, 1400.0], dtype=np.float64)
+    now = datetime.now(tz=pytz.UTC)
+
+    _, _, changed, _, cmds, deltas = constraint.adapt_repartition(
+        first_slot=0,
+        last_slot=3,
+        energy_delta=10_000.0,  # far more than the floor allows — guard is the limit
+        power_slots_duration_s=durations,
+        existing_commands=[None, None, None, None],
+        allow_change_state=True,
+        time=now,
+        bat_charge_traj=bat_traj,
+        battery_min_wh=800.0,
+        fill_order_reverse=True,
+    )
+
+    assert changed is True
+    # Floor invariant: the running battery charge never dips below the
+    # floor at ANY slot, despite the reversed (latest-first) visit order.
+    assert float(np.min(bat_traj)) >= 800.0 - 1e-6, (
+        f"Layer 3 floor breached under reverse fill: min(bat_traj)="
+        f"{float(np.min(bat_traj)):.1f} < floor 800.0"
+    )
+
+    # The reverse guard fills the LATE slots and starves the early ones:
+    # the highest-index slot is placed, the lowest-index slot is skipped
+    # (no headroom remains after the tail drain).
+    assert cmds[3] is not None, "latest slot must be filled first under reverse"
+    assert cmds[0] is None, "earliest slot must be starved once the floor is reached"
+
+    # Total drain matches the trajectory drop (no phantom energy).
+    total_state_delta = float(np.sum(deltas * durations / 3600.0))
+    actual_drop = 1400.0 - float(bat_traj[-1])
+    assert np.isclose(total_state_delta, actual_drop, atol=1e-6)

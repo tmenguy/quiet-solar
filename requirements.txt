@@ -1,4 +1,4 @@
-homeassistant==2026.6.0  # pinned: CI must match local dev env
+homeassistant==2026.7.3  # pinned: CI must match local dev env
 haversine==2.9.0
 aiofiles
 # Core dependencies (if needed)

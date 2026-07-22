@@ -864,7 +864,35 @@ class TestSolver(TestCase):
         # With declining solar and good battery charge, should see intelligent power management
         assert total_car_energy > 0, "Car should get some energy allocation"
 
-        assert energy_utilization > 110, "Expected energy utilization should be > 110% indicating battery supplementing"
+        # QS-302: the surplus pre-discharge now fills the probe window
+        # LATEST-first (hugging the solar-surplus onset) instead of
+        # front-loading the battery drain.  The car is still heavily
+        # loaded, but the aggressive EARLY battery over-supplement that
+        # used to push utilization > 110% is gone BY DESIGN — the battery
+        # is deliberately kept full as an early-window buffer and drained
+        # closer to the surplus onset.  Assert the load is still
+        # substantial (well above grid-idle)...
+        assert energy_utilization > 80, (
+            f"Car should still be heavily loaded by the surplus block; "
+            f"got {energy_utilization:.1f}% utilization"
+        )
+        # ...and that the placement HUGS THE ONSET: the peak car power
+        # occurs later than the first filled slot (reverse fill), unlike
+        # the old forward behavior where slot 0 carried the peak.
+        onset_slot_s = float(SOLVER_STEP_S)
+        per_slot_power: list[float] = []
+        for k, (cmd_start, cmd) in enumerate(car_cmds):
+            cmd_end = car_cmds[k + 1][0] if k + 1 < len(car_cmds) else end_time
+            slot_count = max(0, int(round((cmd_end - cmd_start).total_seconds() / onset_slot_s)))
+            per_slot_power.extend([cmd.power_consign] * slot_count)
+        filled_slots = [i for i, p in enumerate(per_slot_power) if p > 0]
+        assert filled_slots, "surplus block must place deliberate consumption"
+        peak_power = max(per_slot_power)
+        assert per_slot_power[filled_slots[0]] < peak_power, (
+            f"QS-302 reverse fill: the power peak should sit later than the "
+            f"first filled slot; first={per_slot_power[filled_slots[0]]:.0f}W "
+            f"peak={peak_power:.0f}W"
+        )
         # QS-178: the aggressive surplus pre-discharge block (wider waste
         # accounting horizon + probe_window_start=0) intentionally bumps
         # every probe slot above the minimum power band on big-sun /

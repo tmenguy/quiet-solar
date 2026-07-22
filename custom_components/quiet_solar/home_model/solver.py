@@ -789,8 +789,17 @@ class PeriodSolver:
         allow_change_state=True,
         battery_min_wh: float = 0.0,
         battery_commands: list | None = None,
+        fill_order_reverse: bool = False,
     ):
+        """Grow or shrink the given constraints' allocation by `energy_delta`
+        over the `[seg_start, seg_end]` segment, applying the placements to
+        `actions` and returning `(solved, has_changed, remaining_delta)`.
 
+        `battery_min_wh` activates the Layer-3 per-slot battery-charge floor
+        guard; `fill_order_reverse` is forwarded to `adapt_repartition` so the
+        surplus pre-discharge caller can fill the window latest-first (hugging
+        the solar-surplus onset).
+        """
         solved = False
         has_changed = False
 
@@ -905,6 +914,7 @@ class PeriodSolver:
                         power_headroom=self._max_possible_production - self._total_consumed_power,
                         bat_charge_traj=bat_charge_traj,
                         battery_min_wh=battery_min_wh,
+                        fill_order_reverse=fill_order_reverse,
                     )
                 )
                 if has_changes:
@@ -1579,6 +1589,7 @@ class PeriodSolver:
                                 probe_window_end,
                                 battery_min_wh=floor_wh,
                                 battery_commands=battery_commands,
+                                fill_order_reverse=True,
                             )
                             if has_changed:
                                 _LOGGER.info(

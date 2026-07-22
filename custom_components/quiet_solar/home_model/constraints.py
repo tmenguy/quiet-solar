@@ -742,6 +742,7 @@ class LoadConstraint:
         power_headroom: npt.NDArray[np.float64] | None = None,
         bat_charge_traj: npt.NDArray[np.float64] | None = None,
         battery_min_wh: float = 0.0,
+        fill_order_reverse: bool = False,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the power repartition of the constraint over the given period."""
 
@@ -1395,6 +1396,7 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
         power_headroom: npt.NDArray[np.float64] | None = None,
         bat_charge_traj: npt.NDArray[np.float64] | None = None,
         battery_min_wh: float = 0.0,
+        fill_order_reverse: bool = False,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """Adapt the repartition of the constraint over the given period."""
         out_commands: list[LoadCommand | None] = [None] * len(power_slots_duration_s)
@@ -1446,17 +1448,24 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         if energy_delta >= 0.0:
             _LOGGER.info("adapt_repartition: for %s consume more energy %sWh for %s", self.name, energy_delta, log_msg)
-            # Forward iteration over the working window: the solver
-            # re-assesses placement opportunities slot-by-slot in order so
-            # earlier placements influence later ones via power_headroom
-            # and (when active) forward_min back-propagation.
-            sorted_available_power = range(first_slot, last_slot + 1)
         else:
             _LOGGER.info("adapt_repartition: for %s reclaim energy %sWh from %s", self.name, energy_delta, log_msg)
-            # Forward iteration: try to reclaim energy starting from the
-            # earliest slot so the battery fill window is recovered as
-            # soon as possible.
-            sorted_available_power = range(first_slot, last_slot + 1)
+
+        # Iteration order over the working window: the solver re-assesses
+        # placement opportunities slot-by-slot in order so earlier
+        # placements influence later ones via power_headroom and (when
+        # active) forward_min back-propagation.
+        #
+        # QS-302: forward (earliest-first) by default; the surplus
+        # pre-discharge caller opts into `fill_order_reverse=True` to place
+        # the deliberate battery depletion latest-first — hugging the
+        # solar-surplus onset so the battery stays full as a buffer through
+        # the early night.  Applied uniformly regardless of the
+        # energy_delta sign (only positive-delta surplus callers set it).
+        slot_range = range(first_slot, last_slot + 1)
+        if fill_order_reverse:
+            slot_range = range(last_slot, first_slot - 1, -1)
+        sorted_available_power = slot_range
 
         init_energy_delta = energy_delta
 
@@ -1472,7 +1481,12 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
 
         first_modified_slot = None
 
-        start_solved_frontier = first_slot
+        # `start_solved_frontier` marks the boundary of the solved region
+        # for the support_auto cap loop below.  Its meaning is
+        # direction-dependent (QS-302): under forward fill it is the
+        # HIGHEST touched slot (cap the untouched tail); under reverse fill
+        # it is the LOWEST touched slot (cap the untouched early region).
+        start_solved_frontier = last_slot if fill_order_reverse else first_slot
 
         if init_energy_delta < 0.0 and self.is_mandatory is True:
             # do nothing
@@ -1919,7 +1933,18 @@ class MultiStepsPowerLoadConstraint(LoadConstraint):
                 # CAP the modified segment to what has been computed ...or force some consumption
                 # we may in fact do that "all the time" but we are not sure of the future, so limit
                 # the forced caps to where they are important? use first_modified_slot instead?
-                for i in range(start_solved_frontier, last_slot + 1):
+                #
+                # QS-302: the cap range is direction-dependent, mirroring
+                # `start_solved_frontier`'s meaning.  Forward caps the
+                # untouched tail `[frontier, last_slot]`; reverse caps the
+                # untouched early region `[first_slot, frontier]`.  The
+                # `out_commands[i] is None` guard inside the loop still skips
+                # already-placed slots, so filled slots keep their command.
+                if fill_order_reverse:
+                    cap_range = range(first_slot, start_solved_frontier + 1)
+                else:
+                    cap_range = range(start_solved_frontier, last_slot + 1)
+                for i in cap_range:
                     if out_commands[i] is None:
                         if existing_commands[i] is None:
                             out_commands[i] = copy_command(empty_cmd)
@@ -2849,6 +2874,7 @@ class TimeBasedHoldOffConstraint(TimeBasedSimplePowerLoadConstraint):
         power_headroom: npt.NDArray[np.float64] | None = None,
         bat_charge_traj: npt.NDArray[np.float64] | None = None,
         battery_min_wh: float = 0.0,
+        fill_order_reverse: bool = False,
     ) -> tuple[Self, bool, bool, float, list[LoadCommand | None], npt.NDArray[np.float64]]:
         """No-op: the hold-off window must never be shaved by `_constraints_delta`.
 
