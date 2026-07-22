@@ -4148,40 +4148,30 @@ class TestSeedTestmonFollow:
         mock_prog.assert_called_once()  # streamed our own progress
         assert "safe to close" in out
 
-    def test_own_token_then_foreign_exits_5(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """review-fix #01/#02 (finding #1): our token owned the marker, then a
-        newer run replaced it (still `running`, never our terminal) → genuine
-        supersession (exit 5). The superseded-path re-read (finding #1, #02) also
-        sees the foreign token."""
+    def test_own_token_then_foreign_reports_taken_over(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """review-fix #03 (finding #1): our token owned the marker (`running(T)`),
+        then a foreign token owns it (`running(U)`) — the reachable production
+        ordering `running(T) → ok(T) → running(U)` OR `running(T) → running(U)`.
+        The token-guarded single marker means `ok(T)` is unrecoverable, so the
+        follower reports HONEST uncertainty (exit 5), never a false "was
+        stopped"/"fresher" claim, and never a fabricated completion."""
         mine = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
-        newer = {"token": "newer", "state": "running", "pid": 99}
+        foreign = {"token": "U", "state": "running", "pid": 99}
         with (
-            patch.object(quality_gate, "_read_seed_marker", side_effect=[mine, newer, newer]),
+            # only 2 reads now — the dead recovery re-read was removed.
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[mine, foreign]),
             patch.object(quality_gate, "_pid_alive", return_value=True),
             patch.object(quality_gate, "_print_seed_progress"),
         ):
             assert quality_gate.seed_testmon_follow("t") == 5
-        assert "fresher baseline refresh" in capsys.readouterr().out.lower()
-
-    def test_own_token_ok_overwritten_by_foreign_reports_completion(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """review-fix #02 (finding #1) SHOULD-FIX: a run that completed `ok(T)`
-        but whose marker was overwritten by a parallel `running(U)` before the
-        next poll must report COMPLETION (exit 0), not "superseded" — the
-        superseded-path re-read observes our own terminal `ok`."""
-        mine_running = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
-        foreign = {"token": "U", "state": "running", "pid": 99}
-        mine_ok = {"token": "t", "state": "ok"}
-        with (
-            patch.object(quality_gate, "_read_seed_marker", side_effect=[mine_running, foreign, mine_ok]),
-            patch.object(quality_gate, "_pid_alive", return_value=True),
-            patch.object(quality_gate, "_print_seed_progress"),
-        ):
-            assert quality_gate.seed_testmon_follow("t") == 0
         out = capsys.readouterr().out.lower()
-        assert "safe to close" in out
-        assert "fresher baseline" not in out  # NOT misreported as superseded
+        assert "another baseline refresh now holds the marker" in out
+        assert "either completed or was superseded" in out
+        assert "--seed-testmon-status" in out and "safe to close" in out
+        # honest — neither a false "stopped" nor a fabricated completion:
+        assert "was stopped" not in out
+        assert "[ok]" not in out
+        assert out.isascii()
 
     def test_incomplete_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(quality_gate, "_read_seed_marker", return_value={"token": "t", "state": "incomplete"}):
@@ -4261,11 +4251,11 @@ class TestSeedTestmonFollow:
 
     def test_running_dead_then_superseded(self) -> None:
         """R1 re-poll: token flips (superseded) → exit 5. Reads: initial dead,
-        R1 re-read (new), loop-top (new), superseded-path re-read (new)."""
+        R1 re-read (new), loop-top (new) → own-token→foreign taken-over verdict."""
         dead = {"token": "t", "state": "running", "pid": 42, "started": 1.0}
         new = {"token": "new", "state": "running"}
         with (
-            patch.object(quality_gate, "_read_seed_marker", side_effect=[dead, new, new, new]),
+            patch.object(quality_gate, "_read_seed_marker", side_effect=[dead, new, new]),
             patch.object(quality_gate, "_pid_alive", return_value=False),
         ):
             assert quality_gate.seed_testmon_follow("t") == 5
@@ -4716,6 +4706,13 @@ class TestFinishTaskFollowerAgents:
         body = self._text(rel)
         assert "--seed-testmon --detached --seed-token" in body
         assert "</dev/null" in body  # fully backgrounded
+
+    @pytest.mark.parametrize("rel", _AGENTS)
+    def test_empty_seed_token_guard_present(self, rel: str) -> None:
+        """review-fix #03 (finding #5): the launch is guarded by a non-empty
+        SEED_TOKEN check so a uuid failure can't invoke the CLI with an empty
+        --seed-token (which it rejects with exit 2 — a silent no-op)."""
+        assert '[ -n "$SEED_TOKEN" ]' in self._text(rel)
 
     @pytest.mark.parametrize("rel", _AGENTS)
     def test_no_rm_f_marker(self, rel: str) -> None:

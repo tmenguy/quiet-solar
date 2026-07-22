@@ -137,6 +137,18 @@ two copies is low; the cost of a missed sync is high. A diff lint script
 (`scripts/qs/lint_agents.py`, future) can verify the bodies stay
 aligned.
 
+**Byte-identical blocks must be edited in lockstep.** Some agent
+passages are intentionally mirrored byte-for-byte across all three
+harness files and guarded by a test. The clearest example is the QS-299
+post-merge **seed/follow launch block** in `qs-finish-task.md` (the
+`--seed-testmon --detached --seed-token …` launch plus the empty-token
+guard), pinned by
+`tests/test_quality_gate.py::TestFinishTaskRefreshesBaseline::test_seed_launch_block_byte_identical_across_harnesses`.
+Any edit to such a block must be applied identically to `.claude`,
+`.cursor`, and `.opencode` in the same change, or that test fails. The
+surrounding per-harness prose (e.g. the background+monitor mechanism)
+deliberately differs and is not part of the pinned slice.
+
 ## Adding a new harness
 
 1. Add a detection branch to `scripts/qs/harness.py::detect()`.

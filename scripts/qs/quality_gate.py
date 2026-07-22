@@ -1710,6 +1710,12 @@ def _claim_and_preempt(token: str, pid: int, pgid: int | None, started: float) -
     """
     with _seed_lock() as locked:
         if not locked:
+            # review-fix #03 (finding #3): on lock contention two seeds run
+            # concurrently and both truncate/append the shared SEED_LOG, so the
+            # follower's parsed progress line may momentarily jitter (e.g. jump
+            # between the two runs' percentages). Purely cosmetic — outcome safety
+            # is preserved (a duplicate/stale baseline is safe), so we accept the
+            # jitter rather than add per-process log isolation.
             _emit("seed-testmon", "seed lock busy — skipping preemption (best-effort claim)")
             _write_seed_status(_SEED_STATE_RUNNING, **_running_fields(token, pid, pgid, started))
             return
@@ -2056,9 +2062,16 @@ def _print_seed_progress(marker: dict) -> None:
 _FOLLOW_MSG_OK = "[OK] baseline refresh complete - safe to close this terminal."
 _FOLLOW_MSG_PARTIAL = "`.testmondata` may be partial - rerun the refresh."
 _FOLLOW_MSG_UNREADABLE = "The baseline refresh status is unreadable."
-_FOLLOW_MSG_SUPERSEDED = (
-    "A fresher baseline refresh is now running - this one was stopped, "
-    "safe to close this terminal."
+# QS-299 review-fix #03 (finding #1): once a foreign token owns the marker after
+# THIS run owned it, we genuinely cannot tell whether our run completed `ok(T)`
+# (then got overwritten by a parallel `running(U)`) or was preempted mid-run —
+# the token-guarded completion write means `ok(T)` is already gone by the time
+# the poll lands on `running(U)`, and the reverse is forbidden. So the verdict is
+# honest uncertainty, not a definite "this run was stopped".
+_FOLLOW_MSG_TAKEN_OVER = (
+    "Another baseline refresh now holds the marker; this run either completed or "
+    "was superseded - check `python scripts/qs/quality_gate.py --seed-testmon-status`. "
+    "Safe to close this terminal."
 )
 # QS-299 review-fix #02 (finding #3): a foreign marker that persists the whole
 # startup grace might just mean this run's seed was slow to claim (saturated
@@ -2075,9 +2088,6 @@ def _follow_own_terminal_verdict(marker: dict) -> int | None:
     """Map a MY-token marker in a terminal state to its follower exit code,
     printing the verdict line; return None for a non-terminal (`running`) or
     unknown state (QS-299).
-
-    Shared by the main poll and the supersession re-read (review-fix #02 finding
-    #1) so a completed run is never misreported as superseded.
     """
     state = marker.get("state")
     if state == _SEED_STATE_OK:
@@ -2106,7 +2116,10 @@ def seed_testmon_follow(token: str) -> int:
     The exit table (`token` = my `--seed-token`):
 
       0  my token `ok`                          - refresh complete, safe to close
-      5  supersession (see below)               - a fresher refresh took over
+      5  a foreign token owns the marker        - either (a) it owned it AFTER our
+         token did (this run completed or was superseded — indistinguishable, see
+         below), or (b) a foreign token held it for the whole startup grace
+         (unconfirmed start); BOTH cases are safe-to-close, exit 5
       1  my token `incomplete` / `running`-dead / `skipped`
       4  no terminal state within max wait      - keep terminal open / re-attach
       3  marker missing/unreadable past the startup grace
@@ -2118,11 +2131,15 @@ def seed_testmon_follow(token: str) -> int:
     hasn't claimed yet" — poll within the startup grace instead of declaring
     supersession.
 
-    Completed-not-superseded (review-fix #02, finding #1): a new parallel seed
-    unconditionally re-claims `running(U)`, so it can overwrite this run's
-    `ok(T)` in the ≤5 s gap between polls. Before concluding "superseded" on the
-    own-token path, re-read once and honor a MY-token terminal state, so a run
-    that actually completed reports completion (exit 0), not "stopped".
+    Completed-vs-superseded is BEST-EFFORT (review-fix #03, finding #1): the
+    single shared marker is token-guarded, so the on-disk history is
+    `running(T) → ok(T) → running(U)` (a parallel task overwrites our completed
+    marker) or `running(T) → running(U)` (we were preempted mid-run). Either way
+    `ok(T)` is gone by the time a poll lands on `running(U)`, and the follower
+    cannot tell the two apart — so on the own-token→foreign path it reports honest
+    uncertainty (`_FOLLOW_MSG_TAKEN_OVER`, exit 5), never a false "this run was
+    stopped". The outcome is safe regardless: a valid baseline exists (ours or the
+    winner's, which is still rebuilding).
 
     The `_SEED_FOLLOW_MAX_WAIT_S` deadline is enforced at the TOP of the loop
     (review-fix #02, finding #4) so EVERY path — startup wait, no-marker re-poll,
@@ -2207,19 +2224,15 @@ def seed_testmon_follow(token: str) -> int:
             print(_FOLLOW_MSG_UNREADABLE)
             return 3
 
-        # --- We owned the marker before; it is no longer ours. ---
+        # --- We owned the marker before; a foreign token now owns it. ---
         if marker is not None:
-            # A different token now owns it. Re-read once and honor a MY-token
-            # terminal state (finding #1): a completed run whose `ok(T)` was
-            # overwritten by a parallel `running(U)` must report completion.
-            repoll = _read_seed_marker()
-            if repoll is not None and repoll.get("token") == token:
-                verdict = _follow_own_terminal_verdict(repoll)
-                if verdict is not None:
-                    return verdict
-                # Back to our own running marker — keep following.
-                continue
-            print(_FOLLOW_MSG_SUPERSEDED)
+            # review-fix #03 (finding #1): the token-guarded single marker makes
+            # our completed `ok(T)` unrecoverable once `running(U)` is claimed
+            # (and the reverse write is forbidden), so we cannot distinguish
+            # "completed then overwritten" from "preempted mid-run". Report honest
+            # uncertainty (exit 5) rather than a false "this run was stopped".
+            # Both are safe-to-close: a valid baseline exists either way.
+            print(_FOLLOW_MSG_TAKEN_OVER)
             return 5
 
         # --- No readable marker after we owned it — re-read once, else exit 3. ---
