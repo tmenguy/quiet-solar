@@ -54,6 +54,9 @@ coverage.xml
 # QS-286: sidecar completion marker for the detached --seed-testmon refresh.
 # (.testmondata.seed.log is already covered by the *.log rule below.)
 .testmondata.seed-status
+# QS-286 follow-up: the seed-status advisory lock held while a --seed-testmon
+# refresh is in flight (sibling artifact that was missed by the rule above).
+.testmondata.seed-status.lock
 *.cover
 *.py,cover
 .hypothesis/
