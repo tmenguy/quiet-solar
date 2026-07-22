@@ -2396,6 +2396,12 @@ def main() -> None:
     # from. Fail loudly at the CLI instead of silently mismatching.
     if args.seed_token is not None and not args.seed_token.strip():
         parser.error("--seed-token must not be empty or whitespace")
+    # QS-299 review-fix #04 (finding #4): normalize the token by trimming
+    # surrounding whitespace so the seed and its follower compare strictly
+    # identical values (harmless today — both read the same shell var — but keeps
+    # the marker token clean and the equality robust).
+    if args.seed_token is not None:
+        args.seed_token = args.seed_token.strip()
     if args.seed_testmon_follow and args.seed_token is None:
         parser.error("--seed-testmon-follow requires --seed-token")
     if args.detached and not args.seed_testmon:

@@ -4367,6 +4367,28 @@ class TestSeedFollowCli:
             quality_gate.main()
         mock_seed.assert_called_once_with(token="T", detached=True)
 
+    def test_padded_token_is_trimmed_seed(self) -> None:
+        """review-fix #04 (finding #4): a token with surrounding whitespace is
+        accepted and normalized (trimmed) before dispatch."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon", "--seed-token", "  abc  "]),
+            patch.object(quality_gate, "seed_testmon", return_value=0) as mock_seed,
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        mock_seed.assert_called_once_with(token="abc", detached=False)
+
+    def test_padded_token_is_trimmed_follow(self) -> None:
+        """review-fix #04 (finding #4): the follower receives the trimmed token so
+        it compares strictly identical to the seed's."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon-follow", "--seed-token", "\tabc\n"]),
+            patch.object(quality_gate, "seed_testmon_follow", return_value=0) as mock_follow,
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        mock_follow.assert_called_once_with("abc")
+
     def test_follow_requires_token(self, capsys: pytest.CaptureFixture[str]) -> None:
         with (
             patch("sys.argv", ["quality_gate.py", "--seed-testmon-follow"]),
