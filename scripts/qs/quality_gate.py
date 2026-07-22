@@ -42,11 +42,17 @@ Smart scope detection:
 
 Exit codes:
     0 = all gates pass
-    1 = one or more gates failed (incl. --impacted changed-lines <100%)
+    1 = one or more gates failed (incl. --impacted changed-lines <100%;
+        --seed-testmon-follow: baseline incomplete/interrupted/skipped — rerun)
     2 = argument parsing error (e.g., --quick with no paths, or mutex violation)
-    3 = required tooling missing (--impacted: testmon / diff-cover not importable)
+    3 = required tooling missing (--impacted: testmon / diff-cover not importable;
+        --seed-testmon-follow: marker missing/unreadable past the startup grace)
     4 = --impacted could not resolve a diff base in CI
-    5 = --seed-testmon-follow: this run was superseded by a fresher baseline refresh
+        (--seed-testmon-follow: no terminal state within the max wait — re-attach)
+    5 = --seed-testmon-follow: a foreign token owns the marker — this run was
+        superseded / taken over, OR its start could not be confirmed (both
+        safe-to-close). Exit codes 1/3/4 are REUSED by --seed-testmon-follow with
+        the follower-specific meanings noted above.
 """
 
 from __future__ import annotations
@@ -1958,6 +1964,13 @@ _SEED_FOLLOW_INTERVAL_S = 5
 # claimed yet" — keep polling within this window rather than mis-reporting a
 # supersession. Widened to 12 polls (~60 s) so a slow interpreter cold-start
 # can't exhaust the grace.
+#
+# review-fix #05 (finding #5), record-only: this ~60 s is a DELIBERATE tuned
+# trade-off. A missing marker that persists the whole grace returns exit 3
+# ("unreadable"); under 3-4 saturating parallel seeds a detached interpreter
+# cold-start could in theory exceed 60 s and yield a mildly-misleading exit-3
+# advisory — but cleanup has already finished and the seed still completes
+# safely, so the consequence is cosmetic. Do NOT retune without re-measuring.
 _SEED_FOLLOW_MAX_WAIT_S = 2700  # 45 min
 _SEED_STARTUP_GRACE_POLLS = 12  # ~60 s at the 5 s poll interval
 # The progress line `_stream_pytest` synthesizes (verified live under `-n auto`):
@@ -2156,13 +2169,16 @@ def seed_testmon_follow(token: str) -> int:
         time.sleep(_SEED_FOLLOW_INTERVAL_S)
 
     deadline = time.monotonic() + _SEED_FOLLOW_MAX_WAIT_S
+    # review-fix #05 (finding #4): derive the human-readable wait from the
+    # constant so the exit-4 message can never drift if it is retuned.
+    max_wait_min = _SEED_FOLLOW_MAX_WAIT_S // 60
     startup_polls = 0
     own_token_seen = False
     while True:
         # Finding #4: universal upper bound — no path can loop past the deadline.
         if time.monotonic() >= deadline:
             print(
-                f"Still running after 45m - keep this terminal open, or re-attach: "
+                f"Still running after {max_wait_min}m - keep this terminal open, or re-attach: "
                 f"python scripts/qs/quality_gate.py --seed-testmon-follow --seed-token {token}"
             )
             return 4

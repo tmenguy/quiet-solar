@@ -4225,7 +4225,9 @@ class TestSeedTestmonFollow:
         ):
             assert quality_gate.seed_testmon_follow("t") == 4
         out = capsys.readouterr().out.lower()
-        assert "still running after 45m" in out and "--seed-token t" in out
+        # review-fix #05 (finding #4): the minutes are derived from the constant.
+        mins = quality_gate._SEED_FOLLOW_MAX_WAIT_S // 60
+        assert f"still running after {mins}m" in out and "--seed-token t" in out
 
     def test_running_dead_confirmed_exits_1(self, capsys: pytest.CaptureFixture[str]) -> None:
         """R1 re-poll: dead pid confirmed on re-read → interrupted."""
@@ -4300,7 +4302,8 @@ class TestSeedTestmonFollow:
             patch.object(quality_gate, "_print_seed_progress"),
         ):
             assert quality_gate.seed_testmon_follow("t") == 4
-        assert "still running after 45m" in capsys.readouterr().out.lower()
+        mins = quality_gate._SEED_FOLLOW_MAX_WAIT_S // 60
+        assert f"still running after {mins}m" in capsys.readouterr().out.lower()
 
     def test_startup_grace_then_exit_3(self, capsys: pytest.CaptureFixture[str]) -> None:
         with patch.object(quality_gate, "_read_seed_marker", return_value=None):
