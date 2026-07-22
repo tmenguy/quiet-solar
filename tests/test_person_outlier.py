@@ -292,9 +292,35 @@ def test_recurrence_window_exceeded_rejects(hass: HomeAssistant) -> None:
     assert mileage_out is not None and mileage_out <= 60.0
 
 
-def test_rescue_pair_size_matches_num_good_samples(hass: HomeAssistant) -> None:
-    """N8: the live-pattern rescue validates exactly a pair, so it is tied to
-    PERSON_MILEAGE_NUM_GOOD_SAMPLES == 2. Guard the tunable here."""
+def test_rescue_only_validates_last_two_records(hass: HomeAssistant) -> None:
+    """N8 / N5: the live-pattern rescue validates exactly ``bucket[-2:]``.
+
+    A third, distinct most-recent record must not change the rescue decision
+    for the pair — the rescue only ever inspects the last two records, which
+    is why it is coupled to ``PERSON_MILEAGE_NUM_GOOD_SAMPLES == 2`` (kept as a
+    tripwire below). Here the live pair is rescued whether or not an older
+    third big record precedes it, proving the third record is inert.
+    """
+    person = _make_person(hass)
+    normals = [_entry(WED, w, 40.0) for w in range(5)]  # weeks 0-4
+    live_pair = [_entry(WED, 6, 400.0), _entry(WED, 7, 390.0)]
+
+    # Baseline: just normals + the live pair → rescued (~400 km kept).
+    _set_history(person, normals + live_pair)
+    now = _recent_now(person)
+    baseline_pair = person._is_mileage_outlier(live_pair[-1], person.historical_mileage_data, now)
+    assert baseline_pair is False
+    assert person._get_best_week_day_guess(WED.weekday(), now)[0] >= 390.0
+
+    # Add a distinct older big record BEFORE the pair (week 5): the newest
+    # record's rescue decision is unchanged (rescue inspects only bucket[-2:]).
+    with_third = normals + [_entry(WED, 5, 500.0)] + live_pair
+    _set_history(person, with_third)
+    now = _recent_now(person)
+    assert person._is_mileage_outlier(live_pair[-1], person.historical_mileage_data, now) is False
+    assert person._get_best_week_day_guess(WED.weekday(), now)[0] >= 390.0
+
+    # Tripwire: the rescue's pair semantics are tied to this tunable.
     assert PERSON_MILEAGE_NUM_GOOD_SAMPLES == 2
 
 

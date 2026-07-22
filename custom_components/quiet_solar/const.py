@@ -442,7 +442,7 @@ MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS = 90  # count cap: max mileage record
 PERSON_HISTORY_BACKFILL_DAYS = 30  # boot-time recorder backfill depth in days
 
 # Outlier-resistant trip prediction tunables (defaults chosen in planning, not
-# user-validated — see docs/stories/QS-298.story.md Design §2).
+# user-validated — see docs/agents/concepts/person-trip-prediction.md).
 PERSON_MILEAGE_OUTLIER_FACTOR = 2.5
 PERSON_MILEAGE_OUTLIER_MIN_KM = 100.0
 PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS = 21

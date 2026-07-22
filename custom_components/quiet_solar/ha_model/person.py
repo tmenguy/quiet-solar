@@ -128,9 +128,7 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         # outlier baseline median undefined; a negative would flip the
         # magnitude test — both silently corrupt detection.
         if not math.isfinite(mileage) or mileage <= 0:
-            _LOGGER.warning(
-                "add_to_mileage_history: rejecting invalid mileage %s for person %s", mileage, self.name
-            )
+            _LOGGER.warning("add_to_mileage_history: rejecting invalid mileage %s for person %s", mileage, self.name)
             return
 
         day = day.replace(tzinfo=pytz.UTC).astimezone(tz=None)
@@ -218,7 +216,10 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         # last-2 pair always exists. The rescue validates exactly a pair; this
         # is tied to PERSON_MILEAGE_NUM_GOOD_SAMPLES == 2 (guarded in tests).
         older, newest = bucket[-2], bucket[-1]
-        if entry[0] != older[0] and entry[0] != newest[0]:
+        # The rescue only ever applies to the 2 most recent bucket records.
+        # Day keys are unique, so membership is tested by day key.
+        last_two_days = {older[0], newest[0]}
+        if entry[0] not in last_two_days:
             return True  # older suspicious record, never rescued
 
         if not (self._is_suspicious_mileage(newest, bucket) and self._is_suspicious_mileage(older, bucket)):

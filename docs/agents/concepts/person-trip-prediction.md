@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-07-05
+last_verified: 2026-07-22
 ---
 
 # Person, Car, and trip prediction
