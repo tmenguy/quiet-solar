@@ -47,7 +47,6 @@ from ..const import (
     HOME_CONSUMPTION_SENSOR,
     HOME_NON_CONTROLLED_CONSUMPTION_SENSOR,
     INTERVALS_MN,
-    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
     MAX_POWER_INFINITE,
     NUM_INTERVAL_PER_HOUR,
     NUM_INTERVALS_PER_DAY,
@@ -56,6 +55,7 @@ from ..const import (
     OFF_GRID_MODE_FORCE_ON_GRID,
     OVERRIDE_STATE_NO_OVERRIDE,
     PASS1_PREFERRED_CAR_PENALTY_KWH,
+    PERSON_HISTORY_BACKFILL_DAYS,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
     SENSOR_CAR_CHARGE_ORIGIN,
@@ -2268,14 +2268,14 @@ class QSHome(QSDynamicGroup):
         if is_passed_limit is False:
             local_day_utc = local_day_utc - timedelta(days=1)
 
-        # we are after 4am of the current day, we can recompute the last MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS days
+        # we are after 4am of the current day, we can recompute the last PERSON_HISTORY_BACKFILL_DAYS days
         # we shift to 4am to have mileage from 4am to 4am,
 
         data_to_save = []  # list of (start, end, [(car_name, car_positions, car_odos)], [(person, person_positions)])
         min_start = None
         max_end = None
 
-        for d in range(0, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS):
+        for d in range(0, PERSON_HISTORY_BACKFILL_DAYS):
             start = local_day_utc - timedelta(days=d + 1) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
             end = local_day_utc - timedelta(days=d) + timedelta(hours=HOME_PERSON_CAR_DAY_JOURNEY_START_HOURS)
 
@@ -2349,7 +2349,7 @@ class QSHome(QSDynamicGroup):
                         has_person_to_recompute = True
 
                 if has_person_to_recompute:
-                    # we are after 4am of the current day, we can recompute the last MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS days
+                    # we are after 4am of the current day, we can recompute the last PERSON_HISTORY_BACKFILL_DAYS days
                     # we shift to 4am to have mileage from 4am to 4am,
                     await self.recompute_people_historical_data(time)
 
@@ -2390,7 +2390,7 @@ class QSHome(QSDynamicGroup):
             delta = 0
         else:
             delta = 1
-        for d in range(delta, MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS + delta):
+        for d in range(delta, PERSON_HISTORY_BACKFILL_DAYS + delta):
             await self._compute_and_store_person_car_forecasts(local_day_utc, day_shift=d)
 
         for person in self._persons:

@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-06-29
+last_verified: 2026-07-22
 ---
 
 # Person, Car, and trip prediction
@@ -13,7 +13,9 @@ last_verified: 2026-06-29
 ## TL;DR
 
 `QSPerson` (`ha_model/person.py`) tracks presence and predicts trips
-from GPS and historical mileage (31-day rolling window). `QSCar`
+from GPS and historical mileage (a count-capped ring of the last 90
+mileage records; boot-time recorder backfill is a separate 30-day
+window). `QSCar`
 (`ha_model/car.py`) tracks SOC, charger assignment, and a custom
 power→amperage lookup table per car. The two together produce the
 constraints behind the "Magali plugs in her car" magic moment: the
@@ -22,8 +24,8 @@ tomorrow's predicted trips with margin.
 
 ## When you need this concept
 
-- Modifying trip prediction, mileage estimation, or the 31-day
-  rolling window.
+- Modifying trip prediction, mileage estimation, or the retention /
+  backfill windows.
 - Adding a new car model with non-linear charging curves.
 - Working on person-car allocation (which car belongs to which
   person).
@@ -34,8 +36,59 @@ tomorrow's predicted trips with margin.
 **Person side**:
 
 - GPS-based presence detection (home / away / commuting).
-- Mileage history (31 days, sensor-attribute restored) →
-  per-day-of-week average → next-day prediction.
+- Mileage history (count cap of 90 records via
+  `MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS`, sensor-attribute restored;
+  boot-time recorder backfill uses the separate
+  `PERSON_HISTORY_BACKFILL_DAYS = 30` so a larger retention never
+  inflates the per-day recorder queries) → **outlier-resistant**
+  per-weekday guess → next-day prediction. The retention is a count cap,
+  not an age cutoff: with gap days the ring may span more than 90
+  calendar days.
+- **Per-weekday guess** (`_get_best_week_day_guess`): walk the history
+  most-recent-first, same weekday only, **skip outliers**, and take the
+  **max mileage** and **earliest leave time** of the last
+  `PERSON_MILEAGE_NUM_GOOD_SAMPLES = 2` non-outlier records. Outlier
+  records contribute neither mileage nor leave time. Whenever the bucket
+  is non-empty at least one good record provably exists, so there is no
+  all-outlier fallback branch.
+- **Outlier detection** (`_is_mileage_outlier` / `_is_suspicious_mileage`):
+  a record is *suspicious* when
+  `mileage > PERSON_MILEAGE_OUTLIER_FACTOR (2.5) ×` its **leave-one-out**
+  `statistics.median` same-weekday baseline (interpolated median; the
+  record under test is excluded by its day key) **and**
+  `mileage > PERSON_MILEAGE_OUTLIER_MIN_KM (100 km)` (absolute floor —
+  rejecting normal km for a low-mileage person under-charges, the worse
+  failure mode). Detection is disabled (record kept) when the
+  leave-one-out bucket has fewer than
+  `PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION = 4` samples —
+  identical to the pre-QS-298 behavior on sparse / cold-start data (3
+  samples → off, 4 → on).
+- **Live-pattern recurrence rescue**: a suspicious record is kept only
+  when it is one of the **2 most recent** records of its weekday bucket
+  and that last-2 pair is a *live pattern* — BOTH suspicious, mutually
+  similar (`abs(older − newest) ≤ PERSON_MILEAGE_RECURRENCE_TOLERANCE
+  (0.2) × max(older, newest)` — a **symmetric** denominator matching the
+  "mutually similar" wording), within
+  `PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS = 21` days of each other
+  (inclusive), **and** the pair's newest record itself within that same
+  window of the prediction time (*now*). The recency-vs-now clause stops
+  a dead habit — two similar long trips then that weekday goes
+  driving-silent (no records are ever written for zero-mileage days) —
+  from predicting stale ~400 km indefinitely; the prediction reverts to
+  the non-outlier records once the pair ages past the window. This keeps
+  a genuine weekly far commute while rejecting a one-off. A single normal
+  day in the bucket breaks liveness and reverts the prediction
+  immediately (minority regime).
+- **Documented trade-offs**: the *first* occurrence of a new recurring
+  long trip is rejected (bounded to one mispredicted week, until the
+  second occurrence makes the pattern live); non-weekly / alternating /
+  monthly cadences are rejected (calendar integration is the fix, a
+  separate story); out-and-back weekend round trips cannot self-validate
+  because corroboration is same-weekday only. In the **majority regime**
+  (a habit that dominates the bucket) the leave-one-out median itself
+  rises, the records stop being suspicious, and the prediction decays
+  over a few weeks after the habit ends — the immediate-reversion
+  guarantee applies to the minority regime only.
 - Prediction confidence: if history is sparse or pattern match is
   weak, fall back to a conservative (over-charged) target.
 
@@ -71,7 +124,9 @@ prediction_kWh + margin` is pushed for the car's charger.
 - `QSPerson(HADeviceMixin, AbstractDevice)` — person tracking class.
 - `QSCar(HADeviceMixin, AbstractLoad)` — car class. Inherits constraint
   surface from `AbstractLoad`.
-- 31-day mileage ring (sensor-attribute restored).
+- 90-record mileage ring (count cap, sensor-attribute restored;
+  serialized payload stays under the recorder's 16 KB attribute limit —
+  guarded by a permanent test).
 - Custom power-to-amperage lookup table on `QSCar`.
 - `QSCar.get_car_person_readable_forecast_mileage(for_small_standalone=True)`
   — raw forecast string (`"<Person>: <km>km <date>"`); backs the

@@ -1,4 +1,6 @@
 import logging
+import math
+import statistics
 from bisect import bisect_left
 from datetime import datetime, timedelta
 from datetime import time as dt_time
@@ -17,7 +19,13 @@ from ..const import (
     CONF_PERSON_PREFERRED_CAR,
     CONF_PERSON_TRACKER,
     DEVICE_STATUS_CHANGE_NOTIFY,
-    MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS,
+    MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS,
+    PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION,
+    PERSON_MILEAGE_NUM_GOOD_SAMPLES,
+    PERSON_MILEAGE_OUTLIER_FACTOR,
+    PERSON_MILEAGE_OUTLIER_MIN_KM,
+    PERSON_MILEAGE_RECURRENCE_TOLERANCE,
+    PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS,
     PERSON_NO_FORECAST_STRING,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
@@ -115,6 +123,14 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             _LOGGER.warning("add_to_mileage_history: Leave time not provided for person %s", self.name)
             return
 
+        # Single choke point for both the live and restore paths: reject
+        # non-finite (NaN/inf) or non-positive mileage. A NaN would make the
+        # outlier baseline median undefined; a negative would flip the
+        # magnitude test — both silently corrupt detection.
+        if not math.isfinite(mileage) or mileage <= 0:
+            _LOGGER.warning("add_to_mileage_history: rejecting invalid mileage %s for person %s", mileage, self.name)
+            return
+
         day = day.replace(tzinfo=pytz.UTC).astimezone(tz=None)
         leave_time = leave_time.replace(tzinfo=pytz.UTC).astimezone(tz=None)
         week_day = day.weekday()
@@ -139,8 +155,8 @@ class QSPerson(HADeviceMixin, AbstractDevice):
 
         while True:
             if (
-                len(self.historical_mileage_data) > MAX_PERSON_MILEAGE_HISTORICAL_DATA_DAYS
-            ):  # keeps only 2 weeks of data
+                len(self.historical_mileage_data) > MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS
+            ):  # count cap: keep at most MAX_PERSON_MILEAGE_HISTORICAL_DATA_RECORDS records
                 self.historical_mileage_data.pop(0)
             else:
                 break
@@ -154,23 +170,108 @@ class QSPerson(HADeviceMixin, AbstractDevice):
             )
         self.serializable_historical_data = serialized_hist_data
 
-    def _get_best_week_day_guess(self, week_day: int) -> tuple[float | None, dt_time | None]:
-        """Get the best guess for mileage and leave time for a given weekday."""
+    def _is_suspicious_mileage(
+        self,
+        entry: tuple[datetime, float, datetime, int],
+        bucket: list[tuple[datetime, float, datetime, int]],
+    ) -> bool:
+        """Return True when ``entry`` is far above its same-weekday norm.
+
+        The baseline is the leave-one-out ``statistics.median`` of the bucket
+        mileages, excluding ``entry`` by its day key. Detection is disabled
+        (returns ``False``) when fewer than
+        ``PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION`` other samples
+        remain — identical to today's behavior on sparse buckets.
+        """
+        entry_day = entry[0]
+        others = [e[1] for e in bucket if e[0] != entry_day]
+        if len(others) < PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION:
+            return False
+        baseline = statistics.median(others)
+        return entry[1] > PERSON_MILEAGE_OUTLIER_FACTOR * baseline and entry[1] > PERSON_MILEAGE_OUTLIER_MIN_KM
+
+    def _is_mileage_outlier(
+        self,
+        entry: tuple[datetime, float, datetime, int],
+        bucket: list[tuple[datetime, float, datetime, int]],
+        now: datetime,
+    ) -> bool:
+        """Return True when ``entry`` should be excluded from the prediction.
+
+        ``bucket`` is the same-weekday record list (built once by the caller);
+        ``now`` is the local prediction time. A record is an outlier when it is
+        suspicious (magnitude test with its own leave-one-out baseline) unless
+        it is rescued by the live-pattern recurrence rule: rescue applies only
+        to the 2 most recent records of the weekday bucket, and only when BOTH
+        are suspicious, mutually similar, within
+        ``PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS`` of each other, AND the newest
+        of the pair is itself within that window of ``now`` (a dead habit
+        produces no records and must not keep predicting).
+        """
+        if not self._is_suspicious_mileage(entry, bucket):
+            return False
+
+        # A suspicious record implies the bucket has at least
+        # PERSON_MILEAGE_MIN_SAMPLES_FOR_OUTLIER_DETECTION + 1 records, so the
+        # last-2 pair always exists. The rescue validates exactly a pair; this
+        # is tied to PERSON_MILEAGE_NUM_GOOD_SAMPLES == 2 (guarded in tests).
+        older, newest = bucket[-2], bucket[-1]
+        # The rescue only ever applies to the 2 most recent bucket records.
+        # Day keys are unique, so membership is tested by day key.
+        last_two_days = {older[0], newest[0]}
+        if entry[0] not in last_two_days:
+            return True  # older suspicious record, never rescued
+
+        if not (self._is_suspicious_mileage(newest, bucket) and self._is_suspicious_mileage(older, bucket)):
+            return True  # the last-2 pair is not a live pattern
+
+        # Symmetric similarity: normalize by the larger of the pair.
+        if abs(older[1] - newest[1]) > PERSON_MILEAGE_RECURRENCE_TOLERANCE * max(older[1], newest[1]):
+            return True  # not mutually similar
+
+        # Ordering is enforced at ingestion (ascending, unique day keys), so
+        # newest[0] >= older[0] and now >= newest[0] in the normal case.
+        if (newest[0].date() - older[0].date()).days > PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS:
+            return True  # too far apart to be a live pattern
+
+        if (now.date() - newest[0].date()).days > PERSON_MILEAGE_RECURRENCE_WINDOW_DAYS:
+            return True  # pair is stale relative to now — habit likely stopped
+
+        return False  # rescued: a live recurring long trip
+
+    def _get_best_week_day_guess(
+        self, week_day: int, now: datetime | None = None
+    ) -> tuple[float | None, dt_time | None]:
+        """Get the best guess for mileage and leave time for a given weekday.
+
+        Walks the same-weekday bucket most-recent-first, skipping outliers,
+        until ``PERSON_MILEAGE_NUM_GOOD_SAMPLES`` good records are collected.
+        Prediction is the max mileage and earliest leave time of the good
+        records (outliers contribute neither). ``now`` (local time) gates the
+        live-pattern recurrence recency check; it defaults to the current
+        local time.
+        """
+        if now is None:
+            now = datetime.now(tz=pytz.UTC).astimezone(tz=None)
+
+        bucket = [e for e in self.historical_mileage_data if e[3] == week_day]
+
         best_mileage = None
         best_leave_time = None
 
-        # Look for the last two entries for the given weekday
-        num_entries = 0
-        for entry in reversed(self.historical_mileage_data):
-            if entry[3] == week_day:
-                num_entries += 1
-                if best_mileage is None or entry[1] > best_mileage:
-                    best_mileage = entry[1]
-                if best_leave_time is None or entry[2].time() < best_leave_time:
-                    best_leave_time = entry[2].time()
+        num_good = 0
+        for entry in reversed(bucket):
+            if self._is_mileage_outlier(entry, bucket, now):
+                continue
 
-                if num_entries >= 2:
-                    break
+            num_good += 1
+            if best_mileage is None or entry[1] > best_mileage:
+                best_mileage = entry[1]
+            if best_leave_time is None or entry[2].time() < best_leave_time:
+                best_leave_time = entry[2].time()
+
+            if num_good >= PERSON_MILEAGE_NUM_GOOD_SAMPLES:
+                break
 
         return best_mileage, best_leave_time
 
@@ -182,8 +283,12 @@ class QSPerson(HADeviceMixin, AbstractDevice):
         tomorrow_week_day = (today_week_day + 1) % 7
 
         # all below is in local time
-        predicted_mileage_today, predicted_leave_time_today = self._get_best_week_day_guess(today_week_day)
-        predicted_mileage_tomorrow, predicted_leave_time_tomorrow = self._get_best_week_day_guess(tomorrow_week_day)
+        predicted_mileage_today, predicted_leave_time_today = self._get_best_week_day_guess(
+            today_week_day, now=local_time
+        )
+        predicted_mileage_tomorrow, predicted_leave_time_tomorrow = self._get_best_week_day_guess(
+            tomorrow_week_day, now=local_time
+        )
 
         self.predicted_leave_time = None
         self.predicted_mileage = None
@@ -278,8 +383,12 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                         _LOGGER.warning("device_post_home_init: QSPerson %s error in saved data %s", self.name, e)
                         continue
 
-                    day = datetime.fromisoformat(day_str).replace(tzinfo=None).astimezone(tz=pytz.UTC)
-                    leave_time = datetime.fromisoformat(leave_time_str).replace(tzinfo=None).astimezone(tz=pytz.UTC)
+                    # Keep the serialized offset: aware isoformat strings map
+                    # to the correct instant across TZ / DST changes; naive
+                    # legacy strings still fall back to system-local (unchanged
+                    # behavior).
+                    day = datetime.fromisoformat(day_str).astimezone(tz=pytz.UTC)
+                    leave_time = datetime.fromisoformat(leave_time_str).astimezone(tz=pytz.UTC)
 
                     self.add_to_mileage_history(day, float(mileage), leave_time)
                 except Exception as ex:
