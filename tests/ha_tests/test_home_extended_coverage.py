@@ -38,6 +38,8 @@ from custom_components.quiet_solar.ha_model.home import (
     get_time_from_state,
 )
 from custom_components.quiet_solar.ha_model.solar import QSSolar
+from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_ON, copy_command
+from tests.factories import NeverAcksLoad, attach_minimal_load_to_home
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
@@ -547,12 +549,14 @@ class TestHomeOffGridMode:
         # check_loads_commands needs to return False
         home.home_mode = QSHomeMode.HOME_MODE_ON.value
 
-        load = MagicMock()
-        load.name = "test_load"
-        load.qs_enable_device = True
-        load.check_commands = AsyncMock(return_value=(timedelta(seconds=0), False))
-        load.running_command_num_relaunch = 0
-        home._all_loads = [load]
+        # QS-304 (AC8): a real load with an unacked in-flight command reports
+        # `command_acked_or_good is False`, which is what holds the off-grid
+        # transition back. A permanently uncontrollable load must not change
+        # that contract.
+        load = attach_minimal_load_to_home(home, name="test_load", load_class=NeverAcksLoad)
+        load.running_command = copy_command(CMD_IDLE)
+        load.running_command_first_launch = t_now
+        load.running_command_last_launch = t_now
         home._chargers = []
         home._init_completed = True
 
@@ -572,12 +576,8 @@ class TestHomeOffGridMode:
         home._switch_to_off_grid_launched = t_now - timedelta(seconds=30)
         home.home_mode = QSHomeMode.HOME_MODE_ON.value
 
-        load = MagicMock()
-        load.name = "test_load"
-        load.qs_enable_device = True
-        load.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
-        load.running_command_num_relaunch = 0
-        home._all_loads = [load]
+        # QS-304: a real load with an empty command slot is "ok".
+        load = attach_minimal_load_to_home(home, name="test_load")
         home._chargers = []
         home._init_completed = True
         home.physical_battery = None
@@ -964,10 +964,11 @@ class TestCheckLoadsCommands:
         home.home_mode = QSHomeMode.HOME_MODE_CHARGER_ONLY.value
         home._init_completed = True
 
-        charger = MagicMock()
-        charger.name = "test_charger"
-        charger.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
-        charger.running_command_num_relaunch = 0
+        # QS-304: a real load standing in for the charger — a duck-typed double
+        # has no `check_and_relaunch_command` and would `AttributeError` into
+        # the swallowing `except`.
+        charger = attach_minimal_load_to_home(home, name="test_charger")
+        charger.check_commands = AsyncMock(wraps=charger.check_commands)
         home._chargers = [charger]
 
         result = await home.check_loads_commands(datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC))
@@ -1000,17 +1001,19 @@ class TestCheckLoadsCommands:
         home._init_completed = True
         home.physical_battery = None
 
-        load = MagicMock()
-        load.name = "stale_load"
-        load.check_commands = AsyncMock(return_value=(timedelta(seconds=110), False))
-        load.running_command_num_relaunch = 1
-        load.force_relaunch_command = AsyncMock()
-        home._all_loads = [load]
-
         t = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
+        # QS-304: rung 1 means a 100 s delay, so 110 s of silence is stale.
+        load = attach_minimal_load_to_home(home, name="stale_load", load_class=NeverAcksLoad)
+        load.running_command = copy_command(CMD_ON, power_consign=1000.0)
+        load.running_command_num_relaunch = 1
+        load.running_command_first_launch = t - timedelta(seconds=110)
+        load.running_command_last_launch = t - timedelta(seconds=110)
+        load.force_relaunch_command = AsyncMock(wraps=load.force_relaunch_command)
+
         result = await home.check_loads_commands(t)
         assert result is False
         load.force_relaunch_command.assert_awaited_once()
+        assert load.running_command_num_relaunch == 2
 
 
 # ========================================================================
@@ -1058,18 +1061,9 @@ class TestUpdateLoads:
         home._switch_to_off_grid_launched = None
         home.physical_battery = None
 
-        charger = MagicMock()
-        charger.name = "test_charger"
-        charger.qs_enable_device = True
-        charger.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
-        charger.running_command_num_relaunch = 0
-        charger.is_load_active = MagicMock(return_value=False)
-        charger.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
-        charger.get_current_active_constraint = MagicMock(return_value=None)
-        charger.launch_command = AsyncMock()
-        charger.do_probe_state_change = AsyncMock()
-        charger.do_run_check_load_activity_and_constraints = AsyncMock(return_value=False)
-        charger.update_live_constraints = AsyncMock(return_value=False)
+        # QS-304: a real load standing in for the charger.
+        charger = attach_minimal_load_to_home(home, name="test_charger")
+        charger.launch_command = AsyncMock(wraps=charger.launch_command)
         home._chargers = [charger]
         home._all_loads = []
         home._commands = []
@@ -1077,6 +1071,8 @@ class TestUpdateLoads:
         home._last_solve_done = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
 
         await home.update_loads(datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC))
+
+        charger.launch_command.assert_awaited()
 
     @pytest.mark.asyncio
     async def test_update_loads_off_grid_not_finished(
@@ -1091,17 +1087,18 @@ class TestUpdateLoads:
         t_now = datetime(2026, 2, 10, 12, 0, tzinfo=pytz.UTC)
         home._switch_to_off_grid_launched = t_now - timedelta(seconds=30)
 
-        # Mock check_loads_commands to return False (not ready)
-        load = MagicMock()
-        load.name = "test"
-        load.check_commands = AsyncMock(return_value=(timedelta(0), False))
-        load.running_command_num_relaunch = 0
-        home._all_loads = [load]
+        # QS-304: a real never-acking load makes check_loads_commands report
+        # not-ready, which is what holds the off-grid switch back.
+        load = attach_minimal_load_to_home(home, name="test", load_class=NeverAcksLoad)
+        load.running_command = copy_command(CMD_IDLE)
+        load.running_command_first_launch = t_now
+        load.running_command_last_launch = t_now
         home._chargers = []
         home.physical_battery = None
 
         await home.update_loads(t_now)
-        # The fact we didn't crash is the test
+        # The off-grid switch is still pending: nothing was solved.
+        assert home._switch_to_off_grid_launched is not None
 
 
 # ========================================================================

@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
   - custom_components/quiet_solar/ha_model/person.py
-last_verified: 2026-07-22
+last_verified: 2026-07-29
 ---
 
 # Notification routing
@@ -55,6 +55,23 @@ alarm at 3am is supposed to wake you).
 - `QSPerson.notify(category, body, priority)` — per-person delivery.
 - Per-person preferences (quiet hours, channel, opt-in flags) live
   on `QSPerson`.
+- `DEVICE_STATUS_CHANGE_ERROR` producers — the newest is
+  `AbstractLoad._notify_unresponsive` (QS-304), fired **once** from
+  `check_and_relaunch_command` when a load crosses the lost-control
+  threshold (~1050 s of unacked relaunches). It is `AbstractLoad`-only:
+  the base `AbstractDevice._notify_unresponsive` is a documented no-op,
+  so an uncontrollable **battery** gets the ERROR log but no push and no
+  binary sensor. Accepted product consequence.
+
+### There is no recovery push (QS-304)
+
+The channel is a fire-and-forget `Platform.NOTIFY` mobile push with no
+notification id, so nothing can be dismissed or updated — and sending an
+`ERROR`-status push to say things are *fine* would be wrong. Recovery
+gets one INFO log line, and the live state is the
+`qs_load_uncontrollable` binary sensor (`BinarySensorDeviceClass.PROBLEM`),
+which clears itself when control returns. One line in, one line out; no
+heartbeat.
 
 ## Common mistakes
 
@@ -68,6 +85,9 @@ alarm at 3am is supposed to wake you).
   Trust depends on traceable "why".
 - Hard-coding the recipient. Always route through `QSPerson` so
   per-person preferences apply.
+- Pairing an entry push with a "recovered" push. The channel cannot
+  dismiss, so a second push is noise — expose recovery as state, not as
+  a notification (QS-304).
 
 ## See also
 

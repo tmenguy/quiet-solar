@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from custom_components.quiet_solar.const import DATA_HANDLER, DOMAIN
 from custom_components.quiet_solar.ha_model.home import QSHomeMode
 from custom_components.quiet_solar.home_model.commands import CMD_IDLE, LoadCommand
+from tests.factories import attach_minimal_load_to_home
 
 
 async def _setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -193,25 +194,18 @@ async def test_home_update_loads_forbid_command(
     home.update_loads_constraints = AsyncMock()
     home._last_solve_done = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
 
-    load = MagicMock()
-    load.name = "forbid_load"
-    load.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
-    load.running_command_num_relaunch = 0
-    load.force_relaunch_command = AsyncMock()
-    load.is_load_active = MagicMock(return_value=True)
-    load.update_live_constraints = AsyncMock(return_value=False)
-    load.get_phase_amps_from_power_for_budgeting = MagicMock(return_value=[1, 1, 1])
-    load.launch_command = AsyncMock()
-    load.is_load_has_a_command_now_or_coming = MagicMock(return_value=True)
-    load.get_current_active_constraint = MagicMock(return_value=True)
-    load.do_probe_state_change = AsyncMock()
-    load.current_command = CMD_IDLE
-    load.father_device = SimpleNamespace(is_delta_current_acceptable=MagicMock(return_value=False))
-
     command = LoadCommand(command="on", power_consign=100.0)
     time_now = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
 
-    home._all_loads = [load]
+    # QS-304: a real load — a MagicMock load fails silently inside
+    # `check_loads_commands`, so this test's assertion could never fire.
+    load = attach_minimal_load_to_home(home, name="forbid_load", time=time_now, with_constraint=True)
+    load.current_command = CMD_IDLE
+    load.update_live_constraints = AsyncMock(return_value=False)
+    load.launch_command = AsyncMock(wraps=load.launch_command)
+    # The load's real `father_device` is the home; refuse the amps delta there.
+    home.is_delta_current_acceptable = MagicMock(return_value=False)
+
     home._chargers = []
     home.physical_battery = None
     home._commands = [(load, [(time_now, command)])]

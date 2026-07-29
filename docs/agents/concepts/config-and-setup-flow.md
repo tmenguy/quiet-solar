@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-07-22
+last_verified: 2026-07-29
 ---
 
 # Config flow and setup
@@ -202,6 +202,15 @@ key instead of the localised "Dashboard section" label.
   storage payload keys (read/written by `home_model/load.py`'s
   save/restore methods). Part of the on-disk format: never change the
   values without a storage migration (QS-256).
+- `BINARY_SENSOR_*` constants in `const.py` — entity translation keys.
+  The newest is `BINARY_SENSOR_LOAD_UNCONTROLLABLE =
+  "qs_load_uncontrollable"` (QS-304), created for **every**
+  `AbstractLoad` by `create_ha_binary_sensor_for_AbstractLoad` in
+  `binary_sensor.py`. Adding one means: constant in `const.py`, key
+  under `entity.binary_sensor` in `strings.json`, then
+  `bash scripts/generate-translations.sh`. `const.py` stays
+  HA-import-free — the `BinarySensorDeviceClass` lives in
+  `binary_sensor.py`.
 
 ## Lifecycle
 

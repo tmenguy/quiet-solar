@@ -7,7 +7,7 @@ covers:
   - tests/factories.py
   - tests/ha_tests/conftest.py
   - tests/ha_tests/const.py
-last_verified: 2026-06-24
+last_verified: 2026-07-29
 ---
 
 # Testing layers — FakeHass, factories, and real HA fixtures
@@ -130,6 +130,20 @@ integration and self-tests alike — for the authoritative 100%.
 - `tests/factories.py` — real-object builders for every domain
   class. The single source of truth for "how do I build a valid
   X in a test?".
+- `NeverAcksLoad` / `NeverAcksDevice` / `RaisingProbeLoad` /
+  `RaisingExecuteLoad` (QS-304) — misbehaving-device doubles for the
+  command lifecycle. `NeverAcksLoad` answers its probe but never
+  confirms (the Cumulus Pool House shape); flip `probe_result` to make
+  the device finally comply, or to `None` to make it unreachable.
+  `NeverAcksDevice` is the non-`AbstractLoad` variant (the battery
+  path). Public so both `tests/` and `tests/ha_tests/` can import them —
+  `tests/ha_tests/` must never import from a `tests/test_*.py` module.
+- `attach_minimal_load_to_home(home, ...)` (QS-304) — builds a real
+  `MinimalTestLoad` and registers it via `home.add_device`, which is what
+  gives it a usable `father_device`. Required for any
+  `check_loads_commands` / `update_loads` test: a `MagicMock` load fails
+  *silently* there (the `TypeError` is swallowed by the per-load
+  `except`, `all_ok` stays `True`), so a green run proves nothing.
 - `tests/conftest.py` — shared fixtures for the fast layer.
 - `tests/ha_tests/conftest.py` — shared fixtures for the real-HA
   layer (mostly pytest-homeassistant-custom-component re-exports
@@ -141,7 +155,11 @@ integration and self-tests alike — for the authoritative 100%.
 
 - Using mocks instead of factories. Mocks pass tests against
   themselves; factories pass tests against the real object's
-  invariants.
+  invariants. Worse, when the production code swallows exceptions
+  per-item, a mock makes the test pass while exercising **nothing** —
+  the QS-304 failure mode. If you suspect it, temporarily re-raise from
+  the swallowing `except`, run the suite, and the failures are your
+  conversion list.
 - Writing a real-HA test for logic the fast layer covers. You
   burn CI time and slow the dev loop.
 - Letting FakeHass diverge from real HA. Smoke tests

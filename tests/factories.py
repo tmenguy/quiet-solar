@@ -59,7 +59,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
 )
-from custom_components.quiet_solar.home_model.load import AbstractLoad
+from custom_components.quiet_solar.home_model.load import AbstractDevice, AbstractLoad
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
@@ -153,6 +153,133 @@ class MinimalTestLoad(AbstractLoad):
     def is_off_grid(self) -> bool:
         """Check if load is off-grid."""
         return False
+
+
+# =============================================================================
+# QS-304: Loads whose commands never land
+# =============================================================================
+
+
+class NeverAcksLoad(MinimalTestLoad):
+    """A load that answers its probe but never reaches the target state.
+
+    This is the Cumulus Pool House / Cumulus Enfants shape: the device is
+    reachable (the probe returns a real `False`, never `None`) but the
+    command is never confirmed, so `_ack_command` is never reached.
+
+    Three knobs let a single double cover the whole incident lifecycle:
+    `probe_result` (flip to `True` to make the device finally comply, or to
+    `None` to make it unreachable), `suppress_override` (make the load behave
+    as if a user override were swallowing commands), and `executed_commands`
+    (the recorded service calls).
+    """
+
+    def __init__(self, **kwargs):
+        """Initialize the load and its recording knobs."""
+        super().__init__(**kwargs)
+        self.executed_commands: list[LoadCommand] = []
+        self.state_change_notifications: list[tuple[datetime, str, str | None]] = []
+        self.probe_result: bool | None = False
+        self.suppress_override: bool = False
+
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
+        """Answer the probe with the configured (by default unconfirmed) result."""
+        return self.probe_result
+
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
+        """Record the service call and report the command as not yet set."""
+        self.executed_commands.append(command)
+        return False
+
+    def is_command_suppressed_by_override(self, time: datetime, command: LoadCommand) -> bool:
+        """Report whether the configured user override swallows commands."""
+        return self.suppress_override
+
+    async def on_device_state_change(
+        self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
+    ):
+        """Record the notification instead of pushing it to a mobile app."""
+        self.state_change_notifications.append((time, device_change_type, message))
+
+
+class RaisingProbeLoad(MinimalTestLoad):
+    """A load whose `probe_if_command_set` always raises."""
+
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
+        """Raise, as a device whose entity lookup blows up would."""
+        raise RuntimeError("probe exploded")
+
+
+class RaisingExecuteLoad(MinimalTestLoad):
+    """A load whose `execute_command` always raises, and never acks."""
+
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
+        """Answer the probe, but never confirm the command."""
+        return False
+
+    async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
+        """Raise, as a failing HA service call would."""
+        raise RuntimeError("execute exploded")
+
+
+class NeverAcksDevice(AbstractDevice):
+    """A plain `AbstractDevice` (NOT an `AbstractLoad`) that never acks.
+
+    Used to exercise the `AbstractDevice._notify_unresponsive` no-op — the
+    notification channel only exists on `AbstractLoad`, but the relaunch
+    driver also runs against `QSBattery`, which is `AbstractDevice`-side.
+    """
+
+    def __init__(self, name: str = "TestDevice", **kwargs):
+        """Initialize the device with a minimal home."""
+        home = kwargs.pop("home", None)
+        if home is None:
+            home = MinimalTestHome()
+        super().__init__(name=name, device_type="test_device", home=home, **kwargs)
+
+    async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
+        """Answer the probe, but never confirm the command."""
+        return False
+
+
+def attach_minimal_load_to_home(
+    home: Any,
+    name: str = "Test Load",
+    power: float = 1000.0,
+    time: datetime | None = None,
+    with_constraint: bool = False,
+    load_class: type[MinimalTestLoad] = MinimalTestLoad,
+    **kwargs,
+) -> MinimalTestLoad:
+    """Create a real `MinimalTestLoad`, register it on `home`, and return it.
+
+    QS-304: `QSHome.check_loads_commands` and `QSHome.update_loads` drive real
+    `AbstractLoad` behaviour — probing, the relaunch ladder, the lost-control
+    escalation. A `MagicMock` passed as a load fails *silently* there, because
+    the resulting `TypeError` is swallowed by the per-load `except`, so `all_ok`
+    stays `True` and the test's assertions never fire. Use a real load.
+
+    `home.add_device` appends the load to `_all_loads` and re-runs
+    `_set_topology()`, which is what gives the load a usable `father_device`.
+    """
+    load = load_class(name=name, power=power, home=home, **kwargs)
+    home.add_device(load)
+
+    if with_constraint:
+        if time is None:
+            time = datetime.now(tz=pytz.UTC)
+        load.push_live_constraint(
+            time,
+            create_constraint(
+                load=load,
+                time=time,
+                end_of_constraint=time + timedelta(hours=2),
+                target_value=power,
+                power=power,
+            ),
+        )
+
+    return load
 
 
 # =============================================================================

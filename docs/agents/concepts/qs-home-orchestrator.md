@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-07-04
+last_verified: 2026-07-29
 ---
 
 # QSHome — the orchestrator
@@ -59,6 +59,16 @@ than the cycle completes.
 - `QSHomeMode` — `NORMAL` / `OFF_GRID` / `FORCED_OFF_GRID`.
 - `update_all_states()` — the 4s cycle.
 - `update_loads()` — the 7s cycle.
+- `check_loads_commands(time)` — a **thin driver** (QS-304). It builds
+  the device list (battery + loads, or chargers only in
+  `HOME_MODE_CHARGER_ONLY`), calls
+  `load.check_and_relaunch_command(time)` per device inside a per-load
+  `try/except` for fault isolation, and aggregates `all_ok`. It holds
+  **no** ladder arithmetic: probing, the saturating backoff, the
+  lost-control escalation and the supersession throttle all live in
+  `home_model/load.py`. It no longer logs a per-cycle ERROR for a
+  device that will not converge — that is one ERROR on entry and one
+  INFO on recovery, in the pure layer.
 - `_state_lock`, `_loads_lock` — `asyncio.Lock` guards.
 - Public registry accessors — `get_car_by_name(name)`,
   `get_person_by_name(name)`, `get_heat_pumps()`. Callers outside
@@ -89,6 +99,13 @@ per cycle:
   cycle; cross-cycle shared mutable state is a footgun.
 - Blocking inside a cycle (sync I/O, long compute). All work must
   be async or routed through `hass.async_add_executor_job()`.
+- Putting relaunch/backoff logic back into `check_loads_commands`. It
+  would be untestable without Home Assistant and invisible to
+  `QSBattery`; keep it in `AbstractDevice` (QS-304).
+- Testing `check_loads_commands` or `update_loads` with a `MagicMock`
+  load. The per-load `except` swallows the resulting `TypeError`, so
+  the test passes while exercising nothing — use
+  `tests.factories.attach_minimal_load_to_home`.
 - Hard-coding the cycle intervals — they live in `const.py`.
 
 ## Dashboard sections — init-time auto-include

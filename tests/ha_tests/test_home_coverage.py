@@ -2670,49 +2670,6 @@ async def test_update_loads_do_solve(
     await hass.async_block_till_done()
 
 
-async def test_check_loads_commands_max_relaunch_exceeded(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """Cover line 2511: max relaunch exceeded in check_loads_commands."""
-    from custom_components.quiet_solar.ha_model.home import QSHomeMode
-
-    from .const import MOCK_CHARGER_CONFIG
-
-    await hass.config_entries.async_setup(home_config_entry.entry_id)
-    await hass.async_block_till_done()
-
-    charger_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=MOCK_CHARGER_CONFIG,
-        entry_id="charger_relaunch_test",
-        title=f"charger: {MOCK_CHARGER_CONFIG['name']}",
-        unique_id="qs_charger_relaunch_test",
-    )
-    charger_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(charger_entry.entry_id)
-    await hass.async_block_till_done()
-
-    data_handler = hass.data[DOMAIN][DATA_HANDLER]
-    home = data_handler.home
-
-    home.home_mode = QSHomeMode.HOME_MODE_ON.value
-    home._init_completed = True
-
-    for load in home._all_loads:
-        load.check_commands = AsyncMock(return_value=(timedelta(seconds=500), False))
-        load.running_command_num_relaunch = 7
-        load.current_command = MagicMock()
-        load.force_relaunch_command = AsyncMock()
-
-    time = datetime.now(tz=pytz.UTC)
-    result = await home.check_loads_commands(time)
-    assert result is False
-
-    await hass.config_entries.async_unload(charger_entry.entry_id)
-    await hass.async_block_till_done()
-
-
 async def test_power_derivation_no_solar_ac_battery_max_discharge(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,

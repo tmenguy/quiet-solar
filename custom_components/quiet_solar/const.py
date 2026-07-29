@@ -284,6 +284,7 @@ BINARY_SENSOR_SOLAR_FORECAST_OK = "qs_solar_forecast_ok"
 BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"
 BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"
 BINARY_SENSOR_CAR_IS_SOC_ESTIMATED = "qs_car_is_soc_estimated"
+BINARY_SENSOR_LOAD_UNCONTROLLABLE = "qs_load_uncontrollable"
 
 SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
 SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
