@@ -219,6 +219,17 @@ async def test_permanently_uncontrollable_load_still_blocks_off_grid_switch(
     assert finished is False
     assert just_switched is False
 
+    # And the same holds for a load whose cycle RAISES rather than reporting
+    # not-good: it is equally unconfirmed, so it must equally hold the switch back.
+    raising = attach_minimal_load_to_home(home, name="raising_load", load_class=RaisingCheckLoad)
+    home._all_loads = [raising]
+    assert await home.check_loads_commands(time) is False
+
+    home._switch_to_off_grid_launched = time - timedelta(seconds=30)
+    finished, just_switched = await home.finish_off_grid_switch(time)
+    assert finished is False
+    assert just_switched is False
+
     await hass.config_entries.async_unload(charger_entry.entry_id)
     await hass.async_block_till_done()
 
@@ -448,9 +459,11 @@ async def test_one_broken_load_does_not_stop_the_sweep(
     healthy.check_and_relaunch_command.assert_awaited_once()
     # (b) the failure was logged, naming the load
     assert _count(caplog, "check_loads_commands: Error checking load commands broken_load") == 1
-    # (c) a raising load does not by itself falsify `all_ok` — only a load that
-    #     reports `command_acked_or_good is False` does
-    assert all_ok is True
+    # (c) a load whose cycle raised is NOT confirmed-good, so it falsifies `all_ok`.
+    #     Reporting True here let `finish_off_grid_switch` complete the transition
+    #     while that load's command had never landed, violating AC8 for exactly the
+    #     device whose probe raises.
+    assert all_ok is False
 
 
 async def test_a_load_reporting_a_constraint_change_forces_a_solve(
@@ -492,6 +505,44 @@ async def test_a_load_reporting_a_constraint_change_forces_a_solve(
     assert load.is_load_active(T0) is True
 
 
+async def test_lost_control_state_is_released_when_the_home_stops_managing_a_load(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """The PROBLEM sensor must not latch on when the driver stops sweeping the load.
+
+    `is_uncontrollable` is derived state whose only clearing mechanism is a driver
+    cycle. `check_loads_commands` returns early for OFF / SENSORS_ONLY and narrows
+    to `_chargers` in CHARGER_ONLY, while the independent state loop keeps
+    refreshing the binary sensor — so the flag would stay on forever. Switching the
+    home off is the natural reaction to the notification.
+    """
+    home = await _get_home(hass, home_config_entry)
+    home._init_completed = True
+    home.physical_battery = None
+
+    for mode in (QSHomeMode.HOME_MODE_OFF.value, QSHomeMode.HOME_MODE_SENSORS_ONLY.value):
+        load = attach_minimal_load_to_home(home, name=f"stuck_{mode}", load_class=NeverAcksLoad)
+        load.running_command = copy_command(CMD_IDLE)
+        load.unresponsive_since = T0
+        assert load.is_uncontrollable is True
+
+        home.home_mode = mode
+        assert await home.check_loads_commands(T0) is True
+        assert load.is_uncontrollable is False, mode
+
+    # CHARGER_ONLY: a non-charger load is no longer managed either.
+    non_charger = attach_minimal_load_to_home(home, name="non_charger", load_class=NeverAcksLoad)
+    non_charger.running_command = copy_command(CMD_IDLE)
+    non_charger.unresponsive_since = T0
+    assert non_charger.is_uncontrollable is True
+
+    home.home_mode = QSHomeMode.HOME_MODE_CHARGER_ONLY.value
+    home._chargers = []
+    await home.check_loads_commands(T0)
+    assert non_charger.is_uncontrollable is False
+
+
 # =============================================================================
 # AC14b — the driver holds no ladder arithmetic
 # =============================================================================
@@ -512,20 +563,20 @@ def test_check_loads_commands_is_a_thin_driver():
     for ladder_symbol in (
         "COMMAND_RELAUNCH_BASE_DELAY_S",
         "NUM_MAX_COMMAND_RELAUNCH",
-        "command_relaunch_delay_s",
-        "force_relaunch_command",
+        AbstractDevice.command_relaunch_delay_s.__name__,
+        AbstractDevice.force_relaunch_command.__name__,
         "running_command_num_relaunch",
     ):
         assert ladder_symbol not in code, ladder_symbol
 
-    assert "check_and_relaunch_command" in code
+    assert AbstractDevice.check_and_relaunch_command.__name__ in code
 
     # The delay itself is derived from `command_relaunch_delay_s()`, one call
     # away, in `home_model/load.py`.
     lifecycle = inspect.getsource(AbstractDevice.check_and_relaunch_command) + inspect.getsource(
         AbstractDevice._relaunch_stale_command
     )
-    assert "command_relaunch_delay_s()" in lifecycle
+    assert f"{AbstractDevice.command_relaunch_delay_s.__name__}()" in lifecycle
 
 
 # =============================================================================

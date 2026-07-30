@@ -457,7 +457,7 @@ def test_abandon_preserves_current_command_clock_and_rung():
     load._last_supersede_time = T0
     load._stacked_command = copy_command(CMD_OFF)
 
-    load.abandon_running_command(T0 + timedelta(seconds=20), reason="superseded")
+    load.abandon_running_command(reason="superseded")
 
     assert load.running_command is None
     assert load.running_command_num_relaunch_after_invalid == 0
@@ -718,6 +718,123 @@ async def test_a_disabled_load_with_a_stale_command_has_its_slot_cleaned_up():
     assert load.running_command is None
     assert len(load.executed_commands) == calls_before
     assert load.is_uncontrollable is False
+
+
+async def test_a_raising_probe_on_the_stack_promotion_path_still_makes_progress():
+    """A raising probe must never re-create the deadlock on the promotion path.
+
+    `launch_command` guarded `execute_command` but not `probe_if_command_set`. On
+    the stacked-promotion path the intent was consumed and both the supersede window
+    and the staleness clock were stamped before the probe ran — and because
+    `abandon_running_command` preserves the rung, the 300 s ladder delay and the
+    300 s throttle window then expired on the same instant. The path was re-entered
+    every window and `execute_command` was never reached again: the exact deadlock
+    this story exists to fix.
+
+    This is the AC5 device *plus* a differing stacked intent — the combination the
+    original AC5 test missed, because with an empty stack it routes through the
+    exception-safe `force_relaunch_command`.
+    """
+    load = NeverAcksLoad(name="cumulus_enfants")
+    time = await drive_until_uncontrollable(load)
+    assert load.running_command_num_relaunch >= NUM_MAX_COMMAND_RELAUNCH
+
+    load.probe_error = RuntimeError("probe exploded")
+    calls_before = len(load.executed_commands)
+
+    # Two hours of consign jitter, so a differing `_stacked_command` always exists.
+    consign = 500.0
+    end = time + timedelta(hours=2)
+    while time <= end:
+        consign += 1.0
+        await load.launch_command(time, copy_command(CMD_ON, power_consign=consign))
+        try:
+            await load.check_and_relaunch_command(time)
+        except RuntimeError:
+            pass  # check_commands' probe legitimately propagates
+        time = time + timedelta(seconds=CYCLE_S)
+
+    made = len(load.executed_commands) - calls_before
+    # ~1 per 300 s over 2 h; before the fix this was exactly 0.
+    assert 20 <= made <= 28, made
+    assert load.is_uncontrollable is True
+
+
+async def test_a_rewound_clock_does_not_freeze_the_relaunch_ladder():
+    """A backwards clock step must not stop the ladder advancing.
+
+    The primary comparison `time - running_command_last_launch` returns early on a
+    negative delta, so for the whole duration of a backwards jump no relaunch is
+    issued, the rung can never reach the escalation threshold, and `launch_command`
+    stacks every solver command — a silently deadlocked slot with no ERROR and no
+    PROBLEM sensor. The sibling throttle comparison was already hardened, so the two
+    disagreed about a rewound clock until they were given a shared primitive.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    await load.launch_command(T0, CMD_IDLE)
+    calls_before = len(load.executed_commands)
+
+    # NTP corrects the clock back by an hour, and the device still does not ack.
+    rewound = T0 - timedelta(hours=1)
+    assert load._seconds_since(rewound, load.running_command_last_launch) is None
+
+    await load.check_and_relaunch_command(rewound)
+
+    assert len(load.executed_commands) == calls_before + 1
+    assert load.running_command_num_relaunch == 1
+
+
+async def test_a_never_acked_load_does_not_strand_the_clock():
+    """A load with no confirmed command must still release the clock on a drop.
+
+    Both clears used to be gated on `current_command is not None`, but a load that
+    has never been acked — a fresh config-entry reload, or a bistate switch the user
+    then flips by hand — can cross the threshold with `current_command` still
+    `None`. The clock survived the drop, so the next command was flagged
+    uncontrollable on its first cycle *and* got a 50 s rung while flagged, breaking
+    the one-service-call-per-300 s invariant.
+    """
+    load = NeverAcksLoad(name="pool_house_facade")
+    time = await drive_until_uncontrollable(load)
+    # Never acked: this is the shape the old gate stranded.
+    assert load.current_command is None
+    assert load.is_uncontrollable is True
+
+    # The user flips the switch by hand, so the stale command is dropped.
+    load.suppress_override = True
+    time = await drive(load, time, 2 * SUPERSEDE_MIN_INTERVAL_S)
+    load.suppress_override = False
+
+    assert load.running_command is None
+    assert load.unresponsive_since is None
+    assert load._last_supersede_time is None
+
+    # The next command is therefore born clean, with a full 50 s first rung.
+    await load.launch_command(time, CMD_ON)
+    assert load.is_uncontrollable is False
+    assert load.command_relaunch_delay_s() == float(COMMAND_RELAUNCH_BASE_DELAY_S)
+
+
+async def test_a_failing_push_leaves_the_rung_untouched_because_the_slot_is_full():
+    """Pin the mutual exclusion the push-ordering decision rests on.
+
+    The escalation arm requires `running_command is not None` and the housekeeping
+    arm requires it to be `None`, so a failing push cannot skip the rung reset. That
+    argument is correct but was previously only argued, never asserted — so an edit
+    breaking the exclusion would have landed silently.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    time = await drive_until_uncontrollable(load)
+    load.unresponsive_since = None  # re-arm so the notify is reached again
+    load.notify_error = RuntimeError("the push channel exploded")
+    rung_before = load.running_command_num_relaunch
+    assert rung_before >= NUM_MAX_COMMAND_RELAUNCH
+
+    await load.check_and_relaunch_command(time)
+
+    assert load.running_command is not None
+    assert load.running_command_num_relaunch == rung_before
+    assert load.unresponsive_since is not None
 
 
 async def test_disabled_load_never_shouts():

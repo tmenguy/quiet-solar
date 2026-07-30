@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
   - custom_components/quiet_solar/ha_model/person.py
-last_verified: 2026-07-29
+last_verified: 2026-07-30
 ---
 
 # Notification routing
@@ -62,6 +62,15 @@ alarm at 3am is supposed to wake you).
   the base `AbstractDevice._notify_unresponsive` is a documented no-op,
   so an uncontrollable **battery** gets the ERROR log but no push and no
   binary sensor. Accepted product consequence.
+
+The push is issued **last** in `_escalate_or_recover`, and a failure in it
+cannot skip the surrounding housekeeping or mask the device exception the
+cycle was propagating — `_finish_command_cycle` isolates it. One
+consequence to know when counting log lines: if the push raises, a
+*second* ERROR is logged for the failed housekeeping, so the
+"exactly one ERROR per episode" guarantee holds on the non-raising path
+only. The once-only guard is unaffected, because `unresponsive_since` is
+written before the await.
 
 ### There is no recovery push (QS-304)
 

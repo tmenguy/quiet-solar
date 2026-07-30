@@ -75,6 +75,31 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   forever with no retry left to clear it. If we are not waiting on
   anything, we are not uncontrollable. That give-up also makes the *next*
   command inherit the clock — see #308.
+- **Five clearers, one writer.** `_clear_unresponsive` is the only writer;
+  it is reached by an ack, by the empty-slot re-arm, by
+  `_drop_running_command` (**unconditionally** — an emptied slot has no
+  owner for the clock whether or not a confirmed command ever existed), by
+  a `keep_commands=False` wipe, and by `release_lost_control_state` when
+  the driver stops managing the load. It also clears the supersede anchor
+  *ahead of* its own early return, so the two fields cannot
+  desynchronise.
+- **Both clock comparisons go through `_seconds_since`.** It returns
+  `None` for "no anchor" and for an anchor in the *future*, which means
+  "treat as fully elapsed". A backwards clock step (HA booting without an
+  RTC, then NTP correcting) otherwise makes the delta negative — trivially
+  below any threshold — which freezes the supersede throttle *and* stops
+  the relaunch ladder advancing, so the rung can never reach the
+  escalation threshold: a silently deadlocked slot with no ERROR and no
+  PROBLEM sensor. One primitive so the two sites cannot drift apart.
+- **`launch_command` guards its probe as well as its execute.** An
+  unguarded `probe_if_command_set` re-created the deadlock on the
+  stack-promotion path: it consumed the intent, stamped both the throttle
+  and the staleness clock, and skipped the rung — and since
+  `SUPERSEDE_MIN_INTERVAL_S == COMMAND_RELAUNCH_BASE_DELAY_S *
+  NUM_MAX_COMMAND_RELAUNCH`, the window and the ladder delay expired
+  together so the path was re-entered forever with zero service calls. A
+  raising probe is treated exactly like one returning `None`: go on and
+  execute.
 - **Supersession + throttle.** A *differing* command against an
   uncontrollable load calls `abandon_running_command` and executes, at
   most once per `SUPERSEDE_MIN_INTERVAL_S` (300 s); inside the window it
@@ -214,6 +239,13 @@ Switching-cost protection (`AbstractDevice`):
   launch a successor. It preserves the rung by design; use
   `_drop_running_command` instead, or the next command inherits a spent
   ladder and is declared uncontrollable with zero relaunches of its own.
+- Comparing a stored timestamp against `time` directly. Use
+  `_seconds_since`, or a rewound clock silently freezes whatever the
+  comparison gates.
+- Adding an `await` in `launch_command` whose exception can escape. The
+  slot, the throttle anchor and the rung are mutated around it, so an
+  escape leaves them inconsistent — that is exactly how the deadlock was
+  re-created once already.
 - Using a `MagicMock` as a load in a `check_loads_commands` /
   `update_loads` test. The resulting `TypeError` is swallowed by the
   per-load `except`, `all_ok` stays `True`, and your assertions never

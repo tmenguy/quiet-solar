@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-07-29
+last_verified: 2026-07-30
 ---
 
 # QSHome — the orchestrator
@@ -69,6 +69,20 @@ than the cycle completes.
   `home_model/load.py`. It no longer logs a per-cycle ERROR for a
   device that will not converge — that is one ERROR on entry and one
   INFO on recovery, in the pure layer.
+
+  Two responsibilities it does keep, both load-bearing:
+  - **A raising load falsifies `all_ok`.** The per-load `except` logs
+    and continues, but also sets `all_ok = False`: a load whose cycle
+    raised is not confirmed-good, and reporting OK let
+    `finish_off_grid_switch` complete with an unlanded command.
+  - **It releases the lost-control flag on loads it stops managing.**
+    `qs_load_uncontrollable` is derived state whose only clearing
+    mechanism is a driver cycle, so a load the driver stops sweeping —
+    home mode off / sensors-only, or a non-charger in charger-only mode
+    — would latch PROBLEM forever while the independent state loop kept
+    refreshing the entity. Ownership of the flag is released together
+    with ownership of the load, via
+    `AbstractDevice.release_lost_control_state`.
 - `_state_lock`, `_loads_lock` — `asyncio.Lock` guards.
 - Public registry accessors — `get_car_by_name(name)`,
   `get_person_by_name(name)`, `get_heat_pumps()`. Callers outside
