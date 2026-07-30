@@ -5,7 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypeGuard
 
 import pytz
 from haversine import Unit, haversine
@@ -219,6 +219,13 @@ TIME_OK_SHOULD_BUDGET_RESET_S = min(
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES = 60 * 30
 CHARGER_START_STOP_RETRY_S = 90
+
+
+# QS-306 log-tuning values. Module-private: they are not operator configuration,
+# so they stay here rather than in const.py, and they are deliberately NOT
+# sourced from SOLVER_STEP_S despite the numeric coincidence.
+_RELOG_UNCHANGED_AFTER_S = 900  # max gap between two emissions for one key
+_POWER_LOG_DEADBAND_W = 100.0  # ignore sub-100W jitter on the available-power line
 
 
 class QSChargerStates(StrEnum):
@@ -581,7 +588,62 @@ class QSChargerStatus:
         return possible_num_phases, consign_amp
 
 
-class QSChargerGroup:
+def _is_number(x: object) -> TypeGuard[float]:
+    """Return True for a real number. `bool` is excluded: it passes isinstance(int)."""
+    return isinstance(x, int | float) and not isinstance(x, bool)
+
+
+def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool:
+    """Return True when `current` is indistinguishable from `prev`."""
+    if deadband is None:
+        return bool(prev == current)
+    # Only the available-power site passes a deadband, always a fixed-arity numeric
+    # tuple. Anything else (including a test double) counts as changed: log rather
+    # than crash.
+    if not isinstance(prev, tuple) or not isinstance(current, tuple) or len(prev) != len(current):
+        return False
+    return all(_is_number(p) and _is_number(c) and abs(c - p) < deadband for p, c in zip(prev, current))
+
+
+class LogOnChangeMixin:
+    """Emit INFO only when a reported value changes, or after 900 s (QS-306)."""
+
+    # Annotation WITH an immutable default. Never give this a `{}` default: a mutable
+    # class attribute is shared across instances, and the per-charger sites use keys
+    # that are not instance-qualified, so every charger would silence the others.
+    _log_on_change_state: dict[str, tuple[object, datetime]] | None = None
+
+    def log_info_on_change(
+        self,
+        key: str,
+        value: object,
+        time: datetime,
+        msg: str,
+        *args: object,
+        deadband: float | None = None,
+    ) -> None:
+        """Log `msg` at INFO if `value` changed for `key`, or if 900 s elapsed.
+
+        `time` must be timezone-aware UTC — the same value the caller already
+        receives. `|elapsed|` is used so a backwards clock jump cannot silence a
+        key. The timer is re-stamped on every emission, so the constant bounds the
+        gap between emissions rather than imposing a fixed cadence.
+        """
+        state = self._log_on_change_state
+        if state is None:
+            state = self._log_on_change_state = {}
+        prev = state.get(key)
+        if prev is not None:
+            prev_value, prev_time = prev
+            if abs((time - prev_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S and _is_unchanged(
+                prev_value, value, deadband
+            ):
+                return
+        state[key] = (value, time)
+        _LOGGER.info(msg, *args)
+
+
+class QSChargerGroup(LogOnChangeMixin):
     def __init__(self, dynamic_group: QSDynamicGroup):
         self.dynamic_group: QSDynamicGroup = dynamic_group
         self._chargers: list[QSChargerGeneric] = []
@@ -624,9 +686,25 @@ class QSChargerGroup:
 
             res, handled_static, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
 
-            _LOGGER.info(
-                f"ensure_correct_state dyn group: {charger.name}  correct_state: {res} handled_static: {handled_static}"
-            )
+            if probe_only:
+                # Defensive: no production caller probes at the group level, but a
+                # probe performs no action, so it must not claim an INFO line.
+                _LOGGER.debug(
+                    "ensure_correct_state dyn group: %s  correct_state: %s handled_static: %s",
+                    charger.name,
+                    res,
+                    handled_static,
+                )
+            else:
+                self.log_info_on_change(
+                    f"ensure_correct_state:{charger.name}",
+                    (res, handled_static),
+                    time,
+                    "ensure_correct_state dyn group: %s  correct_state: %s handled_static: %s",
+                    charger.name,
+                    res,
+                    handled_static,
+                )
 
             if handled_static:
                 continue
@@ -686,12 +764,12 @@ class QSChargerGroup:
 
         # here we check all the chargers and they all need to be in a good state
         # could be plugged, unplugged whatever but in a good state
-        _LOGGER.info("dyn_handle: START")
+        _LOGGER.debug("dyn_handle: START")
 
         actionable_chargers, verified_correct_state_time = await self.ensure_correct_state(time)
 
         if len(actionable_chargers) == 0:
-            _LOGGER.info("dyn_handle: no actionable chargers, do nothing")
+            _LOGGER.debug("dyn_handle: no actionable chargers, do nothing")
         else:
             if self.remaining_budget_to_apply:
                 # in case we would have had increases that could go above the limits because done before the decrease
@@ -754,8 +832,15 @@ class QSChargerGroup:
                     # battery_asked_charge > 0 : the battery needs to charge
                     # battery_asked_charge < 0 : the battery needs to discharge: it means if a charger is "post battery" we don't charge the car ?
 
-                _LOGGER.info(
-                    f"dyn_handle: full_available_home_power {full_available_home_power}W, grid_available_home_power {grid_available_home_power}W battery_asked_charge {battery_asked_charge}W"
+                self.log_info_on_change(
+                    "dyn_handle_available_power",
+                    (full_available_home_power, grid_available_home_power, battery_asked_charge),
+                    time,
+                    "dyn_handle: full_available_home_power %sW, grid_available_home_power %sW battery_asked_charge %sW",
+                    full_available_home_power,
+                    grid_available_home_power,
+                    battery_asked_charge,
+                    deadband=_POWER_LOG_DEADBAND_W,
                 )
 
                 dampened_chargers = {}
@@ -846,7 +931,7 @@ class QSChargerGroup:
                     )
                     dampened_chargers[charger] = a_charging_cs
                 else:
-                    _LOGGER.info(
+                    _LOGGER.debug(
                         "dyn_handle: can't dampen simple case %s %s %s", num_true_charging_cs, charging, reason
                     )
 
@@ -935,7 +1020,7 @@ class QSChargerGroup:
                         # Keep current amp as budget so apply_budget_strategy won't crash
                         cs.budgeted_amp = cs.current_real_max_charging_amp or 0
                         cs.budgeted_num_phases = cs.current_active_phase_number or (3 if cs.charger.physical_3p else 1)
-                        _LOGGER.info(
+                        _LOGGER.debug(
                             "dyn_handle: skipping %s for budgeting, amp change cooldown (%ss since last change)",
                             cs.name,
                             (time - cs.charger._last_amp_change_time).total_seconds(),
@@ -944,7 +1029,7 @@ class QSChargerGroup:
                         budget_chargers.append(cs)
 
                 if len(budget_chargers) == 0:
-                    _LOGGER.info("dyn_handle: all chargers in cooldown, skipping budgeting")
+                    _LOGGER.debug("dyn_handle: all chargers in cooldown, skipping budgeting")
                     success = False
                     should_do_reset_allocation = False
                     done_reset_budget = False
@@ -2015,7 +2100,7 @@ class QSChargerGroup:
             await cs.charger._ensure_correct_state(time)
 
 
-class QSChargerGeneric(HADeviceMixin, AbstractLoad):
+class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
     conf_type_name = CONF_TYPE_NAME_QSChargerGeneric
 
     def __init__(self, **kwargs):
@@ -2498,8 +2583,15 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
         score = self.get_normalized_score(ct, time)
 
-        _LOGGER.info(
-            f"get_stable_dynamic_charge_status: {self.name} for {self.car.name} score:{score} possible_amps:{cs.possible_amps} possible_num_phases:{cs.possible_num_phases} current_amps:{cs.get_current_charging_amps()} command:{cs.command}"
+        _LOGGER.debug(
+            "get_stable_dynamic_charge_status: %s for %s score:%s possible_amps:%s possible_num_phases:%s current_amps:%s command:%s",
+            self.name,
+            self.car.name,
+            score,
+            cs.possible_amps,
+            cs.possible_num_phases,
+            cs.get_current_charging_amps(),
+            cs.command,
         )
 
         native_score_span_duration, native_score_span_battery, native_score_span = (
@@ -3013,8 +3105,16 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
                 )
                 best_car = self._boot_car
             else:
-                _LOGGER.info(
-                    f"get_best_car: {best_car.name} with score {assigned_chargers_score.get(self)} for charger {self.name}"
+                # Keyed on the car name only: the score is a per-cycle float, so
+                # keying on it would preserve every line.
+                self.log_info_on_change(
+                    "get_best_car",
+                    best_car.name,
+                    time,
+                    "get_best_car: %s with score %s for charger %s",
+                    best_car.name,
+                    assigned_chargers_score.get(self),
+                    self.name,
                 )
 
         if best_car.charger is not None and best_car.charger != self:
@@ -3749,8 +3849,9 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
 
                     if do_remove_all_person_constraints:
                         # we should remove ALL previous person based constraints from this car
-                        _LOGGER.info(
-                            f"check_load_activity_and_constraints: plugged car {self.car.name} do_remove_all_person_constraints"
+                        _LOGGER.debug(
+                            "check_load_activity_and_constraints: plugged car %s do_remove_all_person_constraints",
+                            self.car.name,
                         )
 
                         if self.clean_constraints_for_load_param_and_if_same_key_same_value_info(
@@ -4866,8 +4967,27 @@ class QSChargerGeneric(HADeviceMixin, AbstractLoad):
             # await self._dynamic_compute_and_launch_new_charge_state(time)
             await self.charger_group.dyn_handle(time)
 
-        _LOGGER.info(
-            f"update_value_callback (is %:{is_target_percent}):{self.name} {self.car.name}  {do_continue_constraint}/{result} ({sensor_result}/{result_calculus}) is_car_charged {is_car_charged} cmd {self.current_command}"
+        # The key includes `is_target_percent`: the percent and energy callbacks are two
+        # delegating entry points, and one shared key would let them thrash. The literal
+        # `%` must be `%%` or `record.getMessage()` raises ValueError.
+        self.log_info_on_change(
+            f"update_value_callback_soc:{is_target_percent}",
+            (
+                do_continue_constraint,
+                is_car_charged,
+                None if self.current_command is None else self.current_command.command,
+            ),
+            time,
+            "update_value_callback (is %%:%s):%s %s %s/%s (%s/%s) is_car_charged %s cmd %s",
+            is_target_percent,
+            self.name,
+            self.car.name,
+            do_continue_constraint,
+            result,
+            sensor_result,
+            result_calculus,
+            is_car_charged,
+            self.current_command,
         )
 
         return (result, do_continue_constraint)

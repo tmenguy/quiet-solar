@@ -1,0 +1,848 @@
+"""QS-306: INFO log volume reduction.
+
+Covers the `LogOnChangeMixin` helper (B3) and the 13 call sites the story
+enumerates (B1, B1b, B2, B4, B5).
+"""
+
+from __future__ import annotations
+
+import copy
+import logging
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+import pytz
+
+import custom_components.quiet_solar as quiet_solar
+from custom_components.quiet_solar.const import (
+    CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    USER_ORIGINATED_CAR_NAME,
+)
+from custom_components.quiet_solar.ha_model.charger import (
+    _POWER_LOG_DEADBAND_W,
+    _RELOG_UNCHANGED_AFTER_S,
+    CHARGER_ADAPTATION_WINDOW_S,
+    LogOnChangeMixin,
+    QSChargerStatus,
+)
+from custom_components.quiet_solar.home_model.commands import CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command
+from custom_components.quiet_solar.home_model.constraints import (
+    LoadConstraint,
+    MultiStepsPowerLoadConstraintChargePercent,
+)
+from tests.factories import MinimalTestLoad, create_constraint
+from tests.utils.charger_harness import (
+    create_charger,
+    init_charger_states,
+    make_battery,
+    make_charger_group,
+    make_hass,
+    make_home,
+    make_real_car,
+    plug_car,
+)
+
+CHARGER_LOGGER = "custom_components.quiet_solar.ha_model.charger"
+LOAD_LOGGER = "custom_components.quiet_solar.home_model.load"
+
+T0 = datetime(2026, 7, 29, 8, 0, 0, tzinfo=pytz.UTC)
+
+
+class _Host(LogOnChangeMixin):
+    """Minimal mixin host: the mixin defines no `__init__`, so this suffices."""
+
+
+def _messages(caplog: pytest.LogCaptureFixture, fragment: str, level: int) -> list[logging.LogRecord]:
+    """Return the captured records at `level` whose message contains `fragment`."""
+    return [r for r in caplog.records if r.levelno == level and fragment in r.getMessage()]
+
+
+# =============================================================================
+# B3 — helper unit tests
+# =============================================================================
+
+_SHARED_MOCK = MagicMock()
+
+# (label, first_value, second_value, delta_seconds, deadband, second_call_logs)
+_B3_CASES = [
+    ("no_deadband_equal_inside_window", 1, 1, 7, None, False),
+    ("no_deadband_changed_inside_window", 1, 2, 7, None, True),
+    ("no_deadband_unchanged_after_window", 1, 1, _RELOG_UNCHANGED_AFTER_S, None, True),
+    ("small_backward_jump_stays_silent", 1, 1, -5, None, False),
+    ("large_backward_jump_relogs", 1, 1, -1000, None, True),
+    (
+        "deadband_sub_threshold_silent",
+        (1000.0, 500.0, 0.0),
+        (1049.0, 500.0, 0.0),
+        7,
+        _POWER_LOG_DEADBAND_W,
+        False,
+    ),
+    (
+        "deadband_one_element_over_threshold_logs",
+        (1000.0, 500.0, 0.0),
+        (1000.0, 650.0, 0.0),
+        7,
+        _POWER_LOG_DEADBAND_W,
+        True,
+    ),
+    ("deadband_non_tuple_current_logs", (1000.0,), 1000.0, 7, _POWER_LOG_DEADBAND_W, True),
+    ("deadband_non_tuple_prev_logs", 1000.0, (1000.0,), 7, _POWER_LOG_DEADBAND_W, True),
+    ("deadband_length_mismatch_logs", (1000.0,), (1000.0, 2.0), 7, _POWER_LOG_DEADBAND_W, True),
+    ("deadband_bool_element_logs", (True,), (True,), 7, _POWER_LOG_DEADBAND_W, True),
+    ("deadband_none_element_logs", (None,), (None,), 7, _POWER_LOG_DEADBAND_W, True),
+    ("deadband_mock_element_logs", (_SHARED_MOCK,), (_SHARED_MOCK,), 7, _POWER_LOG_DEADBAND_W, True),
+]
+
+
+@pytest.mark.parametrize(
+    ("first_value", "second_value", "delta_seconds", "deadband", "second_call_logs"),
+    [pytest.param(*case[1:], id=case[0]) for case in _B3_CASES],
+)
+def test_log_info_on_change_emission_predicate(
+    caplog: pytest.LogCaptureFixture,
+    first_value: object,
+    second_value: object,
+    delta_seconds: int,
+    deadband: float | None,
+    second_call_logs: bool,
+) -> None:
+    """B3 cases 1-11: the first call always logs; the second follows the predicate."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    # Case 1: lazy init — `_log_on_change_state` is `None`, so the first call logs.
+    host.log_info_on_change("k", first_value, T0, "probe %s", "one", deadband=deadband)
+    assert len(_messages(caplog, "probe", logging.INFO)) == 1
+
+    # Case 2: the state is now initialized — the second call takes the other arc.
+    host.log_info_on_change(
+        "k", second_value, T0 + timedelta(seconds=delta_seconds), "probe %s", "two", deadband=deadband
+    )
+    expected = 2 if second_call_logs else 1
+    assert len(_messages(caplog, "probe", logging.INFO)) == expected
+
+
+def test_log_info_on_change_keeps_state_per_instance(caplog: pytest.LogCaptureFixture) -> None:
+    """B3 case 12: an immutable class default cannot leak state between instances."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    first = _Host()
+    second = _Host()
+
+    first.log_info_on_change("shared_key", "value", T0, "per instance %s", "a")
+    second.log_info_on_change("shared_key", "value", T0, "per instance %s", "b")
+
+    assert len(_messages(caplog, "per instance", logging.INFO)) == 2
+    assert LogOnChangeMixin._log_on_change_state is None
+
+
+def test_log_info_on_change_only_mutates_its_own_state(caplog: pytest.LogCaptureFixture) -> None:
+    """B3 case 13: returns `None` and adds exactly one attribute to the instance."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+    before = copy.deepcopy(vars(host))
+    assert "_log_on_change_state" not in before
+
+    assert host.log_info_on_change("k", "v", T0, "only state %s", "x") is None
+
+    after = vars(host)
+    assert set(after) - set(before) == {"_log_on_change_state"}
+    assert set(before) - set(after) == set()
+    assert host._log_on_change_state == {"k": ("v", T0)}
+
+
+def test_log_info_on_change_resets_the_timer_on_every_emission(caplog: pytest.LogCaptureFixture) -> None:
+    """The 900 s constant bounds the gap between emissions, not a fixed cadence."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    host.log_info_on_change("k", 1, T0, "timer %s", 1)
+    # A change re-stamps the timer, so 899 s after the change is still inside the window.
+    changed_at = T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S - 1)
+    host.log_info_on_change("k", 2, changed_at, "timer %s", 2)
+    host.log_info_on_change("k", 2, changed_at + timedelta(seconds=7), "timer %s", 3)
+
+    assert len(_messages(caplog, "timer", logging.INFO)) == 2
+
+
+def test_log_info_on_change_keys_are_independent(caplog: pytest.LogCaptureFixture) -> None:
+    """Two keys on one instance memo independently."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    host.log_info_on_change("a", 1, T0, "keyed %s", "a")
+    host.log_info_on_change("b", 1, T0, "keyed %s", "b")
+    host.log_info_on_change("a", 1, T0 + timedelta(seconds=7), "keyed %s", "a")
+
+    assert len(_messages(caplog, "keyed", logging.INFO)) == 2
+
+
+# =============================================================================
+# dyn_handle drivers — S1, S2, S3, S4, S13 (B1) and S10 (B2)
+# =============================================================================
+
+
+def _power_series(value: float, time: datetime) -> list[tuple[datetime, float, dict]]:
+    """A non-empty, CONSTANT series: a varying one drifts the weighted mean."""
+    return [(time - timedelta(seconds=30), value, {}), (time, value, {})]
+
+
+def _make_dyn_handle_group(
+    num_chargers: int = 2,
+    cooldown_seconds: float | None = None,
+    battery=None,
+    available_power_w: float | None = None,
+    grid_power_w: float = 500.0,
+):
+    """Build a group whose `dyn_handle` reaches the budgeting branch.
+
+    `ensure_correct_state` is stubbed (the S9 driver below uses the real one).
+    """
+    hass = make_hass()
+    home = make_home(battery=battery)
+    past = T0 - timedelta(seconds=CHARGER_ADAPTATION_WINDOW_S + 100)
+
+    chargers = []
+    statuses = []
+    for index in range(num_chargers):
+        charger = create_charger(hass, home, name=f"Ch{index}")
+        car = make_real_car(hass, home, name=f"Car{index}")
+        init_charger_states(charger, charge_state=True, amperage=10, num_phases=1)
+        plug_car(charger, car, past)
+        charger.is_charging_power_zero = MagicMock(return_value=False)
+        charger.qs_enable_device = True
+        charger.update_car_dampening_value = MagicMock()
+        if cooldown_seconds is not None:
+            charger._last_amp_change_time = T0 - timedelta(seconds=cooldown_seconds)
+        chargers.append(charger)
+
+        status = QSChargerStatus(charger)
+        status.current_real_max_charging_amp = 10
+        status.current_active_phase_number = 1
+        status.accurate_current_power = 2300.0
+        statuses.append(status)
+
+    group = make_charger_group(home, chargers)
+    group.ensure_correct_state = AsyncMock(return_value=(statuses, past))
+    group.dynamic_group.get_median_sensor = MagicMock(return_value=4600.0)
+    group.apply_budgets = AsyncMock()
+    group.apply_budget_strategy = AsyncMock()
+    group.budgeting_algorithm_minimize_diffs = AsyncMock(return_value=(True, False, False))
+    group.remaining_budget_to_apply = []
+
+    if available_power_w is not None:
+        home.get_available_power_values = MagicMock(side_effect=lambda _w, t: _power_series(available_power_w, t))
+        home.get_grid_consumption_power_values = MagicMock(side_effect=lambda _w, t: _power_series(grid_power_w, t))
+
+    return group, chargers, home
+
+
+async def test_s1_dyn_handle_start_is_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1/S1: `dyn_handle: START` is unconditional — it must never be INFO."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    group, _, _ = _make_dyn_handle_group()
+
+    await group.dyn_handle(T0)
+
+    assert _messages(caplog, "dyn_handle: START", logging.INFO) == []
+    assert len(_messages(caplog, "dyn_handle: START", logging.DEBUG)) == 1
+
+
+async def test_s4_cannot_dampen_simple_case_is_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1/S4: two truly-charging chargers means the simple case does not apply."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    group, _, _ = _make_dyn_handle_group(num_chargers=2)
+
+    await group.dyn_handle(T0)
+
+    assert _messages(caplog, "can't dampen simple case", logging.INFO) == []
+    assert len(_messages(caplog, "can't dampen simple case", logging.DEBUG)) == 1
+
+
+async def test_s2_and_s3_cooldown_are_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1/S2+S3: one actionable charger in cooldown means one skip plus one all-in-cooldown."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    group, _, _ = _make_dyn_handle_group(num_chargers=1, cooldown_seconds=10)
+
+    await group.dyn_handle(T0)
+
+    assert _messages(caplog, "amp change cooldown", logging.INFO) == []
+    assert len(_messages(caplog, "amp change cooldown", logging.DEBUG)) == 1
+    assert _messages(caplog, "all chargers in cooldown", logging.INFO) == []
+    assert len(_messages(caplog, "all chargers in cooldown", logging.DEBUG)) == 1
+    group.budgeting_algorithm_minimize_diffs.assert_not_awaited()
+
+
+async def test_s13_no_actionable_chargers_is_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1/S13: the `do nothing` branch is mutually exclusive with S9/S10's."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    group, _, _ = _make_dyn_handle_group(num_chargers=1)
+    group.ensure_correct_state = AsyncMock(return_value=([], None))
+
+    await group.dyn_handle(T0)
+
+    assert _messages(caplog, "no actionable chargers, do nothing", logging.INFO) == []
+    assert len(_messages(caplog, "no actionable chargers, do nothing", logging.DEBUG)) == 1
+    assert _messages(caplog, "battery_asked_charge", logging.INFO) == []
+
+
+async def test_s10_available_power_logged_once_per_window(caplog: pytest.LogCaptureFixture) -> None:
+    """B2/S10: unchanged power over 10 cycles emits once; +900 s and a change re-emit."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    group, _, _ = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
+
+    for cycle in range(10):
+        await group.dyn_handle(T0 + timedelta(seconds=7 * cycle))
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO)) == 1
+
+    await group.dyn_handle(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 63))
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO)) == 2
+
+    group.home.get_available_power_values = MagicMock(side_effect=lambda _w, t: _power_series(5000.0, t))
+    await group.dyn_handle(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 70))
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO)) == 3
+
+
+async def test_s10_deadband_absorbs_sub_threshold_jitter(caplog: pytest.LogCaptureFixture) -> None:
+    """B2/S10: a walk whose every step is <100 W emits once; a >=100 W step emits again."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
+
+    jitter = [1000.0, 1049.0, 1051.0, 1049.0, 1055.0, 1049.0, 1051.0, 1060.0, 1049.0, 1051.0]
+    for cycle, watts in enumerate(jitter):
+        home.get_available_power_values = MagicMock(side_effect=lambda _w, t, v=watts: _power_series(v, t))
+        await group.dyn_handle(T0 + timedelta(seconds=7 * cycle))
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO)) == 1
+
+    home.get_available_power_values = MagicMock(side_effect=lambda _w, t: _power_series(1051.0 + 100.0, t))
+    await group.dyn_handle(T0 + timedelta(seconds=7 * len(jitter)))
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO)) == 2
+
+
+# =============================================================================
+# S5, S6 — charger-side rule-2 demotions (B1)
+# =============================================================================
+
+
+def _make_stable_status_charger():
+    """A plugged, enabled, available charger — S5's branch precondition."""
+    hass = make_hass()
+    home = make_home()
+    charger = create_charger(hass, home)
+    car = make_real_car(hass, home)
+    past = T0 - timedelta(hours=2)
+
+    init_charger_states(charger, charge_state=True, amperage=10, num_phases=1)
+    plug_car(charger, car, past)
+
+    charger.qs_enable_device = True
+    charger.current_command = copy_command(CMD_AUTO_GREEN_ONLY)
+    charger.is_not_plugged = MagicMock(return_value=False)
+    charger.is_charger_unavailable = MagicMock(return_value=False)
+    charger._probe_and_enforce_stopped_charge_command_state = MagicMock(return_value=False)
+    charger.get_median_sensor = MagicMock(return_value=1000.0)
+    charger.get_current_active_constraint = MagicMock(return_value=None)
+    charger.can_do_3_to_1_phase_switch = MagicMock(return_value=False)
+    charger._expected_charge_state.last_change_asked = past
+    charger._expected_charge_state.last_time_set = past
+    charger._expected_num_active_phases.last_change_asked = past
+    charger._expected_num_active_phases.last_time_set = past
+
+    return hass, home, charger, car
+
+
+def test_s5_stable_status_dump_is_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1/S5: the per-cycle state dump moves to DEBUG."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    *_, charger, _ = _make_stable_status_charger()
+
+    assert charger.get_stable_dynamic_charge_status(T0) is not None
+
+    assert _messages(caplog, "possible_amps:", logging.INFO) == []
+    assert len(_messages(caplog, "possible_amps:", logging.DEBUG)) == 1
+
+
+async def _drive_remove_all_person_constraints() -> None:
+    """Reach S6: a plugged car charged past a person's minimum target."""
+    hass = make_hass()
+    home = make_home()
+    charger = create_charger(hass, home)
+    car = make_real_car(hass, home)
+    init_charger_states(charger)
+    charger.is_charger_unavailable = MagicMock(return_value=False)
+    charger.probe_for_possible_needed_reboot = MagicMock(return_value=False)
+    charger.is_not_plugged = MagicMock(return_value=False)
+    charger.is_plugged = MagicMock(return_value=True)
+    charger.set_charging_num_phases = AsyncMock(return_value=False)
+    charger.set_max_charging_current = AsyncMock(return_value=True)
+    charger.reboot = AsyncMock()
+    plug_car(charger, car, T0)
+    charger.get_best_car = MagicMock(return_value=car)
+    car.get_car_charge_percent = lambda time=None, *a, **kw: 80.0
+    charger.is_car_stopped_asking_current = MagicMock(return_value=True)
+
+    person = MagicMock()
+    person.name = "Dave"
+    person.notify_of_forecast_if_needed = AsyncMock()
+
+    next_usage_time = T0 + timedelta(hours=10)
+    person_min_target_charge = 50.0
+    old_person_ct = MultiStepsPowerLoadConstraintChargePercent(
+        total_capacity_wh=60000,
+        type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+        time=T0 - timedelta(hours=1),
+        load=charger,
+        load_param=car.name,
+        from_user=False,
+        end_of_constraint=next_usage_time,
+        initial_value=30.0,
+        target_value=person_min_target_charge,
+        power_steps=charger._power_steps,
+        support_auto=True,
+    )
+    old_person_ct.load_info = {"person": "Dave"}
+    charger.push_live_constraint(T0 - timedelta(hours=1), old_person_ct)
+
+    car.get_best_person_next_need = AsyncMock(return_value=(False, next_usage_time, person_min_target_charge, person))
+    car.get_next_scheduled_event = AsyncMock(return_value=(None, None))
+    car.do_next_charge_time = None
+    car.do_force_next_charge = False
+    charger._auto_constraints_cleaned_at_user_reset = []
+
+    await charger.check_load_activity_and_constraints(T0)
+
+
+async def test_s6_remove_all_person_constraints_is_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1/S6: the announcement of the person-constraint cleanup moves to DEBUG."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+
+    await _drive_remove_all_person_constraints()
+
+    assert _messages(caplog, "do_remove_all_person_constraints", logging.INFO) == []
+    assert len(_messages(caplog, "do_remove_all_person_constraints", logging.DEBUG)) == 1
+
+
+# =============================================================================
+# S7, S8 — home_model/load.py (B1 and B1b)
+# =============================================================================
+
+_S8_FRAGMENT = "Constraint Reset device"
+
+
+def test_s7_no_bad_constraint_found_is_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1/S7: `no reset needed` is a no-op announcement."""
+    caplog.set_level(logging.DEBUG, logger=LOAD_LOGGER)
+    load = MinimalTestLoad(name="S7Load")
+    caplog.clear()
+
+    assert (
+        load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
+            T0, load_param="CarA", load_info=None, for_full_reset=False
+        )
+        is False
+    )
+
+    assert _messages(caplog, "No bad constraint found", logging.INFO) == []
+    assert len(_messages(caplog, "No bad constraint found", logging.DEBUG)) == 1
+
+
+def test_b1b_fresh_load_construction_logs_the_no_op_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """B1b: constructing a load raises nothing and takes case (d) — nothing to reset."""
+    caplog.set_level(logging.DEBUG, logger=LOAD_LOGGER)
+
+    load = MinimalTestLoad(name="FreshLoad")
+
+    assert load.name == "FreshLoad"
+    assert _messages(caplog, _S8_FRAGMENT, logging.INFO) == []
+    assert len(_messages(caplog, _S8_FRAGMENT, logging.DEBUG)) == 1
+    assert "nothing to reset" in _messages(caplog, _S8_FRAGMENT, logging.DEBUG)[0].getMessage()
+
+
+@pytest.mark.parametrize(
+    ("case", "keep_commands", "expected_level"),
+    [
+        pytest.param("constraints", True, logging.INFO, id="a_non_empty_constraints"),
+        pytest.param("last_completed", True, logging.INFO, id="b_last_completed_constraint"),
+        pytest.param("command", False, logging.INFO, id="c_command_dropped"),
+        pytest.param("nothing", True, logging.DEBUG, id="d_nothing_to_reset"),
+        pytest.param("command", True, logging.DEBUG, id="e_command_kept"),
+    ],
+)
+def test_b1b_s8_logs_info_only_when_work_is_performed(
+    caplog: pytest.LogCaptureFixture, case: str, keep_commands: bool, expected_level: int
+) -> None:
+    """B1b: INFO iff the reset actually had something to reset."""
+    caplog.set_level(logging.DEBUG, logger=LOAD_LOGGER)
+    load = MinimalTestLoad(name=f"S8Load{case}")
+    load._constraints = []
+    load._last_completed_constraint = None
+    load.current_command = None
+
+    if case == "constraints":
+        load._constraints = [create_constraint(load=load, time=T0)]
+    elif case == "last_completed":
+        load._last_completed_constraint = create_constraint(load=load, time=T0)
+    elif case == "command":
+        load.current_command = copy_command(CMD_ON, power_consign=1000.0)
+
+    caplog.clear()
+    load.constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
+
+    other_level = logging.DEBUG if expected_level == logging.INFO else logging.INFO
+    assert len(_messages(caplog, _S8_FRAGMENT, expected_level)) == 1
+    assert _messages(caplog, _S8_FRAGMENT, other_level) == []
+
+
+# =============================================================================
+# S9 — ensure_correct_state, per-charger key (B2)
+# =============================================================================
+
+
+def _make_ensure_correct_state_group(num_chargers: int = 2):
+    """Drive the REAL `QSChargerGroup.ensure_correct_state`; stub the children only."""
+    hass = make_hass()
+    home = make_home()
+    chargers = []
+    for index in range(num_chargers):
+        charger = create_charger(hass, home, name=f"EcsCh{index}")
+        charger.qs_enable_device = True
+        charger.ensure_correct_state = AsyncMock(return_value=(True, False, T0))
+        charger.get_stable_dynamic_charge_status = MagicMock(return_value=None)
+        chargers.append(charger)
+
+    return make_charger_group(home, chargers), chargers
+
+
+async def test_s9_correct_state_logged_once_per_charger_per_window(caplog: pytest.LogCaptureFixture) -> None:
+    """B2/S9: one record PER CHARGER over 10 cycles; +900 s and a change re-emit."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    group, chargers = _make_ensure_correct_state_group(num_chargers=2)
+
+    for cycle in range(10):
+        await group.ensure_correct_state(T0 + timedelta(seconds=7 * cycle))
+    records = _messages(caplog, "ensure_correct_state dyn group", logging.INFO)
+    assert len(records) == 2
+    for charger in chargers:
+        assert len([r for r in records if charger.name in r.getMessage()]) == 1
+
+    await group.ensure_correct_state(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 63))
+    assert len(_messages(caplog, "ensure_correct_state dyn group", logging.INFO)) == 4
+
+    # A change is not deferred to the next tick, even well inside the window.
+    for charger in chargers:
+        charger.ensure_correct_state = AsyncMock(return_value=(True, True, T0))
+    await group.ensure_correct_state(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 70))
+    assert len(_messages(caplog, "ensure_correct_state dyn group", logging.INFO)) == 6
+
+
+async def test_s9_probe_only_never_logs_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    """B2/S9: the defensive `probe_only` early-out reports at DEBUG only."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    group, chargers = _make_ensure_correct_state_group(num_chargers=2)
+
+    for cycle in range(3):
+        await group.ensure_correct_state(T0 + timedelta(seconds=7 * cycle), probe_only=True)
+
+    assert _messages(caplog, "ensure_correct_state dyn group", logging.INFO) == []
+    assert len(_messages(caplog, "ensure_correct_state dyn group", logging.DEBUG)) == 6
+
+
+# =============================================================================
+# S11 — get_best_car (B2)
+# =============================================================================
+
+
+def _make_best_car_charger():
+    """A charger whose `get_best_car` lands on the computed-best-car branch."""
+    hass = make_hass()
+    home = make_home()
+    charger = create_charger(hass, home, name="BestCh")
+    car_a = make_real_car(hass, home, name="CarA")
+    car_b = make_real_car(hass, home, name="CarB")
+    init_charger_states(charger, charge_state=True, amperage=10)
+    plug_car(charger, car_a, T0 - timedelta(hours=1))
+    charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)
+    charger._boot_car = None
+    charger.is_plugged = MagicMock(return_value=True)
+    return hass, home, charger, car_a, car_b
+
+
+async def test_s11_best_car_logged_once_per_window(caplog: pytest.LogCaptureFixture) -> None:
+    """B2/S11: the key is the car name only — a per-cycle score must not re-emit."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    _, _, charger, car_a, car_b = _make_best_car_charger()
+
+    scores = {"CarA": 10.0, "CarB": 5.0}
+    drift = {"n": 0}
+
+    def _score(car, time, cache):
+        # The score drifts every cycle: keying on it would preserve all 71k lines.
+        drift["n"] += 1
+        return scores[car.name] + drift["n"] * 0.001
+
+    charger.get_car_score = MagicMock(side_effect=_score)
+
+    for cycle in range(10):
+        assert charger.get_best_car(T0 + timedelta(seconds=7 * cycle)).name == "CarA"
+    assert len(_messages(caplog, "with score", logging.INFO)) == 1
+
+    assert charger.get_best_car(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 63)).name == "CarA"
+    assert len(_messages(caplog, "with score", logging.INFO)) == 2
+
+    scores["CarB"] = 100.0
+    assert charger.get_best_car(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 70)).name == car_b.name
+    assert len(_messages(caplog, "with score", logging.INFO)) == 3
+    assert car_a.name == "CarA"
+
+
+# =============================================================================
+# S12 — constraint_update_value_callback_soc (B2)
+# =============================================================================
+
+_S12_FRAGMENT = "is_car_charged"
+
+
+def _make_soc_callback_charger():
+    """The real-charger SOC-callback driver: constant inputs across invocations."""
+    hass = make_hass()
+    home = make_home()
+    charger = create_charger(hass, home, name="SocCh")
+    car = make_real_car(hass, home, name="SocCar")
+    init_charger_states(charger, charge_state=True, amperage=10, num_phases=1)
+    plug_car(charger, car, T0 - timedelta(hours=2))
+
+    charger.current_command = copy_command(CMD_AUTO_GREEN_ONLY)
+    charger.is_not_plugged = MagicMock(return_value=False)
+    # `return_value`, never `side_effect`: a finite list raises StopIteration on cycle 2.
+    charger._compute_added_charge_update = MagicMock(return_value=6.0)
+    charger._do_update_charger_state = AsyncMock()
+    charger.charger_group.dyn_handle = AsyncMock()
+
+    car.car_charge_percent_sensor = "sensor.car_soc"
+    car.get_car_charge_percent_raw_sensor = MagicMock(return_value=52.0)
+    car.is_car_charge_growing = MagicMock(return_value=True)
+    car.setup_car_charge_target_if_needed = AsyncMock()
+
+    probe_charge_window = 30 * 60
+    constraint = MagicMock(spec=LoadConstraint)
+    constraint.first_value_update = T0 - timedelta(seconds=probe_charge_window + 100)
+    constraint.last_value_update = T0
+    constraint.last_value_change_update = T0 - timedelta(seconds=60)
+    constraint.current_value = 50.0
+    constraint.target_value = 80.0
+    constraint.is_constraint_met = MagicMock(return_value=False)
+
+    return charger, constraint
+
+
+async def test_s12_soc_callback_logged_once_per_mode_per_window(caplog: pytest.LogCaptureFixture) -> None:
+    """B2/S12: percent and energy modes memo separately; +900 s and a change re-emit."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    charger, constraint = _make_soc_callback_charger()
+
+    for cycle in range(10):
+        await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=7 * cycle))
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO)) == 1
+
+    # The energy mode is a different key: one key would let the two callbacks thrash.
+    await charger.constraint_update_value_callback_energy_soc(constraint, T0 + timedelta(seconds=70))
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO)) == 2
+
+    await charger.constraint_update_value_callback_percent_soc(
+        constraint, T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 63)
+    )
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO)) == 3
+
+    constraint.is_constraint_met = MagicMock(return_value=True)
+    await charger.constraint_update_value_callback_percent_soc(
+        constraint, T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 70)
+    )
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO)) == 4
+
+
+async def test_s12_literal_percent_is_escaped(caplog: pytest.LogCaptureFixture) -> None:
+    """The literal `%` must be `%%`, else `record.getMessage()` raises ValueError."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    charger, constraint = _make_soc_callback_charger()
+
+    await charger.constraint_update_value_callback_percent_soc(constraint, T0)
+
+    record = _messages(caplog, _S12_FRAGMENT, logging.INFO)[0]
+    assert "(is %:True)" in record.getMessage()
+    assert "%%" in record.msg
+
+
+# =============================================================================
+# B4 — the keepers are still at INFO
+# =============================================================================
+
+# Regex rather than `inspect.getsource` of an enclosing function: ruff may split a
+# call across lines, and this keeps the check independent of function naming.
+_B4_SOURCE_ANCHORS = [
+    pytest.param("ha_model/charger.py", "STOP CHARGE LAUNCHED", id="charger_stop_charge"),
+    pytest.param("ha_model/charger.py", "START CHARGE LAUNCHED", id="charger_start_charge"),
+    pytest.param("home_model/load.py", "ack command %s for load %s", id="load_ack_command"),
+    pytest.param("home_model/load.py", "launch_command: %s for this load %s), ctxt: %s", id="load_launch_command"),
+    pytest.param("home_model/constraints.py", "%s update callback asked for stop", id="constraints_asked_for_stop"),
+    pytest.param(
+        "home_model/solver.py",
+        "_constraints_delta: trying to consume more: %sWh from %s to %s for loads %s",
+        id="solver_constraints_delta",
+    ),
+]
+
+
+@pytest.mark.parametrize(("module_path", "anchor"), _B4_SOURCE_ANCHORS)
+def test_b4_keeper_lines_are_still_logged_at_info(module_path: str, anchor: str) -> None:
+    """B4: each keeper is matched by exactly one `_LOGGER.info(` call."""
+    source = (Path(quiet_solar.__file__).parent / module_path).read_text(encoding="utf-8")
+    pattern = re.compile(r"_LOGGER\.info\(\s*[^)]*" + re.escape(anchor), re.DOTALL)
+
+    assert len(pattern.findall(source)) == 1, f"expected exactly one INFO call for {anchor!r}"
+
+
+async def test_b4_charger_start_stop_charge_still_log_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    """B4 runtime: the real action lines survive in the file this change set edits."""
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    *_, charger, _ = _make_stable_status_charger()
+    charger.low_level_stop_charge = AsyncMock()
+    charger.low_level_start_charge = AsyncMock()
+    charger.is_charge_enabled = MagicMock(return_value=True)
+    charger.is_charge_disabled = MagicMock(return_value=True)
+
+    await charger.stop_charge(T0)
+    await charger.start_charge(T0)
+
+    assert len(_messages(caplog, "STOP CHARGE LAUNCHED", logging.INFO)) == 1
+    assert len(_messages(caplog, "START CHARGE LAUNCHED", logging.INFO)) == 1
+
+
+async def test_b4_load_command_lines_still_log_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    """B4 runtime: `launch_command` and `_ack_command` stay at INFO in `load.py`."""
+    caplog.set_level(logging.DEBUG, logger=LOAD_LOGGER)
+    load = MinimalTestLoad(name="B4Load")
+    caplog.clear()
+
+    load._ack_command(T0, copy_command(CMD_ON, power_consign=1000.0))
+    await load.launch_command(T0, copy_command(CMD_ON, power_consign=2000.0), ctxt="B4")
+
+    acks = [r for r in caplog.records if r.msg == "ack command %s for load %s" and r.levelno == logging.INFO]
+    launches = [
+        r
+        for r in caplog.records
+        if r.msg == "launch_command: %s for this load %s), ctxt: %s" and r.levelno == logging.INFO
+    ]
+    assert len(acks) >= 1
+    assert len(launches) == 1
+
+
+# =============================================================================
+# B5 — every touched site logs lazily, with the expected literal
+# =============================================================================
+
+# site id -> (fragment used to find the record, expected `record.msg` literal)
+_B5_SITES = {
+    "S1": ("dyn_handle: START", "dyn_handle: START"),
+    "S2": (
+        "amp change cooldown",
+        "dyn_handle: skipping %s for budgeting, amp change cooldown (%ss since last change)",
+    ),
+    "S3": ("all chargers in cooldown", "dyn_handle: all chargers in cooldown, skipping budgeting"),
+    "S4": ("can't dampen simple case", "dyn_handle: can't dampen simple case %s %s %s"),
+    "S5": (
+        "possible_amps:",
+        "get_stable_dynamic_charge_status: %s for %s score:%s possible_amps:%s "
+        "possible_num_phases:%s current_amps:%s command:%s",
+    ),
+    "S6": (
+        "do_remove_all_person_constraints",
+        "check_load_activity_and_constraints: plugged car %s do_remove_all_person_constraints",
+    ),
+    "S7": (
+        "No bad constraint found",
+        "clean_constraints_for_load_param: No bad constraint found for %s, no reset needed",
+    ),
+    "S8": ("Constraint Reset device", "Constraint Reset device %s"),
+    "S8d": ("nothing to reset", "Constraint Reset device %s, nothing to reset"),
+    "S9": (
+        "ensure_correct_state dyn group",
+        "ensure_correct_state dyn group: %s  correct_state: %s handled_static: %s",
+    ),
+    "S10": (
+        "battery_asked_charge",
+        "dyn_handle: full_available_home_power %sW, grid_available_home_power %sW battery_asked_charge %sW",
+    ),
+    "S11": ("with score", "get_best_car: %s with score %s for charger %s"),
+    "S12": (
+        "is_car_charged",
+        "update_value_callback (is %%:%s):%s %s %s/%s (%s/%s) is_car_charged %s cmd %s",
+    ),
+    "S13": ("no actionable chargers, do nothing", "dyn_handle: no actionable chargers, do nothing"),
+}
+
+# S1, S3 and S13 are argless literals; every other touched site interpolates.
+_B5_ARGLESS_SITES = {"S1", "S3", "S13"}
+
+
+async def _drive_every_touched_site() -> None:
+    """Drive all 13 sites once, in the branch each one needs."""
+    group, _, _ = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
+    await group.dyn_handle(T0)  # S1, S4, S10
+
+    cooldown_group, _, _ = _make_dyn_handle_group(num_chargers=1, cooldown_seconds=10)
+    await cooldown_group.dyn_handle(T0)  # S2, S3
+
+    idle_group, _, _ = _make_dyn_handle_group(num_chargers=1)
+    idle_group.ensure_correct_state = AsyncMock(return_value=([], None))
+    await idle_group.dyn_handle(T0)  # S13
+
+    *_, stable_charger, _ = _make_stable_status_charger()
+    stable_charger.get_stable_dynamic_charge_status(T0)  # S5
+
+    await _drive_remove_all_person_constraints()  # S6
+
+    ecs_group, _ = _make_ensure_correct_state_group(num_chargers=1)
+    await ecs_group.ensure_correct_state(T0)  # S9
+
+    _, _, best_charger, _, _ = _make_best_car_charger()
+    best_charger.get_car_score = MagicMock(return_value=10.0)
+    best_charger.get_best_car(T0)  # S11
+
+    soc_charger, constraint = _make_soc_callback_charger()
+    await soc_charger.constraint_update_value_callback_percent_soc(constraint, T0)  # S12
+
+    load = MinimalTestLoad(name="B5Load")  # S8d (nothing to reset)
+    load.clean_constraints_for_load_param_and_if_same_key_same_value_info(
+        T0, load_param="CarA", load_info=None, for_full_reset=False
+    )  # S7
+    load._constraints = [create_constraint(load=load, time=T0)]
+    load.constraint_reset_and_reset_commands_if_needed(keep_commands=True)  # S8
+
+
+async def test_b5_every_touched_site_logs_lazily(caplog: pytest.LogCaptureFixture) -> None:
+    """B5: no surviving f-string, no trailing period, and `%s` args where expected.
+
+    No gate can catch this: `pyproject.toml` ignores `G004` with 384 existing
+    occurrences, and `per-file-ignores` cannot scope below file granularity.
+    """
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
+    caplog.set_level(logging.DEBUG, logger=LOAD_LOGGER)
+
+    await _drive_every_touched_site()
+
+    for site, (fragment, expected_msg) in _B5_SITES.items():
+        matching = [r for r in caplog.records if fragment in r.getMessage() and r.msg == expected_msg]
+        assert matching, f"{site}: no record whose msg is exactly {expected_msg!r}"
+        record = matching[0]
+        # An f-string would have been interpolated, so an exact-literal match is the
+        # detector even for the argless sites.
+        assert record.msg == expected_msg
+        assert not record.msg.rstrip().endswith("."), f"{site}: log messages take no trailing period"
+        if site in _B5_ARGLESS_SITES:
+            assert not record.args
+        else:
+            assert record.args, f"{site}: converted site must interpolate lazily"
+            assert "%" in record.msg

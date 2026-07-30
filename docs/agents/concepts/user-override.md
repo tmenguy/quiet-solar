@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-06-05
+last_verified: 2026-07-30
 ---
 
 # User override
@@ -20,6 +20,9 @@ override is **distinct** from external control detection
 ([external-control-detection.md](external-control-detection.md)):
 override = "user told *us* to do this differently"; external = "user
 is driving the device themselves".
+
+**Log levels (QS-306).** Override handling is unchanged; only the no-op
+constraint-reset lines in `home_model/load.py` moved to DEBUG.
 
 ## When you need this concept
 

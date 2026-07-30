@@ -323,7 +323,20 @@ class AbstractDevice:
             return self.father_device.update_available_amps_for_group(idx, amps, add)
 
     def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
-        _LOGGER.info("Constraint Reset device %s", self.name)
+        # QS-306: log INFO only when there was actually something to reset. The three
+        # `getattr` defaults are all required: `AbstractDevice.__init__` calls this
+        # method (load.py:155) BEFORE `_constraints` / `current_command` exist, and
+        # `AbstractLoad` assigns `_last_completed_constraint` only after its own
+        # `super().__init__()` returns. `AbstractLoad`'s override calls `super()`
+        # first, so this predicate still observes the pre-clear values.
+        had_constraints = bool(getattr(self, "_constraints", None)) or (
+            getattr(self, "_last_completed_constraint", None) is not None
+        )
+        had_commands = not keep_commands and getattr(self, "current_command", None) is not None
+        if had_constraints or had_commands:
+            _LOGGER.info("Constraint Reset device %s", self.name)
+        else:
+            _LOGGER.debug("Constraint Reset device %s, nothing to reset", self.name)
         self._constraints: list[LoadConstraint | None] = []
         if keep_commands is False:
             self.current_command: LoadCommand | None = None
@@ -1215,7 +1228,7 @@ class AbstractLoad(AbstractDevice):
 
         if found_one_bad is False and for_full_reset is False:
             # no need to reset, we have all the constraints we need
-            _LOGGER.info(
+            _LOGGER.debug(
                 "clean_constraints_for_load_param: No bad constraint found for %s, no reset needed", load_param
             )
             return False

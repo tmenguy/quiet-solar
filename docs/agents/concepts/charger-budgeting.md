@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-06-13
+last_verified: 2026-07-30
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -19,6 +19,10 @@ same circuit, and **can override the solver** when amp budgets
 conflict. Phase switching (1P↔3P), staged transitions, and dampening
 (real-power measurement) all live here. A bug in the solver makes a
 bad plan; a bug here trips a breaker.
+
+**Log levels (QS-306).** Per-cycle status lines from this file are now
+DEBUG, or emitted at INFO only when the reported value changes (or after
+900 s). Behavior is unchanged: only log levels and log frequency moved.
 
 ## When you need this concept
 

@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-06-05
+last_verified: 2026-07-30
 ---
 
 # AbstractDevice & AbstractLoad
@@ -20,6 +20,10 @@ constraint-management surface (`get_for_solver_constraints()` is the
 solver's entry point), plus green-only mode, user override state, and
 external-control detection. **Both live in `home_model/load.py` —
 strict zero-HA-import boundary.**
+
+**Log levels (QS-306).** `constraint_reset_and_reset_commands_if_needed()`
+now logs INFO only when there was something to reset, and the
+"no bad constraint found" line is DEBUG. No behavior change.
 
 ## When you need this concept
 
