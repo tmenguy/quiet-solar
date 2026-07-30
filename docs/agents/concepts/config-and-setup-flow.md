@@ -206,11 +206,33 @@ key instead of the localised "Dashboard section" label.
   The newest is `BINARY_SENSOR_LOAD_UNCONTROLLABLE =
   "qs_load_uncontrollable"` (QS-304), created for **every**
   `AbstractLoad` by `create_ha_binary_sensor_for_AbstractLoad` in
-  `binary_sensor.py`. Adding one means: constant in `const.py`, key
-  under `entity.binary_sensor` in `strings.json`, then
-  `bash scripts/generate-translations.sh`. `const.py` stays
-  HA-import-free — the `BinarySensorDeviceClass` lives in
-  `binary_sensor.py`.
+  `binary_sensor.py`. `const.py` stays HA-import-free — the
+  `BinarySensorDeviceClass` lives in `binary_sensor.py`.
+
+### Adding a new entity: the full checklist
+
+Four steps, not two. Stopping after the translation leaves a
+translated key with **no working entity** — the trap the `value_fn`
+comment in `binary_sensor.py` warns about.
+
+1. Add the `BINARY_SENSOR_*` / `SENSOR_*` constant to `const.py`.
+2. Add the key under `entity.<platform>` in `strings.json`, then run
+   `bash scripts/generate-translations.sh`. Never hand-edit
+   `translations/en.json`.
+3. **Register it** in the platform module — for a load-wide binary
+   sensor that means appending a `QSBinarySensorEntityDescription` in
+   `create_ha_binary_sensor_for_AbstractLoad`, and making sure the
+   enclosing `isinstance` branch exists in `create_ha_binary_sensor`.
+4. **Pass an explicit `value_fn`** unless the entity's *translation
+   key* happens to equal the property name.
+   `QSBaseBinarySensor.async_update_callback` falls back to
+   `getattr(device, key, False)`, and `key` is the translation key —
+   so without `value_fn` the entity is silently pinned `False`
+   forever.
+
+Then check the entity-count and dashboard assertions in
+`tests/ha_tests/` and `tests/test_dashboard_rendering.py`: a sensor
+created for every load changes per-device entity counts.
 
 ## Lifecycle
 

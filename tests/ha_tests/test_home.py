@@ -2564,9 +2564,14 @@ async def test_home_update_loads_error_paths(
 
     await home.update_loads(time_now)
 
-    # The inactive load stays untouched by the relaunch ladder's escalation,
-    # while the active one keeps being retried rather than deadlocked.
+    # Review fix #01/25: assert BOTH halves the comment claims. The active load
+    # keeps being retried rather than deadlocked, and the inactive one (no
+    # constraint, so `is_load_active` is False) is still swept by
+    # `check_loads_commands` and climbs its own ladder — being inactive exempts a
+    # load from the solver, not from command reconciliation.
     assert active_load.running_command is not None
+    assert inactive_load.is_load_active(time_now) is False
+    assert inactive_load.running_command is not None
 
 
 async def test_home_update_loads_charger_only(

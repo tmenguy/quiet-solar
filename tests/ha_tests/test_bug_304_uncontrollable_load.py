@@ -32,6 +32,12 @@ from custom_components.quiet_solar.home_model.load import (
     NUM_MAX_COMMAND_RELAUNCH,
     AbstractDevice,
 )
+from tests.factories import (
+    AlwaysReplansLoad,
+    NeverAcksLoad,
+    RaisingCheckLoad,
+    attach_minimal_load_to_home,
+)
 
 from .const import MOCK_BATTERY_CONFIG, MOCK_CHARGER_CONFIG
 
@@ -84,17 +90,33 @@ async def _drive(load, start: datetime, duration_s: float) -> datetime:
 # AC7 — no collateral damage on power accounting
 # =============================================================================
 
-IS_LOAD_COMMAND_SET_SOURCE = """    def is_load_command_set(self, time: datetime):
-        if self.qs_enable_device is False:
-            return False
 
-        return self.running_command is None and self.current_command is not None
-"""
+def test_is_load_command_set_truth_table_is_unmodified():
+    """AC7: widening `is_load_command_set` would move the persisted forecast.
 
+    Review fix #01/15: this used to assert `inspect.getsource(...) == "<hardcoded
+    body>"`, which broke on any reformat or comment while letting a real semantic
+    change through if it happened to reformat identically. The behavioural truth
+    table over the three inputs it actually reads is both stricter and stable.
+    """
+    load = NeverAcksLoad(name="accounting_probe")
+    time = T0
 
-def test_is_load_command_set_body_is_unmodified():
-    """AC7: widening `is_load_command_set` would move the persisted forecast."""
-    assert inspect.getsource(AbstractDevice.is_load_command_set) == IS_LOAD_COMMAND_SET_SOURCE
+    # (enabled, running_command, current_command, expected)
+    cases = [
+        (True, None, None, False),
+        (True, None, CMD_ON, True),
+        (True, CMD_IDLE, None, False),
+        (True, CMD_IDLE, CMD_ON, False),
+        (False, None, CMD_ON, False),
+        (False, CMD_IDLE, CMD_ON, False),
+    ]
+
+    for enabled, running, current, expected in cases:
+        load._enabled = enabled
+        load.running_command = None if running is None else copy_command(running)
+        load.current_command = None if current is None else copy_command(current)
+        assert load.is_load_command_set(time) is expected, (enabled, running, current)
 
 
 def _accounting_snapshot(home: QSHome, load, time: datetime) -> dict:
@@ -116,7 +138,23 @@ async def test_uncontrollable_load_does_not_perturb_power_accounting(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """AC7: crossing the lost-control threshold moves no accounting value."""
+    """AC7: crossing the lost-control threshold moves no accounting value.
+
+    Review fix #01/11 — provenance of the pinned literals. They were verified
+    against pre-QS-304 code during implementation: the production diff was stashed
+    and the equivalent probe run against `main`'s `_ack_command(time, None)` +
+    spent-ladder state (`running_command_num_relaunch = 7`), which produced the
+    same five values — `is_load_command_set False`, `is_user_overridden False`,
+    `command_power_state None`, `device_power 0.0`, `group_power 0.0`. That run was
+    throwaway, so the temporal claim is not reconstructible from branch history.
+
+    What IS structurally guaranteed here, and is the durable part of the pin: all
+    five values are forced by `is_load_command_set` returning False whenever
+    `running_command is not None`, and that body is unmodified (pinned by
+    `test_is_load_command_set_truth_table_is_unmodified`). The before/after
+    comparison below is therefore the load-bearing assertion; the literals are a
+    secondary guard against both sides moving together.
+    """
     home = await _get_home(hass, home_config_entry)
     charger, charger_entry = await _add_charger(hass, "charger_ac7")
     _make_never_ack(charger)
@@ -231,7 +269,7 @@ async def test_entry_pushes_once_and_recovery_pushes_never(
 
     assert charger.is_uncontrollable is False
     assert _count(caplog, "Lost control of load") == 1
-    assert _count(caplog, "Regained control of load") == 1
+    assert _count(caplog, "Lost-control state cleared for load") == 1
     assert len(notify_calls) == 1
 
     await hass.config_entries.async_unload(charger_entry.entry_id)
@@ -333,6 +371,21 @@ async def test_uncontrollable_binary_sensor_is_created_for_a_charger(
     await hass.async_block_till_done()
 
 
+def test_car_is_not_a_load_so_it_gains_no_uncontrollable_sensor():
+    """Review fix #01/24: confirm `QSCar` is not an `AbstractLoad`.
+
+    AC11 covers charger / home / battery but not the car. If `QSCar` were an
+    `AbstractLoad`, every configured car would silently gain a "QS lost control"
+    PROBLEM sensor that nothing ever sets, because cars are not commanded through
+    `launch_command`.
+    """
+    from custom_components.quiet_solar.ha_model.car import QSCar
+    from custom_components.quiet_solar.home_model.load import AbstractLoad
+
+    assert not issubclass(QSCar, AbstractLoad)
+    assert issubclass(QSCar, AbstractDevice)
+
+
 async def test_uncontrollable_binary_sensor_is_absent_for_home_and_battery(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
@@ -361,18 +414,111 @@ async def test_uncontrollable_binary_sensor_is_absent_for_home_and_battery(
 
 
 # =============================================================================
+# Review fix #01/1 + #01/2 — the driver's fault isolation and the force-solve
+# =============================================================================
+
+
+async def test_one_broken_load_does_not_stop_the_sweep(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Review fix #01/1: `check_loads_commands` isolates a per-load failure.
+
+    Story §5 keeps "the `all_ok` aggregation and the per-load `try/except`" as a
+    behaviour. Before this test the branch was only ever reached by accident, via
+    the swallowed `TypeError` from a `MagicMock` load — so task 7's conversion to
+    real loads turned the R1 hazard into a coverage hole.
+    """
+    home = await _get_home(hass, home_config_entry)
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+    home._init_completed = True
+    home.physical_battery = None
+
+    broken = attach_minimal_load_to_home(home, name="broken_load", load_class=RaisingCheckLoad)
+    healthy = attach_minimal_load_to_home(home, name="healthy_load")
+    healthy.check_and_relaunch_command = AsyncMock(wraps=healthy.check_and_relaunch_command)
+    # Order matters: the broken load must come first to prove the sweep continues.
+    home._all_loads = [broken, healthy]
+
+    with caplog.at_level(logging.ERROR):
+        all_ok = await home.check_loads_commands(T0)
+
+    # (a) the sweep continued past the broken load
+    healthy.check_and_relaunch_command.assert_awaited_once()
+    # (b) the failure was logged, naming the load
+    assert _count(caplog, "check_loads_commands: Error checking load commands broken_load") == 1
+    # (c) a raising load does not by itself falsify `all_ok` — only a load that
+    #     reports `command_acked_or_good is False` does
+    assert all_ok is True
+
+
+async def test_a_load_reporting_a_constraint_change_forces_a_solve(
+    hass: HomeAssistant,
+    home_config_entry: ConfigEntry,
+) -> None:
+    """Review fix #01/2: `update_live_constraints` returning True forces a re-plan.
+
+    Collateral from the de-Mock conversion: every real double returned `False`, so
+    nothing drove `do_force_solve = True` any more. The line is untouched by this
+    story's diff — the coverage loss was introduced by the test rewrite.
+    """
+    home = await _get_home(hass, home_config_entry)
+    home.home_mode = QSHomeMode.HOME_MODE_ON.value
+    home._init_completed = True
+    home._switch_to_off_grid_launched = None
+    home.physical_battery = None
+    home.finish_setup = AsyncMock(return_value=True)
+    home.update_loads_constraints = AsyncMock()
+    home.compute_non_controlled_forecast = AsyncMock(return_value=[])
+    home.get_solar_from_current_forecast = MagicMock(return_value=[])
+
+    load = attach_minimal_load_to_home(
+        home, name="replanning_load", time=T0, with_constraint=True, load_class=AlwaysReplansLoad
+    )
+    home._chargers = []
+    home._commands = []
+    home._battery_commands = []
+    # A recent solve, so ONLY the constraint change can trigger the re-plan.
+    home._last_solve_done = T0 - timedelta(seconds=30)
+
+    solver = MagicMock()
+    solver.solve = MagicMock(return_value=([], []))
+    with patch("custom_components.quiet_solar.ha_model.home.PeriodSolver", return_value=solver):
+        await home.update_loads(T0)
+
+    solver.solve.assert_called_once()
+    assert home._last_solve_done == T0
+    assert load.is_load_active(T0) is True
+
+
+# =============================================================================
 # AC14b — the driver holds no ladder arithmetic
 # =============================================================================
 
 
 def test_check_loads_commands_is_a_thin_driver():
-    """AC14b: the relaunch cadence is decided in the pure layer, not here."""
-    source = inspect.getsource(QSHome.check_loads_commands)
+    """AC14b: the relaunch cadence is decided in the pure layer, not here.
 
-    assert "50" not in source
-    assert "6" not in source
-    assert "force_relaunch_command" not in source
-    assert "check_and_relaunch_command" in source
+    Review fix #01/15: the digit substring checks (`"50"`, `"6"`) were brittle —
+    any line number, count or unrelated literal in a comment could trip them. The
+    meaningful assertion is the absence of the ladder *symbols* from the driver.
+    """
+    source = inspect.getsource(QSHome.check_loads_commands)
+    # Comments are prose about the design and may legitimately name the pure-layer
+    # helpers; the assertion is about the executable code.
+    code = "\n".join(line for line in source.splitlines() if not line.strip().startswith("#"))
+
+    for ladder_symbol in (
+        "COMMAND_RELAUNCH_BASE_DELAY_S",
+        "NUM_MAX_COMMAND_RELAUNCH",
+        "command_relaunch_delay_s",
+        "force_relaunch_command",
+        "running_command_num_relaunch",
+    ):
+        assert ladder_symbol not in code, ladder_symbol
+
+    assert "check_and_relaunch_command" in code
 
     # The delay itself is derived from `command_relaunch_delay_s()`, one call
     # away, in `home_model/load.py`.

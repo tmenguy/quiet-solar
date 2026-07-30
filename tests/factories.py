@@ -38,12 +38,12 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_MONO_PHASE,
-    CONF_TYPE_NAME_QSRadiator,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    CONF_TYPE_NAME_QSRadiator,
 )
 from custom_components.quiet_solar.ha_model.bistate_transport import (
     ClimateTransport,
@@ -181,9 +181,15 @@ class NeverAcksLoad(MinimalTestLoad):
         self.state_change_notifications: list[tuple[datetime, str, str | None]] = []
         self.probe_result: bool | None = False
         self.suppress_override: bool = False
+        # Review fix #01/9: set either to make that step of the cycle blow up, so
+        # the exception-shadowing guarantee can be pinned.
+        self.probe_error: Exception | None = None
+        self.notify_error: Exception | None = None
 
     async def probe_if_command_set(self, time: datetime, command: LoadCommand) -> bool | None:
         """Answer the probe with the configured (by default unconfirmed) result."""
+        if self.probe_error is not None:
+            raise self.probe_error
         return self.probe_result
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
@@ -198,8 +204,14 @@ class NeverAcksLoad(MinimalTestLoad):
     async def on_device_state_change(
         self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
     ):
-        """Record the notification instead of pushing it to a mobile app."""
+        """Record the notification, or blow up like a real push channel can.
+
+        `QSChargerGeneric.on_device_state_change` dereferences optional car state
+        before its inner try/except, so a push really can raise.
+        """
         self.state_change_notifications.append((time, device_change_type, message))
+        if self.notify_error is not None:
+            raise self.notify_error
 
 
 class RaisingProbeLoad(MinimalTestLoad):
@@ -220,6 +232,35 @@ class RaisingExecuteLoad(MinimalTestLoad):
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:
         """Raise, as a failing HA service call would."""
         raise RuntimeError("execute exploded")
+
+
+class RaisingCheckLoad(MinimalTestLoad):
+    """A load whose whole command cycle blows up.
+
+    Review fix #01/1: `QSHome.check_loads_commands` keeps a per-load `try/except`
+    so one bad device cannot stop the sweep. Task 7's de-Mock conversion removed
+    the `MagicMock` loads whose swallowed `TypeError` had been *accidentally*
+    covering that branch, so it needs a deliberate double.
+    """
+
+    async def check_and_relaunch_command(self, time: datetime) -> bool:
+        """Raise, as a device whose command cycle is broken would."""
+        raise RuntimeError("check_and_relaunch exploded")
+
+
+class AlwaysReplansLoad(MinimalTestLoad):
+    """A load whose live constraints always report "something changed".
+
+    Review fix #01/2: every other real double returns `False` from
+    `update_live_constraints`, so nothing drove `update_loads`'
+    `do_force_solve = True` branch after the de-Mock conversion.
+    """
+
+    async def update_live_constraints(
+        self, time: datetime, period: timedelta, end_constraint_min_tolerancy: timedelta = timedelta(seconds=2)
+    ) -> bool:
+        """Report a constraint change, forcing the solver to re-plan."""
+        return True
 
 
 class NeverAcksDevice(AbstractDevice):
@@ -268,7 +309,7 @@ def attach_minimal_load_to_home(
     if with_constraint:
         if time is None:
             time = datetime.now(tz=pytz.UTC)
-        load.push_live_constraint(
+        pushed, _needs_ack = load.push_live_constraint(
             time,
             create_constraint(
                 load=load,
@@ -278,6 +319,10 @@ def attach_minimal_load_to_home(
                 power=power,
             ),
         )
+        # Review fix #01/28: an already-met constraint returns (False, True) and
+        # appends nothing, which would silently hand back a load with NO live
+        # constraint and make every dependent assertion vacuous. Fail loudly.
+        assert pushed is True, f"constraint was not pushed onto {name}"
 
     return load
 

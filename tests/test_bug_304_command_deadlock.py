@@ -51,7 +51,7 @@ LADDER_TOTAL_S = 1050
 LADDER_WALL_S = LADDER_TOTAL_S + NUM_MAX_COMMAND_RELAUNCH * CYCLE_S
 
 LOST_CONTROL_LOG = "Lost control of load"
-REGAINED_CONTROL_LOG = "Regained control of load"
+REGAINED_CONTROL_LOG = "Lost-control state cleared for load"
 
 
 async def drive(load, start: datetime, duration_s: float, step_s: float = CYCLE_S) -> datetime:
@@ -115,11 +115,73 @@ def test_is_uncontrollable_requires_in_flight_command():
     assert load.is_uncontrollable is False
 
 
-async def test_unresponsive_since_survives_a_constraint_reset():
-    """A constraint reset must not silently clear the lost-control clock."""
-    load = await _uncontrollable_load()
+async def test_unresponsive_since_survives_a_command_preserving_constraint_reset():
+    """`keep_commands=True` touches no command state, so the clock must survive.
+
+    Review fix #01/4: this used to be the whole of the AC3 reset assertion, which
+    made it near-vacuous — `keep_commands=True` is guarded out of every command
+    mutation, so there was nothing for the clock to outlive.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
+    await drive_until_uncontrollable(load)
+
+    running_before = load.running_command
     load.constraint_reset_and_reset_commands_if_needed(keep_commands=True)
+
+    # Nothing about the command the clock describes has changed...
+    assert load.running_command is running_before
+    assert load.current_command is not None
+    # ...so the evidence that we gave up on it must still stand.
     assert load.unresponsive_since is not None
+    assert load.is_uncontrollable is True
+
+
+async def test_command_wiping_constraint_reset_releases_the_clock():
+    """`keep_commands=False` destroys the clock's subject, so the clock goes too.
+
+    Review fix #01/4: the wipe nulls both `current_command` and `running_command`.
+    The only re-arm path is gated on `current_command is not None`, so a surviving
+    clock became permanently ownerless and the next command launched was declared
+    uncontrollable on its first cycle, with zero relaunches of its own.
+    """
+    load = await _uncontrollable_load()
+    assert load.unresponsive_since is not None
+
+    load.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
+
+    assert load.current_command is None
+    assert load.running_command is None
+    assert load.unresponsive_since is None
+    assert load._last_supersede_time is None
+
+    # The next command therefore starts completely clean.
+    await load.launch_command(T0 + timedelta(hours=1), CMD_ON)
+    assert load.running_command == CMD_ON
+    assert load.is_uncontrollable is False
+    assert load.running_command_num_relaunch == 0
+    assert load.command_relaunch_delay_s() == float(COMMAND_RELAUNCH_BASE_DELAY_S)
+
+
+async def test_reset_button_does_not_flash_problem_on_a_healthy_load():
+    """The user's own remediation must not immediately light the PROBLEM sensor.
+
+    Review fix #01/4: `user_clean_and_reset` → `reset()` →
+    `constraint_reset_and_reset_commands_if_needed(keep_commands=False)`, and a
+    bistate load's `execute_command` returns falsy on a perfectly normal service
+    call, so the follow-up command sits in flight for one cycle — long enough for
+    `qs_load_uncontrollable` to flash right after the user pressed reset.
+    """
+    load = await _uncontrollable_load()
+    assert load.is_uncontrollable is True
+
+    await load.user_clean_and_reset()
+    assert load.unresponsive_since is None
+
+    # The command the reset path itself launches must not be born uncontrollable.
+    await load.launch_command(T0 + timedelta(hours=1), CMD_IDLE)
+    await load.check_and_relaunch_command(T0 + timedelta(hours=1, seconds=CYCLE_S))
+    assert load.is_uncontrollable is False
 
 
 async def test_recovery_clears_and_logs_once(caplog: pytest.LogCaptureFixture):
@@ -550,6 +612,174 @@ async def test_supersede_cadence_survives_repeated_supersession():
     assert len(load.executed_commands) == after_first + 1
 
 
+async def test_no_op_supersede_leaves_a_clean_slate_and_an_unburnt_window():
+    """Review fix #01/3: a supersede that launches nothing must commit nothing.
+
+    `launch_command` used to stamp `_last_supersede_time` and abandon the stale
+    command *before* the override-suppression and equal-command gates. Either gate
+    then returned with the slot empty and the rung still at 6, so a brand-new
+    command inherited a 300 s first retry and was declared uncontrollable with zero
+    relaunches — while a supersede that issued no service call at all had already
+    burnt the 300 s window.
+    """
+    for reason, arrange in (
+        ("equal-command gate", lambda load: None),
+        ("override-suppression gate", lambda load: setattr(load, "suppress_override", True)),
+    ):
+        load = NeverAcksLoad(name=f"pool_house_{reason}")
+        load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
+        time = await drive_until_uncontrollable(load)
+        calls_before = len(load.executed_commands)
+        arrange(load)
+
+        # `on` equals the preserved `current_command`; with the override set the
+        # suppression gate is reached first. Either way nothing is launched.
+        await load.launch_command(time, CMD_ON)
+
+        assert len(load.executed_commands) == calls_before, reason
+        assert load.running_command is None, reason
+        assert load.running_command_num_relaunch == 0, reason
+        assert load.is_uncontrollable is False, reason
+        assert load._last_supersede_time is None, reason
+
+        # ...and the next real command gets a fresh 50 s ladder, not 300 s.
+        load.suppress_override = False
+        await load.launch_command(time + timedelta(seconds=CYCLE_S), copy_command(CMD_IDLE, power_consign=7.0))
+        assert load.command_relaunch_delay_s() == float(COMMAND_RELAUNCH_BASE_DELAY_S), reason
+        assert load.is_uncontrollable is False, reason
+
+
+async def test_a_failing_push_does_not_mask_the_device_error(caplog: pytest.LogCaptureFixture):
+    """Review fix #01/9: the primary device exception must survive the housekeeping.
+
+    `check_and_relaunch_command` runs the relaunch ladder and the escalation from a
+    `finally`. If either of those also raises, the original device error was
+    silently REPLACED and never reached `QSHome`'s per-load log — so the real fault
+    became invisible.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    await load.launch_command(T0, CMD_IDLE)
+    await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+    assert load.unresponsive_since is not None
+
+    # Now make BOTH the probe and the push fail, and re-arm the escalation so the
+    # notify is reached again.
+    load.unresponsive_since = None
+    load.probe_error = RuntimeError("the device fell off the bus")
+    load.notify_error = RuntimeError("the push channel exploded")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="the device fell off the bus"):
+            await load.check_and_relaunch_command(T0 + timedelta(seconds=LADDER_WALL_S + 2 * CYCLE_S))
+
+    # The secondary failure is logged rather than swallowed silently...
+    assert _count(caplog, "Error escalating the command state for load pool_house") == 1
+    # ...and the once-only guard still holds, so the episode is not re-notified.
+    assert load.unresponsive_since is not None
+
+
+async def test_a_failing_relaunch_does_not_mask_the_device_error(caplog: pytest.LogCaptureFixture):
+    """Review fix #01/9: the same guarantee for the relaunch half of the cycle."""
+    load = NeverAcksLoad(name="pool_house")
+    await load.launch_command(T0, CMD_IDLE)
+
+    # A stale command whose relaunch will explode inside `force_relaunch_command`'s
+    # own `else: await self.check_commands(time)`.
+    load.probe_error = RuntimeError("the device fell off the bus")
+
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(RuntimeError, match="the device fell off the bus"):
+            await load.check_and_relaunch_command(T0 + timedelta(seconds=2 * COMMAND_RELAUNCH_BASE_DELAY_S))
+
+    assert _count(caplog, "Error relaunching the stale command for load pool_house") == 1
+    # AC5 still holds: the ladder climbed despite the raising probe.
+    assert load.running_command_num_relaunch == 1
+
+
+async def test_a_disabled_load_with_a_stale_command_has_its_slot_cleaned_up():
+    """Review fix #01/6: the driver routes a disabled load to the cleanup branch.
+
+    `_relaunch_stale_command` no longer duplicates the `qs_enable_device` guard, so
+    `force_relaunch_command`'s disabled-device cleanup is reachable from the only
+    production call path instead of being dead behind a second guard. Reached by
+    mutating `_enabled` directly — the property setter calls `reset()`, which
+    empties the slot first, so this is the defensive path.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    await load.launch_command(T0, CMD_IDLE)
+    assert load.running_command == CMD_IDLE
+    calls_before = len(load.executed_commands)
+
+    load._enabled = False
+    await load.check_and_relaunch_command(T0 + timedelta(seconds=2 * COMMAND_RELAUNCH_BASE_DELAY_S))
+
+    # The stale slot is cleaned up, and nothing was executed against the load the
+    # user told QS to leave alone.
+    assert load.running_command is None
+    assert len(load.executed_commands) == calls_before
+    assert load.is_uncontrollable is False
+
+
+async def test_disabled_load_never_shouts():
+    """Review fix #01/5: QS was told to leave this load alone, so it must be quiet."""
+    load = NeverAcksLoad(name="pool_house")
+    await load.launch_command(T0, CMD_IDLE)
+    time = await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+    assert load.running_command_num_relaunch >= NUM_MAX_COMMAND_RELAUNCH
+
+    # Rewind the escalation so the threshold is crossed while already disabled.
+    load.unresponsive_since = None
+    load._enabled = False
+    pushes_before = len(load.state_change_notifications)
+
+    await load.check_and_relaunch_command(time)
+
+    assert load.unresponsive_since is None
+    assert load.is_uncontrollable is False
+    assert len(load.state_change_notifications) == pushes_before
+
+
+async def test_stacked_intent_is_not_starved_by_a_quiet_solver():
+    """Review fix #01/7: retry the NEWEST intent, not the one we know is ignored.
+
+    A throttled command lands in `_stacked_command`, but `check_commands` promotes
+    the stack only when the slot empties — and for an uncontrollable load it never
+    does. So once the solver goes quiet the newest desired command was never sent,
+    while the stale one was retried every 300 s forever.
+    """
+    load = NeverAcksLoad(name="cumulus_enfants")
+    time = await drive_until_uncontrollable(load)
+
+    # First supersede opens the throttle window.
+    await load.launch_command(time, copy_command(CMD_ON, power_consign=1761.0))
+    # A newer intent arrives inside the window and is parked.
+    await load.launch_command(time + timedelta(seconds=CYCLE_S), copy_command(CMD_ON, power_consign=536.0))
+    assert load._stacked_command == copy_command(CMD_ON, power_consign=536.0)
+
+    # The solver now goes completely quiet; only the driver runs.
+    await drive(load, time + timedelta(seconds=2 * CYCLE_S), 2 * SUPERSEDE_MIN_INTERVAL_S)
+
+    assert load.executed_commands[-1] == copy_command(CMD_ON, power_consign=536.0)
+    assert load._stacked_command is None
+
+
+async def test_backwards_clock_step_does_not_freeze_the_throttle():
+    """Review fix #01/26: a future anchor must not stack everything indefinitely."""
+    load = NeverAcksLoad(name="pool_house")
+    time = await drive_until_uncontrollable(load)
+
+    await load.launch_command(time, copy_command(CMD_ON, power_consign=1761.0))
+    assert load._last_supersede_time == time
+
+    # NTP corrects the clock backwards by an hour: the anchor is now in the future.
+    rewound = time - timedelta(hours=1)
+    assert load._is_supersede_throttled(rewound) is False
+
+    calls_before = len(load.executed_commands)
+    await load.launch_command(rewound, copy_command(CMD_ON, power_consign=521.0))
+    assert len(load.executed_commands) == calls_before + 1
+
+
 async def test_supersede_needs_an_in_flight_command():
     """With an empty slot a command is launched immediately, exactly as today."""
     load = NeverAcksLoad(name="pool_house")
@@ -666,6 +896,12 @@ def test_home_model_never_imports_home_assistant():
     assert offenders == []
 
 
+def test_load_command_equality_is_consign_sensitive():
+    """The throttle exists because a consign jitter really is a new command."""
+    assert copy_command(CMD_ON, power_consign=521.0) != copy_command(CMD_ON, power_consign=536.0)
+    assert isinstance(CMD_ON, LoadCommand)
+
+
 # =============================================================================
 # Helpers
 # =============================================================================
@@ -681,9 +917,3 @@ async def _uncontrollable_load(name: str = "pool_house") -> NeverAcksLoad:
     load = NeverAcksLoad(name=name)
     await drive_until_uncontrollable(load)
     return load
-
-
-def test_load_command_equality_is_consign_sensitive():
-    """The throttle exists because a consign jitter really is a new command."""
-    assert copy_command(CMD_ON, power_consign=521.0) != copy_command(CMD_ON, power_consign=536.0)
-    assert isinstance(CMD_ON, LoadCommand)
