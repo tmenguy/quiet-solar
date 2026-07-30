@@ -1,38 +1,44 @@
 """Tests for the Legrand/Netatmo facade switches in ``config/configuration.jinja``.
 
-The design these tests pin is stated in ``docs/stories/QS-305.story_review_fix_#01.md``
-Part 1, which supersedes the original story. The rule everything derives from:
+The design pinned here is ``docs/stories/QS-305.story_review_fix_%2301.md`` Part 1 as amended
+by ``docs/stories/QS-305.story_review_fix_%2302.md`` Part A. The rule everything derives from:
 
     **Never trust a value you just wrote. Never report a value you can't trust.**
 
-We write ``input_boolean.<slug>_command`` and we write the Netatmo cloud switch, so neither
-can be evidence -- they only parrot back what we told them. The Netatmo switch in particular
-sets ``_attr_is_on`` optimistically and writes state immediately
-(``custom_components/netatmo/switch.py:77-90``, a **fork** that shadows the core integration),
-so reading it back after our own write is guaranteed to return the target value. The mirror,
-``input_boolean.<slug>_state``, is written only by Apple Home from watching the real device,
-and is therefore the only honest witness.
+We write ``input_boolean.<slug>_command`` and we write the Netatmo cloud switch, so neither can
+be evidence -- they only parrot back what we told them. The mirror,
+``input_boolean.<slug>_state``, is written only by Apple Home from watching the real device, so
+it is the only honest witness. See the story for the forked-integration source citations.
 
 These tests catch bugs where:
 
+- The facade becomes ``unavailable``. HA filters unavailable entities out of entity-service
+  calls (``helpers/service.py:763``) and only logs a warning, and ``switch.turn_on/off`` are
+  entity services -- so an unavailable facade **silently swallows every actuation**, with no
+  script run and therefore no diagnostic either. That is the incident's shape by another route,
+  and it would fire on every HA restart while the health sensors warm up.
+- The untrusted branch emits the *string* ``unknown`` instead of ``none``. ``cv.boolean`` is
+  applied without ``none_on_unknown_unavailable``, so a string logs an ERROR on every
+  evaluation; only a real ``None`` is accepted cleanly.
 - A wait or notification condition consults the cloud leg, making the wait vacuously true and
-  the notification branch unreachable (the shipped-then-reverted defect: an un-actuated
-  ``turn_on`` was never reported).
+  the notification unreachable.
 - A wait is expressed as "the mirror is not ``on``" instead of positively confirming the
   target, so an ``unknown``/``unavailable`` mirror silently satisfies a turn-off.
-- ``state:`` or ``availability:`` reports a confident value while the mirror cannot be
-  trusted -- an entity confidently reporting ``off`` while a boiler ran is the whole incident.
-- A predicate or ``enabled: false`` can prevent either actuation write from executing.
+- A cloud-side exception aborts the script before the diagnostic can fire. ``pyatmo`` raises
+  plain ``Exception`` subclasses, which ``continue_on_error`` does **not** swallow, so the cloud
+  write lives in its own ``parallel:`` branch.
+- A predicate, or ``enabled: false``, can prevent either actuation write from executing.
 
-**Permanent gate note.** ``config/configuration.jinja`` is a non-Python file, so testmon
-cannot select this test: ``--impacted`` is blind to a template-only change. Run
+**Permanent gate note.** ``config/configuration.jinja`` is a non-Python file, so testmon cannot
+select this test: ``--impacted`` is blind to a template-only change. Run
 ``python scripts/qs/quality_gate.py --quick tests/test_config_jinja_rendering.py``
 in any PR that touches the template. CI's whole-suite run is the durable net.
 """
 
 from __future__ import annotations
 
-import re
+import copy
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,6 +46,13 @@ from typing import Any
 import jinja2
 import pytest
 import yaml
+from homeassistant.components.template import validators as template_validators
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.script import Script
+from homeassistant.helpers.template import Template
+from homeassistant.setup import async_setup_component
+from pytest_homeassistant_custom_component.common import async_mock_service
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = REPO_ROOT / "config"
@@ -54,7 +67,6 @@ FIXTURE_NETATMO_ENTITIES = [
 
 LINK_SENSOR = "binary_sensor.legrand_homekit_link_healthy"
 HUB_SENSOR = "binary_sensor.homekit_hub_healthy"
-HEALTH_SENSORS = (LINK_SENSOR, HUB_SENSOR)
 
 DIRECTIONS = ("turn_on", "turn_off")
 
@@ -62,48 +74,49 @@ DIRECTIONS = ("turn_on", "turn_off")
 TARGET_OF = {"turn_on": "on", "turn_off": "off"}
 
 
+class _CloudApiError(Exception):
+    """Stand-in for pyatmo's ``ApiError``.
+
+    Verified: ``ApiError``, ``ApiThrottlingError`` and ``ApiTooManyRequestError`` are plain
+    ``Exception`` subclasses (``custom_components/netatmo/pyatmo/exceptions.py``), **not**
+    ``HomeAssistantError``, so ``continue_on_error`` does not swallow them
+    (``helpers/script.py`` -- "Only Home Assistant errors can be ignored", then ``raise``).
+    Declared locally to keep this test hermetic.
+    """
+
+
 @dataclass(frozen=True)
 class Row:
-    """One scenario for the emitted ``state:`` and ``availability:`` templates."""
+    """One scenario for the emitted ``state:`` template."""
 
     mirror: str
     link: str
     hub: str
     state: str
-    available: str
     why: str
 
 
-# Rows are NAMED, not numbered, so the state and availability expectations cannot drift.
+# Rows are NAMED, not numbered, so expectations cannot drift.
 #
-# The trust predicate is `hk_ok and mirror in ['on','off']`. `R_link_down` and `R_hub_down`
-# vary the two health sensors independently, which pins `hk_ok` as an AND -- an OR
-# implementation would pass if only one of them were ever exercised.
+# `R_link_down` and `R_hub_down` vary the two health sensors independently, which pins `hk_ok`
+# as an AND -- an OR implementation would survive if only one were ever exercised.
+#
+# "None" is the *rendered* form of `{{ none }}`; HA literal-evals it back to Python None, which
+# publishes state `unknown` while the entity stays AVAILABLE.
 ROWS: dict[str, Row] = {
-    "R_mirror_on_trusted": Row(
-        "on", "on", "on", "True", "True", "the normal running state"
-    ),
+    "R_mirror_on_trusted": Row("on", "on", "on", "True", "the normal running state"),
     "R_mirror_off_trusted": Row(
-        "off", "on", "on", "False", "True", "the only case that may report a confident off"
+        "off", "on", "on", "False", "the only case that may report a confident off"
     ),
-    "R_mirror_unknown": Row(
-        "unknown", "on", "on", "unknown", "False", "mirror not yet restored -> go dark"
-    ),
-    "R_mirror_unavailable": Row(
-        "unavailable", "on", "on", "unknown", "False", "mirror invalid -> go dark"
-    ),
-    "R_link_down": Row(
-        "on", "off", "on", "unknown", "False", "pins hk_ok as AND on the link sensor"
-    ),
-    "R_hub_down": Row(
-        "on", "on", "off", "unknown", "False", "pins hk_ok as AND on the hub sensor"
-    ),
+    "R_mirror_unknown": Row("unknown", "on", "on", "None", "mirror not restored -> report nothing"),
+    "R_mirror_unavailable": Row("unavailable", "on", "on", "None", "mirror invalid"),
+    "R_link_down": Row("on", "off", "on", "None", "pins hk_ok as AND on the link sensor"),
+    "R_hub_down": Row("on", "on", "off", "None", "pins hk_ok as AND on the hub sensor"),
     "R_health_down_mirror_off": Row(
         "off",
         "off",
         "off",
-        "unknown",
-        "False",
+        "None",
         "THE incident class: never report a confident off when we cannot see",
     ),
 }
@@ -138,9 +151,7 @@ class _TagTolerantLoader(yaml.SafeLoader):
     """
 
 
-_TagTolerantLoader.add_multi_constructor(
-    "!", lambda loader, suffix, node: f"!{suffix}"
-)
+_TagTolerantLoader.add_multi_constructor("!", lambda loader, suffix, node: f"!{suffix}")
 
 
 def parse_config(rendered: str) -> dict[str, Any]:
@@ -160,31 +171,74 @@ def facade_blocks(parsed: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return blocks
 
 
-def cloud_entity_of(blk: dict[str, Any]) -> str:
-    """Return the Netatmo cloud entity id a facade block actuates.
+# --- step accessors -------------------------------------------------------------------
+#
+# Post-B1 shape per direction:
+#   [0] input_boolean.turn_<dir>            (continue_on_error)
+#   [1] parallel:
+#         [0] sequence: [ switch.turn_<dir> (continue_on_error) ]
+#         [1] sequence: [ wait_template, choose(+default) ]
+#
+# The cloud write is isolated in its own parallel branch so a plain-Exception failure cannot
+# abort the diagnostic branch: `_async_step_parallel` gathers with `return_exceptions=True`
+# and re-raises only after every branch has completed.
 
-    Sourced from the actuation step's target, because the cloud entity is deliberately
-    absent from ``availability:`` (it may appear only as an actuation target and as
-    diagnostic text in a notification message).
-    """
-    entity_id = blk["turn_on"][1]["target"]["entity_id"]
+
+def boolean_step_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
+    """Return the local command-boolean actuation step."""
+    return blk[direction][0]
+
+
+def cloud_step_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
+    """Return the Netatmo cloud actuation step, inside its own parallel branch."""
+    return blk[direction][1]["parallel"][0]["sequence"][0]
+
+
+def diagnostic_of(blk: dict[str, Any], direction: str) -> list[dict[str, Any]]:
+    """Return the diagnostic branch's sequence: ``[wait_template, choose]``."""
+    return blk[direction][1]["parallel"][1]["sequence"]
+
+
+def actuation_steps_of(blk: dict[str, Any], direction: str) -> list[dict[str, Any]]:
+    """Return both actuation writes."""
+    return [boolean_step_of(blk, direction), cloud_step_of(blk, direction)]
+
+
+def cloud_entity_of(blk: dict[str, Any]) -> str:
+    """Return the Netatmo cloud entity id a facade block actuates."""
+    entity_id = cloud_step_of(blk, "turn_on")["target"]["entity_id"]
     assert entity_id.startswith("switch."), entity_id
     return entity_id
 
 
 def wait_of(blk: dict[str, Any], direction: str) -> str:
     """Return the ``wait_template`` of a facade block's direction script."""
-    return blk[direction][2]["wait_template"]
+    return diagnostic_of(blk, direction)[0]["wait_template"]
+
+
+def wait_step_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
+    """Return the whole wait step, for timeout assertions."""
+    return diagnostic_of(blk, direction)[0]
+
+
+def choose_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
+    """Return the diagnostic ``choose`` step."""
+    return diagnostic_of(blk, direction)[1]
 
 
 def complain_of(blk: dict[str, Any], direction: str) -> str:
     """Return the diagnostic ``choose`` condition of a direction script."""
-    return blk[direction][3]["choose"][0]["conditions"]
+    return choose_of(blk, direction)["choose"][0]["conditions"]
 
 
 def notification_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
     """Return the notification ``data`` mapping of a direction script."""
-    return blk[direction][3]["choose"][0]["sequence"][0]["data"]
+    return choose_of(blk, direction)["choose"][0]["sequence"][0]["data"]
+
+
+def dismiss_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
+    """Return the success-path ``persistent_notification.dismiss`` step."""
+    return choose_of(blk, direction)["default"][0]
 
 
 def all_notification_data(parsed: dict[str, Any]) -> list[dict[str, Any]]:
@@ -205,6 +259,21 @@ def all_notification_data(parsed: dict[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def sub_templates_of(blk: dict[str, Any]) -> dict[str, str]:
+    """Return every template string a facade block evaluates at runtime.
+
+    Includes the notification *message* templates: a broken template there raises at runtime
+    on a step with no ``continue_on_error``, turning the diagnostic into a silent script
+    failure -- exactly the class this task exists to eliminate.
+    """
+    out = {"state": blk["state"]}
+    for direction in DIRECTIONS:
+        out[f"{direction}.wait"] = wait_of(blk, direction)
+        out[f"{direction}.conditions"] = complain_of(blk, direction)
+        out[f"{direction}.message"] = notification_of(blk, direction)["message"]
+    return out
+
+
 # ============================================================================
 # Layer 3: evaluate the emitted HA-runtime templates
 # ============================================================================
@@ -218,8 +287,8 @@ def _negate(rendered: str) -> str:
 def eval_ha_template(text: str, states: dict[str, str]) -> str:
     """Render an emitted HA-runtime template with stubbed HA globals.
 
-    Whitespace is collapsed rather than merely stripped, because ``state:`` is a ``>``
-    folded scalar whose more-indented body lines keep their newlines.
+    Whitespace is collapsed rather than merely stripped, because ``state:`` is a ``>`` folded
+    scalar whose more-indented body lines keep their newlines.
     """
 
     def _state_of(entity_id: str) -> str:
@@ -227,19 +296,27 @@ def eval_ha_template(text: str, states: dict[str, str]) -> str:
             raise KeyError(f"template read unstubbed entity {entity_id!r}")
         return states[entity_id]
 
+    class _FixedNow:
+        """Stub for ``now()`` so message templates are evaluable off a real hass."""
+
+        @staticmethod
+        def isoformat() -> str:
+            return "2026-07-30T12:00:00+02:00"
+
     env = jinja2.Environment(undefined=jinja2.StrictUndefined)
     env.globals["states"] = _state_of
     env.globals["is_state"] = lambda entity_id, value: _state_of(entity_id) == value
+    env.globals["now"] = lambda: _FixedNow()
     return " ".join(env.from_string(text).render().split())
 
 
 def trusted_states(slug: str, row: Row) -> dict[str, str]:
     """Build the ``states`` dict for one row.
 
-    The cloud entity is **deliberately absent**. Every template under test must consult
-    only the mirror and the two health sensors, so if a future edit reintroduces the cloud
-    leg into ``state:``, ``availability:``, a wait or a notification condition, the raising
-    accessor turns it into a loud ``KeyError`` rather than a silent pass.
+    The cloud entity is **deliberately absent**. Every template under test must consult only
+    the mirror and the two health sensors, so if a future edit reintroduces the cloud leg into
+    ``state:``, a wait or a notification condition, the raising accessor turns it into a loud
+    ``KeyError`` rather than a silent pass.
     """
     return {
         f"input_boolean.{slug}_state": row.mirror,
@@ -288,8 +365,10 @@ def test_facade_block_inventory(
 ) -> None:
     """Every mapped Legrand device yields exactly one cloud-actuating facade block.
 
-    This is what keeps every other assertion non-vacuous: it pins the set they quantify
-    over. Do not prune it.
+    This is what keeps every other assertion non-vacuous: it pins the set they quantify over.
+    Do not prune it. There is no longer an HK-only variant -- that branch was dead code on the
+    superseded design and was deleted, so ``cloud_entity`` is now effectively required and a
+    missing one fails the render loudly under ``StrictUndefined``.
     """
     expected_slugs = {
         key.removesuffix("_command")
@@ -304,96 +383,181 @@ def test_facade_block_inventory(
 
 
 # ============================================================================
-# Reporting: state and availability (Part 1 section 1.5)
+# Reporting (plan #02 section A1)
 # ============================================================================
+
+
+def test_facade_is_never_unavailable(blocks: dict[str, dict[str, Any]]) -> None:
+    """No ``availability:`` template may exist on the facade.
+
+    HA filters unavailable entities out of entity-service calls and only logs a warning, and
+    ``switch.turn_on/off`` are entity services -- so an unavailable facade silently swallows
+    every actuation quiet-solar issues, with no script run and therefore no diagnostic either.
+    Both health sensors force themselves ``off`` for 120 s after an HA restart, which exceeds
+    the ~70 s quiet-solar needs to give up on a command. Do not reintroduce this key.
+    """
+    for slug, blk in blocks.items():
+        assert "availability" not in blk, f"{slug} would swallow actuation when untrusted"
 
 
 @pytest.mark.parametrize("row_name", list(ROWS))
 def test_facade_reports_only_what_the_mirror_can_prove(
     blocks: dict[str, dict[str, Any]], row_name: str
 ) -> None:
-    """``state:`` is the mirror when trusted, and nothing at all when it is not.
-
-    Never report ``off`` when the mirror cannot be trusted. The Netatmo leg is not a
-    fallback: a backup that lies is worse than no backup, because it sits at ``off`` and
-    reports it with full confidence, turning every HomeKit outage into exactly the false
-    ``off`` this work exists to eliminate. Going dark honestly is better.
-    """
+    """``state:`` is the mirror when trusted, and ``none`` when it is not."""
     row = ROWS[row_name]
     for slug, blk in blocks.items():
         states = trusted_states(slug, row)
         assert eval_ha_template(blk["state"], states) == row.state, f"{slug} / {row_name}"
-        assert (
-            eval_ha_template(blk["availability"], states) == row.available
-        ), f"{slug} / {row_name} availability"
 
 
-def test_facade_never_reports_confident_off_while_untrusted(
+def test_untrusted_state_emits_none_not_the_string_unknown(
     blocks: dict[str, dict[str, Any]],
 ) -> None:
-    """The incident class, asserted directly rather than only via the row table.
+    """The untrusted branch must emit ``none``, never the literal ``unknown``.
 
-    An entity confidently reporting ``off`` while a boiler ran is the entire incident.
+    ``cv.boolean`` is applied without ``none_on_unknown_unavailable``, so the string
+    ``unknown`` fails validation, takes the error path and logs an ERROR on **every**
+    evaluation. Only a real ``None`` is accepted cleanly.
     """
-    for row_name, row in ROWS.items():
-        if row.available == "True":
-            continue
+    for slug, blk in blocks.items():
+        assert "unknown" not in blk["state"], f"{slug} still emits a literal state string"
+        assert "unavailable" not in blk["state"], slug
+
+
+async def test_untrusted_state_parses_to_none_without_error(
+    hass: HomeAssistant, blocks: dict[str, dict[str, Any]]
+) -> None:
+    """End-to-end: HA parses the untrusted branch to ``None``, with no ERROR logged.
+
+    Asserted through Home Assistant's own ``Template`` and the template platform's validator
+    rather than the layer-3 stub, because this is the single most likely thing to be silently
+    wrong: a string here would still *look* like ``unknown`` in the UI while logging an error
+    on every state evaluation.
+    """
+    records: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Capture(level=logging.ERROR)
+    validators_logger = logging.getLogger(template_validators.__name__)
+    validators_logger.addHandler(handler)
+    try:
         for slug, blk in blocks.items():
-            reported = eval_ha_template(blk["state"], trusted_states(slug, row))
-            assert reported == "unknown", f"{slug} / {row_name} leaked {reported!r}"
+            # Untrusted: HomeKit link down.
+            hass.states.async_set(LINK_SENSOR, "off")
+            hass.states.async_set(HUB_SENSOR, "on")
+            hass.states.async_set(f"input_boolean.{slug}_state", "on")
+            result = Template(blk["state"], hass).async_render(parse_result=True)
+            assert result is None, f"{slug} rendered {result!r} instead of None"
+            # This is the check the template platform actually applies to `state:`.
+            assert template_validators.check_result_for_none(result) is True, slug
+
+            # Trusted: the same template must still yield a real boolean.
+            hass.states.async_set(LINK_SENSOR, "on")
+            trusted = Template(blk["state"], hass).async_render(parse_result=True)
+            assert trusted is True, f"{slug} rendered {trusted!r} instead of True"
+    finally:
+        validators_logger.removeHandler(handler)
+
+    assert not records, f"validator logged errors: {[r.getMessage() for r in records]}"
+
+
+async def test_actuation_reaches_the_entity_while_untrusted(
+    hass: HomeAssistant, blocks: dict[str, dict[str, Any]]
+) -> None:
+    """The §A1 regression, closed by demonstration rather than by argument.
+
+    Sets up the real facade through the ``template`` integration with the HomeKit link down, so
+    the facade publishes ``unknown``, then calls ``switch.turn_on`` on it and asserts the local
+    actuation actually executed. Had an ``availability:`` template made the entity unavailable,
+    HA would have filtered it out of the service call with only a warning and this would fail --
+    which is precisely how every actuation would be lost for 120 s after each HA restart.
+    """
+    slug, blk = next(iter(blocks.items()))
+    mirror = f"input_boolean.{slug}_state"
+
+    # Untrusted (link down) but the turn_on wait is immediately satisfied, so the script is fast.
+    hass.states.async_set(LINK_SENSOR, "off")
+    hass.states.async_set(HUB_SENSOR, "on")
+    hass.states.async_set(mirror, "on")
+
+    driven = async_mock_service(hass, "input_boolean", "turn_on")
+    async_mock_service(hass, "persistent_notification", "dismiss")
+
+    assert await async_setup_component(hass, "template", {"template": [{"switch": [blk]}]})
+    await hass.async_block_till_done()
+
+    facade = next(e for e in hass.states.async_entity_ids("switch") if e.endswith("_facade"))
+    assert hass.states.get(facade).state == "unknown", "expected the untrusted scenario"
+
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": facade}, blocking=True
+    )
+    await hass.async_block_till_done()
+
+    assert len(driven) == 1, "the untrusted facade swallowed the actuation"
+    assert driven[0].data["entity_id"] == [f"input_boolean.{slug}_command"]
 
 
 def test_cloud_leg_cannot_move_the_facade(blocks: dict[str, dict[str, Any]]) -> None:
-    """The cloud leg has no effect whatsoever on what the facade reports.
-
-    Seeds the cloud entity at ``on`` and at ``off`` against a mirror reading the opposite
-    and asserts the reported state and availability are identical. This is the regression
-    guard for "the Netatmo leg is not a fallback for state".
-    """
+    """The cloud leg has no effect whatsoever on what the facade reports."""
     for slug, blk in blocks.items():
         cloud = cloud_entity_of(blk)
         for mirror in ("on", "off"):
-            row = Row(mirror, "on", "on", "", "", "probe")
-            base = trusted_states(slug, row)
-            results = set()
-            avail = set()
-            for cloud_value in ("on", "off", "unavailable"):
-                probe = dict(base) | {cloud: cloud_value}
-                results.add(eval_ha_template(blk["state"], probe))
-                avail.add(eval_ha_template(blk["availability"], probe))
+            base = trusted_states(slug, Row(mirror, "on", "on", "", "probe"))
+            results = {
+                eval_ha_template(blk["state"], dict(base) | {cloud: value})
+                for value in ("on", "off", "unavailable")
+            }
             assert results == {"True" if mirror == "on" else "False"}, f"{slug}/{mirror}"
-            assert avail == {"True"}, f"{slug}/{mirror}"
 
 
-def test_state_and_availability_never_read_last_changed(
-    blocks: dict[str, dict[str, Any]],
-) -> None:
-    """No ``last_changed`` anywhere: a stale leg keeps an old timestamp."""
+def test_no_sub_template_reads_last_changed(blocks: dict[str, dict[str, Any]]) -> None:
+    """No ``last_changed`` in any evaluated template, including message text.
+
+    A stale leg keeps an old timestamp, so ``last_changed`` is never a validity signal.
+    Message text is included because a broken template there fails silently at runtime.
+    """
     for slug, blk in blocks.items():
-        assert "last_changed" not in blk["state"], slug
-        assert "last_changed" not in blk["availability"], slug
+        for name, text in sub_templates_of(blk).items():
+            assert "last_changed" not in text, f"{slug} / {name}"
 
 
-def test_cloud_entity_confined_to_actuation_and_message(
-    blocks: dict[str, dict[str, Any]],
-) -> None:
-    """The cloud entity id appears only where Part 1 section 1.6 permits it.
+def test_every_sub_template_evaluates(blocks: dict[str, dict[str, Any]]) -> None:
+    """Every runtime template renders, including the notification messages.
 
-    Allowed: the target of the actuation write, and the notification message as diagnostic
-    context. Forbidden: ``state:``, ``availability:``, either wait, either notification
-    condition.
+    Substring checks alone would let a broken message template through; at runtime that raises
+    on a step with no ``continue_on_error``, converting the diagnostic into a silent failure.
+    """
+    for slug, blk in blocks.items():
+        states = trusted_states(slug, ROWS["R_mirror_on_trusted"])
+        for name, text in sub_templates_of(blk).items():
+            out = eval_ha_template(text, states)
+            assert out, f"{slug} / {name} rendered empty"
+
+
+def test_cloud_entity_confined_to_actuation(blocks: dict[str, dict[str, Any]]) -> None:
+    """The cloud entity id appears only as an actuation target.
+
+    It is no longer quoted in the notification message either: the fork writes state
+    optimistically and ignores the API's return value, so ``cloud=`` echoed our own command (or
+    a stale pre-command value) and could never tell the operator whether the write was accepted.
     """
     for slug, blk in blocks.items():
         cloud = cloud_entity_of(blk)
         assert cloud not in blk["state"], f"{slug}: cloud leaked into state"
-        assert cloud not in blk["availability"], f"{slug}: cloud leaked into availability"
         for direction in DIRECTIONS:
             assert cloud not in wait_of(blk, direction), f"{slug}/{direction} wait"
             assert cloud not in complain_of(blk, direction), f"{slug}/{direction} condition"
+            message = notification_of(blk, direction)["message"]
+            assert cloud not in message, f"{slug}/{direction} message quotes an inert leg"
 
 
 # ============================================================================
-# Actuation: unconditional, both channels (Part 1 sections 1.3, 1.6)
+# Actuation (plan #01 sections 1.3, 1.6; plan #02 B1)
 # ============================================================================
 
 
@@ -401,41 +565,81 @@ def test_cloud_entity_confined_to_actuation_and_message(
 def test_both_channels_driven_unconditionally(
     blocks: dict[str, dict[str, Any]], direction: str
 ) -> None:
-    """Both channels are driven every time, and nothing can suppress either write.
-
-    We cannot know in advance which channel will work, and *deciding* is exactly what
-    caused the incident. Both steps carry ``continue_on_error`` so a failure of one still
-    drives the other -- notably, an exception on the local boolean must not abort before
-    the cloud, which is the verified-working actuator.
-    """
+    """Both channels are driven every time, and nothing can suppress either write."""
     for slug, blk in blocks.items():
         steps = blk[direction]
-        assert len(steps) == 4, f"{slug} / {direction}: expected actuation head + diagnostic"
+        assert len(steps) == 2, f"{slug}/{direction}: expected boolean write + parallel"
 
-        assert steps[0].get("action") == f"input_boolean.{direction}", f"{slug}/{direction}"
-        assert steps[0]["target"]["entity_id"] == f"input_boolean.{slug}_command"
+        boolean_step = boolean_step_of(blk, direction)
+        assert boolean_step.get("action") == f"input_boolean.{direction}", f"{slug}/{direction}"
+        assert boolean_step["target"]["entity_id"] == f"input_boolean.{slug}_command"
 
-        assert steps[1].get("action") == f"switch.{direction}", f"{slug}/{direction}"
-        assert steps[1]["target"]["entity_id"] == cloud_entity_of(blk)
+        cloud_step = cloud_step_of(blk, direction)
+        assert cloud_step.get("action") == f"switch.{direction}", f"{slug}/{direction}"
+        assert cloud_step["target"]["entity_id"] == cloud_entity_of(blk)
 
-        for index in (0, 1):
-            assert steps[index].get("continue_on_error") is True, f"{slug}/{direction}/{index}"
-            # HA honours `enabled: false` on a script action, which would silently
-            # disable an actuation write while every other assertion still passed.
-            assert "enabled" not in steps[index], f"{slug}/{direction}: step {index} disabled"
+        for index, step in enumerate(actuation_steps_of(blk, direction)):
+            assert step.get("continue_on_error") is True, f"{slug}/{direction}/{index}"
+            # HA honours `enabled: false` on a script action, which would silently disable an
+            # actuation write while every other assertion still passed.
+            assert "enabled" not in step, f"{slug}/{direction}: actuation {index} disabled"
+            assert "variables" not in step, f"{slug}/{direction}: actuation {index} conditional"
+            assert "choose" not in step, f"{slug}/{direction}: actuation {index} branches"
 
-        assert steps[2]["timeout"] == "00:00:10", f"{slug}/{direction}"
-        assert steps[2]["continue_on_timeout"] is True, f"{slug}/{direction}"
+        # The cloud write is isolated so its exceptions cannot abort the diagnostic.
+        branches = steps[1]["parallel"]
+        assert len(branches) == 2, f"{slug}/{direction}"
+        assert len(branches[0]["sequence"]) == 1, f"{slug}/{direction}: cloud branch not isolated"
 
-        for index, step in enumerate(steps):
-            assert "variables" not in step, f"{slug}/{direction}: step {index} is conditional"
-            assert ("choose" in step) == (index == 3), (
-                f"{slug}/{direction}: step {index} must not branch"
-            )
+        wait_step = wait_step_of(blk, direction)
+        assert wait_step["timeout"] == "00:00:10", f"{slug}/{direction}"
+        assert wait_step["continue_on_timeout"] is True, f"{slug}/{direction}"
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+async def test_notification_fires_when_cloud_write_raises(
+    hass: HomeAssistant, blocks: dict[str, dict[str, Any]], direction: str
+) -> None:
+    """B1: a non-``HomeAssistantError`` from the cloud step must not suppress the diagnostic.
+
+    ``continue_on_error`` only swallows ``HomeAssistantError`` subclasses, but pyatmo raises
+    plain ``Exception`` subclasses on a 429/throttle or a dropped connection -- a documented
+    operating condition for this fork. Before the ``parallel:`` split that aborted the script
+    at the cloud step, so the single failure the diagnostic exists to report was the one that
+    silenced it.
+
+    Runs the real rendered sequence through HA's ``Script`` helper.
+    """
+    slug, blk = next(iter(blocks.items()))
+    mirror = f"input_boolean.{slug}_state"
+
+    # Mirror parked at the value that does NOT confirm this direction, so the wait must fail.
+    hass.states.async_set(mirror, "on" if direction == "turn_off" else "off")
+
+    async_mock_service(hass, "input_boolean", direction)
+    created = async_mock_service(hass, "persistent_notification", "create")
+    async_mock_service(hass, "persistent_notification", "dismiss")
+
+    async def _raise(call: Any) -> None:
+        raise _CloudApiError("429 throttled")
+
+    hass.services.async_register("switch", direction, _raise)
+
+    sequence = copy.deepcopy(blk[direction])
+    # Shorten the wait so the test is fast; the 10 s value is asserted structurally above.
+    diagnostic_of({direction: sequence}, direction)[0]["timeout"] = {"seconds": 0.05}
+
+    script = Script(hass, cv.SCRIPT_SCHEMA(sequence), f"{slug} {direction}", "template")
+    with pytest.raises(_CloudApiError):
+        await script.async_run(context=Context())
+    await hass.async_block_till_done()
+
+    assert len(created) == 1, "the cloud exception suppressed the diagnostic notification"
+    assert created[0].data["notification_id"] == f"{slug}_facade_{TARGET_OF[direction]}_unconfirmed"
 
 
 # ============================================================================
-# Diagnostics: positive confirmation on the mirror (Part 1 sections 1.3, 1.4)
+# Diagnostics (plan #01 sections 1.3, 1.4)
 # ============================================================================
 
 
@@ -443,20 +647,15 @@ def test_both_channels_driven_unconditionally(
 def test_wait_positively_confirms_the_target_value(
     blocks: dict[str, dict[str, Any]], direction: str
 ) -> None:
-    """Each wait confirms the target value itself, never the absence of its opposite.
-
-    ``not is_state(mirror,'on')`` is satisfied by an ``unavailable`` or ``unknown`` mirror,
-    which would let us silently conclude a turn-off succeeded. Confirm the target.
-    """
+    """Each wait confirms the target value itself, never the absence of its opposite."""
     target = TARGET_OF[direction]
     for slug, blk in blocks.items():
         wait = wait_of(blk, direction)
         assert f"'{target}'" in wait, f"{slug}/{direction} does not mention {target!r}"
         assert "not " not in wait, f"{slug}/{direction} is expressed as a negation: {wait}"
 
-        # An invalid mirror must NOT satisfy either direction's wait.
         for mirror in ("unknown", "unavailable"):
-            states = trusted_states(slug, Row(mirror, "on", "on", "", "", "probe"))
+            states = trusted_states(slug, Row(mirror, "on", "on", "", "probe"))
             assert eval_ha_template(wait, states) == "False", f"{slug}/{direction}/{mirror}"
 
 
@@ -466,9 +665,9 @@ def test_wait_and_complain_track_the_mirror_only(
 ) -> None:
     """The wait is satisfied exactly when the mirror reads the target value.
 
-    Deliberately **not** the old ``wait == not state`` identity. ``state:`` answers "is the
-    load on?" and consults ``hk_ok``; the wait answers "did the mirror confirm the target?"
-    and does not. The divergence is intentional -- do not "fix" it back.
+    Deliberately **not** the old ``wait == not state`` identity. ``state:`` answers "is the load
+    on?" and consults ``hk_ok``; the wait answers "did the mirror confirm the target?" and does
+    not. The divergence is intentional -- do not "fix" it back.
     """
     row = ROWS[row_name]
     for slug, blk in blocks.items():
@@ -477,7 +676,6 @@ def test_wait_and_complain_track_the_mirror_only(
             expected = "True" if row.mirror == TARGET_OF[direction] else "False"
             wait = eval_ha_template(wait_of(blk, direction), states)
             assert wait == expected, f"{slug}/{row_name}/{direction}"
-            # We complain exactly when the wait was not satisfied.
             complain = eval_ha_template(complain_of(blk, direction), states)
             assert complain == _negate(wait), f"{slug}/{row_name}/{direction} condition"
 
@@ -485,15 +683,9 @@ def test_wait_and_complain_track_the_mirror_only(
 def test_notifications_have_per_direction_id(
     parsed: dict[str, Any], blocks: dict[str, dict[str, Any]]
 ) -> None:
-    """Every facade notification carries a stable, per-direction ``notification_id``.
-
-    Without an id HA generates a fresh one per call, so repeated failures pile up
-    duplicates that cannot be replaced. Direction attribution is asserted through
-    ``notification_of``, because a flat walk cannot tell direction: ten *swapped* ids
-    would otherwise pass.
-    """
-    # "Mirror did not confirm" is absent from this list on purpose: under the mirror-only
-    # design the message legitimately says the mirror did not confirm.
+    """Every facade notification carries a stable, per-direction ``notification_id``."""
+    # "Mirror did not confirm" is absent on purpose: under the mirror-only design the message
+    # legitimately says the mirror did not confirm.
     stale_phrases = ("falling back", "HK turn")
     suffixes = {"turn_on": "_facade_on_unconfirmed", "turn_off": "_facade_off_unconfirmed"}
     valid_ids = {f"{slug}{suffix}" for slug in blocks for suffix in suffixes.values()}
@@ -511,10 +703,24 @@ def test_notifications_have_per_direction_id(
         for direction, suffix in suffixes.items():
             data = notification_of(blk, direction)
             assert data["notification_id"] == f"{slug}{suffix}", f"{slug}/{direction}"
-            # Both leg states are reported: the cheapest evidence that distinguishes a
-            # truthful mirror from one frozen at its old value.
             assert f"input_boolean.{slug}_state" in data["message"], f"{slug}/{direction}"
-            assert cloud_entity_of(blk) in data["message"], f"{slug}/{direction}"
+
+
+@pytest.mark.parametrize("direction", DIRECTIONS)
+def test_success_path_dismisses_the_notification(
+    blocks: dict[str, dict[str, Any]], direction: str
+) -> None:
+    """A confirmed command clears any stale notification for that direction.
+
+    Otherwise a transient failure leaves an alarm standing forever, even once the mirror has
+    confirmed -- the same "a stale signal carries no information" problem as the log line this
+    notification replaced.
+    """
+    suffix = TARGET_OF[direction]
+    for slug, blk in blocks.items():
+        step = dismiss_of(blk, direction)
+        assert step["action"] == "persistent_notification.dismiss", f"{slug}/{direction}"
+        assert step["data"]["notification_id"] == f"{slug}_facade_{suffix}_unconfirmed"
 
 
 def test_state_stub_raises_on_unknown_entity() -> None:

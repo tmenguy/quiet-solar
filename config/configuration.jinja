@@ -282,27 +282,39 @@ template:
 {#-                                                                                  -#}
 {#- We write input_boolean.<slug>_command and we write the Netatmo cloud switch, so   -#}
 {#- NEITHER can be evidence -- they only parrot back what we told them. The Netatmo   -#}
-{#- switch sets _attr_is_on optimistically and writes state immediately              -#}
-{#- (custom_components/netatmo/switch.py:77-90 -- a FORK, symlinked into              -#}
-{#- custom_components/, that shadows the core integration), and on 2026-07-27 it read -#}
-{#- 'off' all day while the boiler drew 2353 W. Reading it back after our own write   -#}
-{#- is guaranteed to return the target, so a wait that consults it is VACUOUSLY TRUE  -#}
-{#- and the notification branch unreachable.                                          -#}
+{#- switch writes its state optimistically, and it read 'off' all day on 2026-07-27   -#}
+{#- while the boiler drew 2353 W. Reading it back after our own write is guaranteed   -#}
+{#- to return the target, so a wait that consults it is VACUOUSLY TRUE and the        -#}
+{#- notification branch unreachable.                                                  -#}
 {#-                                                                                  -#}
 {#- input_boolean.<slug>_state (the mirror) is written only by Apple Home from        -#}
 {#- watching the real device, and follows a real change in 2-3 s. It is the only      -#}
-{#- honest witness, so it is the only leg used for state, availability and both       -#}
-{#- waits. Do NOT "restore symmetry" by re-adding the cloud term anywhere below: a    -#}
-{#- backup that lies is worse than no backup, because it sits at 'off' and reports it -#}
-{#- with full confidence. Going dark honestly is better.                              -#}
+{#- honest witness, so it is the only leg used for state and for both waits. Do NOT   -#}
+{#- "restore symmetry" by re-adding the cloud term anywhere below: a backup that lies -#}
+{#- is worse than no backup, because it sits at 'off' and reports it with full        -#}
+{#- confidence. Going dark honestly is better.                                        -#}
+{#-                                                                                  -#}
+{#- Three things below look like they could be tidied. None of them can:              -#}
+{#-  1. There is deliberately NO availability: key. A falsy availability makes HA     -#}
+{#-     filter the entity out of entity-service calls with only a warning, so every   -#}
+{#-     actuation would be SILENTLY SWALLOWED -- and both health sensors force        -#}
+{#-     themselves off for 120 s after an HA restart. Untrusted must stay AVAILABLE.  -#}
+{#-  2. The untrusted branch emits {{ none }}, not the string 'unknown'. cv.boolean   -#}
+{#-     is applied without none_on_unknown_unavailable, so a string logs an ERROR on  -#}
+{#-     every single evaluation.                                                       -#}
+{#-  3. The cloud write sits alone in a parallel: branch because pyatmo raises plain  -#}
+{#-     Exception subclasses, which continue_on_error does NOT swallow. Inline, a 429  -#}
+{#-     would abort the script before the diagnostic could fire.                       -#}
+{#-                                                                                  -#}
+{#- Full derivation and source citations: docs/stories/QS-305.story.md and its two    -#}
+{#- review fix plans. Do not re-derive from memory.                                    -#}
 {#- ================================================================================ -#}
 {%- for s in legrand_switches_to_map.switches %}
-{%- if s.cloud_entity is defined %}
 {##  --- Dual-channel actuation, mirror-only trust --- ##}
   - switch:
       - unique_id: {{ s.slug }}_facade
         default_entity_id: switch.{{ s.slug }}_facade
-        name: {{ s.name }}
+        name: {{ s.name | tojson }}
         state: >
           {{ "{% set hk_ok = is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') %}" }}
           {{ "{% set mirror = states('input_boolean." ~ s.slug ~ "_state') %}" }}
@@ -310,80 +322,68 @@ template:
           {{ "{% if mirror_valid %}" }}
             {{ "{{ mirror == 'on' }}" }}
           {{ "{% else %}" }}
-            unknown
+            {{ "{{ none }}" }}
           {{ "{% endif %}" }}
-        availability: >
-          {{ "{{ is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') and states('input_boolean." ~ s.slug ~ "_state') in ['on','off'] }}" }}
         turn_on:
           - action: input_boolean.turn_on
             target:
               entity_id: input_boolean.{{ s.slug }}_command
             continue_on_error: true
-          - action: switch.turn_on
-            target:
-              entity_id: {{ s.cloud_entity }}
-            continue_on_error: true
-          - wait_template: >-
-              {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
-            timeout: "00:00:10"
-            continue_on_timeout: true
-          - choose:
-              - conditions: >-
-                  {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
-                sequence:
-                  - action: persistent_notification.create
-                    data:
-                      title: "{{ s.name }} - turn_on not confirmed"
-                      message: >-
-                        {{ "{{ 'Both channels were driven but the mirror did not confirm on within 10 s. mirror=' ~ states('input_boolean." ~ s.slug ~ "_state') ~ ' cloud=' ~ states('" ~ s.cloud_entity ~ "') ~ ' at ' ~ now().isoformat() }}" }}
-                      notification_id: {{ s.slug }}_facade_on_unconfirmed
+          - parallel:
+              - sequence:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: {{ s.cloud_entity }}
+                    continue_on_error: true
+              - sequence:
+                  - wait_template: >-
+                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
+                    timeout: "00:00:10"
+                    continue_on_timeout: true
+                  - choose:
+                      - conditions: >-
+                          {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
+                        sequence:
+                          - action: persistent_notification.create
+                            data:
+                              title: {{ (s.name ~ " - turn_on not confirmed") | tojson }}
+                              message: >-
+                                {{ "{{ 'Both channels were driven but the mirror did not confirm on within 10 s. mirror=' ~ states('input_boolean." ~ s.slug ~ "_state') ~ ' at ' ~ now().isoformat() }}" }}
+                              notification_id: {{ s.slug }}_facade_on_unconfirmed
+                    default:
+                      - action: persistent_notification.dismiss
+                        data:
+                          notification_id: {{ s.slug }}_facade_on_unconfirmed
         turn_off:
           - action: input_boolean.turn_off
             target:
               entity_id: input_boolean.{{ s.slug }}_command
             continue_on_error: true
-          - action: switch.turn_off
-            target:
-              entity_id: {{ s.cloud_entity }}
-            continue_on_error: true
-          - wait_template: >-
-              {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
-            timeout: "00:00:10"
-            continue_on_timeout: true
-          - choose:
-              - conditions: >-
-                  {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
-                sequence:
-                  - action: persistent_notification.create
-                    data:
-                      title: "{{ s.name }} - turn_off not confirmed"
-                      message: >-
-                        {{ "{{ 'Both channels were driven but the mirror did not confirm off within 10 s. mirror=' ~ states('input_boolean." ~ s.slug ~ "_state') ~ ' cloud=' ~ states('" ~ s.cloud_entity ~ "') ~ ' at ' ~ now().isoformat() }}" }}
-                      notification_id: {{ s.slug }}_facade_off_unconfirmed
-{%- else %}
-{##  --- HK-only variant: no cloud fallback --- ##}
-  - switch:
-      - unique_id: {{ s.slug }}_facade
-        default_entity_id: switch.{{ s.slug }}_facade
-        name: {{ s.name }}
-        state: >
-          {{ "{% set hk_ok = is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') %}" }}
-          {{ "{% if hk_ok and states('input_boolean." ~ s.slug ~ "_state') in ['on','off'] %}" }}
-            {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
-          {{ "{% else %}" }}
-            unknown
-          {{ "{% endif %}" }}
-        availability: >
-          {{ "{{ is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') }}" }}
-        turn_on:
-          - action: input_boolean.turn_on
-            target:
-              entity_id: input_boolean.{{ s.slug }}_command
-        turn_off:
-          - action: input_boolean.turn_off
-            target:
-              entity_id: input_boolean.{{ s.slug }}_command
-{%- endif %}
+          - parallel:
+              - sequence:
+                  - action: switch.turn_off
+                    target:
+                      entity_id: {{ s.cloud_entity }}
+                    continue_on_error: true
+              - sequence:
+                  - wait_template: >-
+                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
+                    timeout: "00:00:10"
+                    continue_on_timeout: true
+                  - choose:
+                      - conditions: >-
+                          {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
+                        sequence:
+                          - action: persistent_notification.create
+                            data:
+                              title: {{ (s.name ~ " - turn_off not confirmed") | tojson }}
+                              message: >-
+                                {{ "{{ 'Both channels were driven but the mirror did not confirm off within 10 s. mirror=' ~ states('input_boolean." ~ s.slug ~ "_state') ~ ' at ' ~ now().isoformat() }}" }}
+                              notification_id: {{ s.slug }}_facade_off_unconfirmed
+                    default:
+                      - action: persistent_notification.dismiss
+                        data:
+                          notification_id: {{ s.slug }}_facade_off_unconfirmed
 {%- endfor %}
 {## --- END: generated Legrand façade switches --- ##}
   - binary_sensor:
