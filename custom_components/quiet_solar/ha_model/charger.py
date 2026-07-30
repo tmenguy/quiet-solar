@@ -1,6 +1,7 @@
 import bisect
 import copy
 import logging
+import math
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from datetime import time as dt_time
@@ -593,6 +594,27 @@ def _is_number(x: object) -> TypeGuard[float]:
     return isinstance(x, int | float) and not isinstance(x, bool)
 
 
+def _element_unchanged(prev: object, current: object, deadband: float) -> bool:
+    """Return True when one deadband-compared element is indistinguishable."""
+    if not _is_number(prev) or not _is_number(current):
+        # Fail open: anything non-numeric (including a test double) counts as
+        # changed, so we log rather than crash.
+        return False
+    if prev == current:
+        # Covers a stuck-at-inf sensor, where `inf - inf` would be NaN below.
+        return True
+    if math.isnan(prev) and math.isnan(current):
+        # `abs(NaN - NaN) < deadband` is False, so without this a persistently-NaN
+        # sensor would report "changed" every cycle and re-inflate the log to the
+        # full cycle rate — silently recreating the volume this throttle removes.
+        return True
+    if (prev > 0) != (current > 0):
+        # A sign flip is the operationally meaningful boundary (exporting vs
+        # importing), so it beats the deadband however small the absolute step.
+        return False
+    return abs(current - prev) < deadband
+
+
 def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool:
     """Return True when `current` is indistinguishable from `prev`."""
     if deadband is None:
@@ -602,7 +624,7 @@ def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool
     # than crash.
     if not isinstance(prev, tuple) or not isinstance(current, tuple) or len(prev) != len(current):
         return False
-    return all(_is_number(p) and _is_number(c) and abs(c - p) < deadband for p, c in zip(prev, current))
+    return all(_element_unchanged(p, c, deadband) for p, c in zip(prev, current, strict=True))
 
 
 class LogOnChangeMixin:
@@ -635,8 +657,14 @@ class LogOnChangeMixin:
         prev = state.get(key)
         if prev is not None:
             prev_value, prev_time = prev
-            if abs((time - prev_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S and _is_unchanged(
-                prev_value, value, deadband
+            # Mixing naive and aware datetimes under one key would raise TypeError on
+            # the subtraction. A logging helper must never be load-bearing, so bail to
+            # logging instead of propagating out of the caller's control cycle.
+            comparable = (prev_time.tzinfo is None) == (time.tzinfo is None)
+            if (
+                comparable
+                and abs((time - prev_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S
+                and _is_unchanged(prev_value, value, deadband)
             ):
                 return
         state[key] = (value, time)
@@ -3257,6 +3285,20 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._boot_constraints = self._constraints
         self._constraints = []
 
+    def _has_state_to_reset(self, keep_commands: bool) -> bool:
+        """Extend the base predicate with the user-initiated flags this class clears.
+
+        QS-306: the override below destroys `do_force_next_charge` /
+        `do_next_charge_time`, which are user-initiated actions — exactly the class
+        of line the log-volume work set out to PRESERVE at INFO. `getattr` for the
+        same `__init__`-ordering reason the base documents: `car` does not exist yet
+        when `AbstractDevice.__init__` first calls the reset.
+        """
+        car = getattr(self, "car", None)
+        return super()._has_state_to_reset(keep_commands) or (
+            car is not None and (bool(car.do_force_next_charge) or car.do_next_charge_time is not None)
+        )
+
     def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
         super().constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
         # reset the next charge force state
@@ -4014,6 +4056,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self.car = None
         self._power_steps = []
         self.car_attach_time = None
+        # QS-306: the log-on-change memos describe the car that just left. Keeping
+        # them would suppress the first line of the NEXT charge session whenever the
+        # new car reports the same value inside the 900 s window — and the last
+        # emitted record would name the wrong car.
+        self._log_on_change_state = None
 
     # update in place the power steps
     def update_power_steps(self):
@@ -4968,17 +5015,19 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             await self.charger_group.dyn_handle(time)
 
         # The key includes `is_target_percent`: the percent and energy callbacks are two
-        # delegating entry points, and one shared key would let them thrash. The literal
+        # delegating entry points, and one shared key would let them thrash. It also
+        # includes the car name as defence in depth — `detach_car()` clears the memo,
+        # but a future path could swap a car without routing through it. The literal
         # `%` must be `%%` or `record.getMessage()` raises ValueError.
         self.log_info_on_change(
-            f"update_value_callback_soc:{is_target_percent}",
+            f"update_value_callback_soc:{self.car.name}:{is_target_percent}",
             (
                 do_continue_constraint,
                 is_car_charged,
                 None if self.current_command is None else self.current_command.command,
             ),
             time,
-            "update_value_callback (is %%:%s):%s %s %s/%s (%s/%s) is_car_charged %s cmd %s",
+            "update_value_callback (is %%:%s):%s %s  %s/%s (%s/%s) is_car_charged %s cmd %s",
             is_target_percent,
             self.name,
             self.car.name,

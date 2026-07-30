@@ -23,8 +23,10 @@ when the heat pump alone can't meet the climate setpoint.
 translates climate setpoints into the heat pump's command vocabulary.
 
 **Log levels (QS-306).** The shared `home_model/load.py` reset path logs
-INFO only when it actually resets something. Piloting behavior is
-unchanged.
+INFO only when it actually resets something, via the overridable
+`_has_state_to_reset()` hook ([load-base.md](load-base.md)). A
+`PilotedDevice` subclass that clears extra state in its reset override
+should extend that hook. Piloting behavior is unchanged.
 
 ## When you need this concept
 

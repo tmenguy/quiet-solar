@@ -23,6 +23,14 @@ bad plan; a bug here trips a breaker.
 **Log levels (QS-306).** Per-cycle status lines from this file are now
 DEBUG, or emitted at INFO only when the reported value changes (or after
 900 s). Behavior is unchanged: only log levels and log frequency moved.
+The available-power line compares against a 100 W deadband, with three
+deliberate exceptions: a sign flip (export ↔ import) always logs, and a
+stuck-at-`NaN` or stuck-at-`inf` sensor counts as *unchanged* so a broken
+sensor cannot re-inflate the log to the full cycle rate. `detach_car()`
+clears the memos, so each charge session gets a fresh first line.
+`QSChargerGeneric` extends `_has_state_to_reset()` (see
+[load-base.md](load-base.md)) because its reset override destroys the
+user-initiated `do_force_next_charge` / `do_next_charge_time` flags.
 
 ## When you need this concept
 

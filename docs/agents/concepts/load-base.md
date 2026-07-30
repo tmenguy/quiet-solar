@@ -25,6 +25,15 @@ strict zero-HA-import boundary.**
 now logs INFO only when there was something to reset, and the
 "no bad constraint found" line is DEBUG. No behavior change.
 
+The "was there anything to reset?" test lives in the overridable
+`_has_state_to_reset(keep_commands)` hook. **Any subclass whose reset
+override clears extra state must extend it**, or that work is destroyed
+while the base reports "nothing to reset" at DEBUG. The base term covers
+`_constraints`, `_last_completed_constraint`, and — when
+`keep_commands=False` — `current_command` or an in-flight
+`running_command`. Every access uses `getattr` with a default: the hook
+runs during `AbstractDevice.__init__`, before those attributes exist.
+
 ## When you need this concept
 
 - Adding a new device type — you'll extend `AbstractLoad` (or, rarely,

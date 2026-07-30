@@ -22,7 +22,10 @@ override = "user told *us* to do this differently"; external = "user
 is driving the device themselves".
 
 **Log levels (QS-306).** Override handling is unchanged; only the no-op
-constraint-reset lines in `home_model/load.py` moved to DEBUG.
+constraint-reset lines in `home_model/load.py` moved to DEBUG. A reset that
+destroys a user-initiated flag still logs INFO — that is what the
+`_has_state_to_reset()` hook ([load-base.md](load-base.md)) exists to
+guarantee for subclasses such as `QSChargerGeneric`.
 
 ## When you need this concept
 

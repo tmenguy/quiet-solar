@@ -322,18 +322,33 @@ class AbstractDevice:
         if self.father_device is not None:
             return self.father_device.update_available_amps_for_group(idx, amps, add)
 
-    def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
-        # QS-306: log INFO only when there was actually something to reset. The three
-        # `getattr` defaults are all required: `AbstractDevice.__init__` calls this
-        # method (load.py:155) BEFORE `_constraints` / `current_command` exist, and
-        # `AbstractLoad` assigns `_last_completed_constraint` only after its own
-        # `super().__init__()` returns. `AbstractLoad`'s override calls `super()`
-        # first, so this predicate still observes the pre-clear values.
+    def _has_state_to_reset(self, keep_commands: bool) -> bool:
+        """Return True when this reset will actually destroy something.
+
+        QS-306: the reset logs INFO only when it did work. Subclasses that clear
+        EXTRA state in their override must extend this predicate, otherwise their
+        work is destroyed while the base reports "nothing to reset" at DEBUG.
+
+        Every `getattr` default is required: `AbstractDevice.__init__` calls
+        `constraint_reset_and_reset_commands_if_needed` (see the call in
+        `__init__`) BEFORE `_constraints` / `current_command` exist, and
+        `AbstractLoad` assigns `_last_completed_constraint` only after its own
+        `super().__init__()` returns. Overrides must follow the same rule.
+        """
         had_constraints = bool(getattr(self, "_constraints", None)) or (
             getattr(self, "_last_completed_constraint", None) is not None
         )
-        had_commands = not keep_commands and getattr(self, "current_command", None) is not None
-        if had_constraints or had_commands:
+        # `keep_commands=False` also drops `running_command` — an in-flight command
+        # awaiting verification — so both are loggable work.
+        had_commands = not keep_commands and (
+            getattr(self, "current_command", None) is not None or getattr(self, "running_command", None) is not None
+        )
+        return had_constraints or had_commands
+
+    def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
+        # `AbstractLoad`'s override calls `super()` first, so the predicate still
+        # observes the pre-clear values.
+        if self._has_state_to_reset(keep_commands):
             _LOGGER.info("Constraint Reset device %s", self.name)
         else:
             _LOGGER.debug("Constraint Reset device %s, nothing to reset", self.name)

@@ -21,7 +21,9 @@ human. The detection logic lives in `home_model/load.py`
 `HADeviceMixin.update_states()` in `ha_model/device.py`.
 
 **Log levels (QS-306).** No-op announcements in `home_model/load.py` are now
-DEBUG. Detection behavior is unchanged.
+DEBUG. Detection behavior is unchanged. The constraint-reset line logs INFO
+via the `_has_state_to_reset()` hook described in
+[load-base.md](load-base.md).
 
 ## When you need this concept
 
