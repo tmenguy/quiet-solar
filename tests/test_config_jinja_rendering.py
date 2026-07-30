@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -127,14 +128,50 @@ ROWS: dict[str, Row] = {
 # ============================================================================
 
 
+def _environment(loader: jinja2.BaseLoader) -> jinja2.Environment:
+    """Build the generator-layer environment with the one global the template needs.
+
+    ``StrictUndefined`` is a **test-harness** choice, not a production guarantee: this repo
+    has no renderer, and HA's own Jinja runs with ``strict=None``. It is used here so a typo
+    in the inventory fails loudly in tests rather than rendering an empty string.
+    """
+    env = jinja2.Environment(loader=loader, undefined=jinja2.StrictUndefined)
+    env.globals["integration_entities"] = lambda domain: FIXTURE_NETATMO_ENTITIES
+    return env
+
+
 def render_config() -> str:
     """Render ``config/configuration.jinja`` with the generator-layer globals stubbed."""
-    env = jinja2.Environment(
-        loader=jinja2.FileSystemLoader(CONFIG_DIR),
-        undefined=jinja2.StrictUndefined,
+    return _environment(jinja2.FileSystemLoader(CONFIG_DIR)).get_template(
+        "configuration.jinja"
+    ).render()
+
+
+# The marker that closes the hand-edited device inventory.
+_INVENTORY_END = "{## --- END EDIT --- ##}"
+
+
+def render_config_with_extra_device(slug: str, name: str, cloud_entity: str | None) -> str:
+    """Render the real template with one extra device appended to the inventory.
+
+    The inventory is hardcoded in the template rather than injected, so exercising a
+    HomeKit-only device (no ``cloud_entity``) or an awkward ``name`` means adding an entry.
+    Done by source injection at the inventory's own end marker, so the block under test is
+    the real one -- no forked copy of the facade definition to drift.
+    """
+    source = (CONFIG_DIR / "configuration.jinja").read_text()
+    assert source.count(_INVENTORY_END) == 1, "inventory end marker moved"
+    entry = {"slug": slug, "name": name}
+    if cloud_entity is not None:
+        entry["cloud_entity"] = cloud_entity
+    injected = (
+        "{%- set legrand_switches_to_map.switches = "
+        f"legrand_switches_to_map.switches + [{entry!r}] %}}\n" + _INVENTORY_END
     )
-    env.globals["integration_entities"] = lambda domain: FIXTURE_NETATMO_ENTITIES
-    return env.get_template("configuration.jinja").render()
+    patched = source.replace(_INVENTORY_END, injected)
+    return _environment(jinja2.DictLoader({"configuration.jinja": patched})).get_template(
+        "configuration.jinja"
+    ).render()
 
 
 # ============================================================================
@@ -173,15 +210,19 @@ def facade_blocks(parsed: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 # --- step accessors -------------------------------------------------------------------
 #
-# Post-B1 shape per direction:
-#   [0] input_boolean.turn_<dir>            (continue_on_error)
+# Shape per direction, identical for both variants:
+#   [0] input_boolean.turn_<dir>              (continue_on_error)
 #   [1] parallel:
-#         [0] sequence: [ switch.turn_<dir> (continue_on_error) ]
-#         [1] sequence: [ wait_template, choose(+default) ]
+#         [0] sequence: [ switch.turn_<dir> ] -- ONLY when `cloud_entity` is defined
+#         [-1] sequence: [ wait_template, choose(+default) ]
 #
-# The cloud write is isolated in its own parallel branch so a plain-Exception failure cannot
-# abort the diagnostic branch: `_async_step_parallel` gathers with `return_exceptions=True`
-# and re-raises only after every branch has completed.
+# The diagnostic is always the LAST parallel branch, so every accessor below is uniform
+# across a cloud-backed and a HomeKit-only device. `cloud_entity` is optional: a device
+# without one gets the same facade with no cloud branch emitted.
+#
+# The cloud write is isolated in its own branch so a plain-Exception failure cannot abort
+# the diagnostic: `_async_step_parallel` gathers with `return_exceptions=True` and re-raises
+# only after every branch has completed.
 
 
 def boolean_step_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
@@ -189,19 +230,38 @@ def boolean_step_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
     return blk[direction][0]
 
 
+def parallel_of(blk: dict[str, Any], direction: str) -> list[dict[str, Any]]:
+    """Return the parallel branches of a direction script."""
+    return blk[direction][1]["parallel"]
+
+
+def has_cloud(blk: dict[str, Any]) -> bool:
+    """Whether this facade drives a Netatmo cloud channel."""
+    counts = {len(parallel_of(blk, d)) for d in DIRECTIONS}
+    assert counts in ({1}, {2}), f"inconsistent branch counts across directions: {counts}"
+    return counts == {2}
+
+
 def cloud_step_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
     """Return the Netatmo cloud actuation step, inside its own parallel branch."""
-    return blk[direction][1]["parallel"][0]["sequence"][0]
+    assert has_cloud(blk), "this facade has no cloud channel"
+    return parallel_of(blk, direction)[0]["sequence"][0]
 
 
 def diagnostic_of(blk: dict[str, Any], direction: str) -> list[dict[str, Any]]:
-    """Return the diagnostic branch's sequence: ``[wait_template, choose]``."""
-    return blk[direction][1]["parallel"][1]["sequence"]
+    """Return the diagnostic branch's sequence: ``[wait_template, choose]``.
+
+    Always the last parallel branch, so this is variant-independent.
+    """
+    return parallel_of(blk, direction)[-1]["sequence"]
 
 
 def actuation_steps_of(blk: dict[str, Any], direction: str) -> list[dict[str, Any]]:
-    """Return both actuation writes."""
-    return [boolean_step_of(blk, direction), cloud_step_of(blk, direction)]
+    """Return every actuation write: the boolean, plus the cloud when there is one."""
+    steps = [boolean_step_of(blk, direction)]
+    if has_cloud(blk):
+        steps.append(cloud_step_of(blk, direction))
+    return steps
 
 
 def cloud_entity_of(blk: dict[str, Any]) -> str:
@@ -236,9 +296,16 @@ def notification_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
     return choose_of(blk, direction)["choose"][0]["sequence"][0]["data"]
 
 
-def dismiss_of(blk: dict[str, Any], direction: str) -> dict[str, Any]:
-    """Return the success-path ``persistent_notification.dismiss`` step."""
-    return choose_of(blk, direction)["default"][0]
+def dismiss_ids_of(blk: dict[str, Any], direction: str) -> set[str]:
+    """Return the notification ids the success path dismisses.
+
+    Both directions are dismissed on either success path: a ``turn_off`` that timed out would
+    otherwise leave its alarm standing through every later successful ``turn_on`` -- for hours
+    on a solar-scheduled load -- showing a stale alarm for a device that just confirmed.
+    """
+    steps = choose_of(blk, direction)["default"]
+    assert all(s["action"] == "persistent_notification.dismiss" for s in steps), steps
+    return {s["data"]["notification_id"] for s in steps}
 
 
 def all_notification_data(parsed: dict[str, Any]) -> list[dict[str, Any]]:
@@ -432,37 +499,25 @@ async def test_untrusted_state_parses_to_none_without_error(
 
     Asserted through Home Assistant's own ``Template`` and the template platform's validator
     rather than the layer-3 stub, because this is the single most likely thing to be silently
-    wrong: a string here would still *look* like ``unknown`` in the UI while logging an error
-    on every state evaluation.
+    wrong. The companion *no-ERROR-logged* assertion lives in
+    ``test_actuation_reaches_the_entity_while_untrusted``, which stands up the real platform --
+    the validator is never invoked by rendering a ``Template`` directly, so asserting it here
+    would be decorative.
     """
-    records: list[logging.LogRecord] = []
+    for slug, blk in blocks.items():
+        # Untrusted: HomeKit link down.
+        hass.states.async_set(LINK_SENSOR, "off")
+        hass.states.async_set(HUB_SENSOR, "on")
+        hass.states.async_set(f"input_boolean.{slug}_state", "on")
+        result = Template(blk["state"], hass).async_render(parse_result=True)
+        assert result is None, f"{slug} rendered {result!r} instead of None"
+        # This is the check the template platform actually applies to `state:`.
+        assert template_validators.check_result_for_none(result) is True, slug
 
-    class _Capture(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            records.append(record)
-
-    handler = _Capture(level=logging.ERROR)
-    validators_logger = logging.getLogger(template_validators.__name__)
-    validators_logger.addHandler(handler)
-    try:
-        for slug, blk in blocks.items():
-            # Untrusted: HomeKit link down.
-            hass.states.async_set(LINK_SENSOR, "off")
-            hass.states.async_set(HUB_SENSOR, "on")
-            hass.states.async_set(f"input_boolean.{slug}_state", "on")
-            result = Template(blk["state"], hass).async_render(parse_result=True)
-            assert result is None, f"{slug} rendered {result!r} instead of None"
-            # This is the check the template platform actually applies to `state:`.
-            assert template_validators.check_result_for_none(result) is True, slug
-
-            # Trusted: the same template must still yield a real boolean.
-            hass.states.async_set(LINK_SENSOR, "on")
-            trusted = Template(blk["state"], hass).async_render(parse_result=True)
-            assert trusted is True, f"{slug} rendered {trusted!r} instead of True"
-    finally:
-        validators_logger.removeHandler(handler)
-
-    assert not records, f"validator logged errors: {[r.getMessage() for r in records]}"
+        # Trusted: the same template must still yield a real boolean.
+        hass.states.async_set(LINK_SENSOR, "on")
+        trusted = Template(blk["state"], hass).async_render(parse_result=True)
+        assert trusted is True, f"{slug} rendered {trusted!r} instead of True"
 
 
 async def test_actuation_reaches_the_entity_while_untrusted(
@@ -487,7 +542,24 @@ async def test_actuation_reaches_the_entity_while_untrusted(
     driven = async_mock_service(hass, "input_boolean", "turn_on")
     async_mock_service(hass, "persistent_notification", "dismiss")
 
-    assert await async_setup_component(hass, "template", {"template": [{"switch": [blk]}]})
+    # C1: the real platform DOES invoke `template_validators.boolean` on `state:`, so this is
+    # where a no-ERROR assertion is load-bearing. Under a string-`unknown` mutation the
+    # platform logs "Received invalid switch state: unknown"; under `{{ none }}` it is silent.
+    errors: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            errors.append(record)
+
+    handler = _Capture(level=logging.ERROR)
+    validators_logger = logging.getLogger(template_validators.__name__)
+    validators_logger.addHandler(handler)
+
+    # `async_setup_component` runs config validation, which mutates mappings in place
+    # (template strings -> Template objects). `blocks` is module-scoped, so pass a copy or
+    # later tests in this module see a contaminated fixture.
+    config = {"template": [{"switch": [copy.deepcopy(blk)]}]}
+    assert await async_setup_component(hass, "template", config)
     await hass.async_block_till_done()
 
     facade = next(e for e in hass.states.async_entity_ids("switch") if e.endswith("_facade"))
@@ -498,8 +570,11 @@ async def test_actuation_reaches_the_entity_while_untrusted(
     )
     await hass.async_block_till_done()
 
+    validators_logger.removeHandler(handler)
+
     assert len(driven) == 1, "the untrusted facade swallowed the actuation"
     assert driven[0].data["entity_id"] == [f"input_boolean.{slug}_command"]
+    assert not errors, f"the platform rejected the state template: {[r.getMessage() for r in errors]}"
 
 
 def test_cloud_leg_cannot_move_the_facade(blocks: dict[str, dict[str, Any]]) -> None:
@@ -652,7 +727,9 @@ def test_wait_positively_confirms_the_target_value(
     for slug, blk in blocks.items():
         wait = wait_of(blk, direction)
         assert f"'{target}'" in wait, f"{slug}/{direction} does not mention {target!r}"
-        assert "not " not in wait, f"{slug}/{direction} is expressed as a negation: {wait}"
+        assert not re.search(r"\bnot\s+is_state", wait), (
+            f"{slug}/{direction} is expressed as a negation: {wait}"
+        )
 
         for mirror in ("unknown", "unavailable"):
             states = trusted_states(slug, Row(mirror, "on", "on", "", "probe"))
@@ -716,11 +793,158 @@ def test_success_path_dismisses_the_notification(
     confirmed -- the same "a stale signal carries no information" problem as the log line this
     notification replaced.
     """
-    suffix = TARGET_OF[direction]
     for slug, blk in blocks.items():
-        step = dismiss_of(blk, direction)
-        assert step["action"] == "persistent_notification.dismiss", f"{slug}/{direction}"
-        assert step["data"]["notification_id"] == f"{slug}_facade_{suffix}_unconfirmed"
+        assert dismiss_ids_of(blk, direction) == {
+            f"{slug}_facade_on_unconfirmed",
+            f"{slug}_facade_off_unconfirmed",
+        }, f"{slug}/{direction} must clear the other direction's stale alarm too"
+
+
+# ============================================================================
+# `cloud_entity` is optional (plan #03 section A2)
+# ============================================================================
+
+
+def test_homekit_only_device_gets_the_full_facade() -> None:
+    """A device without ``cloud_entity`` gets the same facade, minus the cloud channel.
+
+    Previously this was a duplicated ``{% else %}`` block with no wait, no notification and
+    no dismiss, plus an ``availability:`` key that could take the entity offline -- which is
+    why a mutation making it report a confident ``off`` passed the whole suite. There is now
+    one code path, so a HomeKit-only device inherits every guarantee automatically.
+    """
+    parsed = parse_config(render_config_with_extra_device("lhk_hk_only", "hk only", None))
+    blocks = facade_blocks(parsed)
+    assert "lhk_hk_only" in blocks, "the HomeKit-only device produced no facade"
+    blk = blocks["lhk_hk_only"]
+
+    assert not has_cloud(blk)
+    assert "availability" not in blk
+    assert eval_ha_template(
+        blk["state"], trusted_states("lhk_hk_only", ROWS["R_mirror_on_trusted"])
+    ) == "True"
+
+    for direction in DIRECTIONS:
+        assert len(blk[direction]) == 2, direction
+        assert len(parallel_of(blk, direction)) == 1, "a cloud branch was emitted anyway"
+        assert boolean_step_of(blk, direction)["action"] == f"input_boolean.{direction}"
+        # The full diagnostic apparatus must still be present.
+        assert wait_step_of(blk, direction)["timeout"] == "00:00:10"
+        assert wait_step_of(blk, direction)["continue_on_timeout"] is True
+        assert complain_of(blk, direction)
+        assert notification_of(blk, direction)["notification_id"] == (
+            f"lhk_hk_only_facade_{TARGET_OF[direction]}_unconfirmed"
+        )
+        assert dismiss_ids_of(blk, direction) == {
+            "lhk_hk_only_facade_on_unconfirmed",
+            "lhk_hk_only_facade_off_unconfirmed",
+        }
+
+
+def test_homekit_only_device_emits_no_empty_entity_id() -> None:
+    """No ``entity_id`` may render empty, ``null`` or ``'none'``.
+
+    Under HA's own Jinja (``strict=None``, unlike this harness) an undefined ``cloud_entity``
+    would render as an empty string, become ``entity_id: null``, and be coerced by
+    ``cv.SCRIPT_SCHEMA`` to the string ``'none'`` -- which is ``ENTITY_MATCH_NONE``, so the
+    call selects nothing **and logs nothing**. The cloud channel would vanish in silence.
+    """
+    rendered = render_config_with_extra_device("lhk_hk_only", "hk only", None)
+    lines = rendered.splitlines()
+    offenders = []
+    for index, line in enumerate(lines):
+        match = re.match(r"^(\s*)entity_id:\s*(.*)$", line)
+        if not match:
+            continue
+        indent, value = match.group(1), match.group(2).strip()
+        if value in ("null", "none", "'none'", '"none"', "~"):
+            offenders.append(line.strip())
+        elif not value:
+            # A bare `entity_id:` is legitimate when a block list follows (several triggers do
+            # this); it is an offender only when nothing does. A block sequence may be indented
+            # at or beyond its key's column, so accept either.
+            following = next((v for v in lines[index + 1 :] if v.strip()), "")
+            is_list = following.lstrip().startswith("- ") and (
+                len(following) - len(following.lstrip()) >= len(indent)
+            )
+            if not is_list:
+                offenders.append(f"{line.strip()} (no value, no list)")
+    assert not offenders, offenders
+
+    # Belt and braces: the parsed form must not contain such a target either.
+    for slug, blk in facade_blocks(parse_config(rendered)).items():
+        for direction in DIRECTIONS:
+            for step in actuation_steps_of(blk, direction):
+                target = step["target"]["entity_id"]
+                assert target and target not in ("none", "null"), f"{slug}/{direction}"
+
+
+def test_homekit_only_notification_does_not_claim_two_channels() -> None:
+    """The message must not say both channels were driven when there is only one.
+
+    The wording is now reachable with an undriven cloud in three separate cases: the cloud
+    write raised (which the ``parallel:`` split made reportable), the ``cloud=`` field was
+    removed so the operator cannot tell which case they are in, and a HomeKit-only device has
+    no second channel at all.
+    """
+    hk_only = facade_blocks(
+        parse_config(render_config_with_extra_device("lhk_hk_only", "hk only", None))
+    )["lhk_hk_only"]
+    for direction in DIRECTIONS:
+        message = notification_of(hk_only, direction)["message"]
+        assert "no cloud channel" in message, message
+        assert "Netatmo" not in message, message
+        assert "Both channels" not in message, message
+
+
+def test_cloud_backed_notification_names_both_channels(
+    blocks: dict[str, dict[str, Any]],
+) -> None:
+    """A cloud-backed device's message says which channels were commanded."""
+    for slug, blk in blocks.items():
+        for direction in DIRECTIONS:
+            message = notification_of(blk, direction)["message"]
+            assert "Netatmo cloud" in message, f"{slug}/{direction}"
+            assert "no cloud channel" not in message, f"{slug}/{direction}"
+            assert "Both channels" not in message, f"{slug}/{direction}"
+
+
+# ============================================================================
+# Name escaping (plan #03 B1)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "hostile_name",
+    [
+        'po"ol: pump',  # double quote inside a quoted scalar, plus a colon
+        "pump: {weird}",  # leading brace after a colon
+        "a'b",  # single quote
+        "*anchor & alias",  # YAML indicators
+        "trailing backslash \\",
+    ],
+)
+def test_hostile_device_name_still_renders_valid_yaml(hostile_name: str) -> None:
+    """Every ``s.name`` interpolation is escaped, so no name can break the render.
+
+    There are seven interpolation sites: the two ``input_boolean`` helper names, the facade
+    ``name:``, the two notification titles, and the two HomeKit ``entity_config`` names. A
+    malformed render fails the load of **all** of HA's startup, not just the facade -- so a
+    single unescaped site is a whole-instance outage triggered by a rename.
+    """
+    rendered = render_config_with_extra_device("lhk_hostile", hostile_name, "switch.hostile")
+    parsed = parse_config(rendered)  # must not raise
+    assert "lhk_hostile" in facade_blocks(parsed)
+    assert parsed["input_boolean"]["lhk_hostile_state"]["name"] == (
+        f"{hostile_name} - HK Mirror (read)"
+    )
+    assert parsed["input_boolean"]["lhk_hostile_command"]["name"] == (
+        f"{hostile_name} - HK Command (write)"
+    )
+    entity_config = parsed["homekit"][0]["entity_config"]
+    assert entity_config["input_boolean.lhk_hostile_state"]["name"] == f"LHK {hostile_name} Mirror"
+    assert entity_config["input_boolean.lhk_hostile_command"]["name"] == f"LHK {hostile_name} Cmd"
+    assert facade_blocks(parsed)["lhk_hostile"]["name"] == hostile_name
 
 
 def test_state_stub_raises_on_unknown_entity() -> None:
