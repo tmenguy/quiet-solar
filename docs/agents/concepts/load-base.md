@@ -30,9 +30,15 @@ The "was there anything to reset?" test lives in the overridable
 override clears extra state must extend it**, or that work is destroyed
 while the base reports "nothing to reset" at DEBUG. The base term covers
 `_constraints`, `_last_completed_constraint`, and — when
-`keep_commands=False` — `current_command` or an in-flight
-`running_command`. Every access uses `getattr` with a default: the hook
-runs during `AbstractDevice.__init__`, before those attributes exist.
+`keep_commands=False` — `current_command`, an in-flight `running_command`, or
+a queued `_stacked_command`. Every access uses `getattr` with a default: the
+hook runs during `AbstractDevice.__init__`, before those attributes exist.
+
+`QSChargerGeneric` is the worked example: its override clears the
+user-initiated `do_force_next_charge` / `do_next_charge_time`, so it ORs them
+into the hook. Without that, a user pressing "force next charge" on a charger
+holding no constraints would have the flag destroyed while the log said
+"nothing to reset".
 
 ## When you need this concept
 

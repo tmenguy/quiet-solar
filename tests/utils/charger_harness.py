@@ -1,15 +1,19 @@
 """Shared charger-test harness: real `QSChargerGeneric` / `QSCar` / `QSChargerGroup`.
 
-Promoted from the module-level helpers in `tests/test_charger_coverage_deep.py`
-(QS-306) so more than one test module can drive a real charger. Only Home
-Assistant I/O (sensor state reads, service calls, the dynamic group) is mocked;
-the charger, car and charger group are real objects.
+Copied from the module-level helpers in `tests/test_charger_coverage_deep.py`, which
+intentionally retains its own copies (QS-306 Task 9) — this is NOT a single source of
+truth. Roughly nine test modules define their own `make_hass` / `make_home` /
+`create_charger`; consolidating them is out of scope here.
+
+Only Home Assistant I/O (sensor state reads, service calls, the dynamic group) is
+mocked; the charger, car and charger group are real objects.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytz
 
@@ -38,18 +42,27 @@ from custom_components.quiet_solar.ha_model.charger import (
 )
 
 
-def make_hass() -> MagicMock:
-    """Minimal hass mock: only for HA-level I/O (states, services, bus)."""
+def make_hass(config_dir: str | None = None) -> MagicMock:
+    """Minimal hass mock: only for HA-level I/O (states, services, bus).
+
+    `config_dir` defaults to a UNIQUE path per call rather than a fixed shared one,
+    which would be collision-prone under parallel test runs (xdist). Pass pytest's
+    `tmp_path` when a test needs a directory that actually exists. Nothing in
+    `custom_components/quiet_solar/` reads `config_dir` today, so this is hygiene
+    against a future reader copying a shared path.
+    """
     hass = MagicMock()
     hass.states = MagicMock()
     hass.states.get = MagicMock(return_value=None)
     hass.services = MagicMock()
     hass.services.async_call = AsyncMock()
     hass.config = MagicMock()
-    hass.config.config_dir = "/tmp/test"
+    hass.config.config_dir = config_dir if config_dir is not None else f"/tmp/qs-test-{uuid4().hex}"
     hass.bus = MagicMock()
     hass.bus.async_listen = MagicMock(return_value=lambda: None)
-    hass.async_add_executor_job = AsyncMock(side_effect=lambda f, *a: f(*a))
+    # `**kw` matters: `async_add_executor_job` is routinely called with keyword
+    # arguments, and dropping them would raise TypeError instead of running the job.
+    hass.async_add_executor_job = AsyncMock(side_effect=lambda f, *a, **kw: f(*a, **kw))
     return hass
 
 

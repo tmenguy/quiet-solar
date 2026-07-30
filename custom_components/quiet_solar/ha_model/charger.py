@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from enum import StrEnum
-from typing import Any, TypeGuard
+from typing import Any, TypeIs
 
 import pytz
 from haversine import Unit, haversine
@@ -589,8 +589,12 @@ class QSChargerStatus:
         return possible_num_phases, consign_amp
 
 
-def _is_number(x: object) -> TypeGuard[float]:
-    """Return True for a real number. `bool` is excluded: it passes isinstance(int)."""
+def _is_number(x: object) -> TypeIs[int | float]:
+    """Return True for a real number. `bool` is excluded: it passes isinstance(int).
+
+    `TypeIs` rather than `TypeGuard[float]`: an `int` input stays an `int` at runtime,
+    and `_element_unchanged` relies on this narrowing for its arithmetic.
+    """
     return isinstance(x, int | float) and not isinstance(x, bool)
 
 
@@ -608,9 +612,15 @@ def _element_unchanged(prev: object, current: object, deadband: float) -> bool:
         # sensor would report "changed" every cycle and re-inflate the log to the
         # full cycle rate — silently recreating the volume this throttle removes.
         return True
-    if (prev > 0) != (current > 0):
+    if (prev > 0) != (current > 0) and max(abs(prev), abs(current)) >= deadband:
         # A sign flip is the operationally meaningful boundary (exporting vs
-        # importing), so it beats the deadband however small the absolute step.
+        # importing), so it beats the deadband — but ONLY above a magnitude floor.
+        # An unbounded flip term makes near-zero dither (+20W / -20W on alternating
+        # cycles, the steady state of a well-regulated home) log every cycle, which
+        # is the same full-cycle-rate re-inflation the NaN guard above prevents.
+        # A real export/import transition necessarily clears the floor on one side.
+        # The floor also makes the `> 0` test's asymmetry about zero unreachable for
+        # small values, so 0 -> +50 and 0 -> -50 behave identically.
         return False
     return abs(current - prev) < deadband
 
@@ -628,7 +638,14 @@ def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool
 
 
 class LogOnChangeMixin:
-    """Emit INFO only when a reported value changes, or after 900 s (QS-306)."""
+    """Emit INFO only when a reported value changes, or after 900 s (QS-306).
+
+    NOTE: this deliberately closes over THIS module's `_LOGGER`, so every host emits
+    on the `ha_model.charger` logger. Both current hosts live here, and the tests pin
+    that logger name on purpose (a move would change the operator's `logger:` config).
+    A future non-charger host — the `home_model/load.py` sites are the candidates —
+    must take the logger as a class attribute rather than inherit this one.
+    """
 
     # Annotation WITH an immutable default. Never give this a `{}` default: a mutable
     # class attribute is shared across instances, and the per-charger sites use keys
@@ -710,6 +727,11 @@ class QSChargerGroup(LogOnChangeMixin):
         actionable_chargers = []
         for charger in self._chargers:
             if charger.qs_enable_device is False:
+                # QS-306: evict rather than leave a stale entry, so the first status
+                # line after a re-enable inside the 900 s window is not suppressed —
+                # the log needs a marker that the charger is back under management.
+                if self._log_on_change_state is not None:
+                    self._log_on_change_state.pop(f"ensure_correct_state:{charger.name}", None)
                 continue
 
             res, handled_static, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
@@ -5019,12 +5041,23 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # includes the car name as defence in depth — `detach_car()` clears the memo,
         # but a future path could swap a car without routing through it. The literal
         # `%` must be `%%` or `record.getMessage()` raises ValueError.
+        # The memo covers everything the message PRINTS, so no printed field can go
+        # stale for up to 900 s — including `power_consign`, which `LoadCommand.__eq__`
+        # compares but the command NAME alone hides. The continuous values are
+        # quantised to whole units: these are SoC percentages and Wh figures where
+        # sub-unit jitter carries no operator value, and memoizing them raw would make
+        # the site log every cycle.
         self.log_info_on_change(
             f"update_value_callback_soc:{self.car.name}:{is_target_percent}",
             (
                 do_continue_constraint,
                 is_car_charged,
-                None if self.current_command is None else self.current_command.command,
+                None
+                if self.current_command is None
+                else (self.current_command.command, self.current_command.power_consign),
+                None if result is None else round(result),
+                None if sensor_result is None else round(sensor_result),
+                None if result_calculus is None else round(result_calculus),
             ),
             time,
             "update_value_callback (is %%:%s):%s %s  %s/%s (%s/%s) is_car_charged %s cmd %s",

@@ -119,10 +119,23 @@ _B3_CASES = [
     # A stuck-at-inf sensor is the same failure mode (`inf - inf` is NaN).
     ("deadband_inf_to_inf_silent", lambda: ((math.inf, 500.0, 0.0), (math.inf, 500.0, 0.0)), 7, _DB, False),
     ("deadband_inf_to_finite_logs", lambda: ((math.inf, 500.0, 0.0), (1000.0, 500.0, 0.0)), 7, _DB, True),
-    # NH4: a sign flip is the operationally meaningful boundary (export vs import),
-    # so it beats the deadband even when the absolute step is tiny.
-    ("deadband_sub_threshold_sign_flip_logs", lambda: ((20.0, 500.0, 0.0), (-20.0, 500.0, 0.0)), 7, _DB, True),
+    # NH4/MF1: a sign flip is the operationally meaningful boundary (export vs
+    # import) and beats the deadband — but ONLY above a magnitude floor. An unbounded
+    # flip term makes near-zero dither log every cycle, which is the same
+    # full-cycle-rate re-inflation the NaN guard above exists to prevent.
+    ("deadband_sub_threshold_sign_flip_silent", lambda: ((20.0, 500.0, 0.0), (-20.0, 500.0, 0.0)), 7, _DB, False),
+    ("deadband_supra_threshold_sign_flip_logs", lambda: ((150.0, 500.0, 0.0), (-150.0, 500.0, 0.0)), 7, _DB, True),
+    # One side outside the floor is enough: a real export -> import transition
+    # necessarily crosses the deadband on one side.
+    ("deadband_sign_flip_one_side_over_floor_logs", lambda: ((10.0, 500.0, 0.0), (-120.0, 500.0, 0.0)), 7, _DB, True),
     ("deadband_sub_threshold_same_sign_silent", lambda: ((20.0, 500.0, 0.0), (40.0, 500.0, 0.0)), 7, _DB, False),
+    # NH-J: zero sits on the negative side of `> 0`, so the sign test alone is
+    # asymmetric about zero. The magnitude floor must make both directions behave
+    # identically — small moves silent, large moves logged.
+    ("deadband_zero_to_small_negative_silent", lambda: ((0.0, 500.0, 0.0), (-50.0, 500.0, 0.0)), 7, _DB, False),
+    ("deadband_zero_to_small_positive_silent", lambda: ((0.0, 500.0, 0.0), (50.0, 500.0, 0.0)), 7, _DB, False),
+    ("deadband_zero_to_large_negative_logs", lambda: ((0.0, 500.0, 0.0), (-150.0, 500.0, 0.0)), 7, _DB, True),
+    ("deadband_zero_to_large_positive_logs", lambda: ((0.0, 500.0, 0.0), (150.0, 500.0, 0.0)), 7, _DB, True),
 ]
 
 
@@ -339,7 +352,7 @@ async def test_s13_no_actionable_chargers_is_debug(caplog: pytest.LogCaptureFixt
 async def test_s10_available_power_logged_once_per_window(caplog: pytest.LogCaptureFixture) -> None:
     """B2/S10: unchanged power over 10 cycles emits once; +900 s and a change re-emit."""
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
-    group, _, _ = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
+    group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
 
     for cycle in range(10):
         await group.dyn_handle(T0 + timedelta(seconds=7 * cycle))
@@ -348,7 +361,7 @@ async def test_s10_available_power_logged_once_per_window(caplog: pytest.LogCapt
     await group.dyn_handle(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 63))
     assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 2
 
-    group.home.get_available_power_values = MagicMock(side_effect=lambda _w, t: _power_series(5000.0, t))
+    home.get_available_power_values = MagicMock(side_effect=lambda _w, t: _power_series(5000.0, t))
     await group.dyn_handle(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 70))
     assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 3
 
@@ -367,6 +380,44 @@ async def test_s10_deadband_absorbs_sub_threshold_jitter(caplog: pytest.LogCaptu
     home.get_available_power_values = MagicMock(side_effect=lambda _w, t: _power_series(1051.0 + 100.0, t))
     await group.dyn_handle(T0 + timedelta(seconds=7 * len(jitter)))
     assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 2
+
+
+async def _run_oscillating_power_cycles(group, home, watts: float, cycles: int = 10) -> None:
+    """Drive `dyn_handle` with the power series alternating +watts / -watts."""
+    for cycle in range(cycles):
+        value = watts if cycle % 2 == 0 else -watts
+        home.get_available_power_values = MagicMock(side_effect=lambda _w, t, v=value: _power_series(v, t))
+        home.get_grid_consumption_power_values = MagicMock(side_effect=lambda _w, t, v=value: _power_series(v, t))
+        await group.dyn_handle(T0 + timedelta(seconds=7 * cycle))
+
+
+async def test_mf1_near_zero_sign_dither_does_not_re_inflate_the_log(caplog: pytest.LogCaptureFixture) -> None:
+    """MF1: an UNBOUNDED sign-flip term logs every ~7 s forever near zero.
+
+    Near-zero grid power is the steady state of a well-regulated self-consumption
+    home, so this is the common case, not an exotic one. |delta| is 40 W here, well
+    inside the 100 W deadband, yet every cycle flips sign. Without a magnitude floor
+    this is exactly the full-cycle-rate volume the PR exists to remove — on its
+    highest-volume site.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
+
+    await _run_oscillating_power_cycles(group, home, watts=20.0)
+
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 1
+
+
+async def test_mf1_real_export_import_transition_is_still_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """MF1: the floor must not cost us a genuine export <-> import transition."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
+
+    await _run_oscillating_power_cycles(group, home, watts=150.0)
+
+    # Every cycle crosses zero with both sides outside the deadband, so every cycle
+    # is a real transition and every cycle is reported.
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 10
 
 
 # =============================================================================
@@ -519,6 +570,9 @@ def test_b1b_fresh_load_construction_logs_the_no_op_at_debug(caplog: pytest.LogC
         # NH5: `keep_commands=False` also drops an in-flight `running_command`.
         pytest.param("running_command", False, logging.INFO, id="f_running_command_dropped"),
         pytest.param("running_command", True, logging.DEBUG, id="g_running_command_kept"),
+        # NH-A: ... and a queued `_stacked_command`, on the same reasoning.
+        pytest.param("stacked_command", False, logging.INFO, id="h_stacked_command_dropped"),
+        pytest.param("stacked_command", True, logging.DEBUG, id="i_stacked_command_kept"),
     ],
 )
 def test_b1b_s8_logs_info_only_when_work_is_performed(
@@ -531,6 +585,7 @@ def test_b1b_s8_logs_info_only_when_work_is_performed(
     load._last_completed_constraint = None
     load.current_command = None
     load.running_command = None
+    load._stacked_command = None
 
     if case == "constraints":
         load._constraints = [create_constraint(load=load, time=T0)]
@@ -540,6 +595,8 @@ def test_b1b_s8_logs_info_only_when_work_is_performed(
         load.current_command = copy_command(CMD_ON, power_consign=1000.0)
     elif case == "running_command":
         load.running_command = copy_command(CMD_ON, power_consign=1000.0)
+    elif case == "stacked_command":
+        load._stacked_command = copy_command(CMD_ON, power_consign=1000.0)
 
     caplog.clear()
     load.constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
@@ -658,6 +715,33 @@ async def test_s9_probe_only_never_logs_at_info(caplog: pytest.LogCaptureFixture
 
     assert _messages(caplog, "ensure_correct_state dyn group", logging.INFO, CHARGER_LOGGER) == []
     assert len(_messages(caplog, "ensure_correct_state dyn group", logging.DEBUG, CHARGER_LOGGER)) == 6
+
+
+async def test_nhb_re_enabling_a_charger_inside_the_window_emits_a_marker(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """NH-B: the `qs_enable_device is False` early-out must EVICT the memo key.
+
+    Otherwise the entry goes stale, and a charger re-enabled inside 900 s with the
+    same `(res, handled_static)` pair produces no line — the log carries no marker
+    that it came back under management. `detach_car()` gives the charger-level memo
+    this cleanup; the group needs its own.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    group, chargers = _make_ensure_correct_state_group(num_chargers=1)
+    charger = chargers[0]
+
+    await group.ensure_correct_state(T0)
+    assert len(_messages(caplog, "ensure_correct_state dyn group", logging.INFO, CHARGER_LOGGER)) == 1
+
+    charger.qs_enable_device = False
+    await group.ensure_correct_state(T0 + timedelta(seconds=7))
+    # The disabled charger reports nothing at all, by design.
+    assert len(_messages(caplog, "ensure_correct_state dyn group", logging.INFO, CHARGER_LOGGER)) == 1
+
+    charger.qs_enable_device = True
+    await group.ensure_correct_state(T0 + timedelta(seconds=14))
+    assert len(_messages(caplog, "ensure_correct_state dyn group", logging.INFO, CHARGER_LOGGER)) == 2
 
 
 # =============================================================================
@@ -823,6 +907,50 @@ async def test_s12_soc_callback_logged_once_per_mode_per_window(caplog: pytest.L
     assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 4
 
 
+async def test_sfg_soc_progress_numbers_are_memoized_but_quantised(caplog: pytest.LogCaptureFixture) -> None:
+    """SF-G: the printed charge-progress numbers must be in the memo — "it can't be
+    invisible" — but QUANTISED, or the site degenerates into logging every cycle
+    (the trap MF1 fell into).
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    charger, constraint = _make_soc_callback_charger()
+
+    # Sub-unit drift: every reading rounds to 52, so the operator learns nothing new.
+    for cycle, soc in enumerate([52.0, 52.1, 52.4, 52.2, 51.8, 52.3, 51.6, 52.4, 52.0, 51.9]):
+        charger.car.get_car_charge_percent_raw_sensor = MagicMock(return_value=soc)
+        await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=7 * cycle))
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 1
+
+    # A whole unit of real progress is worth a line, well inside the 900 s window.
+    charger.car.get_car_charge_percent_raw_sensor = MagicMock(return_value=53.0)
+    await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=77))
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 2
+
+
+async def test_sfg_consign_change_under_the_same_command_name_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SF-G: the memo stored only `command.command`, so a consign change was invisible.
+
+    `LoadCommand.__eq__` compares `power_consign` too, and the message prints the whole
+    command — so `auto_green` at 3000 W and at 7000 W must not share a memo entry.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    charger, constraint = _make_soc_callback_charger()
+
+    charger.current_command = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=3000.0)
+    await charger.constraint_update_value_callback_percent_soc(constraint, T0)
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 1
+
+    charger.current_command = copy_command(CMD_AUTO_GREEN_ONLY, power_consign=7000.0)
+    assert charger.current_command.command == CMD_AUTO_GREEN_ONLY.command
+    await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=7))
+
+    records = _messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)
+    assert len(records) == 2
+    assert "7000" in records[1].getMessage()
+
+
 async def test_s12_literal_percent_is_escaped(caplog: pytest.LogCaptureFixture) -> None:
     """The literal `%` must be `%%`, else `record.getMessage()` raises ValueError."""
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
@@ -833,6 +961,24 @@ async def test_s12_literal_percent_is_escaped(caplog: pytest.LogCaptureFixture) 
     record = _messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)[0]
     assert "(is %:True)" in record.getMessage()
     assert "%%" in record.msg
+
+
+# =============================================================================
+# Harness contract (NH-C, NH-D)
+# =============================================================================
+
+
+def test_harness_hass_config_dir_is_caller_controlled_and_unique(tmp_path: Path) -> None:
+    """NH-C: a fixed shared config dir is collision-prone under parallel runs."""
+    assert make_hass(config_dir=str(tmp_path)).config.config_dir == str(tmp_path)
+    assert make_hass().config.config_dir != make_hass().config.config_dir
+
+
+async def test_harness_executor_job_forwards_keyword_arguments() -> None:
+    """NH-D: dropping kwargs would raise TypeError instead of running the job."""
+    hass = make_hass()
+
+    assert await hass.async_add_executor_job(lambda a, b=0: a + b, 1, b=2) == 3
 
 
 # =============================================================================
@@ -857,11 +1003,25 @@ _B4_SOURCE_ANCHORS = [
 
 @pytest.mark.parametrize(("module_path", "anchor"), _B4_SOURCE_ANCHORS)
 def test_b4_keeper_lines_are_still_logged_at_info(module_path: str, anchor: str) -> None:
-    """B4: each keeper is matched by exactly one `_LOGGER.info(` call."""
-    source = (Path(quiet_solar.__file__).parent / module_path).read_text(encoding="utf-8")
-    pattern = re.compile(r"_LOGGER\.info\(\s*[^)]*" + re.escape(anchor), re.DOTALL)
+    r"""B4: each keeper appears exactly once, inside an INFO call.
 
-    assert len(pattern.findall(source)) == 1, f"expected exactly one INFO call for {anchor!r}"
+    Deliberately NOT a single clever regex. The previous form
+    (`_LOGGER\.info\(\s*[^)]*` + anchor) had `[^)]*` stop at the first `)`, so a
+    keeper wrapped in an inner call would silently stop matching, and a cosmetic ruff
+    reformat could fail the test while behavior was intact. Instead: assert the anchor
+    is unique in the module, then check the nearest preceding logger call is `.info`.
+    The sibling runtime `caplog` assertions below carry the behavioral weight.
+    """
+    source = (Path(quiet_solar.__file__).parent / module_path).read_text(encoding="utf-8")
+
+    occurrences = [m.start() for m in re.finditer(re.escape(anchor), source)]
+    assert len(occurrences) == 1, f"expected exactly one occurrence of {anchor!r}"
+
+    preceding_calls = list(re.finditer(r"_LOGGER\.(\w+)\(", source[: occurrences[0]]))
+    assert preceding_calls, f"no logger call precedes {anchor!r}"
+    assert preceding_calls[-1].group(1) == "info", (
+        f"{anchor!r} is emitted by _LOGGER.{preceding_calls[-1].group(1)}, expected info"
+    )
 
 
 async def test_b4_charger_start_stop_charge_still_log_at_info(caplog: pytest.LogCaptureFixture) -> None:

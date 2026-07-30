@@ -23,7 +23,8 @@ human. The detection logic lives in `home_model/load.py`
 **Log levels (QS-306).** No-op announcements in `home_model/load.py` are now
 DEBUG. Detection behavior is unchanged. The constraint-reset line logs INFO
 via the `_has_state_to_reset()` hook described in
-[load-base.md](load-base.md).
+[load-base.md](load-base.md), which counts a dropped in-flight or queued
+command as work worth reporting.
 
 ## When you need this concept
 

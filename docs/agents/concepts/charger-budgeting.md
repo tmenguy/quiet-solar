@@ -20,17 +20,24 @@ conflict. Phase switching (1P↔3P), staged transitions, and dampening
 (real-power measurement) all live here. A bug in the solver makes a
 bad plan; a bug here trips a breaker.
 
-**Log levels (QS-306).** Per-cycle status lines from this file are now
-DEBUG, or emitted at INFO only when the reported value changes (or after
-900 s). Behavior is unchanged: only log levels and log frequency moved.
+**Log levels (QS-306).** The QS-306-touched per-cycle status lines in this
+file are now DEBUG, or emitted at INFO only on change (or after 900 s);
+**other INFO sites in this file are unchanged** — notably the start/stop
+keepers and the `budgeting_algorithm_minimize_diffs` lines, which were
+deliberately left out of scope. Behavior is unchanged: only log levels and
+log frequency moved.
+
 The available-power line compares against a 100 W deadband, with three
-deliberate exceptions: a sign flip (export ↔ import) always logs, and a
-stuck-at-`NaN` or stuck-at-`inf` sensor counts as *unchanged* so a broken
-sensor cannot re-inflate the log to the full cycle rate. `detach_car()`
-clears the memos, so each charge session gets a fresh first line.
-`QSChargerGeneric` extends `_has_state_to_reset()` (see
-[load-base.md](load-base.md)) because its reset override destroys the
-user-initiated `do_force_next_charge` / `do_next_charge_time` flags.
+deliberate exceptions: a sign flip (export ↔ import) logs **when either side
+is at least the deadband** — the floor matters, because an unbounded flip term
+makes near-zero dither log every cycle — and a stuck-at-`NaN` or
+stuck-at-`inf` sensor counts as *unchanged*, so a broken sensor cannot
+re-inflate the log to the full cycle rate. `detach_car()` clears the memos, so
+each charge session gets a fresh first line, and a disabled charger's key is
+evicted so a re-enable is always announced. `QSChargerGeneric` extends
+`_has_state_to_reset()` (see [load-base.md](load-base.md)) because its reset
+override destroys the user-initiated `do_force_next_charge` /
+`do_next_charge_time` flags.
 
 ## When you need this concept
 

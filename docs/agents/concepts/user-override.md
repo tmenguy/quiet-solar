@@ -25,7 +25,8 @@ is driving the device themselves".
 constraint-reset lines in `home_model/load.py` moved to DEBUG. A reset that
 destroys a user-initiated flag still logs INFO — that is what the
 `_has_state_to_reset()` hook ([load-base.md](load-base.md)) exists to
-guarantee for subclasses such as `QSChargerGeneric`.
+guarantee for subclasses such as `QSChargerGeneric`, whose override ORs in
+`do_force_next_charge` / `do_next_charge_time`.
 
 ## When you need this concept
 

@@ -339,9 +339,12 @@ class AbstractDevice:
             getattr(self, "_last_completed_constraint", None) is not None
         )
         # `keep_commands=False` also drops `running_command` — an in-flight command
-        # awaiting verification — so both are loggable work.
+        # awaiting verification — and `_stacked_command`, one queued behind it. All
+        # three are loggable work.
         had_commands = not keep_commands and (
-            getattr(self, "current_command", None) is not None or getattr(self, "running_command", None) is not None
+            getattr(self, "current_command", None) is not None
+            or getattr(self, "running_command", None) is not None
+            or getattr(self, "_stacked_command", None) is not None
         )
         return had_constraints or had_commands
 
