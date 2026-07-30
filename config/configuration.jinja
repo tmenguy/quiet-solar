@@ -308,6 +308,49 @@ template:
 {#-                                                                                  -#}
 {#- Full derivation and source citations: docs/stories/QS-305.story.md and its two    -#}
 {#- review fix plans. Do not re-derive from memory.                                    -#}
+{#-                                                                                  -#}
+{#- -------------------------------------------------------------------------------- -#}
+{#- THE APPLE-SIDE HALF, WHICH LIVES OUTSIDE THIS REPO                                -#}
+{#-                                                                                  -#}
+{#- HA never writes input_boolean.<slug>_state. TWO Apple Home automations do, and    -#}
+{#- both must exist for every device in the inventory above:                          -#}
+{#-                                                                                  -#}
+{#-  (1) EDGE, one pair per device -- the fast path.                                  -#}
+{#-      when <homekit_device> switches ON  -> set <slug>_state ON                     -#}
+{#-      when <homekit_device> switches OFF -> set <slug>_state OFF                    -#}
+{#-      Follows a real change in 2-3 s, which is what the 10 s waits below rely on.   -#}
+{#-      It is driven by HomeKit change events, and those can stop arriving silently.  -#}
+{#-                                                                                  -#}
+{#-  (2) PERIODIC RESYNC, one Shortcut for all devices -- the safety net.              -#}
+{#-      when input_boolean.legrand_ticker switches ON -> run a Shortcut that, for     -#}
+{#-      each device, does:                                                            -#}
+{#-          if <homekit_device> is on  -> set <slug>_state ON                         -#}
+{#-          else                       -> set <slug>_state OFF                        -#}
+{#-      This writes the observed value EVERY tick, changed or not. That is what makes -#}
+{#-      the mirror polled rather than event-driven, so all four of these self-heal    -#}
+{#-      within one ticker period instead of persisting indefinitely:                  -#}
+{#-        - a mirror frozen by a lost HomeKit subscription;                           -#}
+{#-        - a stale mirror after HA was down while the device was switched;            -#}
+{#-        - a NEW device whose mirror Apple has never written (it reads off, and       -#}
+{#-          would otherwise be trusted as a confident off -- the incident signature); -#}
+{#-        - a stray hand tap on the mirror in Apple Home, or a scene sweeping it.     -#}
+{#-      The ticker cadence is set in automations.yaml, NOT here, and it is the bound  -#}
+{#-      on every one of those mitigations.                                            -#}
+{#-                                                                                  -#}
+{#- WHEN YOU ADD A DEVICE: add its mirror to BOTH automations. With (1) only, a new    -#}
+{#- device is fine until the first HomeKit freeze; with (2) only, confirmation is as   -#}
+{#- slow as the ticker and the 10 s waits will time out and notify on every command.   -#}
+{#- With neither, the facade trusts a mirror nobody writes -- which reads off.         -#}
+{#-                                                                                  -#}
+{#- NEITHER AUTOMATION IS OBSERVABLE FROM HA, and Apple's Home app has no automation   -#}
+{#- execution log. If the Shortcut in (2) silently stops running, behaviour degrades   -#}
+{#- back to event-driven-only and nothing here can tell you. A liveness check for it   -#}
+{#- is the highest-value watchdog target -- see the story's follow-up Issue A.         -#}
+{#-                                                                                  -#}
+{#- Because (2) rewrites the value even when it has not changed, HA advances the       -#}
+{#- mirror's last_reported on every tick, while last_changed does NOT move on a        -#}
+{#- no-op write. So last_reported is a usable freshness signal for the trust           -#}
+{#- predicate. NOT used yet: see the story's Issue D.                                  -#}
 {#- ================================================================================ -#}
 {%- for s in legrand_switches_to_map.switches %}
 {##  --- Dual-channel actuation, mirror-only trust --- ##}
