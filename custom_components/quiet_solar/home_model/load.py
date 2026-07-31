@@ -637,6 +637,9 @@ class AbstractDevice:
             # `_ack_command(time, None)` is NOT one — it is the give-up on an
             # unavailable probe, i.e. the device failing harder — and
             # `_ack_command(None, None)` is just `__init__` priming the fields.
+            # QS-307 (from #308): the give-up still releases the clock, but from its
+            # OWN call site in `check_commands`, with a reason that says so. Keeping
+            # the release out of here is what keeps the two meanings distinguishable.
             self._clear_unresponsive("control returned, the command was acked")
 
         if command is not None and time is not None and self.prev_command is not None:
@@ -701,8 +704,12 @@ class AbstractDevice:
         The in-flight conjunct is load-bearing: several paths empty the slot with no
         successor, and a clock-only property would stay True forever with no retry
         able to clear it. Note this is NOT "the in-flight command failed N times" —
-        the invalid-probe give-up keeps the clock while nulling `current_command`, so
-        the next command inherits it. See the story.
+        the clock is per EPISODE, not per command, and survives a supersede.
+
+        QS-307 (from #308): every slot-emptying path now releases the clock,
+        including the invalid-probe give-up, which used to keep it and hand it to
+        the next command. So a command in flight with the clock set really has an
+        unresolved episode behind it.
         """
         return self.unresponsive_since is not None and self.running_command is not None
 
@@ -1016,6 +1023,13 @@ class AbstractDevice:
                 if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
                     # will kill completely the command ....
                     self._ack_command(time, None)
+                    # QS-307 (from #308): the give-up destroys the clock's subject —
+                    # `current_command` and the slot both go — so the clock goes with
+                    # it. Leaving it made the clock ownerless (`_ack_command` clears
+                    # only on a real ack, and `_escalate_or_recover`'s re-arm is gated
+                    # on the `current_command` this path just nulled), and the next
+                    # command inherited supersede semantics with zero evidence.
+                    self._clear_unresponsive("the probe went unavailable")
 
             if is_command_set is True:
                 self._ack_command(time, self.running_command)
@@ -1155,19 +1169,18 @@ class AbstractDevice:
             # equal-command early-return and the override-suppression drop
             # leave no successor at all.
             self.running_command_num_relaunch = 0
-            # Cleared OUTSIDE the gate below: the invalid-probe give-up reaches here
-            # via `_ack_command(time, None)`, which never calls
-            # `_clear_unresponsive`, so a stale anchor would throttle the next
-            # command's first legitimate supersede. That give-up keeps the clock on
-            # purpose.
+            # Cleared OUTSIDE the gate below, and kept that way: several paths reach
+            # here with `current_command` already nulled, and a stale anchor would
+            # throttle the next command's first legitimate supersede.
             self._last_supersede_time = None
 
             if self.current_command is not None:
                 # Nothing in flight, so nothing can clear the clock later — re-arm
-                # now. The `current_command` gate exists solely to preserve the
-                # invalid-probe give-up shape: that path nulls `current_command` on
-                # purpose, and an unavailable probe means the device is failing
-                # harder, not recovering.
+                # now. QS-307 (from #308) made the `current_command` gate redundant:
+                # the invalid-probe give-up it existed to preserve now releases the
+                # clock at its own call site, right where it nulls `current_command`.
+                # Kept anyway — it is harmless, both arms stay exercised, and the
+                # release belongs next to the state destruction that motivates it.
                 self._clear_unresponsive("the command slot emptied with no successor")
 
         if unresponsive_command is not None:
@@ -1606,8 +1619,11 @@ class AbstractLoad(AbstractDevice):
 
         QS-304: entry only. There is no recovery push — the channel is a
         fire-and-forget mobile push with no notification id, so nothing could
-        be dismissed, and the `qs_load_uncontrollable` binary sensor is the
-        live state that clears itself.
+        be dismissed.
+
+        QS-307 (from #308): once per EPISODE, not once per lifetime. The clock
+        is released on every slot-emptying path now, so a load that loses
+        control, recovers, and loses it again pushes twice.
         """
         await self.on_device_state_change(
             time,

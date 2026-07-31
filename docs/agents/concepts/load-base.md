@@ -89,20 +89,19 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   escalation; nothing exposes it to Home Assistant. That is why a clock
   that outlives its command is a nuisance rather than a user-visible bug.
 - **`is_uncontrollable` needs `running_command is not None`.** That
-  conjunct is load-bearing, not defensive. The remaining path that
-  empties the slot while keeping the clock is the
-  `NUM_MAX_INVALID_PROBES_COMMANDS` give-up, which nulls
-  `current_command` on purpose (preserving it would bill phantom
-  consumption into the persisted forecast) and so cannot re-arm. Without
-  the conjunct an `unresponsive_since`-only property would stay `True`
-  forever with no retry left to clear it. If we are not waiting on
-  anything, we are not uncontrollable. That give-up also makes the *next*
-  command inherit the clock — see #308.
-- **Four clearers, one writer.** `_clear_unresponsive` is the only writer;
+  conjunct is load-bearing, not defensive. Without it an
+  `unresponsive_since`-only property would stay `True` forever with no
+  retry left to clear it. If we are not waiting on anything, we are not
+  uncontrollable. QS-307 (from #308) closed the last path that emptied
+  the slot while keeping the clock, so a set clock now always describes
+  a live, unresolved episode.
+- **Five clearers, one writer.** `_clear_unresponsive` is the only writer;
   it is reached by an ack, by the empty-slot re-arm, by
   `_drop_running_command` (**unconditionally** — an emptied slot has no
-  owner for the clock whether or not a confirmed command ever existed), and
-  by a `keep_commands=False` wipe. It also clears the supersede anchor
+  owner for the clock whether or not a confirmed command ever existed), by
+  the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up in `check_commands`
+  (QS-307), and by a `keep_commands=False` wipe. It also clears the
+  supersede anchor
   *ahead of* its own early return, so the two fields cannot
   desynchronise.
 - **Both clock comparisons go through `_seconds_since`.** It returns
@@ -156,17 +155,31 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
 - **A disabled load never shouts.** The escalation branch is gated on
   `qs_enable_device`; the housekeeping half still runs. QS was
   explicitly told to leave the load alone, so it must not push.
-- **One shape keeps the clock with an empty slot**: the
-  `NUM_MAX_INVALID_PROBES_COMMANDS` give-up goes through
-  `_ack_command(time, None)`, which nulls `current_command` on purpose
-  (preserving it would bill phantom consumption into the persisted
-  forecast) and so cannot re-arm. The *next* command therefore inherits
-  the clock. Consequence is limited to supersede-vs-stack choice — there
-  is no entity exposing `is_uncontrollable` — and the once-only guard
-  means no repeat notification. The supersede **anchor** is released on
-  that path (in `_escalate_or_recover`'s housekeeping arm, outside the
-  `current_command` gate) so a fresh command's first legitimate supersede
-  is not throttled.
+- **No shape keeps the clock with an empty slot (QS-307, from #308).** The
+  last one that did was the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up: it
+  goes through `_ack_command(time, None)`, which nulls `current_command` on
+  purpose (preserving it would bill phantom consumption into the persisted
+  forecast) — and that is exactly what put it out of reach of
+  `_escalate_or_recover`'s `current_command is not None` re-arm. The clock
+  survived describing a command that no longer existed, and the *next*
+  command inherited it: `is_uncontrollable` on its first cycle, so it
+  **superseded** where it should have stacked, and the once-only guard then
+  silenced every genuinely new episode for the rest of the load's life.
+  `check_commands` now calls `_clear_unresponsive("the probe went
+  unavailable")` right after the give-up, next to the state destruction that
+  motivates it. `_ack_command` itself is unchanged — the release lives at the
+  caller so "acked" and "gave up" stay distinguishable in the log.
+  Re-escalation cannot storm: `_escalate_or_recover` resets the rung on every
+  emptied slot, and one give-up window
+  (`NUM_MAX_INVALID_PROBES_COMMANDS` × cycle ≈ 70 s) is far too short to
+  climb back to `NUM_MAX_COMMAND_RELAUNCH`. The supersede **anchor** was
+  already released on that path (in `_escalate_or_recover`'s housekeeping
+  arm, outside the `current_command` gate) so a fresh command's first
+  legitimate supersede is not throttled.
+  *Accepted residual:* an **intermittently** available device — visible-stuck
+  long enough to escalate, then unavailable for a give-up window, repeating
+  — can now push about once per such cycle (~19 min) where the old
+  once-ever guard capped it at one. Each push describes a real new episode.
 - **"One service call per 300 s" is per command *identity*, not per
   load.** The relaunch ladder and the supersede throttle are measured on
   two independent anchors, so a relaunch immediately followed by a
@@ -270,11 +283,13 @@ Switching-cost protection (`AbstractDevice`):
 - Keying "we have lost control" on `running_command_num_relaunch`.
   `abandon_running_command` no longer zeroes it, but `_ack_command`
   still does — read `is_uncontrollable` instead (QS-304).
-- Adding a give-up that empties `running_command` without either
-  clearing `unresponsive_since` (sensor pinned on, recovery edge
-  unreachable) or deliberately keeping it (a probe that went
-  *unavailable* is the device failing harder, not recovering — that is
-  why the empty-slot clear is guarded on `current_command is not None`).
+- Adding a give-up that empties `running_command` without clearing
+  `unresponsive_since`. The clock describes an in-flight command; with the
+  slot empty it is ownerless, and the next command inherits supersede
+  semantics with zero evidence of its own. "The device is failing harder,
+  so keep the clock" sounds right and is wrong (QS-307, from #308) — keep
+  the *reason string* honest instead; `_clear_unresponsive` is reason-led
+  precisely so a release does not have to claim a recovery.
 - Calling `abandon_running_command` on a path that does not go on to
   launch a successor. It preserves the rung by design; use
   `_drop_running_command` instead, or the next command inherits a spent

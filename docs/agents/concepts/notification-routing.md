@@ -56,9 +56,12 @@ alarm at 3am is supposed to wake you).
 - Per-person preferences (quiet hours, channel, opt-in flags) live
   on `QSPerson`.
 - `DEVICE_STATUS_CHANGE_ERROR` producers — the newest is
-  `AbstractLoad._notify_unresponsive` (QS-304), fired **once** from
-  `check_and_relaunch_command` when a load crosses the lost-control
-  threshold (~1050 s of unacked relaunches). It is `AbstractLoad`-only:
+  `AbstractLoad._notify_unresponsive` (QS-304), fired **once per episode**
+  from `check_and_relaunch_command` when a load crosses the lost-control
+  threshold (~1050 s of unacked relaunches). Once per *episode*, not once
+  per lifetime: QS-307 (from #308) made every slot-emptying path release
+  `unresponsive_since`, which is the once-only guard, so a load that loses
+  control, recovers and loses it again pushes twice. It is `AbstractLoad`-only:
   the base `AbstractDevice._notify_unresponsive` is a documented no-op,
   so an uncontrollable **battery** gets the ERROR log but no push.
   Accepted product consequence.
