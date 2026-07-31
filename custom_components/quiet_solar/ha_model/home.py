@@ -2865,18 +2865,19 @@ class QSHome(QSDynamicGroup):
         all_ok = True
         for load in all_extended_loads:
             try:
-                wait_time, command_acked_or_good = await load.check_commands(time=time)
-                if command_acked_or_good is False:
+                # QS-304: probing, the saturating relaunch ladder and the
+                # lost-control escalation all live in the pure layer, keyed on
+                # `command_relaunch_delay_s()`. This is a thin driver whose only
+                # job is the `all_ok` aggregation and per-load fault isolation.
+                if await load.check_and_relaunch_command(time) is False:
                     all_ok = False
-                if wait_time > timedelta(seconds=50 * (load.running_command_num_relaunch + 1)):
-                    if load.running_command_num_relaunch < 6:
-                        await load.force_relaunch_command(time)
-                    else:
-                        # we have an issue with this command ....
-                        _LOGGER.error(
-                            f"check_loads_commands: Command for load {load.name} has been relaunched {load.running_command_num_relaunch} times and is still not acked or good, there may be an issue with the device or the command, please check it. Last command was {load.current_command} and wait time is {wait_time}"
-                        )
             except Exception as err:
+                # QS-304: a load whose command cycle raised is by definition NOT
+                # confirmed-good, so it must falsify `all_ok`. Treating it as OK let
+                # `finish_off_grid_switch` complete the transition while that load's
+                # command had never landed, violating AC8 for precisely the device
+                # whose probe raises.
+                all_ok = False
                 _LOGGER.error(
                     f"check_loads_commands: Error checking load commands {load.name} {err}",
                     exc_info=True,

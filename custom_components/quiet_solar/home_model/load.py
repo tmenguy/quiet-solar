@@ -28,6 +28,7 @@ from ..const import (
     DASHBOARD_NO_SECTION,
     DEVICE_STATUS_CHANGE_CONSTRAINT,
     DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED,
+    DEVICE_STATUS_CHANGE_ERROR,
     LOAD_TYPE_DASHBOARD_DEFAULT_SECTION,
     OVERRIDE_STATE_ASKED_FOR_RESET,
     OVERRIDE_STATE_NO_OVERRIDE,
@@ -49,6 +50,25 @@ if TYPE_CHECKING:
     import QSDynamicGroup
 
 NUM_MAX_INVALID_PROBES_COMMANDS = 10
+
+# QS-304: the in-flight command relaunch ladder. `NUM_MAX_COMMAND_RELAUNCH` is
+# the rung at which the linear backoff STOPS GROWING — it is not a give-up
+# count. The cumulative wall time of the growing part is unchanged at
+# 50 + 100 + 150 + 200 + 250 + 300 = 1050 s, after which QS declares it has lost
+# control of the load and keeps retrying every 300 s, forever.
+COMMAND_RELAUNCH_BASE_DELAY_S = 50
+NUM_MAX_COMMAND_RELAUNCH = 6
+
+# QS-304: minimum interval between two supersessions of a stale in-flight
+# command on a load QS has lost control of. Equal to the saturated ladder delay, so
+# a disobedient device sees at most one service call per 300 s **per command
+# identity**: the relaunch ladder and the supersede throttle are measured on two
+# independent anchors (`running_command_last_launch` and `_last_supersede_time`), so
+# a relaunch immediately followed by a superseding command can produce two calls
+# inside one nominal window. Bounded to one extra call per episode, and deliberately
+# not coupled — sharing one clock would make a supersede delay the ladder, or a
+# relaunch delay a newer intent.
+SUPERSEDE_MIN_INTERVAL_S = COMMAND_RELAUNCH_BASE_DELAY_S * NUM_MAX_COMMAND_RELAUNCH
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -151,6 +171,12 @@ class AbstractDevice:
 
         self._dampen_start_transition: datetime | None = None
         self._dampened_computed_power_use: float | None = kwargs.pop(f"measured_{CONF_POWER}", None)
+
+        # QS-304: the "we gave up on this command" clock and the supersede-throttle
+        # anchor. Initialised BEFORE the reset below so a `keep_commands=False` wipe
+        # can clear them — that wipe destroys the command the clock describes.
+        self.unresponsive_since: datetime | None = None
+        self._last_supersede_time: datetime | None = None
 
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
         self.last_check_update: datetime | None = None
@@ -369,6 +395,17 @@ class AbstractDevice:
             self.running_command_last_launch: datetime | None = None
             self.running_command_num_relaunch: int = 0
             self.running_command_num_relaunch_after_invalid: int = 0
+            # This wipe destroys BOTH `current_command` and
+            # `running_command` — the very command the lost-control clock
+            # describes — so the clock goes with it. Leaving it behind made it
+            # ownerless: the only re-arm path (`_escalate_or_recover`) is gated
+            # on `current_command is not None`, so after the load's reset button
+            # or a disable/re-enable the next command launched would flip
+            # `is_uncontrollable` True on its very first cycle, with zero
+            # relaunches — flashing PROBLEM right after the user's own
+            # remediation. Routed through `_clear_unresponsive` to keep the
+            # single-writer / one-line-out guarantee.
+            self._clear_unresponsive("the command state was reset")
 
     # for class overcharging reset
     def reset(self, keep_commands=False):
@@ -595,6 +632,13 @@ class AbstractDevice:
         self.running_command_first_launch = None
         self.running_command_last_launch = None
 
+        if command is not None:
+            # QS-304: a real ack is the only evidence that control came back.
+            # `_ack_command(time, None)` is NOT one — it is the give-up on an
+            # unavailable probe, i.e. the device failing harder — and
+            # `_ack_command(None, None)` is just `__init__` priming the fields.
+            self._clear_unresponsive("control returned, the command was acked")
+
         if command is not None and time is not None and self.prev_command is not None:
             do_count = False
             if command.is_off_or_idle() and not self.prev_command.is_off_or_idle():
@@ -647,24 +691,216 @@ class AbstractDevice:
             return True
         return False
 
+    @property
+    def is_uncontrollable(self) -> bool:
+        """Return True when a command is in flight AND lost-control history is unresolved.
+
+        Internal state — nothing exposes it to Home Assistant. It decides
+        supersede-vs-stack and gates the one-shot escalation.
+
+        The in-flight conjunct is load-bearing: several paths empty the slot with no
+        successor, and a clock-only property would stay True forever with no retry
+        able to clear it. Note this is NOT "the in-flight command failed N times" —
+        the invalid-probe give-up keeps the clock while nulling `current_command`, so
+        the next command inherits it. See the story.
+        """
+        return self.unresponsive_since is not None and self.running_command is not None
+
+    def command_relaunch_delay_s(self) -> float:
+        """Return the linear backoff that saturates instead of running out.
+
+        QS-304: 50, 100, 150, 200, 250, 300 s for relaunch counts 0..5, then
+        300 s forever. The load stays commandable no matter how long the device
+        refuses to converge.
+        """
+        return float(
+            COMMAND_RELAUNCH_BASE_DELAY_S * min(self.running_command_num_relaunch + 1, NUM_MAX_COMMAND_RELAUNCH)
+        )
+
+    def _clear_unresponsive(self, reason: str) -> None:
+        """Re-arm the lost-control detection, logging the exit exactly once.
+
+        The single writer, so the "one line out" guarantee cannot drift between
+        its callers. Re-arming matters more than the log line: the entry guard is
+        `unresponsive_since is None`, so a load that loses control, recovers and
+        loses it again must be able to shout twice.
+
+        The message is reason-led rather than saying "regained control", because
+        several callers are not recoveries at all — a user override drop means
+        control was taken *away* from QS, and a `keep_commands=False` reset simply
+        destroys the clock's subject.
+        """
+        # The supersede anchor is cleared unconditionally: it is meaningless
+        # without a lost-control episode to throttle, and leaving it behind let a
+        # brand-new command inherit a stale anchor and have its first legitimate
+        # supersede throttled for up to `SUPERSEDE_MIN_INTERVAL_S`.
+        self._last_supersede_time = None
+
+        if self.unresponsive_since is None:
+            return
+
+        self.unresponsive_since = None
+        _LOGGER.info("Lost-control state cleared for load %s: %s", self.name, reason)
+
+    def abandon_running_command(self, reason: str) -> None:
+        """Drop the stale in-flight command without faking an ack.
+
+        QS-304: `current_command` means "last CONFIRMED command", so it is
+        preserved — the device really is still in its old state. `num_on_off`,
+        `unresponsive_since` and `_last_supersede_time` are preserved too, and
+        so is `running_command_num_relaunch`: the ladder rung is what keeps the
+        saturated 300 s cadence across supersession instead of restarting the
+        backoff at 50 s and turning the retry into a service-call storm.
+        `_stacked_command` is left alone — `launch_command` owns it.
+
+        Preserving the rung is only sound when a successor is launched in the same
+        call. Use `_drop_running_command` when the slot is left empty — it resets
+        the rung and releases the clock as well.
+        """
+        _LOGGER.debug(
+            "abandon_running_command: dropping %s for load %s, reason: %s", self.running_command, self.name, reason
+        )
+        self.running_command = None
+        self.running_command_num_relaunch_after_invalid = 0
+        self.running_command_first_launch = None
+        self.running_command_last_launch = None
+
+    async def _notify_unresponsive(self, _time: datetime, _command: LoadCommand) -> None:
+        """Push a "QS lost control" notification — no-op for a non-load device.
+
+        QS-304: the relaunch driver also runs against `QSBattery`, which is
+        `AbstractDevice`-side and has no notification channel. `AbstractLoad`
+        overrides this.
+        """
+        return
+
+    def _log_stacked_command(self, command: LoadCommand, ctxt: str) -> None:
+        """Log a command that could not be executed right away."""
+        _LOGGER.info(
+            "launch_command: stack command %s for this load %s, ctxt: %s running %s, stacked %s",
+            command,
+            self.name,
+            ctxt,
+            self.running_command,
+            self._stacked_command,
+        )
+
+    def _log_absorbed_command(self, command: LoadCommand, ctxt: str) -> None:
+        """Log a command that matched the one already in flight.
+
+        This must not reuse the "stack command" message, which
+        claimed the command had been stacked when it was in fact absorbed, and
+        reported a misleading "stacked None".
+        """
+        _LOGGER.info(
+            "launch_command: absorb command %s already in flight for this load %s, ctxt: %s, stacked %s",
+            command,
+            self.name,
+            ctxt,
+            self._stacked_command,
+        )
+
+    @staticmethod
+    def _seconds_since(time: datetime, anchor: datetime | None) -> float | None:
+        """Return seconds elapsed since `anchor`, or None when it cannot be trusted.
+
+        `None` means "treat as fully elapsed". Two cases produce it: there is no
+        anchor, or the anchor lies in the *future* because the clock stepped
+        backwards — HA booting without an RTC and NTP later correcting, or a manual
+        change.
+
+        Both of this class's clock comparisons go through here on purpose. A
+        negative delta is trivially below any threshold, so an unguarded
+        comparison freezes whatever it gates for the whole duration of the jump:
+        the supersede throttle would stack every command, and the relaunch ladder
+        would stop advancing so the rung could never reach the escalation
+        threshold — a silently deadlocked command slot with no ERROR and no
+        PROBLEM sensor. Sharing one primitive is what stops the two sites drifting
+        apart again.
+        """
+        if anchor is None:
+            return None
+
+        elapsed = (time - anchor).total_seconds()
+        if elapsed < 0:
+            return None
+
+        return elapsed
+
+    def _is_supersede_throttled(self, time: datetime) -> bool:
+        """Return True while the supersede window is still closed."""
+        elapsed = self._seconds_since(time, self._last_supersede_time)
+        return elapsed is not None and elapsed < SUPERSEDE_MIN_INTERVAL_S
+
+    def _drop_running_command(self, reason: str) -> None:
+        """Abandon the in-flight command when nothing will succeed it.
+
+        `abandon_running_command` preserves `running_command_num_relaunch` so a
+        *supersede* keeps the saturated 300 s cadence — but that is only sound when
+        a successor is launched in the same call. When the slot is left empty, the
+        rung describes a command that no longer exists and the lost-control clock
+        has lost its subject, so both go with it.
+
+        The clock release is deliberately **unconditional**, not gated on
+        `current_command is not None`: an emptied slot with no successor has no
+        owner for the clock whether or not a confirmed command ever existed. A load
+        that has never been acked — a fresh config-entry reload, or a bistate switch
+        the user then flips by hand — could otherwise cross the threshold with
+        `current_command` still `None`, keep the clock through the drop, and light
+        PROBLEM on the very next command with zero relaunches *and* a 50 s rung,
+        breaking the one-service-call-per-300 s invariant.
+
+        Doing this here rather than leaving it to `_escalate_or_recover` closes an
+        intra-cycle window: `update_loads` calls `launch_command` twice per cycle
+        for the same load, and the buttons call it outside the load-management lock.
+        """
+        self.abandon_running_command(reason=reason)
+        self.running_command_num_relaunch = 0
+        self._clear_unresponsive(reason)
+
     async def launch_command(self, time: datetime, command: LoadCommand, ctxt="NO CTXT"):
         if self.qs_enable_device is False:
             return
 
         command = copy_command(command)
 
-        if self.running_command is not None:
-            # another command has been launched, stack this one (we replace the previous stacked one)
-            if self.running_command == command:
-                self.running_command = command
-                self._stacked_command = None
-            else:
-                self._stacked_command = command
+        supersede_stale_command = False
 
-            _LOGGER.info(
-                f"launch_command: stack command {command} for this load {self.name}), ctxt: {ctxt} running {self.running_command}, stacked {self._stacked_command}"
-            )
-            return
+        if self.running_command is not None:
+            if self.running_command == command:
+                # the very same command is already in flight: absorb this one
+                self.running_command = command
+                # The stack MUST be cleared here: nothing can stack after
+                # `launch_command` is entered, so the incoming command is the solver's
+                # newest word and anything stacked is obsolete. Keeping it resurrects
+                # a command the solver has moved on from (AC13).
+                self._stacked_command = None
+                self._log_absorbed_command(command, ctxt)
+                return
+
+            if not self.is_uncontrollable:
+                # another command has been launched, stack this one (we replace the previous stacked one)
+                self._stacked_command = command
+                self._log_stacked_command(command, ctxt)
+                return
+
+            if self._is_supersede_throttled(time):
+                # QS-304: we have lost control, but we already superseded
+                # recently — stack instead (last one wins) so a jittering
+                # power consign cannot turn into a per-cycle service call storm
+                self._stacked_command = command
+                self._log_stacked_command(command, ctxt)
+                return
+
+            # QS-304: QS has lost control of this load, so the newer desired
+            # command must SUPERSEDE the stale one instead of starving behind it
+            # forever.
+            #
+            # Only an INTENT here: the abandon and the throttle stamp commit further
+            # down, once a successor is really being launched. Committing early left
+            # the slot empty with a spent rung whenever a gate below returned, and
+            # burnt the window on a supersede that made no service call.
+            supersede_stale_command = True
 
         # there is no running : whatever we will not execute the stacked one but only the last one
         self._stacked_command = None
@@ -680,12 +916,26 @@ class AbstractDevice:
                 self.name,
                 ctxt,
             )
+            if supersede_stale_command:
+                # the user has taken control, so the stale command is not merely
+                # superseded, it is unwanted: drop it outright
+                self._drop_running_command("suppressed by user override")
             return
 
         if self.current_command is not None and self.current_command == command:
             # We kill the stacked one and keep the current one like the choice above
             self.current_command = command  # needed as command == may have been overcharged to not test everything
+            if supersede_stale_command:
+                # the device already matches what is now wanted, so the stale
+                # in-flight command is simply no longer desired
+                self._drop_running_command("the newly requested command was already confirmed")
             return
+
+        if supersede_stale_command:
+            # No `await` between here and the launch below, so no other task can
+            # observe the momentarily-empty slot.
+            self._last_supersede_time = time
+            self.abandon_running_command(reason=f"superseded by {command.command}")
 
         self.running_command = command
         self.running_command_first_launch = time
@@ -693,7 +943,23 @@ class AbstractDevice:
 
         _LOGGER.info("launch_command: %s for this load %s), ctxt: %s", command, self.name, ctxt)
 
-        is_command_set = await self.probe_if_command_set(time, self.running_command)
+        try:
+            is_command_set = await self.probe_if_command_set(time, self.running_command)
+        except Exception as err:
+            # A probe that raises cannot tell us anything, so treat it exactly like
+            # one returning None and go on to execute. Unguarded, it re-created this
+            # story's deadlock on the stack-promotion path — see load-base.md.
+            _LOGGER.error(
+                "Error while probing command %s for load %s : %s, ctxt: %s",
+                command.command,
+                self.name,
+                err,
+                ctxt,
+                exc_info=True,
+                stack_info=True,
+            )
+            is_command_set = None
+
         if is_command_set is True:
             _LOGGER.info("launch_command: Command already set %s for this load %s, ctxt: %s", command, self.name, ctxt)
         else:
@@ -765,9 +1031,159 @@ class AbstractDevice:
 
         return res, command_acked_or_good
 
+    async def check_and_relaunch_command(self, time: datetime) -> bool:
+        """Probe the in-flight command, relaunch it when stale, and escalate.
+
+        The whole retry lifecycle, in the pure layer, so relaunch timing depends only
+        on `command_relaunch_delay_s()` and `is_uncontrollable`. Returns
+        `command_acked_or_good` for `QSHome.check_loads_commands`' `all_ok`.
+
+        The `finally` is what makes a device whose *probe* raises still climb the
+        ladder. The device exception is deliberately not swallowed —
+        `QSHome.check_loads_commands` owns the per-load `try/except` — and
+        `_finish_command_cycle` never raises, so a housekeeping failure cannot
+        replace it.
+
+        NOT protected by a lock: `_update_loads_lock` guards only
+        `async_update_loads`, while `button.py` calls into this chain unlocked. The
+        invariant relied on is narrower — each command-slot mutation happens between
+        `await`s, and the clock is only cleared alongside the command state it
+        describes.
+        """
+        try:
+            _wait_time, command_acked_or_good = await self.check_commands(time)
+        finally:
+            await self._finish_command_cycle(time)
+
+        return command_acked_or_good
+
+    async def _finish_command_cycle(self, time: datetime) -> None:
+        """Run the relaunch ladder and the escalation housekeeping. Never raises.
+
+        Runs from `check_and_relaunch_command`'s `finally`, so anything escaping
+        would replace the device exception being propagated. The broad `except` is
+        scoped to one call each: this is the background-cycle boundary, mirroring
+        `QSHome.check_loads_commands`' own per-load handler.
+        """
+        try:
+            await self._relaunch_stale_command(time)
+        except Exception as err:  # noqa: BLE001 - background cycle boundary, see docstring
+            _LOGGER.error(
+                "Error relaunching the stale command for load %s: %s", self.name, err, exc_info=True, stack_info=True
+            )
+
+        try:
+            await self._escalate_or_recover(time)
+        except Exception as err:  # noqa: BLE001 - background cycle boundary, see docstring
+            _LOGGER.error(
+                "Error escalating the command state for load %s: %s", self.name, err, exc_info=True, stack_info=True
+            )
+
+    async def _relaunch_stale_command(self, time: datetime) -> None:
+        """Relaunch the in-flight command once its backoff delay has elapsed."""
+        if self.running_command is None:
+            return
+
+        # Checked BEFORE the backoff gate: a load the user disabled should have its
+        # stale slot cleaned up immediately, not only once a possibly-300 s rung has
+        # elapsed. `force_relaunch_command` owns that cleanup — it clears the slot
+        # and never executes anything for a disabled load. Note the branch is
+        # defensive either way: the `qs_enable_device` setter calls `reset()`, which
+        # empties the slot *before* `_enabled` flips, so it is reachable only when
+        # `_enabled` is mutated without the property setter.
+        if self.qs_enable_device is False:
+            await self.force_relaunch_command(time)
+            return
+
+        elapsed = self._seconds_since(time, self.running_command_last_launch)
+        if elapsed is not None and elapsed <= self.command_relaunch_delay_s():
+            return
+
+        if (
+            self._stacked_command is not None
+            and self.is_uncontrollable
+            and self._stacked_command != self.running_command
+            and not self._is_supersede_throttled(time)
+        ):
+            # Once the supersede window has opened, retry the
+            # NEWEST intent rather than the command we already know the device is
+            # ignoring. Without this the stacked command starves forever:
+            # `check_commands` only promotes the stack when the slot empties, and
+            # for an uncontrollable load it never does — so a quiet solver left
+            # the stale command being retried every 300 s in perpetuity.
+            await self.launch_command(time, self._stacked_command, ctxt="relaunch newest stacked intent")
+            return
+
+        await self.force_relaunch_command(time)
+
+    async def _escalate_or_recover(self, time: datetime) -> None:
+        """Cross the lost-control threshold once, or re-arm on an emptied slot."""
+        if (
+            # A load the user disabled must never shout — QS was
+            # explicitly told to leave it alone. The guard sits on the escalation
+            # branch only, so the housekeeping below still runs for a disabled load.
+            self.qs_enable_device is not False
+            and self.running_command is not None
+            and self.running_command_num_relaunch >= NUM_MAX_COMMAND_RELAUNCH
+            and self.unresponsive_since is None
+        ):
+            # `>=` and not `==`: the counter is resettable, so the threshold has
+            # to be a floor. `unresponsive_since is None` is the once-only guard.
+            self.unresponsive_since = time
+            _LOGGER.error(
+                # "in this episode": `abandon_running_command` preserves the rung
+                # across a supersede on purpose, so the count can include
+                # relaunches of this command's predecessors.
+                "Lost control of load %s: command %s not confirmed after %s relaunches in this episode",
+                self.name,
+                self.running_command,
+                self.running_command_num_relaunch,
+            )
+            unresponsive_command = self.running_command
+        else:
+            unresponsive_command = None
+
+        if self.running_command is None:
+            # QS-304 invariant: an empty command slot implies rung 0. The rung
+            # counts relaunches OF THE IN-FLIGHT COMMAND, so with nothing in
+            # flight it describes a command that no longer exists. Leaving it
+            # high would make the NEXT command cross the threshold on its very
+            # first cycle, with zero relaunches and a false "after N
+            # relaunches" message. `abandon_running_command` preserves the rung
+            # on purpose — but that is only sound when a successor is launched
+            # in the same `launch_command` call, with no cycle in between; the
+            # equal-command early-return and the override-suppression drop
+            # leave no successor at all.
+            self.running_command_num_relaunch = 0
+            # Cleared OUTSIDE the gate below: the invalid-probe give-up reaches here
+            # via `_ack_command(time, None)`, which never calls
+            # `_clear_unresponsive`, so a stale anchor would throttle the next
+            # command's first legitimate supersede. That give-up keeps the clock on
+            # purpose.
+            self._last_supersede_time = None
+
+            if self.current_command is not None:
+                # Nothing in flight, so nothing can clear the clock later — re-arm
+                # now. The `current_command` gate exists solely to preserve the
+                # invalid-probe give-up shape: that path nulls `current_command` on
+                # purpose, and an unavailable probe means the device is failing
+                # harder, not recovering.
+                self._clear_unresponsive("the command slot emptied with no successor")
+
+        if unresponsive_command is not None:
+            # The push goes LAST: it is the only part that can realistically raise
+            # (a subclass may dereference optional state), so nothing that matters is
+            # sequenced behind it. `unresponsive_since` is already written, so the
+            # once-only guard holds even if it fails.
+            await self._notify_unresponsive(time, unresponsive_command)
+
     async def force_relaunch_command(self, time: datetime):
         if self.qs_enable_device is False:
-            self.running_command = None
+            # QS-304: route the disabled-device cleanup through the shared drop so
+            # the rung and the lost-control clock go with the slot. Leaving the
+            # clock behind stranded it with no owner, and the next command was then
+            # flagged uncontrollable on its first cycle.
+            self._drop_running_command("the load was disabled")
 
         if self.running_command is not None:
             # review fix QS-256#02: a stale running command suppressed by an
@@ -780,15 +1196,14 @@ class AbstractDevice:
                     self.running_command,
                     self.name,
                 )
-                self.running_command = None
-                self.running_command_num_relaunch = 0
-                self.running_command_num_relaunch_after_invalid = 0
-                self.running_command_first_launch = None
-                self.running_command_last_launch = None
-                # `current_command` is intentionally PRESERVED: it is the last
-                # acked command of record, and a later non-suppressed launch
-                # (e.g. after the override ends) must still be able to compare
-                # against it — only the stale in-flight command is dropped
+                # QS-304: this IS an abandon with no successor — drop the stale
+                # in-flight command without faking an ack, and let the rung and
+                # the lost-control clock go with it (the USER took control, so
+                # there is no retry cadence left to protect). `current_command` is
+                # intentionally PRESERVED: it is the last acked command of record,
+                # and a later non-suppressed launch (e.g. after the override ends)
+                # must still be able to compare against it.
+                self._drop_running_command("suppressed by user override")
                 return
 
             _LOGGER.info(
@@ -1185,6 +1600,23 @@ class AbstractLoad(AbstractDevice):
         self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
     ):
         pass
+
+    async def _notify_unresponsive(self, time: datetime, command: LoadCommand) -> None:
+        """Push one notification when QS loses control of this load.
+
+        QS-304: entry only. There is no recovery push — the channel is a
+        fire-and-forget mobile push with no notification id, so nothing could
+        be dismissed, and the `qs_load_uncontrollable` binary sensor is the
+        live state that clears itself.
+        """
+        await self.on_device_state_change(
+            time,
+            DEVICE_STATUS_CHANGE_ERROR,
+            message=(
+                f"Quiet Solar lost control of `{self.name}`: the command "
+                f"`{command.command}` was sent repeatedly but the device never confirmed it"
+            ),
+        )
 
     def get_update_value_callback_for_constraint_class(
         self, constraint: LoadConstraint

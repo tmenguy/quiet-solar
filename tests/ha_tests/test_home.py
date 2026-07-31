@@ -29,8 +29,9 @@ from custom_components.quiet_solar.const import (
 )
 from custom_components.quiet_solar.ha_model.device import HADeviceMixin
 from custom_components.quiet_solar.ha_model.solar import QSSolar
-from custom_components.quiet_solar.home_model.commands import CMD_IDLE
+from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_ON, copy_command
 from custom_components.quiet_solar.home_model.load import AbstractDevice
+from tests.factories import NeverAcksLoad, attach_minimal_load_to_home
 
 
 class _HashableNS(SimpleNamespace):
@@ -1066,26 +1067,16 @@ async def test_home_update_loads_solver_path(
     home.compute_non_controlled_forecast = AsyncMock(return_value=[])
     home.get_solar_from_current_forecast = MagicMock(return_value=[])
 
-    load = MagicMock()
-    load.name = "Load 1"
-    load.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
-    load.running_command_num_relaunch = 0
-    load.force_relaunch_command = AsyncMock()
-    load.is_load_active = MagicMock(return_value=True)
-    load.update_live_constraints = AsyncMock(return_value=True)
-    load.get_phase_amps_from_power_for_budgeting = MagicMock(return_value=[0, 0, 0])
-    load.launch_command = AsyncMock()
-    load.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
-    load.get_current_active_constraint = MagicMock(return_value=None)
-    load.do_probe_state_change = AsyncMock()
-    load.current_command = None
-    load.father_device = SimpleNamespace(is_delta_current_acceptable=MagicMock(return_value=True))
-
-    home._all_loads = [load]
+    time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+    # QS-304: a real load — `check_loads_commands` now drives the real
+    # probe/relaunch/escalate lifecycle, which a MagicMock breaks silently.
+    load = attach_minimal_load_to_home(home, name="Load 1", time=time, with_constraint=True)
+    load.launch_command = AsyncMock(wraps=load.launch_command)
     home._chargers = [load]
 
     battery = MagicMock()
     battery.launch_command = AsyncMock()
+    battery.check_and_relaunch_command = AsyncMock(return_value=True)
     home.physical_battery = battery
 
     class DummySolver:
@@ -1097,7 +1088,6 @@ async def test_home_update_loads_solver_path(
             return ([(load, [(cmd_time, CMD_IDLE)])], [(cmd_time, CMD_IDLE)])
 
     with patch("custom_components.quiet_solar.ha_model.home.PeriodSolver", DummySolver):
-        time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
         await home.update_loads(time)
 
     load.launch_command.assert_awaited()
@@ -1375,27 +1365,27 @@ async def test_home_update_loads_relaunch_and_forbid(
     home.finish_setup = AsyncMock(return_value=True)
     home.update_loads_constraints = AsyncMock()
 
-    load = MagicMock()
-    load.name = "Load 2"
-    load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
-    load.running_command_num_relaunch = 0
-    load.force_relaunch_command = AsyncMock()
-    load.is_load_active = MagicMock(return_value=True)
-    load.update_live_constraints = AsyncMock(return_value=False)
-    load.get_phase_amps_from_power_for_budgeting = MagicMock(return_value=[1, 1, 1])
-    load.launch_command = AsyncMock()
-    load.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
-    load.get_current_active_constraint = MagicMock(return_value=None)
-    load.do_probe_state_change = AsyncMock()
+    time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+    # QS-304: a real load that never acks, with a genuinely stale in-flight
+    # command — 60 s of silence against a 50 s first rung — is what makes the
+    # driver relaunch. A MagicMock would swallow the whole path.
+    load = attach_minimal_load_to_home(
+        home, name="Load 2", time=time, with_constraint=True, load_class=NeverAcksLoad
+    )
     load.current_command = CMD_IDLE
-    load.father_device = SimpleNamespace(is_delta_current_acceptable=MagicMock(return_value=False))
+    load.running_command = copy_command(CMD_ON, power_consign=1000.0)
+    load.running_command_first_launch = time - timedelta(seconds=60)
+    load.running_command_last_launch = time - timedelta(seconds=60)
+    load.force_relaunch_command = AsyncMock(wraps=load.force_relaunch_command)
+    load.update_live_constraints = AsyncMock(return_value=False)
+    # The load's real `father_device` is the home; refuse the amps delta there.
+    home.is_delta_current_acceptable = MagicMock(return_value=False)
 
-    home._all_loads = [load]
-    home._commands = [(load, [(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC), CMD_IDLE)])]
+    home._commands = [(load, [(time, CMD_IDLE)])]
     home._battery_commands = []
     home._last_solve_done = datetime(2026, 1, 15, 8, 59, tzinfo=pytz.UTC)
 
-    await home.update_loads(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
+    await home.update_loads(time)
 
     load.force_relaunch_command.assert_awaited()
 
@@ -2141,26 +2131,27 @@ async def test_home_update_loads_no_solver(
     home.update_loads_constraints = AsyncMock()
     home._last_solve_done = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
 
-    load = MagicMock()
-    load.name = "load1"
-    load.running_command_num_relaunch = 0
-    load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
-    load.force_relaunch_command = AsyncMock()
-    load.is_load_active = MagicMock(return_value=True)
-    load.update_live_constraints = AsyncMock(return_value=False)
-    load.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
-    load.get_current_active_constraint = MagicMock(return_value=None)
-    load.launch_command = AsyncMock()
-    load.do_probe_state_change = AsyncMock()
+    time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+    # QS-304: a real never-acking load with a stale in-flight command.
+    load = attach_minimal_load_to_home(
+        home, name="load1", time=time, with_constraint=True, load_class=NeverAcksLoad
+    )
     load.current_command = CMD_IDLE
+    load.running_command = copy_command(CMD_ON, power_consign=1000.0)
+    load.running_command_first_launch = time - timedelta(seconds=60)
+    load.running_command_last_launch = time - timedelta(seconds=60)
+    load.force_relaunch_command = AsyncMock(wraps=load.force_relaunch_command)
+    load.update_live_constraints = AsyncMock(return_value=False)
+    load.launch_command = AsyncMock(wraps=load.launch_command)
+    load.do_probe_state_change = AsyncMock(wraps=load.do_probe_state_change)
+    load.get_current_active_constraint = MagicMock(return_value=None)
 
-    home._all_loads = [load]
     home._chargers = []
     home.physical_battery = None
     home._commands = []
     home._battery_commands = []
 
-    await home.update_loads(datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC))
+    await home.update_loads(time)
 
     load.force_relaunch_command.assert_called()
     load.launch_command.assert_called()
@@ -2550,32 +2541,37 @@ async def test_home_update_loads_error_paths(
     home.compute_non_controlled_forecast = AsyncMock(return_value=[])
     home.get_solar_from_current_forecast = MagicMock(return_value=[])
 
-    inactive_load = MagicMock()
-    inactive_load.name = "inactive"
+    # QS-304: real loads — one inactive (no constraint), one active whose
+    # live-constraint update blows up. Both carry a stale in-flight command so
+    # the relaunch ladder is really exercised.
+    inactive_load = attach_minimal_load_to_home(home, name="inactive", load_class=NeverAcksLoad)
+    inactive_load.running_command = copy_command(CMD_ON, power_consign=1000.0)
     inactive_load.running_command_num_relaunch = 3
-    inactive_load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
-    inactive_load.is_load_active = MagicMock(return_value=False)
-    inactive_load.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
-    inactive_load.get_current_active_constraint = MagicMock(return_value=None)
-    inactive_load.launch_command = AsyncMock()
-    inactive_load.do_probe_state_change = AsyncMock()
+    inactive_load.running_command_first_launch = time_now - timedelta(seconds=60)
+    inactive_load.running_command_last_launch = time_now - timedelta(seconds=60)
 
-    active_load = MagicMock()
-    active_load.name = "active"
-    active_load.running_command_num_relaunch = 3
-    active_load.check_commands = AsyncMock(return_value=(timedelta(seconds=60), False))
-    active_load.is_load_active = MagicMock(return_value=True)
-    active_load.update_live_constraints = AsyncMock(side_effect=RuntimeError("boom"))
-    active_load.is_load_has_a_command_now_or_coming = MagicMock(return_value=True)
-    active_load.get_current_active_constraint = MagicMock(return_value=True)
-    active_load.launch_command = AsyncMock()
-    active_load.do_probe_state_change = AsyncMock()
+    active_load = attach_minimal_load_to_home(
+        home, name="active", time=time_now, with_constraint=True, load_class=NeverAcksLoad
+    )
     active_load.current_command = CMD_IDLE
+    active_load.running_command = copy_command(CMD_ON, power_consign=1000.0)
+    active_load.running_command_num_relaunch = 3
+    active_load.running_command_first_launch = time_now - timedelta(seconds=60)
+    active_load.running_command_last_launch = time_now - timedelta(seconds=60)
+    active_load.update_live_constraints = AsyncMock(side_effect=RuntimeError("boom"))
 
-    home._all_loads = [inactive_load, active_load]
     home._chargers = []
 
     await home.update_loads(time_now)
+
+    # Review fix #01/25: assert BOTH halves the comment claims. The active load
+    # keeps being retried rather than deadlocked, and the inactive one (no
+    # constraint, so `is_load_active` is False) is still swept by
+    # `check_loads_commands` and climbs its own ladder — being inactive exempts a
+    # load from the solver, not from command reconciliation.
+    assert active_load.running_command is not None
+    assert inactive_load.is_load_active(time_now) is False
+    assert inactive_load.running_command is not None
 
 
 async def test_home_update_loads_charger_only(
@@ -2594,16 +2590,11 @@ async def test_home_update_loads_charger_only(
     home.update_loads_constraints = AsyncMock()
     home._last_solve_done = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
 
-    charger = MagicMock()
-    charger.name = "charger"
-    charger.running_command_num_relaunch = 0
-    charger.check_commands = AsyncMock(return_value=(timedelta(seconds=0), True))
-    charger.is_load_active = MagicMock(return_value=False)
-    charger.is_load_has_a_command_now_or_coming = MagicMock(return_value=False)
-    charger.get_current_active_constraint = MagicMock(return_value=None)
-    charger.launch_command = AsyncMock()
-    charger.do_probe_state_change = AsyncMock()
+    # QS-304: a real load standing in for the charger, so the driver runs the
+    # real `check_and_relaunch_command`.
+    charger = attach_minimal_load_to_home(home, name="charger")
     charger.current_command = CMD_IDLE
+    charger.launch_command = AsyncMock(wraps=charger.launch_command)
 
     home._chargers = [charger]
     home._all_loads = []
@@ -2612,6 +2603,10 @@ async def test_home_update_loads_charger_only(
     home._battery_commands = []
 
     await home.update_loads(datetime(2026, 1, 15, 9, 45, tzinfo=pytz.UTC))
+
+    # Charger-only mode drives the charger list, and the inactive charger gets
+    # pushed back to idle.
+    charger.launch_command.assert_awaited()
 
 
 async def test_home_finish_setup_initializes_devices(

@@ -4,7 +4,7 @@ slug: off-grid-mode
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-07-04
+last_verified: 2026-07-31
 ---
 
 # Off-grid mode
@@ -55,6 +55,25 @@ mode for maintenance windows. It does not auto-recover.
 - Off-grid detection logic on `QSHome` (in the state polling cycle).
 - Broadcast helper: routes through every configured `QSPerson`'s
   mobile-app entity.
+- `finish_off_grid_switch(time)` gates the transition on
+  `check_loads_commands(time)`: the switch only completes once **every**
+  load reports its command confirmed-or-good. QS-304 tightened that
+  contract in two ways:
+  - a load whose command never converges keeps reporting not-good
+    forever, so it holds the transition back indefinitely rather than
+    being silently given up on;
+  - a load whose command cycle **raises** now also falsifies `all_ok`.
+    It is equally unconfirmed, and treating it as OK let the transition
+    complete with an unlanded command.
+
+  So an unresponsive or exploding load blocks the off-grid switch. That
+  is deliberate — switching to island power while a load is still in an
+  unknown state is the riskier failure.
+
+  Not to be confused with `HOME_MODE_OFF`: that is the *managing* mode
+  switch, and QS-304 releases every device's lost-control state on its
+  `update_loads` early return. `OFF_GRID` is an island-power state in
+  which QS keeps managing loads, so nothing is released there.
 
 ## Lifecycle
 

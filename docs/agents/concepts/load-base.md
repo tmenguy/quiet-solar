@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-30
+last_verified: 2026-07-31
 ---
 
 # AbstractDevice & AbstractLoad
@@ -63,7 +63,134 @@ Command lifecycle (`AbstractDevice`):
   call, ACK not yet observed.
 - `acked` / `current_command` — `probe_if_command_set()` confirmed.
 - Stacking: when a device is busy with a `running_command`, additional
-  pending commands stack until ACK clears the slot.
+  pending commands stack until ACK clears the slot — *unless* QS has
+  lost control, in which case the newer command supersedes the stale
+  one (see below).
+
+Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
+
+- `check_and_relaunch_command(time)` is the whole retry lifecycle, and
+  it is the *only* thing `QSHome.check_loads_commands` calls. Probe →
+  ack-or-relaunch → escalate-or-re-arm. It returns
+  `command_acked_or_good` for the caller's `all_ok` aggregation.
+- **Saturating backoff, not a give-up.** `command_relaunch_delay_s()`
+  returns `COMMAND_RELAUNCH_BASE_DELAY_S * min(n + 1,
+  NUM_MAX_COMMAND_RELAUNCH)` — 50, 100, 150, 200, 250, 300 s and then
+  300 s **forever**. Two distinct indices, deliberately named apart:
+  the *delay* stops growing at `n == 5`; the *uncontrollable threshold*
+  is `n >= 6` (1050 s cumulative). Before QS-304 the second index
+  meant "give up", which bricked the load's command slot permanently.
+- **One durable clock.** `unresponsive_since` is set once when the
+  threshold is crossed (one ERROR, one push) and cleared *only* by
+  `_clear_unresponsive` — the single writer, so "one line in, one line
+  out" cannot drift.
+- **`is_uncontrollable` is internal state, not an entity.** It decides
+  supersede-vs-stack in `launch_command` and gates the one-shot
+  escalation; nothing exposes it to Home Assistant. That is why a clock
+  that outlives its command is a nuisance rather than a user-visible bug.
+- **`is_uncontrollable` needs `running_command is not None`.** That
+  conjunct is load-bearing, not defensive. The remaining path that
+  empties the slot while keeping the clock is the
+  `NUM_MAX_INVALID_PROBES_COMMANDS` give-up, which nulls
+  `current_command` on purpose (preserving it would bill phantom
+  consumption into the persisted forecast) and so cannot re-arm. Without
+  the conjunct an `unresponsive_since`-only property would stay `True`
+  forever with no retry left to clear it. If we are not waiting on
+  anything, we are not uncontrollable. That give-up also makes the *next*
+  command inherit the clock — see #308.
+- **Four clearers, one writer.** `_clear_unresponsive` is the only writer;
+  it is reached by an ack, by the empty-slot re-arm, by
+  `_drop_running_command` (**unconditionally** — an emptied slot has no
+  owner for the clock whether or not a confirmed command ever existed), and
+  by a `keep_commands=False` wipe. It also clears the supersede anchor
+  *ahead of* its own early return, so the two fields cannot
+  desynchronise.
+- **Both clock comparisons go through `_seconds_since`.** It returns
+  `None` for "no anchor" and for an anchor in the *future*, which means
+  "treat as fully elapsed". A backwards clock step (HA booting without an
+  RTC, then NTP correcting) otherwise makes the delta negative — trivially
+  below any threshold — which freezes the supersede throttle *and* stops
+  the relaunch ladder advancing, so the rung can never reach the
+  escalation threshold: a silently deadlocked slot with no ERROR and no
+  PROBLEM sensor. One primitive so the two sites cannot drift apart.
+- **`launch_command` guards its probe as well as its execute.** An
+  unguarded `probe_if_command_set` re-created the deadlock on the
+  stack-promotion path: it consumed the intent, stamped both the throttle
+  and the staleness clock, and skipped the rung — and since
+  `SUPERSEDE_MIN_INTERVAL_S == COMMAND_RELAUNCH_BASE_DELAY_S *
+  NUM_MAX_COMMAND_RELAUNCH`, the window and the ladder delay expired
+  together so the path was re-entered forever with zero service calls. A
+  raising probe is treated exactly like one returning `None`: go on and
+  execute.
+- **Supersession + throttle.** A *differing* command against an
+  uncontrollable load calls `abandon_running_command` and executes, at
+  most once per `SUPERSEDE_MIN_INTERVAL_S` (300 s); inside the window it
+  becomes `_stacked_command` (last-wins). An *equal* command is absorbed
+  with no service call at any rung. A differing command against a
+  *healthy* load is stacked, exactly as before.
+- **Two abandon flavours, and picking the wrong one is a bug.**
+  `abandon_running_command` preserves `running_command_num_relaunch`
+  (along with `current_command` = last *confirmed* command,
+  `prev_command`, `num_on_off`, `unresponsive_since` and
+  `_last_supersede_time`), because zeroing the rung would restart the
+  ladder at 50 s after every supersede — ~1150 service calls/day
+  instead of ~288. That is only sound **when a successor is launched in
+  the same call**. When the slot is left empty, use
+  `_drop_running_command`, which additionally zeroes the rung and
+  releases the clock: with nothing in flight, the rung describes a
+  command that no longer exists and the clock has lost its subject.
+- **The supersede is an intent, committed late.** `launch_command`
+  decides to supersede, then still has to pass the
+  override-suppression and `current_command == command` gates. Both the
+  `_last_supersede_time` stamp and the abandon therefore happen next to
+  `self.running_command = command`, so a supersede that launches
+  nothing neither burns the 300 s window nor leaves a spent rung
+  behind. The two gate-returns route through `_drop_running_command`.
+- **The clock dies with the command state it describes.**
+  `constraint_reset_and_reset_commands_if_needed(keep_commands=False)`
+  wipes `current_command` *and* `running_command`, so it also releases
+  the clock. `keep_commands=True` touches no command state and the
+  clock survives. Skipping this makes the clock ownerless, and the
+  first command after a reset-button press or a disable/re-enable is
+  declared uncontrollable on its very first cycle.
+- **A disabled load never shouts.** The escalation branch is gated on
+  `qs_enable_device`; the housekeeping half still runs. QS was
+  explicitly told to leave the load alone, so it must not push.
+- **One shape keeps the clock with an empty slot**: the
+  `NUM_MAX_INVALID_PROBES_COMMANDS` give-up goes through
+  `_ack_command(time, None)`, which nulls `current_command` on purpose
+  (preserving it would bill phantom consumption into the persisted
+  forecast) and so cannot re-arm. The *next* command therefore inherits
+  the clock. Consequence is limited to supersede-vs-stack choice — there
+  is no entity exposing `is_uncontrollable` — and the once-only guard
+  means no repeat notification. The supersede **anchor** is released on
+  that path (in `_escalate_or_recover`'s housekeeping arm, outside the
+  `current_command` gate) so a fresh command's first legitimate supersede
+  is not throttled.
+- **"One service call per 300 s" is per command *identity*, not per
+  load.** The relaunch ladder and the supersede throttle are measured on
+  two independent anchors, so a relaunch immediately followed by a
+  superseding command can produce two calls inside one nominal window —
+  bounded to one extra per episode. Deliberately not coupled: one shared
+  clock would let a supersede delay the ladder, or a relaunch delay a
+  newer intent.
+- **Invariant:** anything meaning "we have lost control" reads
+  `is_uncontrollable`, never `running_command_num_relaunch`. The
+  counter is resettable; the clock is not.
+- **`check_and_relaunch_command` never lets housekeeping mask a device
+  error.** The relaunch + escalation run from a `finally` via
+  `_finish_command_cycle`, which isolates and logs each half — a
+  secondary failure (a raising probe reached again through
+  `force_relaunch_command`, or a push blowing up) must not replace the
+  real device exception on its way to `QSHome`'s per-load log. The push
+  is issued last, for the same reason.
+- **No lock.** `QSDataHandler._update_loads_lock` guards only
+  `async_update_loads`; `button.py` calls `user_clean_and_reset`,
+  `user_clean_constraints`, `mark_current_constraint_has_done` and
+  `async_reset_override_state` straight from a press, unlocked. The
+  invariant relied upon is narrower: each command-slot mutation happens
+  between `await`s, and the clock is only ever cleared alongside the
+  command state it describes.
 
 Switching-cost protection (`AbstractDevice`):
 
@@ -110,6 +237,15 @@ Switching-cost protection (`AbstractDevice`):
   arithmetic never raises (review fix QS-256#02). The persisted payload
   keys themselves are the `STORAGE_KEY_*` constants in `const.py`
   (review fix QS-256#05).
+- `unresponsive_since` / `is_uncontrollable` /
+  `command_relaunch_delay_s()` / `abandon_running_command(time, reason)`
+  / `_drop_running_command(time, reason)` /
+  `check_and_relaunch_command(time)` / `_finish_command_cycle(time)` /
+  `_is_supersede_throttled(time)` / `_notify_unresponsive(time,
+  command)` — the QS-304 lost-control surface. `_notify_unresponsive` is
+  a documented no-op on `AbstractDevice` (the battery reaches the same
+  driver and has no notification channel) and is overridden on
+  `AbstractLoad` to push one `DEVICE_STATUS_CHANGE_ERROR`.
 - `last_command_execution_time` — in-memory causality anchor, set
   only on real `execute_command` successes (via the shared
   `_anchor_causality_guard_if_executed` helper called from
@@ -131,6 +267,29 @@ Switching-cost protection (`AbstractDevice`):
   uniformly.
 - Importing `homeassistant.*` into `home_model/load.py`. The two-
   layer boundary is non-negotiable.
+- Keying "we have lost control" on `running_command_num_relaunch`.
+  `abandon_running_command` no longer zeroes it, but `_ack_command`
+  still does — read `is_uncontrollable` instead (QS-304).
+- Adding a give-up that empties `running_command` without either
+  clearing `unresponsive_since` (sensor pinned on, recovery edge
+  unreachable) or deliberately keeping it (a probe that went
+  *unavailable* is the device failing harder, not recovering — that is
+  why the empty-slot clear is guarded on `current_command is not None`).
+- Calling `abandon_running_command` on a path that does not go on to
+  launch a successor. It preserves the rung by design; use
+  `_drop_running_command` instead, or the next command inherits a spent
+  ladder and is declared uncontrollable with zero relaunches of its own.
+- Comparing a stored timestamp against `time` directly. Use
+  `_seconds_since`, or a rewound clock silently freezes whatever the
+  comparison gates.
+- Adding an `await` in `launch_command` whose exception can escape. The
+  slot, the throttle anchor and the rung are mutated around it, so an
+  escape leaves them inconsistent — that is exactly how the deadlock was
+  re-created once already.
+- Using a `MagicMock` as a load in a `check_loads_commands` /
+  `update_loads` test. The resulting `TypeError` is swallowed by the
+  per-load `except`, `all_ok` stays `True`, and your assertions never
+  fire. Use `tests.factories.attach_minimal_load_to_home`.
 
 ## See also
 
