@@ -1,24 +1,24 @@
 {## ============================================================ ##}
 {## LEGRAND FAÇADE SWITCHES - per-device list to map             ##}
 {## ============================================================ ##}
-{## Add one entry per Legrand switch you want to expose as a     ##}
-{## resilient (HK-with-cloud-fallback) façade.                   ##}
-{## Each entry is a dict with two required keys + one optional:  ##}
-{##   slug          : (required) short snake_case id. Generates   ##}
-{##                   input_boolean.<slug>_state,                 ##}
-{##                   input_boolean.<slug>_command,               ##}
-{##                   switch.<slug>_facade.                       ##}
-{##                   Pick a slug that does NOT collide with any  ##}
-{##                   Netatmo cloud entity name.                  ##}
-{##   name          : (required) friendly name shown in HA UI and ##}
-{##                   (with the "HA <name> Mirror"/"HA <name> Cmd"##}
-{##                   prefix) in Apple Home.                      ##}
-{##   cloud_entity  : (optional) the existing Netatmo cloud       ##}
-{##                   switch entity_id used as the fallback leg.  ##}
-{##                   If omitted, the façade is HK-only: it will  ##}
-{##                   be unavailable whenever either health sensor##}
-{##                   is off, and turn_on/turn_off only drive the ##}
-{##                   HK command boolean.                         ##}
+{## Add one entry per Legrand switch to expose as a façade whose ##}
+{## reported state can be trusted.                               ##}
+{## Each entry is a dict with two required keys + one optional:   ##}
+{##   slug          : (required) short snake_case id. Generates    ##}
+{##                   input_boolean.<slug>_state, _command, and    ##}
+{##                   switch.<slug>_facade. Must NOT collide with  ##}
+{##                   any Netatmo cloud entity name.               ##}
+{##   name          : (required) friendly name. Any characters are ##}
+{##                   safe -- every use is | tojson escaped.       ##}
+{##   cloud_entity  : (OPTIONAL) a Netatmo cloud switch entity_id, ##}
+{##                   driven as a SECOND actuation channel in      ##}
+{##                   parallel with the HomeKit boolean. NEVER     ##}
+{##                   read -- writing actuates, but reading only   ##}
+{##                   echoes Netatmo's last command. When absent   ##}
+{##                   the device is HomeKit-only and gets the SAME ##}
+{##                   façade (same trust, wait, notify, dismiss),  ##}
+{##                   just no cloud channel. No separate variant.  ##}
+{## The façade is NEVER unavailable: untrusted reports unknown.    ##}
 {## ============================================================ ##}
 {%- set legrand_switches_to_map = namespace(switches = []) %}
 
@@ -159,9 +159,9 @@ input_boolean:
     name: "HomeKit Hub Alive"
 {%- for s in legrand_switches_to_map.switches %}
   {{ s.slug }}_state:
-    name: "{{ s.name }} - HK Mirror (read)"
+    name: {{ (s.name ~ " - HK Mirror (read)") | tojson }}
   {{ s.slug }}_command:
-    name: "{{ s.name }} - HK Command (write)"
+    name: {{ (s.name ~ " - HK Command (write)") | tojson }}
 {%- endfor %}
 
 template:
@@ -277,120 +277,152 @@ template:
         name: QS Radiateur Serviette Arthur
         state: {{ "'{{ is_state(''climate.salle_de_bains_darthur'', ''heat'') }}'" }}
 {##  --- BEGIN: generated Legrand façade switches --- ##}
+{#- ================================================================================ -#}
+{#- RULE: Never trust a value you just wrote. Never report a value you can't trust.  -#}
+{#-                                                                                  -#}
+{#- We write input_boolean.<slug>_command and we write the Netatmo cloud switch, so  -#}
+{#- NEITHER can be evidence -- they only echo what we told them. The Netatmo switch  -#}
+{#- writes state optimistically and read 'off' all day on 2026-07-27 while the       -#}
+{#- boiler drew 2353 W. input_boolean.<slug>_state (the mirror) is written only by   -#}
+{#- Apple Home from watching the real device: the ONLY honest witness, and the only  -#}
+{#- leg used for state and for both waits. Do not "restore symmetry" by re-adding a  -#}
+{#- cloud term -- a backup that lies is worse than no backup.                        -#}
+{#-                                                                                  -#}
+{#- FOUR THINGS HERE LOOK TIDYABLE. NONE ARE:                                        -#}
+{#-  1. There is deliberately NO availability: key. A falsy availability makes HA    -#}
+{#-     drop the entity from entity-service calls with only a warning, silently      -#}
+{#-     swallowing every actuation -- and the health sensors force themselves off    -#}
+{#-     for 120 s after each HA restart. Untrusted must stay AVAILABLE.              -#}
+{#-  2. The untrusted branch emits none, not the string 'unknown'. cv.boolean is     -#}
+{#-     applied without none_on_unknown_unavailable, so a string logs an ERROR on    -#}
+{#-     every evaluation.                                                            -#}
+{#-  3. The cloud write sits alone in a parallel: branch because pyatmo raises       -#}
+{#-     plain Exception subclasses, which continue_on_error does NOT swallow.        -#}
+{#-  4. Do NOT reorder hk_ok = is_state(link) and is_state(hub). Jinja               -#}
+{#-     short-circuits, so WHICH ENTITIES GET TRACKED DEPENDS ON THE RENDER PATH:    -#}
+{#-     while the link reads off the hub is never evaluated, so it is not            -#}
+{#-     subscribed. Benign here (link recovery re-renders), but reordering or        -#}
+{#-     splitting this can strand the template on a sensor it never subscribed to    -#}
+{#-     -- the most common cause of "my template switch doesn't update".             -#}
+{#-                                                                                  -#}
+{#- THE APPLE-SIDE HALF, OUTSIDE THIS REPO. HA never writes the mirror; TWO Apple    -#}
+{#- Home automations do, and BOTH must exist for every device above:                 -#}
+{#-  (1) EDGE, one pair per device -- the fast path:                                 -#}
+{#-        <homekit_device> ON  -> set <slug>_state ON                               -#}
+{#-        <homekit_device> OFF -> set <slug>_state OFF                              -#}
+{#-      Follows a real change in 2-3 s, which is what the 10 s waits rely on.       -#}
+{#-      Driven by HomeKit change events, which can stop arriving silently.          -#}
+{#-  (2) PERIODIC RESYNC, one Shortcut for all devices -- the safety net:            -#}
+{#-        input_boolean.legrand_ticker switches ON -> Shortcut that, per device:    -#}
+{#-            if <homekit_device> is on -> set <slug>_state ON                      -#}
+{#-            else                      -> set <slug>_state OFF                     -#}
+{#-      Writes the observed value EVERY tick, changed or not, making the mirror     -#}
+{#-      polled rather than event-driven. Within one ticker period it heals: a       -#}
+{#-      mirror frozen by a lost subscription; staleness after HA downtime; a NEW    -#}
+{#-      device whose mirror Apple never wrote (it reads off, and would otherwise    -#}
+{#-      be trusted as a confident off -- the incident signature); and a stray tap   -#}
+{#-      or scene sweep. The cadence is set in automations.yaml, NOT here, and it    -#}
+{#-      bounds all of the above.                                                    -#}
+{#-                                                                                  -#}
+{#- ADDING A DEVICE: add its mirror to BOTH automations. With (1) only it is fine    -#}
+{#- until the first freeze; with (2) only, every command times out and notifies;     -#}
+{#- with neither, the facade trusts a mirror nobody writes -- which reads off.       -#}
+{#-                                                                                  -#}
+{#- NEITHER AUTOMATION IS OBSERVABLE FROM HA and Apple has no execution log, so a    -#}
+{#- Shortcut that silently stops degrades this to event-driven only, unnoticed.      -#}
+{#-                                                                                  -#}
+{#- Because (2) rewrites unchanged values, HA advances the mirror's last_reported    -#}
+{#- each tick while last_changed does not, making last_reported a usable freshness   -#}
+{#- signal. NOT used yet -- see the story's Issue D.                                 -#}
+{#-                                                                                  -#}
+{#- Derivation, citations and residuals: docs/stories/QS-305.story.md and its three  -#}
+{#- review fix plans. Do not re-derive from memory.                                  -#}
+{#- ================================================================================ -#}
 {%- for s in legrand_switches_to_map.switches %}
-{%- if s.cloud_entity is defined %}
-{##  --- Cloud-backed variant: HK preferred, cloud fallback --- ##}
+{##  --- Dual-channel actuation, mirror-only trust --- ##}
   - switch:
       - unique_id: {{ s.slug }}_facade
         default_entity_id: switch.{{ s.slug }}_facade
-        name: {{ s.name }}
+        name: {{ s.name | tojson }}
         state: >
           {{ "{% set hk_ok = is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') %}" }}
           {{ "{% set mirror = states('input_boolean." ~ s.slug ~ "_state') %}" }}
-          {{ "{% set cloud = states('" ~ s.cloud_entity ~ "') %}" }}
           {{ "{% set mirror_valid = hk_ok and mirror in ['on','off'] %}" }}
-          {{ "{% set cloud_valid = cloud in ['on','off'] %}" }}
-          {{ "{% if mirror_valid and cloud_valid and mirror != cloud %}" }}
-            {{ "{% set m_t = states['input_boolean." ~ s.slug ~ "_state'].last_changed %}" }}
-            {{ "{% set c_t = states['" ~ s.cloud_entity ~ "'].last_changed %}" }}
-            {{ "{{ (mirror if m_t > c_t else cloud) == 'on' }}" }}
-          {{ "{% elif mirror_valid %}" }}
+          {{ "{% if mirror_valid %}" }}
             {{ "{{ mirror == 'on' }}" }}
-          {{ "{% elif cloud_valid %}" }}
-            {{ "{{ cloud == 'on' }}" }}
           {{ "{% else %}" }}
-            unknown
+            {{ "{{ none }}" }}
           {{ "{% endif %}" }}
-        availability: >
-          {{ "{{ (is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on')) or states('" ~ s.cloud_entity ~ "') in ['on','off'] }}" }}
-        turn_on:
-          - variables:
-              hk_ok: >
-                {{ "{{ is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') }}" }}
-          - choose:
-              - conditions: {{ '"{{ hk_ok }}"' }}
-                sequence:
-                  - action: input_boolean.turn_on
-                    target:
-                      entity_id: input_boolean.{{ s.slug }}_command
-                  - wait_template: >-
-                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') or is_state('" ~ s.cloud_entity ~ "', 'on') }}" }}
-                    timeout: "00:00:10"
-                    continue_on_timeout: true
-                  - choose:
-                      - conditions: >-
-                          {{ "{{ not (is_state('input_boolean." ~ s.slug ~ "_state', 'on') or is_state('" ~ s.cloud_entity ~ "', 'on')) }}" }}
-                        sequence:
-                          - action: persistent_notification.create
-                            data:
-                              title: "{{ s.name }} - HK turn_on timed out"
-                              message: "Mirror did not confirm in 10 s; falling back to cloud."
-                          - action: switch.turn_on
-                            target:
-                              entity_id: {{ s.cloud_entity }}
-            default:
-              - action: switch.turn_on
-                target:
-                  entity_id: {{ s.cloud_entity }}
-              - action: input_boolean.turn_on
-                target:
-                  entity_id: input_boolean.{{ s.slug }}_command
-        turn_off:
-          - variables:
-              hk_ok: >
-                {{ "{{ is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') }}" }}
-          - choose:
-              - conditions: {{ '"{{ hk_ok }}"' }}
-                sequence:
-                  - action: input_boolean.turn_off
-                    target:
-                      entity_id: input_boolean.{{ s.slug }}_command
-                  - wait_template: >-
-                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'off') or is_state('" ~ s.cloud_entity ~ "', 'off') }}" }}
-                    timeout: "00:00:10"
-                    continue_on_timeout: true
-                  - choose:
-                      - conditions: >-
-                          {{ "{{ not (is_state('input_boolean." ~ s.slug ~ "_state', 'off') or is_state('" ~ s.cloud_entity ~ "', 'off')) }}" }}
-                        sequence:
-                          - action: persistent_notification.create
-                            data:
-                              title: "{{ s.name }} - HK turn_off timed out"
-                              message: "Mirror did not confirm in 10 s; falling back to cloud."
-                          - action: switch.turn_off
-                            target:
-                              entity_id: {{ s.cloud_entity }}
-            default:
-              - action: switch.turn_off
-                target:
-                  entity_id: {{ s.cloud_entity }}
-              - action: input_boolean.turn_off
-                target:
-                  entity_id: input_boolean.{{ s.slug }}_command
-{%- else %}
-{##  --- HK-only variant: no cloud fallback --- ##}
-  - switch:
-      - unique_id: {{ s.slug }}_facade
-        default_entity_id: switch.{{ s.slug }}_facade
-        name: {{ s.name }}
-        state: >
-          {{ "{% set hk_ok = is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') %}" }}
-          {{ "{% if hk_ok and states('input_boolean." ~ s.slug ~ "_state') in ['on','off'] %}" }}
-            {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
-          {{ "{% else %}" }}
-            unknown
-          {{ "{% endif %}" }}
-        availability: >
-          {{ "{{ is_state('binary_sensor.legrand_homekit_link_healthy', 'on') and is_state('binary_sensor.homekit_hub_healthy', 'on') }}" }}
         turn_on:
           - action: input_boolean.turn_on
             target:
               entity_id: input_boolean.{{ s.slug }}_command
+            continue_on_error: true
+          - parallel:
+{%- if s.cloud_entity is defined %}
+              - sequence:
+                  - action: switch.turn_on
+                    target:
+                      entity_id: {{ s.cloud_entity }}
+                    continue_on_error: true
+{%- endif %}
+              - sequence:
+                  - wait_template: >-
+                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
+                    timeout: "00:00:10"
+                    continue_on_timeout: true
+                  - choose:
+                      - conditions: >-
+                          {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'on') }}" }}
+                        sequence:
+                          - action: persistent_notification.create
+                            data:
+                              title: {{ (s.name ~ " - turn_on not confirmed") | tojson }}
+                              message: >-
+                                {{ "{{ 'Commanded on via the HomeKit boolean" ~ (" and the Netatmo cloud," if s.cloud_entity is defined else " (this device has no cloud channel),") ~ " but the mirror did not confirm on within 10 s. mirror=' ~ states('input_boolean." ~ s.slug ~ "_state') ~ ' at ' ~ now().isoformat() }}" }}
+                              notification_id: {{ s.slug }}_facade_on_unconfirmed
+                    default:
+                      - action: persistent_notification.dismiss
+                        data:
+                          notification_id: {{ s.slug }}_facade_on_unconfirmed
+                      - action: persistent_notification.dismiss
+                        data:
+                          notification_id: {{ s.slug }}_facade_off_unconfirmed
         turn_off:
           - action: input_boolean.turn_off
             target:
               entity_id: input_boolean.{{ s.slug }}_command
+            continue_on_error: true
+          - parallel:
+{%- if s.cloud_entity is defined %}
+              - sequence:
+                  - action: switch.turn_off
+                    target:
+                      entity_id: {{ s.cloud_entity }}
+                    continue_on_error: true
 {%- endif %}
+              - sequence:
+                  - wait_template: >-
+                      {{ "{{ is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
+                    timeout: "00:00:10"
+                    continue_on_timeout: true
+                  - choose:
+                      - conditions: >-
+                          {{ "{{ not is_state('input_boolean." ~ s.slug ~ "_state', 'off') }}" }}
+                        sequence:
+                          - action: persistent_notification.create
+                            data:
+                              title: {{ (s.name ~ " - turn_off not confirmed") | tojson }}
+                              message: >-
+                                {{ "{{ 'Commanded off via the HomeKit boolean" ~ (" and the Netatmo cloud," if s.cloud_entity is defined else " (this device has no cloud channel),") ~ " but the mirror did not confirm off within 10 s. mirror=' ~ states('input_boolean." ~ s.slug ~ "_state') ~ ' at ' ~ now().isoformat() }}" }}
+                              notification_id: {{ s.slug }}_facade_off_unconfirmed
+                    default:
+                      - action: persistent_notification.dismiss
+                        data:
+                          notification_id: {{ s.slug }}_facade_on_unconfirmed
+                      - action: persistent_notification.dismiss
+                        data:
+                          notification_id: {{ s.slug }}_facade_off_unconfirmed
 {%- endfor %}
 {## --- END: generated Legrand façade switches --- ##}
   - binary_sensor:
@@ -589,9 +621,9 @@ homekit:
         name: TV Salon
 {%- for s in legrand_switches_to_map.switches %}
       input_boolean.{{ s.slug }}_state:
-        name: LHK {{ s.name }} Mirror
+        name: {{ ("LHK " ~ s.name ~ " Mirror") | tojson }}
       input_boolean.{{ s.slug }}_command:
-        name: LHK {{ s.name }} Cmd
+        name: {{ ("LHK " ~ s.name ~ " Cmd") | tojson }}
 {%- endfor %}
 
 

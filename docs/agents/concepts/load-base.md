@@ -21,6 +21,25 @@ solver's entry point), plus green-only mode, user override state, and
 external-control detection. **Both live in `home_model/load.py` —
 strict zero-HA-import boundary.**
 
+**Log levels (QS-306).** `constraint_reset_and_reset_commands_if_needed()`
+now logs INFO only when there was something to reset, and the
+"no bad constraint found" line is DEBUG. No behavior change.
+
+The "was there anything to reset?" test lives in the overridable
+`_has_state_to_reset(keep_commands)` hook. **Any subclass whose reset
+override clears extra state must extend it**, or that work is destroyed
+while the base reports "nothing to reset" at DEBUG. The base term covers
+`_constraints`, `_last_completed_constraint`, and — when
+`keep_commands=False` — `current_command`, an in-flight `running_command`, or
+a queued `_stacked_command`. Every access uses `getattr` with a default: the
+hook runs during `AbstractDevice.__init__`, before those attributes exist.
+
+`QSChargerGeneric` is the worked example: its override clears the
+user-initiated `do_force_next_charge` / `do_next_charge_time`, so it ORs them
+into the hook. Without that, a user pressing "force next charge" on a charger
+holding no constraints would have the flag destroyed while the log said
+"nothing to reset".
+
 ## When you need this concept
 
 - Adding a new device type — you'll extend `AbstractLoad` (or, rarely,

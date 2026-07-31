@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/device.py
-last_verified: 2026-06-05
+last_verified: 2026-07-30
 ---
 
 # External control detection
@@ -19,6 +19,12 @@ quiet-solar **detects this** and steps back rather than fighting the
 human. The detection logic lives in `home_model/load.py`
 (`external_user_initiated_state`) and is set during
 `HADeviceMixin.update_states()` in `ha_model/device.py`.
+
+**Log levels (QS-306).** No-op announcements in `home_model/load.py` are now
+DEBUG. Detection behavior is unchanged. The constraint-reset line logs INFO
+via the `_has_state_to_reset()` hook described in
+[load-base.md](load-base.md), which counts a dropped in-flight or queued
+command as work worth reporting.
 
 ## When you need this concept
 
