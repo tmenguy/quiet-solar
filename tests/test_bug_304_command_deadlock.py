@@ -541,11 +541,18 @@ async def test_a_second_lost_control_episode_can_escalate_again(caplog: pytest.L
     assert count_log(caplog, RELEASED_WITHOUT_CONTACT_LOG) == 1
 
 
+# The horizon the QS-307 alert-storm measurement was taken over, on `main` and on
+# the branch alike. One [unavailable window + full ladder] cycle is ~19.6 min, so
+# this is between five and six of them.
+STORM_MEASUREMENT_HORIZON_S = 105 * 60
+
+
 async def _flap_once(load: NeverAcksLoad, time: datetime) -> datetime:
     """Drop off the network for one give-up window, then answer-but-disobey.
 
-    The exact pattern D5 used to write off as an accepted residual: each cycle of
-    it re-earns a full ladder rung, so each one used to produce a push.
+    Scenario 1 of the QS-307 alert-storm measurement, and the pattern D5 originally
+    wrote off as an accepted residual: each cycle of it re-earns a full ladder rung,
+    so each one produced a push once the clock release re-armed the guard.
     """
     load.probe_result = None
     time = await drive(load, time, CYCLE_S * (NUM_MAX_INVALID_PROBES_COMMANDS + 2))
@@ -557,21 +564,26 @@ async def _flap_once(load: NeverAcksLoad, time: datetime) -> datetime:
 
 
 async def test_a_flapping_device_shouts_once_until_it_answers_again(caplog: pytest.LogCaptureFixture):
-    """Review fix #01 (must-fix): flapping must not become a push every ~18 min.
+    """The parity oracle for `_unresponsive_needs_ack`: 1 alert / 105 min, like `main`.
 
-    `running_command_num_relaunch_after_invalid` is cumulative over a command's
-    life, so a give-up can fire *after* a rung was already earned outside any
-    give-up window. D5 and
-    `test_a_give_up_window_cannot_climb_the_escalation_ladder` only prove a single
-    give-up window is too short to climb the ladder — they say nothing about a rung
-    earned before one. So the clock release re-opened the escalation guard once per
-    [unavailable window + ladder climb] cycle, indefinitely, for a device whose
-    situation never changed — on a fire-and-forget channel whose pushes accumulate
-    on the phone and cannot be collapsed.
+    **This test is the flag's entire justification.** Measured over the same 105
+    simulated minutes, a device dropping off the network intermittently produces
+    1 alert on `main`, **5** with Part B's clock release and no flag, and 1 again
+    with the flag. Part B has to release the clock at the invalid-probe give-up —
+    that is #308's fix, and AC9/AC12 depend on it — but the release also re-arms the
+    once-only escalation guard, which is a 5x alert regression against `main`. The
+    flag's whole job is to stop the release from re-announcing an incident that was
+    already announced.
 
-    The fix must NOT be to stop releasing the clock (that is #308's fix, and AC9 /
-    AC10 depend on it). It is to stop treating "the clock was released" as "a new
-    episode began": `_unresponsive_needs_ack` requires evidence of contact first.
+    Any future simplification of the contact signal must be checked against **this**,
+    not against reasoning: `running_command_num_relaunch_after_invalid` is cumulative
+    over a command's life, so a give-up can fire long after a rung was earned outside
+    any give-up window, and `test_a_give_up_window_cannot_climb_the_escalation_ladder`
+    does not cover that.
+
+    What this does NOT cover: a device that stays reachable and simply never obeys.
+    That alerts every ~18.5 min here and on `main` alike — pre-existing, out of
+    scope, tracked as #319.
     """
     load = NeverAcksLoad(name="pool_house")
     load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
@@ -587,11 +599,19 @@ async def test_a_flapping_device_shouts_once_until_it_answers_again(caplog: pyte
         lost_control_before = count_log(caplog, LOST_CONTROL_LOG)
         assert lost_control_before == 1
 
-        for _ in range(3):
+        flaps = 0
+        horizon_end = time + timedelta(seconds=STORM_MEASUREMENT_HORIZON_S)
+        while time <= horizon_end:
             time = await _flap_once(load, time)
+            flaps += 1
 
-    # Three more full ladder climbs, each preceded by a give-up, and QS stays quiet:
-    # nothing about the device's situation changed and it never answered.
+        # guard against a vacuous pass: `main` produced 1 alert over this horizon
+        # and the unflagged branch produced 5, so the horizon has to fit ~5 cycles
+        assert flaps >= 5
+
+    # Five-plus full ladder climbs, each preceded by a give-up, and QS stays quiet:
+    # nothing about the device's situation changed and it never answered. ONE alert
+    # over the whole 105 minutes — the same count `main` produces.
     assert len(load.state_change_notifications) == 1
     assert count_log(caplog, LOST_CONTROL_LOG) == lost_control_before
     # The clock still gets re-armed every climb — it is what drives
@@ -637,7 +657,7 @@ async def test_a_device_unavailable_from_the_start_never_escalates(caplog: pytes
     assert count_log(caplog, LOST_CONTROL_LOG) == 0
     assert count_log(caplog, REGAINED_CONTROL_LOG) == 0
     # Review fix #02/06: the give-up fires four times here and passes
-    # `CONTACT_NONE`, so THIS is the line that could actually appear — the sibling
+    # `UNREACHABLE`, so THIS is the line that could actually appear — the sibling
     # above was asserting the constant this path no longer uses.
     assert count_log(caplog, RELEASED_WITHOUT_CONTACT_LOG) == 0
     # Review fix #02/01: the latch state that made the swallowed-first-push bug

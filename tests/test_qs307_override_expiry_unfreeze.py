@@ -108,6 +108,37 @@ class _StuckPump(QSBiStateDuration):
         return "test_select_key"
 
 
+class _RacingPump(_StuckPump):
+    """A pump whose service call is interrupted by a user action mid-flight.
+
+    `check_load_activity_and_constraints` gained a command-slot mutation (the
+    expiry-time drop of an override-aligned command), and three of its four callers
+    run OUTSIDE `_update_loads_lock` — `user_set_default_on_duration`,
+    `user_set_bistate_mode` and `AbstractLoad.async_reset_override_state`. So a user
+    touching the mode select, the on-duration number or the reset button while a
+    service call is in flight really can empty the slot across the await. Setting
+    `race_at` replays that deterministically, from inside the transport.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.race_at: datetime | None = None
+        # what the interrupted service call reports back: `True` reaches the ack
+        # branch, `None` reaches the "impossible to force" log — both dereference
+        # the command slot after the await
+        self.race_result: bool | None = True
+
+    async def execute_command_system(self, time, command, state):
+        """Let a user action land in the middle of the service call."""
+        if self.race_at is None:
+            return await super().execute_command_system(time, command, state)
+
+        self.transport_calls.append((time, command.command, state))
+        race_at, self.race_at = self.race_at, None
+        await self.check_load_activity_and_constraints(race_at)
+        return self.race_result
+
+
 def _next_daily_end(local_hours: dt_time, time_utc_now: datetime | None = None, output_in_utc=True):
     """Deterministic, timezone-independent stand-in for get_next_time_from_hours."""
     assert output_in_utc is True
@@ -120,12 +151,15 @@ def _next_daily_end(local_hours: dt_time, time_utc_now: datetime | None = None, 
     return candidate
 
 
-def _make_pump(override_duration_h: float = OVERRIDE_DURATION_H) -> _StuckPump:
+def _make_pump(
+    override_duration_h: float = OVERRIDE_DURATION_H,
+    pump_class: type[_StuckPump] = _StuckPump,
+) -> _StuckPump:
     """Build a switch-backed bistate pump on FakeHass, with no config entry."""
     hass = FakeHass()
     home = create_minimal_home_model()
     home.is_off_grid = MagicMock(return_value=False)
-    pump = _StuckPump(
+    pump = pump_class(
         hass=hass,
         config_entry=None,
         home=home,
@@ -671,6 +705,57 @@ async def test_detection_stays_off_for_a_boost_only_load():
 
 
 # =============================================================================
+# AC25 — the expiry drop must not strand a command slot across an await
+# =============================================================================
+
+
+@pytest.mark.parametrize("race_result", [True, None], ids=["service-call-lands", "service-call-impossible"])
+async def test_a_user_action_during_a_service_call_cannot_strand_the_command_slot(race_result):
+    """Review fix #03 (must-fix): the expiry drop broke a documented invariant.
+
+    D1d's drop is the first command-slot mutation ever performed inside
+    `check_load_activity_and_constraints`, and three of that method's callers run
+    outside `_update_loads_lock`. So "each command-slot mutation happens between
+    `await`s" (`check_and_relaunch_command`'s docstring) stopped being true, and
+    `force_relaunch_command` dereferences the slot after its `await` — either
+    `_ack_command(time, None)`, which nulls `current_command` and silently drops the
+    load out of controlled-consumption accounting, or a `None` deref that aborts the
+    cycle.
+
+    The fix is a post-await re-check, not a wider lock. Both post-await branches are
+    exercised here: a service call that lands, and one that reports impossible.
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    _arm_override(pump)
+    _push_override_constraint(pump)
+    pump.race_result = race_result
+    pump.hass.states.set(PUMP_ENTITY, "off", last_changed=T_OVERRIDE)
+    # a confirmed command of record, which must survive whatever happens
+    pump._ack_command(T_OVERRIDE, copy_command(CMD_IDLE))
+    confirmed = pump.current_command
+
+    # the override's own ON command goes in flight and is never confirmed
+    pump.obeys = False
+    await pump.launch_command(T_OVERRIDE + timedelta(hours=1), CMD_ON, ctxt="override hold dispatch")
+    assert pump.running_command == CMD_ON
+
+    # the relaunch's service call is interrupted by the user, and the expiry that
+    # runs on that path drops the override-aligned command underneath it
+    pump.race_at = T_EXPIRED
+    await pump.force_relaunch_command(T_EXPIRED)
+
+    assert pump.running_command is None
+    assert pump.external_user_initiated_state is None
+    # no phantom ack of `None`: the confirmed command of record is intact...
+    assert pump.current_command == confirmed
+    # ...so the load is still inside the power-accounting that feeds the forecast
+    assert pump.is_load_command_set(T_EXPIRED) is True
+    # and the counters do not outlive the command they describe
+    assert pump.running_command_num_relaunch == 0
+    assert pump.running_command_last_launch is None
+
+
+# =============================================================================
 # AC8 — the end-to-end bug, in both death modes
 # =============================================================================
 
@@ -721,10 +806,16 @@ async def _assert_override_self_heals(pump: _StuckPump) -> None:
     assert pump.running_command is None
     transport_calls_after_expiry = len(pump.transport_calls)
 
+    # Review fix #03: drive a FULL relaunch ladder across the post-expiry window
+    # before re-reading the counter. Without it the "no further service call"
+    # assertion below was vacuous — nothing could have re-issued the call in zero
+    # cycles, and the auditor re-introduced the regression with the test still green.
+    await drive(pump, T_EXPIRED + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
     # the post-override cooldown is clock arithmetic too, so it also drains on
     # a load QS can no longer talk to — otherwise the load stayed pinned in
     # ASKED FOR RESET forever, which is the same bug one step later
-    t_back = T_EXPIRED + timedelta(seconds=USER_OVERRIDE_STATE_BACK_DURATION_S + CYCLE_S)
+    t_back = T_EXPIRED + timedelta(seconds=LADDER_WALL_S + USER_OVERRIDE_STATE_BACK_DURATION_S + CYCLE_S)
     await pump.check_load_activity_and_constraints(t_back)
 
     assert pump.asked_for_reset_user_initiated_state_time is None

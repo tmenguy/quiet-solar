@@ -56,35 +56,36 @@ alarm at 3am is supposed to wake you).
 - Per-person preferences (quiet hours, channel, opt-in flags) live
   on `QSPerson`.
 - `DEVICE_STATUS_CHANGE_ERROR` producers — the newest is
-  `AbstractLoad._notify_unresponsive` (QS-304), fired **once per episode**
-  from `check_and_relaunch_command` when a load crosses the lost-control
-  threshold (~1050 s of unacked relaunches). Once per *episode*, not once
-  per lifetime and not once per ladder climb. QS-307 (from #308) made every
-  slot-emptying path release `unresponsive_since`, so that field could no
-  longer be the guard on its own — a device flapping between unreachable and
-  answering-but-disobeying would have pushed every ~18 min forever, on a
-  channel with no notification id to collapse them. `_unresponsive_needs_ack`
-  is the actual guard: an **episode** ends only when QS gets a real ack, so a
-  load that loses control, *answers again*, then loses it again pushes twice,
-  while one that merely flaps without ever answering pushes once. See
-  [load-base.md](load-base.md), "Two clocks, not one".
-
-  **"Once per episode" is scoped to the process lifetime.**
-  `_unresponsive_needs_ack` is deliberately **not** persisted, so an HA
-  restart or a config-entry reload resets it and a permanently flapping
-  device pushes once more per restart. That is consistent with
-  `unresponsive_since`, which is not persisted either, and for the same
-  reason: both describe an in-flight command, and a reload wipes the command
-  slot, so the episode's *subject* is gone. Persisting the latch would also
-  reintroduce the failure mode QS-307 had to fix once already — a latch
-  carried into a process where no episode has been announced silences the
-  first genuine push. If a flapping device pushing once per restart ever
-  becomes a real complaint, throttle at the notification channel rather than
-  by persisting this flag.
-  It is `AbstractLoad`-only:
+  `AbstractLoad._notify_unresponsive` (QS-304), fired from
+  `check_and_relaunch_command` when a load crosses the lost-control threshold
+  (~1050 s of unacked relaunches). It is `AbstractLoad`-only:
   the base `AbstractDevice._notify_unresponsive` is a documented no-op,
   so an uncontrollable **battery** gets the ERROR log but no push.
   Accepted product consequence.
+
+  **How often it fires — stated exactly, because it is easy to overclaim.**
+  When QS gives up probing a device it cannot reach, the lost-control clock is
+  released so the next command is not mis-scored (QS-307, from #308).
+  `_unresponsive_needs_ack` stops that release from **re-announcing an incident
+  that was already announced** — without it, a device dropping off the network
+  intermittently alerted 5× where `main` alerted once over the same 105
+  minutes. That is the flag's entire job.
+
+  It does **not** deduplicate alerts for a device that stays *reachable* and
+  simply never obeys. That case re-crosses the threshold about every 18.5
+  minutes and alerts each time, here and on `main` alike — pre-existing,
+  measured identical, and tracked in
+  [#319](https://github.com/tmenguy/quiet-solar/issues/319), which is where a
+  general notification policy belongs.
+
+  Nor does it survive a restart: `_unresponsive_needs_ack` is deliberately
+  **not** persisted, matching `unresponsive_since`, because both describe an
+  in-flight command and a reload wipes the command slot. So a permanently
+  flapping device announces once more per HA restart. Persisting it would
+  reintroduce a failure QS-307 already had to fix — a latch carried into a
+  process where nothing has been announced silences the first genuine
+  alert — so if this ever becomes a real complaint, throttle at the channel
+  instead. Noted in #319.
 
 The push is issued **last** in `_escalate_or_recover`, and a failure in it
 cannot skip the surrounding housekeeping or mask the device exception the

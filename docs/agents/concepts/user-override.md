@@ -80,6 +80,18 @@ an externally-detected override are constraint-driven:
   phantom-acked: `launch_command` drops it at the drop point and
   `force_relaunch_command` drops a stale suppressed `running_command`
   (both via `is_command_suppressed_by_override`).
+- **And the mirror image (QS-307): when the override ENDS, its own
+  command is dropped.** Nulling `external_user_initiated_state` also
+  disables the suppression drop above, so an override-aligned command
+  still in flight would keep being relaunched after the override was
+  over. Expiry is the one place that knows the override just ended, so
+  it owns that drop — for the *aligned* command only; anything else is
+  a genuine solver intent. Note this is the first command-slot mutation
+  inside `check_load_activity_and_constraints`, and three of that
+  method's callers run outside `_update_loads_lock`, so
+  `force_relaunch_command` re-checks the slot after its `await` rather
+  than assuming it still owns the command it launched. See
+  [load-base.md](load-base.md).
 - A state mismatch only classifies as a NEW override when the entity
   state is newer than `last_command_execution_time` (causality guard)
   and the 180s post-override cooldown has elapsed.

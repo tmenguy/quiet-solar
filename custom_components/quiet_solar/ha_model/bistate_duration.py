@@ -22,7 +22,7 @@ from ..home_model.constraints import (
     TimeBasedHoldOffConstraint,
     TimeBasedSimplePowerLoadConstraint,
 )
-from ..home_model.load import AbstractLoad
+from ..home_model.load import CLOCK_SKEW_TOLERANCE_S, AbstractLoad
 
 if TYPE_CHECKING:
     from .bistate_transport import BistateTransport
@@ -199,10 +199,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         # review fix QS-256#03: a future-dated reset-ask timestamp keeps the
         # post-override cooldown permanently active (negative age is always
         # below the cooldown window) — same future-dated drop as the override
-        # timestamp, with the same 60s skew tolerance
+        # timestamp, with the same skew tolerance (QS-307: shared constant,
+        # so retuning it cannot desync this site from the runtime comparisons)
         if self.asked_for_reset_user_initiated_state_time is not None:
             ask_age_s = (datetime.now(pytz.UTC) - self.asked_for_reset_user_initiated_state_time).total_seconds()
-            if ask_age_s < -60.0:
+            if ask_age_s < -CLOCK_SKEW_TOLERANCE_S:
                 _LOGGER.info(
                     "use_saved_extra_device_info: dropping future-dated stored reset-ask time for load %s (age %ss)",
                     self.name,
@@ -221,7 +222,7 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # review fix QS-256#02: a clearly future-dated timestamp (clock
             # skew, NTP correction) is poison too — drop rather than keep,
             # with a small tolerance for benign skew
-            if age_s > 3600.0 * self.override_duration or age_s < -60.0:
+            if age_s > 3600.0 * self.override_duration or age_s < -CLOCK_SKEW_TOLERANCE_S:
                 _LOGGER.info(
                     "use_saved_extra_device_info: dropping expired or future-dated "
                     "stored user override %s for load %s (age %ss)",
@@ -771,10 +772,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 # timer, and `get_override_state()` reports ASKED FOR RESET while it is
                 # set, so leaving the drain behind the detection gate meant an
                 # unresponsive load expired its override and stayed out of controlled
-                # consumption anyway. Position relative to `main` is unchanged — same
-                # not-expired / no-reset-ask-pending arm — so a healthy load still
-                # drains on exactly the same cycle. Only the *suppression* half stays
-                # inside detection, below.
+                # consumption anyway. It sits in the same not-expired /
+                # no-reset-ask-pending arm it did before, so a load with a HEALTHY
+                # command slot drains on the same cycle as on `main` — but for a load
+                # whose slot is not healthy it now drains where `main` never drained
+                # at all, which is the whole point (AC15). Only the *suppression* half
+                # stays inside detection, below.
                 if self.asked_for_reset_user_initiated_state_time is not None:
                     # review fix QS-256#02: coerce a legacy tz-naive
                     # reset-ask timestamp before the subtraction

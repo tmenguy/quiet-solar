@@ -174,7 +174,7 @@ Four things about this shape are load-bearing:
      carries an earlier `event_time` (see
      [#317](https://github.com/tmenguy/quiet-solar/issues/317)).
 
-   So: future by less than `CLOCK_SKEW_TOLERANCE_S` ⇒ zero elapsed; beyond
+   So: future by at most `CLOCK_SKEW_TOLERANCE_S` ⇒ zero elapsed; beyond
    it ⇒ fully elapsed. Same ±60 s the restore path already grants these
    timestamps.
 
