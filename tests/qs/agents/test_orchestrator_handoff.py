@@ -403,8 +403,8 @@ def test_gui_block_states_the_pin_conditionally(filename: str) -> None:
 _STALE_PIN_SENTENCE = (
     "On `false` the worktree may still carry the **previous** phase's pin, "
     "which `false` cannot distinguish from no pin at all — so drop the GUI "
-    "bullets too and route the user to the Preferred `--agent` line, which "
-    "is correct either way."
+    "block entirely (pin sentence and bullets) and route the user to the "
+    "Preferred `--agent` line, which is correct either way."
 )
 
 

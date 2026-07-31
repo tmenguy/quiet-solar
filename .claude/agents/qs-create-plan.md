@@ -200,8 +200,8 @@ Inspect the file paths your task breakdown will touch:
 
    On `false` the worktree may still carry the **previous** phase's pin,
    which `false` cannot distinguish from no pin at all — so drop the GUI
-   bullets too and route the user to the Preferred `--agent` line, which is
-   correct either way.
+   block entirely (pin sentence and bullets) and route the user to the
+   Preferred `--agent` line, which is correct either way.
 
    ```text
    ✅ Story committed and pushed to {{branch}}.

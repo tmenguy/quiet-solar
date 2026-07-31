@@ -86,9 +86,9 @@ the payload's `phase_agent_pinned` before promising it: with
 pinned, so that run always reports `false`.
 
 On `false` the worktree may still carry the **previous** phase's pin, which
-`false` cannot distinguish from no pin at all — so drop the GUI bullets too
-and route the user to the Preferred `--agent` line, which is correct either
-way.
+`false` cannot distinguish from no pin at all — so drop the GUI block
+entirely (pin sentence and bullets) and route the user to the Preferred
+`--agent` line, which is correct either way.
 
 ```text
 Task #{{issue_number}} set up.

@@ -99,9 +99,9 @@ Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
 there means the GUI pin was skipped). Then present both blocks:
 
 On `false` the worktree may still carry the **previous** phase's pin, which
-`false` cannot distinguish from no pin at all — so drop the GUI bullets too
-and route the user to the Preferred `--agent` line, which is correct either
-way.
+`false` cannot distinguish from no pin at all — so drop the GUI block
+entirely (pin sentence and bullets) and route the user to the Preferred
+`--agent` line, which is correct either way.
 
 ```text
 ✅ Adversarial review complete. No blocking findings.
@@ -229,9 +229,9 @@ Parse the JSON; capture `new_context`, `existing_session_prompt`, and
 `phase_agent_pinned` (a `false` there means the GUI pin was skipped).
 
 On `false` the worktree may still carry the **previous** phase's pin, which
-`false` cannot distinguish from no pin at all — so drop the GUI bullets too
-and route the user to the Preferred `--agent` line, which is correct either
-way.
+`false` cannot distinguish from no pin at all — so drop the GUI block
+entirely (pin sentence and bullets) and route the user to the Preferred
+`--agent` line, which is correct either way.
 
 Then present three blocks (substitute `{{next_implement}}`
 consistently — same value the launcher payload was built with):
