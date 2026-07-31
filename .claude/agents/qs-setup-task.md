@@ -67,14 +67,28 @@ For `--no-worktree`, pass `--no-worktree`. The script:
 - detects the harness and emits the appropriate launcher
 
 Capture `worktree_path`, `branch`, and the launcher payload
-(`new_context`, `same_context`, plus optional `pycharm_context`).
+(`new_context`, `same_context`, `phase_agent_pinned`, plus optional
+`pycharm_context`).
 
 ### 3. Tell the user what to do next
 
 The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
 `scripts/worktree-setup.sh`). Surface the launcher (preferred path — an
 interactive `claude --agent qs-create-plan` session) and the slash-command
-fallback (degraded one-shot UX, kept for Claude Desktop).
+fallback (degraded one-shot UX; the GUI can instead run the phase agent
+directly, see [docs/workflow/harness.md](../../docs/workflow/harness.md)).
+
+The launcher attempts to pin `qs-create-plan` into the new worktree's
+`.claude/settings.local.json`, so a Claude Code GUI session opened on that
+directory boots as the plan orchestrator without any `--agent` flag. Check
+the payload's `phase_agent_pinned` before promising it: with
+`--no-worktree` the work dir **is** the main checkout, which is never
+pinned, so that run always reports `false`.
+
+On `false` the worktree may still carry the **previous** phase's pin, which
+`false` cannot distinguish from no pin at all — so drop the GUI block
+entirely (pin sentence and bullets) and route the user to the Preferred
+`--agent` line, which is correct either way.
 
 ```text
 Task #{{issue_number}} set up.
@@ -87,16 +101,20 @@ Preferred (opens a fresh interactive `claude --agent qs-create-plan` session):
   {{new_context}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
   /create-plan
 
-[Claude Desktop] no `--agent` equivalent exists on Desktop. Manual route:
-  • New session → open folder → pick
-        {{worktree_path}}
-  • The worktree is already on QS_{{issue_number}}. If Desktop's
-    auto-isolation spawns a `claude/...` sub-worktree, that sub-tree
-    inherits HEAD, so you still land on QS_{{issue_number}}.
-  • Then type `/create-plan` in the new chat (the degraded path).
+[Claude Code GUI] the worktree should now be pinned to `qs-create-plan` in
+`.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
+whether that write happened — it is always skipped on a main checkout).
+The GUI displays the active agent nowhere, so if the phase looks wrong,
+use the Preferred line above, where `--agent` always wins.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{{worktree_path}}`
+  • Name it `QS_{{issue_number}} create-plan`
+  • See `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)".
 ```
 
 If `pycharm_context` is present in the payload, mention it as a bridge

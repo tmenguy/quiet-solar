@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OVERVIEW = REPO_ROOT / "docs" / "workflow" / "overview.md"
 HARNESS_DOC = REPO_ROOT / "docs" / "workflow" / "harness.md"
@@ -120,16 +122,136 @@ def test_harness_doc_documents_codex_opencode_agent_exception() -> None:
     )
 
 
+# --------------------------------------------------------------------------- #
+# QS-311 AC7 — the GUI launch-surface section.
+#
+# The section is deliberately NOT a harness identifier: the GUI shares
+# `.claude/` wholesale, so `claude-gui` would be a category error (one
+# harness == one agent directory). Its content is prose and therefore
+# reviewer-verified; only the four tokens below are gate-checked, because
+# a section that omits any of them fails to answer the question a GUI
+# user actually arrives with.
+# --------------------------------------------------------------------------- #
+
+GUI_SECTION_HEADING = "GUI launch surface (Claude Code Desktop)"
+
+GUI_SECTION_REQUIRED_TOKENS = (
+    # the mechanism
+    "settings.local.json",
+    # the CLI precedence rule that makes the pin inert for `claude --agent`
+    "--agent",
+    # the hybrid CLI→GUI bridge
+    "/desktop",
+    # The main-checkout gap: those phases are never pinned. Review-fix #01
+    # N3: this used to be the token `"release"`, which any mention of a
+    # release anywhere in the section would satisfy — it pinned nothing.
+    "main checkout",
+    # Review-fix #01 S7: the pin is gitignored by design, so it does NOT
+    # follow into a sub-worktree the GUI creates for itself. The pre-PR
+    # setup-task prose acknowledged that mode and the PR deleted it; the
+    # Traps list has to carry it instead.
+    "isolation",
+    # Review-fix #02 E: by the section's own stated mechanism, a HEADLESS
+    # invocation (`claude -p …`, an Agent-SDK run) with cwd inside a pinned
+    # worktree inherits the pin too — with no CLI header to reveal it. The
+    # worst case is a `qs-finish-task` pin, which merges PRs and removes
+    # worktrees.
+    "headless",
+    # Review-fix #03 B2/C4: a symlinked pin file is REFUSED (following it
+    # would move the write outside the worktree, breaking guard 2's
+    # containment invariant). One of the two states that now silently
+    # produce no pin, so the section has to name it.
+    "symlink",
+)
+
+
+def _gui_section_body() -> str:
+    """Return the text of the GUI launch-surface section of harness.md."""
+    body = HARNESS_DOC.read_text()
+    heading = f"## {GUI_SECTION_HEADING}"
+    assert heading in body, (
+        f"harness.md is missing the {heading!r} section (QS-311 AC7). "
+        f"The GUI is a launch surface of the Claude harness, so it is "
+        f"documented here rather than as a new harness identifier."
+    )
+    start = body.index(heading) + len(heading)
+    rest = body[start:]
+    next_h2 = re.search(r"^## ", rest, re.MULTILINE)
+    return rest[: next_h2.start()] if next_h2 else rest
+
+
+def test_harness_doc_has_gui_launch_surface_section() -> None:
+    """The section exists and is an H2 (asserted inside the helper)."""
+    assert _gui_section_body().strip(), (
+        f"harness.md's {GUI_SECTION_HEADING!r} section is empty."
+    )
+
+
+@pytest.mark.parametrize("token", GUI_SECTION_REQUIRED_TOKENS)
+def test_gui_launch_surface_section_names_required_tokens(token: str) -> None:
+    """Each load-bearing token appears in the GUI section.
+
+    Whitespace-normalised: these are prose tokens and the section
+    line-wraps at 72 columns, so a multi-word token like ``main checkout``
+    would otherwise fail purely on where the wrap landed. Case-normalised
+    for the same reason — a token that happens to open a sentence or a
+    bolded Traps lead-in is capitalised, and which of those a sentence
+    lands on is not the property being pinned.
+    """
+    section = " ".join(_gui_section_body().split()).lower()
+    token = token.lower()
+    assert token in section, (
+        f"harness.md's {GUI_SECTION_HEADING!r} section does not mention "
+        f"{token!r} (QS-311 AC7)."
+    )
+
+
+def test_gui_section_is_not_advertised_as_a_harness_identifier() -> None:
+    """The bare token ``claude-gui`` must never appear as a harness value.
+
+    Decision 1: the GUI is a launch surface, not a harness. Naming
+    ``claude-gui`` anywhere invites a reader (or a future agent) to pass it
+    to ``--harness``, where it resolves to nothing.
+    """
+    body = HARNESS_DOC.read_text()
+    assert "claude-gui" not in body, (
+        "harness.md names `claude-gui` — there is no such harness. GUI "
+        "sessions use `--harness claude-code` (QS-311 Decision 1)."
+    )
+
+
 def test_overview_documents_claude_desktop_limitation() -> None:
-    """AC-8: overview.md (or phase-protocols.md) calls out Desktop's limit."""
+    """AC-8: overview.md (or phase-protocols.md) calls out Desktop's limit.
+
+    The three tokens below must all stay present. Review-fix #01 S10: the
+    failure message used to add "**and direct users to the slash-command
+    fallback**" — the very inference AC8 retracts and AC9 bans. What AC8
+    requires is that the *limitation* stays documented (there is still no
+    way to launch a GUI session programmatically) alongside the fourth
+    mechanism that makes the fallback unnecessary.
+
+    Review-fix #01 N2: the ``"by necessity"`` ban that used to live here
+    too now has a dedicated owner —
+    ``test_workflow_no_desktop_fallback_by_necessity.py`` — which scans
+    every workflow doc rather than this one file.
+    """
     body = OVERVIEW.read_text()
     assert "Claude Desktop" in body and "limitation" in body.lower(), (
         "overview.md is missing the Claude Desktop limitation subsection "
-        "(AC-8). The doc must honestly state Desktop has no `--agent` "
-        "equivalent and direct users to the slash-command fallback."
+        "(AC-8). The doc must honestly state that Desktop offers no way to "
+        "*launch* a session on a directory programmatically — while naming "
+        "the `agent` settings key that binds the orchestrator once a GUI "
+        "session is open."
     )
     # Must specifically mention pycharm_context as the bridge.
     assert "pycharm_context" in body, (
         "overview.md should mention pycharm_context as the suggested bridge "
         "for users who can't use the CLI launcher directly."
+    )
+    # Whitespace-normalised because this paragraph line-wraps mid-phrase.
+    normalized = " ".join(body.split())
+    assert "settings.local.json" in normalized, (
+        "overview.md must name the fourth mechanism — the `agent` key in "
+        "`.claude/settings.local.json` — alongside the three that really "
+        "are missing (URL scheme, argv pass-through, UI gesture)."
     )

@@ -95,7 +95,13 @@ python scripts/qs/next_step.py \
     --harness claude-code
 ```
 
-Parse the JSON; capture `new_context`. Then present both blocks:
+Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
+there means the GUI pin was skipped). Then present both blocks:
+
+On `false` the worktree may still carry the **previous** phase's pin, which
+`false` cannot distinguish from no pin at all — so drop the GUI block
+entirely (pin sentence and bullets) and route the user to the Preferred
+`--agent` line, which is correct either way.
 
 ```text
 ✅ Adversarial review complete. No blocking findings.
@@ -106,8 +112,20 @@ Preferred (opens a fresh interactive `claude --agent qs-finish-task` session):
   {{new_context}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
   /finish-task
+
+[Claude Code GUI] the worktree should now be pinned to `qs-finish-task` in
+`.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
+whether that write happened — it is always skipped on a main checkout).
+The GUI displays the active agent nowhere, so if the phase looks wrong,
+use the Preferred line above, where `--agent` always wins.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{{worktree}}`
+  • Name it `QS_{{issue}} finish-task`
+  • See `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)".
 ```
 
 Stop here.
@@ -207,7 +225,14 @@ python scripts/qs/next_step.py \
     --harness claude-code
 ```
 
-Parse the JSON; capture `new_context` and `existing_session_prompt`.
+Parse the JSON; capture `new_context`, `existing_session_prompt`, and
+`phase_agent_pinned` (a `false` there means the GUI pin was skipped).
+
+On `false` the worktree may still carry the **previous** phase's pin, which
+`false` cannot distinguish from no pin at all — so drop the GUI block
+entirely (pin sentence and bullets) and route the user to the Preferred
+`--agent` line, which is correct either way.
+
 Then present three blocks (substitute `{{next_implement}}`
 consistently — same value the launcher payload was built with):
 
@@ -225,8 +250,20 @@ Paste this prompt into it:
   {{existing_session_prompt}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
   /{{next_implement}}
+
+[Claude Code GUI] the worktree should now be pinned to `qs-{{next_implement}}` in
+`.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
+whether that write happened — it is always skipped on a main checkout).
+The GUI displays the active agent nowhere, so if the phase looks wrong,
+use the Preferred line above, where `--agent` always wins.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{{worktree}}`
+  • Name it `QS_{{issue}} {{next_implement}}`
+  • See `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)".
 
 Then re-run /review-task (or open a fresh `claude --agent qs-review-task`
 session) to verify.

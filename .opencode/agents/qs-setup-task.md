@@ -117,6 +117,13 @@ Capture `worktree_path`, `branch`, and the launcher payload
 
 ### 3. Tell the user what to do next
 
+> Launch surfaces for the Claude harness (including the GUI) are
+> documented in
+> [docs/workflow/harness.md](../../docs/workflow/harness.md).
+> That doc's GUI phase pin is best-effort: the Claude payload
+> reports the outcome as `phase_agent_pinned`, and no other harness
+> reads it.
+
 The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
 `scripts/worktree-setup.sh`). Surface the launcher (preferred path —
 activate `qs-create-plan` from the OpenCode agent picker in a fresh

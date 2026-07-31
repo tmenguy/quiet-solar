@@ -25,9 +25,13 @@ dev pipeline this script is built for; switching to
 
 from __future__ import annotations
 
+import contextlib
+import json
+import os
 import platform
 import shlex
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -36,6 +40,12 @@ from launchers.phases import (  # type: ignore[import-not-found]
     build_existing_session_prompt,
     resolve_agent_for_next_cmd,
 )
+
+# Separate import block on purpose: ``utils`` is a sibling top-level module
+# under ``scripts/qs/``, not part of the ``launchers`` package. Not an isort
+# ``I001`` violation — verify with ``ruff check --select I001`` before
+# "fixing" it.
+from utils import is_worktree  # type: ignore[import-not-found]
 
 # ``caller`` literal — reserved for harness-specific bifurcation
 # (the OpenCode launcher uses it to switch between HTTP-API and
@@ -47,6 +57,11 @@ Caller = Literal["setup_task", "next_step"]
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose
 # — users can override via env or by editing this constant.
 CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus"
+
+# Mode for a freshly created pin file. Owner-only because this file can
+# carry an ``env`` block with a token, and because a fresh worktree has no
+# existing mode to honour. An existing file's mode is copied, not replaced.
+_PRIVATE_MODE = 0o600
 
 
 def _pycharm_bin() -> str | None:
@@ -165,6 +180,260 @@ def _pycharm_applescript_command(
     return f"sh {script_path}"
 
 
+def _is_linked_worktree(work_dir: str) -> bool:
+    """Return ``True`` if ``work_dir`` is a **linked git worktree**.
+
+    A linked worktree's ``.git`` is a **file** holding a ``gitdir:``
+    pointer; the main checkout's — and any second clone's — is a directory,
+    and a throwaway path has none. That one ``stat`` is the actual
+    containment check, so it runs first.
+
+    ``utils.is_worktree`` alone is **not** sufficient and must not be used
+    as if it were: it is ``resolve() != get_main_worktree().resolve()``,
+    i.e. "is not the main checkout". It answers ``True`` for any throwaway
+    path, and since ``get_main_worktree()`` takes no ``cwd``, even for this
+    repo's main checkout when called from inside a different repo. It is
+    kept here as the explicit statement of intent, after the real check.
+    """
+    if not (Path(work_dir) / ".git").is_file():
+        return False
+    return is_worktree(work_dir)
+
+
+def _read_settings(target: Path) -> dict | None:
+    """Return ``target``'s settings dict, or ``None`` to leave it alone.
+
+    ``None`` means "do not write anything, skip the pin". The user's bytes
+    are never modified by this function or by anything downstream of a
+    ``None``: this file holds the user's own ``permissions`` decisions, so
+    anything we do not fully understand is left alone.
+
+    Three outcomes:
+
+    * **absent** → ``{}``; there is nothing to preserve, so the caller
+      writes a fresh file.
+    * **present and a JSON object** → the parsed dict, for a shallow merge.
+      Decoded as ``utf-8-sig`` so a leading BOM — which several editors
+      write by default, and which is *valid* — parses instead of being
+      treated as corruption.
+    * **anything else** → ``None`` with a warning naming the file, the
+      reason, and the remedy. That covers unreadable (``OSError``:
+      ``EACCES``, ``EINTR``, a lock, ``EIO`` on a network mount),
+      unparseable (``ValueError``, which subsumes ``json.JSONDecodeError``
+      *and* ``UnicodeDecodeError``), and parsed-but-not-an-object
+      (``null``, ``[1, 2]``, ``"x"`` — a shallow merge would raise outside
+      any guard).
+
+    The skip is **terminal, not transient**: nothing repairs the file, so
+    every later handoff re-reads it and refuses again. That is why the
+    warnings name the remedy explicitly.
+    """
+    if not target.exists():
+        return {}
+    try:
+        raw = target.read_bytes()
+    except OSError as exc:
+        print(
+            f"warning: could not read {target} ({exc}); leaving it untouched "
+            f"and skipping the phase pin — pass --agent, or fix the file's "
+            f"permissions to pin it again",
+            file=sys.stderr,
+        )
+        return None
+    try:
+        parsed = json.loads(raw.decode("utf-8-sig"))
+    except ValueError as exc:
+        print(
+            f"warning: {target} does not parse as JSON ({exc}); leaving it "
+            f"untouched and skipping the phase pin — every later handoff "
+            f"will skip too until it is repaired; "
+            f"`rm {target}` recreates it at 0600",
+            file=sys.stderr,
+        )
+        return None
+    if not isinstance(parsed, dict):
+        print(
+            f"warning: {target} is not a JSON object "
+            f"(got {type(parsed).__name__}); leaving it untouched and "
+            f"skipping the phase pin — every later handoff will skip too "
+            f"until it is repaired; `rm {target}` recreates it at 0600",
+            file=sys.stderr,
+        )
+        return None
+    return parsed
+
+
+def _render(settings: dict, agent: str) -> str:
+    """Return the on-disk form of ``settings`` with ``agent`` pinned."""
+    return json.dumps({**settings, "agent": agent}, indent=2) + "\n"
+
+
+def _late_render(target: Path, agent: str) -> str | None:
+    """Re-render from ``target``'s current bytes, or ``None`` to keep the first.
+
+    Shrinks — it does not close — the read-modify-write race against the
+    live Claude Code session that owns this file: the handoff normally runs
+    from inside a session on this very worktree, so a permission the user
+    approves between our first read and the publish would otherwise be
+    dropped. Silent by design: the first read already warned about anything
+    wrong, and anything unreadable, unparseable or non-object here simply
+    leaves the first render standing. ``utf-8-sig`` for the same reason as
+    ``_read_settings``.
+    """
+    try:
+        parsed = json.loads(target.read_bytes().decode("utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        # A live session replaced the object with a non-object between our
+        # two reads. Keep the first render rather than merging onto
+        # something a shallow merge would raise on.
+        return None
+    return _render(parsed, agent)
+
+
+def _write_phase_agent(work_dir: str, agent: str) -> bool:
+    """Pin ``agent`` into ``<work_dir>/.claude/settings.local.json`` (QS-311).
+
+    The Claude Code **GUI** has no ``--agent`` flag, so the only way to
+    boot a GUI session as a phase orchestrator is the ``agent`` settings
+    key, which Claude Code reads at *session* start. Writing it at every
+    handoff keeps the worktree pinned to the phase the pipeline just
+    handed off to. CLI sessions are unaffected: ``--agent`` overrides the
+    setting. See ``docs/workflow/harness.md`` → "GUI launch surface
+    (Claude Code Desktop)".
+
+    Guards, in this order (the order is load-bearing):
+
+    1. the phase agent file must exist at
+       ``<work_dir>/.claude/agents/<agent>.md`` — a pure filesystem check,
+       first so it short-circuits before any subprocess. An unknown agent
+       name falls back to the default agent *silently*, and the GUI
+       displays no agent name, so a bad pin would be invisible. This skip
+       warns on stderr: it is a real anomaly, not a designed no-op.
+       (Project-scoped agents only; user-scope ``~/.claude/agents/`` is
+       out of scope.)
+    2. ``work_dir`` must be a **linked worktree** — see
+       ``_is_linked_worktree``. Silent: it is the designed no-op for
+       ``--no-worktree`` and the main-checkout phases, which the caller
+       reports via ``phase_agent_pinned``.
+
+    ``agent`` is always replaced; every other top-level key is preserved
+    (shallow merge). This file is **not** machine-written — Claude Code
+    persists the user's per-project ``permissions`` decisions (and
+    ``model``, ``env``, …) in it. Two consequences, both deliberate:
+
+    * anything we cannot read, or cannot parse as a JSON object, is **left
+      exactly as it is** and the pin is skipped;
+    * a **symlink** is **refused**, not followed, at any of the three paths
+      this function touches: ``.claude``, the settings file, and the temp
+      sibling. Those three are the writes, so refusing them keeps the writes
+      inside ``work_dir``. (Stated as the enumeration it is, rather than as
+      an invariant: an earlier phrasing claimed containment "by
+      construction" while the temp was still missing from the list.)
+
+    Best-effort by contract — a handoff must never break because of this
+    write, hence the suppressed temp cleanup. Warnings go to
+    ``sys.stderr``; ``stdout`` carries the JSON payload that
+    ``next_step.py`` callers parse.
+
+    **No ``fsync``** before the replace, matching
+    ``quality_gate.py::_write_seed_status`` — the in-repo atomic-write
+    precedent. A crash between the write and the replace can therefore
+    publish a short file; re-running the handoff repairs it, and diverging
+    from the precedent for that is not worth it.
+
+    Returns:
+        ``True`` if the file was written, ``False`` on any skip or failure —
+        surfaced to callers as the ``phase_agent_pinned`` payload key. The
+        handoff prose must not assert the pin without consulting it.
+    """
+    claude_dir = Path(work_dir) / ".claude"
+    if not (claude_dir / "agents" / f"{agent}.md").is_file():
+        print(
+            f"warning: no {agent}.md under {claude_dir / 'agents'}; "
+            f"not pinning the phase agent",
+            file=sys.stderr,
+        )
+        return False
+    if not _is_linked_worktree(work_dir):
+        return False
+
+    target = claude_dir / "settings.local.json"
+    tmp = target.with_suffix(f"{target.suffix}.{os.getpid()}.tmp")
+    # Refuse a symlink at any of the three paths this function writes to or
+    # through; never follow one. Each was found the hard way: a link at
+    # ``.claude`` let the write land in the main checkout while reporting
+    # success, and a link at the *temp* name — reachable via a leftover temp
+    # plus a reused PID — sent the merged settings outside the worktree and
+    # then renamed the link onto the pin file, leaving the worktree
+    # permanently unpinnable. ``write_text`` follows links, so this check is
+    # what keeps the writes inside ``work_dir``.
+    for suspect in (claude_dir, target, tmp):
+        if suspect.is_symlink():
+            print(
+                f"warning: {suspect} is a symlink; refusing to pin through "
+                f"it, because the write would leave the worktree — pass "
+                f"--agent instead",
+                file=sys.stderr,
+            )
+            return False
+
+    settings = _read_settings(target)
+    if settings is None:
+        return False
+
+    content = _render(settings, agent)
+    try:
+        # Ordinary high-level file operations only: ``write_text`` writes
+        # fully or raises, and ``copymode`` is one call for "keep whatever
+        # mode the user chose". Hand-rolled descriptor-level writing was
+        # tried here and produced two distinct defects (a discarded
+        # partial-write result, and a temp that followed a symlink), so it
+        # is deliberately not used.
+        tmp.write_text(content, encoding="utf-8")
+        late = _late_render(target, agent)
+        if late is not None and late != content:
+            tmp.write_text(late, encoding="utf-8")
+        # Non-fatal on purpose: the content is already written and
+        # ``os.replace`` needs only directory permission, so a mode failure
+        # (``EPERM`` on a chmod-hostile mount, a settings file owned by
+        # another uid, or a ``FileNotFoundError`` if the live session
+        # replaced ``target`` between the check and the stat) degrades to
+        # "published at the default mode" rather than "not pinned at all",
+        # which would be permanent for that worktree.
+        #
+        # It warns, though: silence here is sticky. One failure publishes at
+        # ``0o666 & ~umask``, Claude Code may then persist an ``env`` token
+        # into that same file, and every later handoff faithfully copies the
+        # widened mode forward — so a transient failure would otherwise
+        # leave a secrets-bearing file world-readable for good, with an
+        # empty stderr and ``phase_agent_pinned: True``.
+        try:
+            if target.exists():
+                shutil.copymode(target, tmp)  # keep a deliberate chmod
+            else:
+                tmp.chmod(_PRIVATE_MODE)  # fresh file: owner-only
+        except OSError as exc:
+            print(
+                f"warning: could not set the mode of {target} ({exc}); "
+                f"publishing it at the default mode rather than skipping "
+                f"the pin — check the mode if the file holds secrets",
+                file=sys.stderr,
+            )
+        os.replace(tmp, target)
+    except OSError as exc:
+        print(f"warning: could not write {target} ({exc})", file=sys.stderr)
+        return False
+    finally:
+        # ``missing_ok=True`` only covers FileNotFoundError; EACCES on the
+        # directory or EIO on a network mount would otherwise propagate out
+        # of this ``finally`` and break the handoff.
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+    return True
+
+
 def build_payload(
     work_dir: str,
     issue: int | str,
@@ -177,6 +446,16 @@ def build_payload(
     pr_number: int | None = None,
 ) -> dict:
     """Build the launcher payload for Claude Code.
+
+    Side effect (QS-311, deliberate — flagged here because the name says
+    "build"): also pins the resolved agent into
+    ``<work_dir>/.claude/settings.local.json`` via ``_write_phase_agent``,
+    so a Claude Code **GUI** session opened on the worktree boots as the
+    phase orchestrator (the GUI has no ``--agent`` flag). It lives here
+    rather than in the two callers (``setup_task.py`` / ``next_step.py``)
+    to avoid duplicating the call at every handoff site. The write is
+    guarded to real worktrees that already contain the agent file, and is
+    inert for CLI sessions because ``--agent`` takes precedence.
 
     Args:
         work_dir: Worktree directory the new session should open in.
@@ -200,10 +479,15 @@ def build_payload(
         pr_number: Optional PR number for the existing-session prompt.
 
     Returns:
-        A dict with ``tool``, ``agent``, ``same_context``, ``new_context``,
-        optionally ``existing_session_prompt``, and (on macOS with
-        PyCharm installed) ``pycharm_context`` /
-        ``pycharm_applescript_context`` keys.
+        A dict with ``tool``, ``agent``, ``phase_agent_pinned``,
+        ``same_context``, ``new_context``, optionally
+        ``existing_session_prompt``, and (on macOS with PyCharm installed)
+        ``pycharm_context`` / ``pycharm_applescript_context`` keys.
+        ``phase_agent_pinned`` is ``False`` whenever the GUI pin was
+        skipped or failed — the orchestrator must not claim the pin as fact
+        without consulting it. There is deliberately no key reporting a
+        settings rebuild: the writer never discards the user's settings, so
+        there is nothing of that kind to report.
 
     Raises:
         ValueError: if ``next_cmd`` is not a known phase. No silent
@@ -211,6 +495,13 @@ def build_payload(
     """
     del caller  # reserved for harness-specific bifurcation; not used here
     agent = resolve_agent_for_next_cmd(next_cmd)
+    # Side effect (QS-311): pin the phase agent into the worktree's local
+    # settings so a GUI session there boots as this orchestrator. Guarded
+    # and best-effort — see ``_write_phase_agent``. The result is surfaced
+    # as ``phase_agent_pinned``: the GUI handoff blocks must not assert a
+    # pin that is deterministically absent on ``--no-worktree`` and
+    # silently absent on any write failure.
+    pinned = _write_phase_agent(work_dir, agent)
     new_context = _claude_command(
         work_dir, issue, title, agent=agent, next_prompt=next_prompt,
     )
@@ -218,6 +509,7 @@ def build_payload(
     payload: dict = {
         "tool": "claude-code",
         "agent": agent,
+        "phase_agent_pinned": pinned,
         "same_context": next_cmd,
         "new_context": new_context,
     }

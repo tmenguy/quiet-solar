@@ -195,7 +195,13 @@ Inspect the file paths your task breakdown will touch:
        --harness claude-code
    ```
 
-   Parse the JSON; capture `new_context`. Then print both blocks:
+   Parse the JSON; capture `new_context` and `phase_agent_pinned` (a
+   `false` there means the GUI pin was skipped). Then print both blocks:
+
+   On `false` the worktree may still carry the **previous** phase's pin,
+   which `false` cannot distinguish from no pin at all — so drop the GUI
+   block entirely (pin sentence and bullets) and route the user to the
+   Preferred `--agent` line, which is correct either way.
 
    ```text
    ✅ Story committed and pushed to {{branch}}.
@@ -206,8 +212,20 @@ Inspect the file paths your task breakdown will touch:
      {{new_context}}
 
    Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-   kept for Claude Desktop and any chat without a CLI launcher):
+   kept for any chat without a CLI launcher; the GUI can instead run the
+   phase agent directly, see `docs/workflow/harness.md`):
      /{{NEXT_PHASE}}
+
+   [Claude Code GUI] the worktree should now be pinned to `qs-{{NEXT_PHASE}}`
+   in `.claude/settings.local.json` (the payload's `phase_agent_pinned`
+   reports whether that write happened — it is always skipped on a main
+   checkout). The GUI displays the active agent nowhere, so if the phase
+   looks wrong, use the Preferred line above, where `--agent` always wins.
+     • **New session** (not a restored one — the GUI reopens the last session)
+     • Select directory `{{worktree}}`
+     • Name it `QS_{{issue}} {{NEXT_PHASE}}`
+     • See `docs/workflow/harness.md` →
+       "GUI launch surface (Claude Code Desktop)".
    ```
 
 ## Hard rules
