@@ -107,13 +107,13 @@ of the on/off behaviour unchanged.
 command state; only **detection** is:
 
 ```text
-if qs_enable_device is not False:
+if qs_enable_device is not False and support_user_override():
     if <override aged past override_duration>:      # unconditional
         <drop an override-ALIGNED running_command>
     elif <reset-ask follow-up flag set>:            # unconditional
     else:
         <post-override cooldown drain>              # unconditional
-        if support_user_override() and is_load_command_set(time):
+        if is_load_command_set(time):
             <detection: reads entity state>
 ```
 
@@ -143,13 +143,17 @@ Four things about this shape are load-bearing:
    to power accounting. The drain must hoist too, or the load expires its
    override and stays out of controlled consumption anyway. Only the
    *suppression* half stays inside detection.
-2. **`support_user_override()` guards detection, never the lifecycle.**
-   Leaving it on the outer gate was the same bug in a worse form: unlike the
-   `qs_enable_device` arm it is not self-healing. Disabling and re-enabling a
-   load runs the lifecycle again; flipping one to boost-only
-   (`CONF_LOAD_IS_BOOST_ONLY`) never does — and since the reset-ask timestamp
-   is persisted and restore only drops *future*-dated ones, such a load stayed
-   `is_user_overridden()` forever, across restarts.
+2. **`support_user_override()` stays on the OUTER gate; only
+   `is_load_command_set` moved inward.** The two answer different questions:
+   "am I waiting on a command" (unrelated to clock arithmetic, so splitting it
+   out is the actual fix) versus "can this load have an override at all" (a load
+   that cannot needs no lifecycle, ever). QS-307 briefly moved this one down too,
+   which ran the whole override lifecycle every cycle for chargers and boost-only
+   loads, and reverted it. The case that motivated the move — a load
+   reconfigured to boost-only holding a live override nothing could clear — is
+   handled at the restore boundary instead: `use_saved_extra_device_info` already
+   drops stale and future-dated overrides, and now also drops them when
+   `support_user_override()` is false. A reconfigure reloads the entry.
 3. **Expiry drops an override-*aligned* in-flight command.** Reachable only
    after the hoist (the old gate guaranteed an empty slot here). Nulling the
    override state also disables `force_relaunch_command`'s suppression drop,
@@ -158,25 +162,14 @@ Four things about this shape are load-bearing:
    it. Alignment is `expected_state_from_command(running_command) ==
    external_user_initiated_state`; anything else is a genuine solver intent
    and must survive `keep_commands=True`.
-4. **Every clock comparison goes through
-   `AbstractDevice._seconds_since_skew_tolerant`,** which needs a *band*, not
-   just a sign test. Both failure directions are live here:
-   - a raw subtraction freezes whatever it gates for the duration of a
-     backwards clock step, and the drain is the *only* release of the
-     cooldown — hence `_seconds_since`'s "a future anchor means fully
-     elapsed";
-   - but reading **any** future-dating as "fully elapsed" cancels a
-     brand-new 8-hour override on the spot, which is QS fighting the user.
-     And a few seconds of future-dating is routine with no clock anomaly at
-     all: the user-action call sites (`user_set_bistate_mode`,
-     `user_set_default_on_duration`, `async_reset_override_state`) each take
-     their own unlocked `datetime.now()`, while a cycle already in flight
-     carries an earlier `event_time` (see
-     [#317](https://github.com/tmenguy/quiet-solar/issues/317)).
-
-   So: future by at most `CLOCK_SKEW_TOLERANCE_S` ⇒ zero elapsed; beyond
-   it ⇒ fully elapsed. Same ±60 s the restore path already grants these
-   timestamps.
+4. **The clock comparisons use plain subtraction, on purpose.** A future-dated
+   anchor gives a negative age, which is never past the threshold, so the
+   override simply lasts a little longer. Do **not** "fix" this by routing
+   through a clock-safe helper: `_seconds_since`'s "a future anchor means fully
+   elapsed" is right for the retry ladder it was written for, and on an override
+   it means *destroy what the user just set* — state nulled, aligned command
+   dropped, constraint wiped. QS-307 tried it, and a ±60 s tolerance band on top
+   of it, and reverted both. Expiring late is the benign direction.
 
 The `qs_enable_device` guard is deliberate, not incidental:
 `is_load_command_set` returned False for a disabled load, so dropping the

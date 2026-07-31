@@ -202,17 +202,9 @@ class AbstractDevice:
         # can clear them — that wipe destroys the command the clock describes.
         self.unresponsive_since: datetime | None = None
         self._last_supersede_time: datetime | None = None
-        # QS-307: the EPISODE latch. `unresponsive_since` is per-command by
-        # construction (every slot-emptying path releases it, so it can drive
-        # supersede-vs-stack), which makes it unfit to be the once-only notification
-        # guard on its own: a device that alternates unreachable with
-        # answering-but-disobeying releases and re-crosses the threshold every
-        # ~18 min forever. This latch is per EPISODE and gates the shout, never the
-        # clock. Set only when an ANNOUNCED episode's clock is released with the
-        # device unreachable; cleared only by a real ack. Everything else — a drop we
-        # chose, a command wipe — leaves it alone, because it is evidence of nothing.
-        # In-memory only, like `unresponsive_since`: see `notification-routing.md` for
-        # the restart semantics that follow from that.
+        # QS-307: the per-EPISODE latch, as against `unresponsive_since`'s
+        # per-command clock. Gates the shout, never the clock. See
+        # `_clear_unresponsive` and `docs/agents/concepts/load-base.md`.
         self._unresponsive_needs_ack: bool = False
 
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
@@ -676,11 +668,8 @@ class AbstractDevice:
             # `_ack_command(time, None)` is NOT one — it is the give-up on an
             # unavailable probe, i.e. the device failing harder — and
             # `_ack_command(None, None)` is just `__init__` priming the fields.
-            # QS-307 (from #308): the give-up still releases the clock, but from its
-            # OWN call site in `check_commands`, with `earned_recovery=False` and a
-            # reason that says so. Keeping the release out of here is what keeps the
-            # two meanings distinguishable — and this call, the only real ack in the
-            # class, is what clears the episode latch so the load may shout again.
+            # The give-up releases the clock from its own call site instead, so
+            # "acked" and "gave up" stay distinguishable (QS-307).
             self._clear_unresponsive("control returned, the command was acked", contact=ContactEvidence.CONFIRMED)
 
         if command is not None and time is not None and self.prev_command is not None:
@@ -903,37 +892,6 @@ class AbstractDevice:
 
         return elapsed
 
-    @classmethod
-    def _seconds_since_skew_tolerant(cls, time: datetime, anchor: datetime | None) -> float | None:
-        """`_seconds_since`, but a *slightly* future anchor means "just armed".
-
-        QS-307: `_seconds_since` collapses EVERY negative delta to `None` ("treat as
-        fully elapsed"). That is right for a real backwards clock step, and wrong —
-        actively harmful — for a window whose anchor is a user action: a few seconds
-        of future-dating would then read as "fully elapsed" and cancel a brand-new
-        8-hour user override on the spot, i.e. QS fighting the user.
-
-        A few seconds of future-dating is routine, with no clock anomaly at all:
-        `user_set_bistate_mode`, `user_set_default_on_duration` and
-        `async_reset_override_state` each take their own unlocked
-        `datetime.now(pytz.UTC)`, while an `async_update_loads` cycle already in
-        flight is still carrying an earlier `event_time`. So a user-stamped anchor
-        can legitimately sit ahead of the cycle time that evaluates it.
-
-        Hence the band, the same ±`CLOCK_SKEW_TOLERANCE_S` the bistate restore path
-        already grants these timestamps: future by AT MOST the tolerance ⇒ zero
-        elapsed (not expired); beyond it ⇒ `None`, keeping `_seconds_since`'s
-        fully-elapsed meaning for the genuine large-jump case.
-        """
-        elapsed = cls._seconds_since(time, anchor)
-        if elapsed is not None or anchor is None:
-            return elapsed
-
-        if (anchor - time).total_seconds() <= CLOCK_SKEW_TOLERANCE_S:
-            return 0.0
-
-        return None
-
     def _is_supersede_throttled(self, time: datetime) -> bool:
         """Return True while the supersede window is still closed."""
         elapsed = self._seconds_since(time, self._last_supersede_time)
@@ -963,11 +921,8 @@ class AbstractDevice:
         """
         self.abandon_running_command(reason=reason)
         self.running_command_num_relaunch = 0
-        # `UNKNOWN` (QS-307): a drop is OUR decision — the user took control,
-        # the load was disabled, the command became redundant — and says nothing about
-        # whether the device is answering. Ending the episode here let a latched
-        # flapping load shout again on its next ladder climb, once per override
-        # expiry, for a device that never answered.
+        # `UNKNOWN`: a drop is OUR decision, so it says nothing about the device and
+        # must not end a lost-control episode (QS-307).
         self._clear_unresponsive(reason, contact=ContactEvidence.UNKNOWN)
 
     async def launch_command(self, time: datetime, command: LoadCommand, ctxt="NO CTXT"):
@@ -1086,6 +1041,16 @@ class AbstractDevice:
                 is_command_set = None
             self._anchor_causality_guard_if_executed(is_command_set, time)
 
+        if self.running_command is None:
+            # QS-307: same guard, same reason as in `force_relaunch_command`.
+            _LOGGER.info(
+                "launch_command: command %s for load %s was dropped while its service call was in flight, ctxt: %s",
+                command.command,
+                self.name,
+                ctxt,
+            )
+            return
+
         if is_command_set is None:
             # hum we may have an impossibility to launch this command
             _LOGGER.info(
@@ -1128,19 +1093,9 @@ class AbstractDevice:
                 if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
                     # will kill completely the command ....
                     self._ack_command(time, None)
-                    # QS-307 (from #308): the give-up destroys the clock's subject —
-                    # `current_command` and the slot both go — so the clock goes with
-                    # it. Leaving it made the clock ownerless (`_ack_command` clears
-                    # only on a real ack, and `_escalate_or_recover`'s re-arm is gated
-                    # on the `current_command` this path just nulled), and the next
-                    # command inherited supersede semantics with zero evidence.
-                    # `UNREACHABLE`: the device cannot be reached, so this is not news.
-                    # When it releases a live clock it latches the episode, so the
-                    # ladder that follows cannot shout again until the device actually
-                    # answers. When there was no clock — the usual case, since this
-                    # fires ~70 s in and the escalation threshold is ~1050 s away —
-                    # it latches nothing, or the load's first genuine push would be
-                    # swallowed for good.
+                    # QS-307 (from #308): this destroys the clock's subject, so the
+                    # clock goes with it or the next command inherits it. `UNREACHABLE`
+                    # because the device cannot be reached — see `_clear_unresponsive`.
                     self._clear_unresponsive("the probe went unavailable", contact=ContactEvidence.UNREACHABLE)
 
             if is_command_set is True:
@@ -1180,9 +1135,11 @@ class AbstractDevice:
         mode select, the on-duration number, the reset-override button) run outside
         the lock. So the slot CAN be emptied across an await. What makes that safe is
         the post-await re-check in `force_relaunch_command`: it holds the command it
-        launched in a local, and bails out if the slot no longer holds it rather than
-        writing counters for, acking, or dereferencing a command that is gone. The
-        clock is still only cleared alongside the command state it describes.
+        launched in a local, and bails out if the slot is EMPTY rather than writing
+        counters for, acking, or dereferencing a command that is gone. Emptied, not
+        replaced: every `launch_command` site runs inside `home.update_loads`, and the
+        unlocked user-action callers only ever drop. The clock is still only cleared
+        alongside the command state it describes.
         """
         try:
             _wait_time, command_acked_or_good = await self.check_commands(time)
@@ -1265,17 +1222,9 @@ class AbstractDevice:
             # to be a floor. `unresponsive_since is None` is the per-COMMAND guard.
             self.unresponsive_since = time
             if self._unresponsive_needs_ack:
-                # QS-307: same episode, and the device has not answered since.
-                # Re-arming the clock is still required — it is what drives
-                # supersede-vs-stack, and suppressing it here would starve a newer
-                # intent behind a command we already know is going nowhere — but
-                # there is nothing new to tell anyone. Without this, releasing the
-                # clock at the give-up turned an intermittently unreachable device
-                # into 5 alerts per 105 min where `main` produced 1.
-                #
-                # Still logged, at INFO: `main` always emitted something here, and a
-                # silent re-arm makes a load hitting the ladder wall again invisible
-                # in user logs — which is exactly what diagnosing #319 needs.
+                # QS-307: same episode, no contact since. The clock still has to be
+                # re-armed (it drives supersede-vs-stack) but there is nothing new to
+                # tell anyone. Logged so the ladder wall stays visible in user logs.
                 _LOGGER.info(
                     "Lost-control clock re-armed for load %s: command %s still unconfirmed after %s relaunches, "
                     "incident already announced, not re-notifying",
@@ -1316,26 +1265,10 @@ class AbstractDevice:
             # legitimate supersede.
             self._last_supersede_time = None
 
-            # The gate below is LOAD-BEARING for `_unresponsive_needs_ack` (QS-307 —
-            # an earlier revision of this comment called it redundant, which was wrong
-            # once the episode latch existed). Reaching here with `current_command is
-            # None` means the slot was emptied by a path that nulled the confirmed
-            # command too, and the only such path is the invalid-probe give-up — which
-            # runs in THIS cycle, immediately before us, and may have just latched the
-            # episode. The release below is `CONFIRMED`, which clears the latch
-            # unconditionally, so without the gate it would undo that one statement
-            # later and restore the push storm the latch exists to damp.
-            #
-            # `CONFIRMED` is the honest value here: `current_command is not
-            # None` means a command of record was confirmed by the device, and the slot
-            # emptied without a give-up.
-            #
-            # For `unresponsive_since` itself the gate is belt-and-braces: every
-            # slot-emptying path releases the clock at its own call site (a real
-            # ack, `_drop_running_command`, a `keep_commands=False` wipe, the
-            # give-up), so there is never a live clock left for us to find. The
-            # branch is the re-arm for the ordinary case — nothing in flight means
-            # nothing can clear the clock later.
+            # Gated because the release below is `CONFIRMED`, which clears the
+            # episode latch. Only the give-up sets that latch, and the give-up nulls
+            # `current_command` — so this branch runs exactly when nothing has latched
+            # in this cycle (QS-307).
             if self.current_command is not None:
                 self._clear_unresponsive(
                     "the command slot emptied with no successor", contact=ContactEvidence.CONFIRMED
@@ -1377,43 +1310,36 @@ class AbstractDevice:
                 self._drop_running_command("suppressed by user override")
                 return
 
-            # QS-307: hold the command locally across the await. The slot can be
-            # emptied underneath us (see the re-check below), and both the error
-            # handler and the logging after it used to dereference
-            # `self.running_command` unguarded.
+            # Held locally: the slot can empty across the await (see the re-check).
             launched_command = self.running_command
             _LOGGER.info(
-                f"force launch command {launched_command.command} for this load {self.name} (#{self.running_command_num_relaunch})"
+                "force launch command %s for this load %s (#%s)",
+                launched_command.command,
+                self.name,
+                self.running_command_num_relaunch,
             )
             self.running_command_num_relaunch += 1
             try:
                 is_command_set = await self.execute_command(time, launched_command)
             except Exception as err:
                 _LOGGER.error(
-                    f"Error while executing command {launched_command.command} for load {self.name} : {err}",
+                    "Error while executing command %s for load %s : %s",
+                    launched_command.command,
+                    self.name,
+                    err,
                     exc_info=True,
                     stack_info=True,
                 )
                 is_command_set = None
 
-            # Anchored before the re-check on purpose: a service call really did land,
-            # so the causality guard must know about it even if the slot is now empty —
-            # otherwise the resulting state change reads as a user override.
+            # Before the re-check: a service call really landed, so the causality
+            # guard must know even if the slot is now empty.
             self._anchor_causality_guard_if_executed(is_command_set, time)
 
             if self.running_command is None:
-                # QS-307: the slot emptied ACROSS the await. Three callers of
-                # `check_load_activity_and_constraints` run outside
-                # `_update_loads_lock` (the bistate mode select, the on-duration
-                # number, the reset-override button), and its override-expiry branch
-                # drops an override-aligned command — so a user action landing while
-                # this service call is in flight legitimately removes the command we
-                # launched. Everything below describes THAT command: writing its
-                # launch stamp would outlive it, `_ack_command(time,
-                # self.running_command)` would ack `None` and silently null
-                # `current_command` (dropping the load out of controlled-consumption
-                # accounting), and the log line would raise on a `None` deref. Nothing
-                # left to do, so stop here.
+                # QS-307: the slot emptied across the await — a user action can reach
+                # the override expiry outside `_update_loads_lock`. Everything below
+                # describes the command that is now gone, so stop.
                 _LOGGER.info(
                     "force_relaunch_command: command %s for load %s was dropped while its service call was in flight",
                     launched_command.command,
@@ -1810,12 +1736,13 @@ class AbstractLoad(AbstractDevice):
         be dismissed. That is exactly why the guard has to be tight: pushes
         accumulate on the phone and cannot be collapsed afterwards.
 
-        QS-307 (from #308): once per EPISODE — not once per lifetime, and not
-        once per ladder climb. The clock is released on every slot-emptying
-        path now, so a load that loses control, *answers again*, and loses it
-        again pushes twice; a load that merely flaps in and out of reach
-        without ever answering pushes once. `_unresponsive_needs_ack` is what
-        tells those two apart.
+        QS-307 (from #308): the clock is released on every slot-emptying path
+        now, and `_unresponsive_needs_ack` stops that release re-announcing an
+        incident already announced — a device flapping in and out of reach
+        pushes once, not once per ~18 min. It does NOT deduplicate alerts for a
+        device that stays reachable and simply never obeys; that re-crosses the
+        threshold about every 18.5 min and pushes each time, here and on `main`
+        alike. Pre-existing, tracked in #319.
         """
         await self.on_device_state_change(
             time,

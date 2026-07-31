@@ -57,11 +57,11 @@ When external control is detected:
 This is the structural defence behind "embrace uncertainty" —
 quiet-solar doesn't assume it has exclusive control of the device.
 
-**Detection rules (QS-256).** Detection itself is reached only when
-`support_user_override() and is_load_command_set(time)` — QS-307 moved
-**both** of those conjuncts inward so they guard detection *only* and
-no longer freeze the override lifecycle around it (see the "split gate"
-section of
+**Detection rules (QS-256).** Detection sits behind
+`support_user_override()` (the outer gate — can this load have an override
+at all) and `is_load_command_set(time)`, which QS-307 moved inward so it
+guards detection *only* and no longer freezes the override lifecycle
+around it (see the "split gate" section of
 [bistate-duration-devices.md](bistate-duration-devices.md)). Detection
 behaviour is unchanged by that story: while a command is landing,
 observed state ≠ wanted state is expected, so classifying it as a user

@@ -88,10 +88,10 @@ an externally-detected override are constraint-driven:
   it owns that drop — for the *aligned* command only; anything else is
   a genuine solver intent. Note this is the first command-slot mutation
   inside `check_load_activity_and_constraints`, and three of that
-  method's callers run outside `_update_loads_lock`, so
-  `force_relaunch_command` re-checks the slot after its `await` rather
-  than assuming it still owns the command it launched. See
-  [load-base.md](load-base.md).
+  method's callers run outside `_update_loads_lock`, so both
+  `launch_command` and `force_relaunch_command` re-check the slot after
+  their `await` rather than assuming they still own the command they
+  launched. See [load-base.md](load-base.md).
 - A state mismatch only classifies as a NEW override when the entity
   state is newer than `last_command_execution_time` (causality guard)
   and the 180s post-override cooldown has elapsed.
@@ -111,12 +111,14 @@ an externally-detected override are constraint-driven:
 **An override ALWAYS expires, even on a dead load (QS-307).** The
 override lifecycle's clock-driven branches — expiry, the reset-ask
 follow-up, the post-override cooldown drain — run regardless of what
-the command slot holds, and regardless of whether the load even
-*supports* overrides any more. They read no entity state, so an
-unresponsive device cannot freeze them. Only *detection* is gated, on
-`support_user_override() and is_load_command_set()`; see the "split
-gate" section of
-[bistate-duration-devices.md](bistate-duration-devices.md).
+the command slot holds. They read no entity state, so an unresponsive
+device cannot freeze them. Only *detection* is gated on
+`is_load_command_set()`; see the "split gate" section of
+[bistate-duration-devices.md](bistate-duration-devices.md). (A load that
+cannot have an override at all is still gated out entirely, by
+`support_user_override()` on the outer gate — and a stored override on
+such a load is dropped at restore rather than left for a lifecycle that
+will never run.)
 
 Before QS-307 the whole block sat behind that gate, and QS-304's
 saturating retry ladder meant the gate could stay shut forever: an

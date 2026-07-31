@@ -26,7 +26,6 @@ from custom_components.quiet_solar.home_model.commands import (
     copy_command,
 )
 from custom_components.quiet_solar.home_model.load import (
-    CLOCK_SKEW_TOLERANCE_S,
     COMMAND_RELAUNCH_BASE_DELAY_S,
     NUM_MAX_COMMAND_RELAUNCH,
     NUM_MAX_INVALID_PROBES_COMMANDS,
@@ -447,28 +446,6 @@ async def test_unavailable_probe_give_up_releases_the_ownerless_clock(caplog: py
     assert count_log(caplog, REGAINED_CONTROL_LOG) == 0
 
 
-def test_the_skew_tolerance_band_separates_jitter_from_a_clock_step():
-    """Review fix #02 (must-fix): a few seconds ahead is jitter, not "fully elapsed".
-
-    `_seconds_since` collapses EVERY negative delta to `None`, which its callers read
-    as "treat as fully elapsed". Right for a real backwards clock step; catastrophic
-    for a window anchored by a user action, where a few seconds of future-dating is
-    routine (each user-action call site takes its own unlocked `datetime.now()` while
-    a cycle already in flight carries an earlier `event_time`).
-    """
-    load = NeverAcksLoad(name="pool_house")
-
-    # the ordinary case is untouched
-    assert load._seconds_since_skew_tolerant(T0, T0 - timedelta(seconds=30)) == 30.0
-    # future, inside the band → "just armed", never "fully elapsed"
-    assert load._seconds_since_skew_tolerant(T0, T0 + timedelta(seconds=5)) == 0.0
-    assert load._seconds_since_skew_tolerant(T0, T0 + timedelta(seconds=CLOCK_SKEW_TOLERANCE_S)) == 0.0
-    # beyond it → `_seconds_since`'s fully-elapsed meaning is preserved
-    assert load._seconds_since_skew_tolerant(T0, T0 + timedelta(seconds=CLOCK_SKEW_TOLERANCE_S + 1)) is None
-    # ...and "no anchor" still means the same thing it does in `_seconds_since`
-    assert load._seconds_since_skew_tolerant(T0, None) is None
-
-
 def test_a_give_up_window_cannot_climb_the_escalation_ladder():
     """AC9 (D5): re-arming cannot become a push storm, from the constants alone.
 
@@ -486,7 +463,7 @@ def test_a_give_up_window_cannot_climb_the_escalation_ladder():
 
 
 async def _recover_with_a_real_ack(load: NeverAcksLoad, time: datetime) -> datetime:
-    """Let the device answer once — the only thing that ends an episode."""
+    """Let the device answer once, which ends the episode."""
     load.probe_result = True
     if load.running_command is None:
         # the give-up emptied the slot, so there is nothing to probe: dispatch a
@@ -710,15 +687,18 @@ async def test_a_give_up_before_any_episode_does_not_swallow_the_first_push(
     assert count_log(caplog, LOST_CONTROL_LOG) == 1
 
 
-async def test_only_a_real_ack_clears_the_episode_latch(caplog: pytest.LogCaptureFixture):
-    """Review fix #02/03: a drop WE chose is not evidence the device answered.
+async def test_a_drop_we_chose_does_not_re_announce_the_episode(caplog: pytest.LogCaptureFixture):
+    """AC22: a drop WE chose is not evidence the device answered.
 
     `_drop_running_command` is reached by the override-suppression drop, the
-    disabled-load cleanup and — since review fix #01 — the expiry-time drop of an
-    override's own command. All three are QS changing its mind. Treating them as
-    recoveries let a latched flapping load shout again on its next ladder climb,
-    once per drop, for a device that never came back. AC13 pins "a real ack ⇒
-    escalates again"; this is the missing "and *only* a real ack".
+    disabled-load cleanup and — new in QS-307 — the expiry-time drop of an
+    override's own command. All three are QS changing its mind, so treating them as
+    recoveries let a latched load re-announce on its next ladder climb, once per
+    drop, for a device that never came back.
+
+    Scoped deliberately: this pins `_drop_running_command`'s contact contract, NOT a
+    general "only a real ack ever clears the latch" — the empty-slot re-arm clears it
+    too, and #319 owns the reachable-but-disobeying storm.
     """
     load = NeverAcksLoad(name="pool_house")
     load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))

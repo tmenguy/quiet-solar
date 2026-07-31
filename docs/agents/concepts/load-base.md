@@ -200,9 +200,10 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   never a live one left here — but for `_unresponsive_needs_ack`. Reaching
   the housekeeping arm with `current_command is None` means the give-up ran
   earlier in **this same cycle** and may have just latched the episode; the
-  release here is `CONFIRMED`, which clears the latch
-  *unconditionally*, so without the gate it would undo that one statement
-  later and re-announce an already-announced incident. Note
+  release here is `CONFIRMED`, which clears the latch *unconditionally*, so
+  without the gate it would undo that one statement later. The invariant to
+  keep in mind: only the give-up sets the latch, and the give-up nulls
+  `current_command`. Note
   `_last_supersede_time` is cleared *outside* that gate, on purpose — the
   two fields answer different questions, so read the comment for which
   sentence governs which.
@@ -216,9 +217,9 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   command inherited it: `is_uncontrollable` on its first cycle, so it
   **superseded** where it should have stacked, and the once-only guard then
   silenced every genuinely new episode for the rest of the load's life.
-  `check_commands` now calls `_clear_unresponsive("the probe went
-  unavailable")` right after the give-up, next to the state destruction that
-  motivates it. `_ack_command` itself is unchanged — the release lives at the
+  `check_commands` now calls `_clear_unresponsive("the probe went unavailable",
+  contact=ContactEvidence.UNREACHABLE)` right after the give-up, next to the
+  state destruction that motivates it. `_ack_command` itself is unchanged — the release lives at the
   caller so "acked" and "gave up" stay distinguishable in the log.
   Two things stop *this release* re-announcing, and **both** are needed. The
   rung reset (`_escalate_or_recover` zeroes `running_command_num_relaunch` on

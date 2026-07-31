@@ -203,9 +203,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         # so retuning it cannot desync this site from the runtime comparisons)
         if self.asked_for_reset_user_initiated_state_time is not None:
             ask_age_s = (datetime.now(pytz.UTC) - self.asked_for_reset_user_initiated_state_time).total_seconds()
-            if ask_age_s < -CLOCK_SKEW_TOLERANCE_S:
+            # QS-307: a load that cannot hold an override has no lifecycle to drain a
+            # restored reset-ask, so drop it here — a reconfigure reloads the entry.
+            if ask_age_s < -CLOCK_SKEW_TOLERANCE_S or not self.support_user_override():
                 _LOGGER.info(
-                    "use_saved_extra_device_info: dropping future-dated stored reset-ask time for load %s (age %ss)",
+                    "use_saved_extra_device_info: dropping future-dated or unsupported stored "
+                    "reset-ask time for load %s (age %ss)",
                     self.name,
                     int(ask_age_s),
                 )
@@ -222,9 +225,14 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # review fix QS-256#02: a clearly future-dated timestamp (clock
             # skew, NTP correction) is poison too — drop rather than keep,
             # with a small tolerance for benign skew
-            if age_s > 3600.0 * self.override_duration or age_s < -CLOCK_SKEW_TOLERANCE_S:
+            # QS-307: same reason as the reset-ask above — nothing could expire it.
+            if (
+                age_s > 3600.0 * self.override_duration
+                or age_s < -CLOCK_SKEW_TOLERANCE_S
+                or not self.support_user_override()
+            ):
                 _LOGGER.info(
-                    "use_saved_extra_device_info: dropping expired or future-dated "
+                    "use_saved_extra_device_info: dropping expired, future-dated or unsupported "
                     "stored user override %s for load %s (age %ss)",
                     self.external_user_initiated_state,
                     self.name,
@@ -694,14 +702,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         do_push_constraint_after = None
 
         # we want to check that the load hasn't been changed externally from the system:
-        # THE SPLIT GATE (QS-307). Invariant: override DETECTION is gated on command
-        # state, the override LIFECYCLE is not — the lifecycle branches read no entity
-        # state, so an unresponsive device must not be able to freeze them. The
-        # `qs_enable_device` guard is defence in depth (callers already short-circuit)
-        # and treats `None`/unset as enabled. Rationale, failure modes and the four
-        # load-bearing properties of this shape:
-        # `docs/agents/concepts/bistate-duration-devices.md`, "the split gate".
-        if self.qs_enable_device is not False:
+        # QS-307: only override DETECTION is gated on `is_load_command_set` (below);
+        # the lifecycle branches read no entity state, so an unresponsive device must
+        # not freeze them. See `docs/agents/concepts/bistate-duration-devices.md`.
+        if self.qs_enable_device is not False and self.support_user_override():
             # we need to know if the state we have is compatible with the current command
             # well more if it has been set ON or any other stuff externally so that we don't want to reset it to OFF
             # because the user wanted to force the state of the load
@@ -722,28 +726,18 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     tzinfo=pytz.UTC
                 )
 
-            # Clock-step-safe, and skew-tolerant: a future-dated anchor beyond the
-            # tolerance band is treated as fully elapsed (a real backwards jump must
-            # not freeze the expiry), but a few seconds of future-dating is benign and
-            # must NOT cancel a brand-new override. See
-            # `AbstractDevice._seconds_since_skew_tolerant`.
-            override_expired = False
-            if self.external_user_initiated_state_time is not None:
-                override_age_s = self._seconds_since_skew_tolerant(time, self.external_user_initiated_state_time)
-                override_expired = override_age_s is None or override_age_s > (3600.0 * self.override_duration)
-
-            if override_expired:
+            # Plain subtraction on purpose: a future-dated anchor is negative, so the
+            # override just lasts longer. Reading it as "fully elapsed" would destroy a
+            # live user override — strictly worse than expiring late (QS-307).
+            if self.external_user_initiated_state_time is not None and (
+                time - self.external_user_initiated_state_time
+            ).total_seconds() > (3600.0 * self.override_duration):
                 _LOGGER.info(
                     f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} "
                 )
-                # Expiry owns dropping the override's OWN in-flight service call: it is
-                # the one place that knows the override just ended, and nulling the
-                # override state below disables `force_relaunch_command`'s suppression
-                # drop, so an aligned command would otherwise keep being relaunched
-                # after the override was over. Only an ALIGNED command — anything else
-                # is a genuine solver intent that `keep_commands=True` must preserve.
-                # `_drop_running_command`, not `abandon_running_command`: no successor
-                # is launched here, so the rung and the clock go with the slot.
+                # Nulling the override state below disables the suppression drop, so
+                # the override's OWN command must go with it. ALIGNED only — anything
+                # else is a solver intent `keep_commands=True` must preserve.
                 if (
                     self.running_command is not None
                     and self.expected_state_from_command(self.running_command) == self.external_user_initiated_state
@@ -767,17 +761,9 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     keep_commands=True
                 )  # remove any constraint if any we will add it back if needed below
             else:
-                # The post-override cooldown drain: the third state-free branch, and
-                # the one that finishes the lifecycle. Expiry only hands off to this
-                # timer, and `get_override_state()` reports ASKED FOR RESET while it is
-                # set, so leaving the drain behind the detection gate meant an
-                # unresponsive load expired its override and stayed out of controlled
-                # consumption anyway. It sits in the same not-expired /
-                # no-reset-ask-pending arm it did before, so a load with a HEALTHY
-                # command slot drains on the same cycle as on `main` — but for a load
-                # whose slot is not healthy it now drains where `main` never drained
-                # at all, which is the whole point (AC15). Only the *suppression* half
-                # stays inside detection, below.
+                # The cooldown drain: expiry only hands off to this timer, and
+                # `get_override_state()` reports ASKED FOR RESET while it is set. Only
+                # the *suppression* half stays inside detection, below.
                 if self.asked_for_reset_user_initiated_state_time is not None:
                     # review fix QS-256#02: coerce a legacy tz-naive
                     # reset-ask timestamp before the subtraction
@@ -785,20 +771,13 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                         self.asked_for_reset_user_initiated_state_time = (
                             self.asked_for_reset_user_initiated_state_time.replace(tzinfo=pytz.UTC)
                         )
-                    # Shares the expiry's skew-tolerant helper: this is the ONLY release
-                    # of the cooldown, so a frozen comparison pins `is_user_overridden()`
-                    ask_age_s = self._seconds_since_skew_tolerant(time, self.asked_for_reset_user_initiated_state_time)
-                    if ask_age_s is None or ask_age_s >= min(
+                    if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() >= min(
                         float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
                     ):
                         # long enough ask to check the fact that the override should be finished
                         self.asked_for_reset_user_initiated_state_time = None
 
-                # `support_user_override()` guards DETECTION, never the lifecycle above:
-                # on the outer gate it was a second, non-self-healing "an override can
-                # never expire" path (a load flipped to boost-only kept a restored
-                # override forever, across restarts).
-                if self.support_user_override() and self.is_load_command_set(time):
+                if self.is_load_command_set(time):
                     for i, ct in enumerate(self._constraints):
                         if (
                             ct.load_param is not None
