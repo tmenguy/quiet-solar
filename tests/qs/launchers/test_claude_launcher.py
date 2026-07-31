@@ -948,6 +948,13 @@ def test_is_worktree_semantics_are_not_containment(tmp_path: Path) -> None:
     # "comparison is against a value" comment was simply wrong. ``git
     # rev-parse --git-common-dir`` names the shared git dir; its parent is
     # the main checkout, computed here from the test file's location.
+    #
+    # Review-fix #04 M1: this used to also assert ``main_checkout != repo``
+    # as a precondition. That is true in a linked worktree and FALSE in a
+    # plain clone, so it broke CI — which is the only place this assertion
+    # runs against a plain clone, and therefore the last place it should
+    # break. The property below needs no such precondition, and skipping
+    # instead of deleting would have hidden it exactly where it matters.
     repo = Path(__file__).resolve().parents[3]
     common = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "--path-format=absolute",
@@ -959,11 +966,6 @@ def test_is_worktree_semantics_are_not_containment(tmp_path: Path) -> None:
         f"derived main checkout {main_checkout} has no .git directory — the "
         f"derivation, not is_worktree, is broken"
     )
-    assert main_checkout != repo, (
-        "this test must run from a linked worktree for the contrast below to "
-        "mean anything"
-    )
-
     assert utils.is_worktree(tmp_path) is True
     assert utils.is_worktree(str(main_checkout)) is False
 
