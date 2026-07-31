@@ -9,6 +9,7 @@ with callers like ``setup_task.py`` that still pass slash form).
 from __future__ import annotations
 
 import json
+import os
 import stat
 import tempfile
 from pathlib import Path
@@ -260,12 +261,17 @@ def test_claude_build_payload_rejects_invalid_next_cmd(bad_next_cmd: str) -> Non
 #   1. the phase agent file exists at
 #      ``<work_dir>/.claude/agents/<agent>.md``  (pure filesystem check —
 #      short-circuits before any subprocess)
-#   2. ``work_dir`` is a worktree, not the main checkout
+#   2. ``work_dir`` is a **linked git worktree**: its ``.git`` must be a
+#      *file* (``gitdir: …``), and it must not be the main checkout
 #
 # **Isolation invariant** (AC4): each guard *independently* rejects the
 # throwaway paths the tests above pass (``/tmp/work``, ``/tmp/wt``), so no
-# existing test writes into a real directory. That is a designed property,
-# pinned by ``test_no_write_for_non_worktree_path``, not a coincidence.
+# existing test writes into a real directory. Review-fix #01 S4: this was
+# only true of guard 1 while guard 2 was a bare ``utils.is_worktree``
+# call, which means "is not the main checkout" and therefore accepts any
+# throwaway path. The ``.git``-is-a-file containment check restores the
+# independence, and it is pinned by ``test_no_write_for_non_worktree_path``
+# plus ``test_second_clone_is_not_pinned``.
 # --------------------------------------------------------------------------- #
 
 
@@ -273,11 +279,23 @@ SETTINGS_REL = Path(".claude") / "settings.local.json"
 
 
 def _fake_worktree(tmp_path: Path, agent: str = "qs-create-plan") -> Path:
-    """Return ``tmp_path`` prepared as a worktree holding ``<agent>.md``."""
+    """Return ``tmp_path`` prepared as a linked worktree holding ``<agent>.md``.
+
+    A *linked* git worktree's ``.git`` is a FILE containing a ``gitdir:``
+    pointer (the main checkout's — and any second clone's — is a
+    directory). Guard 2 checks exactly that, so the stub has to carry it
+    (review-fix #01 S4).
+    """
     agents_dir = tmp_path / ".claude" / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / f"{agent}.md").write_text("# stub agent body\n")
+    (tmp_path / ".git").write_text(f"gitdir: {tmp_path}/../.git/worktrees/stub\n")
     return tmp_path
+
+
+def _tmp_siblings(work_dir: Path) -> list[Path]:
+    """Return any surviving atomic-write temp siblings of the settings file."""
+    return sorted((work_dir / ".claude").glob("settings.local.json.*.tmp"))
 
 
 def _settings(work_dir: Path) -> dict:
@@ -295,8 +313,9 @@ def test_writes_agent_key_into_new_settings_file(tmp_path: Path) -> None:
 
     assert payload["agent"] == "qs-create-plan"
     assert _settings(work_dir) == {"agent": "qs-create-plan"}
-    # The atomic-write temp sibling must not survive the call.
-    assert not (work_dir / ".claude" / "settings.local.json.tmp").exists()
+    # The atomic-write temp sibling must not survive the call. The name
+    # carries the writer's PID (review-fix #01 N5), so glob for it.
+    assert _tmp_siblings(work_dir) == []
 
 
 def test_merges_and_preserves_existing_keys(tmp_path: Path) -> None:
@@ -404,8 +423,11 @@ def test_overwrites_corrupt_existing_json_with_warning(
     """Unparseable settings are rebuilt from scratch, with a warning.
 
     Skipping would leave the phase unbound, and F3+F6 make that invisible
-    in the GUI. The file is machine-written and gitignored, so overwriting
-    it destroys nothing a human authored.
+    in the GUI. Review-fix #01 M1: rebuilding is **not** free — Claude Code
+    persists per-user permission decisions in this file — so it is confined
+    to genuinely unparseable content (a *read* failure must not rebuild,
+    see ``test_read_oserror_does_not_write``) and the old bytes are kept in
+    a ``.bak`` sibling (``test_corrupt_file_is_backed_up_before_rebuild``).
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
@@ -489,9 +511,15 @@ def test_no_write_for_non_worktree_path() -> None:
     """The isolation invariant: throwaway paths never gain a settings file.
 
     ``/tmp/work`` is the path the pre-QS-311 tests in this module pass.
-    Both guards reject it (no ``.claude/agents/qs-create-plan.md`` there,
-    and it is not a worktree), which is why AC4 holds with zero edits to
+    Both guards reject it — there is no
+    ``.claude/agents/qs-create-plan.md`` there (guard 1) and no ``.git``
+    *file* either (guard 2) — which is why AC4 holds with zero edits to
     those tests.
+
+    Review-fix #01 S4: guard 2 used to be a bare ``utils.is_worktree``
+    call, which is a *not-the-main-checkout* test and therefore returned
+    ``True`` for ``/tmp/work``. The two guards were consequently NOT
+    independent; the ``.git``-is-a-file containment check makes them so.
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
@@ -500,3 +528,346 @@ def test_no_write_for_non_worktree_path() -> None:
     )
 
     assert not (Path("/tmp/work") / SETTINGS_REL).exists()
+
+
+# --------------------------------------------------------------------------- #
+# Review fix plan #01 — hardening of the pin writer.
+#
+# M1  a READ failure must never rebuild the file (it holds user-local
+#     permission state); a genuine rebuild backs the old bytes up
+# M3  the write result is surfaced as ``phase_agent_pinned`` and every
+#     skip path warns on stderr
+# S1  the temp unlink is best-effort — it must not break the handoff
+# S2  a re-read immediately before the publish shrinks the race against a
+#     live Claude Code session rewriting the same file
+# S4  guard 2 is a real containment check, not ``!= main checkout``
+# S5  a literal ``null`` body is a non-object, and must warn
+# S6  the write-failure branch is tested
+# N5  the temp name carries the PID
+# N6  the target's permission bits survive the replace
+# --------------------------------------------------------------------------- #
+
+
+def test_payload_reports_pin_true_on_success(tmp_path: Path) -> None:
+    """M3: a successful write is reported as ``phase_agent_pinned: True``."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is True
+
+
+def test_payload_reports_pin_false_when_skipped(tmp_path: Path) -> None:
+    """M3: a skipped write is reported, so the handoff can stop asserting the pin.
+
+    Every GUI handoff block claims the worktree "should now be pinned".
+    Before this key the orchestrator had no signal at all — the claim was
+    unfalsifiable at the moment it was printed, and *deterministically
+    false* for ``setup_task.py --no-worktree`` (which passes the main
+    checkout as ``work_dir``).
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    payload = claude_launcher.build_payload(
+        str(tmp_path), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is False
+
+
+def test_warns_on_stderr_when_agent_file_absent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """M3: the guard-1 skip is observable — it was the one silent path."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    claude_launcher.build_payload(
+        str(tmp_path), 311, "Title", next_cmd="create-plan",
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == "", f"unexpected stdout output: {captured.out!r}"
+    assert "warning:" in captured.err
+    assert "qs-create-plan" in captured.err
+
+
+def test_read_oserror_does_not_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """M1: a file we cannot READ is a file we must not replace.
+
+    ``EACCES`` / ``EINTR`` / a lock / ``EIO`` on a network mount are
+    transient conditions; treating them like corrupt JSON would replace a
+    still-valid file — and this file carries the user's ``permissions``
+    decisions (see ``test_merges_and_preserves_existing_keys``).
+
+    ``read_bytes`` is the patch target because the reader takes bytes and
+    decodes separately: ``UnicodeDecodeError`` is a ``ValueError``, not an
+    ``OSError``, and must keep routing to the rebuild path.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    original = json.dumps({"permissions": {"allow": ["Bash(git status)"]}})
+    (work_dir / SETTINGS_REL).write_text(original, encoding="utf-8")
+
+    real_read_bytes = Path.read_bytes
+
+    def _boom(self: Path) -> bytes:
+        if self.name == "settings.local.json":
+            raise PermissionError(13, "Permission denied")
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", _boom)
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is False
+    assert (work_dir / SETTINGS_REL).read_text(encoding="utf-8") == original
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_corrupt_file_is_backed_up_before_rebuild(tmp_path: Path) -> None:
+    """M1: a rebuild is recoverable — the old bytes land in a ``.bak`` sibling."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    corrupt = '{"permissions": {"allow": ["Bash(git status)"]}'  # truncated
+    (work_dir / SETTINGS_REL).write_text(corrupt, encoding="utf-8")
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    backup = work_dir / ".claude" / "settings.local.json.bak"
+    assert backup.is_file(), "corrupt settings were rebuilt with no backup"
+    assert backup.read_text(encoding="utf-8") == corrupt
+
+
+def test_null_json_is_overwritten_with_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """S5: ``null`` parses fine but is not an object — warn, then rebuild.
+
+    The reader used to use ``loaded is not None`` as its parse-failed
+    sentinel, so ``json.loads("null") -> None`` took neither the corrupt
+    branch nor the non-object branch: the file was rewritten with an empty
+    stderr. AC2 requires a non-``dict`` parse to be treated as corrupt,
+    i.e. overwritten *with a warning*.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / SETTINGS_REL).write_text("null", encoding="utf-8")
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_unlink_failure_does_not_break_handoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S1: the temp unlink is best-effort — ``EACCES`` there is not fatal.
+
+    The unlink sits in a bare ``finally`` outside any ``except``, so an
+    ``OSError`` from it used to propagate and break the handoff — the exact
+    outcome the "must never break a handoff" contract forbids.
+    ``missing_ok=True`` only suppresses ``FileNotFoundError``.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    real_unlink = Path.unlink
+
+    def _boom(self: Path, *args: object, **kwargs: object) -> None:
+        if self.name.endswith(".tmp"):
+            raise PermissionError(13, "Permission denied")
+        real_unlink(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "unlink", _boom)
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is True
+    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+
+
+def test_write_failure_reports_unpinned_and_survives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """S6: the ``except OSError`` write branch warns, returns, and is reported."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    real_write_text = Path.write_text
+
+    def _boom(self: Path, *args: object, **kwargs: object) -> int:
+        if self.name.startswith("settings.local.json"):
+            raise OSError(28, "No space left on device")
+        return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type,return-value]
+
+    monkeypatch.setattr(Path, "write_text", _boom)
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    # The handoff itself survives — the launcher one-liner is still built.
+    assert payload["phase_agent_pinned"] is False
+    assert payload["new_context"].startswith("sh ")
+    assert not (work_dir / SETTINGS_REL).exists()
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_reread_before_replace_preserves_late_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S2: a key that appears after the first read still survives the publish.
+
+    The handoff normally runs from *inside* a live Claude Code session on
+    the same worktree, and the app owns this file too. A read-modify-write
+    with no re-read loses whatever the app wrote in between. The re-read
+    immediately before ``os.replace`` shrinks — it does not close — that
+    window; the residual race is documented in ``harness.md``'s Traps.
+
+    The simulation hooks the temp write, which happens between the first
+    read and the publish.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    target = work_dir / SETTINGS_REL
+    target.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+
+    real_write_text = Path.write_text
+    fired: list[str] = []
+
+    def _late_writer(self: Path, *args: object, **kwargs: object) -> int:
+        if self.name.endswith(".tmp") and not fired:
+            fired.append(self.name)
+            # The live session lands a permission decision right here.
+            real_write_text(
+                target,
+                json.dumps({"model": "opus", "permissions": {"allow": ["Bash(ls)"]}}),
+                encoding="utf-8",
+            )
+        return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type,return-value]
+
+    monkeypatch.setattr(Path, "write_text", _late_writer)
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert fired, "the temp write never happened — the simulation is vacuous"
+    assert _settings(work_dir) == {
+        "model": "opus",
+        "permissions": {"allow": ["Bash(ls)"]},
+        "agent": "qs-create-plan",
+    }
+
+
+def test_temp_sibling_name_carries_the_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """N5: a fixed temp name lets two concurrent handoffs clobber each other.
+
+    With a shared name, A's ``os.replace`` can publish over B, or A's
+    unlink can remove B's temp so B's ``os.replace`` raises
+    ``FileNotFoundError`` and the *earlier* phase wins.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    seen: list[str] = []
+    real_write_text = Path.write_text
+
+    def _spy(self: Path, *args: object, **kwargs: object) -> int:
+        if self.name.endswith(".tmp"):
+            seen.append(self.name)
+        return real_write_text(self, *args, **kwargs)  # type: ignore[arg-type,return-value]
+
+    monkeypatch.setattr(Path, "write_text", _spy)
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert seen, "no temp sibling was written"
+    assert all(str(os.getpid()) in name for name in seen), (
+        f"temp name must carry the writer's PID; got {seen!r}"
+    )
+
+
+def test_file_mode_is_preserved_across_replace(tmp_path: Path) -> None:
+    """N6: ``chmod 600`` survives the publish.
+
+    ``write_text`` creates the temp at ``0o666 & ~umask`` and
+    ``os.replace`` keeps the *temp's* mode, so a user who tightened the
+    file (it can carry an ``env`` block with a token) had it silently
+    republished world-readable.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    target = work_dir / SETTINGS_REL
+    target.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+    target.chmod(0o600)
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_second_clone_is_not_pinned(tmp_path: Path) -> None:
+    """S4: a second full clone is a main checkout — guard 2 must reject it.
+
+    ``utils.is_worktree`` cannot see this: ``get_main_worktree()`` takes no
+    ``cwd``, so run from a cwd inside a different repo it reports the other
+    repo's root, and the clone (or even quiet-solar's own main checkout)
+    compares unequal → ``True``. A clone's ``.git`` is a *directory*, which
+    is what guard 2 now checks.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / ".git").unlink()
+    (work_dir / ".git").mkdir()
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is False
+    assert not (work_dir / SETTINGS_REL).exists()
+
+
+def test_is_worktree_semantics_are_not_containment(tmp_path: Path) -> None:
+    """S4: ``utils.is_worktree`` means "not the main checkout" — nothing more.
+
+    Documented rather than fixed: the launcher is its only caller, and the
+    containment property the pin needs is supplied by guard 2's
+    ``.git``-is-a-file check. Anything that reads the name as "is inside a
+    worktree of this repo" is reading a claim the function never made.
+    """
+    import utils  # type: ignore[import-not-found]
+
+    assert utils.is_worktree(tmp_path) is True
+    assert utils.is_worktree("/tmp/work") is True
+    assert utils.is_worktree(utils.get_main_worktree()) is False

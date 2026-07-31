@@ -199,6 +199,8 @@ custom_components/volkswagencarnet
 # Per-task OpenCode agent files (rendered dynamically, not tracked)
 .opencode/agents/qs-*-QS-*.md
 
-# QS-311: per-worktree GUI phase pin (local, never committed).
-.claude/settings.local.json
-
+# QS-311: per-worktree GUI phase pin (local, never committed). The
+# trailing `*` also covers the writer's atomic-write temp
+# (`.json.<pid>.tmp`) and its rebuild backup (`.json.bak`), which a
+# SIGKILL / OOM kill can leave behind.
+.claude/settings.local.json*

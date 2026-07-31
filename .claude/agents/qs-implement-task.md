@@ -178,7 +178,9 @@ python scripts/qs/next_step.py \
     --harness claude-code
 ```
 
-Parse the JSON; capture `new_context`. Then print both blocks:
+Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
+there means the GUI pin was skipped — drop the GUI block's pin sentence
+and point at the Preferred line instead). Then print both blocks:
 
 ```text
 ✅ Implementation complete — quality gate passed.
@@ -195,12 +197,15 @@ kept for any chat without a CLI launcher; the GUI can instead run the phase
 agent directly, see `docs/workflow/harness.md`):
   /review-task
 
-[Claude Code GUI] the worktree is now pinned to `qs-review-task` in
-`.claude/settings.local.json`, so a GUI session there boots as that agent.
+[Claude Code GUI] the worktree should now be pinned to `qs-review-task` in
+`.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
+whether that write happened — it is always skipped on a main checkout).
+The GUI displays the active agent nowhere, so if the phase looks wrong,
+use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
   • Select directory `{{worktree}}`
   • Name it `QS_{{issue}} review-task`
-  • No `--agent` needed; see `docs/workflow/harness.md` →
+  • See `docs/workflow/harness.md` →
     "GUI launch surface (Claude Code Desktop)".
 ```
 

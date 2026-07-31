@@ -12,17 +12,39 @@ These assertions read `.gitignore` **as text** rather than calling
 excludes (`~/.config/git/ignore`), where the pattern happens to be
 present on the author's machine (finding F11), so a `check-ignore`
 based test would pass spuriously on a repo that never gained the entry.
+
+Review-fix #01 M2: the pattern carries a trailing `*` so it also covers
+the writer's **siblings** — the atomic-write temp
+(`settings.local.json.<pid>.tmp`) and the rebuild backup
+(`settings.local.json.bak`). `finally` cleanup covers Ctrl-C and
+`SystemExit` but not `SIGKILL`, an OOM kill, or power loss, so a temp can
+survive; un-ignored it would be swept into the next commit by
+`utils.auto_commit_and_push` (which stages `.claude/` wholesale) and would
+make `qs-finish-task` prompt "Force-delete and lose this work?" over a
+stray temp file.
 """
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GITIGNORE = REPO_ROOT / ".gitignore"
 
-# The exact pattern AC1 requires.
-REQUIRED_PATTERN = ".claude/settings.local.json"
+# The exact pattern AC1 requires (review-fix #01 M2: plus the trailing
+# ``*`` so the writer's temp / backup siblings are covered too).
+REQUIRED_PATTERN = ".claude/settings.local.json*"
+
+# Filenames the pattern must cover. The bare settings file is AC1's
+# original requirement; the other two are the writer's siblings.
+COVERED_FILENAMES = (
+    ".claude/settings.local.json",
+    ".claude/settings.local.json.12345.tmp",
+    ".claude/settings.local.json.bak",
+)
 
 # Patterns that would ignore *more* of `.claude/` than intended. The
 # tracked agent/command files must never become invisible to git. This
@@ -47,12 +69,44 @@ def _patterns() -> list[str]:
 
 
 def test_gitignore_ignores_claude_local_settings() -> None:
-    """`.claude/settings.local.json` appears verbatim as a pattern."""
+    """`.claude/settings.local.json*` appears verbatim as a pattern."""
     patterns = _patterns()
     assert REQUIRED_PATTERN in patterns, (
         f"{REQUIRED_PATTERN!r} missing from .gitignore — the launcher's "
         f"per-worktree GUI phase pin would be offered for commit "
         f"(QS-311 AC1). Patterns: {patterns}"
+    )
+
+
+@pytest.mark.parametrize("filename", COVERED_FILENAMES)
+def test_gitignore_pattern_covers_the_writer_siblings(filename: str) -> None:
+    """Each file the pin writer can leave behind is matched by some pattern.
+
+    Matched with `fnmatch` against the patterns actually read from
+    `.gitignore` — not against `REQUIRED_PATTERN` — so the assertion tests
+    the file rather than restating this module's own constant. `fnmatch`
+    is not a gitignore engine (its `*` crosses `/`), which is harmless for
+    a literal path carrying a single trailing `*`.
+    """
+    matching = [p for p in _patterns() if fnmatch.fnmatch(filename, p)]
+    assert matching, (
+        f"{filename!r} is matched by no .gitignore pattern — the pin "
+        f"writer's leftovers (atomic-write temp, rebuild backup) would be "
+        f"offered for commit, then swept into the next commit by "
+        f"`auto_commit_and_push` (review-fix #01 M2)."
+    )
+
+
+def test_gitignore_has_no_double_trailing_blank_line() -> None:
+    """The file ends with exactly one newline — no trailing blank line.
+
+    Review-fix #01 N8. The blank line *before* the `# QS-311` comment
+    separates it from the previous stanza and stays.
+    """
+    text = GITIGNORE.read_text(encoding="utf-8")
+    assert text.endswith("\n"), ".gitignore must end with a newline"
+    assert not text.endswith("\n\n"), (
+        ".gitignore ends with a blank line (double trailing newline)."
     )
 
 

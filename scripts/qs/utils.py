@@ -90,7 +90,18 @@ def get_worktree_dir(issue_number: int) -> Path:
 
 
 def is_worktree(work_dir: str | Path) -> bool:
-    """Return ``True`` if ``work_dir`` is a worktree (not the main repo)."""
+    """Return ``True`` if ``work_dir`` is **not the main checkout**.
+
+    Read the name literally at your peril: this is a single inequality
+    against ``get_main_worktree()``, not a containment check. Any path that
+    is not the main checkout answers ``True`` — a throwaway directory, a
+    second full clone, an unrelated repo. And because
+    ``get_main_worktree()`` takes no ``cwd``, "the main checkout" is
+    whichever repo the *ambient* cwd sits in, so even this repo's own main
+    checkout answers ``True`` when called from elsewhere. Callers needing
+    "is a worktree of this repo" must add their own check — see
+    ``launchers/claude.py::_is_linked_worktree`` (review-fix QS-311 #01 S4).
+    """
     try:
         return Path(work_dir).resolve() != get_main_worktree().resolve()
     except (subprocess.CalledProcessError, OSError, RuntimeError):

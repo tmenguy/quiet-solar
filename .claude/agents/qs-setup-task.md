@@ -67,7 +67,8 @@ For `--no-worktree`, pass `--no-worktree`. The script:
 - detects the harness and emits the appropriate launcher
 
 Capture `worktree_path`, `branch`, and the launcher payload
-(`new_context`, `same_context`, plus optional `pycharm_context`).
+(`new_context`, `same_context`, `phase_agent_pinned`, plus optional
+`pycharm_context`).
 
 ### 3. Tell the user what to do next
 
@@ -77,9 +78,13 @@ interactive `claude --agent qs-create-plan` session) and the slash-command
 fallback (degraded one-shot UX; the GUI can instead run the phase agent
 directly, see [docs/workflow/harness.md](../../docs/workflow/harness.md)).
 
-The launcher has already pinned `qs-create-plan` into the new worktree's
+The launcher attempts to pin `qs-create-plan` into the new worktree's
 `.claude/settings.local.json`, so a Claude Code GUI session opened on that
-directory boots as the plan orchestrator without any `--agent` flag.
+directory boots as the plan orchestrator without any `--agent` flag. Check
+the payload's `phase_agent_pinned` before promising it: with
+`--no-worktree` the work dir **is** the main checkout, which is never
+pinned, so that run always reports `false` and the GUI block below must be
+replaced with "no GUI pin — use `/create-plan`, or the CLI line above".
 
 ```text
 Task #{{issue_number}} set up.
@@ -96,12 +101,15 @@ kept for any chat without a CLI launcher; the GUI can instead run the phase
 agent directly, see `docs/workflow/harness.md`):
   /create-plan
 
-[Claude Code GUI] the worktree is now pinned to `qs-create-plan` in
-`.claude/settings.local.json`, so a GUI session there boots as that agent.
+[Claude Code GUI] the worktree should now be pinned to `qs-create-plan` in
+`.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
+whether that write happened — it is always skipped on a main checkout).
+The GUI displays the active agent nowhere, so if the phase looks wrong,
+use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
   • Select directory `{{worktree_path}}`
   • Name it `QS_{{issue_number}} create-plan`
-  • No `--agent` needed; see `docs/workflow/harness.md` →
+  • See `docs/workflow/harness.md` →
     "GUI launch surface (Claude Code Desktop)".
 ```
 

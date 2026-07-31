@@ -246,15 +246,40 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 # next phase into ``<worktree>/.claude/settings.local.json`` and each
 # handoff must print the GUI gesture (New session → select directory →
 # name it). The set of orchestrators is exactly the two-block set — the
-# 5 worktree handoffs — so it is ALIASED rather than re-listed, and the
-# alias is asserted below so a future edit to one list can't silently
-# leave the other behind.
+# 5 worktree handoffs — and the equality is asserted below.
+#
+# Review-fix #01 S3: this list used to be a bare ALIAS of
+# ``_TWO_BLOCK_ORCHESTRATORS``, which made that equality assertion an
+# object compared with itself — it could never fail, so the "pinned so it
+# can't drift" docstring was false. It is now an independent literal, so
+# the assertion is a real cross-check.
 # --------------------------------------------------------------------------- #
 
-_GUI_BLOCK_ORCHESTRATORS = _TWO_BLOCK_ORCHESTRATORS
+_GUI_BLOCK_ORCHESTRATORS = [
+    "qs-setup-task.md",
+    "qs-create-plan.md",
+    "qs-implement-task.md",
+    "qs-implement-setup-task.md",
+    "qs-review-task.md",
+]
 
-_GUI_BLOCK_RE = re.compile(
-    r"\[Claude Code GUI\][\s\S]{0,400}?GUI launch surface \(Claude Code Desktop\)",
+_GUI_BLOCK_MARKER = "[Claude Code GUI]"
+
+# Tokens every GUI block must carry. Review-fix #01 N4: these used to be
+# folded into one ``[\s\S]{0,400}?`` regex window, so a single added
+# sentence dropped the match count and failed with a misleading "block
+# missing" message — precisely the trap M3's rewording would have sprung.
+# Asserted one by one instead, and the block is delimited by the enclosing
+# fence rather than a character budget.
+_GUI_BLOCK_REQUIRED_TOKENS = (
+    "`.claude/settings.local.json`",
+    "New session",
+    "GUI launch surface (Claude Code Desktop)",
+    # The consumer of the payload key. Decision 8 declined `gui_context`
+    # precisely because no consumer read it; `phase_agent_pinned` earns its
+    # place only if the handoff prose actually consults it, so that is
+    # pinned here rather than left to review (review-fix #01 M3).
+    "`phase_agent_pinned`",
 )
 
 # ``qs-review-task`` hands off twice — the zero-findings → finish-task
@@ -263,13 +288,41 @@ _GUI_BLOCK_RE = re.compile(
 _GUI_BLOCK_COUNTS = {name: 1 for name in _GUI_BLOCK_ORCHESTRATORS}
 _GUI_BLOCK_COUNTS["qs-review-task.md"] = 2
 
+# The fallback line each orchestrator's handoff must still expose after
+# the GUI block was inserted. ``qs-create-plan`` is the dynamic-next-phase
+# exception, so its expectation is the placeholder rather than a concrete
+# slash form — review-fix #01 S9: AC5 says "for each" of the five, and
+# leaving create-plan out of the shadow check covered only 4 of 5.
+_FALLBACK_LINE_EXPECTATION = dict(_HARDCODED_FALLBACK)
+_FALLBACK_LINE_EXPECTATION["qs-create-plan.md"] = "/{{NEXT_PHASE}}"
+
+
+def _gui_blocks(body: str) -> list[str]:
+    """Return each ``[Claude Code GUI]`` block, delimited by its closing fence.
+
+    Splitting on the marker guarantees a block can never absorb a later
+    one; truncating at the next ``\\n``-anchored triple fence keeps it from
+    absorbing the rest of the file. Both bounds are structural, unlike the
+    fixed character window this replaces (review-fix #01 N4).
+    """
+    blocks: list[str] = []
+    for chunk in body.split(_GUI_BLOCK_MARKER)[1:]:
+        end = chunk.find("\n```")
+        blocks.append(chunk if end == -1 else chunk[:end])
+    return blocks
+
 
 def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:
-    """The GUI-block list is the two-block list — pinned so it can't drift."""
+    """The GUI-block list equals the two-block list — a real cross-check now."""
     assert _GUI_BLOCK_ORCHESTRATORS == _TWO_BLOCK_ORCHESTRATORS, (
         "QS-311 AC5: the GUI launch-surface block belongs to exactly the "
         "orchestrators that emit a worktree handoff — the two-block set. "
         "If a new orchestrator joins one list it must join the other."
+    )
+    assert _GUI_BLOCK_ORCHESTRATORS is not _TWO_BLOCK_ORCHESTRATORS, (
+        "review-fix #01 S3: the two lists must be independent literals. An "
+        "alias makes the equality above compare an object with itself, so "
+        "it can never fail and pins nothing."
     )
 
 
@@ -277,20 +330,57 @@ def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:
 def test_orchestrator_has_gui_launch_block(filename: str) -> None:
     """Each worktree handoff prints the ``[Claude Code GUI]`` block."""
     body = (AGENTS_DIR / filename).read_text()
-    found = _GUI_BLOCK_RE.findall(body)
+    found = _gui_blocks(body)
     expected = _GUI_BLOCK_COUNTS[filename]
     assert len(found) == expected, (
-        f"{filename}: expected {expected} '[Claude Code GUI]' block(s) "
-        f"pointing at the harness.md 'GUI launch surface (Claude Code "
-        f"Desktop)' section, found {len(found)}. GUI users have no "
-        f"`--agent` flag — the handoff must name the gesture (QS-311 AC5)."
+        f"{filename}: expected {expected} '[Claude Code GUI]' block(s), "
+        f"found {len(found)}. GUI users have no `--agent` flag — the "
+        f"handoff must name the gesture (QS-311 AC5)."
     )
 
 
-@pytest.mark.parametrize(("filename", "expected_slash"), _HARDCODED_FALLBACK)
-def test_gui_block_does_not_shadow_fallback_line(
-    filename: str, expected_slash: str,
-) -> None:
+@pytest.mark.parametrize("token", _GUI_BLOCK_REQUIRED_TOKENS)
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_gui_block_names_required_tokens(filename: str, token: str) -> None:
+    """Every GUI block names the mechanism, the gesture, and the doc section."""
+    body = (AGENTS_DIR / filename).read_text()
+    blocks = _gui_blocks(body)
+    assert blocks, f"{filename}: no '[Claude Code GUI]' block at all"
+    missing = [i for i, block in enumerate(blocks) if token not in block]
+    assert not missing, (
+        f"{filename}: GUI block(s) {missing} do not mention {token!r} "
+        f"(QS-311 AC5). Each block must stand alone — a reader of one "
+        f"handoff never sees the others."
+    )
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_gui_block_states_the_pin_conditionally(filename: str) -> None:
+    """No GUI block may assert the pin as accomplished fact.
+
+    Review-fix #01 M3: the blocks read "the worktree **is now pinned**",
+    but the writer's return value was discarded, the GUI displays the
+    active agent *nowhere*, and the claim is deterministically FALSE for
+    ``setup_task.py --no-worktree`` (which hands the main checkout to the
+    launcher, where guard 2 always skips). The wording must be conditional
+    and must name the ``--agent`` escape hatch.
+    """
+    body = (AGENTS_DIR / filename).read_text()
+    for i, block in enumerate(_gui_blocks(body)):
+        assert "is now pinned" not in block, (
+            f"{filename}: GUI block {i} asserts the pin as fact ('is now "
+            f"pinned'). The write can silently skip or fail — say 'should "
+            f"now be pinned' and name the fallback (review-fix #01 M3)."
+        )
+        assert "--agent" in block, (
+            f"{filename}: GUI block {i} does not name the `--agent` escape "
+            f"hatch. When the pin is missing the GUI gives no signal, so "
+            f"the block must say how to recover (review-fix #01 M3)."
+        )
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_gui_block_does_not_shadow_fallback_line(filename: str) -> None:
     """The GUI block must not become the line ``_find_fallback_line`` returns.
 
     That helper walks forward from the ``Fallback`` marker to the first
@@ -298,13 +388,20 @@ def test_gui_block_does_not_shadow_fallback_line(
     the GUI block is therefore backticked — an unbackticked worktree path
     or ``{{worktree}}`` on its own line would hijack the scan and break
     the fallback assertions above.
+
+    Review-fix #01 S9: parametrized over all five orchestrators, not just
+    the four with a hardcoded fallback. ``qs-create-plan``'s expectation is
+    its ``/{{NEXT_PHASE}}`` placeholder — the same shape
+    ``test_create_plan_fallback_uses_next_phase_placeholder_not_same_context``
+    checks from the other direction.
     """
     body = (AGENTS_DIR / filename).read_text()
+    expected = _FALLBACK_LINE_EXPECTATION[filename]
     fallback_line = _find_fallback_line(body)
     assert fallback_line is not None, f"{filename}: 'Fallback' block not found"
-    assert expected_slash in fallback_line, (
+    assert expected in fallback_line, (
         f"{filename}: the GUI block shadowed the fallback line — expected "
-        f"{expected_slash!r}, got {fallback_line!r}. Backtick every path "
+        f"{expected!r}, got {fallback_line!r}. Backtick every path "
         f"inside the GUI block (QS-311 AC5)."
     )
 
@@ -324,19 +421,29 @@ _POINTER_LINE = (
     "documented in [docs/workflow/harness.md](../../docs/workflow/harness.md)."
 )
 
+# Review-fix #01 M3: the pin is conditional, so the counterparts say so
+# too — and say that nothing in *their* harness reads the flag. Pinned
+# verbatim (like the line above) because a freehand edit here is exactly
+# what the harness-sync co-modification rule cannot detect.
+_POINTER_FOLLOWUP = (
+    "> That doc's GUI phase pin is best-effort: the Claude payload reports "
+    "the outcome as `phase_agent_pinned`, and no other harness reads it."
+)
+
 
 @pytest.mark.parametrize("harness_dir", _COUNTERPART_DIRS)
 @pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
 def test_counterpart_agents_point_at_harness_doc(
     harness_dir: str, filename: str,
 ) -> None:
-    """All 10 counterparts carry the identical pointer line."""
+    """All 10 counterparts carry the identical two-line pointer block."""
     path = REPO_ROOT / harness_dir / "agents" / filename
     assert path.is_file(), f"missing counterpart agent file: {path}"
     body = path.read_text()
-    assert _POINTER_LINE in body, (
+    expected = f"{_POINTER_LINE}\n{_POINTER_FOLLOWUP}"
+    assert expected in body, (
         f"{harness_dir}/agents/{filename}: missing the verbatim harness.md "
-        f"pointer line (QS-311 AC6). Expected:\n{_POINTER_LINE}"
+        f"pointer block (QS-311 AC6). Expected:\n{expected}"
     )
 
 

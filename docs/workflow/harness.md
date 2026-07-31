@@ -162,23 +162,45 @@ programmatically (no URL scheme creates a session on a directory, and
 A session started **without** `--agent` in a directory whose
 `.claude/settings.local.json` carries that key runs its main thread as
 the named agent. This is documented upstream
-(`code.claude.com/docs/en/settings.md` — "Run the main thread as a named
-subagent…", scopes User / Project / Local).
+(<https://code.claude.com/docs/en/settings.md> — "Run the main thread as
+a named subagent…", scopes User / Project / Local).
 
 `launchers/claude.py::_write_phase_agent` writes that key at **every**
 handoff, so the worktree is always pinned to the phase the pipeline just
-handed off to. Two guards keep the write narrow: the destination must
-already contain `.claude/agents/<agent>.md`, and it must be a worktree.
+handed off to, and reports the outcome as the payload's
+`phase_agent_pinned` — the handoff blocks say "should now be pinned"
+because two guards, a race, and any `OSError` can each skip the write.
+
+Two guards keep it narrow:
+
+1. the destination must already contain `.claude/agents/<agent>.md`
+   (a pin naming an absent agent silently falls back to the default one);
+2. the destination must be a **linked worktree** — its `.git` is a
+   *file* holding a `gitdir:` pointer. Note that `utils.is_worktree`
+   alone does **not** establish this: it is a single inequality against
+   `get_main_worktree()`, i.e. "is not the main checkout", and it answers
+   `True` for a throwaway directory, a second clone, or even this repo's
+   main checkout when the launcher runs from a cwd inside another repo.
+   The `.git`-is-a-file check is what makes the two guards independent.
 
 The file is **local and never committed** — `.gitignore` carries
-`.claude/settings.local.json` (only that path; the rest of `.claude/` is
-tracked). It is machine-written, so a corrupt or non-object file is
-rebuilt from scratch with a warning on stderr; the write is atomic
-(temp sibling + `os.replace`) and best-effort, and never breaks a
-handoff.
+`.claude/settings.local.json*` (that path plus the writer's temp/backup
+siblings; the rest of `.claude/` is tracked). It is **not** purely
+machine-written: Claude Code persists the user's own `permissions`
+decisions, `model`, and `env` there, so the writer shallow-merges, never
+rewrites a file it failed to *read*, and copies the old bytes to
+`.bak` on the one path that does rebuild (an unparseable or non-object
+body, always with a warning on stderr). The write is atomic (temp
+sibling + `os.replace`, permission bits preserved) and best-effort, and
+never breaks a handoff.
 
 **The CLI is unaffected: `--agent` overrides the key.** A launcher
 one-liner always lands on the agent it names, whatever the pin says.
+*(Evidence: scratch-directory test, two agents, the flag won — QS-311
+finding F2, verified 2026-07-30 on `claude` 2.1.220. Marked because this
+claim is load-bearing for every "use the Preferred line above" recovery
+instruction, and it was previously the only unmarked claim in the
+section.)*
 
 ### The GUI loop
 
@@ -191,8 +213,9 @@ One GUI session per phase, exactly as on the CLI:
 3. Name it something like `QS_<N> implement-task`.
 4. Work the phase; at the handoff, repeat from step 1 for the next one.
 
-`/setup-task` seeds the loop: it creates the worktree and pins
-`qs-create-plan` into it, then prints the directory to open.
+`/setup-task` seeds the loop: it creates the worktree, pins
+`qs-create-plan` into it (unless `--no-worktree`, see Traps), and prints
+the directory to open.
 
 ### Traps
 
@@ -210,7 +233,24 @@ One GUI session per phase, exactly as on the CLI:
 - **The main-checkout gap.** `setup-task` and `release` run on the main
   checkout, which is never pinned (by design — guard 2). Reach them in
   the GUI via the slash form `/setup-task` / `/release`, which is what
-  the slash commands are still for.
+  the slash commands are still for. Same for `setup-task --no-worktree`:
+  the work dir *is* the main checkout, so that run reports
+  `phase_agent_pinned: false` and there is no GUI pin to open.
+- **GUI self-isolation drops the pin.** The pin file is gitignored *by
+  design*, so it does not exist in a git worktree the GUI creates for
+  itself when isolation is enabled: the tracked `.claude/agents/*.md`
+  come along with `HEAD`, the untracked pin does not, and the sub-tree
+  boots as the default agent — invisibly, like every other bad-pin case.
+  Either disable isolation for pipeline worktrees, or work the phase from
+  the CLI where `--agent` always wins.
+- **The pin races the app.** The writer does a read-modify-write on a
+  file Claude Code also owns, with no lock. A handoff normally runs from
+  *inside* a live session on that same worktree, so a permission the user
+  approves at just the wrong moment can be dropped — or can drop the
+  `agent` key, un-pinning the worktree the handoff text just described.
+  A re-read immediately before the publish shrinks the window; it does
+  not close it. Harmless in practice (re-run the handoff, or use the
+  CLI), recorded because the failure is silent.
 
 ### Hybrid: `/desktop`
 

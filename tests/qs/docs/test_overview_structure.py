@@ -142,8 +142,15 @@ GUI_SECTION_REQUIRED_TOKENS = (
     "--agent",
     # the hybrid CLI→GUI bridge
     "/desktop",
-    # the main-checkout gap: `release` (and `setup-task`) are never pinned
-    "release",
+    # The main-checkout gap: those phases are never pinned. Review-fix #01
+    # N3: this used to be the token `"release"`, which any mention of a
+    # release anywhere in the section would satisfy — it pinned nothing.
+    "main checkout",
+    # Review-fix #01 S7: the pin is gitignored by design, so it does NOT
+    # follow into a sub-worktree the GUI creates for itself. The pre-PR
+    # setup-task prose acknowledged that mode and the PR deleted it; the
+    # Traps list has to carry it instead.
+    "isolation",
 )
 
 
@@ -171,8 +178,13 @@ def test_harness_doc_has_gui_launch_surface_section() -> None:
 
 @pytest.mark.parametrize("token", GUI_SECTION_REQUIRED_TOKENS)
 def test_gui_launch_surface_section_names_required_tokens(token: str) -> None:
-    """Each load-bearing token appears in the GUI section."""
-    section = _gui_section_body()
+    """Each load-bearing token appears in the GUI section.
+
+    Whitespace-normalised: these are prose tokens and the section
+    line-wraps at 72 columns, so a multi-word token like ``main checkout``
+    would otherwise fail purely on where the wrap landed.
+    """
+    section = " ".join(_gui_section_body().split())
     assert token in section, (
         f"harness.md's {GUI_SECTION_HEADING!r} section does not mention "
         f"{token!r} (QS-311 AC7)."
@@ -194,32 +206,37 @@ def test_gui_section_is_not_advertised_as_a_harness_identifier() -> None:
 
 
 def test_overview_documents_claude_desktop_limitation() -> None:
-    """AC-8: overview.md (or phase-protocols.md) calls out Desktop's limit."""
+    """AC-8: overview.md (or phase-protocols.md) calls out Desktop's limit.
+
+    The three tokens below must all stay present. Review-fix #01 S10: the
+    failure message used to add "**and direct users to the slash-command
+    fallback**" — the very inference AC8 retracts and AC9 bans. What AC8
+    requires is that the *limitation* stays documented (there is still no
+    way to launch a GUI session programmatically) alongside the fourth
+    mechanism that makes the fallback unnecessary.
+
+    Review-fix #01 N2: the ``"by necessity"`` ban that used to live here
+    too now has a dedicated owner —
+    ``test_workflow_no_desktop_fallback_by_necessity.py`` — which scans
+    every workflow doc rather than this one file.
+    """
     body = OVERVIEW.read_text()
     assert "Claude Desktop" in body and "limitation" in body.lower(), (
         "overview.md is missing the Claude Desktop limitation subsection "
-        "(AC-8). The doc must honestly state Desktop has no `--agent` "
-        "equivalent and direct users to the slash-command fallback."
+        "(AC-8). The doc must honestly state that Desktop offers no way to "
+        "*launch* a session on a directory programmatically — while naming "
+        "the `agent` settings key that binds the orchestrator once a GUI "
+        "session is open."
     )
     # Must specifically mention pycharm_context as the bridge.
     assert "pycharm_context" in body, (
         "overview.md should mention pycharm_context as the suggested bridge "
         "for users who can't use the CLI launcher directly."
     )
-    # QS-311 AC8: the limitation is real and stays documented (there is
-    # still no way to launch a GUI session programmatically) — but the
-    # CONCLUSION that GUI users must therefore live on the slash-command
-    # fallback is retracted: the `agent` settings key binds the phase
-    # orchestrator in the GUI. Whitespace-normalised because this
-    # paragraph line-wraps mid-phrase.
+    # Whitespace-normalised because this paragraph line-wraps mid-phrase.
     normalized = " ".join(body.split())
     assert "settings.local.json" in normalized, (
         "overview.md must name the fourth mechanism — the `agent` key in "
         "`.claude/settings.local.json` — alongside the three that really "
         "are missing (URL scheme, argv pass-through, UI gesture)."
-    )
-    assert "by necessity" not in normalized, (
-        "overview.md still concludes GUI users land on the slash-command "
-        "fallback 'by necessity'. That inference is false (QS-311 AC8); "
-        "the enumeration of missing mechanisms may stay — it is accurate."
     )

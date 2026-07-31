@@ -22,6 +22,13 @@ Scope notes:
   truth (risk R4).
 - `AGENTS.md` and `.claude/commands/**` are verified free of the phrase
   today and are left out of the glob to keep the net minimal.
+- Review-fix #01 N1: the banned string is the fuller
+  `"fallback path by necessity"`, not a bare `"by necessity"`. The bare
+  form is ordinary English ("the solver is iterative by necessity") and
+  banning it across every workflow doc would false-positive on a future
+  sentence that has nothing to do with launch surfaces. The anchor is
+  still specific enough that the retracted sentence cannot return —
+  it *is* the sentence, verbatim.
 """
 
 from __future__ import annotations
@@ -33,8 +40,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The retracted inference. Lower-cased comparison so "By necessity" at the
-# start of a sentence cannot slip through.
-RETRACTED_INFERENCE = "by necessity"
+# start of a sentence cannot slip through; anchored on the full clause so
+# an unrelated "by necessity" elsewhere is not a false positive (N1).
+RETRACTED_INFERENCE = "fallback path by necessity"
 
 
 def _scanned_files() -> list[Path]:
