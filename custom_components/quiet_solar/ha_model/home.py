@@ -2841,31 +2841,12 @@ class QSHome(QSDynamicGroup):
 
         return False, False
 
-    def _release_unmanaged_loads_lost_control_state(self, managed: list | None = None) -> None:
-        """Drop the lost-control state of every load this cycle will not sweep.
-
-        QS-304: `qs_load_uncontrollable` is derived state whose only clearing
-        mechanism is a driver cycle. A load the driver stops visiting would keep
-        the PROBLEM sensor on indefinitely, so ownership of the flag is released
-        together with ownership of the load.
-        """
-        for load in self._all_loads:
-            if managed is None or load not in managed:
-                load.release_lost_control_state("the load is no longer managed by QS")
-
     async def check_loads_commands(self, time: datetime) -> bool:
 
         if self.home_mode is None or self.home_mode in [
             QSHomeMode.HOME_MODE_OFF.value,
             QSHomeMode.HOME_MODE_SENSORS_ONLY.value,
         ]:
-            # QS-304: QS manages no load in these modes, so none may keep claiming
-            # "QS lost control of me". `is_uncontrollable` is derived state that
-            # clears itself on the next driver cycle — and there is no next cycle
-            # here, while the independent state loop keeps refreshing the binary
-            # sensor. Without this the PROBLEM sensor latches on forever, and
-            # switching the home off is the natural reaction to the notification.
-            self._release_unmanaged_loads_lost_control_state()
             return True
 
         if await self.finish_setup(time) is False:
@@ -2880,8 +2861,6 @@ class QSHome(QSDynamicGroup):
 
         if self.home_mode == QSHomeMode.HOME_MODE_CHARGER_ONLY.value:
             all_extended_loads = self._chargers
-            # Same reasoning for the non-chargers this mode stops sweeping.
-            self._release_unmanaged_loads_lost_control_state(managed=all_extended_loads)
 
         all_ok = True
         for load in all_extended_loads:

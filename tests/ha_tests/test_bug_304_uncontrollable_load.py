@@ -20,9 +20,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.quiet_solar.binary_sensor import create_ha_binary_sensor
 from custom_components.quiet_solar.const import (
-    BINARY_SENSOR_LOAD_UNCONTROLLABLE,
     DATA_HANDLER,
     DOMAIN,
 )
@@ -38,14 +36,13 @@ from tests.factories import (
     RaisingCheckLoad,
     attach_minimal_load_to_home,
 )
+from tests.qs304_helpers import CYCLE_S, LADDER_WALL_S, count_log
 
-from .const import MOCK_BATTERY_CONFIG, MOCK_CHARGER_CONFIG
+from .const import MOCK_CHARGER_CONFIG
 
 pytestmark = pytest.mark.usefixtures("mock_sensor_states")
 
 T0 = datetime(2026, 7, 27, 12, 12, 19, tzinfo=pytz.UTC)
-CYCLE_S = 7
-LADDER_WALL_S = 1050 + NUM_MAX_COMMAND_RELAUNCH * CYCLE_S
 
 
 async def _get_home(hass: HomeAssistant, entry: ConfigEntry) -> QSHome:
@@ -189,7 +186,7 @@ async def test_uncontrollable_load_does_not_perturb_power_accounting(
 
 
 # =============================================================================
-# AC8 — the off-grid contract is unchanged
+# AC8 — an unconfirmed load blocks the off-grid switch
 # =============================================================================
 
 
@@ -221,8 +218,10 @@ async def test_permanently_uncontrollable_load_still_blocks_off_grid_switch(
 
     # And the same holds for a load whose cycle RAISES rather than reporting
     # not-good: it is equally unconfirmed, so it must equally hold the switch back.
-    raising = attach_minimal_load_to_home(home, name="raising_load", load_class=RaisingCheckLoad)
-    home._all_loads = [raising]
+    # `attach_minimal_load_to_home` appends, so the uncontrollable charger stays in
+    # the sweep and this assertion keeps covering it too. Clobbering `_all_loads`
+    # here also broke the charger-entry teardown.
+    attach_minimal_load_to_home(home, name="raising_load", load_class=RaisingCheckLoad)
     assert await home.check_loads_commands(time) is False
 
     home._switch_to_off_grid_launched = time - timedelta(seconds=30)
@@ -279,8 +278,8 @@ async def test_entry_pushes_once_and_recovery_pushes_never(
         await _drive(charger, time, 600)
 
     assert charger.is_uncontrollable is False
-    assert _count(caplog, "Lost control of load") == 1
-    assert _count(caplog, "Lost-control state cleared for load") == 1
+    assert count_log(caplog, "Lost control of load") == 1
+    assert count_log(caplog, "Lost-control state cleared for load") == 1
     assert len(notify_calls) == 1
 
     await hass.config_entries.async_unload(charger_entry.entry_id)
@@ -351,80 +350,6 @@ async def test_manually_disabled_load_is_never_auto_re_enabled(
 
 
 # =============================================================================
-# AC11 — the qs_load_uncontrollable binary sensor
-# =============================================================================
-
-
-async def test_uncontrollable_binary_sensor_is_created_for_a_charger(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """AC11: the sensor exists for a load and reads `is_uncontrollable`."""
-    await _get_home(hass, home_config_entry)
-    charger, charger_entry = await _add_charger(hass, "charger_ac11")
-
-    entities = create_ha_binary_sensor(charger)
-    matches = [e for e in entities if e.entity_description.key == BINARY_SENSOR_LOAD_UNCONTROLLABLE]
-    assert len(matches) == 1
-
-    description = matches[0].entity_description
-    # It must NOT rely on the `getattr(device, key, False)` fallback: `key` is
-    # the translation key, not the property name.
-    assert description.value_fn is not None
-    assert getattr(charger, description.key, "missing") == "missing"
-
-    assert description.value_fn(charger, description.key) is False
-    charger.unresponsive_since = T0
-    charger.running_command = copy_command(CMD_IDLE)
-    assert description.value_fn(charger, description.key) is True
-
-    await hass.config_entries.async_unload(charger_entry.entry_id)
-    await hass.async_block_till_done()
-
-
-def test_car_is_not_a_load_so_it_gains_no_uncontrollable_sensor():
-    """Review fix #01/24: confirm `QSCar` is not an `AbstractLoad`.
-
-    AC11 covers charger / home / battery but not the car. If `QSCar` were an
-    `AbstractLoad`, every configured car would silently gain a "QS lost control"
-    PROBLEM sensor that nothing ever sets, because cars are not commanded through
-    `launch_command`.
-    """
-    from custom_components.quiet_solar.ha_model.car import QSCar
-    from custom_components.quiet_solar.home_model.load import AbstractLoad
-
-    assert not issubclass(QSCar, AbstractLoad)
-    assert issubclass(QSCar, AbstractDevice)
-
-
-async def test_uncontrollable_binary_sensor_is_absent_for_home_and_battery(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """AC11: `QSHome` and `QSBattery` are not loads and get no such sensor."""
-    home = await _get_home(hass, home_config_entry)
-
-    battery_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data=MOCK_BATTERY_CONFIG,
-        entry_id="battery_ac11",
-        title=f"battery: {MOCK_BATTERY_CONFIG['name']}",
-        unique_id="qs_battery_ac11",
-    )
-    battery_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(battery_entry.entry_id)
-    await hass.async_block_till_done()
-    battery = hass.data[DOMAIN][battery_entry.entry_id]
-
-    for device in (home, battery):
-        keys = [e.entity_description.key for e in create_ha_binary_sensor(device)]
-        assert BINARY_SENSOR_LOAD_UNCONTROLLABLE not in keys
-
-    await hass.config_entries.async_unload(battery_entry.entry_id)
-    await hass.async_block_till_done()
-
-
-# =============================================================================
 # Review fix #01/1 + #01/2 — the driver's fault isolation and the force-solve
 # =============================================================================
 
@@ -458,7 +383,7 @@ async def test_one_broken_load_does_not_stop_the_sweep(
     # (a) the sweep continued past the broken load
     healthy.check_and_relaunch_command.assert_awaited_once()
     # (b) the failure was logged, naming the load
-    assert _count(caplog, "check_loads_commands: Error checking load commands broken_load") == 1
+    assert count_log(caplog, "check_loads_commands: Error checking load commands broken_load") == 1
     # (c) a load whose cycle raised is NOT confirmed-good, so it falsifies `all_ok`.
     #     Reporting True here let `finish_off_grid_switch` complete the transition
     #     while that load's command had never landed, violating AC8 for exactly the
@@ -505,44 +430,6 @@ async def test_a_load_reporting_a_constraint_change_forces_a_solve(
     assert load.is_load_active(T0) is True
 
 
-async def test_lost_control_state_is_released_when_the_home_stops_managing_a_load(
-    hass: HomeAssistant,
-    home_config_entry: ConfigEntry,
-) -> None:
-    """The PROBLEM sensor must not latch on when the driver stops sweeping the load.
-
-    `is_uncontrollable` is derived state whose only clearing mechanism is a driver
-    cycle. `check_loads_commands` returns early for OFF / SENSORS_ONLY and narrows
-    to `_chargers` in CHARGER_ONLY, while the independent state loop keeps
-    refreshing the binary sensor — so the flag would stay on forever. Switching the
-    home off is the natural reaction to the notification.
-    """
-    home = await _get_home(hass, home_config_entry)
-    home._init_completed = True
-    home.physical_battery = None
-
-    for mode in (QSHomeMode.HOME_MODE_OFF.value, QSHomeMode.HOME_MODE_SENSORS_ONLY.value):
-        load = attach_minimal_load_to_home(home, name=f"stuck_{mode}", load_class=NeverAcksLoad)
-        load.running_command = copy_command(CMD_IDLE)
-        load.unresponsive_since = T0
-        assert load.is_uncontrollable is True
-
-        home.home_mode = mode
-        assert await home.check_loads_commands(T0) is True
-        assert load.is_uncontrollable is False, mode
-
-    # CHARGER_ONLY: a non-charger load is no longer managed either.
-    non_charger = attach_minimal_load_to_home(home, name="non_charger", load_class=NeverAcksLoad)
-    non_charger.running_command = copy_command(CMD_IDLE)
-    non_charger.unresponsive_since = T0
-    assert non_charger.is_uncontrollable is True
-
-    home.home_mode = QSHomeMode.HOME_MODE_CHARGER_ONLY.value
-    home._chargers = []
-    await home.check_loads_commands(T0)
-    assert non_charger.is_uncontrollable is False
-
-
 # =============================================================================
 # AC14b — the driver holds no ladder arithmetic
 # =============================================================================
@@ -582,8 +469,3 @@ def test_check_loads_commands_is_a_thin_driver():
 # =============================================================================
 # Helpers
 # =============================================================================
-
-
-def _count(caplog: pytest.LogCaptureFixture, needle: str) -> int:
-    """Count log records whose formatted message contains `needle`."""
-    return len([r for r in caplog.records if needle in r.getMessage()])

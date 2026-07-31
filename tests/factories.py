@@ -38,12 +38,12 @@ from custom_components.quiet_solar.const import (
     CONF_IS_3P,
     CONF_MINIMUM_OK_CAR_CHARGE,
     CONF_MONO_PHASE,
+    CONF_TYPE_NAME_QSRadiator,
     CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN,
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
-    CONF_TYPE_NAME_QSRadiator,
 )
 from custom_components.quiet_solar.ha_model.bistate_transport import (
     ClimateTransport,
@@ -181,8 +181,8 @@ class NeverAcksLoad(MinimalTestLoad):
         self.state_change_notifications: list[tuple[datetime, str, str | None]] = []
         self.probe_result: bool | None = False
         self.suppress_override: bool = False
-        # Review fix #01/9: set either to make that step of the cycle blow up, so
-        # the exception-shadowing guarantee can be pinned.
+        # Set either to make that step of the cycle blow up, so the
+        # exception-shadowing guarantee can be pinned.
         self.probe_error: Exception | None = None
         self.notify_error: Exception | None = None
 

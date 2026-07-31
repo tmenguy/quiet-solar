@@ -36,32 +36,19 @@ from tests.factories import (
     RaisingExecuteLoad,
     RaisingProbeLoad,
 )
+from tests.qs304_helpers import (
+    CYCLE_S,
+    LADDER_TOTAL_S,
+    LADDER_WALL_S,
+    count_log,
+    drive,
+    expected_relaunches,
+)
 
 T0 = datetime(2026, 7, 27, 12, 12, 19, tzinfo=pytz.UTC)
 
-# The observed quiet-solar load-management cycle period.
-CYCLE_S = 7
-
-# Cumulative wall time of the full 50/100/150/200/250/300 ladder.
-LADDER_TOTAL_S = 1050
-
-# Each rung fires on the first load-management cycle AFTER its deadline, so the
-# observed wall time runs up to one cycle per rung longer — 17 m 52 s in the
-# incident log against a nominal 17 m 30 s.
-LADDER_WALL_S = LADDER_TOTAL_S + NUM_MAX_COMMAND_RELAUNCH * CYCLE_S
-
 LOST_CONTROL_LOG = "Lost control of load"
 REGAINED_CONTROL_LOG = "Lost-control state cleared for load"
-
-
-async def drive(load, start: datetime, duration_s: float, step_s: float = CYCLE_S) -> datetime:
-    """Run the load-management cycle over `duration_s`, returning the next cycle time."""
-    time = start
-    end = start + timedelta(seconds=duration_s)
-    while time <= end:
-        await load.check_and_relaunch_command(time)
-        time = time + timedelta(seconds=step_s)
-    return time
 
 
 async def drive_until_uncontrollable(load, start: datetime = T0) -> datetime:
@@ -164,7 +151,7 @@ async def test_command_wiping_constraint_reset_releases_the_clock():
 
 
 async def test_reset_button_does_not_flash_problem_on_a_healthy_load():
-    """The user's own remediation must not immediately light the PROBLEM sensor.
+    """The user's own remediation must not immediately re-declare lost control.
 
     Review fix #01/4: `user_clean_and_reset` → `reset()` →
     `constraint_reset_and_reset_commands_if_needed(keep_commands=False)`, and a
@@ -195,7 +182,7 @@ async def test_recovery_clears_and_logs_once(caplog: pytest.LogCaptureFixture):
 
     assert load.unresponsive_since is None
     assert load.is_uncontrollable is False
-    assert _count(caplog, REGAINED_CONTROL_LOG) == 1
+    assert count_log(caplog, REGAINED_CONTROL_LOG) == 1
 
 
 async def test_recovery_after_equal_command_early_return(caplog: pytest.LogCaptureFixture):
@@ -215,7 +202,7 @@ async def test_recovery_after_equal_command_early_return(caplog: pytest.LogCaptu
 
     assert load.unresponsive_since is None
     assert load.is_uncontrollable is False
-    assert _count(caplog, REGAINED_CONTROL_LOG) == 1
+    assert count_log(caplog, REGAINED_CONTROL_LOG) == 1
 
 
 async def test_recovery_after_override_suppression_drop(caplog: pytest.LogCaptureFixture):
@@ -231,7 +218,7 @@ async def test_recovery_after_override_suppression_drop(caplog: pytest.LogCaptur
     assert load.running_command is None
     assert load.unresponsive_since is None
     assert load.is_uncontrollable is False
-    assert _count(caplog, REGAINED_CONTROL_LOG) == 1
+    assert count_log(caplog, REGAINED_CONTROL_LOG) == 1
 
 
 async def test_re_arm_resets_the_ladder_rung_so_the_next_command_starts_fresh():
@@ -374,51 +361,33 @@ async def test_relaunch_counters_never_outlive_the_command_they_describe():
     assert earned_rung_cycles > 10
 
 
-async def test_unreachable_entity_keeps_shouting_through_the_sensor():
-    """A permanently unreachable entity must keep the PROBLEM sensor on, not go quiet.
+async def test_unreachable_entity_does_not_produce_a_push_storm():
+    """A permanently unreachable entity must be reported once, not per cycle.
 
-    **Read this before "cleaning up" `unresponsive_since` — see #308.**
-
-    When a load's probe returns `None` forever (the entity is unavailable), the
+    When a load's probe returns `None` forever, the
     `NUM_MAX_INVALID_PROBES_COMMANDS` give-up empties the command slot every ~70 s
-    while `unresponsive_since` is deliberately kept. That lingering clock is what
-    keeps `is_uncontrollable` True for the large majority of cycles, which is the
-    correct user-facing answer for a permanently broken entity.
-
-    It is currently achieved by an *ownerless* clock rather than by design (#308).
-    The tempting tidy-up — clearing the clock at the give-up — silently drops the
-    signal from ~88% of cycles to ~0%, because the give-up fires at ~70 s while the
-    relaunch threshold needs 1050 s, so the clock could never be re-earned. This
-    test exists so that regression fails loudly here instead of shipping.
-
-    When #308 lands, rewrite this to assert the new `qs_load_unreachable` sensor.
+    while `unresponsive_since` is deliberately kept. The once-only escalation guard
+    is what stops that turning into a notification per cycle.
     """
     load = NeverAcksLoad(name="broken_entity")
     load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
     await load.launch_command(T0, CMD_IDLE)
 
-    # Earn the first escalation honestly.
     time = await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
-    assert load.is_uncontrollable is True
-    pushes_after_first_episode = len(load.state_change_notifications)
-    assert pushes_after_first_episode == 1
+    assert len(load.state_change_notifications) == 1
 
-    # The entity now goes permanently unavailable, while QS keeps commanding it.
+    # Six hours of a permanently unavailable entity, while QS keeps commanding it.
     load.probe_result = None
-    sensor_on = total = 0
+    total = 0
     end = time + timedelta(seconds=6 * 3600)
     while time <= end:
         if load.running_command is None:
             await load.launch_command(time, CMD_IDLE if total % 2 else CMD_ON)
         await load.check_and_relaunch_command(time)
         total += 1
-        sensor_on += 1 if load.is_uncontrollable else 0
         time = time + timedelta(seconds=CYCLE_S)
 
-    # Measured at ~88%; the regression being guarded takes this to ~0%.
-    assert sensor_on > total // 2, f"sensor only on for {sensor_on}/{total} cycles"
-    # And it stays one push per episode — no per-cycle notification storm.
-    assert len(load.state_change_notifications) == pushes_after_first_episode
+    assert len(load.state_change_notifications) == 1
 
 
 async def test_unavailable_probe_give_up_is_not_a_recovery(caplog: pytest.LogCaptureFixture):
@@ -434,7 +403,7 @@ async def test_unavailable_probe_give_up_is_not_a_recovery(caplog: pytest.LogCap
     assert load.current_command is None
     assert load.running_command is None
     assert load.unresponsive_since is not None
-    assert _count(caplog, REGAINED_CONTROL_LOG) == 0
+    assert count_log(caplog, REGAINED_CONTROL_LOG) == 0
 
 
 # =============================================================================
@@ -499,12 +468,14 @@ async def test_retry_is_perpetual(caplog: pytest.LogCaptureFixture):
         await drive(load, time, 3 * 3600)
 
     extra = len(load.executed_commands) - at_threshold
-    # 300 s cadence over 3 h, allowing cycle quantisation.
-    assert 33 <= extra <= 36
+    # Derived from the saturated cadence, so a change to the ladder constants moves
+    # the bound instead of flaking the test.
+    low, high = expected_relaunches(3 * 3600)
+    assert low <= extra <= high, extra
     assert load.running_command is not None
     assert load.is_uncontrollable is True
     # One line in — not one per load-management cycle.
-    assert _count(caplog, LOST_CONTROL_LOG) == 1
+    assert count_log(caplog, LOST_CONTROL_LOG) == 1
 
 
 async def test_threshold_notifies_once():
@@ -529,7 +500,7 @@ async def test_notify_is_a_no_op_for_a_non_load_device(caplog: pytest.LogCapture
         await drive(device, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
 
     assert device.is_uncontrollable is True
-    assert _count(caplog, LOST_CONTROL_LOG) == 1
+    assert count_log(caplog, LOST_CONTROL_LOG) == 1
     assert await device._notify_unresponsive(T0, CMD_IDLE) is None
 
 
@@ -673,7 +644,7 @@ async def test_a_failing_push_does_not_mask_the_device_error(caplog: pytest.LogC
             await load.check_and_relaunch_command(T0 + timedelta(seconds=LADDER_WALL_S + 2 * CYCLE_S))
 
     # The secondary failure is logged rather than swallowed silently...
-    assert _count(caplog, "Error escalating the command state for load pool_house") == 1
+    assert count_log(caplog, "Error escalating the command state for load pool_house") == 1
     # ...and the once-only guard still holds, so the episode is not re-notified.
     assert load.unresponsive_since is not None
 
@@ -691,7 +662,7 @@ async def test_a_failing_relaunch_does_not_mask_the_device_error(caplog: pytest.
         with pytest.raises(RuntimeError, match="the device fell off the bus"):
             await load.check_and_relaunch_command(T0 + timedelta(seconds=2 * COMMAND_RELAUNCH_BASE_DELAY_S))
 
-    assert _count(caplog, "Error relaunching the stale command for load pool_house") == 1
+    assert count_log(caplog, "Error relaunching the stale command for load pool_house") == 1
     # AC5 still holds: the ladder climbed despite the raising probe.
     assert load.running_command_num_relaunch == 1
 
@@ -755,8 +726,9 @@ async def test_a_raising_probe_on_the_stack_promotion_path_still_makes_progress(
         time = time + timedelta(seconds=CYCLE_S)
 
     made = len(load.executed_commands) - calls_before
-    # ~1 per 300 s over 2 h; before the fix this was exactly 0.
-    assert 20 <= made <= 28, made
+    # ~1 per saturated interval over 2 h; before the fix this was exactly 0.
+    low, high = expected_relaunches(2 * 3600)
+    assert low <= made <= high, made
     assert load.is_uncontrollable is True
 
 
@@ -766,8 +738,8 @@ async def test_a_rewound_clock_does_not_freeze_the_relaunch_ladder():
     The primary comparison `time - running_command_last_launch` returns early on a
     negative delta, so for the whole duration of a backwards jump no relaunch is
     issued, the rung can never reach the escalation threshold, and `launch_command`
-    stacks every solver command — a silently deadlocked slot with no ERROR and no
-    PROBLEM sensor. The sibling throttle comparison was already hardened, so the two
+    stacks every solver command — a silently deadlocked slot with no ERROR at all.
+    The sibling throttle comparison was already hardened, so the two
     disagreed about a rewound clock until they were given a shared primitive.
     """
     load = NeverAcksLoad(name="pool_house")
@@ -1022,11 +994,6 @@ def test_load_command_equality_is_consign_sensitive():
 # =============================================================================
 # Helpers
 # =============================================================================
-
-
-def _count(caplog: pytest.LogCaptureFixture, needle: str) -> int:
-    """Count log records whose formatted message contains `needle`."""
-    return len([r for r in caplog.records if needle in r.getMessage()])
 
 
 async def _uncontrollable_load(name: str = "pool_house") -> NeverAcksLoad:

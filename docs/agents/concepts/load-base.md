@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-30
+last_verified: 2026-07-31
 ---
 
 # AbstractDevice & AbstractLoad
@@ -65,6 +65,10 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   threshold is crossed (one ERROR, one push) and cleared *only* by
   `_clear_unresponsive` — the single writer, so "one line in, one line
   out" cannot drift.
+- **`is_uncontrollable` is internal state, not an entity.** It decides
+  supersede-vs-stack in `launch_command` and gates the one-shot
+  escalation; nothing exposes it to Home Assistant. That is why a clock
+  that outlives its command is a nuisance rather than a user-visible bug.
 - **`is_uncontrollable` needs `running_command is not None`.** That
   conjunct is load-bearing, not defensive. The remaining path that
   empties the slot while keeping the clock is the
@@ -75,12 +79,11 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   forever with no retry left to clear it. If we are not waiting on
   anything, we are not uncontrollable. That give-up also makes the *next*
   command inherit the clock — see #308.
-- **Five clearers, one writer.** `_clear_unresponsive` is the only writer;
+- **Four clearers, one writer.** `_clear_unresponsive` is the only writer;
   it is reached by an ack, by the empty-slot re-arm, by
   `_drop_running_command` (**unconditionally** — an emptied slot has no
-  owner for the clock whether or not a confirmed command ever existed), by
-  a `keep_commands=False` wipe, and by `release_lost_control_state` when
-  the driver stops managing the load. It also clears the supersede anchor
+  owner for the clock whether or not a confirmed command ever existed), and
+  by a `keep_commands=False` wipe. It also clears the supersede anchor
   *ahead of* its own early return, so the two fields cannot
   desynchronise.
 - **Both clock comparisons go through `_seconds_since`.** It returns
@@ -134,6 +137,24 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
 - **A disabled load never shouts.** The escalation branch is gated on
   `qs_enable_device`; the housekeeping half still runs. QS was
   explicitly told to leave the load alone, so it must not push.
+- **One shape keeps the clock with an empty slot**: the
+  `NUM_MAX_INVALID_PROBES_COMMANDS` give-up goes through
+  `_ack_command(time, None)`, which nulls `current_command` on purpose
+  (preserving it would bill phantom consumption into the persisted
+  forecast) and so cannot re-arm. The *next* command therefore inherits
+  the clock. Consequence is limited to supersede-vs-stack choice — there
+  is no entity exposing `is_uncontrollable` — and the once-only guard
+  means no repeat notification. The supersede **anchor** is released on
+  that path (in `_escalate_or_recover`'s housekeeping arm, outside the
+  `current_command` gate) so a fresh command's first legitimate supersede
+  is not throttled.
+- **"One service call per 300 s" is per command *identity*, not per
+  load.** The relaunch ladder and the supersede throttle are measured on
+  two independent anchors, so a relaunch immediately followed by a
+  superseding command can produce two calls inside one nominal window —
+  bounded to one extra per episode. Deliberately not coupled: one shared
+  clock would let a supersede delay the ladder, or a relaunch delay a
+  newer intent.
 - **Invariant:** anything meaning "we have lost control" reads
   `is_uncontrollable`, never `running_command_num_relaunch`. The
   counter is resettable; the clock is not.

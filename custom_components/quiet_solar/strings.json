@@ -854,9 +854,6 @@
       },
       "qs_car_is_soc_estimated": {
         "name": "Car charge is estimated"
-      },
-      "qs_load_uncontrollable": {
-        "name": "QS lost control"
       }
     },
 

@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
   - custom_components/quiet_solar/ha_model/person.py
-last_verified: 2026-07-30
+last_verified: 2026-07-31
 ---
 
 # Notification routing
@@ -60,8 +60,8 @@ alarm at 3am is supposed to wake you).
   `check_and_relaunch_command` when a load crosses the lost-control
   threshold (~1050 s of unacked relaunches). It is `AbstractLoad`-only:
   the base `AbstractDevice._notify_unresponsive` is a documented no-op,
-  so an uncontrollable **battery** gets the ERROR log but no push and no
-  binary sensor. Accepted product consequence.
+  so an uncontrollable **battery** gets the ERROR log but no push.
+  Accepted product consequence.
 
 The push is issued **last** in `_escalate_or_recover`, and a failure in it
 cannot skip the surrounding housekeeping or mask the device exception the
@@ -77,10 +77,8 @@ written before the await.
 The channel is a fire-and-forget `Platform.NOTIFY` mobile push with no
 notification id, so nothing can be dismissed or updated — and sending an
 `ERROR`-status push to say things are *fine* would be wrong. Recovery
-gets one INFO log line, and the live state is the
-`qs_load_uncontrollable` binary sensor (`BinarySensorDeviceClass.PROBLEM`),
-which clears itself when control returns. One line in, one line out; no
-heartbeat.
+gets one INFO log line. One line in, one line out; no heartbeat, and no
+entity — the lost-control state is internal.
 
 ## Common mistakes
 
@@ -97,6 +95,11 @@ heartbeat.
 - Pairing an entry push with a "recovered" push. The channel cannot
   dismiss, so a second push is noise — expose recovery as state, not as
   a notification (QS-304).
+- Clearing a lost-control *flag* without also resetting the evidence
+  behind it. QS-304: anything that clears `unresponsive_since` must also
+  reset the relaunch rung — otherwise the next cycle re-crosses the
+  threshold instantly and pushes again with no fresh evidence. Route it
+  through `_drop_running_command`.
 
 ## See also
 
