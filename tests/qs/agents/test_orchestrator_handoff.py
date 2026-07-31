@@ -397,6 +397,60 @@ def test_gui_block_states_the_pin_conditionally(filename: str) -> None:
         )
 
 
+# The sentence every orchestrator must carry in its `phase_agent_pinned:
+# false` branch. Byte-identical across all six sites (qs-review-task hands
+# off twice), so it is pinned here as one constant rather than described.
+_STALE_PIN_SENTENCE = (
+    "On `false` the worktree may still carry the **previous** phase's pin, "
+    "which `false` cannot distinguish from no pin at all — so drop the GUI "
+    "bullets too and route the user to the Preferred `--agent` line, which "
+    "is correct either way."
+)
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_false_branch_carries_the_stale_pin_hazard(filename: str) -> None:
+    """Review-fix #06 F5: `false` must not route the user into the GUI at all.
+
+    The instruction used to be "drop the GUI block's pin sentence and point
+    at the Preferred line instead", which leaves the *New session / Select
+    directory / Name it* bullets standing. `phase_agent_pinned: false` cannot
+    distinguish "no pin" from "**stale** pin", so following those bullets can
+    open a GUI session still bound to the previous phase's orchestrator —
+    with the agent name displayed nowhere, and orchestrators commit and push.
+
+    Concrete trigger: an implement→review handoff where guard 1 fires because
+    the branch renamed or deleted `.claude/agents/qs-review-task.md` — which
+    is the kind of thing a branch editing agent files does. The GUI session
+    then boots `qs-implement-task` under the review phase's name.
+
+    Whitespace-normalised because the sentence line-wraps differently in the
+    indented (`qs-create-plan`) and unindented sites; what must be identical
+    is the wording, not the wrap.
+    """
+    body = " ".join((AGENTS_DIR / filename).read_text().split())
+    expected = " ".join(_STALE_PIN_SENTENCE.split())
+    assert expected in body, (
+        f"{filename}: the `phase_agent_pinned: false` branch does not carry "
+        f"the stale-pin hazard. Expected this sentence verbatim:\n{expected}"
+    )
+
+
+def test_review_task_carries_the_stale_pin_hazard_at_both_handoffs() -> None:
+    """``qs-review-task`` hands off twice, so it needs the sentence twice.
+
+    The per-file test above is satisfied by one occurrence; this is the same
+    two-handoff asymmetry ``_GUI_BLOCK_COUNTS`` exists for. Without it the
+    fix-plan loop back to the implement phase keeps the old wording.
+    """
+    body = " ".join((AGENTS_DIR / "qs-review-task.md").read_text().split())
+    expected = " ".join(_STALE_PIN_SENTENCE.split())
+    assert body.count(expected) == 2, (
+        f"qs-review-task.md: expected the stale-pin sentence at both handoff "
+        f"sites, found {body.count(expected)}"
+    )
+
+
 @pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
 def test_gui_block_does_not_shadow_fallback_line(filename: str) -> None:
     """The GUI block must not become the line ``_find_fallback_line`` returns.

@@ -83,8 +83,12 @@ The launcher attempts to pin `qs-create-plan` into the new worktree's
 directory boots as the plan orchestrator without any `--agent` flag. Check
 the payload's `phase_agent_pinned` before promising it: with
 `--no-worktree` the work dir **is** the main checkout, which is never
-pinned, so that run always reports `false` and the GUI block below must be
-replaced with "no GUI pin — use `/create-plan`, or the CLI line above".
+pinned, so that run always reports `false`.
+
+On `false` the worktree may still carry the **previous** phase's pin, which
+`false` cannot distinguish from no pin at all — so drop the GUI bullets too
+and route the user to the Preferred `--agent` line, which is correct either
+way.
 
 ```text
 Task #{{issue_number}} set up.

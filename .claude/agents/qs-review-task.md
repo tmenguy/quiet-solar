@@ -96,8 +96,12 @@ python scripts/qs/next_step.py \
 ```
 
 Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
-there means the GUI pin was skipped — drop the GUI block's pin sentence
-and point at the Preferred line instead). Then present both blocks:
+there means the GUI pin was skipped). Then present both blocks:
+
+On `false` the worktree may still carry the **previous** phase's pin, which
+`false` cannot distinguish from no pin at all — so drop the GUI bullets too
+and route the user to the Preferred `--agent` line, which is correct either
+way.
 
 ```text
 ✅ Adversarial review complete. No blocking findings.
@@ -222,8 +226,12 @@ python scripts/qs/next_step.py \
 ```
 
 Parse the JSON; capture `new_context`, `existing_session_prompt`, and
-`phase_agent_pinned` (a `false` there means the GUI pin was skipped — drop
-the GUI block's pin sentence and point at the Preferred line instead).
+`phase_agent_pinned` (a `false` there means the GUI pin was skipped).
+
+On `false` the worktree may still carry the **previous** phase's pin, which
+`false` cannot distinguish from no pin at all — so drop the GUI bullets too
+and route the user to the Preferred `--agent` line, which is correct either
+way.
 
 Then present three blocks (substitute `{{next_implement}}`
 consistently — same value the launcher payload was built with):

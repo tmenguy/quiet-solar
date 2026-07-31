@@ -161,8 +161,12 @@ python scripts/qs/next_step.py \
 ```
 
 Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
-there means the GUI pin was skipped — drop the GUI block's pin sentence
-and point at the Preferred line instead). Then print both blocks:
+there means the GUI pin was skipped). Then print both blocks:
+
+On `false` the worktree may still carry the **previous** phase's pin, which
+`false` cannot distinguish from no pin at all — so drop the GUI bullets too
+and route the user to the Preferred `--agent` line, which is correct either
+way.
 
 ```text
 ✅ Implementation complete — quality gate passed.

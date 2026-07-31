@@ -1165,13 +1165,24 @@ def test_published_pin_carries_the_target_mode(tmp_path: Path) -> None:
     ``os`` module (the launcher keeps no alias), so the syscall was globally
     replaced for the test's duration.
 
-    ``0o664`` rather than the ``0o644`` the fix plan named: ``0o644`` is
-    what ``write_text`` produces under the common ``umask 022``, so the
-    assertion would pass whether or not ``copymode`` ran at all — the same
-    can't-fail defect this fix exists to remove. ``0o664`` also exercises
-    the *widening* direction, which no other test covers; the narrowing
-    direction is covered by
-    ``test_file_mode_is_preserved_across_replace`` (``0o600``).
+    The fixture is ``0o664`` and the **umask is pinned to 022** for the call
+    (review-fix #06 F3). Both halves matter:
+
+    * ``0o644`` — what the fix plan originally named — is exactly what
+      ``write_text`` produces under ``umask 022``, so the assertion would
+      pass whether or not ``copymode`` ran at all.
+    * ``0o664`` alone is not enough either: under ``umask 002``, the default
+      for regular users on Debian/Ubuntu-family images, ``write_text``
+      produces ``0o664`` and the assertion goes vacuous again. Verified
+      empirically by the reviewer — with ``copymode`` removed and
+      ``umask 002``, this test passed while its ``0o600`` neighbour failed.
+
+    With the umask pinned, ``0o664`` is reliably *wider* than the temp's
+    default, so this covers ``copymode``'s **widening** direction, which no
+    other test does; ``test_file_mode_is_preserved_across_replace`` covers
+    narrowing (``0o600``). ``os.umask`` is process-global, and pytest runs
+    tests sequentially within an xdist worker, so setting and restoring it
+    around the call is safe.
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
@@ -1182,9 +1193,13 @@ def test_published_pin_carries_the_target_mode(tmp_path: Path) -> None:
     )
     target.chmod(0o664)
 
-    payload = claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
+    previous_umask = os.umask(0o022)
+    try:
+        payload = claude_launcher.build_payload(
+            str(work_dir), 311, "Title", next_cmd="create-plan",
+        )
+    finally:
+        os.umask(previous_umask)
 
     assert payload["phase_agent_pinned"] is True
     assert stat.S_IMODE(target.stat().st_mode) == 0o664, (
@@ -1201,6 +1216,7 @@ def test_published_pin_carries_the_target_mode(tmp_path: Path) -> None:
 
 def test_mode_failure_still_publishes_the_pin(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """S2: a ``copymode`` failure degrades the mode, it does not refuse the pin.
 
@@ -1230,6 +1246,15 @@ def test_mode_failure_still_publishes_the_pin(
 
     assert payload["phase_agent_pinned"] is True
     assert _settings(work_dir) == {"model": "opus", "agent": "qs-create-plan"}
+    # Review-fix #06 F2: the degrade must be OBSERVABLE. Silence here is
+    # sticky — one failure publishes at ``0o666 & ~umask``, Claude Code may
+    # then persist an ``env`` token into that same file, and every later
+    # handoff copies the widened mode forward, so a transient failure would
+    # leave a secrets-bearing file world-readable for good while reporting
+    # success.
+    err = capsys.readouterr().err
+    assert "warning:" in err, f"the mode failure was silent; stderr: {err!r}"
+    assert "mode" in err
 
 
 def test_late_non_object_keeps_the_first_render(

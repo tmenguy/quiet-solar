@@ -211,12 +211,17 @@ not fully understand:
   — would send the merged content outside the worktree and then rename the
   link onto the pin file, after which that worktree can never be pinned
   again.
-- **Permissions**: a fresh pin file is created `0o600`; an existing file's
-  mode is preserved, so your `chmod` survives. Note the limit: the temp
-  sibling is written first and given that mode afterwards, so between those
-  two steps it exists at the default `0o666 & ~umask` already containing the
-  merged content. That window is an accepted cost of writing through ordinary
-  file operations rather than raw descriptors.
+- **Permissions**: a fresh pin file is created `0o600`, and an existing
+  file's mode is preserved so your `chmod` survives — **unless the mode call
+  itself fails**, in which case the pin is published at the default
+  `0o666 & ~umask` rather than skipped, with a warning on stderr. Refusing to
+  pin forever on a chmod-hostile mount (exFAT, CIFS `noperm`, some Docker
+  volumes) would be worse than publishing at a looser mode, so that trade is
+  deliberate — but it does mean a mode you set can be silently widened once,
+  and later handoffs then carry the widened mode forward. Two further limits
+  worth knowing: the temp sibling is written *before* it is given that mode,
+  so while populated it exists at the default; and only `st_mode` is carried,
+  so ACLs and xattrs are not.
 
 The write is atomic (temp sibling + `os.replace`) and best-effort: it never
 breaks a handoff, and every skip above reports `phase_agent_pinned: false`.

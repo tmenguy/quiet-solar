@@ -395,17 +395,32 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
         late = _late_render(target, agent)
         if late is not None and late != content:
             tmp.write_text(late, encoding="utf-8")
-        # Suppressed on purpose: the content is already written and
+        # Non-fatal on purpose: the content is already written and
         # ``os.replace`` needs only directory permission, so a mode failure
-        # (``EPERM`` on a chmod-hostile mount, or a settings file owned by
-        # another uid) must degrade to "published at the default mode"
-        # rather than "not pinned at all" — which would be permanent for
-        # that worktree.
-        with contextlib.suppress(OSError):
+        # (``EPERM`` on a chmod-hostile mount, a settings file owned by
+        # another uid, or a ``FileNotFoundError`` if the live session
+        # replaced ``target`` between the check and the stat) degrades to
+        # "published at the default mode" rather than "not pinned at all",
+        # which would be permanent for that worktree.
+        #
+        # It warns, though: silence here is sticky. One failure publishes at
+        # ``0o666 & ~umask``, Claude Code may then persist an ``env`` token
+        # into that same file, and every later handoff faithfully copies the
+        # widened mode forward — so a transient failure would otherwise
+        # leave a secrets-bearing file world-readable for good, with an
+        # empty stderr and ``phase_agent_pinned: True``.
+        try:
             if target.exists():
                 shutil.copymode(target, tmp)  # keep a deliberate chmod
             else:
                 tmp.chmod(_PRIVATE_MODE)  # fresh file: owner-only
+        except OSError as exc:
+            print(
+                f"warning: could not set the mode of {target} ({exc}); "
+                f"publishing it at the default mode rather than skipping "
+                f"the pin — check the mode if the file holds secrets",
+                file=sys.stderr,
+            )
         os.replace(tmp, target)
     except OSError as exc:
         print(f"warning: could not write {target} ({exc})", file=sys.stderr)
