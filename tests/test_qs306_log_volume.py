@@ -29,7 +29,12 @@ from custom_components.quiet_solar.ha_model.charger import (
     LogOnChangeMixin,
     QSChargerStatus,
 )
-from custom_components.quiet_solar.home_model.commands import CMD_AUTO_GREEN_ONLY, CMD_ON, copy_command
+from custom_components.quiet_solar.home_model.commands import (
+    CMD_AUTO_FROM_CONSIGN,
+    CMD_AUTO_GREEN_ONLY,
+    CMD_ON,
+    copy_command,
+)
 from custom_components.quiet_solar.home_model.constraints import (
     LoadConstraint,
     MultiStepsPowerLoadConstraintChargePercent,
@@ -949,6 +954,51 @@ async def test_sfg_consign_change_under_the_same_command_name_is_logged(
     records = _messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)
     assert len(records) == 2
     assert "7000" in records[1].getMessage()
+
+
+async def test_sfg_soc_volume_scales_with_amp_changes_not_cycles(caplog: pytest.LogCaptureFixture) -> None:
+    """SF-G's COST, pinned: S12 volume is proportional to amp changes, not cycles.
+
+    The story deliberately kept `power_consign` OUT of this memo (F8 calls it "a
+    per-cycle budgeted float"), and review fix plan #02 SF-G put it back. That is the
+    same shape as the MF1 defect — a volatile value entering a memo — so the saving
+    needs an explicit assertion, not an argument. `power_consign` is safe because it
+    comes from the DISCRETE power-step table, so a hold is silent and only the step
+    logs.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    charger, constraint = _make_soc_callback_charger()
+
+    # Three discrete power steps, each held for four ~7 s cycles.
+    consigns = [1380.0] * 4 + [1610.0] * 4 + [1840.0] * 4
+    for cycle, consign in enumerate(consigns):
+        charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=consign)
+        await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=7 * cycle))
+
+    records = _messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)
+    assert len(records) == len(set(consigns)) == 3, "one line per amp change, not one per cycle"
+
+
+async def test_sfg_soc_volume_ceiling_is_one_line_per_consign_change(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The documented CEILING of SF-G, so the cost is explicit rather than implied.
+
+    If the consign genuinely changed on every cycle, every cycle would log. In
+    production that is bounded by the 45 s amp-change cooldown (the S2 site), not by
+    this memo — so the worst realistic case is ~1 line per 45 s, still far below the
+    ~7 s cycle rate. If a future change adds smoothing, this test should fail and
+    force a conscious decision.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    charger, constraint = _make_soc_callback_charger()
+
+    for cycle in range(10):
+        consign = 1380.0 if cycle % 2 == 0 else 1610.0
+        charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=consign)
+        await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=7 * cycle))
+
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 10
 
 
 async def test_s12_literal_percent_is_escaped(caplog: pytest.LogCaptureFixture) -> None:
