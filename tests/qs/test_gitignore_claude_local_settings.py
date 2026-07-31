@@ -3,9 +3,13 @@
 The launcher writes the per-worktree GUI phase pin into
 `<worktree>/.claude/settings.local.json` (see
 `scripts/qs/launchers/claude.py::_write_phase_agent`). That file is
-machine-written, per-developer, and must never be committed — while the
-rest of `.claude/` (agents, commands, `settings.json`) is *tracked* and
-must stay tracked.
+per-developer and must never be committed — while the rest of `.claude/`
+(agents, commands, `settings.json`) is *tracked* and must stay tracked.
+
+It is deliberately **not** described as machine-written: Claude Code
+persists the user's own `permissions` decisions there, which is exactly why
+the writer refuses to rewrite a file it cannot parse. "Machine-written" was
+the premise that justified the deleted rebuild path.
 
 These assertions read `.gitignore` **as text** rather than calling
 `git check-ignore`: `check-ignore` also consults the user's global

@@ -99,14 +99,22 @@ deleted — to flag this distinction.
 ### Claude Desktop limitation
 
 Claude Desktop has no equivalent to `claude --agent`: no URL scheme, no
-CLI argument pass-through, no UI gesture to pre-load an agent persona
-into a new chat. All three of those remain true — there is still no way
-to **cold-start** a GUI session on a directory programmatically. ("Cold
-start" is the operative qualifier: `/desktop` *can* move an
-already-running CLI session to the GUI on the same directory and branch,
-persona included — see [harness.md](harness.md) → "Hybrid: `/desktop`".
-What has no programmatic entry point is creating a GUI session from
-nothing.)
+CLI argument pass-through, and no UI gesture that pre-loads an agent
+persona *by itself*. Read with the **cold-start** qualifier, all three
+remain true — there is still no way to cold-start a GUI session on a
+directory programmatically.
+
+Both qualifiers are load-bearing:
+
+- `/desktop` *can* move an already-running CLI session to the GUI on the
+  same directory and branch, persona included — see
+  [harness.md](harness.md) → "Hybrid: `/desktop`". What has no
+  programmatic entry point is creating a GUI session from nothing.
+- **New session** on a directory whose `.claude/settings.local.json`
+  carries an `agent` key *does* boot the persona. That is a UI gesture
+  which pre-loads one — but only because a settings file was written
+  first, which is why the claim is "no gesture by itself" rather than
+  "no gesture".
 
 **What does not follow is that GUI users are stuck with the
 slash-command fallback.** A fourth mechanism exists, and it is the one

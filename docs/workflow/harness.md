@@ -201,9 +201,12 @@ not fully understand:
   revisions rebuilt the file and kept a `.bak`, and that safety net produced
   three consecutive must-fix findings of its own, so the destructive path
   was removed rather than patched again.
-- **A symlinked pin file is refused**, not followed. Resolving it would move
-  the write outside the worktree — into `~/.claude/settings.json`, or into
-  the main checkout this section promises is never pinned.
+- **A symlink is refused**, not followed — at the settings file *or* at
+  `.claude` itself. Following either would move the write outside the
+  worktree: into `~/.claude/settings.json` (user scope, affecting every
+  project), or into the main checkout this section promises is never
+  pinned. Checking only the file was not enough, because a symlinked
+  `.claude` leaves the file itself looking perfectly ordinary.
 - **Permissions**: a fresh pin file is created `0o600`; an existing file's
   mode is preserved, so your `chmod` survives. The temp sibling is created
   private and widened only once populated, so a merged `env` token is never
@@ -274,12 +277,16 @@ the directory to open.
   after the review-task → finish-task handoff, a bare invocation in that
   worktree boots as the orchestrator whose job is to merge the PR and
   remove the worktree. **Pass `--agent` explicitly in any automation.**
-- **A corrupt or symlinked pin file produces no pin, silently.** Those are
-  the two states the writer refuses (above), and like every other bad-pin
-  case the GUI shows you nothing. The observable signal is
-  `phase_agent_pinned: false` in the handoff payload — the orchestrator is
-  instructed to stop claiming the pin when it sees that — and the stderr
-  warning naming the file. The unconditional fix is `--agent`.
+- **A corrupt or symlinked pin file produces no pin — and stays that way.**
+  Those are the states the writer refuses (above), and like every other
+  bad-pin case the GUI shows you nothing. The signals are
+  `phase_agent_pinned: false` in the handoff payload (the orchestrator is
+  instructed to stop claiming the pin when it sees that) and a stderr
+  warning naming the file. **The skip is terminal, not transient:** nothing
+  repairs the file, so every later handoff in that worktree refuses it too.
+  The remedy is `rm .claude/settings.local.json` — the next handoff
+  recreates it at `0600` — or, for a symlink, remove the link. `--agent`
+  works regardless and needs no repair.
 - **A failed write leaves the *previous* phase's pin in place.** The
   writer is best-effort, so an `OSError` on the publish means the worktree
   stays pinned to the phase before this one — strictly worse than being
