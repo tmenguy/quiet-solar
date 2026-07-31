@@ -6,7 +6,7 @@ covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/heat_pump.py
   - custom_components/quiet_solar/ha_model/climate_controller.py
-last_verified: 2026-05-21
+last_verified: 2026-07-30
 ---
 
 # PilotedDevice and heat pump
@@ -21,6 +21,13 @@ canonical user: it pilots an auxiliary electric heater that kicks in
 when the heat pump alone can't meet the climate setpoint.
 `climate_controller.py` is the thin HA-facing controller that
 translates climate setpoints into the heat pump's command vocabulary.
+
+**Log levels (QS-306).** The shared `home_model/load.py` reset path logs
+INFO only when it actually resets something, via the overridable
+`_has_state_to_reset()` hook ([load-base.md](load-base.md)) — which covers a
+dropped `current_command`, `running_command` or `_stacked_command`. A
+`PilotedDevice` subclass that clears extra state in its reset override **must**
+extend that hook. Piloting behavior is unchanged.
 
 ## When you need this concept
 

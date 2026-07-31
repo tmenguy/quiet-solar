@@ -322,8 +322,39 @@ class AbstractDevice:
         if self.father_device is not None:
             return self.father_device.update_available_amps_for_group(idx, amps, add)
 
+    def _has_state_to_reset(self, keep_commands: bool) -> bool:
+        """Return True when this reset will actually destroy something.
+
+        QS-306: the reset logs INFO only when it did work. Subclasses that clear
+        EXTRA state in their override must extend this predicate, otherwise their
+        work is destroyed while the base reports "nothing to reset" at DEBUG.
+
+        Every `getattr` default is required: `AbstractDevice.__init__` calls
+        `constraint_reset_and_reset_commands_if_needed` (see the call in
+        `__init__`) BEFORE `_constraints` / `current_command` exist, and
+        `AbstractLoad` assigns `_last_completed_constraint` only after its own
+        `super().__init__()` returns. Overrides must follow the same rule.
+        """
+        had_constraints = bool(getattr(self, "_constraints", None)) or (
+            getattr(self, "_last_completed_constraint", None) is not None
+        )
+        # `keep_commands=False` also drops `running_command` — an in-flight command
+        # awaiting verification — and `_stacked_command`, one queued behind it. All
+        # three are loggable work.
+        had_commands = not keep_commands and (
+            getattr(self, "current_command", None) is not None
+            or getattr(self, "running_command", None) is not None
+            or getattr(self, "_stacked_command", None) is not None
+        )
+        return had_constraints or had_commands
+
     def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
-        _LOGGER.info("Constraint Reset device %s", self.name)
+        # `AbstractLoad`'s override calls `super()` first, so the predicate still
+        # observes the pre-clear values.
+        if self._has_state_to_reset(keep_commands):
+            _LOGGER.info("Constraint Reset device %s", self.name)
+        else:
+            _LOGGER.debug("Constraint Reset device %s, nothing to reset", self.name)
         self._constraints: list[LoadConstraint | None] = []
         if keep_commands is False:
             self.current_command: LoadCommand | None = None
@@ -1215,7 +1246,7 @@ class AbstractLoad(AbstractDevice):
 
         if found_one_bad is False and for_full_reset is False:
             # no need to reset, we have all the constraints we need
-            _LOGGER.info(
+            _LOGGER.debug(
                 "clean_constraints_for_load_param: No bad constraint found for %s, no reset needed", load_param
             )
             return False
