@@ -34,7 +34,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from launchers.phases import (  # type: ignore[import-not-found]
     build_existing_session_prompt,
@@ -53,6 +53,12 @@ Caller = Literal["setup_task", "next_step"]
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose
 # — users can override via env or by editing this constant.
 CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus"
+
+# Fail-closed mode for the pin family (settings file, ``.bak``, temp) when
+# the target's own mode cannot be read — typically because there is no
+# target yet, which is every fresh worktree. Owner-only: the file can carry
+# an ``env`` block with a token (review-fix #02 A / N-a).
+_PRIVATE_MODE = 0o600
 
 
 def _pycharm_bin() -> str | None:
@@ -193,6 +199,35 @@ def _is_linked_worktree(work_dir: str) -> bool:
     return is_worktree(work_dir)
 
 
+def _target_mode(target: Path) -> int:
+    """Return the permission bits every file in the pin family should carry.
+
+    ``target``'s own bits when it exists, so a deliberate ``chmod`` is
+    honoured; otherwise ``_PRIVATE_MODE`` — **fail closed** (review-fix #02
+    N-a). The absent-target branch is not an edge case: ``worktree-setup.sh``
+    seeds only ``.mypy_cache`` / ``.testmondata``, never a settings file, so
+    *every* fresh worktree takes it. Defaulting to the umask there created
+    the pin file ``0o644`` and froze that in for every later writer that
+    preserves the existing mode.
+
+    Residual, by design: an **existing** file's looser mode is preserved,
+    not tightened — the user's ``chmod`` wins either way. A worktree already
+    pinned by an earlier version therefore keeps ``0o644`` until the file is
+    removed and recreated; ``rm .claude/settings.local.json`` is the fix,
+    and the next handoff recreates it at ``_PRIVATE_MODE``.
+    """
+    try:
+        return target.stat().st_mode & 0o7777
+    except OSError:
+        return _PRIVATE_MODE
+
+
+def _apply_mode(path: Path, mode: int) -> None:
+    """``chmod`` ``path`` to ``mode``, best-effort (never breaks a handoff)."""
+    with contextlib.suppress(OSError):
+        os.chmod(path, mode)
+
+
 def _backup(target: Path, raw: bytes) -> None:
     """Copy ``raw`` (``target``'s current bytes) to a ``.bak`` sibling.
 
@@ -200,9 +235,40 @@ def _backup(target: Path, raw: bytes) -> None:
     to an unparseable body stays recoverable. Best-effort like everything
     else here; the ``.bak`` name is covered by the same ``.gitignore``
     pattern as the settings file itself.
+
+    Two properties this got wrong when it shipped:
+
+    * **It must not leak what ``_preserve_mode`` protects** (review-fix #02
+      A). This is the one path that *copies* the bytes rather than
+      replacing them, so a ``0o600`` file carrying an ``env`` token was
+      republished at ``0o666 & ~umask`` under a ``.bak`` name. The mode is
+      applied to an **empty** file before the content goes in, so there is
+      no window in which the token exists at the looser mode.
+    * **It must not clobber a good backup with nothing** (review-fix #02
+      C). An empty body is exactly what a ``SIGKILL`` / full disk leaves
+      behind while Claude Code rewrites the file non-atomically; copying
+      that over a ``.bak`` holding the user's real approvals destroys the
+      only recoverable copy. The skip gets its own warning, because the
+      generic "could not parse … rebuilding it" line does not say that
+      recovery is now impossible.
     """
     backup = target.with_suffix(target.suffix + ".bak")
+    if not raw.strip():
+        print(
+            f"warning: {target} is empty; NOT overwriting {backup} with it — "
+            f"this rebuild is unrecoverable"
+            + (" (the existing backup is older)" if backup.exists() else ""),
+            file=sys.stderr,
+        )
+        return
+    mode = _target_mode(target)
     try:
+        # Create/truncate first, tighten, then fill: the bytes never exist
+        # at a looser mode. ``touch`` applies ``mode & ~umask`` on creation
+        # and nothing at all if the file already exists, so the explicit
+        # ``_apply_mode`` covers both cases exactly.
+        backup.touch(mode=mode, exist_ok=True)
+        _apply_mode(backup, mode)
         backup.write_bytes(raw)
     except OSError as exc:
         print(
@@ -211,24 +277,30 @@ def _backup(target: Path, raw: bytes) -> None:
         )
 
 
-def _read_settings(target: Path) -> dict | None:
-    """Return ``target``'s settings dict, or ``None`` if it must not be touched.
+def _read_settings(target: Path) -> tuple[dict | None, bool]:
+    """Return ``(settings, rebuilt)`` for ``target``.
+
+    ``settings`` is ``None`` when the file must not be touched at all.
+    ``rebuilt`` is ``True`` when the user's existing content was discarded
+    — surfaced all the way out as the ``settings_rebuilt`` payload key
+    (review-fix #02 N-c), because the alternative signal is a stderr line
+    that no orchestrator is instructed to relay.
 
     Three outcomes, deliberately distinct (review-fix #01 M1 / S5):
 
-    * **absent** → ``{}``; there is nothing to preserve.
+    * **absent** → ``({}, False)``; there is nothing to preserve.
     * **unreadable** (``OSError``: ``EACCES``, ``EINTR``, a lock, ``EIO``
-      on a network mount) → ``None``. A file we cannot read is a file we
-      must not replace: the condition is typically transient and this file
-      carries the user's own ``permissions`` decisions.
+      on a network mount) → ``(None, False)``. A file we cannot read is a
+      file we must not replace: the condition is typically transient and
+      this file carries the user's own ``permissions`` decisions.
     * **unparseable or not an object** (``ValueError`` — which covers both
       ``json.JSONDecodeError`` and ``UnicodeDecodeError`` from the decode,
-      plus ``null`` / ``[1, 2]`` bodies) → ``{}`` after a warning and a
-      ``.bak`` copy. Skipping instead would leave the phase silently
+      plus ``null`` / ``[1, 2]`` bodies) → ``({}, True)`` after a warning
+      and a ``.bak`` copy. Skipping instead would leave the phase silently
       unbound, which the invisible-agent trap makes worse than a rebuild.
     """
     if not target.exists():
-        return {}
+        return {}, False
     try:
         raw = target.read_bytes()
     except OSError as exc:
@@ -236,7 +308,7 @@ def _read_settings(target: Path) -> dict | None:
             f"warning: could not read {target} ({exc}); leaving it untouched",
             file=sys.stderr,
         )
-        return None
+        return None, False
     try:
         parsed = json.loads(raw.decode("utf-8"))
     except ValueError as exc:
@@ -245,7 +317,7 @@ def _read_settings(target: Path) -> dict | None:
             file=sys.stderr,
         )
         _backup(target, raw)
-        return {}
+        return {}, True
     if not isinstance(parsed, dict):
         # Valid JSON, wrong shape (``null``, ``[1, 2]``) — the shallow
         # merge would raise outside any guard. Tracked as its own branch
@@ -256,8 +328,8 @@ def _read_settings(target: Path) -> dict | None:
             file=sys.stderr,
         )
         _backup(target, raw)
-        return {}
-    return parsed
+        return {}, True
+    return parsed, False
 
 
 def _render(settings: dict, agent: str) -> str:
@@ -266,7 +338,7 @@ def _render(settings: dict, agent: str) -> str:
 
 
 def _late_render(target: Path, agent: str) -> str | None:
-    """Re-render from ``target``'s *current* bytes, or ``None`` to keep the first render.
+    """Re-render from ``target``'s current bytes, or ``None`` to keep the first.
 
     Shrinks — it does not close — the read-modify-write race against the
     live Claude Code session that owns this file (review-fix #01 S2): the
@@ -291,16 +363,28 @@ def _preserve_mode(target: Path, tmp: Path) -> None:
     ``write_text`` creates the temp at ``0o666 & ~umask`` and
     ``os.replace`` keeps the *temp's* mode, so a ``chmod 600`` (this file
     can carry an ``env`` block with a token) would be silently undone.
+    When there is no target yet, ``_target_mode`` falls back to
+    ``_PRIVATE_MODE`` rather than leaving the umask default in place
+    (review-fix #02 N-a).
+
+    **Caveat — mode only** (review-fix #02 N-b). ``st_mode`` is all that is
+    carried: macOS ACLs (``chmod +a``), SELinux labels and other extended
+    attributes are dropped by ``os.replace``, so a file whose real
+    restriction lives in an ACL comes back looking correctly-moded while
+    the restriction is gone. Preserving those portably is not free, and no
+    other writer in this repo does it; recorded here rather than fixed.
     """
-    try:
-        mode = target.stat().st_mode & 0o7777
-    except OSError:
-        return  # no target yet, or unstattable — the temp's own mode stands
-    with contextlib.suppress(OSError):
-        os.chmod(tmp, mode)
+    _apply_mode(tmp, _target_mode(target))
 
 
-def _write_phase_agent(work_dir: str, agent: str) -> bool:
+class _PinResult(NamedTuple):
+    """Outcome of one pin attempt, as surfaced in the launcher payload."""
+
+    pinned: bool
+    rebuilt: bool
+
+
+def _write_phase_agent(work_dir: str, agent: str) -> _PinResult:
     """Pin ``agent`` into ``<work_dir>/.claude/settings.local.json`` (QS-311).
 
     The Claude Code **GUI** has no ``--agent`` flag, so the only way to
@@ -338,10 +422,20 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
     ``sys.stderr``; ``stdout`` carries the JSON payload that
     ``next_step.py`` callers parse.
 
+    **No ``fsync``** before the replace, matching
+    ``quality_gate.py::_write_seed_status`` — the in-repo atomic-write
+    precedent this writer was modelled on, whose docstring says the same in
+    the same words. A crash between the write and the replace can therefore
+    publish a short file. Verified deliberate rather than assumed: there is
+    no ``fsync`` anywhere under ``scripts/``, and a stale or truncated pin
+    is recoverable by re-running the handoff, so consistency with the
+    precedent wins over diverging here (review-fix #02 N-h).
+
     Returns:
-        ``True`` if the file was written, ``False`` on any skip or failure.
-        Surfaced to callers as the ``phase_agent_pinned`` payload key —
-        the handoff prose must not assert the pin without it.
+        ``_PinResult(pinned, rebuilt)`` — surfaced to callers as the
+        ``phase_agent_pinned`` and ``settings_rebuilt`` payload keys. The
+        handoff prose must not assert the pin without consulting the first,
+        nor report a clean pin without consulting the second.
     """
     claude_dir = Path(work_dir) / ".claude"
     if not (claude_dir / "agents" / f"{agent}.md").is_file():
@@ -350,14 +444,25 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
             f"not pinning the phase agent",
             file=sys.stderr,
         )
-        return False
+        return _PinResult(False, False)
     if not _is_linked_worktree(work_dir):
-        return False
+        return _PinResult(False, False)
 
     target = claude_dir / "settings.local.json"
-    settings = _read_settings(target)
+    # Follow a symlink to its destination before choosing the temp and the
+    # replace target (review-fix #02 D). ``os.replace`` onto the link would
+    # swap the link itself for a regular file: the content looks right at
+    # handoff time, but the shared file the user deliberately linked to
+    # never receives another update — surfacing much later as "my approvals
+    # stopped syncing". Resolving preserves the intent instead of refusing
+    # it. Symlinking a shared settings file is the natural workaround for
+    # re-approving permissions in every fresh per-task worktree.
+    if target.is_symlink():
+        target = target.resolve()
+
+    settings, rebuilt = _read_settings(target)
     if settings is None:
-        return False
+        return _PinResult(False, False)
 
     content = _render(settings, agent)
     tmp = target.with_suffix(f"{target.suffix}.{os.getpid()}.tmp")
@@ -370,14 +475,14 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
         os.replace(tmp, target)
     except OSError as exc:
         print(f"warning: could not write {target} ({exc})", file=sys.stderr)
-        return False
+        return _PinResult(False, rebuilt)
     finally:
         # ``missing_ok=True`` only covers FileNotFoundError; EACCES on the
         # directory or EIO on a network mount would propagate out of a
         # bare ``finally`` and break the handoff (review-fix #01 S1).
         with contextlib.suppress(OSError):
             tmp.unlink(missing_ok=True)
-    return True
+    return _PinResult(True, rebuilt)
 
 
 def build_payload(
@@ -426,12 +531,15 @@ def build_payload(
 
     Returns:
         A dict with ``tool``, ``agent``, ``phase_agent_pinned``,
-        ``same_context``, ``new_context``, optionally
+        ``settings_rebuilt``, ``same_context``, ``new_context``, optionally
         ``existing_session_prompt``, and (on macOS with PyCharm installed)
         ``pycharm_context`` / ``pycharm_applescript_context`` keys.
         ``phase_agent_pinned`` is ``False`` whenever the GUI pin was
         skipped or failed — the orchestrator must not claim the pin as
-        fact without consulting it.
+        fact without consulting it. ``settings_rebuilt`` is ``True`` when
+        an unparseable local settings file was discarded (old bytes kept in
+        a ``.bak`` sibling); the orchestrator must relay that, since a
+        rebuild is invisible in ``phase_agent_pinned`` alone.
 
     Raises:
         ValueError: if ``next_cmd`` is not a known phase. No silent
@@ -445,7 +553,7 @@ def build_payload(
     # as ``phase_agent_pinned`` (review-fix #01 M3): discarding it left the
     # GUI handoff blocks asserting a pin that is deterministically absent
     # on ``--no-worktree`` and silently absent on any write failure.
-    pinned = _write_phase_agent(work_dir, agent)
+    pin = _write_phase_agent(work_dir, agent)
     new_context = _claude_command(
         work_dir, issue, title, agent=agent, next_prompt=next_prompt,
     )
@@ -453,7 +561,8 @@ def build_payload(
     payload: dict = {
         "tool": "claude-code",
         "agent": agent,
-        "phase_agent_pinned": pinned,
+        "phase_agent_pinned": pin.pinned,
+        "settings_rebuilt": pin.rebuilt,
         "same_context": next_cmd,
         "new_context": new_context,
     }

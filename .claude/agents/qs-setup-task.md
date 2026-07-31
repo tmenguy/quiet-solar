@@ -67,8 +67,13 @@ For `--no-worktree`, pass `--no-worktree`. The script:
 - detects the harness and emits the appropriate launcher
 
 Capture `worktree_path`, `branch`, and the launcher payload
-(`new_context`, `same_context`, `phase_agent_pinned`, plus optional
-`pycharm_context`).
+(`new_context`, `same_context`, `phase_agent_pinned`, `settings_rebuilt`,
+plus optional `pycharm_context`).
+
+If `settings_rebuilt` is `true`, add one line telling the user their
+`.claude/settings.local.json` was unparseable and was rebuilt from scratch —
+the previous bytes are in `settings.local.json.bak`. A rebuild discards their
+local permission approvals, and `phase_agent_pinned` alone cannot show it.
 
 ### 3. Tell the user what to do next
 

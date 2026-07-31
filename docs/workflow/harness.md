@@ -194,8 +194,11 @@ body, always with a warning on stderr). The write is atomic (temp
 sibling + `os.replace`, permission bits preserved) and best-effort, and
 never breaks a handoff.
 
-**The CLI is unaffected: `--agent` overrides the key.** A launcher
-one-liner always lands on the agent it names, whatever the pin says.
+**A CLI session that passes `--agent` is unaffected: the flag overrides
+the key.** A launcher one-liner always lands on the agent it names,
+whatever the pin says. A CLI session that does *not* pass the flag —
+a bare `claude`, `claude -p …`, an SDK run — is pinned like any other
+(see Traps).
 *(Evidence: scratch-directory test, two agents, the flag won — QS-311
 finding F2, verified 2026-07-30 on `claude` 2.1.220. Marked because this
 claim is load-bearing for every "use the Preferred line above" recovery
@@ -228,8 +231,8 @@ the directory to open.
   invisible agent name, a reopened GUI session can silently be the wrong
   orchestrator — and orchestrators commit and push. Confirm the phase
   before working in a reopened GUI session; when in doubt, re-run the
-  previous handoff to refresh the pin, or use the CLI, where `--agent`
-  always wins.
+  previous handoff to refresh the pin, or use the CLI *passing*
+  `--agent`, which always wins.
 - **The main-checkout gap.** `setup-task` and `release` run on the main
   checkout, which is never pinned (by design — guard 2). Reach them in
   the GUI via the slash form `/setup-task` / `/release`, which is what
@@ -241,8 +244,24 @@ the directory to open.
   itself when isolation is enabled: the tracked `.claude/agents/*.md`
   come along with `HEAD`, the untracked pin does not, and the sub-tree
   boots as the default agent — invisibly, like every other bad-pin case.
-  Either disable isolation for pipeline worktrees, or work the phase from
-  the CLI where `--agent` always wins.
+  The good news is that the sub-tree *does* inherit `HEAD`, so you still
+  land on `QS_<N>` with your work in place; it is only the persona that is
+  lost. Either disable isolation for pipeline worktrees, or work the phase
+  from the CLI, passing `--agent`.
+- **Headless and bare CLI runs are pinned too.** The mechanism is "a
+  session started *without* `--agent` runs its main thread as the named
+  agent" — and nothing about that is GUI-specific. `claude -p …`, an
+  Agent-SDK run, or any script whose `cwd` is inside a pinned worktree
+  inherits the pin, with no interactive header to reveal it. Worst case:
+  after the review-task → finish-task handoff, a bare invocation in that
+  worktree boots as the orchestrator whose job is to merge the PR and
+  remove the worktree. **Pass `--agent` explicitly in any automation.**
+- **A failed write leaves the *previous* phase's pin in place.** The
+  writer is best-effort, so an `OSError` on the publish means the worktree
+  stays pinned to the phase before this one — strictly worse than being
+  unpinned, because it looks intentional. `phase_agent_pinned: false`
+  cannot distinguish "no pin" from "stale pin"; when you see it, check the
+  file or just pass `--agent`.
 - **The pin races the app.** The writer does a read-modify-write on a
   file Claude Code also owns, with no lock. A handoff normally runs from
   *inside* a live session on that same worktree, so a permission the user

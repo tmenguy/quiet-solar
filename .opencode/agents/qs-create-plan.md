@@ -215,7 +215,7 @@ Inspect the file paths your task breakdown will touch:
 ## Commit and hand off (at FINALIZE)
 
 > Launch surfaces for the Claude harness (including the GUI) are documented in [docs/workflow/harness.md](../../docs/workflow/harness.md).
-> That doc's GUI phase pin is best-effort: the Claude payload reports the outcome as `phase_agent_pinned`, and no other harness reads it.
+> That doc's GUI phase pin is best-effort: the Claude payload reports the outcome as `phase_agent_pinned` and `settings_rebuilt`, and no other harness reads either key.
 
 1. Commit and push the story file:
    ```bash

@@ -151,6 +151,12 @@ GUI_SECTION_REQUIRED_TOKENS = (
     # setup-task prose acknowledged that mode and the PR deleted it; the
     # Traps list has to carry it instead.
     "isolation",
+    # Review-fix #02 E: by the section's own stated mechanism, a HEADLESS
+    # invocation (`claude -p …`, an Agent-SDK run) with cwd inside a pinned
+    # worktree inherits the pin too — with no CLI header to reveal it. The
+    # worst case is a `qs-finish-task` pin, which merges PRs and removes
+    # worktrees.
+    "headless",
 )
 
 
@@ -182,9 +188,13 @@ def test_gui_launch_surface_section_names_required_tokens(token: str) -> None:
 
     Whitespace-normalised: these are prose tokens and the section
     line-wraps at 72 columns, so a multi-word token like ``main checkout``
-    would otherwise fail purely on where the wrap landed.
+    would otherwise fail purely on where the wrap landed. Case-normalised
+    for the same reason — a token that happens to open a sentence or a
+    bolded Traps lead-in is capitalised, and which of those a sentence
+    lands on is not the property being pinned.
     """
-    section = " ".join(_gui_section_body().split())
+    section = " ".join(_gui_section_body().split()).lower()
+    token = token.lower()
     assert token in section, (
         f"harness.md's {GUI_SECTION_HEADING!r} section does not mention "
         f"{token!r} (QS-311 AC7)."

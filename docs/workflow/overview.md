@@ -101,7 +101,12 @@ deleted — to flag this distinction.
 Claude Desktop has no equivalent to `claude --agent`: no URL scheme, no
 CLI argument pass-through, no UI gesture to pre-load an agent persona
 into a new chat. All three of those remain true — there is still no way
-to *launch* a GUI session on a directory programmatically.
+to **cold-start** a GUI session on a directory programmatically. ("Cold
+start" is the operative qualifier: `/desktop` *can* move an
+already-running CLI session to the GUI on the same directory and branch,
+persona included — see [harness.md](harness.md) → "Hybrid: `/desktop`".
+What has no programmatic entry point is creating a GUI session from
+nothing.)
 
 **What does not follow is that GUI users are stuck with the
 slash-command fallback.** A fourth mechanism exists, and it is the one

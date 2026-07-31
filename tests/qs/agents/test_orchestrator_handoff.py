@@ -313,11 +313,20 @@ def _gui_blocks(body: str) -> list[str]:
 
 
 def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:
-    """The GUI-block list equals the two-block list — a real cross-check now."""
-    assert _GUI_BLOCK_ORCHESTRATORS == _TWO_BLOCK_ORCHESTRATORS, (
+    """The GUI-block list equals the two-block list — a real cross-check now.
+
+    Review-fix #02 N-k: compared as **sets**, because the property is
+    "the same orchestrators", not "in the same order" — a harmless
+    reordering of the pre-existing list should not fail this.
+    """
+    assert set(_GUI_BLOCK_ORCHESTRATORS) == set(_TWO_BLOCK_ORCHESTRATORS), (
         "QS-311 AC5: the GUI launch-surface block belongs to exactly the "
         "orchestrators that emit a worktree handoff — the two-block set. "
         "If a new orchestrator joins one list it must join the other."
+    )
+    assert len(_GUI_BLOCK_ORCHESTRATORS) == len(set(_GUI_BLOCK_ORCHESTRATORS)), (
+        "duplicate entry in _GUI_BLOCK_ORCHESTRATORS — the set comparison "
+        "above would hide it, and the per-file block counts would double."
     )
     assert _GUI_BLOCK_ORCHESTRATORS is not _TWO_BLOCK_ORCHESTRATORS, (
         "review-fix #01 S3: the two lists must be independent literals. An "
@@ -367,6 +376,15 @@ def test_gui_block_states_the_pin_conditionally(filename: str) -> None:
     """
     body = (AGENTS_DIR / filename).read_text()
     for i, block in enumerate(_gui_blocks(body)):
+        # Review-fix #02 N-d: require the hedge POSITIVELY. Banning one
+        # phrasing of its negation is not the same property — "the worktree
+        # **is pinned** to `qs-X`" re-asserts the pin as fact and passed
+        # both of the assertions below.
+        assert "should now be pinned" in block, (
+            f"{filename}: GUI block {i} must hedge the pin with the literal "
+            f"'should now be pinned'. The write can silently skip or fail, "
+            f"so the prose may not assert it (review-fix #01 M3 / #02 N-d)."
+        )
         assert "is now pinned" not in block, (
             f"{filename}: GUI block {i} asserts the pin as fact ('is now "
             f"pinned'). The write can silently skip or fail — say 'should "
@@ -377,6 +395,23 @@ def test_gui_block_states_the_pin_conditionally(filename: str) -> None:
             f"hatch. When the pin is missing the GUI gives no signal, so "
             f"the block must say how to recover (review-fix #01 M3)."
         )
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_orchestrator_relays_a_settings_rebuild(filename: str) -> None:
+    """Each orchestrator is told to relay `settings_rebuilt` (review-fix #02 N-c).
+
+    A rebuild discards the user's entire local settings while
+    `phase_agent_pinned` still reports ``True``; the only other signal is a
+    stderr line. The payload key earns its place only if the prose consults
+    it — the same standard that got `gui_context` declined (Decision 8).
+    """
+    body = (AGENTS_DIR / filename).read_text()
+    assert "`settings_rebuilt`" in body, (
+        f"{filename}: does not mention `settings_rebuilt`, so a run that "
+        f"discarded the user's local settings would be reported to them as "
+        f"a clean pin (review-fix #02 N-c)."
+    )
 
 
 @pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
@@ -427,7 +462,8 @@ _POINTER_LINE = (
 # what the harness-sync co-modification rule cannot detect.
 _POINTER_FOLLOWUP = (
     "> That doc's GUI phase pin is best-effort: the Claude payload reports "
-    "the outcome as `phase_agent_pinned`, and no other harness reads it."
+    "the outcome as `phase_agent_pinned` and `settings_rebuilt`, and no "
+    "other harness reads either key."
 )
 
 
