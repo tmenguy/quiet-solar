@@ -204,6 +204,8 @@ empty directories. `legacy/` is only staged when you've performed a
 
 ### 6. Tell the user the next command
 
+> Launch surfaces for the Claude harness (including the GUI) are documented in [docs/workflow/harness.md](../../docs/workflow/harness.md).
+
 Build the launcher payload for the review phase so the user has a copy/paste
 command to open a fresh session bound to `qs-review-task`:
 

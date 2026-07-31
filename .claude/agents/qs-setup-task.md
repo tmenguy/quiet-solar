@@ -74,7 +74,12 @@ Capture `worktree_path`, `branch`, and the launcher payload
 The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
 `scripts/worktree-setup.sh`). Surface the launcher (preferred path — an
 interactive `claude --agent qs-create-plan` session) and the slash-command
-fallback (degraded one-shot UX, kept for Claude Desktop).
+fallback (degraded one-shot UX; the GUI can instead run the phase agent
+directly, see [docs/workflow/harness.md](../../docs/workflow/harness.md)).
+
+The launcher has already pinned `qs-create-plan` into the new worktree's
+`.claude/settings.local.json`, so a Claude Code GUI session opened on that
+directory boots as the plan orchestrator without any `--agent` flag.
 
 ```text
 Task #{{issue_number}} set up.
@@ -87,16 +92,17 @@ Preferred (opens a fresh interactive `claude --agent qs-create-plan` session):
   {{new_context}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
   /create-plan
 
-[Claude Desktop] no `--agent` equivalent exists on Desktop. Manual route:
-  • New session → open folder → pick
-        {{worktree_path}}
-  • The worktree is already on QS_{{issue_number}}. If Desktop's
-    auto-isolation spawns a `claude/...` sub-worktree, that sub-tree
-    inherits HEAD, so you still land on QS_{{issue_number}}.
-  • Then type `/create-plan` in the new chat (the degraded path).
+[Claude Code GUI] the worktree is now pinned to `qs-create-plan` in
+`.claude/settings.local.json`, so a GUI session there boots as that agent.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{{worktree_path}}`
+  • Name it `QS_{{issue_number}} create-plan`
+  • No `--agent` needed; see `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)".
 ```
 
 If `pycharm_context` is present in the payload, mention it as a bridge

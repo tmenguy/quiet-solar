@@ -71,6 +71,8 @@ Capture `worktree_path`, `branch`, and the launcher payload
 
 ### 3. Tell the user what to do next
 
+> Launch surfaces for the Claude harness (including the GUI) are documented in [docs/workflow/harness.md](../../docs/workflow/harness.md).
+
 The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
 `scripts/worktree-setup.sh`). Surface the launcher for the next phase.
 

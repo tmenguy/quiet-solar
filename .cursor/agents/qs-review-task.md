@@ -83,6 +83,8 @@ justification." Fetch the PR's changed paths via
 
 ### 4. Zero-findings fast path
 
+> Launch surfaces for the Claude harness (including the GUI) are documented in [docs/workflow/harness.md](../../docs/workflow/harness.md).
+
 If there are no must-fix or should-fix findings, build the launcher
 payload for `/finish-task`:
 

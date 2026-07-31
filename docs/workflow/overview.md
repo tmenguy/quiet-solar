@@ -100,14 +100,26 @@ deleted — to flag this distinction.
 
 Claude Desktop has no equivalent to `claude --agent`: no URL scheme, no
 CLI argument pass-through, no UI gesture to pre-load an agent persona
-into a new chat. Desktop users land on the slash-command fallback path
-by necessity. The existing `pycharm_context` (clipboard / AppleScript)
+into a new chat. All three of those remain true — there is still no way
+to *launch* a GUI session on a directory programmatically.
+
+**What does not follow is that GUI users are stuck with the
+slash-command fallback.** A fourth mechanism exists, and it is the one
+the pipeline uses: the `agent` key in `.claude/settings.local.json`. The
+launcher writes it into the worktree at every handoff, so a GUI session
+the user opens there boots as the phase orchestrator with no `--agent`
+flag involved. The gesture (**New session** → select directory → name
+it), the traps, and the `/desktop` hybrid are documented in
+[harness.md](harness.md) → "GUI launch surface (Claude Code Desktop)".
+
+The existing `pycharm_context` (clipboard / AppleScript)
 helpers in `scripts/qs/launchers/claude.py` remain the suggested
-bridge: setup-task emits a `pycharm_context` shell command that copies
+bridge for IDE-embedded terminals: setup-task emits a `pycharm_context`
+shell command that copies
 the launcher invocation to the clipboard and opens PyCharm on the
 worktree — users then paste into PyCharm's embedded terminal to get
-the interactive path. This is honest about the limitation, not an
-attempt to automate Desktop with brittle clipboard tricks.
+the interactive path. This is honest about the remaining limitation, not
+an attempt to automate the GUI with brittle clipboard tricks.
 
 ## Phase routing
 

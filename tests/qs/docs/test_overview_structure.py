@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OVERVIEW = REPO_ROOT / "docs" / "workflow" / "overview.md"
 HARNESS_DOC = REPO_ROOT / "docs" / "workflow" / "harness.md"
@@ -120,6 +122,77 @@ def test_harness_doc_documents_codex_opencode_agent_exception() -> None:
     )
 
 
+# --------------------------------------------------------------------------- #
+# QS-311 AC7 — the GUI launch-surface section.
+#
+# The section is deliberately NOT a harness identifier: the GUI shares
+# `.claude/` wholesale, so `claude-gui` would be a category error (one
+# harness == one agent directory). Its content is prose and therefore
+# reviewer-verified; only the four tokens below are gate-checked, because
+# a section that omits any of them fails to answer the question a GUI
+# user actually arrives with.
+# --------------------------------------------------------------------------- #
+
+GUI_SECTION_HEADING = "GUI launch surface (Claude Code Desktop)"
+
+GUI_SECTION_REQUIRED_TOKENS = (
+    # the mechanism
+    "settings.local.json",
+    # the CLI precedence rule that makes the pin inert for `claude --agent`
+    "--agent",
+    # the hybrid CLI→GUI bridge
+    "/desktop",
+    # the main-checkout gap: `release` (and `setup-task`) are never pinned
+    "release",
+)
+
+
+def _gui_section_body() -> str:
+    """Return the text of the GUI launch-surface section of harness.md."""
+    body = HARNESS_DOC.read_text()
+    heading = f"## {GUI_SECTION_HEADING}"
+    assert heading in body, (
+        f"harness.md is missing the {heading!r} section (QS-311 AC7). "
+        f"The GUI is a launch surface of the Claude harness, so it is "
+        f"documented here rather than as a new harness identifier."
+    )
+    start = body.index(heading) + len(heading)
+    rest = body[start:]
+    next_h2 = re.search(r"^## ", rest, re.MULTILINE)
+    return rest[: next_h2.start()] if next_h2 else rest
+
+
+def test_harness_doc_has_gui_launch_surface_section() -> None:
+    """The section exists and is an H2 (asserted inside the helper)."""
+    assert _gui_section_body().strip(), (
+        f"harness.md's {GUI_SECTION_HEADING!r} section is empty."
+    )
+
+
+@pytest.mark.parametrize("token", GUI_SECTION_REQUIRED_TOKENS)
+def test_gui_launch_surface_section_names_required_tokens(token: str) -> None:
+    """Each load-bearing token appears in the GUI section."""
+    section = _gui_section_body()
+    assert token in section, (
+        f"harness.md's {GUI_SECTION_HEADING!r} section does not mention "
+        f"{token!r} (QS-311 AC7)."
+    )
+
+
+def test_gui_section_is_not_advertised_as_a_harness_identifier() -> None:
+    """The bare token ``claude-gui`` must never appear as a harness value.
+
+    Decision 1: the GUI is a launch surface, not a harness. Naming
+    ``claude-gui`` anywhere invites a reader (or a future agent) to pass it
+    to ``--harness``, where it resolves to nothing.
+    """
+    body = HARNESS_DOC.read_text()
+    assert "claude-gui" not in body, (
+        "harness.md names `claude-gui` — there is no such harness. GUI "
+        "sessions use `--harness claude-code` (QS-311 Decision 1)."
+    )
+
+
 def test_overview_documents_claude_desktop_limitation() -> None:
     """AC-8: overview.md (or phase-protocols.md) calls out Desktop's limit."""
     body = OVERVIEW.read_text()
@@ -132,4 +205,21 @@ def test_overview_documents_claude_desktop_limitation() -> None:
     assert "pycharm_context" in body, (
         "overview.md should mention pycharm_context as the suggested bridge "
         "for users who can't use the CLI launcher directly."
+    )
+    # QS-311 AC8: the limitation is real and stays documented (there is
+    # still no way to launch a GUI session programmatically) — but the
+    # CONCLUSION that GUI users must therefore live on the slash-command
+    # fallback is retracted: the `agent` settings key binds the phase
+    # orchestrator in the GUI. Whitespace-normalised because this
+    # paragraph line-wraps mid-phrase.
+    normalized = " ".join(body.split())
+    assert "settings.local.json" in normalized, (
+        "overview.md must name the fourth mechanism — the `agent` key in "
+        "`.claude/settings.local.json` — alongside the three that really "
+        "are missing (URL scheme, argv pass-through, UI gesture)."
+    )
+    assert "by necessity" not in normalized, (
+        "overview.md still concludes GUI users land on the slash-command "
+        "fallback 'by necessity'. That inference is false (QS-311 AC8); "
+        "the enumeration of missing mechanisms may stay — it is accurate."
     )

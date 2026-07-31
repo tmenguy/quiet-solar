@@ -8,6 +8,7 @@ with callers like ``setup_task.py`` that still pass slash form).
 
 from __future__ import annotations
 
+import json
 import stat
 import tempfile
 from pathlib import Path
@@ -246,3 +247,256 @@ def test_claude_build_payload_rejects_invalid_next_cmd(bad_next_cmd: str) -> Non
         claude_launcher.build_payload(
             "/tmp/work", 1, "Title", next_cmd=bad_next_cmd,
         )
+
+
+# --------------------------------------------------------------------------- #
+# QS-311 AC2 — the per-worktree GUI phase pin.
+#
+# ``build_payload`` writes ``{"agent": "qs-<phase>"}`` into
+# ``<work_dir>/.claude/settings.local.json`` so a Claude Code **GUI**
+# session opened on the worktree boots as the phase orchestrator (the GUI
+# has no ``--agent`` flag). The write is guarded, in this order:
+#
+#   1. the phase agent file exists at
+#      ``<work_dir>/.claude/agents/<agent>.md``  (pure filesystem check —
+#      short-circuits before any subprocess)
+#   2. ``work_dir`` is a worktree, not the main checkout
+#
+# **Isolation invariant** (AC4): each guard *independently* rejects the
+# throwaway paths the tests above pass (``/tmp/work``, ``/tmp/wt``), so no
+# existing test writes into a real directory. That is a designed property,
+# pinned by ``test_no_write_for_non_worktree_path``, not a coincidence.
+# --------------------------------------------------------------------------- #
+
+
+SETTINGS_REL = Path(".claude") / "settings.local.json"
+
+
+def _fake_worktree(tmp_path: Path, agent: str = "qs-create-plan") -> Path:
+    """Return ``tmp_path`` prepared as a worktree holding ``<agent>.md``."""
+    agents_dir = tmp_path / ".claude" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / f"{agent}.md").write_text("# stub agent body\n")
+    return tmp_path
+
+
+def _settings(work_dir: Path) -> dict:
+    return json.loads((work_dir / SETTINGS_REL).read_text(encoding="utf-8"))
+
+
+def test_writes_agent_key_into_new_settings_file(tmp_path: Path) -> None:
+    """No settings file yet → one is created carrying just the ``agent`` key."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["agent"] == "qs-create-plan"
+    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    # The atomic-write temp sibling must not survive the call.
+    assert not (work_dir / ".claude" / "settings.local.json.tmp").exists()
+
+
+def test_merges_and_preserves_existing_keys(tmp_path: Path) -> None:
+    """Every other top-level key in the user's local settings survives."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / SETTINGS_REL).write_text(
+        json.dumps({"permissions": {"allow": ["Bash(git status)"]}, "model": "opus"}),
+        encoding="utf-8",
+    )
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert _settings(work_dir) == {
+        "permissions": {"allow": ["Bash(git status)"]},
+        "model": "opus",
+        "agent": "qs-create-plan",
+    }
+
+
+def test_replaces_pre_existing_agent_value(tmp_path: Path) -> None:
+    """A stale pin from the previous phase is replaced, not merged."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / SETTINGS_REL).write_text(
+        json.dumps({"agent": "qs-review-task"}), encoding="utf-8",
+    )
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+
+
+def test_skips_when_destination_is_main_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard 2: the main checkout is never pinned (``--no-worktree``, release)."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    # Patch the name imported INTO the launcher module, not utils'.
+    monkeypatch.setattr(claude_launcher, "is_worktree", lambda _work_dir: False)
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["agent"] == "qs-create-plan"
+    assert not (work_dir / SETTINGS_REL).exists()
+
+
+def test_skips_when_agent_file_absent(tmp_path: Path) -> None:
+    """Guard 1: no ``<agent>.md`` in the destination → nothing is written.
+
+    A pin naming an agent that doesn't exist there would fall back to the
+    default agent *silently* (finding F3) and the GUI shows no agent name
+    (F6) — worse than no pin at all.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    payload = claude_launcher.build_payload(
+        str(tmp_path), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["agent"] == "qs-create-plan"
+    assert not (tmp_path / SETTINGS_REL).exists()
+
+
+def test_skips_without_invoking_git_when_agent_file_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard ORDER: the cheap filesystem check runs before any subprocess.
+
+    ``git`` is made to raise ``AssertionError`` — deliberately *not* one of
+    the exceptions ``utils.is_worktree`` swallows — so a reversed guard
+    order surfaces as a failure here instead of silently depending on git
+    succeeding in the pytest CWD.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    import utils  # type: ignore[import-not-found]
+
+    def _no_git(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("git must not be invoked when the agent file is absent")
+
+    monkeypatch.setattr(utils, "run_git", _no_git)
+
+    payload = claude_launcher.build_payload(
+        str(tmp_path), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["agent"] == "qs-create-plan"
+    assert not (tmp_path / SETTINGS_REL).exists()
+
+
+def test_overwrites_corrupt_existing_json_with_warning(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Unparseable settings are rebuilt from scratch, with a warning.
+
+    Skipping would leave the phase unbound, and F3+F6 make that invisible
+    in the GUI. The file is machine-written and gitignored, so overwriting
+    it destroys nothing a human authored.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / SETTINGS_REL).write_text("{not json at all", encoding="utf-8")
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_overwrites_non_object_existing_json(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Valid JSON that isn't an object is corrupt too.
+
+    Without this branch the shallow merge would raise ``TypeError`` /
+    ``AttributeError`` *outside* the read/parse guard.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / SETTINGS_REL).write_text("[1, 2]", encoding="utf-8")
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_warns_on_stderr_not_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Warnings must never touch stdout — it carries the JSON payload.
+
+    ``next_step.py`` prints the payload to stdout and
+    ``test_next_step_unit.py`` parses it, so a stray ``print()`` here
+    would corrupt a machine-read stream.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / SETTINGS_REL).write_text("{corrupt", encoding="utf-8")
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out == "", f"unexpected stdout output: {captured.out!r}"
+    assert "warning:" in captured.err
+
+
+def test_second_write_is_byte_identical(tmp_path: Path) -> None:
+    """Re-pinning the same phase is a no-op change (repeat-safe + stable format)."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+    first = (work_dir / SETTINGS_REL).read_bytes()
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="/create-plan",
+    )
+    second = (work_dir / SETTINGS_REL).read_bytes()
+
+    assert first == second
+    # Pin the on-disk format: 2-space indent + trailing newline.
+    assert first.decode("utf-8") == (
+        json.dumps({"agent": "qs-create-plan"}, indent=2) + "\n"
+    )
+
+
+def test_no_write_for_non_worktree_path() -> None:
+    """The isolation invariant: throwaway paths never gain a settings file.
+
+    ``/tmp/work`` is the path the pre-QS-311 tests in this module pass.
+    Both guards reject it (no ``.claude/agents/qs-create-plan.md`` there,
+    and it is not a worktree), which is why AC4 holds with zero edits to
+    those tests.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    claude_launcher.build_payload(
+        "/tmp/work", 311, "Title", next_cmd="create-plan",
+    )
+
+    assert not (Path("/tmp/work") / SETTINGS_REL).exists()

@@ -106,8 +106,17 @@ Preferred (opens a fresh interactive `claude --agent qs-finish-task` session):
   {{new_context}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
   /finish-task
+
+[Claude Code GUI] the worktree is now pinned to `qs-finish-task` in
+`.claude/settings.local.json`, so a GUI session there boots as that agent.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{{worktree}}`
+  • Name it `QS_{{issue}} finish-task`
+  • No `--agent` needed; see `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)".
 ```
 
 Stop here.
@@ -225,8 +234,17 @@ Paste this prompt into it:
   {{existing_session_prompt}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
   /{{next_implement}}
+
+[Claude Code GUI] the worktree is now pinned to `qs-{{next_implement}}` in
+`.claude/settings.local.json`, so a GUI session there boots as that agent.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{{worktree}}`
+  • Name it `QS_{{issue}} {{next_implement}}`
+  • No `--agent` needed; see `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)".
 
 Then re-run /review-task (or open a fresh `claude --agent qs-review-task`
 session) to verify.

@@ -18,7 +18,9 @@ _This file contains critical rules and patterns that AI agents must follow when 
 
 The development pipeline runs each phase as an interactive
 `claude --agent qs-<phase>` session (preferred) or via the
-slash-command fallback (`/<phase>`, kept for Claude Desktop):
+slash-command fallback (`/<phase>`; in the Claude Code GUI the phase
+agent can run directly instead — see
+[harness.md](harness.md) → "GUI launch surface (Claude Code Desktop)"):
 
 - **`qs-setup-task`** → **`qs-create-plan`** → **`qs-implement-task`** → **`qs-review-task`** → **`qs-finish-task`** → **`qs-release`**
 

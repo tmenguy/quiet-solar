@@ -14,7 +14,9 @@ per-machine memory stores.
 
 Each phase runs as an interactive `claude --agent qs-<phase>` session
 (preferred — fresh terminal) or as a `/<phase>` slash command
-(fallback — degraded one-shot UX kept for Claude Desktop). See
+(fallback — degraded one-shot UX; the GUI can instead run the phase
+agent directly, see [docs/workflow/harness.md](docs/workflow/harness.md)).
+See
 [docs/workflow/overview.md](docs/workflow/overview.md) section
 "Orchestrators are interactive sessions; sub-agents are parallel
 fan-out" for the rationale.

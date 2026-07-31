@@ -178,6 +178,8 @@ Inspect the file paths your task breakdown will touch:
 
 ## Commit and hand off (at FINALIZE)
 
+> Launch surfaces for the Claude harness (including the GUI) are documented in [docs/workflow/harness.md](../../docs/workflow/harness.md).
+
 1. Commit and push the story file:
    ```bash
    git add docs/stories/QS-{{issue}}.story.md

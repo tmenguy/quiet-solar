@@ -240,6 +240,107 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# QS-311 AC5 — the GUI launch-surface block.
+#
+# The Claude Code GUI has no ``--agent`` flag, so the launcher pins the
+# next phase into ``<worktree>/.claude/settings.local.json`` and each
+# handoff must print the GUI gesture (New session → select directory →
+# name it). The set of orchestrators is exactly the two-block set — the
+# 5 worktree handoffs — so it is ALIASED rather than re-listed, and the
+# alias is asserted below so a future edit to one list can't silently
+# leave the other behind.
+# --------------------------------------------------------------------------- #
+
+_GUI_BLOCK_ORCHESTRATORS = _TWO_BLOCK_ORCHESTRATORS
+
+_GUI_BLOCK_RE = re.compile(
+    r"\[Claude Code GUI\][\s\S]{0,400}?GUI launch surface \(Claude Code Desktop\)",
+)
+
+# ``qs-review-task`` hands off twice — the zero-findings → finish-task
+# path and the fix-plan loop back to the implement phase. A single block
+# would leave the review-found-problems hop with no GUI instructions.
+_GUI_BLOCK_COUNTS = {name: 1 for name in _GUI_BLOCK_ORCHESTRATORS}
+_GUI_BLOCK_COUNTS["qs-review-task.md"] = 2
+
+
+def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:
+    """The GUI-block list is the two-block list — pinned so it can't drift."""
+    assert _GUI_BLOCK_ORCHESTRATORS == _TWO_BLOCK_ORCHESTRATORS, (
+        "QS-311 AC5: the GUI launch-surface block belongs to exactly the "
+        "orchestrators that emit a worktree handoff — the two-block set. "
+        "If a new orchestrator joins one list it must join the other."
+    )
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_orchestrator_has_gui_launch_block(filename: str) -> None:
+    """Each worktree handoff prints the ``[Claude Code GUI]`` block."""
+    body = (AGENTS_DIR / filename).read_text()
+    found = _GUI_BLOCK_RE.findall(body)
+    expected = _GUI_BLOCK_COUNTS[filename]
+    assert len(found) == expected, (
+        f"{filename}: expected {expected} '[Claude Code GUI]' block(s) "
+        f"pointing at the harness.md 'GUI launch surface (Claude Code "
+        f"Desktop)' section, found {len(found)}. GUI users have no "
+        f"`--agent` flag — the handoff must name the gesture (QS-311 AC5)."
+    )
+
+
+@pytest.mark.parametrize(("filename", "expected_slash"), _HARDCODED_FALLBACK)
+def test_gui_block_does_not_shadow_fallback_line(
+    filename: str, expected_slash: str,
+) -> None:
+    """The GUI block must not become the line ``_find_fallback_line`` returns.
+
+    That helper walks forward from the ``Fallback`` marker to the first
+    line whose ``strip()`` starts with ``/`` or ``{{``. Every path inside
+    the GUI block is therefore backticked — an unbackticked worktree path
+    or ``{{worktree}}`` on its own line would hijack the scan and break
+    the fallback assertions above.
+    """
+    body = (AGENTS_DIR / filename).read_text()
+    fallback_line = _find_fallback_line(body)
+    assert fallback_line is not None, f"{filename}: 'Fallback' block not found"
+    assert expected_slash in fallback_line, (
+        f"{filename}: the GUI block shadowed the fallback line — expected "
+        f"{expected_slash!r}, got {fallback_line!r}. Backtick every path "
+        f"inside the GUI block (QS-311 AC5)."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# QS-311 AC6 — the Cursor / OpenCode counterparts carry a byte-identical
+# pointer line to ``harness.md``. Harness sync is a path-level
+# co-modification check (no content parity), so a cross-reference is the
+# minimal honest edit: the GUI is a Claude-only launch surface, and those
+# trees have no Desktop prose to extend.
+# --------------------------------------------------------------------------- #
+
+_COUNTERPART_DIRS = (".cursor", ".opencode")
+
+_POINTER_LINE = (
+    "> Launch surfaces for the Claude harness (including the GUI) are "
+    "documented in [docs/workflow/harness.md](../../docs/workflow/harness.md)."
+)
+
+
+@pytest.mark.parametrize("harness_dir", _COUNTERPART_DIRS)
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_counterpart_agents_point_at_harness_doc(
+    harness_dir: str, filename: str,
+) -> None:
+    """All 10 counterparts carry the identical pointer line."""
+    path = REPO_ROOT / harness_dir / "agents" / filename
+    assert path.is_file(), f"missing counterpart agent file: {path}"
+    body = path.read_text()
+    assert _POINTER_LINE in body, (
+        f"{harness_dir}/agents/{filename}: missing the verbatim harness.md "
+        f"pointer line (QS-311 AC6). Expected:\n{_POINTER_LINE}"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
 

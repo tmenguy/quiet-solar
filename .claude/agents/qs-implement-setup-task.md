@@ -173,8 +173,17 @@ Preferred (opens a fresh interactive `claude --agent qs-review-task` session):
   {{new_context}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-kept for Claude Desktop and any chat without a CLI launcher):
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
   /review-task
+
+[Claude Code GUI] the worktree is now pinned to `qs-review-task` in
+`.claude/settings.local.json`, so a GUI session there boots as that agent.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{{worktree}}`
+  • Name it `QS_{{issue}} review-task`
+  • No `--agent` needed; see `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)".
 ```
 
 ## Hard rules

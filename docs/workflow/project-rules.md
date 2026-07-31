@@ -192,7 +192,8 @@ spawn) as needed for each.
 
 Each phase runs as an interactive `claude --agent qs-<phase>` session
 (preferred — open a fresh terminal) or as a `/<phase>` slash command
-(fallback — degraded one-shot UX kept for Claude Desktop). Do NOT ask
+(fallback — degraded one-shot UX; the GUI can instead run the phase
+agent directly, see [harness.md](harness.md)). Do NOT ask
 which phase to use — infer from context.
 
 | You say                                                      | Preferred launcher                       | Fallback           |

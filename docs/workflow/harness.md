@@ -132,6 +132,105 @@ PyCharm convenience commands (`pycharm_context`,
 `pycharm_applescript_context`) are added when PyCharm is detected on
 macOS and the work dir is a worktree.
 
+The Claude launcher also has one **filesystem side effect**: it pins the
+resolved phase agent into the worktree's local settings, for the benefit
+of the GUI launch surface documented next.
+
+## GUI launch surface (Claude Code Desktop)
+
+The Claude harness has **two launch surfaces**: the CLI
+(`claude --agent qs-<phase>` — what the launcher emits) and the **Claude
+Code GUI** (`Claude.app`). The GUI is a *surface*, not a harness: it
+shares `.claude/` wholesale, so it has no agent directory of its own,
+and `scripts/qs/harness.py` detects it as `claude-code`. GUI sessions
+keep using `--harness claude-code`, and no launcher output is
+conditional on the surface — a GUI user reads the same payload a CLI
+user does, plus the `[Claude Code GUI]` block each orchestrator prints
+at handoff.
+
+### The mechanism — the `agent` settings key
+
+The GUI exposes no `--agent` flag and no way to launch a session
+programmatically (no URL scheme creates a session on a directory, and
+`open -a "Claude" <dir>` ignores the folder). What it does honour is an
+`agent` key in the settings file:
+
+```json
+{ "agent": "qs-implement-task" }
+```
+
+A session started **without** `--agent` in a directory whose
+`.claude/settings.local.json` carries that key runs its main thread as
+the named agent. This is documented upstream
+(`code.claude.com/docs/en/settings.md` — "Run the main thread as a named
+subagent…", scopes User / Project / Local).
+
+`launchers/claude.py::_write_phase_agent` writes that key at **every**
+handoff, so the worktree is always pinned to the phase the pipeline just
+handed off to. Two guards keep the write narrow: the destination must
+already contain `.claude/agents/<agent>.md`, and it must be a worktree.
+
+The file is **local and never committed** — `.gitignore` carries
+`.claude/settings.local.json` (only that path; the rest of `.claude/` is
+tracked). It is machine-written, so a corrupt or non-object file is
+rebuilt from scratch with a warning on stderr; the write is atomic
+(temp sibling + `os.replace`) and best-effort, and never breaks a
+handoff.
+
+**The CLI is unaffected: `--agent` overrides the key.** A launcher
+one-liner always lands on the agent it names, whatever the pin says.
+
+### The GUI loop
+
+One GUI session per phase, exactly as on the CLI:
+
+1. **New session** — this is mandatory, not stylistic. The GUI reopens
+   the previous session by default, and a restored session keeps the
+   agent it was created with (the key is read at *session* start).
+2. Select the worktree directory.
+3. Name it something like `QS_<N> implement-task`.
+4. Work the phase; at the handoff, repeat from step 1 for the next one.
+
+`/setup-task` seeds the loop: it creates the worktree and pins
+`qs-create-plan` into it, then prints the directory to open.
+
+### Traps
+
+- **A bad pin fails silently.** An unknown agent name falls back to the
+  default agent with no error, and the GUI displays the active agent
+  *nowhere* (the CLI header does show it). That is why the writer
+  refuses to pin an agent whose file is absent from the destination.
+- **Stale pins.** The pin reflects the *last handoff*, not necessarily
+  the phase you intend to work. Combined with session restore and the
+  invisible agent name, a reopened GUI session can silently be the wrong
+  orchestrator — and orchestrators commit and push. Confirm the phase
+  before working in a reopened GUI session; when in doubt, re-run the
+  previous handoff to refresh the pin, or use the CLI, where `--agent`
+  always wins.
+- **The main-checkout gap.** `setup-task` and `release` run on the main
+  checkout, which is never pinned (by design — guard 2). Reach them in
+  the GUI via the slash form `/setup-task` / `/release`, which is what
+  the slash commands are still for.
+
+### Hybrid: `/desktop`
+
+From a running CLI session, `/desktop` (alias `/app`) transfers the
+session to the GUI on the same directory and branch, and the agent
+persona survives the transfer — the smoothest route into the GUI when
+you are already on the CLI. Caveats:
+
+- It **fails on an empty session** with `transcript_missing`, which
+  reads like data loss but only means "complete one exchange first".
+- It **terminates the originating CLI session**, so there is no
+  dual-agent hazard.
+- It is **undocumented upstream and feature-flagged**, so it may vanish;
+  the loop above does not depend on it.
+- Persona survival was **observed once (n=1)** under controlled
+  conditions — treat it as evidence, not as an established contract.
+
+Verified 2026-07-31 against `claude` 2.1.220 and `Claude.app`
+(`com.anthropic.claudefordesktop`) 1.24012.9.
+
 ## Why not synchronize agent files via a script?
 
 Two approaches were considered:
