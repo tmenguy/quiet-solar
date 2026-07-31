@@ -417,35 +417,84 @@ def test_skips_without_invoking_git_when_agent_file_absent(
     assert not (tmp_path / SETTINGS_REL).exists()
 
 
-def test_overwrites_corrupt_existing_json_with_warning(
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 B1 — a settings file we cannot parse is LEFT ALONE.
+#
+# Rounds 1 and 2 rebuilt it and kept a `.bak`. Three must-fix findings in a
+# row came out of that safety net (a mode leak, a recoverability claim that
+# could be false, and a read-only target producing an EMPTY backup while the
+# original was discarded). Option B removes the destructive path outright:
+# warn, write nothing, report `phase_agent_pinned: False`. The only cost is
+# an unpinned GUI session on a worktree whose settings file is corrupt —
+# `--agent` already covers that, and it is strictly better than destroying
+# the user's `permissions.allow` list.
+#
+# Parametrized over every shape that reaches the "not a JSON object"
+# conclusion, including the ones that motivated the deleted machinery.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("name", "body"),
+    [
+        ("corrupt", "{not json at all"),
+        ("truncated_with_token", '{"env": {"TOKEN": "s3cr"}, '),
+        ("non_object_list", "[1, 2]"),
+        ("non_object_string", '"x"'),
+        ("null", "null"),
+        ("empty", ""),
+        ("nul_bytes", "\x00\x00\x00"),
+        ("utf16", '\ufeff{"model": "opus"}'),
+    ],
+)
+def test_unparseable_settings_are_left_untouched_and_pin_skipped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], name: str, body: str,
+) -> None:
+    """Every unusable body: bytes preserved, warning, no pin, no `.bak`."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    target = work_dir / SETTINGS_REL
+    target.write_text(body, encoding="utf-8")
+    before = target.read_bytes()
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is False, name
+    assert target.read_bytes() == before, f"{name}: the user's bytes changed"
+    assert "warning:" in capsys.readouterr().err, name
+    assert not list((work_dir / ".claude").glob("*.bak")), (
+        f"{name}: a .bak was created — Option B removed the backup path, and "
+        f"a backup implies a rebuild that no longer happens"
+    )
+
+
+def test_corrupt_json_is_left_untouched_and_pin_skipped(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Unparseable settings are rebuilt from scratch, with a warning.
-
-    Skipping would leave the phase unbound, and F3+F6 make that invisible
-    in the GUI. Review-fix #01 M1: rebuilding is **not** free — Claude Code
-    persists per-user permission decisions in this file — so it is confined
-    to genuinely unparseable content (a *read* failure must not rebuild,
-    see ``test_read_oserror_does_not_write``) and the old bytes are kept in
-    a ``.bak`` sibling (``test_corrupt_file_is_backed_up_before_rebuild``).
-    """
+    """AC2's named case: unparseable JSON. Named for the acceptance auditor."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     work_dir = _fake_worktree(tmp_path)
     (work_dir / SETTINGS_REL).write_text("{not json at all", encoding="utf-8")
 
-    claude_launcher.build_payload(
+    payload = claude_launcher.build_payload(
         str(work_dir), 311, "Title", next_cmd="create-plan",
     )
 
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert payload["phase_agent_pinned"] is False
+    assert (work_dir / SETTINGS_REL).read_text(encoding="utf-8") == (
+        "{not json at all"
+    )
     assert "warning:" in capsys.readouterr().err
 
 
-def test_overwrites_non_object_existing_json(
+def test_non_object_json_is_left_untouched_and_pin_skipped(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Valid JSON that isn't an object is corrupt too.
+    """AC2's named case: valid JSON of the wrong shape.
 
     Without this branch the shallow merge would raise ``TypeError`` /
     ``AttributeError`` *outside* the read/parse guard.
@@ -455,12 +504,48 @@ def test_overwrites_non_object_existing_json(
     work_dir = _fake_worktree(tmp_path)
     (work_dir / SETTINGS_REL).write_text("[1, 2]", encoding="utf-8")
 
-    claude_launcher.build_payload(
+    payload = claude_launcher.build_payload(
         str(work_dir), 311, "Title", next_cmd="create-plan",
     )
 
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert payload["phase_agent_pinned"] is False
+    assert (work_dir / SETTINGS_REL).read_text(encoding="utf-8") == "[1, 2]"
     assert "warning:" in capsys.readouterr().err
+
+
+def test_null_json_is_left_untouched_and_pin_skipped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """AC2's named case: ``null`` parses, is not an object, and must not write."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    (work_dir / SETTINGS_REL).write_text("null", encoding="utf-8")
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is False
+    assert (work_dir / SETTINGS_REL).read_text(encoding="utf-8") == "null"
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_no_settings_rebuilt_key_in_payload(tmp_path: Path) -> None:
+    """B1: the key is gone. Nothing may claim a rebuild happened.
+
+    It existed only to report the destructive path. With that path deleted,
+    a surviving key would be an unread payload field — the exact thing
+    Decision 8 declined `gui_context` for.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert "settings_rebuilt" not in payload
 
 
 def test_warns_on_stderr_not_stdout(
@@ -507,7 +592,7 @@ def test_second_write_is_byte_identical(tmp_path: Path) -> None:
     )
 
 
-def test_no_write_for_non_worktree_path() -> None:
+def test_no_write_for_non_worktree_path(tmp_path: Path) -> None:
     """The isolation invariant: throwaway paths never gain a settings file.
 
     ``/tmp/work`` is the path the pre-QS-311 tests in this module pass.
@@ -516,6 +601,13 @@ def test_no_write_for_non_worktree_path() -> None:
     *file* either (guard 2) — which is why AC4 holds with zero edits to
     those tests.
 
+    Review-fix #03 C5: the assertion runs against a ``tmp_path`` stand-in
+    rather than the real global ``/tmp/work``. A leftover
+    ``/tmp/work/.claude/agents/qs-create-plan.md`` on any machine — this
+    module's own earlier runs could not create one, but a developer
+    experimenting could — would have satisfied guard 1 and failed the test
+    for a reason that has nothing to do with the invariant.
+
     Review-fix #01 S4: guard 2 used to be a bare ``utils.is_worktree``
     call, which is a *not-the-main-checkout* test and therefore returned
     ``True`` for ``/tmp/work``. The two guards were consequently NOT
@@ -523,11 +615,14 @@ def test_no_write_for_non_worktree_path() -> None:
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
+    throwaway = tmp_path / "work"
+    throwaway.mkdir()
+
     claude_launcher.build_payload(
-        "/tmp/work", 311, "Title", next_cmd="create-plan",
+        str(throwaway), 311, "Title", next_cmd="create-plan",
     )
 
-    assert not (Path("/tmp/work") / SETTINGS_REL).exists()
+    assert not (throwaway / SETTINGS_REL).exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -633,48 +728,6 @@ def test_read_oserror_does_not_write(
     assert "warning:" in capsys.readouterr().err
 
 
-def test_corrupt_file_is_backed_up_before_rebuild(tmp_path: Path) -> None:
-    """M1: a rebuild is recoverable — the old bytes land in a ``.bak`` sibling."""
-    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
-
-    work_dir = _fake_worktree(tmp_path)
-    corrupt = '{"permissions": {"allow": ["Bash(git status)"]}'  # truncated
-    (work_dir / SETTINGS_REL).write_text(corrupt, encoding="utf-8")
-
-    claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
-
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
-    backup = work_dir / ".claude" / "settings.local.json.bak"
-    assert backup.is_file(), "corrupt settings were rebuilt with no backup"
-    assert backup.read_text(encoding="utf-8") == corrupt
-
-
-def test_null_json_is_overwritten_with_warning(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
-) -> None:
-    """S5: ``null`` parses fine but is not an object — warn, then rebuild.
-
-    The reader used to use ``loaded is not None`` as its parse-failed
-    sentinel, so ``json.loads("null") -> None`` took neither the corrupt
-    branch nor the non-object branch: the file was rewritten with an empty
-    stderr. AC2 requires a non-``dict`` parse to be treated as corrupt,
-    i.e. overwritten *with a warning*.
-    """
-    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
-
-    work_dir = _fake_worktree(tmp_path)
-    (work_dir / SETTINGS_REL).write_text("null", encoding="utf-8")
-
-    claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
-
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
-    assert "warning:" in capsys.readouterr().err
-
-
 def test_unlink_failure_does_not_break_handoff(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -705,6 +758,22 @@ def test_unlink_failure_does_not_break_handoff(
     assert _settings(work_dir) == {"agent": "qs-create-plan"}
 
 
+# --------------------------------------------------------------------------- #
+# Review fix plan #03 B3 changed the temp write from ``Path.write_text`` to
+# ``os.open`` + ``os.fchmod`` + ``os.write`` (create private, then fill, then
+# widen). The three spies below therefore hook ``os.open`` instead. They
+# delegate for every path they do not care about, so unrelated opens — pytest's
+# own capture machinery included — behave normally.
+# --------------------------------------------------------------------------- #
+
+_PIN_NAMES = ("settings.local.json",)
+
+
+def _is_pin_path(path: object) -> bool:
+    """True for the settings file and its temp sibling, false for anything else."""
+    return any(name in str(path) for name in _PIN_NAMES)
+
+
 def test_write_failure_reports_unpinned_and_survives(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -713,16 +782,14 @@ def test_write_failure_reports_unpinned_and_survives(
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     work_dir = _fake_worktree(tmp_path)
-    real_write_text = Path.write_text
+    real_open = os.open
 
-    def _boom(self: Path, *args: object, **kwargs: object) -> int:
-        if self.name.startswith("settings.local.json"):
+    def _boom(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if _is_pin_path(path):
             raise OSError(28, "No space left on device")
-        return real_write_text(  # type: ignore[return-value]
-            self, *args, **kwargs,  # type: ignore[arg-type]
-        )
+        return real_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", _boom)
+    monkeypatch.setattr(os, "open", _boom)
 
     payload = claude_launcher.build_payload(
         str(work_dir), 311, "Title", next_cmd="create-plan",
@@ -755,23 +822,23 @@ def test_reread_before_replace_preserves_late_key(
     target = work_dir / SETTINGS_REL
     target.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
 
-    real_write_text = Path.write_text
+    real_open = os.open
     fired: list[str] = []
 
-    def _late_writer(self: Path, *args: object, **kwargs: object) -> int:
-        if self.name.endswith(".tmp") and not fired:
-            fired.append(self.name)
-            # The live session lands a permission decision right here.
-            real_write_text(
-                target,
-                json.dumps({"model": "opus", "permissions": {"allow": ["Bash(ls)"]}}),
+    def _late_writer(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(path).endswith(".tmp") and not fired:
+            fired.append(str(path))
+            # The live session lands a permission decision right here —
+            # after our first read, before the pre-publish re-read.
+            Path(target).write_text(
+                json.dumps(
+                    {"model": "opus", "permissions": {"allow": ["Bash(ls)"]}},
+                ),
                 encoding="utf-8",
             )
-        return real_write_text(  # type: ignore[return-value]
-            self, *args, **kwargs,  # type: ignore[arg-type]
-        )
+        return real_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", _late_writer)
+    monkeypatch.setattr(os, "open", _late_writer)
 
     claude_launcher.build_payload(
         str(work_dir), 311, "Title", next_cmd="create-plan",
@@ -798,16 +865,14 @@ def test_temp_sibling_name_carries_the_pid(
 
     work_dir = _fake_worktree(tmp_path)
     seen: list[str] = []
-    real_write_text = Path.write_text
+    real_open = os.open
 
-    def _spy(self: Path, *args: object, **kwargs: object) -> int:
-        if self.name.endswith(".tmp"):
-            seen.append(self.name)
-        return real_write_text(  # type: ignore[return-value]
-            self, *args, **kwargs,  # type: ignore[arg-type]
-        )
+    def _spy(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if str(path).endswith(".tmp"):
+            seen.append(Path(path).name)
+        return real_open(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "write_text", _spy)
+    monkeypatch.setattr(os, "open", _spy)
 
     claude_launcher.build_payload(
         str(work_dir), 311, "Title", next_cmd="create-plan",
@@ -872,19 +937,35 @@ def test_is_worktree_semantics_are_not_containment(tmp_path: Path) -> None:
     ``.git``-is-a-file check. Anything that reads the name as "is inside a
     worktree of this repo" is reading a claim the function never made.
     """
+    import subprocess
+
     import utils  # type: ignore[import-not-found]
 
-    main = utils.get_main_worktree()
+    # Review-fix #03 C2: derive the main checkout WITHOUT calling the
+    # function under test. Round 2's attempt still passed
+    # ``get_main_worktree()``'s own output back in, so the assertion stayed
+    # ``p.resolve() != p.resolve()`` — true by construction — and the
+    # "comparison is against a value" comment was simply wrong. ``git
+    # rev-parse --git-common-dir`` names the shared git dir; its parent is
+    # the main checkout, computed here from the test file's location.
+    repo = Path(__file__).resolve().parents[3]
+    common = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--path-format=absolute",
+         "--git-common-dir"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    main_checkout = Path(common).parent.resolve()
+    assert (main_checkout / ".git").is_dir(), (
+        f"derived main checkout {main_checkout} has no .git directory — the "
+        f"derivation, not is_worktree, is broken"
+    )
+    assert main_checkout != repo, (
+        "this test must run from a linked worktree for the contrast below to "
+        "mean anything"
+    )
+
     assert utils.is_worktree(tmp_path) is True
-    assert utils.is_worktree("/tmp/work") is True
-    # Review-fix #02 N-e: the main-checkout case used to be spelled
-    # ``is_worktree(get_main_worktree())``, i.e. structurally
-    # ``p.resolve() != p.resolve()`` — true by construction, and equally
-    # ``False`` if the call had raised. Pass the resolved path as a plain
-    # string so the comparison is against a value, not against the
-    # function's own output.
-    assert utils.is_worktree(str(main.resolve())) is False
-    assert str(main.resolve()) == str(main.resolve()), "sanity: path is stable"
+    assert utils.is_worktree(str(main_checkout)) is False
 
 
 # --------------------------------------------------------------------------- #
@@ -907,110 +988,25 @@ def _corrupt(work_dir: Path, body: str = '{"env": {"TOKEN": "s3cr"}, ') -> Path:
     return target
 
 
-def test_backup_preserves_restrictive_mode(tmp_path: Path) -> None:
-    """A: the `.bak` must carry the target's mode, not ``0o666 & ~umask``.
-
-    `_backup` and `_preserve_mode` shipped in the same commit and cancelled
-    each other out: the rebuild path is the one place the bytes are
-    *copied* rather than replaced, so a `chmod 600` file holding an ``env``
-    token was republished at ``0o644`` under a ``.bak`` name — exactly what
-    the mode-preservation fix existed to prevent.
-    """
-    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
-
-    work_dir = _fake_worktree(tmp_path)
-    target = _corrupt(work_dir)
-    target.chmod(0o600)
-
-    claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
-
-    backup = work_dir / ".claude" / "settings.local.json.bak"
-    assert backup.is_file(), "the corrupt body was not backed up at all"
-    assert "s3cr" in backup.read_text(encoding="utf-8")
-    assert stat.S_IMODE(backup.stat().st_mode) == 0o600, (
-        f"the backup leaked the token at "
-        f"{oct(stat.S_IMODE(backup.stat().st_mode))}"
-    )
-
-
-def test_backup_failure_warns_and_still_pins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """B: a `.bak` write failure warns and never breaks the handoff.
-
-    The backup is a safety net, not a precondition: losing it is worth a
-    warning, but the pin must still land or the phase goes unbound.
-    """
-    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
-
-    work_dir = _fake_worktree(tmp_path)
-    _corrupt(work_dir)
-    real_write_bytes = Path.write_bytes
-
-    def _boom(self: Path, data: bytes) -> int:
-        if self.name.endswith(".bak"):
-            raise PermissionError(13, "Permission denied")
-        return real_write_bytes(self, data)
-
-    monkeypatch.setattr(Path, "write_bytes", _boom)
-
-    payload = claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
-
-    assert payload["phase_agent_pinned"] is True
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
-    assert "warning:" in capsys.readouterr().err
-
-
-def test_empty_body_does_not_clobber_existing_backup(
+def test_symlinked_target_is_refused_not_followed(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """C: a 0-byte target must not overwrite a good `.bak` with nothing.
+    """B2: a symlinked pin file is refused, not resolved.
 
-    Reachable without contrivance: a `SIGKILL` or a full disk while Claude
-    Code rewrites the file non-atomically leaves it empty, and the
-    unconditional copy then destroyed the one recoverable copy of the
-    user's approvals. The warning must say so distinctly — the generic
-    "could not parse … rebuilding it" line does not.
-    """
-    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
-
-    work_dir = _fake_worktree(tmp_path)
-    good = json.dumps({"permissions": {"allow": ["Bash(git status)"]}})
-    backup = work_dir / ".claude" / "settings.local.json.bak"
-    backup.write_text(good, encoding="utf-8")
-    (work_dir / SETTINGS_REL).write_text("", encoding="utf-8")
-
-    payload = claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
-
-    assert payload["phase_agent_pinned"] is True
-    assert backup.read_text(encoding="utf-8") == good, (
-        "the empty body clobbered a good backup"
-    )
-    err = capsys.readouterr().err
-    assert "empty" in err, f"no distinct empty-body warning; got: {err!r}"
-
-
-def test_symlinked_target_stays_a_symlink(tmp_path: Path) -> None:
-    """D: the write must follow a symlink, not replace it with a file.
-
-    Symlinking the pin at a shared file is the natural workaround for
-    re-approving permissions in every fresh per-task worktree. ``os.replace``
-    on the link silently converted it to a regular file: content looked
-    right at handoff time, and the shared file simply never updated again —
-    surfacing much later as "my approvals stopped syncing".
+    Round 2 followed the link with ``target.resolve()`` and never re-applied
+    the containment guard, so every write destination became arbitrary: the
+    pin, its temp and its `.bak` could land in ``~/.claude/settings.json``
+    (user scope — every project, every headless run) or in the **main
+    checkout**, which `harness.md` simultaneously promises is never pinned.
+    Refusing keeps guard 2's invariant unconditional: every destination is a
+    literal path inside ``work_dir/.claude``.
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     work_dir = _fake_worktree(tmp_path)
     shared = tmp_path / "shared-settings.json"
-    shared.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+    original = json.dumps({"model": "opus"})
+    shared.write_text(original, encoding="utf-8")
     link = work_dir / SETTINGS_REL
     link.symlink_to(shared)
 
@@ -1018,13 +1014,68 @@ def test_symlinked_target_stays_a_symlink(tmp_path: Path) -> None:
         str(work_dir), 311, "Title", next_cmd="create-plan",
     )
 
-    assert payload["phase_agent_pinned"] is True
-    assert link.is_symlink(), "the handoff converted the symlink to a file"
-    assert json.loads(shared.read_text(encoding="utf-8")) == {
-        "model": "opus",
-        "agent": "qs-create-plan",
-    }
-    assert not list(work_dir.glob(".claude/*.tmp")), "temp left in .claude"
+    assert payload["phase_agent_pinned"] is False
+    assert link.is_symlink(), "the link itself must be left alone"
+    assert shared.read_text(encoding="utf-8") == original, (
+        "the link's target was written through"
+    )
+    err = capsys.readouterr().err
+    assert "warning:" in err and "symlink" in err, (
+        f"the refusal must be observable on stderr; got: {err!r}"
+    )
+    # Nothing may be written beside EITHER end of the link.
+    assert not list((work_dir / ".claude").glob("settings.local.json.*"))
+    assert not list(tmp_path.glob("shared-settings.json.*"))
+
+
+def test_temp_is_never_world_readable_while_populated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """B3: the temp is created private, then filled — never the reverse.
+
+    The merged content can carry an ``env`` token from the existing file, so
+    a write-then-chmod order exposes it in a world-readable temp for a
+    window. Sampled at the moment ``os.replace`` is called, which is the
+    last instant the temp exists.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    target = work_dir / SETTINGS_REL
+    target.write_text(
+        json.dumps({"env": {"TOKEN": "s3cr"}}), encoding="utf-8",
+    )
+    target.chmod(0o644)  # a deliberately loose TARGET must not loosen the temp
+
+    real_write = os.write
+    sampled: list[tuple[int, bytes]] = []
+
+    def _sampling_write(fd, data):  # type: ignore[no-untyped-def]
+        # Sample the mode of the fd we are about to write the merged content
+        # into. This is the exact instant the property is about: the bytes
+        # are landing, and the widen to the target's mode has not run yet.
+        if b"agent" in data:
+            sampled.append((stat.S_IMODE(os.fstat(fd).st_mode), data))
+        return real_write(fd, data)
+
+    monkeypatch.setattr(os, "write", _sampling_write)
+
+    claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert sampled, "the merged content was never written through os.write"
+    mode, data = sampled[0]
+    assert b"s3cr" in data, "sampled a write that did not carry the merged token"
+    assert not mode & 0o077, (
+        f"the temp was group/other-accessible at {oct(mode)} while the merged "
+        f"token was being written — create-private-then-widen was not honoured"
+    )
+    # The published file still ends up at the target's own (looser) mode:
+    # preserving the user's chmod is deliberate, and is what makes sampling
+    # at os.replace the wrong place to assert this.
+    published = stat.S_IMODE((work_dir / SETTINGS_REL).stat().st_mode)
+    assert published == 0o644, f"target mode not preserved: {oct(published)}"
 
 
 def test_fresh_settings_file_is_created_private(tmp_path: Path) -> None:
@@ -1047,52 +1098,6 @@ def test_fresh_settings_file_is_created_private(tmp_path: Path) -> None:
 
     mode = stat.S_IMODE((work_dir / SETTINGS_REL).stat().st_mode)
     assert mode == 0o600, f"fresh pin file created at {oct(mode)}"
-
-
-def test_payload_reports_settings_rebuilt(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str],
-) -> None:
-    """N-c: a destructive rebuild must be visible in the payload.
-
-    `phase_agent_pinned` is ``True`` on a run that just discarded the
-    user's entire local settings, and the only other signal is a stderr
-    line no orchestrator is told to relay. A hand-edited file with a
-    trailing comma is enough to trigger it.
-    """
-    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
-
-    work_dir = _fake_worktree(tmp_path)
-    _corrupt(work_dir, '{"model": "opus",}')
-
-    payload = claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
-
-    assert payload["phase_agent_pinned"] is True
-    assert payload["settings_rebuilt"] is True
-    capsys.readouterr()
-
-
-def test_payload_reports_settings_not_rebuilt_on_clean_merge(
-    tmp_path: Path,
-) -> None:
-    """N-c: the flag is ``False`` for the ordinary merge path."""
-    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
-
-    work_dir = _fake_worktree(tmp_path)
-    (work_dir / SETTINGS_REL).write_text(
-        json.dumps({"model": "opus"}), encoding="utf-8",
-    )
-
-    payload = claude_launcher.build_payload(
-        str(work_dir), 311, "Title", next_cmd="create-plan",
-    )
-
-    assert payload["settings_rebuilt"] is False
-    # ... and on a skipped write there is nothing to rebuild.
-    assert claude_launcher.build_payload(
-        str(tmp_path / "nope"), 311, "Title", next_cmd="create-plan",
-    )["settings_rebuilt"] is False
 
 
 def test_guard_two_rejects_when_agent_file_present_but_no_git(

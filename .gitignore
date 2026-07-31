@@ -201,6 +201,7 @@ custom_components/volkswagencarnet
 
 # QS-311: per-worktree GUI phase pin (local, never committed). The
 # trailing `*` also covers the writer's atomic-write temp
-# (`.json.<pid>.tmp`) and its rebuild backup (`.json.bak`), which a
-# SIGKILL / OOM kill can leave behind.
+# (`.json.<pid>.tmp`), which a SIGKILL / OOM kill can leave behind, and
+# any `.json.bak` left by a pre-review-fix-#03 revision (the writer no
+# longer makes backups — it refuses to touch a file it cannot parse).
 .claude/settings.local.json*

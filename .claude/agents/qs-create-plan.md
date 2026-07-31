@@ -200,12 +200,6 @@ Inspect the file paths your task breakdown will touch:
    pin sentence and point at the Preferred line instead). Then print
    both blocks:
 
-   If `settings_rebuilt` is `true`, add one line telling the user their
-   `.claude/settings.local.json` was unparseable and was rebuilt from scratch —
-   the previous bytes are in `settings.local.json.bak`. A rebuild discards their
-   local permission approvals, and `phase_agent_pinned` alone cannot show it.
-
-
    ```text
    ✅ Story committed and pushed to {{branch}}.
 

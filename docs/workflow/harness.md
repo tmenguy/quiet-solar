@@ -184,15 +184,33 @@ Two guards keep it narrow:
    The `.git`-is-a-file check is what makes the two guards independent.
 
 The file is **local and never committed** — `.gitignore` carries
-`.claude/settings.local.json*` (that path plus the writer's temp/backup
-siblings; the rest of `.claude/` is tracked). It is **not** purely
-machine-written: Claude Code persists the user's own `permissions`
-decisions, `model`, and `env` there, so the writer shallow-merges, never
-rewrites a file it failed to *read*, and copies the old bytes to
-`.bak` on the one path that does rebuild (an unparseable or non-object
-body, always with a warning on stderr). The write is atomic (temp
-sibling + `os.replace`, permission bits preserved) and best-effort, and
-never breaks a handoff.
+`.claude/settings.local.json*` (that path plus the writer's temp sibling;
+the rest of `.claude/` is tracked).
+
+It is **not** purely machine-written: Claude Code persists the user's own
+`permissions` decisions, `model`, and `env` there. The writer is therefore
+deliberately timid — it will decline to pin rather than touch bytes it does
+not fully understand:
+
+- **A file it can parse as a JSON object** is shallow-merged: `agent` is
+  replaced, every other top-level key is kept.
+- **Anything else is left exactly as it is, and the pin is skipped** — an
+  unreadable file, one that does not parse, or one that parses to something
+  other than an object (`null`, `[1, 2]`, `"x"`, empty, NUL-filled). Always
+  with a warning on stderr. There is **no backup and no rebuild**: earlier
+  revisions rebuilt the file and kept a `.bak`, and that safety net produced
+  three consecutive must-fix findings of its own, so the destructive path
+  was removed rather than patched again.
+- **A symlinked pin file is refused**, not followed. Resolving it would move
+  the write outside the worktree — into `~/.claude/settings.json`, or into
+  the main checkout this section promises is never pinned.
+- **Permissions**: a fresh pin file is created `0o600`; an existing file's
+  mode is preserved, so your `chmod` survives. The temp sibling is created
+  private and widened only once populated, so a merged `env` token is never
+  briefly world-readable.
+
+The write is atomic (temp sibling + `os.replace`) and best-effort: it never
+breaks a handoff, and every skip above reports `phase_agent_pinned: false`.
 
 **A CLI session that passes `--agent` is unaffected: the flag overrides
 the key.** A launcher one-liner always lands on the agent it names,
@@ -256,6 +274,12 @@ the directory to open.
   after the review-task → finish-task handoff, a bare invocation in that
   worktree boots as the orchestrator whose job is to merge the PR and
   remove the worktree. **Pass `--agent` explicitly in any automation.**
+- **A corrupt or symlinked pin file produces no pin, silently.** Those are
+  the two states the writer refuses (above), and like every other bad-pin
+  case the GUI shows you nothing. The observable signal is
+  `phase_agent_pinned: false` in the handoff payload — the orchestrator is
+  instructed to stop claiming the pin when it sees that — and the stderr
+  warning naming the file. The unconditional fix is `--agent`.
 - **A failed write leaves the *previous* phase's pin in place.** The
   writer is best-effort, so an `OSError` on the publish means the worktree
   stays pinned to the phase before this one — strictly worse than being

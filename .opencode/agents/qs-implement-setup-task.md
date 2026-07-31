@@ -204,8 +204,12 @@ empty directories. `legacy/` is only staged when you've performed a
 
 ### 6. Tell the user the next command
 
-> Launch surfaces for the Claude harness (including the GUI) are documented in [docs/workflow/harness.md](../../docs/workflow/harness.md).
-> That doc's GUI phase pin is best-effort: the Claude payload reports the outcome as `phase_agent_pinned` and `settings_rebuilt`, and no other harness reads either key.
+> Launch surfaces for the Claude harness (including the GUI) are
+> documented in
+> [docs/workflow/harness.md](../../docs/workflow/harness.md).
+> That doc's GUI phase pin is best-effort: the Claude payload
+> reports the outcome as `phase_agent_pinned`, and no other harness
+> reads it.
 
 Build the launcher payload for the review phase so the user has a copy/paste
 command to open a fresh session bound to `qs-review-task`:

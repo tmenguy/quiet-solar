@@ -15,13 +15,17 @@ based test would pass spuriously on a repo that never gained the entry.
 
 Review-fix #01 M2: the pattern carries a trailing `*` so it also covers
 the writer's **siblings** — the atomic-write temp
-(`settings.local.json.<pid>.tmp`) and the rebuild backup
-(`settings.local.json.bak`). `finally` cleanup covers Ctrl-C and
+(`settings.local.json.<pid>.tmp`). `finally` cleanup covers Ctrl-C and
 `SystemExit` but not `SIGKILL`, an OOM kill, or power loss, so a temp can
 survive; un-ignored it would be swept into the next commit by
 `utils.auto_commit_and_push` (which stages `.claude/` wholesale) and would
 make `qs-finish-task` prompt "Force-delete and lose this work?" over a
 stray temp file.
+
+`settings.local.json.bak` stays in the covered list even though review-fix
+#03 removed the code that created it: worktrees pinned by an earlier
+revision can still hold one, and it must not become a phantom untracked
+file there.
 """
 
 from __future__ import annotations

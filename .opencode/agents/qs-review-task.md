@@ -115,8 +115,12 @@ justification." Fetch the PR's changed paths via
 
 ### 4. Zero-findings fast path
 
-> Launch surfaces for the Claude harness (including the GUI) are documented in [docs/workflow/harness.md](../../docs/workflow/harness.md).
-> That doc's GUI phase pin is best-effort: the Claude payload reports the outcome as `phase_agent_pinned` and `settings_rebuilt`, and no other harness reads either key.
+> Launch surfaces for the Claude harness (including the GUI) are
+> documented in
+> [docs/workflow/harness.md](../../docs/workflow/harness.md).
+> That doc's GUI phase pin is best-effort: the Claude payload
+> reports the outcome as `phase_agent_pinned`, and no other harness
+> reads it.
 
 If there are no must-fix or should-fix findings, build the launcher
 payload for `finish-task`:

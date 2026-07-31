@@ -164,12 +164,6 @@ Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
 there means the GUI pin was skipped — drop the GUI block's pin sentence
 and point at the Preferred line instead). Then print both blocks:
 
-If `settings_rebuilt` is `true`, add one line telling the user their
-`.claude/settings.local.json` was unparseable and was rebuilt from scratch —
-the previous bytes are in `settings.local.json.bak`. A rebuild discards their
-local permission approvals, and `phase_agent_pinned` alone cannot show it.
-
-
 ```text
 ✅ Implementation complete — quality gate passed.
 ✅ Committed and pushed to {{branch}}.

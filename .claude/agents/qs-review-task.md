@@ -99,12 +99,6 @@ Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
 there means the GUI pin was skipped — drop the GUI block's pin sentence
 and point at the Preferred line instead). Then present both blocks:
 
-If `settings_rebuilt` is `true`, add one line telling the user their
-`.claude/settings.local.json` was unparseable and was rebuilt from scratch —
-the previous bytes are in `settings.local.json.bak`. A rebuild discards their
-local permission approvals, and `phase_agent_pinned` alone cannot show it.
-
-
 ```text
 ✅ Adversarial review complete. No blocking findings.
 
@@ -230,11 +224,6 @@ python scripts/qs/next_step.py \
 Parse the JSON; capture `new_context`, `existing_session_prompt`, and
 `phase_agent_pinned` (a `false` there means the GUI pin was skipped — drop
 the GUI block's pin sentence and point at the Preferred line instead).
-
-If `settings_rebuilt` is `true`, add one line telling the user their
-`.claude/settings.local.json` was unparseable and was rebuilt from scratch —
-the previous bytes are in `settings.local.json.bak`. A rebuild discards their
-local permission approvals, and `phase_agent_pinned` alone cannot show it.
 
 Then present three blocks (substitute `{{next_implement}}`
 consistently — same value the launcher payload was built with):

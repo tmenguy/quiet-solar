@@ -398,23 +398,6 @@ def test_gui_block_states_the_pin_conditionally(filename: str) -> None:
 
 
 @pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
-def test_orchestrator_relays_a_settings_rebuild(filename: str) -> None:
-    """Each orchestrator is told to relay `settings_rebuilt` (review-fix #02 N-c).
-
-    A rebuild discards the user's entire local settings while
-    `phase_agent_pinned` still reports ``True``; the only other signal is a
-    stderr line. The payload key earns its place only if the prose consults
-    it — the same standard that got `gui_context` declined (Decision 8).
-    """
-    body = (AGENTS_DIR / filename).read_text()
-    assert "`settings_rebuilt`" in body, (
-        f"{filename}: does not mention `settings_rebuilt`, so a run that "
-        f"discarded the user's local settings would be reported to them as "
-        f"a clean pin (review-fix #02 N-c)."
-    )
-
-
-@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
 def test_gui_block_does_not_shadow_fallback_line(filename: str) -> None:
     """The GUI block must not become the line ``_find_fallback_line`` returns.
 
@@ -451,20 +434,22 @@ def test_gui_block_does_not_shadow_fallback_line(filename: str) -> None:
 
 _COUNTERPART_DIRS = (".cursor", ".opencode")
 
-_POINTER_LINE = (
-    "> Launch surfaces for the Claude harness (including the GUI) are "
-    "documented in [docs/workflow/harness.md](../../docs/workflow/harness.md)."
-)
-
-# Review-fix #01 M3: the pin is conditional, so the counterparts say so
-# too — and say that nothing in *their* harness reads the flag. Pinned
-# verbatim (like the line above) because a freehand edit here is exactly
-# what the harness-sync co-modification rule cannot detect.
-_POINTER_FOLLOWUP = (
-    "> That doc's GUI phase pin is best-effort: the Claude payload reports "
-    "the outcome as `phase_agent_pinned` and `settings_rebuilt`, and no "
-    "other harness reads either key."
-)
+# The block all 10 counterparts carry verbatim. Review-fix #01 M3 added the
+# second sentence (the pin is conditional, and nothing in *their* harness
+# reads the flag); review-fix #03 C7 wrapped the whole thing to the ~72
+# columns the surrounding docs use — it was ~150 chars/line, and since the
+# tests pin it verbatim, every future wrap would have cost 10 files plus this
+# constant. Wrapped once, here, while those 10 files were being touched
+# anyway. Review-fix #03 B1 dropped `settings_rebuilt` from it again, since
+# Option B removed that key.
+_POINTER_BLOCK = "\n".join([
+    "> Launch surfaces for the Claude harness (including the GUI) are",
+    "> documented in",
+    "> [docs/workflow/harness.md](../../docs/workflow/harness.md).",
+    "> That doc's GUI phase pin is best-effort: the Claude payload",
+    "> reports the outcome as `phase_agent_pinned`, and no other harness",
+    "> reads it.",
+])
 
 
 @pytest.mark.parametrize("harness_dir", _COUNTERPART_DIRS)
@@ -472,15 +457,28 @@ _POINTER_FOLLOWUP = (
 def test_counterpart_agents_point_at_harness_doc(
     harness_dir: str, filename: str,
 ) -> None:
-    """All 10 counterparts carry the identical two-line pointer block."""
+    """All 10 counterparts carry the identical pointer block."""
     path = REPO_ROOT / harness_dir / "agents" / filename
     assert path.is_file(), f"missing counterpart agent file: {path}"
     body = path.read_text()
-    expected = f"{_POINTER_LINE}\n{_POINTER_FOLLOWUP}"
-    assert expected in body, (
+    assert _POINTER_BLOCK in body, (
         f"{harness_dir}/agents/{filename}: missing the verbatim harness.md "
-        f"pointer block (QS-311 AC6). Expected:\n{expected}"
+        f"pointer block (QS-311 AC6). Expected:\n{_POINTER_BLOCK}"
     )
+
+
+def test_pointer_block_stays_within_the_doc_line_width() -> None:
+    """Review-fix #03 C7: the pinned block must not drift back to ~150 chars.
+
+    It is duplicated across 10 files and pinned verbatim by the test above,
+    so a re-widening is 11 files to undo. Guarding the width here makes that
+    a test failure instead of a future finding.
+    """
+    for line in _POINTER_BLOCK.split("\n"):
+        assert len(line) <= 78, (
+            f"pointer-block line is {len(line)} chars, over the ~72-column "
+            f"convention of the surrounding docs: {line!r}"
+        )
 
 
 # --------------------------------------------------------------------------- #

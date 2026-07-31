@@ -157,6 +157,11 @@ GUI_SECTION_REQUIRED_TOKENS = (
     # worst case is a `qs-finish-task` pin, which merges PRs and removes
     # worktrees.
     "headless",
+    # Review-fix #03 B2/C4: a symlinked pin file is REFUSED (following it
+    # would move the write outside the worktree, breaking guard 2's
+    # containment invariant). One of the two states that now silently
+    # produce no pin, so the section has to name it.
+    "symlink",
 )
 
 
