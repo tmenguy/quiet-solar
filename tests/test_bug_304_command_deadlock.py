@@ -50,6 +50,9 @@ T0 = datetime(2026, 7, 27, 12, 12, 19, tzinfo=pytz.UTC)
 
 LOST_CONTROL_LOG = "Lost control of load"
 REGAINED_CONTROL_LOG = "Lost-control state cleared for load"
+# QS-307 review fix #01: the give-up releases the clock without being a recovery,
+# and says so in its own words rather than borrowing the recovery line's.
+RELEASED_WITHOUT_CONTACT_LOG = "Lost-control clock released without contact for load"
 
 
 async def drive_until_uncontrollable(load, start: datetime = T0) -> datetime:
@@ -368,16 +371,16 @@ async def test_unreachable_entity_does_not_produce_a_push_storm(caplog: pytest.L
     When a load's probe returns `None` forever, the
     `NUM_MAX_INVALID_PROBES_COMMANDS` give-up empties the command slot every ~70 s.
     QS-307 (from #308) releases the lost-control clock on that path, so the
-    once-only guard is no longer what holds the line here — the **rung reset** is.
-    `_escalate_or_recover` zeroes `running_command_num_relaunch` on every emptied
-    slot, and one give-up window is far too short to climb back to
-    `NUM_MAX_COMMAND_RELAUNCH` (see
-    `test_a_give_up_window_cannot_climb_the_escalation_ladder`), so re-escalation
-    is unreachable for a device that never comes back.
+    per-command guard is no longer what holds the line here. Two things do: the
+    **rung reset** (`_escalate_or_recover` zeroes
+    `running_command_num_relaunch` on every emptied slot, and one give-up window
+    is far too short to climb back to `NUM_MAX_COMMAND_RELAUNCH` — see
+    `test_a_give_up_window_cannot_climb_the_escalation_ladder`) and the **episode
+    latch** (review fix #01), which is what covers the case where a rung was
+    already earned *before* a give-up.
 
-    The clock is released exactly once too: the first give-up clears the episode
-    opened by the initial escalation, and every later window finds it already
-    `None` and stays silent.
+    Review fix #01 also trimmed the horizon: six simulated hours under log
+    capture bought nothing over the give-up windows D5 actually reasons about.
     """
     load = NeverAcksLoad(name="broken_entity")
     load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
@@ -387,10 +390,11 @@ async def test_unreachable_entity_does_not_produce_a_push_storm(caplog: pytest.L
         time = await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
         assert len(load.state_change_notifications) == 1
 
-        # Six hours of a permanently unavailable entity, while QS keeps commanding it.
+        # Four give-up windows of a permanently unavailable entity, while QS keeps
+        # commanding it — the same horizon as the AC11 sibling below.
         load.probe_result = None
         total = 0
-        end = time + timedelta(seconds=6 * 3600)
+        end = time + timedelta(seconds=4 * NUM_MAX_INVALID_PROBES_COMMANDS * CYCLE_S)
         while time <= end:
             if load.running_command is None:
                 await load.launch_command(time, CMD_IDLE if total % 2 else CMD_ON)
@@ -399,7 +403,9 @@ async def test_unreachable_entity_does_not_produce_a_push_storm(caplog: pytest.L
             time = time + timedelta(seconds=CYCLE_S)
 
     assert len(load.state_change_notifications) == 1
-    assert count_log(caplog, REGAINED_CONTROL_LOG) == 1
+    # The give-up is not a recovery, and no longer claims to be one.
+    assert count_log(caplog, REGAINED_CONTROL_LOG) == 0
+    assert count_log(caplog, RELEASED_WITHOUT_CONTACT_LOG) == 1
 
 
 # =============================================================================
@@ -419,8 +425,9 @@ async def test_unavailable_probe_give_up_releases_the_ownerless_clock(caplog: py
     then inherited by the next command, which became `is_uncontrollable` with zero
     relaunches of its own.
 
-    This is NOT a recovery — the device is failing harder — which is why the log
-    line is reason-led rather than claiming control returned.
+    This is NOT a recovery — the device is failing harder — so it gets its own log
+    line (review fix #01) instead of borrowing the recovery one, and it latches
+    `_unresponsive_needs_ack` so the next ladder climb cannot shout.
     """
     load = NeverAcksLoad(name="pool_house")
     time = await drive_until_uncontrollable(load)
@@ -434,7 +441,9 @@ async def test_unavailable_probe_give_up_releases_the_ownerless_clock(caplog: py
     assert load.running_command is None
     assert load.unresponsive_since is None
     assert load.is_uncontrollable is False
-    assert count_log(caplog, REGAINED_CONTROL_LOG) == 1
+    assert load._unresponsive_needs_ack is True
+    assert count_log(caplog, RELEASED_WITHOUT_CONTACT_LOG) == 1
+    assert count_log(caplog, REGAINED_CONTROL_LOG) == 0
 
 
 def test_a_give_up_window_cannot_climb_the_escalation_ladder():
@@ -453,12 +462,35 @@ def test_a_give_up_window_cannot_climb_the_escalation_ladder():
     assert max_relaunches_per_window < NUM_MAX_COMMAND_RELAUNCH
 
 
+async def _recover_with_a_real_ack(load: NeverAcksLoad, time: datetime) -> datetime:
+    """Let the device answer once — the only thing that ends an episode."""
+    load.probe_result = True
+    if load.running_command is None:
+        # the give-up emptied the slot, so there is nothing to probe: dispatch a
+        # command and let the now-truthful probe ack it on the spot
+        await load.launch_command(time, CMD_ON)
+        time = time + timedelta(seconds=CYCLE_S)
+    else:
+        time = await drive(load, time, 2 * CYCLE_S)
+
+    assert load.current_command is not None
+    assert load._unresponsive_needs_ack is False
+    return time
+
+
 async def test_a_second_lost_control_episode_can_escalate_again(caplog: pytest.LogCaptureFixture):
-    """AC10: lose control, go unavailable, come back, lose control again → 2 pushes.
+    """AC10: lose control, go unavailable, RECOVER, lose control again → 2 pushes.
 
     Impossible before the clock release: `unresponsive_since` survived the give-up
-    forever, and it is the once-only guard, so the load could shout about its first
-    episode and then never again — however many genuinely new episodes followed.
+    forever, and it was the only escalation guard, so the load could shout about its
+    first episode and then never again — however many genuinely new episodes
+    followed.
+
+    Review fix #01 made the "recover" step in AC10's own wording load-bearing
+    rather than decorative: a second episode needs evidence that QS got back in
+    contact, which is a real ack. Without one this is the same episode still
+    running, and `test_a_flapping_device_shouts_once_until_it_answers_again` pins
+    that it stays quiet.
     """
     load = NeverAcksLoad(name="pool_house")
     time = await drive_until_uncontrollable(load)
@@ -470,17 +502,87 @@ async def test_a_second_lost_control_episode_can_escalate_again(caplog: pytest.L
         time = await drive(load, time, CYCLE_S * (NUM_MAX_INVALID_PROBES_COMMANDS + 2))
         assert load.unresponsive_since is None
 
-        # the entity comes back — reachable, answering, and still not obeying
+        # the entity comes back and confirms a command: episode 1 is over
+        time = await _recover_with_a_real_ack(load, time)
+
+        # ...and then genuinely loses control again: a NEW episode
         load.probe_result = False
-        await load.launch_command(time, CMD_ON)
+        await load.launch_command(time, CMD_OFF)
         time = await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
 
     assert load.is_uncontrollable is True
     assert len(load.state_change_notifications) == 2
     # `caplog` spans the whole test, so both episodes' ERROR lines are here; only
-    # the INFO release needed `at_level`.
+    # the INFO releases needed `at_level`.
     assert count_log(caplog, LOST_CONTROL_LOG) == 2
-    assert count_log(caplog, REGAINED_CONTROL_LOG) == 1
+    assert count_log(caplog, RELEASED_WITHOUT_CONTACT_LOG) == 1
+
+
+async def _flap_once(load: NeverAcksLoad, time: datetime) -> datetime:
+    """Drop off the network for one give-up window, then answer-but-disobey.
+
+    The exact pattern D5 used to write off as an accepted residual: each cycle of
+    it re-earns a full ladder rung, so each one used to produce a push.
+    """
+    load.probe_result = None
+    time = await drive(load, time, CYCLE_S * (NUM_MAX_INVALID_PROBES_COMMANDS + 2))
+    assert load.running_command is None  # the give-up emptied the slot
+
+    load.probe_result = False
+    await load.launch_command(time, CMD_ON)
+    return await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+
+async def test_a_flapping_device_shouts_once_until_it_answers_again(caplog: pytest.LogCaptureFixture):
+    """Review fix #01 (must-fix): flapping must not become a push every ~18 min.
+
+    `running_command_num_relaunch_after_invalid` is cumulative over a command's
+    life, so a give-up can fire *after* a rung was already earned outside any
+    give-up window. D5 and
+    `test_a_give_up_window_cannot_climb_the_escalation_ladder` only prove a single
+    give-up window is too short to climb the ladder — they say nothing about a rung
+    earned before one. So the clock release re-opened the escalation guard once per
+    [unavailable window + ladder climb] cycle, indefinitely, for a device whose
+    situation never changed — on a fire-and-forget channel whose pushes accumulate
+    on the phone and cannot be collapsed.
+
+    The fix must NOT be to stop releasing the clock (that is #308's fix, and AC9 /
+    AC10 depend on it). It is to stop treating "the clock was released" as "a new
+    episode began": `_unresponsive_needs_ack` requires evidence of contact first.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
+    await load.launch_command(T0, CMD_IDLE)
+
+    # Episode 1 escalates, legitimately.
+    time = await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+    assert len(load.state_change_notifications) == 1
+
+    with caplog.at_level(logging.INFO):
+        # `caplog` spans the whole test and the ERROR above is already in it, so
+        # baseline rather than assume.
+        lost_control_before = count_log(caplog, LOST_CONTROL_LOG)
+        assert lost_control_before == 1
+
+        for _ in range(3):
+            time = await _flap_once(load, time)
+
+    # Three more full ladder climbs, each preceded by a give-up, and QS stays quiet:
+    # nothing about the device's situation changed and it never answered.
+    assert len(load.state_change_notifications) == 1
+    assert count_log(caplog, LOST_CONTROL_LOG) == lost_control_before
+    # The clock still gets re-armed every climb — it is what drives
+    # supersede-vs-stack, and suppressing it would starve newer intents.
+    assert load.unresponsive_since is not None
+    assert load.is_uncontrollable is True
+
+    # ...and once the device really answers, a later failure is a NEW episode.
+    time = await _recover_with_a_real_ack(load, time)
+    load.probe_result = False
+    await load.launch_command(time, CMD_OFF)
+    await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+    assert len(load.state_change_notifications) == 2
 
 
 async def test_a_device_unavailable_from_the_start_never_escalates(caplog: pytest.LogCaptureFixture):

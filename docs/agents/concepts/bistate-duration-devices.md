@@ -103,18 +103,17 @@ the solver picks the cheapest contiguous (or split) windows.
 extension overrides the duration calculation but inherits the rest
 of the on/off behaviour unchanged.
 
-**The split gate (QS-307).** `check_load_activity_and_constraints`'
-user-override block is guarded by `qs_enable_device is not False and
-support_user_override()`. Inside it, only **detection** is gated on
-`is_load_command_set(time)`:
+**The split gate (QS-307).** The override **lifecycle** is not gated on
+command state; only **detection** is:
 
 ```text
-if qs_enable_device is not False and support_user_override():
-    if <override aged past override_duration>:   # unconditional
-    elif <reset-ask follow-up flag set>:         # unconditional
+if qs_enable_device is not False:
+    if <override aged past override_duration>:      # unconditional
+        <drop an override-ALIGNED running_command>
+    elif <reset-ask follow-up flag set>:            # unconditional
     else:
-        <post-override cooldown expiry>          # unconditional
-        if is_load_command_set(time):
+        <post-override cooldown drain>              # unconditional
+        if support_user_override() and is_load_command_set(time):
             <detection: reads entity state>
 ```
 
@@ -134,10 +133,43 @@ that flowed into the persisted forecast. Both death modes are covered: a
 *unavailable* one reaches the invalid-probe give-up, which nulls
 `current_command` — `is_load_command_set` is False on either arm.
 
+Four things about this shape are load-bearing:
+
+1. **The lifecycle is THREE branches, not two.** Expiry does not finish the
+   job: it hands off to `asked_for_reset_user_initiated_state_time` (the
+   180 s "too soon to re-override" window), and while that is set
+   `get_override_state()` returns `ASKED FOR RESET`, so
+   `is_user_overridden()` is still `True` and the load is still worth `0.0`
+   to power accounting. The drain must hoist too, or the load expires its
+   override and stays out of controlled consumption anyway. Only the
+   *suppression* half stays inside detection.
+2. **`support_user_override()` guards detection, never the lifecycle.**
+   Leaving it on the outer gate was the same bug in a worse form: unlike the
+   `qs_enable_device` arm it is not self-healing. Disabling and re-enabling a
+   load runs the lifecycle again; flipping one to boost-only
+   (`CONF_LOAD_IS_BOOST_ONLY`) never does — and since the reset-ask timestamp
+   is persisted and restore only drops *future*-dated ones, such a load stayed
+   `is_user_overridden()` forever, across restarts.
+3. **Expiry drops an override-*aligned* in-flight command.** Reachable only
+   after the hoist (the old gate guaranteed an empty slot here). Nulling the
+   override state also disables `force_relaunch_command`'s suppression drop,
+   so the **ended** override's own service call would keep being relaunched
+   for up to a full ladder while the real post-expiry intent stacked behind
+   it. Alignment is `expected_state_from_command(running_command) ==
+   external_user_initiated_state`; anything else is a genuine solver intent
+   and must survive `keep_commands=True`.
+4. **Every clock comparison goes through `AbstractDevice._seconds_since`,**
+   which treats a future-dated anchor as fully elapsed. A raw subtraction
+   freezes whatever it gates for the duration of a backwards clock step, and
+   the drain is the *only* release of the cooldown.
+
 The `qs_enable_device` guard is deliberate, not incidental:
 `is_load_command_set` returned False for a disabled load, so dropping the
 gate without it would newly expire overrides on loads QS was told to leave
-alone.
+alone. It is defence in depth — production callers arrive via
+`do_run_check_load_activity_and_constraints`, which already short-circuits on
+a disabled load — and `None`/unset is deliberately treated as **enabled**,
+like every other `is not False` guard on the load.
 
 **Non-goal, do not "fix":** QS-307 changed **no** detection behaviour. Fresh
 detection on an unresponsive load is not merely gated, it is unsafe — for a

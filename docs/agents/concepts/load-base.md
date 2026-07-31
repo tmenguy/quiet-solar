@@ -95,12 +95,26 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   uncontrollable. QS-307 (from #308) closed the last path that emptied
   the slot while keeping the clock, so a set clock now always describes
   a live, unresolved episode.
+- **Two clocks, not one (QS-307).** `unresponsive_since` is per **command**
+  — every slot-emptying path releases it, which is what lets it drive
+  supersede-vs-stack honestly. `_unresponsive_needs_ack` is per **episode**
+  — "we are still in an unresolved lost-control episode" — and it gates the
+  ERROR log and the push, never the clock. Conflating them is what produced
+  a notification every ~18 min for a device flapping between unreachable and
+  answering-but-disobeying: `running_command_num_relaunch_after_invalid` is
+  cumulative over a command's life, so the give-up can fire long after the
+  threshold was crossed by ordinary relaunches, and each release re-opened
+  the guard. `_clear_unresponsive(reason, earned_recovery=False)` — the
+  give-up, and only the give-up — latches the episode; every other caller
+  clears it, because a real ack, a deliberate drop and a command wipe all
+  carry evidence that QS is back in contact.
 - **Five clearers, one writer.** `_clear_unresponsive` is the only writer;
   it is reached by an ack, by the empty-slot re-arm, by
   `_drop_running_command` (**unconditionally** — an emptied slot has no
   owner for the clock whether or not a confirmed command ever existed), by
   the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up in `check_commands`
-  (QS-307), and by a `keep_commands=False` wipe. It also clears the
+  (QS-307, the one `earned_recovery=False` caller), and by a
+  `keep_commands=False` wipe. It also clears the
   supersede anchor
   *ahead of* its own early return, so the two fields cannot
   desynchronise.
@@ -155,6 +169,17 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
 - **A disabled load never shouts.** The escalation branch is gated on
   `qs_enable_device`; the housekeeping half still runs. QS was
   explicitly told to leave the load alone, so it must not push.
+- **`_escalate_or_recover`'s `current_command is not None` gate is
+  load-bearing (QS-307).** Not for `unresponsive_since` — every
+  slot-emptying path releases the clock at its own call site, so there is
+  never a live one left here — but for `_unresponsive_needs_ack`. Reaching
+  the housekeeping arm with `current_command is None` means the give-up ran
+  earlier in **this same cycle** and nulled it; an unconditional
+  `earned_recovery=True` release here would clear the episode latch one
+  statement later and restore the push storm it exists to damp. Note
+  `_last_supersede_time` is cleared *outside* that gate, on purpose — the
+  two fields answer different questions, so read the comment for which
+  sentence governs which.
 - **No shape keeps the clock with an empty slot (QS-307, from #308).** The
   last one that did was the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up: it
   goes through `_ack_command(time, None)`, which nulls `current_command` on
@@ -169,17 +194,17 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   unavailable")` right after the give-up, next to the state destruction that
   motivates it. `_ack_command` itself is unchanged — the release lives at the
   caller so "acked" and "gave up" stay distinguishable in the log.
-  Re-escalation cannot storm: `_escalate_or_recover` resets the rung on every
-  emptied slot, and one give-up window
+  Two things stop re-escalation storming, and **both** are needed. The rung
+  reset (`_escalate_or_recover` zeroes `running_command_num_relaunch` on
+  every emptied slot, and one give-up window
   (`NUM_MAX_INVALID_PROBES_COMMANDS` × cycle ≈ 70 s) is far too short to
-  climb back to `NUM_MAX_COMMAND_RELAUNCH`. The supersede **anchor** was
+  climb back to `NUM_MAX_COMMAND_RELAUNCH`) covers a rung earned *inside* a
+  give-up window. The **episode latch** covers a rung earned *before* one,
+  which is the case the rung argument alone misses — see "Two clocks, not
+  one" above. The supersede **anchor** was
   already released on that path (in `_escalate_or_recover`'s housekeeping
   arm, outside the `current_command` gate) so a fresh command's first
   legitimate supersede is not throttled.
-  *Accepted residual:* an **intermittently** available device — visible-stuck
-  long enough to escalate, then unavailable for a give-up window, repeating
-  — can now push about once per such cycle (~19 min) where the old
-  once-ever guard capped it at one. Each push describes a real new episode.
 - **"One service call per 300 s" is per command *identity*, not per
   load.** The relaunch ladder and the supersede throttle are measured on
   two independent anchors, so a relaunch immediately followed by a

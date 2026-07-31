@@ -98,19 +98,31 @@ an externally-detected override are constraint-driven:
 
 **An override ALWAYS expires, even on a dead load (QS-307).** The
 override lifecycle's clock-driven branches — expiry, the reset-ask
-follow-up, the post-override cooldown — run regardless of what the
-command slot holds. They read no entity state, so an unresponsive
-device cannot freeze them. Only *detection* is gated on
-`is_load_command_set()`; see the "split gate" section of
+follow-up, the post-override cooldown drain — run regardless of what
+the command slot holds, and regardless of whether the load even
+*supports* overrides any more. They read no entity state, so an
+unresponsive device cannot freeze them. Only *detection* is gated, on
+`support_user_override() and is_load_command_set()`; see the "split
+gate" section of
 [bistate-duration-devices.md](bistate-duration-devices.md).
 
 Before QS-307 the whole block sat behind that gate, and QS-304's
 saturating retry ladder meant the gate could stay shut forever: an
 override on a load that stopped obeying was pinned permanently, so
 `is_user_overridden()` stayed True and the load never returned to
-controlled consumption or to the solver. When debugging a stuck
-override, check the clock branches first — they are the self-heal, and
-they are deliberately independent of command state.
+controlled consumption or to the solver.
+
+**The lifecycle does not end at expiry.**
+`reset_override_state_and_set_reset_ask_time` nulls the override state
+but arms `asked_for_reset_user_initiated_state_time`, and
+`get_override_state()` reports `ASKED FOR RESET` while that is set — so
+`is_user_overridden()` is still `True` and
+`get_device_power_latest_possible_valid_value(ignore_auto_and_user_overridden_load=True)`
+still returns `0.0`. Any change that lets the override expire but not
+the cooldown has not fixed anything; it has moved the bug one step
+later. When debugging a stuck override, walk all three clock branches —
+they are the self-heal, and they are deliberately independent of
+command state.
 
 ## Key types / structures
 

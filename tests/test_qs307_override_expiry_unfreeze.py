@@ -35,7 +35,9 @@ from datetime import datetime, timedelta
 from datetime import time as dt_time
 from unittest.mock import MagicMock
 
+import pytest
 import pytz
+from freezegun import freeze_time
 from homeassistant.const import CONF_NAME, STATE_UNAVAILABLE
 
 from custom_components.quiet_solar.const import (
@@ -45,13 +47,15 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_ORIGINATOR_USER_OVERRIDE,
     CONSTRAINT_TYPE_FILLER_AUTO,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    OVERRIDE_STATE_ASKED_FOR_RESET,
     OVERRIDE_STATE_NO_OVERRIDE,
+    STORAGE_KEY_ASKED_FOR_RESET_TIME,
 )
 from custom_components.quiet_solar.ha_model.bistate_duration import (
     USER_OVERRIDE_STATE_BACK_DURATION_S,
     QSBiStateDuration,
 )
-from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_ON, copy_command
+from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_ON, LoadCommand, copy_command
 from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from custom_components.quiet_solar.home_model.load import NUM_MAX_INVALID_PROBES_COMMANDS
 from tests.conftest import FakeHass
@@ -181,6 +185,12 @@ async def test_ac1_expiry_fires_while_a_command_is_in_flight():
     `running_command` set + `current_command` set is the visible-but-disobeying
     death mode: `is_load_command_set` is `False` on its `running_command is
     None` arm, and on `main` that froze the expiry with it.
+
+    Review fix #02: the in-flight command here is the override's OWN service call
+    (it drives the entity to the override state), so expiry must drop it. Left
+    alone it would keep being relaunched for up to a full ladder *after* the
+    override ended, because nulling the override state also disables
+    `force_relaunch_command`'s suppression drop.
     """
     pump = _make_pump()
     _arm_override(pump)
@@ -192,6 +202,7 @@ async def test_ac1_expiry_fires_while_a_command_is_in_flight():
     # the precondition: the old gate is shut
     assert pump.is_load_command_set(T_EXPIRED) is False
     assert _override_constraints(pump) != []
+    assert pump.expected_state_from_command(pump.running_command) == pump.external_user_initiated_state
 
     await pump.check_load_activity_and_constraints(T_EXPIRED)
 
@@ -199,9 +210,35 @@ async def test_ac1_expiry_fires_while_a_command_is_in_flight():
     assert pump.external_user_initiated_state_time is None
     assert pump.asked_for_reset_user_initiated_state_time == T_EXPIRED
     assert _override_constraints(pump) == []
-    # `keep_commands=True`: the reset must not touch the command slot
+    # the override's own command is gone...
+    assert pump.running_command is None
+    # ...but `keep_commands=True` still protects the last CONFIRMED command
     assert pump.current_command is not None
-    assert pump.running_command is not None
+
+
+async def test_ac1_expiry_leaves_a_command_the_override_was_not_serving_alone():
+    """Review fix #02 must not over-reach: only the override's own call is dropped.
+
+    A command whose expected state differs from the override state was never the
+    override's service call — it is a genuine solver intent that got through (the
+    degraded-override nuance lets off/idle commands past). Expiry calls
+    `constraint_reset_and_reset_commands_if_needed(keep_commands=True)`, so it must
+    survive.
+    """
+    pump = _make_pump()
+    _arm_override(pump)
+    _push_override_constraint(pump)
+    pump.current_command = copy_command(CMD_ON)
+    pump.running_command = copy_command(CMD_IDLE)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+
+    assert pump.expected_state_from_command(pump.running_command) != pump.external_user_initiated_state
+
+    await pump.check_load_activity_and_constraints(T_EXPIRED)
+
+    assert pump.external_user_initiated_state is None
+    assert pump.running_command == CMD_IDLE
+    assert pump.current_command == CMD_ON
 
 
 # =============================================================================
@@ -257,32 +294,61 @@ async def test_ac2_expiry_fires_after_the_invalid_probe_give_up():
 # =============================================================================
 
 
-async def test_ac3_a_live_override_is_never_reset_early():
+def _armed_pump(running: LoadCommand | None, current: LoadCommand | None) -> _StuckPump:
+    """A pump carrying a live ON override plus the given command-slot state."""
+    pump = _make_pump()
+    _arm_override(pump)
+    _push_override_constraint(pump)
+    pump.running_command = None if running is None else copy_command(running)
+    pump.current_command = None if current is None else copy_command(current)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+    return pump
+
+
+@pytest.mark.parametrize("current", [None, CMD_ON], ids=["no-current", "current-on"])
+@pytest.mark.parametrize("running", [None, CMD_ON], ids=["no-running", "running-on"])
+async def test_ac3_a_live_override_is_never_reset_early(running, current):
     """Nothing resets an override that has not aged out, in any command state.
 
-    The safety net for the one admitted behaviour change: expiry can now land
-    one cycle earlier (during the command flight rather than just after it).
-    That is only sound if the branches themselves are inert, so a not-yet-aged
-    override must survive every combination of command state.
+    The negative half of the safety net for the one admitted behaviour change:
+    expiry can now land one cycle earlier (during the command flight rather than
+    just after it). That is only sound if the branches themselves are inert, so a
+    not-yet-aged override must survive every combination of command state.
     """
-    for running in (None, CMD_ON):
-        for current in (None, CMD_ON):
-            pump = _make_pump()
-            _arm_override(pump)
-            _push_override_constraint(pump)
-            pump.running_command = None if running is None else copy_command(running)
-            pump.current_command = None if current is None else copy_command(current)
-            pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+    pump = _armed_pump(running, current)
 
-            # half-way through the 8 h window: nowhere near expiry
-            await pump.check_load_activity_and_constraints(T_OVERRIDE + timedelta(hours=4))
+    # half-way through the 8 h window: nowhere near expiry
+    await pump.check_load_activity_and_constraints(T_OVERRIDE + timedelta(hours=4))
 
-            context = (running, current)
-            assert pump.external_user_initiated_state == "on", context
-            assert pump.external_user_initiated_state_time == T_OVERRIDE, context
-            assert pump.asked_for_reset_user_initiated_state_time is None, context
-            assert pump.is_user_overridden() is True, context
-            assert len(_override_constraints(pump)) == 1, context
+    assert pump.external_user_initiated_state == "on"
+    assert pump.external_user_initiated_state_time == T_OVERRIDE
+    assert pump.asked_for_reset_user_initiated_state_time is None
+    assert pump.is_user_overridden() is True
+    assert len(_override_constraints(pump)) == 1
+
+
+@pytest.mark.parametrize("current", [None, CMD_ON], ids=["no-current", "current-on"])
+@pytest.mark.parametrize("running", [None, CMD_ON], ids=["no-running", "running-on"])
+async def test_ac3_an_aged_override_resets_on_the_same_cycle_as_on_main(running, current):
+    """...and the POSITIVE half, which review fix #07 asked to stop delegating.
+
+    The window boundary is `> override_duration`, so the last cycle at exactly
+    8 h must NOT reset and the next one must — identically in all four
+    command-state combinations, which is what "same cycle as on `main`" means.
+    """
+    pump = _armed_pump(running, current)
+
+    # exactly at the window edge: still alive (`>` not `>=`)
+    await pump.check_load_activity_and_constraints(T_OVERRIDE + timedelta(hours=OVERRIDE_DURATION_H))
+    assert pump.external_user_initiated_state == "on"
+    assert pump.asked_for_reset_user_initiated_state_time is None
+
+    # the very next cycle resets, whatever the command slot holds
+    await pump.check_load_activity_and_constraints(T_EXPIRED)
+    assert pump.external_user_initiated_state is None
+    assert pump.external_user_initiated_state_time is None
+    assert pump.asked_for_reset_user_initiated_state_time == T_EXPIRED
+    assert _override_constraints(pump) == []
 
 
 # =============================================================================
@@ -345,6 +411,93 @@ async def test_ac5_reset_ask_follow_up_runs_with_a_command_in_flight():
 
 
 # =============================================================================
+# AC5b — the post-override cooldown, the third hoisted branch
+#
+# Review fix #04: the story's D1 designed two hoisted branches and this one was
+# added during implementation because AC8 is unreachable without it —
+# `get_override_state()` returns ASKED FOR RESET while the timestamp is set, so
+# the load would expire its override and still never come back. It was covered
+# only transitively, through AC8's 8-hour end-to-end replay; these two pin it
+# directly.
+# =============================================================================
+
+
+async def test_the_post_override_cooldown_drains_with_a_command_in_flight():
+    """A cooldown timer is clock arithmetic, so a stuck command must not freeze it.
+
+    This drain used to live *inside* the detection branch, which meant a load that
+    stopped answering stayed `ASKED FOR RESET` forever: `is_user_overridden()`
+    stayed `True`, and the load stayed out of controlled consumption.
+    """
+    pump = _make_pump()
+    pump.asked_for_reset_user_initiated_state_time = T_OVERRIDE
+    pump.current_command = copy_command(CMD_IDLE)
+    pump.running_command = copy_command(CMD_ON)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+
+    t = T_OVERRIDE + timedelta(seconds=USER_OVERRIDE_STATE_BACK_DURATION_S + CYCLE_S)
+    assert pump.is_load_command_set(t) is False
+    assert pump.get_override_state() == OVERRIDE_STATE_ASKED_FOR_RESET
+
+    await pump.check_load_activity_and_constraints(t)
+
+    assert pump.asked_for_reset_user_initiated_state_time is None
+    assert pump.get_override_state() == OVERRIDE_STATE_NO_OVERRIDE
+    assert pump.is_user_overridden() is False
+
+
+async def test_the_post_override_cooldown_is_not_drained_early():
+    """...and the window is still honoured: an open cooldown is left alone.
+
+    Hoisting must not shorten the 180 s "too soon to re-override" window, which is
+    what stops a just-ended override immediately re-arming itself.
+    """
+    pump = _make_pump()
+    pump.asked_for_reset_user_initiated_state_time = T_OVERRIDE
+    pump.current_command = copy_command(CMD_IDLE)
+    pump.running_command = copy_command(CMD_ON)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+
+    await pump.check_load_activity_and_constraints(
+        T_OVERRIDE + timedelta(seconds=USER_OVERRIDE_STATE_BACK_DURATION_S - CYCLE_S)
+    )
+
+    assert pump.asked_for_reset_user_initiated_state_time == T_OVERRIDE
+    assert pump.get_override_state() == OVERRIDE_STATE_ASKED_FOR_RESET
+
+
+async def test_a_rewound_clock_does_not_freeze_the_cooldown_drain():
+    """Review fix #08: a backwards clock step must not pin the load overridden.
+
+    The drain is now the ONLY release of the cooldown, so it goes through
+    `_seconds_since`, where a future-dated anchor means "treat as fully elapsed"
+    rather than "negative, therefore below the window, therefore never".
+    """
+    pump = _make_pump()
+    # NTP corrects the clock backwards AFTER restore, so the future-dated drop in
+    # `use_saved_extra_device_info` never got a chance to help
+    pump.asked_for_reset_user_initiated_state_time = T_OVERRIDE + timedelta(hours=3)
+
+    await pump.check_load_activity_and_constraints(T_OVERRIDE)
+
+    assert pump.asked_for_reset_user_initiated_state_time is None
+    assert pump.is_user_overridden() is False
+
+
+async def test_a_rewound_clock_does_not_freeze_the_override_expiry():
+    """The same hazard on the expiry comparison, which shares the helper."""
+    pump = _make_pump()
+    _arm_override(pump, time=T_OVERRIDE + timedelta(hours=3))
+    _push_override_constraint(pump, time=T_OVERRIDE)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+
+    await pump.check_load_activity_and_constraints(T_OVERRIDE)
+
+    assert pump.external_user_initiated_state is None
+    assert _override_constraints(pump) == []
+
+
+# =============================================================================
 # AC6 — detection is unchanged
 # =============================================================================
 
@@ -388,8 +541,96 @@ async def test_ac6_detection_still_works_once_the_command_has_landed():
 
 
 # =============================================================================
+# AC4b — `support_user_override()` is not a second freeze (review fix #03)
+#
+# Unlike the `qs_enable_device` arm, this one is not self-healing: disabling and
+# re-enabling a load runs the lifecycle again, but flipping a load to boost-only
+# never does. With the lifecycle behind it, a load reconfigured to boost-only
+# kept a live override or a pending reset-ask FOREVER, across restarts — exactly
+# the harm this story exists to fix.
+# =============================================================================
+
+
+async def test_a_load_flipped_to_boost_only_still_expires_its_override():
+    """The lifecycle is not gated on `support_user_override()` — detection is."""
+    pump = _make_pump()
+    _arm_override(pump)
+    _push_override_constraint(pump)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+
+    # the user reconfigures the load as boost-only
+    pump.load_is_auto_to_be_boosted = True
+    assert pump.support_user_override() is False
+
+    await pump.check_load_activity_and_constraints(T_EXPIRED)
+    assert pump.external_user_initiated_state is None
+    assert _override_constraints(pump) == []
+
+    t_back = T_EXPIRED + timedelta(seconds=USER_OVERRIDE_STATE_BACK_DURATION_S + CYCLE_S)
+    await pump.check_load_activity_and_constraints(t_back)
+
+    assert pump.asked_for_reset_user_initiated_state_time is None
+    assert pump.get_override_state() == OVERRIDE_STATE_NO_OVERRIDE
+    assert pump.is_user_overridden() is False
+
+
+async def test_a_boost_only_load_drains_a_reset_ask_restored_from_storage():
+    """...and the persisted half: restore keeps a PAST-dated ask, so it must drain.
+
+    `use_saved_extra_device_info` only drops a *future*-dated reset-ask, and the
+    reset button was the sole other clearer, so a stored timestamp on a boost-only
+    load survived every restart and kept `is_user_overridden()` True for good.
+    """
+    pump = _make_pump()
+    pump.load_is_auto_to_be_boosted = True
+
+    with freeze_time(T_EXPIRED):
+        pump.use_saved_extra_device_info({STORAGE_KEY_ASKED_FOR_RESET_TIME: f"{T_OVERRIDE}"})
+
+    # restore deliberately keeps it — nothing there expires a past-dated ask
+    assert pump.asked_for_reset_user_initiated_state_time == T_OVERRIDE
+    assert pump.get_override_state() == OVERRIDE_STATE_ASKED_FOR_RESET
+
+    await pump.check_load_activity_and_constraints(T_EXPIRED)
+
+    assert pump.asked_for_reset_user_initiated_state_time is None
+    assert pump.is_user_overridden() is False
+
+
+async def test_detection_stays_off_for_a_boost_only_load():
+    """The conjunct still does its real job: no override detection when unsupported."""
+    pump = _make_pump()
+    pump.load_is_auto_to_be_boosted = True
+    pump.current_command = copy_command(CMD_IDLE)
+    pump.last_command_execution_time = T_OVERRIDE
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE + timedelta(seconds=30))
+
+    t = T_OVERRIDE + timedelta(minutes=2)
+    assert pump.is_load_command_set(t) is True  # the OTHER detection conjunct is open
+
+    await pump.check_load_activity_and_constraints(t)
+
+    assert pump.external_user_initiated_state is None
+    assert _override_constraints(pump) == []
+
+
+# =============================================================================
 # AC8 — the end-to-end bug, in both death modes
 # =============================================================================
+
+
+def _controlled_consumption(pump: _StuckPump, time: datetime) -> float:
+    """The power the home accounting attributes to this load.
+
+    Review fix #06: this is the observable the story's Problem section actually
+    blames — "permanently excluded from controlled consumption … flows into the
+    persisted forecast". `get_device_power_latest_possible_valid_value` returns
+    `0.0` for a user-overridden load, and that zero is what reaches
+    `home.py`'s consumption accounting and the persisted forecast.
+    """
+    return pump.get_device_power_latest_possible_valid_value(
+        tolerance_seconds=None, time=time, ignore_auto_and_user_overridden_load=True
+    )
 
 
 async def _detect_user_override_on(pump: _StuckPump) -> None:
@@ -398,12 +639,20 @@ async def _detect_user_override_on(pump: _StuckPump) -> None:
     pump.last_command_execution_time = T_OVERRIDE - timedelta(hours=1)
     pump.hass.states.set(PUMP_ENTITY, "off", last_changed=T_OVERRIDE - timedelta(hours=1))
     pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+    # a real, measurable draw for the accounting to attribute (or refuse to)
+    pump._entity_probed_last_valid_state[pump._get_power_measure()] = (
+        T_OVERRIDE,
+        pump.power_use,
+        {},
+    )
 
     await pump.check_load_activity_and_constraints(T_OVERRIDE + timedelta(seconds=CYCLE_S))
 
     assert pump.external_user_initiated_state == "on"
     assert pump.is_user_overridden() is True
     assert len(_override_constraints(pump)) == 1
+    # ...and while the override stands, the load is OUT of controlled consumption
+    assert _controlled_consumption(pump, T_OVERRIDE + timedelta(seconds=CYCLE_S)) == 0.0
 
 
 async def _assert_override_self_heals(pump: _StuckPump) -> None:
@@ -412,6 +661,9 @@ async def _assert_override_self_heals(pump: _StuckPump) -> None:
 
     assert pump.external_user_initiated_state is None
     assert _override_constraints(pump) == []
+    # review fix #02: the override's own command must not outlive the override
+    assert pump.running_command is None
+    transport_calls_after_expiry = len(pump.transport_calls)
 
     # the post-override cooldown is clock arithmetic too, so it also drains on
     # a load QS can no longer talk to — otherwise the load stayed pinned in
@@ -424,6 +676,11 @@ async def _assert_override_self_heals(pump: _StuckPump) -> None:
     assert pump.is_user_overridden() is False
     # ...and the load is back in the solver with its ordinary daily constraint
     assert pump._constraints != []
+    # ...and back in controlled consumption: its real draw is billed again,
+    # instead of the 0.0 an override forces into the persisted forecast
+    assert _controlled_consumption(pump, t_back) == pump.power_use
+    # nothing kept re-issuing the ended override's service call
+    assert len(pump.transport_calls) == transport_calls_after_expiry
 
 
 async def test_ac8_override_expires_on_a_visible_but_disobeying_load():

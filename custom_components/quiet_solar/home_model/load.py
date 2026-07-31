@@ -177,6 +177,15 @@ class AbstractDevice:
         # can clear them — that wipe destroys the command the clock describes.
         self.unresponsive_since: datetime | None = None
         self._last_supersede_time: datetime | None = None
+        # QS-307 review fix #01: the EPISODE latch. `unresponsive_since` is
+        # per-command by construction (every slot-emptying path releases it, so it
+        # can drive supersede-vs-stack), which makes it unfit to be the once-only
+        # notification guard on its own: a device that alternates unreachable with
+        # answering-but-disobeying releases and re-crosses the threshold every
+        # ~18 min forever. This latch is per EPISODE — set when the clock is
+        # released with NO evidence the device answered, cleared only by evidence
+        # that it did — and it gates the shout, never the clock.
+        self._unresponsive_needs_ack: bool = False
 
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=False)
         self.last_check_update: datetime | None = None
@@ -638,8 +647,10 @@ class AbstractDevice:
             # unavailable probe, i.e. the device failing harder — and
             # `_ack_command(None, None)` is just `__init__` priming the fields.
             # QS-307 (from #308): the give-up still releases the clock, but from its
-            # OWN call site in `check_commands`, with a reason that says so. Keeping
-            # the release out of here is what keeps the two meanings distinguishable.
+            # OWN call site in `check_commands`, with `earned_recovery=False` and a
+            # reason that says so. Keeping the release out of here is what keeps the
+            # two meanings distinguishable — and this call, the only real ack in the
+            # class, is what clears the episode latch so the load may shout again.
             self._clear_unresponsive("control returned, the command was acked")
 
         if command is not None and time is not None and self.prev_command is not None:
@@ -708,8 +719,9 @@ class AbstractDevice:
 
         QS-307 (from #308): every slot-emptying path now releases the clock,
         including the invalid-probe give-up, which used to keep it and hand it to
-        the next command. So a command in flight with the clock set really has an
-        unresolved episode behind it.
+        the next command. So this really is per-command. "Are we still in an
+        unresolved lost-control EPISODE" is a different question, answered by
+        `_unresponsive_needs_ack` — do not conflate the two again.
         """
         return self.unresponsive_since is not None and self.running_command is not None
 
@@ -724,11 +736,11 @@ class AbstractDevice:
             COMMAND_RELAUNCH_BASE_DELAY_S * min(self.running_command_num_relaunch + 1, NUM_MAX_COMMAND_RELAUNCH)
         )
 
-    def _clear_unresponsive(self, reason: str) -> None:
-        """Re-arm the lost-control detection, logging the exit exactly once.
+    def _clear_unresponsive(self, reason: str, earned_recovery: bool = True) -> None:
+        """Release the per-command lost-control clock, logging the exit exactly once.
 
         The single writer, so the "one line out" guarantee cannot drift between
-        its callers. Re-arming matters more than the log line: the entry guard is
+        its callers. Releasing matters more than the log line: the entry guard is
         `unresponsive_since is None`, so a load that loses control, recovers and
         loses it again must be able to shout twice.
 
@@ -736,6 +748,17 @@ class AbstractDevice:
         several callers are not recoveries at all — a user override drop means
         control was taken *away* from QS, and a `keep_commands=False` reset simply
         destroys the clock's subject.
+
+        QS-307 review fix #01 — `earned_recovery` says whether the release came
+        with evidence that QS is back in contact with the device. It is `True` for
+        every caller but one: a real ack, a deliberate drop, and a command wipe all
+        happen because *we* changed our mind or the device answered. The
+        invalid-probe give-up is the exception — the device is unreachable, so
+        releasing its clock is bookkeeping, not news — and it passes `False`, which
+        latches `_unresponsive_needs_ack` and suppresses the NEXT shout (never the
+        next clock) until contact is genuinely re-established. The two cases also
+        log distinguishable lines, so "the clock was released" no longer implies
+        "the device came back".
         """
         # The supersede anchor is cleared unconditionally: it is meaningless
         # without a lost-control episode to throttle, and leaving it behind let a
@@ -743,11 +766,19 @@ class AbstractDevice:
         # supersede throttled for up to `SUPERSEDE_MIN_INTERVAL_S`.
         self._last_supersede_time = None
 
+        if earned_recovery:
+            self._unresponsive_needs_ack = False
+        else:
+            self._unresponsive_needs_ack = True
+
         if self.unresponsive_since is None:
             return
 
         self.unresponsive_since = None
-        _LOGGER.info("Lost-control state cleared for load %s: %s", self.name, reason)
+        if earned_recovery:
+            _LOGGER.info("Lost-control state cleared for load %s: %s", self.name, reason)
+        else:
+            _LOGGER.info("Lost-control clock released without contact for load %s: %s", self.name, reason)
 
     def abandon_running_command(self, reason: str) -> None:
         """Drop the stale in-flight command without faking an ack.
@@ -1029,7 +1060,10 @@ class AbstractDevice:
                     # only on a real ack, and `_escalate_or_recover`'s re-arm is gated
                     # on the `current_command` this path just nulled), and the next
                     # command inherited supersede semantics with zero evidence.
-                    self._clear_unresponsive("the probe went unavailable")
+                    # `earned_recovery=False`: the device is UNREACHABLE, so this is
+                    # not news. It latches the episode so the ladder that follows
+                    # cannot shout again until the device actually answers.
+                    self._clear_unresponsive("the probe went unavailable", earned_recovery=False)
 
             if is_command_set is True:
                 self._ack_command(time, self.running_command)
@@ -1142,18 +1176,29 @@ class AbstractDevice:
             and self.unresponsive_since is None
         ):
             # `>=` and not `==`: the counter is resettable, so the threshold has
-            # to be a floor. `unresponsive_since is None` is the once-only guard.
+            # to be a floor. `unresponsive_since is None` is the per-COMMAND guard.
             self.unresponsive_since = time
-            _LOGGER.error(
-                # "in this episode": `abandon_running_command` preserves the rung
-                # across a supersede on purpose, so the count can include
-                # relaunches of this command's predecessors.
-                "Lost control of load %s: command %s not confirmed after %s relaunches in this episode",
-                self.name,
-                self.running_command,
-                self.running_command_num_relaunch,
-            )
-            unresponsive_command = self.running_command
+            if self._unresponsive_needs_ack:
+                # QS-307 review fix #01: same episode, and the device has not
+                # answered since. Re-arming the clock is still required — it is what
+                # drives supersede-vs-stack, and suppressing it here would starve a
+                # newer intent behind a command we already know is going nowhere —
+                # but there is nothing new to tell anyone. Without this, a device
+                # flapping between unreachable and answering-but-disobeying pushed
+                # once per ladder climb (~18 min) forever, on a fire-and-forget
+                # channel with no notification id to collapse them.
+                unresponsive_command = None
+            else:
+                _LOGGER.error(
+                    # "in this episode": `abandon_running_command` preserves the rung
+                    # across a supersede on purpose, so the count can include
+                    # relaunches of this command's predecessors.
+                    "Lost control of load %s: command %s not confirmed after %s relaunches in this episode",
+                    self.name,
+                    self.running_command,
+                    self.running_command_num_relaunch,
+                )
+                unresponsive_command = self.running_command
         else:
             unresponsive_command = None
 
@@ -1169,18 +1214,30 @@ class AbstractDevice:
             # equal-command early-return and the override-suppression drop
             # leave no successor at all.
             self.running_command_num_relaunch = 0
-            # Cleared OUTSIDE the gate below, and kept that way: several paths reach
-            # here with `current_command` already nulled, and a stale anchor would
-            # throttle the next command's first legitimate supersede.
+            # `_last_supersede_time` (this line) is cleared OUTSIDE the gate below,
+            # and kept that way: paths reach here with `current_command` already
+            # nulled, and a stale anchor would throttle the next command's first
+            # legitimate supersede.
             self._last_supersede_time = None
 
+            # The gate below governs `unresponsive_since` and
+            # `_unresponsive_needs_ack`, and it is LOAD-BEARING (QS-307 review fix
+            # #01 — an earlier revision of this comment called it redundant, which
+            # was wrong once the episode latch existed). Reaching here with
+            # `current_command is None` means the slot was emptied by a path that
+            # nulled the confirmed command too, and the only such path is the
+            # invalid-probe give-up — which runs in THIS cycle, immediately before
+            # us, and has just latched `_unresponsive_needs_ack` on purpose. An
+            # unconditional `earned_recovery=True` release here would clear that
+            # latch one statement later and restore the push storm it exists to damp.
+            #
+            # For `unresponsive_since` itself the gate is belt-and-braces: every
+            # slot-emptying path releases the clock at its own call site (a real
+            # ack, `_drop_running_command`, a `keep_commands=False` wipe, the
+            # give-up), so there is never a live clock left for us to find. The
+            # branch is the re-arm for the ordinary case — nothing in flight means
+            # nothing can clear the clock later.
             if self.current_command is not None:
-                # Nothing in flight, so nothing can clear the clock later — re-arm
-                # now. QS-307 (from #308) made the `current_command` gate redundant:
-                # the invalid-probe give-up it existed to preserve now releases the
-                # clock at its own call site, right where it nulls `current_command`.
-                # Kept anyway — it is harmless, both arms stay exercised, and the
-                # release belongs next to the state destruction that motivates it.
                 self._clear_unresponsive("the command slot emptied with no successor")
 
         if unresponsive_command is not None:
@@ -1619,11 +1676,15 @@ class AbstractLoad(AbstractDevice):
 
         QS-304: entry only. There is no recovery push — the channel is a
         fire-and-forget mobile push with no notification id, so nothing could
-        be dismissed.
+        be dismissed. That is exactly why the guard has to be tight: pushes
+        accumulate on the phone and cannot be collapsed afterwards.
 
-        QS-307 (from #308): once per EPISODE, not once per lifetime. The clock
-        is released on every slot-emptying path now, so a load that loses
-        control, recovers, and loses it again pushes twice.
+        QS-307 (from #308): once per EPISODE — not once per lifetime, and not
+        once per ladder climb. The clock is released on every slot-emptying
+        path now, so a load that loses control, *answers again*, and loses it
+        again pushes twice; a load that merely flaps in and out of reach
+        without ever answering pushes once. `_unresponsive_needs_ack` is what
+        tells those two apart.
         """
         await self.on_device_state_change(
             time,

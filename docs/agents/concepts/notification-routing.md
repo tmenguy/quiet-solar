@@ -59,9 +59,16 @@ alarm at 3am is supposed to wake you).
   `AbstractLoad._notify_unresponsive` (QS-304), fired **once per episode**
   from `check_and_relaunch_command` when a load crosses the lost-control
   threshold (~1050 s of unacked relaunches). Once per *episode*, not once
-  per lifetime: QS-307 (from #308) made every slot-emptying path release
-  `unresponsive_since`, which is the once-only guard, so a load that loses
-  control, recovers and loses it again pushes twice. It is `AbstractLoad`-only:
+  per lifetime and not once per ladder climb. QS-307 (from #308) made every
+  slot-emptying path release `unresponsive_since`, so that field could no
+  longer be the guard on its own — a device flapping between unreachable and
+  answering-but-disobeying would have pushed every ~18 min forever, on a
+  channel with no notification id to collapse them. `_unresponsive_needs_ack`
+  is the actual guard: an **episode** ends only when QS gets a real ack, so a
+  load that loses control, *answers again*, then loses it again pushes twice,
+  while one that merely flaps without ever answering pushes once. See
+  [load-base.md](load-base.md), "Two clocks, not one".
+  It is `AbstractLoad`-only:
   the base `AbstractDevice._notify_unresponsive` is a documented no-op,
   so an uncontrollable **battery** gets the ERROR log but no push.
   Accepted product consequence.
