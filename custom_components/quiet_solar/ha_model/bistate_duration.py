@@ -693,7 +693,18 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         do_push_constraint_after = None
 
         # we want to check that the load hasn't been changed externally from the system:
-        if self.is_load_command_set(time) and self.support_user_override():
+        # QS-307: the gate is `is_load_command_set(time)` no more. Only DETECTION may
+        # be gated on command state (see the `elif` below): while a command is landing,
+        # observed state != wanted state is expected, and reading that as a user action
+        # would be a false positive. The state-FREE branches of the override lifecycle
+        # — expiry, the reset-ask follow-up, the post-override cooldown — are pure
+        # clock/flag arithmetic and must run whatever the command slot holds. Since
+        # QS-304 made the relaunch backoff saturate and retry forever, the old gate
+        # could stay shut indefinitely and an override on a load that stopped obeying
+        # was pinned FOREVER. `qs_enable_device` is kept explicitly because
+        # `is_load_command_set` returned False for a disabled load: QS was told to
+        # leave that load alone, so it must not start expiring overrides on it.
+        if self.qs_enable_device is not False and self.support_user_override():
             # we need to know if the state we have is compatible with the current command
             # well more if it has been set ON or any other stuff externally so that we don't want to reset it to OFF
             # because the user wanted to force the state of the load
@@ -729,17 +740,38 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 self.constraint_reset_and_reset_commands_if_needed(
                     keep_commands=True
                 )  # remove any constraint if any we will add it back if needed below
-            else:
-                if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-                    # do nothing below, just ask for a proper constraint evaluation to kill the current override:
-                    has_a_running_override = False
-                    do_force_next_solve = True
-                    self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
-                    self.constraint_reset_and_reset_commands_if_needed(
-                        keep_commands=True
-                    )  # remove any constraint if any we will add it back if needed below
+            elif self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
+                # do nothing below, just ask for a proper constraint evaluation to kill the current override:
+                has_a_running_override = False
+                do_force_next_solve = True
+                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+                self.constraint_reset_and_reset_commands_if_needed(
+                    keep_commands=True
+                )  # remove any constraint if any we will add it back if needed below
 
-                else:
+            else:
+                # QS-307: the post-override cooldown EXPIRY is clock arithmetic too, so
+                # it is drained here rather than inside the detection branch below. On a
+                # load QS can no longer talk to, leaving it behind pinned the load in
+                # ASKED FOR RESET forever — `is_user_overridden()` stayed True and the
+                # load never came back into controlled consumption, i.e. the same bug
+                # one step later. Position is unchanged: this ran in the same
+                # not-expired / no-reset-ask-pending branch before, so for a healthy
+                # load it still lands on exactly the same cycle.
+                if self.asked_for_reset_user_initiated_state_time is not None:
+                    # review fix QS-256#02: coerce a legacy tz-naive
+                    # reset-ask timestamp before the subtraction
+                    if self.asked_for_reset_user_initiated_state_time.tzinfo is None:
+                        self.asked_for_reset_user_initiated_state_time = (
+                            self.asked_for_reset_user_initiated_state_time.replace(tzinfo=pytz.UTC)
+                        )
+                    if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() >= min(
+                        float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
+                    ):
+                        # long enough ask to check the fact that the override should be finished
+                        self.asked_for_reset_user_initiated_state_time = None
+
+                if self.is_load_command_set(time):
                     for i, ct in enumerate(self._constraints):
                         if (
                             ct.load_param is not None
@@ -849,21 +881,12 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             is_command_overridden_state_changed = False
 
                     if self.asked_for_reset_user_initiated_state_time is not None:
-                        # review fix QS-256#02: coerce a legacy tz-naive
-                        # reset-ask timestamp before the subtraction
-                        if self.asked_for_reset_user_initiated_state_time.tzinfo is None:
-                            self.asked_for_reset_user_initiated_state_time = (
-                                self.asked_for_reset_user_initiated_state_time.replace(tzinfo=pytz.UTC)
-                            )
-                        if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
-                            float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
-                        ):
-                            # small time window after asking for reset, do not consider the command overridden
-                            # too soon to launch an override again
-                            is_command_overridden_state_changed = False
-                        else:
-                            # long enough ask to check the fact that the override should be finished
-                            self.asked_for_reset_user_initiated_state_time = None
+                        # small time window after asking for reset, do not consider the command overridden
+                        # too soon to launch an override again.
+                        # QS-307: the window's EXPIRY moved above the detection gate
+                        # (pure clock arithmetic, and the tz coercion with it), so
+                        # reaching here means the window is still open.
+                        is_command_overridden_state_changed = False
 
                     if is_command_overridden_state_changed:
                         # "back to normal" — user overrides back to base mode state

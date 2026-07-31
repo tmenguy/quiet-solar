@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-30
+last_verified: 2026-07-31
 ---
 
 # User override
@@ -95,6 +95,22 @@ an externally-detected override are constraint-driven:
   smaller than the configured value, a still-valid override can be
   dropped on restart — accepted conservative direction (drop early
   rather than keep poison).
+
+**An override ALWAYS expires, even on a dead load (QS-307).** The
+override lifecycle's clock-driven branches — expiry, the reset-ask
+follow-up, the post-override cooldown — run regardless of what the
+command slot holds. They read no entity state, so an unresponsive
+device cannot freeze them. Only *detection* is gated on
+`is_load_command_set()`; see the "split gate" section of
+[bistate-duration-devices.md](bistate-duration-devices.md).
+
+Before QS-307 the whole block sat behind that gate, and QS-304's
+saturating retry ladder meant the gate could stay shut forever: an
+override on a load that stopped obeying was pinned permanently, so
+`is_user_overridden()` stayed True and the load never returned to
+controlled consumption or to the solver. When debugging a stuck
+override, check the clock branches first — they are the self-heal, and
+they are deliberately independent of command state.
 
 ## Key types / structures
 

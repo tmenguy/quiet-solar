@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-06-05
+last_verified: 2026-07-31
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -102,6 +102,50 @@ the solver picks the cheapest contiguous (or split) windows.
 `QSOnOffDuration`: warmer water → longer filter duration. The
 extension overrides the duration calculation but inherits the rest
 of the on/off behaviour unchanged.
+
+**The split gate (QS-307).** `check_load_activity_and_constraints`'
+user-override block is guarded by `qs_enable_device is not False and
+support_user_override()`. Inside it, only **detection** is gated on
+`is_load_command_set(time)`:
+
+```text
+if qs_enable_device is not False and support_user_override():
+    if <override aged past override_duration>:   # unconditional
+    elif <reset-ask follow-up flag set>:         # unconditional
+    else:
+        <post-override cooldown expiry>          # unconditional
+        if is_load_command_set(time):
+            <detection: reads entity state>
+```
+
+The three unconditional branches never read entity state — they are pure
+clock/flag arithmetic — so nothing about an in-flight command makes them
+unsafe. Detection is different: while a command is landing, observed state
+≠ wanted state is expected, and classifying that as a user action would be
+a false positive, so `is_load_command_set` (which requires
+`running_command is None and current_command is not None`) still guards it.
+
+Gating the *whole* block was the bug: since QS-304 made the relaunch backoff
+saturate and retry forever, the gate could stay shut indefinitely, so an
+override on a load that stopped obeying never expired — the load was
+permanently excluded from controlled consumption and from the solver, and
+that flowed into the persisted forecast. Both death modes are covered: a
+*visible but disobeying* entity keeps `running_command` set forever, while an
+*unavailable* one reaches the invalid-probe give-up, which nulls
+`current_command` — `is_load_command_set` is False on either arm.
+
+The `qs_enable_device` guard is deliberate, not incidental:
+`is_load_command_set` returned False for a disabled load, so dropping the
+gate without it would newly expire overrides on loads QS was told to leave
+alone.
+
+**Non-goal, do not "fix":** QS-307 changed **no** detection behaviour. Fresh
+detection on an unresponsive load is not merely gated, it is unsafe — for a
+dead device the state mismatch is permanent, so "matches neither expectation"
+stops meaning "a user acted" and a dead multi-mode load sitting in some
+leftover mode would be classified as a user override with nobody involved.
+On a 2-state switch it is unconstructible anyway (the state can only ever be
+one of the two expectations).
 
 **Override semantics (QS-256):**
 
