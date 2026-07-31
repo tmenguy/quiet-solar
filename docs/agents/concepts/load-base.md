@@ -104,17 +104,34 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   answering-but-disobeying: `running_command_num_relaunch_after_invalid` is
   cumulative over a command's life, so the give-up can fire long after the
   threshold was crossed by ordinary relaunches, and each release re-opened
-  the guard. `_clear_unresponsive(reason, earned_recovery=False)` — the
-  give-up, and only the give-up — latches the episode; every other caller
-  clears it, because a real ack, a deliberate drop and a command wipe all
-  carry evidence that QS is back in contact.
-- **Five clearers, one writer.** `_clear_unresponsive` is the only writer;
+  the guard.
+- **`_clear_unresponsive(reason, contact=...)` — three values, because two
+  were not enough.** The parameter says what the release tells us about the
+  device, and only that decides whether an **episode** ended:
+  - `CONTACT_CONFIRMED` (the default; the real ack in `_ack_command`, and the
+    empty-slot re-arm) **clears** the latch, and does so *unconditionally* —
+    an ack is contact whether or not there was a clock left to release.
+  - `CONTACT_NONE` (the invalid-probe give-up, the only such caller)
+    **latches** it — but only when it actually released a live clock. Latching
+    a release that released nothing swallowed the load's first genuine push
+    forever, and that is the *ordinary* ordering: the give-up fires ~70 s in,
+    the escalation threshold is ~1050 s away.
+  - `CONTACT_UNKNOWN` (`_drop_running_command`, the `keep_commands=False`
+    wipe) **leaves it alone**. These are QS changing its mind — the user took
+    control, the load was disabled, an override expired — and say nothing
+    about whether the device answers. Calling them recoveries let a latched
+    flapping load shout again on its next ladder climb, once per drop.
+
+  So: an episode ends only on a real ack (or the confirmed-command re-arm).
+  Nothing else, and in particular not a drop we chose ourselves.
+- **Five releasers, one writer.** `_clear_unresponsive` is the only writer;
   it is reached by an ack, by the empty-slot re-arm, by
   `_drop_running_command` (**unconditionally** — an emptied slot has no
   owner for the clock whether or not a confirmed command ever existed), by
   the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up in `check_commands`
-  (QS-307, the one `earned_recovery=False` caller), and by a
-  `keep_commands=False` wipe. It also clears the
+  (QS-307, the one `CONTACT_NONE` caller), and by a
+  `keep_commands=False` wipe. All five release the *clock*; which of them end
+  an *episode* is the `contact` question above. It also clears the
   supersede anchor
   *ahead of* its own early return, so the two fields cannot
   desynchronise.
@@ -174,9 +191,10 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   slot-emptying path releases the clock at its own call site, so there is
   never a live one left here — but for `_unresponsive_needs_ack`. Reaching
   the housekeeping arm with `current_command is None` means the give-up ran
-  earlier in **this same cycle** and nulled it; an unconditional
-  `earned_recovery=True` release here would clear the episode latch one
-  statement later and restore the push storm it exists to damp. Note
+  earlier in **this same cycle** and may have just latched the episode; the
+  release here is `CONTACT_CONFIRMED`, which clears the latch
+  *unconditionally*, so without the gate it would undo that one statement
+  later and restore the push storm the latch exists to damp. Note
   `_last_supersede_time` is cleared *outside* that gate, on purpose — the
   two fields answer different questions, so read the comment for which
   sentence governs which.

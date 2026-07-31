@@ -49,6 +49,7 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     OVERRIDE_STATE_ASKED_FOR_RESET,
     OVERRIDE_STATE_NO_OVERRIDE,
+    OVERRIDE_STATE_PREFIX,
     STORAGE_KEY_ASKED_FOR_RESET_TIME,
 )
 from custom_components.quiet_solar.ha_model.bistate_duration import (
@@ -362,10 +363,16 @@ async def test_ac4_a_disabled_load_runs_no_lifecycle_branch():
     The hoist replaces the gate with an explicit `qs_enable_device` guard rather
     than dropping it: QS was told to leave this load alone, so it must not
     silently start expiring overrides on it.
+
+    All **three** lifecycle branches are armed here (review fix #02/05): an aged
+    override, a pending reset-ask follow-up flag, and a drained-past cooldown timer.
+    AC4 was reworded from "neither" to "no hoisted branch" when the third one was
+    added, but its test was not extended with it.
     """
     pump = _make_pump()
     _arm_override(pump)
     pump.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = T_OVERRIDE
+    pump.asked_for_reset_user_initiated_state_time = T_OVERRIDE
     pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
     pump._enabled = False
 
@@ -373,8 +380,9 @@ async def test_ac4_a_disabled_load_runs_no_lifecycle_branch():
 
     assert pump.external_user_initiated_state == "on"
     assert pump.external_user_initiated_state_time == T_OVERRIDE
-    assert pump.asked_for_reset_user_initiated_state_time is None
     assert pump.asked_for_reset_user_initiated_state_time_first_cmd_reset_done == T_OVERRIDE
+    # the cooldown is long past its window, and still must not be drained
+    assert pump.asked_for_reset_user_initiated_state_time == T_OVERRIDE
 
 
 # =============================================================================
@@ -467,11 +475,11 @@ async def test_the_post_override_cooldown_is_not_drained_early():
 
 
 async def test_a_rewound_clock_does_not_freeze_the_cooldown_drain():
-    """Review fix #08: a backwards clock step must not pin the load overridden.
+    """A backwards clock step must not pin the load overridden.
 
-    The drain is now the ONLY release of the cooldown, so it goes through
-    `_seconds_since`, where a future-dated anchor means "treat as fully elapsed"
-    rather than "negative, therefore below the window, therefore never".
+    The drain is the ONLY release of the cooldown, so a future-dated anchor beyond
+    the skew band means "treat as fully elapsed" rather than "negative, therefore
+    below the window, therefore never".
     """
     pump = _make_pump()
     # NTP corrects the clock backwards AFTER restore, so the future-dated drop in
@@ -495,6 +503,54 @@ async def test_a_rewound_clock_does_not_freeze_the_override_expiry():
 
     assert pump.external_user_initiated_state is None
     assert _override_constraints(pump) == []
+
+
+async def test_a_slightly_future_dated_override_is_not_destroyed():
+    """Review fix #02 (must-fix): benign skew must not cancel a BRAND-NEW override.
+
+    `_seconds_since` reads every negative delta as "fully elapsed", so a few seconds
+    of future-dating expired a fresh 8 h override on the spot — the override state
+    nulled, its command dropped, its constraint wiped, and the load parked in
+    ASKED FOR RESET. QS fighting the user, arriving from the other direction.
+
+    And it needs no clock anomaly at all: `user_set_bistate_mode`,
+    `user_set_default_on_duration` and `async_reset_override_state` each take their
+    own unlocked `datetime.now(pytz.UTC)`, while an `async_update_loads` cycle
+    already in flight is still carrying an earlier `event_time` — so a user-stamped
+    anchor can legitimately sit ahead of the cycle that evaluates it.
+    """
+    pump = _make_pump()
+    _arm_override(pump)
+    _push_override_constraint(pump)
+    pump.current_command = copy_command(CMD_IDLE)
+    pump.running_command = copy_command(CMD_ON)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+
+    # the cycle evaluating the override is 5 s BEHIND the user action that armed it
+    await pump.check_load_activity_and_constraints(T_OVERRIDE - timedelta(seconds=5))
+
+    assert pump.external_user_initiated_state == "on"
+    assert pump.external_user_initiated_state_time == T_OVERRIDE
+    assert pump.asked_for_reset_user_initiated_state_time is None
+    assert pump.get_override_state() == f"{OVERRIDE_STATE_PREFIX}on"
+    assert pump.is_user_overridden() is True
+    # ...and the override's own in-flight command is not dropped either
+    assert pump.running_command == CMD_ON
+    assert len(_override_constraints(pump)) == 1
+
+
+async def test_a_slightly_future_dated_cooldown_is_not_drained_early():
+    """The symmetric half: the same band protects the cooldown timer."""
+    pump = _make_pump()
+    pump.asked_for_reset_user_initiated_state_time = T_OVERRIDE
+    pump.current_command = copy_command(CMD_IDLE)
+    pump.running_command = copy_command(CMD_ON)
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_OVERRIDE)
+
+    await pump.check_load_activity_and_constraints(T_OVERRIDE - timedelta(seconds=5))
+
+    assert pump.asked_for_reset_user_initiated_state_time == T_OVERRIDE
+    assert pump.get_override_state() == OVERRIDE_STATE_ASKED_FOR_RESET
 
 
 # =============================================================================

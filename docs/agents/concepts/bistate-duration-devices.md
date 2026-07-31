@@ -158,10 +158,25 @@ Four things about this shape are load-bearing:
    it. Alignment is `expected_state_from_command(running_command) ==
    external_user_initiated_state`; anything else is a genuine solver intent
    and must survive `keep_commands=True`.
-4. **Every clock comparison goes through `AbstractDevice._seconds_since`,**
-   which treats a future-dated anchor as fully elapsed. A raw subtraction
-   freezes whatever it gates for the duration of a backwards clock step, and
-   the drain is the *only* release of the cooldown.
+4. **Every clock comparison goes through
+   `AbstractDevice._seconds_since_skew_tolerant`,** which needs a *band*, not
+   just a sign test. Both failure directions are live here:
+   - a raw subtraction freezes whatever it gates for the duration of a
+     backwards clock step, and the drain is the *only* release of the
+     cooldown — hence `_seconds_since`'s "a future anchor means fully
+     elapsed";
+   - but reading **any** future-dating as "fully elapsed" cancels a
+     brand-new 8-hour override on the spot, which is QS fighting the user.
+     And a few seconds of future-dating is routine with no clock anomaly at
+     all: the user-action call sites (`user_set_bistate_mode`,
+     `user_set_default_on_duration`, `async_reset_override_state`) each take
+     their own unlocked `datetime.now()`, while a cycle already in flight
+     carries an earlier `event_time` (see
+     [#317](https://github.com/tmenguy/quiet-solar/issues/317)).
+
+   So: future by less than `CLOCK_SKEW_TOLERANCE_S` ⇒ zero elapsed; beyond
+   it ⇒ fully elapsed. Same ±60 s the restore path already grants these
+   timestamps.
 
 The `qs_enable_device` guard is deliberate, not incidental:
 `is_load_command_set` returned False for a disabled load, so dropping the

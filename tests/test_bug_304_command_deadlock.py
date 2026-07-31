@@ -26,6 +26,7 @@ from custom_components.quiet_solar.home_model.commands import (
     copy_command,
 )
 from custom_components.quiet_solar.home_model.load import (
+    CLOCK_SKEW_TOLERANCE_S,
     COMMAND_RELAUNCH_BASE_DELAY_S,
     NUM_MAX_COMMAND_RELAUNCH,
     NUM_MAX_INVALID_PROBES_COMMANDS,
@@ -446,6 +447,28 @@ async def test_unavailable_probe_give_up_releases_the_ownerless_clock(caplog: py
     assert count_log(caplog, REGAINED_CONTROL_LOG) == 0
 
 
+def test_the_skew_tolerance_band_separates_jitter_from_a_clock_step():
+    """Review fix #02 (must-fix): a few seconds ahead is jitter, not "fully elapsed".
+
+    `_seconds_since` collapses EVERY negative delta to `None`, which its callers read
+    as "treat as fully elapsed". Right for a real backwards clock step; catastrophic
+    for a window anchored by a user action, where a few seconds of future-dating is
+    routine (each user-action call site takes its own unlocked `datetime.now()` while
+    a cycle already in flight carries an earlier `event_time`).
+    """
+    load = NeverAcksLoad(name="pool_house")
+
+    # the ordinary case is untouched
+    assert load._seconds_since_skew_tolerant(T0, T0 - timedelta(seconds=30)) == 30.0
+    # future, inside the band → "just armed", never "fully elapsed"
+    assert load._seconds_since_skew_tolerant(T0, T0 + timedelta(seconds=5)) == 0.0
+    assert load._seconds_since_skew_tolerant(T0, T0 + timedelta(seconds=CLOCK_SKEW_TOLERANCE_S)) == 0.0
+    # beyond it → `_seconds_since`'s fully-elapsed meaning is preserved
+    assert load._seconds_since_skew_tolerant(T0, T0 + timedelta(seconds=CLOCK_SKEW_TOLERANCE_S + 1)) is None
+    # ...and "no anchor" still means the same thing it does in `_seconds_since`
+    assert load._seconds_since_skew_tolerant(T0, None) is None
+
+
 def test_a_give_up_window_cannot_climb_the_escalation_ladder():
     """AC9 (D5): re-arming cannot become a push storm, from the constants alone.
 
@@ -613,6 +636,103 @@ async def test_a_device_unavailable_from_the_start_never_escalates(caplog: pytes
     assert load.state_change_notifications == []
     assert count_log(caplog, LOST_CONTROL_LOG) == 0
     assert count_log(caplog, REGAINED_CONTROL_LOG) == 0
+    # Review fix #02/06: the give-up fires four times here and passes
+    # `CONTACT_NONE`, so THIS is the line that could actually appear — the sibling
+    # above was asserting the constant this path no longer uses.
+    assert count_log(caplog, RELEASED_WITHOUT_CONTACT_LOG) == 0
+    # Review fix #02/01: the latch state that made the swallowed-first-push bug
+    # invisible. Four give-ups released nothing, so they must have latched nothing.
+    assert load._unresponsive_needs_ack is False
+
+
+async def test_a_give_up_before_any_episode_does_not_swallow_the_first_push(
+    caplog: pytest.LogCaptureFixture,
+):
+    """Review fix #02 (must-fix): the latch may not fire when no episode exists.
+
+    The ORDINARY timeline, not a corner case: the invalid-probe give-up fires after
+    `NUM_MAX_INVALID_PROBES_COMMANDS × CYCLE_S` ≈ 70 s, an order of magnitude before
+    the ~1050 s escalation threshold. So the first give-up normally releases
+    *nothing* — and latching there suppressed the load's **first genuine** push for
+    good, since the latch's only clearer is a real ack and this device never acks.
+
+    Trigger is mundane: an entity unavailable for ~70 s (HA restart, integration
+    reload, Zigbee coordinator restart), then back but ignoring commands forever.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
+
+    with caplog.at_level(logging.INFO):
+        # phase 1 — unavailable from the first cycle: the give-up fires, but there is
+        # no episode to announce and therefore none to latch
+        load.probe_result = None
+        await load.launch_command(T0, CMD_IDLE)
+        time = await drive(load, T0 + timedelta(seconds=CYCLE_S), CYCLE_S * (NUM_MAX_INVALID_PROBES_COMMANDS + 2))
+
+        assert load.unresponsive_since is None
+        assert load.state_change_notifications == []
+        assert load._unresponsive_needs_ack is False
+
+        # phase 2 — the entity is back, and simply ignores us from now on
+        load.probe_result = False
+        await load.launch_command(time, CMD_ON)
+        time = await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+        # this is a genuine first episode and it must be announced
+        assert load.is_uncontrollable is True
+        assert len(load.state_change_notifications) == 1
+        assert count_log(caplog, LOST_CONTROL_LOG) == 1
+
+        # ...and exactly once: a second ladder on the same episode stays quiet
+        time = await drive(load, time, 2 * LADDER_WALL_S)
+
+    assert len(load.state_change_notifications) == 1
+    assert count_log(caplog, LOST_CONTROL_LOG) == 1
+
+
+async def test_only_a_real_ack_clears_the_episode_latch(caplog: pytest.LogCaptureFixture):
+    """Review fix #02/03: a drop WE chose is not evidence the device answered.
+
+    `_drop_running_command` is reached by the override-suppression drop, the
+    disabled-load cleanup and — since review fix #01 — the expiry-time drop of an
+    override's own command. All three are QS changing its mind. Treating them as
+    recoveries let a latched flapping load shout again on its next ladder climb,
+    once per drop, for a device that never came back. AC13 pins "a real ack ⇒
+    escalates again"; this is the missing "and *only* a real ack".
+    """
+    load = NeverAcksLoad(name="pool_house")
+    load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
+    await load.launch_command(T0, CMD_IDLE)
+
+    # a legitimate first episode, then a give-up that latches it
+    time = await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+    assert len(load.state_change_notifications) == 1
+    load.probe_result = None
+    time = await drive(load, time, CYCLE_S * (NUM_MAX_INVALID_PROBES_COMMANDS + 2))
+    assert load._unresponsive_needs_ack is True
+
+    with caplog.at_level(logging.INFO):
+        # `caplog` spans the whole test, so episode 1's ERROR is already in it.
+        lost_control_before = count_log(caplog, LOST_CONTROL_LOG)
+        assert lost_control_before == 1
+
+        # the user takes control, so the stale command is DROPPED — not acked
+        load.probe_result = False
+        await load.launch_command(time, CMD_ON)
+        load.suppress_override = True
+        time = await drive(load, time + timedelta(seconds=CYCLE_S), 2 * SUPERSEDE_MIN_INTERVAL_S)
+        load.suppress_override = False
+
+        assert load.running_command is None
+        # the episode is untouched: we learned nothing about the device
+        assert load._unresponsive_needs_ack is True
+
+        # so the next full ladder must still stay quiet
+        await load.launch_command(time, CMD_OFF)
+        await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+    assert len(load.state_change_notifications) == 1
+    assert count_log(caplog, LOST_CONTROL_LOG) == lost_control_before
 
 
 async def test_the_command_after_a_give_up_starts_clean_and_stacks():

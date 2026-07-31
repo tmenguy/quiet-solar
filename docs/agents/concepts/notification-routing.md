@@ -68,6 +68,19 @@ alarm at 3am is supposed to wake you).
   load that loses control, *answers again*, then loses it again pushes twice,
   while one that merely flaps without ever answering pushes once. See
   [load-base.md](load-base.md), "Two clocks, not one".
+
+  **"Once per episode" is scoped to the process lifetime.**
+  `_unresponsive_needs_ack` is deliberately **not** persisted, so an HA
+  restart or a config-entry reload resets it and a permanently flapping
+  device pushes once more per restart. That is consistent with
+  `unresponsive_since`, which is not persisted either, and for the same
+  reason: both describe an in-flight command, and a reload wipes the command
+  slot, so the episode's *subject* is gone. Persisting the latch would also
+  reintroduce the failure mode QS-307 had to fix once already — a latch
+  carried into a process where no episode has been announced silences the
+  first genuine push. If a flapping device pushing once per restart ever
+  becomes a real complaint, throttle at the notification channel rather than
+  by persisting this flag.
   It is `AbstractLoad`-only:
   the base `AbstractDevice._notify_unresponsive` is a documented no-op,
   so an uncontrollable **battery** gets the ERROR log but no push.
