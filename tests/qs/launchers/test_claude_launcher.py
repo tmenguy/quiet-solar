@@ -661,8 +661,9 @@ def test_no_write_for_non_worktree_path(tmp_path: Path) -> None:
 # * A file it cannot read or cannot parse as a JSON object is **left
 #   byte-identical** and the pin is skipped, with a warning naming the file
 #   and the remedy. There is no rebuild and no backup.
-# * A symlink at the pin file **or** at ``.claude`` is refused outright, so
-#   every write destination is a literal path inside ``work_dir/.claude``.
+# * A symlink at the pin file, at ``.claude``, or at the temp sibling is
+#   refused outright. Those are the three paths the writer touches, so with
+#   all three refused the writes stay inside ``work_dir/.claude``.
 # * The result is reported as ``phase_agent_pinned``; every skip path warns
 #   on stderr, and none of them can break the handoff.
 # * The publish is atomic (temp sibling + ``os.replace``): the temp name
@@ -1053,6 +1054,51 @@ def test_symlinked_target_is_refused_not_followed(
     assert not list(tmp_path.glob("shared-settings.json.*"))
 
 
+def test_symlinked_temp_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """M2: a symlink at the **temp** name is refused too.
+
+    The refusal covered ``.claude`` and the pin file but not the temp, and
+    ``Path.write_text`` follows symlinks. Reachable without contrivance:
+    ``.gitignore`` itself documents that a ``SIGKILL`` or OOM kill can leave
+    a temp behind, and the name is PID-derived, so a reused PID lands on it.
+
+    The consequence was the worst of the round: the merged settings — an
+    ``env`` token included — were written **outside the worktree**,
+    ``os.replace`` then renamed the *link* onto ``settings.local.json``, the
+    call reported ``phase_agent_pinned: True``, and every later handoff hit
+    the pin-file refusal, leaving the worktree permanently unpinnable.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    target = work_dir / SETTINGS_REL
+    target.write_text(
+        json.dumps({"env": {"TOKEN": "s3cr"}}), encoding="utf-8",
+    )
+    outside = tmp_path / "outside-the-worktree.json"
+    outside.write_text("untouched\n", encoding="utf-8")
+    # The temp name the writer will choose: PID-derived, same as the code.
+    planted = work_dir / ".claude" / f"settings.local.json.{os.getpid()}.tmp"
+    planted.symlink_to(outside)
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is False
+    assert outside.read_text(encoding="utf-8") == "untouched\n", (
+        "the merged settings were written outside the worktree"
+    )
+    assert not target.is_symlink(), "os.replace renamed the link onto the pin"
+    assert "s3cr" in target.read_text(encoding="utf-8"), (
+        "the original settings should be untouched"
+    )
+    err = capsys.readouterr().err
+    assert "warning:" in err and "symlink" in err
+
+
 def test_symlinked_claude_dir_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1097,22 +1143,35 @@ def test_symlinked_claude_dir_is_refused(
     )
 
 
-def test_temp_is_never_world_readable(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The temp sibling is never group/other-accessible before it is published.
+def test_published_pin_carries_the_target_mode(tmp_path: Path) -> None:
+    """The published pin keeps the mode the user chose — ``copymode``'s job.
 
-    Review-fix #04 C1: asserted through the **observable** file rather than
-    through ``os.open`` internals. The temp is written with
-    ``Path.write_text`` and then given the target's mode with
-    ``shutil.copymode``, so it is sampled at ``os.replace`` — the last
-    instant it exists — and the published mode is checked separately.
+    Renamed and restored in review-fix #05 (S1 + S5). Two things were wrong
+    with the previous version:
 
-    The previous form hooked ``os.write`` to sample an fd, which only made
-    sense while the writer used raw syscalls. Those syscalls caused two
-    must-fix findings of their own (a discarded short-write return value,
-    and a temp opened without ``O_NOFOLLOW``), so they are gone and so is
-    the hook.
+    * It was named ``test_temp_is_never_world_readable`` and asserted a
+      pre-publish privacy window. Review-fix #04's C1 deliberately gave that
+      window up: the temp is created by ``write_text`` at
+      ``0o666 & ~umask`` **already containing** the merged content, and
+      narrowed afterwards. The name promised a property the code no longer
+      has, and #05's M1 deletes the matching doc sentence.
+    * It had been narrowed until it could not fail — the fixture mode was
+      changed to ``0o600`` and the published-mode assertion dropped — which
+      is why nothing caught that stale claim.
+
+    No monkeypatching: the property is observable on the published file
+    after ``build_payload`` returns. The previous version hooked
+    ``os.replace`` through ``claude_launcher.os``, which is the **real**
+    ``os`` module (the launcher keeps no alias), so the syscall was globally
+    replaced for the test's duration.
+
+    ``0o664`` rather than the ``0o644`` the fix plan named: ``0o644`` is
+    what ``write_text`` produces under the common ``umask 022``, so the
+    assertion would pass whether or not ``copymode`` ran at all — the same
+    can't-fail defect this fix exists to remove. ``0o664`` also exercises
+    the *widening* direction, which no other test covers; the narrowing
+    direction is covered by
+    ``test_file_mode_is_preserved_across_replace`` (``0o600``).
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
@@ -1121,33 +1180,97 @@ def test_temp_is_never_world_readable(
     target.write_text(
         json.dumps({"env": {"TOKEN": "s3cr"}}), encoding="utf-8",
     )
-    target.chmod(0o600)
+    target.chmod(0o664)
 
-    real_replace = os.replace
-    sampled: list[tuple[int, str]] = []
-
-    def _sampling_replace(src, dst, **kwargs):  # type: ignore[no-untyped-def]
-        src_path = Path(src)
-        sampled.append((
-            stat.S_IMODE(src_path.stat().st_mode),
-            src_path.read_text(encoding="utf-8"),
-        ))
-        return real_replace(src, dst, **kwargs)
-
-    monkeypatch.setattr(claude_launcher.os, "replace", _sampling_replace)
-
-    claude_launcher.build_payload(
+    payload = claude_launcher.build_payload(
         str(work_dir), 311, "Title", next_cmd="create-plan",
     )
 
-    assert sampled, "os.replace was never reached"
-    mode, content = sampled[0]
-    assert "s3cr" in content, "sampled before the merge landed"
-    assert not mode & 0o077, (
-        f"the populated temp was group/other-accessible at {oct(mode)} — a "
-        f"merged token was exposed before the replace"
+    assert payload["phase_agent_pinned"] is True
+    assert stat.S_IMODE(target.stat().st_mode) == 0o664, (
+        f"the target's mode was not carried onto the published file; got "
+        f"{oct(stat.S_IMODE(target.stat().st_mode))}"
     )
-    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    # And the merge really happened, so the mode above is the mode of the
+    # NEW file rather than of an untouched original.
+    assert _settings(work_dir) == {
+        "env": {"TOKEN": "s3cr"},
+        "agent": "qs-create-plan",
+    }
+
+
+def test_mode_failure_still_publishes_the_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S2: a ``copymode`` failure degrades the mode, it does not refuse the pin.
+
+    Review-fix #04's C1 dropped the ``contextlib.suppress(OSError)`` that the
+    deleted ``_preserve_mode`` had around the mode call, so an ``EPERM`` from
+    ``shutil.copymode`` fell into the outer handler and the pin was skipped —
+    even though the content was already written and ``os.replace`` needs only
+    directory permission. On a chmod-hostile mount (exFAT, CIFS ``noperm``,
+    some Docker volumes) or a settings file owned by another uid, that makes
+    the worktree unpinnable *forever*, and per `harness.md` Traps the
+    resulting stale pin looks intentional.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    target = work_dir / SETTINGS_REL
+    target.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(claude_launcher.shutil, "copymode", _boom)
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert payload["phase_agent_pinned"] is True
+    assert _settings(work_dir) == {"model": "opus", "agent": "qs-create-plan"}
+
+
+def test_late_non_object_keeps_the_first_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S3: the late read yielding a non-object keeps the first render.
+
+    ``_late_render``'s ``isinstance`` arm was uncovered for two rounds. It is
+    **reachable** — verified by this test: every *first*-read non-object is
+    short-circuited in ``_read_settings``, but an external writer replacing
+    the file between the two reads produces exactly this case. So the arm is
+    covered rather than deleted (the fix plan's two options), because
+    deleting it would let a shallow merge run against a list.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    target = work_dir / SETTINGS_REL
+    target.write_text(json.dumps({"model": "opus"}), encoding="utf-8")
+
+    real_write_text = Path.write_text
+    fired: list[str] = []
+
+    def _late_non_object(self: Path, *args: object, **kwargs: object) -> int:
+        if self.name.endswith(".tmp") and not fired:
+            fired.append(self.name)
+            real_write_text(target, "[1, 2]", encoding="utf-8")
+        return real_write_text(  # type: ignore[return-value]
+            self, *args, **kwargs,  # type: ignore[arg-type]
+        )
+
+    monkeypatch.setattr(Path, "write_text", _late_non_object)
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 311, "Title", next_cmd="create-plan",
+    )
+
+    assert fired, "the late window never opened — the simulation is vacuous"
+    assert payload["phase_agent_pinned"] is True
+    # The first render stands: the list is discarded, not merged onto.
+    assert _settings(work_dir) == {"model": "opus", "agent": "qs-create-plan"}
 
 
 def test_fresh_settings_file_is_created_private(tmp_path: Path) -> None:

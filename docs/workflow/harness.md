@@ -201,16 +201,22 @@ not fully understand:
   revisions rebuilt the file and kept a `.bak`, and that safety net produced
   three consecutive must-fix findings of its own, so the destructive path
   was removed rather than patched again.
-- **A symlink is refused**, not followed — at the settings file *or* at
-  `.claude` itself. Following either would move the write outside the
-  worktree: into `~/.claude/settings.json` (user scope, affecting every
-  project), or into the main checkout this section promises is never
-  pinned. Checking only the file was not enough, because a symlinked
-  `.claude` leaves the file itself looking perfectly ordinary.
+- **A symlink is refused**, not followed — at the settings file, at
+  `.claude` itself, *or* at the temp sibling. Following any of them would
+  move the write outside the worktree: into `~/.claude/settings.json` (user
+  scope, affecting every project), or into the main checkout this section
+  promises is never pinned. All three are needed. A symlinked `.claude`
+  leaves the file itself looking perfectly ordinary; and a symlink at the
+  temp name — reachable via a temp a `SIGKILL` left behind plus a reused PID
+  — would send the merged content outside the worktree and then rename the
+  link onto the pin file, after which that worktree can never be pinned
+  again.
 - **Permissions**: a fresh pin file is created `0o600`; an existing file's
-  mode is preserved, so your `chmod` survives. The temp sibling is created
-  private and widened only once populated, so a merged `env` token is never
-  briefly world-readable.
+  mode is preserved, so your `chmod` survives. Note the limit: the temp
+  sibling is written first and given that mode afterwards, so between those
+  two steps it exists at the default `0o666 & ~umask` already containing the
+  merged content. That window is an accepted cost of writing through ordinary
+  file operations rather than raw descriptors.
 
 The write is atomic (temp sibling + `os.replace`) and best-effort: it never
 breaks a handoff, and every skip above reports `phase_agent_pinned: false`.

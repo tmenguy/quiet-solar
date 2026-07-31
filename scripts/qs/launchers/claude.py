@@ -325,9 +325,12 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
 
     * anything we cannot read, or cannot parse as a JSON object, is **left
       exactly as it is** and the pin is skipped;
-    * a **symlink** at ``.claude`` or at the settings file is **refused**,
-      not followed, so every write destination is a literal path inside
-      ``work_dir``.
+    * a **symlink** is **refused**, not followed, at any of the three paths
+      this function touches: ``.claude``, the settings file, and the temp
+      sibling. Those three are the writes, so refusing them keeps the writes
+      inside ``work_dir``. (Stated as the enumeration it is, rather than as
+      an invariant: an earlier phrasing claimed containment "by
+      construction" while the temp was still missing from the list.)
 
     Best-effort by contract — a handoff must never break because of this
     write, hence the suppressed temp cleanup. Warnings go to
@@ -357,14 +360,16 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
         return False
 
     target = claude_dir / "settings.local.json"
-    # Refuse a symlink anywhere on the path we are about to write; never
-    # follow one. Checking only the pin file was not enough: with
-    # ``.claude`` itself a link — a plausible way to share one agents
-    # directory — the file is not a link, so the write followed the
-    # directory and landed in the main checkout (or ``~/.claude``) while
-    # reporting success. Refusing both makes the containment property true
-    # by construction: every path below is literally inside ``work_dir``.
-    for suspect in (claude_dir, target):
+    tmp = target.with_suffix(f"{target.suffix}.{os.getpid()}.tmp")
+    # Refuse a symlink at any of the three paths this function writes to or
+    # through; never follow one. Each was found the hard way: a link at
+    # ``.claude`` let the write land in the main checkout while reporting
+    # success, and a link at the *temp* name — reachable via a leftover temp
+    # plus a reused PID — sent the merged settings outside the worktree and
+    # then renamed the link onto the pin file, leaving the worktree
+    # permanently unpinnable. ``write_text`` follows links, so this check is
+    # what keeps the writes inside ``work_dir``.
+    for suspect in (claude_dir, target, tmp):
         if suspect.is_symlink():
             print(
                 f"warning: {suspect} is a symlink; refusing to pin through "
@@ -379,7 +384,6 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
         return False
 
     content = _render(settings, agent)
-    tmp = target.with_suffix(f"{target.suffix}.{os.getpid()}.tmp")
     try:
         # Ordinary high-level file operations only: ``write_text`` writes
         # fully or raises, and ``copymode`` is one call for "keep whatever
@@ -391,10 +395,17 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
         late = _late_render(target, agent)
         if late is not None and late != content:
             tmp.write_text(late, encoding="utf-8")
-        if target.exists():
-            shutil.copymode(target, tmp)  # keep a deliberate chmod
-        else:
-            tmp.chmod(_PRIVATE_MODE)  # fresh file: owner-only
+        # Suppressed on purpose: the content is already written and
+        # ``os.replace`` needs only directory permission, so a mode failure
+        # (``EPERM`` on a chmod-hostile mount, or a settings file owned by
+        # another uid) must degrade to "published at the default mode"
+        # rather than "not pinned at all" — which would be permanent for
+        # that worktree.
+        with contextlib.suppress(OSError):
+            if target.exists():
+                shutil.copymode(target, tmp)  # keep a deliberate chmod
+            else:
+                tmp.chmod(_PRIVATE_MODE)  # fresh file: owner-only
         os.replace(tmp, target)
     except OSError as exc:
         print(f"warning: could not write {target} ({exc})", file=sys.stderr)
