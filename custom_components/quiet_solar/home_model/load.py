@@ -202,6 +202,11 @@ class AbstractDevice:
         # can clear them — that wipe destroys the command the clock describes.
         self.unresponsive_since: datetime | None = None
         self._last_supersede_time: datetime | None = None
+        # QS-320: the dispatch tag the post-await guards compare. NEVER reset it —
+        # not here beyond this priming, not in `reset()`, not in
+        # `constraint_reset_and_reset_commands_if_needed`, not in
+        # `abandon_running_command`. See `_install_running_command`.
+        self._running_command_generation: int = 0
         # QS-307: the per-EPISODE latch, as against `unresponsive_since`'s
         # per-command clock. Gates the shout, never the clock. See
         # `_clear_unresponsive` and `docs/agents/concepts/load-base.md`.
@@ -931,6 +936,70 @@ class AbstractDevice:
         # must not end a lost-control episode (QS-307).
         self._clear_unresponsive(reason, contact=ContactEvidence.UNKNOWN)
 
+    def _install_running_command(self, command: LoadCommand, time: datetime) -> int:
+        """Install a dispatch in the command slot and return its generation tag.
+
+        The one way in. The generation is what the post-await guards compare, so
+        bumping it here rather than at the call site is what stops a future install
+        site from silently re-opening QS-320.
+
+        NEVER reset `_running_command_generation` — not in `reset()`, not in
+        `abandon_running_command`, not anywhere. A reset lets a stale tag captured
+        before the reset compare equal to a fresh one after it, which re-opens
+        QS-320 on exactly the route this guard exists to close.
+
+        Absorb deliberately does NOT come through here: it swaps in an
+        equal-valued object for the SAME dispatch and leaves the launch stamps
+        alone, so the caller already in flight still owns its paperwork.
+        """
+        self._running_command_generation += 1
+        self.running_command = command
+        self.running_command_first_launch = time
+        self.running_command_last_launch = time
+        return self._running_command_generation
+
+    def _slot_still_holds(
+        self, launched_command: LoadCommand, launched_generation: int, site: str, ctxt: str | None = None
+    ) -> bool:
+        """Return True when the slot still holds the dispatch we launched.
+
+        QS-320: the question a post-await completion path must ask is "is the slot
+        still holding the dispatch I made?", not "is the slot empty?". #316's
+        `is None` check answered the second one, so a button press that REPLACED the
+        in-flight command mid-await sailed through it, and the resumer then stamped
+        and acked the new occupant off the *previous* command's result — a phantom ack
+        of a command no service call ever confirmed, with the load left physically
+        running and nothing to retry it.
+
+        Comparing the command value cannot work in either direction. Absorb swaps in
+        an equal-valued object for the SAME dispatch, so an identity test
+        over-triggers and skips paperwork that is genuinely ours. The
+        reset-then-reinstall route (the "clean and reset" button) installs a
+        field-identical command from a DIFFERENT dispatch, so a value test
+        under-triggers and leaves QS-320 wide open. The generation compares
+        dispatches, which is the thing that actually differs.
+
+        `launched_command` is non-`None` at all three call sites by construction —
+        each capture sits inside an existing `is not None` test — so the failure-path
+        dereference is safe. `union-attr` is disabled project-wide, so mypy would NOT
+        catch a regression here.
+        """
+        if self.running_command is not None and self._running_command_generation == launched_generation:
+            return True
+
+        # `info`, matching the two messages this replaces: rare by construction, and
+        # exactly the line an operator needs when a load misbehaves. The
+        # dropped-vs-replaced distinction is the whole subject of QS-320.
+        _LOGGER.info(
+            "%s: command %s for load %s was %s while a call to the device was in flight, ctxt: %s",
+            site,
+            launched_command.command,
+            self.name,
+            "dropped" if self.running_command is None else "replaced",
+            ctxt,
+        )
+        return False
+
     async def launch_command(self, time: datetime, command: LoadCommand, ctxt="NO CTXT"):
         if self.qs_enable_device is False:
             return
@@ -1010,9 +1079,7 @@ class AbstractDevice:
             self._last_supersede_time = time
             self.abandon_running_command(reason=f"superseded by {command.command}")
 
-        self.running_command = command
-        self.running_command_first_launch = time
-        self.running_command_last_launch = time
+        launched_generation = self._install_running_command(command, time)
 
         _LOGGER.info("launch_command: %s for this load %s), ctxt: %s", command, self.name, ctxt)
 
@@ -1047,16 +1114,10 @@ class AbstractDevice:
                 is_command_set = None
             self._anchor_causality_guard_if_executed(is_command_set, time)
 
-        if self.running_command is None:
-            # QS-307: same guard, same reason as in `force_relaunch_command`. Placed
-            # here, at 8 spaces, so it covers BOTH awaits above — the probe and the
-            # conditional execute. Do not move it inside the `else:`.
-            _LOGGER.info(
-                "launch_command: command %s for load %s was dropped while a call to the device was in flight, ctxt: %s",
-                command.command,
-                self.name,
-                ctxt,
-            )
+        if not self._slot_still_holds(command, launched_generation, "launch_command", ctxt):
+            # QS-307/QS-320: same guard, same reason as in `force_relaunch_command`.
+            # Placed here, at 8 spaces, so it covers BOTH awaits above — the probe and
+            # the conditional execute. Do not move it inside the `else:`.
             return
 
         if is_command_set is None:
@@ -1066,7 +1127,9 @@ class AbstractDevice:
             )
         elif is_command_set is True:
             _LOGGER.info("launch_command: ack command %s for this load %s), ctxt: %s", command, self.name, ctxt)
-            self._ack_command(time, self.running_command)
+            # QS-320: the local, not the slot — post-guard they are the same dispatch,
+            # and reading the slot is how the phantom ack happened
+            self._ack_command(time, command)
 
         return
 
@@ -1085,18 +1148,36 @@ class AbstractDevice:
 
         command_acked_or_good = True
 
-        if self.running_command is not None:
+        probed_command = self.running_command
+        if probed_command is not None:
+            # QS-320: this site's await is the probe, and real subclasses await genuine
+            # I/O there — `QSChargerGeneric.probe_if_command_set` awaits
+            # `_do_update_charger_state`, a real `hass.services.async_call`. So this is
+            # NOT dead code: the slot can be replaced or emptied underneath it.
+            probed_generation = self._running_command_generation
             _LOGGER.info(
-                f"check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})"
+                f"check command {probed_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})"
             )
 
-            is_command_set = await self.probe_if_command_set(time, self.running_command)
-            if is_command_set is None:
+            is_command_set = await self.probe_if_command_set(time, probed_command)
+            slot_is_ours = self._slot_still_holds(probed_command, probed_generation, "check_commands")
+            if not slot_is_ours:
+                # the probe told us nothing about whatever is in the slot now, so
+                # "not confirmed this cycle, re-check next cycle" is the safe answer.
+                # It starts no relaunch and raises no alarm by itself.
+                command_acked_or_good = False
+            # A flag rather than an `else:` wrapper or an early `return`: the wrapper
+            # would re-indent the whole body for no behaviour, and the early return
+            # would skip the stacked-promotion tail below, delaying an emptied-slot
+            # promotion by a cycle — a behaviour change on an unrelated path.
+            if slot_is_ours and is_command_set is None:
                 command_acked_or_good = False
                 # impossible to run this command for this load ...
+                # QS-320: gated deliberately — a probe about the PREVIOUS occupant must
+                # not hand its successor a strike towards the invalid-probe give-up.
                 self.running_command_num_relaunch_after_invalid += 1
                 _LOGGER.info(
-                    f"impossible to check command {self.running_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})"
+                    f"impossible to check command {probed_command.command} for this load {self.name}) (#{self.running_command_num_relaunch_after_invalid})"
                 )
                 if self.running_command_num_relaunch_after_invalid >= NUM_MAX_INVALID_PROBES_COMMANDS:
                     # will kill completely the command ....
@@ -1106,10 +1187,12 @@ class AbstractDevice:
                     # because the device cannot be reached — see `_clear_unresponsive`.
                     self._clear_unresponsive("the probe went unavailable", contact=ContactEvidence.UNREACHABLE)
 
-            if is_command_set is True:
-                self._ack_command(time, self.running_command)
+            # Kept as a SEPARATE statement from the block above, not an `elif`: a
+            # `None` probe must still fall through here and assign `res`.
+            if slot_is_ours and is_command_set is True:
+                self._ack_command(time, probed_command)
                 command_acked_or_good = True
-            elif self.running_command_last_launch is not None:
+            elif slot_is_ours and self.running_command_last_launch is not None:
                 res = time - self.running_command_last_launch
                 command_acked_or_good = False
 
@@ -1141,16 +1224,21 @@ class AbstractDevice:
         branch of `QSBiStateDuration.check_load_activity_and_constraints` drops an
         override-aligned command, and three of that method's callers (the bistate
         mode select, the on-duration number, the reset-override button) run outside
-        the lock. So the slot CAN be emptied across an await. `launch_command` and
-        `force_relaunch_command` both hold the command they launched in a local and
-        bail out if the slot is EMPTY, rather than writing counters for, acking, or
-        dereferencing a command that is gone.
+        the lock — and so do the "mark constraint done" and "clean and reset" buttons,
+        which launch a command of their own. So the slot can be emptied OR REPLACED
+        across an await.
 
-        Scope of those guards, precisely: they cover the slot being **emptied**, not
-        **replaced**. A replaced slot passes an `is None` test, so a button press that
-        supersedes the in-flight command mid-await can still stamp its launch time or
-        ack it off the previous command's result. That is pre-existing — it behaves
-        identically on `main` — and is tracked in #320, deliberately not fixed here.
+        Scope of those guards, precisely (QS-320): the invariant is **ownership**, not
+        emptiness. A completion path writes nothing about its own dispatch's outcome
+        unless the slot still carries that dispatch's generation tag — an emptied slot
+        and a slot replaced by a newer dispatch both fail that test, and only the
+        latter passes an `is None` check. All three sites — `launch_command`,
+        `check_commands` and `force_relaunch_command` — hold the command they launched
+        in a local, capture its tag from `_install_running_command`, and consult
+        `_slot_still_holds` after their awaits before stamping, acking, counting or
+        dereferencing. Side effects that merely record that a service call physically
+        landed stay unconditional: `_anchor_causality_guard_if_executed` sits ABOVE
+        the guard on purpose.
 
         The clock is still only cleared alongside the command state it describes.
         """
@@ -1324,8 +1412,10 @@ class AbstractDevice:
                 self._drop_running_command("suppressed by user override")
                 return
 
-            # Held locally: the slot can empty across the await (see the re-check).
+            # Held locally, with its dispatch tag: the slot can be emptied OR replaced
+            # across the await (see the re-check).
             launched_command = self.running_command
+            launched_generation = self._running_command_generation
             _LOGGER.info(
                 "force launch command %s for this load %s (#%s)",
                 launched_command.command,
@@ -1350,25 +1440,21 @@ class AbstractDevice:
             # guard must know even if the slot is now empty.
             self._anchor_causality_guard_if_executed(is_command_set, time)
 
-            if self.running_command is None:
-                # QS-307: the slot emptied across the await — a user action can reach
-                # the override expiry outside `_update_loads_lock`. Everything below
-                # describes the command that is now gone, so stop.
-                _LOGGER.info(
-                    "force_relaunch_command: command %s for load %s was dropped while its service call was in flight",
-                    launched_command.command,
-                    self.name,
-                )
+            if not self._slot_still_holds(launched_command, launched_generation, "force_relaunch_command"):
+                # QS-307/QS-320: the slot was emptied or replaced across the await — a
+                # user action can reach the override expiry, or press a button, outside
+                # `_update_loads_lock`. Everything below describes the dispatch that no
+                # longer owns the slot, so stop.
                 return
 
             self.running_command_last_launch = time
             if is_command_set is None:
-                _LOGGER.info(
-                    "impossible to force command %s for this load %s)", self.running_command.command, self.name
-                )
+                _LOGGER.info("impossible to force command %s for this load %s)", launched_command.command, self.name)
             elif is_command_set is True:
-                self._ack_command(time, self.running_command)
+                self._ack_command(time, launched_command)
             else:
+                # The nested call takes its own local and tag, so it re-establishes
+                # ownership rather than inheriting ours.
                 await self.check_commands(time)
 
     async def execute_command(self, time: datetime, command: LoadCommand) -> bool | None:

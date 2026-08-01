@@ -27,12 +27,19 @@ Both death modes are covered, because they leave different command state behind:
   (`NUM_MAX_INVALID_PROBES_COMMANDS`) nulls `current_command` through
   `_ack_command(time, None)`, so `is_load_command_set` is `False` on its
   `current_command is None` arm instead.
+
+`_RacingPump` is *the* mid-await race harness, so this module hosts both stories'
+race cases: QS-307's **emptied** slot (AC25) and QS-320's **replaced** slot — one
+family, one view.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from datetime import time as dt_time
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -58,7 +65,7 @@ from custom_components.quiet_solar.ha_model.bistate_duration import (
     USER_OVERRIDE_STATE_BACK_DURATION_S,
     QSBiStateDuration,
 )
-from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_ON, LoadCommand, copy_command
+from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_OFF, CMD_ON, LoadCommand, copy_command
 from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from custom_components.quiet_solar.home_model.load import NUM_MAX_INVALID_PROBES_COMMANDS
 from tests.conftest import FakeHass
@@ -120,6 +127,14 @@ class _RacingPump(_StuckPump):
     touching the mode select, the on-duration number or the reset button while a
     service call is in flight really can empty the slot across the await. Setting
     `race_at` replays that deterministically, from inside the transport.
+
+    QS-320: `race_action` makes *which* user action lands pluggable, so the same
+    harness covers the slot being **replaced** (a button press that supersedes or
+    resets-then-reinstalls) as well as QS-307's **emptied** case. It must always go
+    through a real `launch_command` / `user_clean_and_reset` /
+    `_drop_running_command` — a race action that assigns `running_command` by hand
+    replaces the slot WITHOUT bumping the generation, so the guard under test would
+    never trip and the test would pass vacuously.
     """
 
     def __init__(self, **kwargs):
@@ -129,6 +144,9 @@ class _RacingPump(_StuckPump):
         # branch, `None` reaches the "impossible to force" log — both dereference
         # the command slot after the await
         self.race_result: bool | None = True
+        # QS-320: the user action that lands mid-await. QS-307's override-expiry
+        # drop is the default, so the two #316 tests keep their exact behaviour.
+        self.race_action: Callable[[datetime], Awaitable[Any]] = self.check_load_activity_and_constraints
 
     async def execute_command_system(self, time, command, state):
         """Let a user action land in the middle of the service call."""
@@ -137,8 +155,41 @@ class _RacingPump(_StuckPump):
 
         self.transport_calls.append((time, command.command, state))
         race_at, self.race_at = self.race_at, None
-        await self.check_load_activity_and_constraints(race_at)
+        await self.race_action(race_at)
         return self.race_result
+
+
+class _ProbeRacingPump(_RacingPump):
+    """A pump whose *probe* — not its service call — is interrupted mid-flight.
+
+    QS-320 needs this for `check_commands`, whose only await is
+    `probe_if_command_set`. Real subclasses do await I/O there:
+    `QSChargerGeneric.probe_if_command_set` awaits `_do_update_charger_state`, a
+    genuine `hass.services.async_call`, and `QSBattery`'s awaits
+    `is_charge_from_grid()`. Only the bistate probe this test file uses is
+    synchronous, hence the injection.
+
+    One-shot, like `race_at`: the injected press re-enters
+    `probe_if_command_set` through `launch_command`, so a re-arming hook would
+    recurse.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.probe_race_at: datetime | None = None
+        self.probe_race_action: Callable[[datetime], Awaitable[Any]] = self.check_load_activity_and_constraints
+        # what the interrupted probe reports back: `True` reaches the ack branch,
+        # `None` the invalid-probe branch, `False` the staleness arm
+        self.probe_race_result: bool | None = True
+
+    async def probe_if_command_set(self, time, command):
+        """Let a user action land in the middle of the probe."""
+        if self.probe_race_at is None:
+            return await super().probe_if_command_set(time, command)
+
+        probe_race_at, self.probe_race_at = self.probe_race_at, None
+        await self.probe_race_action(probe_race_at)
+        return self.probe_race_result
 
 
 def _next_daily_end(local_hours: dt_time, time_utc_now: datetime | None = None, output_in_utc=True):
@@ -792,6 +843,389 @@ async def test_a_user_action_during_the_first_launch_cannot_strand_the_command_s
     assert pump.external_user_initiated_state is None
     assert pump.current_command == confirmed
     assert pump.is_load_command_set(T_EXPIRED) is True
+
+
+# =============================================================================
+# QS-320 — the replaced slot
+#
+# #316 (above) guarded the slot being EMPTIED across an await. A slot that was
+# REPLACED passes an `is None` test just as well, so a button press that
+# supersedes — or resets and reinstalls — the in-flight command mid-await could
+# still write the previous command's answer onto the new occupant: a phantom ack
+# of a command no service call ever confirmed.
+#
+# Two distinct instants throughout, so a stamp written by the stale resumer is
+# always distinguishable from the press's own.
+# =============================================================================
+
+T_RELAUNCH = T_OVERRIDE + timedelta(hours=1)
+T_PRESS = T_RELAUNCH + timedelta(seconds=1)
+
+_LOAD_LOGGER = "custom_components.quiet_solar.home_model.load"
+
+
+def _spy_on_acks(pump: _StuckPump) -> list[LoadCommand | None]:
+    """Record every command `_ack_command` is called with from now on.
+
+    A phantom ack is the corruption this story is about, and its visible traces
+    (`current_command`, `num_on_off`, the counters) are all reachable by other
+    paths too. Recording the call itself is what makes "did not ack" an assertion
+    about the bug rather than about its footprint.
+    """
+    acked: list[LoadCommand | None] = []
+    real_ack = pump._ack_command
+
+    def _record(time, command):
+        acked.append(command)
+        return real_ack(time, command)
+
+    pump._ack_command = _record  # type: ignore[method-assign]
+    return acked
+
+
+def _sync_race(action: Callable[[], Any]) -> Callable[[datetime], Awaitable[None]]:
+    """Adapt a synchronous user action to the awaitable race-action hook."""
+
+    async def _run(_time: datetime) -> None:
+        action()
+
+    return _run
+
+
+def _race_log(caplog: pytest.LogCaptureFixture, site: str, verdict: str) -> bool:
+    """True when `site` reported the slot `dropped`/`replaced` across its await.
+
+    The dropped-vs-replaced axis IS the subject of this story, so both arms of the
+    guard's one message are pinned — an operator staring at a misbehaving load needs
+    to know which of the two happened.
+    """
+    needle = f"was {verdict} while a call to the device was in flight"
+    return any(needle in message and message.startswith(f"{site}:") for message in caplog.messages)
+
+
+def _arm_for_supersede(pump: _StuckPump, time: datetime = T_RELAUNCH) -> None:
+    """Put the pump in the exact state where a `CMD_IDLE` press SUPERSEDES (route A).
+
+    Every line is load-bearing, because the obvious setup reaches a *different*
+    branch and the test then passes even unfixed:
+
+    - no override armed — otherwise the press's `CMD_IDLE` is override-suppressed
+      and DROPPED instead of installed;
+    - `_ack_command` provides the confirmed `CMD_ON` of record. It nulls the slot as
+      a side effect, hence the direct slot write after it — setup only, never inside
+      a race action, where it would replace the slot without bumping the generation
+      and the test would pass vacuously;
+    - `unresponsive_since` set — otherwise `is_uncontrollable` is False and the
+      press STACKS;
+    - `_last_supersede_time` clear — otherwise the supersede is throttled and stacks;
+    - the confirmed command is `CMD_ON`, not `CMD_IDLE` — otherwise the press hits
+      the "already confirmed" early return and drops the stale command instead.
+
+    The entity reads `on` and the transport stops obeying, so the press's own
+    `CMD_IDLE` probe returns False and its service call leaves the replacement in
+    flight and *unacked* — which is precisely what makes a phantom ack of it visible.
+    """
+    pump.external_user_initiated_state = None
+    pump._ack_command(time, copy_command(CMD_ON))
+    pump.running_command = copy_command(CMD_ON)
+    pump.running_command_first_launch = time
+    pump.running_command_last_launch = time
+    pump.unresponsive_since = time
+    pump._last_supersede_time = None
+    pump.obeys = False
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=time)
+
+
+async def test_the_dispatch_generation_only_ever_moves_forward():
+    """AC13: the tag that makes "is the slot still MINE?" answerable.
+
+    The guard cannot compare the command value — route B reinstalls a
+    field-identical `CMD_IDLE`, so an equality test passes on the very race this
+    exists to catch — nor object identity, because absorb legitimately swaps in an
+    equal object for the SAME dispatch. Only a monotonic per-install tag
+    distinguishes them, and it is monotonic ONLY as long as nothing ever rewinds
+    it: a `reset()` that zeroed it would let a tag captured before the reset
+    compare equal to one issued after it, reopening QS-320 on exactly route B.
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    pump.hass.states.set(PUMP_ENTITY, "off", last_changed=T_RELAUNCH)
+    pump.obeys = False
+    start = pump._running_command_generation
+
+    await pump.launch_command(T_RELAUNCH, CMD_ON, ctxt="first install")
+    first = pump._running_command_generation
+    assert first > start
+
+    # absorb: the same command is already in flight, so this is not a new dispatch
+    # and the caller already awaiting still owns its paperwork
+    await pump.launch_command(T_RELAUNCH, CMD_ON, ctxt="absorbed")
+    assert pump.running_command == CMD_ON
+    assert pump._running_command_generation == first
+
+    # route B's `reset()` wipes the whole command state — it must NOT rewind the tag
+    pump.reset()
+    assert pump.running_command is None
+    assert pump._running_command_generation == first
+
+    await pump.launch_command(T_PRESS, CMD_ON, ctxt="reinstall after reset")
+    assert pump._running_command_generation > first
+
+
+async def test_a_press_that_supersedes_mid_relaunch_cannot_ack_the_command_it_replaced(caplog):
+    """AC1/AC8/AC9/AC10/AC12 — the headline bug, at `force_relaunch_command`.
+
+    The relaunch ladder's service call for `CMD_ON` is in flight when the user
+    presses "mark current constraint done". That press supersedes the slot with its
+    own `CMD_IDLE`, and on `main` the resumer then finishes `CMD_ON`'s paperwork
+    against the new occupant: it stamps `CMD_IDLE`'s launch time with the *relaunch*
+    instant and acks `CMD_IDLE` off `CMD_ON`'s result. QS records "the device
+    confirmed idle" though no `idle` service call ever completed, the load keeps
+    running, and nothing retries because the slot is empty and `current_command`
+    says idle.
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    _arm_for_supersede(pump)
+    assert pump.is_uncontrollable is True  # pre-race: the supersede branch is armed
+    rung_before = pump.running_command_num_relaunch
+    num_on_off_before = pump.num_on_off
+    acked = _spy_on_acks(pump)
+
+    pump.race_at = T_PRESS
+    pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+
+    with caplog.at_level(logging.INFO, logger=_LOAD_LOGGER):
+        await pump.force_relaunch_command(T_RELAUNCH)
+
+    # the supersede really ran: this is the REPLACED case, not #316's emptied one
+    assert pump.running_command == CMD_IDLE
+    assert pump.current_command == CMD_ON
+
+    # none of `CMD_ON`'s outcome was written onto the press's `CMD_IDLE`
+    assert acked == []
+    assert pump.running_command_last_launch == T_PRESS  # the press's stamp, not T_RELAUNCH
+    assert pump.num_on_off == num_on_off_before  # no phantom transition on the daily budget
+    assert pump.unresponsive_since == T_RELAUNCH  # the lost-control episode is not over
+
+    # AC8: the load is not stranded — the replacement is in flight and unacked, so
+    # the lifecycle still has something to drive
+    assert pump.is_load_command_set(T_PRESS) is False
+
+    # AC9 (D7): the ladder rung is deliberately INHERITED across a supersede — that
+    # is QS-304's saturated cadence, not a defect this story introduces
+    assert pump.running_command_num_relaunch == rung_before + 1
+
+    # AC10: a service call really landed, so the causality anchor must fire even
+    # though the slot changed hands
+    assert pump.last_command_execution_time == T_RELAUNCH
+
+    # AC12: the "replaced" arm of the guard's message
+    assert _race_log(caplog, "force_relaunch_command", "replaced")
+
+
+async def test_a_press_that_supersedes_the_first_dispatch_cannot_be_acked_by_it():
+    """AC2/AC8 — the same bug at `launch_command`, the first place a command reaches.
+
+    The entity is unavailable, so both probes return `None`: the outer dispatch falls
+    through to `execute_command` (where the press lands) instead of self-acking, and
+    the press's own dispatch executes and reports "dispatched, unconfirmed".
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    pump.external_user_initiated_state = None
+    pump._ack_command(T_RELAUNCH, copy_command(CMD_ON))  # the confirmed command of record
+    pump.unresponsive_since = T_RELAUNCH  # so the press supersedes rather than stacks
+    pump._last_supersede_time = None
+    pump.obeys = False
+    pump.hass.states.set(PUMP_ENTITY, STATE_UNAVAILABLE, last_changed=T_RELAUNCH)
+    acked = _spy_on_acks(pump)
+
+    pump.race_at = T_PRESS
+    pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: clean and reset")
+
+    # `CMD_OFF`: the outer dispatch must differ from the confirmed `CMD_ON` (else it
+    # early-returns without ever installing) AND from the press's `CMD_IDLE` (else
+    # the press absorbs instead of superseding)
+    await pump.launch_command(T_RELAUNCH, CMD_OFF, ctxt="solver dispatch")
+
+    assert pump.running_command == CMD_IDLE  # the press's command, still in flight
+    assert pump.current_command == CMD_ON  # NOT the phantom `CMD_IDLE`
+    assert acked == []
+    assert pump.is_load_command_set(T_RELAUNCH) is False
+
+
+async def test_a_reset_that_reinstalls_an_identical_command_is_not_acked_by_the_old_one():
+    """AC3 — route B, the case a value-equality guard silently misses.
+
+    "Clean and reset" `reset()`s the whole command state and then installs a fresh
+    `CMD_IDLE`. When the in-flight command was already `CMD_IDLE`, that replacement
+    compares **equal on every field** to the one being awaited — so a guard that
+    compared commands instead of dispatches would wave the stale resumer through and
+    let it stamp and ack a dispatch whose service call is still in flight. This test
+    must FAIL under value equality and PASS under the generation tag.
+
+    No preconditions: `reset()` is unconditional, which is why route B is the
+    disproportionately dangerous one. Stamps are deliberately not asserted here —
+    `user_clean_and_reset` uses `datetime.now()`, not the test clock.
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    pump.external_user_initiated_state = None
+    pump.running_command = copy_command(CMD_IDLE)  # setup-only direct write
+    pump.running_command_first_launch = T_RELAUNCH
+    pump.running_command_last_launch = T_RELAUNCH
+    pump.obeys = False
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_RELAUNCH)
+    acked = _spy_on_acks(pump)
+
+    pump.race_at = T_PRESS
+    pump.race_action = lambda t: pump.user_clean_and_reset()
+
+    await pump.force_relaunch_command(T_RELAUNCH)
+
+    # a field-identical `CMD_IDLE` now occupies the slot, from a different dispatch
+    assert pump.running_command == CMD_IDLE
+    # the stale resumer must not ack it: `current_command is None` is the `reset()`'s
+    # own doing, and would read `CMD_IDLE` under the phantom ack
+    assert acked == []
+    assert pump.current_command is None
+
+
+@pytest.mark.parametrize("race_result", [True, None], ids=["service-call-lands", "service-call-impossible"])
+async def test_an_absorbed_command_still_belongs_to_the_caller_in_flight(race_result):
+    """AC4 — absorb must NOT trip the guard. The mirror of AC1.
+
+    The absorb branch fires when the incoming command equals the one in flight and
+    swaps in a **new object of equal value** for the SAME dispatch, leaving the
+    launch stamps and counters alone. Both buttons launch `CMD_IDLE`, so a press
+    against an in-flight `CMD_IDLE` takes absorb — and an identity-based guard would
+    read that as "replaced" and bail out *before* `running_command_last_launch =
+    time`. The stamp would stay stale, the backoff gate would then be permanently
+    open, and the load would make a service call every cycle while the rung climbed
+    to a false lost-control escalation.
+
+    Green both pre- and post-fix: it pins the design against the identity variant.
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    pump.external_user_initiated_state = None
+    pump.running_command = copy_command(CMD_IDLE)  # setup-only direct write
+    pump.running_command_first_launch = T_RELAUNCH
+    pump.running_command_last_launch = T_RELAUNCH
+    pump.obeys = False
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_RELAUNCH)
+    pump.race_result = race_result
+    slot_before = pump.running_command
+    generation_before = pump._running_command_generation
+    acked = _spy_on_acks(pump)
+
+    pump.race_at = T_PRESS
+    pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+
+    await pump.force_relaunch_command(T_RELAUNCH)
+
+    # absorb is the one non-`None` slot write that does NOT bump the generation
+    assert pump._running_command_generation == generation_before
+
+    if race_result is True:
+        # the caller in flight still owns its paperwork, so it still acks
+        assert acked == [CMD_IDLE]
+        assert pump.current_command == CMD_IDLE
+    else:
+        # the "impossible" arm: no ack, but the stamp is still ours to write, and
+        # the swapped-in object proves absorb really ran
+        assert acked == []
+        assert pump.running_command_last_launch == T_RELAUNCH
+        assert pump.running_command == CMD_IDLE
+        assert pump.running_command is not slot_before
+
+
+async def test_check_commands_cannot_ack_a_command_the_probe_never_saw():
+    """AC5 — the third site. `check_commands` had no post-await re-check at all.
+
+    Its await is the probe, and real subclasses do await I/O there —
+    `QSChargerGeneric.probe_if_command_set` awaits a genuine service call. A probe
+    that answers `True` about the command that WAS in the slot then acks whatever is
+    in the slot now.
+    """
+    pump = _make_pump(pump_class=_ProbeRacingPump)
+    _arm_for_supersede(pump)
+    acked = _spy_on_acks(pump)
+
+    pump.probe_race_at = T_PRESS
+    pump.probe_race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+    pump.probe_race_result = True
+
+    res, command_acked_or_good = await pump.check_commands(T_RELAUNCH)
+
+    assert pump.running_command == CMD_IDLE  # the replacement, unacked
+    assert acked == []
+    assert pump.current_command == CMD_ON
+    # "not confirmed this cycle, re-check next cycle" — the safe answer for a probe
+    # that told us nothing about the current occupant
+    assert command_acked_or_good is False
+    assert res == timedelta(0)
+
+
+async def test_check_commands_hands_no_invalid_probe_strike_to_the_successor():
+    """AC6 — a deliberate behaviour change: the successor inherits no strike.
+
+    An invalid probe about the *previous* occupant says nothing about the new one, so
+    `running_command_num_relaunch_after_invalid` must not be charged. Pre-fix the
+    counter reads 1 — the supersede zeroed it and the stale resumer then incremented
+    it — and the successor starts life one strike closer to being killed off.
+    """
+    pump = _make_pump(pump_class=_ProbeRacingPump)
+    _arm_for_supersede(pump)
+
+    pump.probe_race_at = T_PRESS
+    pump.probe_race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+    pump.probe_race_result = None
+
+    res, command_acked_or_good = await pump.check_commands(T_RELAUNCH)
+
+    assert pump.running_command == CMD_IDLE
+    assert pump.running_command_num_relaunch_after_invalid == 0
+    assert command_acked_or_good is False
+    # and no staleness computed from the previous dispatch's stamp (pre-fix: -1 s,
+    # because the press's stamp is LATER than the relaunch instant)
+    assert res == timedelta(0)
+
+
+async def test_check_commands_cannot_ack_none_onto_an_emptied_slot(caplog):
+    """AC7/AC12 — `check_commands` also carried an unguarded EMPTIED-slot hole.
+
+    With no post-await check, an emptied slot reached `_ack_command(time, None)`,
+    which nulls `current_command` — wiping the confirmed command of record and
+    dropping the load out of controlled-consumption accounting.
+
+    The bail-out is a flag rather than an early `return` precisely so the
+    stacked-promotion tail still runs in the same cycle; an early return would delay
+    an emptied-slot promotion by a whole cycle, a behaviour change on an unrelated
+    path.
+    """
+    pump = _make_pump(pump_class=_ProbeRacingPump)
+    pump.external_user_initiated_state = None
+    pump._ack_command(T_RELAUNCH, copy_command(CMD_ON))
+    pump.running_command = copy_command(CMD_ON)  # setup-only direct write
+    pump.running_command_first_launch = T_RELAUNCH
+    pump.running_command_last_launch = T_RELAUNCH
+    pump.obeys = False
+    # `off`: the promoted stacked command must not be able to self-ack and mask the
+    # corruption this test is looking for
+    pump.hass.states.set(PUMP_ENTITY, "off", last_changed=T_RELAUNCH)
+    # `abandon_running_command` leaves the stack alone, so the tail must still see it
+    pump._stacked_command = copy_command(CMD_ON)
+    acked = _spy_on_acks(pump)
+
+    pump.probe_race_at = T_PRESS
+    pump.probe_race_action = _sync_race(lambda: pump._drop_running_command("test: the user emptied the slot"))
+    pump.probe_race_result = True
+
+    with caplog.at_level(logging.INFO, logger=_LOAD_LOGGER):
+        _res, command_acked_or_good = await pump.check_commands(T_RELAUNCH)
+
+    assert acked == []  # pre-fix: `_ack_command(time, None)`
+    assert pump.current_command == CMD_ON  # the confirmed command of record survives
+    assert command_acked_or_good is False
+    assert pump._stacked_command is None  # the promotion tail still ran this cycle
+    assert _race_log(caplog, "check_commands", "dropped")
 
 
 # =============================================================================

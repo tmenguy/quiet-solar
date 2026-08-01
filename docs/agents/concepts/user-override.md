@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-31
+last_verified: 2026-08-01
 ---
 
 # User override
@@ -88,10 +88,15 @@ an externally-detected override are constraint-driven:
   it owns that drop — for the *aligned* command only; anything else is
   a genuine solver intent. Note this is the first command-slot mutation
   inside `check_load_activity_and_constraints`, and three of that
-  method's callers run outside `_update_loads_lock`, so both
-  `launch_command` and `force_relaunch_command` re-check the slot after
-  their `await` rather than assuming they still own the command they
-  launched. See [load-base.md](load-base.md).
+  method's callers run outside `_update_loads_lock` — as do the buttons
+  that launch a `CMD_IDLE` of their own. So all **three** completion
+  paths (`launch_command`, `check_commands` and
+  `force_relaunch_command`) re-check the slot after their `await`, and
+  what they check is **ownership**, not emptiness: `_slot_still_holds`
+  compares the dispatch's `_running_command_generation` tag, because a
+  slot that was *replaced* (rather than emptied) passes an `is None`
+  test and would otherwise be acked off the previous command's result
+  (QS-320). See [load-base.md](load-base.md).
 - A state mismatch only classifies as a NEW override when the entity
   state is newer than `last_command_execution_time` (causality guard)
   and the 180s post-override cooldown has elapsed.

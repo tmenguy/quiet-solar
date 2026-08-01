@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-31
+last_verified: 2026-08-01
 ---
 
 # AbstractDevice & AbstractLoad
@@ -184,9 +184,10 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   decides to supersede, then still has to pass the
   override-suppression and `current_command == command` gates. Both the
   `_last_supersede_time` stamp and the abandon therefore happen next to
-  `self.running_command = command`, so a supersede that launches
-  nothing neither burns the 300 s window nor leaves a spent rung
-  behind. The two gate-returns route through `_drop_running_command`.
+  the `_install_running_command(command, time)` call, so a supersede
+  that launches nothing neither burns the 300 s window nor leaves a
+  spent rung behind. The two gate-returns route through
+  `_drop_running_command`.
 - **The clock dies with the command state it describes.**
   `constraint_reset_and_reset_commands_if_needed(keep_commands=False)`
   wipes `current_command` *and* `running_command`, so it also releases
@@ -264,10 +265,16 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
 - **No lock.** `QSDataHandler._update_loads_lock` guards only
   `async_update_loads`; `button.py` calls `user_clean_and_reset`,
   `user_clean_constraints`, `mark_current_constraint_has_done` and
-  `async_reset_override_state` straight from a press, unlocked. The
-  invariant relied upon is narrower: each command-slot mutation happens
-  between `await`s, and the clock is only ever cleared alongside the
-  command state it describes.
+  `async_reset_override_state` straight from a press, unlocked. So the
+  command slot **can** be mutated across an `await`: emptied by the
+  override-expiry drop (QS-307), or **replaced** by a press that
+  launches `CMD_IDLE` of its own (QS-320). The invariant relied upon is
+  therefore **ownership**, not emptiness: a completion path writes
+  nothing about its own dispatch's outcome unless
+  `_slot_still_holds(launched_command, launched_generation, site)` says
+  the slot still carries that dispatch's `_running_command_generation`
+  tag. The clock is still only ever cleared alongside the command state
+  it describes.
 
 Switching-cost protection (`AbstractDevice`):
 
@@ -323,6 +330,17 @@ Switching-cost protection (`AbstractDevice`):
   a documented no-op on `AbstractDevice` (the battery reaches the same
   driver and has no notification channel) and is overridden on
   `AbstractLoad` to push one `DEVICE_STATUS_CHANGE_ERROR`.
+- `_install_running_command(command, time)` /
+  `_slot_still_holds(launched_command, launched_generation, site, ctxt)`
+  / `_running_command_generation` — the QS-320 dispatch-ownership
+  surface, all on `AbstractDevice`. The installer is the **one way in**
+  to the command slot and returns the tag the guards compare; absorb
+  deliberately bypasses it (an equal-valued object for the *same*
+  dispatch must stay generation-neutral). The generation is **never
+  reset** — not by `reset()`, not by `abandon_running_command` — because
+  a rewind would let a tag captured before the reset compare equal to
+  one issued after it. It is a convention with an obvious front door,
+  not enforcement: there is no lint.
 - `last_command_execution_time` — in-memory causality anchor, set
   only on real `execute_command` successes (via the shared
   `_anchor_causality_guard_if_executed` helper called from
