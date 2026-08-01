@@ -93,11 +93,14 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   `unresponsive_since`-only property would stay `True` forever with no
   retry left to clear it. If we are not waiting on anything, we are not
   uncontrollable. QS-307 (from #308) closed the last path that emptied
-  the slot while keeping the clock, so a set clock now always describes
-  a live, unresolved episode.
-- **Two clocks, not one (QS-307).** `unresponsive_since` is per **command**
-  — every slot-emptying path releases it, which is what lets it drive
-  supersede-vs-stack honestly. `_unresponsive_needs_ack` is per **episode**
+  the slot **with no successor** while keeping the clock.
+- **Two clocks, not one (QS-307).** `unresponsive_since` tracks the command
+  in flight — every path that empties the slot **with no successor** releases
+  it, which is what lets it drive supersede-vs-stack honestly. A *supersede*
+  is the deliberate exception: `abandon_running_command` preserves the clock
+  and hands it to the successor, so the load keeps superseding instead of
+  stacking and holds QS-304's saturated 300 s cadence. Releasing it there to
+  "restore the invariant" would silently undo that. `_unresponsive_needs_ack` is per **episode**
   — "we are still in an unresolved lost-control episode" — and it gates the
   ERROR log and the push, never the clock. Conflating them is what produced
   a notification every ~18 min for a device flapping between unreachable and

@@ -199,8 +199,8 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         # review fix QS-256#03: a future-dated reset-ask timestamp keeps the
         # post-override cooldown permanently active (negative age is always
         # below the cooldown window) — same future-dated drop as the override
-        # timestamp, with the same skew tolerance (QS-307: shared constant,
-        # so retuning it cannot desync this site from the runtime comparisons)
+        # timestamp, with the same `CLOCK_SKEW_TOLERANCE_S` band. Restore boundary
+        # only — the runtime comparisons use plain subtraction (QS-307).
         if self.asked_for_reset_user_initiated_state_time is not None:
             ask_age_s = (datetime.now(pytz.UTC) - self.asked_for_reset_user_initiated_state_time).total_seconds()
             # QS-307: a load that cannot hold an override has no lifecycle to drain a

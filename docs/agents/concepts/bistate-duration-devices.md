@@ -148,12 +148,18 @@ Four things about this shape are load-bearing:
    "am I waiting on a command" (unrelated to clock arithmetic, so splitting it
    out is the actual fix) versus "can this load have an override at all" (a load
    that cannot needs no lifecycle, ever). QS-307 briefly moved this one down too,
-   which ran the whole override lifecycle every cycle for chargers and boost-only
-   loads, and reverted it. The case that motivated the move — a load
-   reconfigured to boost-only holding a live override nothing could clear — is
-   handled at the restore boundary instead: `use_saved_extra_device_info` already
-   drops stale and future-dated overrides, and now also drops them when
-   `support_user_override()` is false. A reconfigure reloads the entry.
+   which ran the whole override lifecycle every cycle for boost-only
+   `QSBiStateDuration` loads, and reverted it. (Chargers are unaffected either
+   way: `QSChargerGeneric` is not a `QSBiStateDuration`, overrides
+   `check_load_activity_and_constraints` outright, and its
+   `support_user_override()` returns `True`.) The case that motivated the move —
+   a load reconfigured to boost-only holding a live override nothing could
+   clear — is handled at the restore boundary instead:
+   `use_saved_extra_device_info` already drops stale and future-dated overrides,
+   and now also drops the override *state* when `support_user_override()` is
+   false. A reconfigure reloads the entry. Note this covers the stored override
+   fields, not a persisted override *constraint*, which self-heals at its
+   `end_of_constraint` exactly as on `main`.
 3. **Expiry drops an override-*aligned* in-flight command.** Reachable only
    after the hoist (the old gate guaranteed an empty slot here). Nulling the
    override state also disables `force_relaunch_command`'s suppression drop,

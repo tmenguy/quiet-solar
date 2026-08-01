@@ -367,7 +367,7 @@ async def test_ac3_a_live_override_is_never_reset_early(running, current):
 @pytest.mark.parametrize("current", [None, CMD_ON], ids=["no-current", "current-on"])
 @pytest.mark.parametrize("running", [None, CMD_ON], ids=["no-running", "running-on"])
 async def test_ac3_an_aged_override_resets_on_the_same_cycle_as_on_main(running, current):
-    """...and the POSITIVE half, which review fix #07 asked to stop delegating.
+    """...and the POSITIVE half, which review fix #01/07 asked to stop delegating.
 
     The window boundary is `> override_duration`, so the last cycle at exactly
     8 h must NOT reset and the next one must — identically in all four
@@ -606,13 +606,13 @@ async def test_ac6_detection_still_works_once_the_command_has_landed():
 
 
 # =============================================================================
-# AC4b — `support_user_override()` is not a second freeze (review fix #03)
+# AC17-AC19 — `support_user_override()` gates the whole block, as on `main`
 #
-# Unlike the `qs_enable_device` arm, this one is not self-healing: disabling and
-# re-enabling a load runs the lifecycle again, but flipping a load to boost-only
-# never does. With the lifecycle behind it, a load reconfigured to boost-only
-# kept a live override or a pending reset-ask FOREVER, across restarts — exactly
-# the harm this story exists to fix.
+# Review fix #01 moved this conjunct down beside `is_load_command_set` so the
+# lifecycle would tear down an override on a load reconfigured to boost-only.
+# Review fix #04 reverted that: it ran the whole override lifecycle every cycle
+# for every boost-only `QSBiStateDuration` load to serve one reconfiguration
+# case, which is now handled at the restore boundary instead.
 # =============================================================================
 
 
@@ -841,7 +841,7 @@ async def _assert_override_self_heals(pump: _StuckPump) -> None:
 
     assert pump.external_user_initiated_state is None
     assert _override_constraints(pump) == []
-    # review fix #02: the override's own command must not outlive the override
+    # review fix #01/02: the override's own command must not outlive the override
     assert pump.running_command is None
     transport_calls_after_expiry = len(pump.transport_calls)
 
