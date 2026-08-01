@@ -145,9 +145,15 @@ under `custom_components/quiet_solar/` are 100% covered, self-healing a
 drifted testmon baseline automatically (no manual file deletion ever).
 Dev-only changes (`scripts/`, `docs/`, agent files) carry no delta to
 `custom_components/quiet_solar/` coverage specifically, so that side of
-`--impacted` is a fast no-op — but the gate/tooling's own correctness is
-still guarded by its testmon-selected tests under `--impacted` (and the
-whole-repo gate in CI). The whole-repo 100% gate is enforced in **CI** on every PR — the
+`--impacted` is a fast no-op. When your change set **does** contain a
+`.py` file, the gate/tooling's own correctness is still guarded by its
+testmon-selected tests (plus the whole-repo gate in CI). But a change
+set with **no `.py` file at all** — docs-only, agent-file-only, a
+commands-only edit — makes `--impacted` exit early and check
+**nothing** (QS-290): testmon fingerprints AST blocks in `.py` files
+only, so it could never select a test. That green is honest but empty,
+and the `--quick tests/qs` run below is then your ONLY real
+verification, not a supplement. The whole-repo 100% gate is enforced in **CI** on every PR — the
 only local full-gate run is an explicit user request:
 
 ```bash
