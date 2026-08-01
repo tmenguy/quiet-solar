@@ -5,7 +5,9 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
   - custom_components/quiet_solar/ha_model/person.py
-last_verified: 2026-07-31
+  - custom_components/quiet_solar/ha_model/device.py
+  - custom_components/quiet_solar/home_model/load.py
+last_verified: 2026-08-01
 ---
 
 # Notification routing
@@ -60,32 +62,76 @@ alarm at 3am is supposed to wake you).
   `check_and_relaunch_command` when a load crosses the lost-control threshold
   (~1050 s of unacked relaunches). It is `AbstractLoad`-only:
   the base `AbstractDevice._notify_unresponsive` is a documented no-op,
-  so an uncontrollable **battery** gets the ERROR log but no push.
-  Accepted product consequence.
+  so an uncontrollable **battery** latches and logs but never pushes, and
+  gets no `qs_load_lost_control` entity either (the dispatch arm is
+  `isinstance(device, AbstractLoad)`). Accepted product consequence: from
+  QS-319 its per-climb trace is the INFO "clock re-armed … not
+  re-notifying" line rather than one ERROR per ~18.5 min.
+  A charger with **no car and no `mobile_app`** is the mirror image: it
+  announces, latches and pages nobody. Also accepted — the binary sensor is
+  the surface for that case.
 
   **How often it fires — stated exactly, because it is easy to overclaim.**
-  When QS gives up probing a device it cannot reach, the lost-control clock is
-  released so the next command is not mis-scored (QS-307, from #308).
-  `_unresponsive_needs_ack` stops that release from **re-announcing an incident
-  that was already announced** — without it, a device dropping off the network
-  intermittently alerted 5× where `main` alerted once over the same 105
-  minutes. That is the flag's entire job.
+  **One alert per announced episode** (QS-319). `_unresponsive_needs_ack` is
+  set by the announce branch of `_escalate_or_recover` itself, *before* the
+  await, so a notify service that raises cannot resurrect the storm. An
+  episode ends on exactly three things, and every statement of the rule must
+  list all three:
 
-  It does **not** deduplicate alerts for a device that stays *reachable* and
-  simply never obeys. That case re-crosses the threshold about every 18.5
-  minutes and alerts each time, here and on `main` alike — pre-existing,
-  measured identical, and tracked in
-  [#319](https://github.com/tmenguy/quiet-solar/issues/319), which is where a
-  general notification policy belongs.
+  1. a **real ack** (`_ack_command` → `_clear_unresponsive(...,
+     CONFIRMED)`) — the device answered;
+  2. **explicit user remediation** — `_acknowledge_lost_control`, called from
+     `user_clean_and_reset` (the reset button) and from the
+     `qs_enable_device` setter's `enabled != self._enabled` guard;
+  3. a **process restart or config-entry reload**, where nothing restores the
+     latch (see below).
 
-  Nor does it survive a restart: `_unresponsive_needs_ack` is deliberately
-  **not** persisted, matching `unresponsive_since`, because both describe an
-  in-flight command and a reload wipes the command slot. So a permanently
-  flapping device announces once more per HA restart. Persisting it would
-  reintroduce a failure QS-307 already had to fix — a latch carried into a
-  process where nothing has been announced silences the first genuine
-  alert — so if this ever becomes a real complaint, throttle at the channel
-  instead. Noted in #319.
+  This covers both shapes. A device dropping off the network intermittently
+  alerted 5× where `main` alerted once over 105 minutes (QS-307, from #308);
+  a device that stays *reachable* and simply never obeys alerted 5× over the
+  same window on `main` and on the QS-307 branch alike (QS-319). Both are now
+  1. The service-call count is unchanged at 41 over that horizon — the fix
+  changes **alerts only**, never how hard QS retries.
+
+  The second shape needed one more change: the "command slot emptied with no
+  successor" release in `_escalate_or_recover` used to claim
+  `ContactEvidence.CONFIRMED`. That was a **fake ack** — *we* emptied the
+  slot, nobody answered — and it is now `UNKNOWN`. It matters because it is
+  the *production* ordering: `check_loads_commands` runs before the solver's
+  `launch_command`, so a supersede-drop leaves the slot empty across the cycle
+  boundary and the next cycle reaches that release. Without it the latch would
+  be cleared roughly once per load-management cycle and the once-per-episode
+  rule would do nothing in the field.
+
+  Nor does the latch survive a restart: it is deliberately **not** persisted,
+  matching `unresponsive_since`. Nothing *clears* it on restart — the device
+  object is simply rebuilt with `_unresponsive_needs_ack = False` by
+  `__init__`, so do not hunt for clearing code. So a permanently broken device
+  announces once more per HA **restart or config-entry reload** (reloads are
+  much more frequent — any options edit), and `qs_load_lost_control` reads
+  `off` for the ~18 minutes the ladder takes to re-cross. That window is a
+  deliberate consequence, not a bug: for those minutes QS genuinely does not
+  know the device is broken, and reporting "not currently in an announced
+  episode" is honest. Persisting would reintroduce a failure QS-307 already had
+  to fix — a latch carried into a process where nothing has been announced
+  silences the first genuine alert.
+
+  **Delivery: the push carries a collapsing tag** (QS-319). Lost-control
+  pushes set `data.tag` to
+  `f"{NOTIFICATION_TAG_LOST_CONTROL_PREFIX}{device_id}"`. HA's mobile-app
+  notify platform treats `tag` as a replace-key on both Android and iOS, so
+  repeated alerts for one load replace each other instead of stacking. The tag
+  keys on the *config-derived* `device_id`, so it is stable across restarts;
+  for a charger it identifies the failing **charger**, not the recipient, so
+  swapping cars mid-episode does not re-alert. Scoped to lost-control pushes
+  only (a generic per-type tag would collapse unrelated constraint
+  notifications), and shipped **inside** `data`, never top-level — standard
+  notify platforms ignore unknown `data` keys.
+
+  The nested `data` dict stays **conditional** on `mobile_app_url is not None
+  or notification_tag is not None`. Creating it unconditionally would ship
+  `"data": {}` on every previously-bare notification, a shape change to a path
+  shared by every QS notification.
 
 The push is issued **last** in `_escalate_or_recover`, and a failure in it
 cannot skip the surrounding housekeeping or mask the device exception the
@@ -98,11 +144,17 @@ written before the await.
 
 ### There is no recovery push (QS-304)
 
-The channel is a fire-and-forget `Platform.NOTIFY` mobile push with no
-notification id, so nothing can be dismissed or updated — and sending an
-`ERROR`-status push to say things are *fine* would be wrong. Recovery
-gets one INFO log line. One line in, one line out; no heartbeat, and no
-entity — the lost-control state is internal.
+Still true, and the reasoning is now the *right* one: sending an
+`ERROR`-status push to say things are *fine* would be wrong. Recovery gets
+one INFO log line. One line in, one line out; no heartbeat.
+
+Two things that used to justify it are **false since QS-319** and must not be
+repeated: the push is no longer id-less (it carries a `data.tag` and the
+mobile app collapses the series), and the state is no longer invisible — the
+`qs_load_lost_control` PROBLEM binary sensor exposes
+`has_unacknowledged_lost_control` on every commandable load, which is
+precisely "expose recovery as state, not as a notification". The recovery
+*policy* is unchanged; only these two factual claims were wrong.
 
 ## Common mistakes
 
@@ -116,9 +168,10 @@ entity — the lost-control state is internal.
   Trust depends on traceable "why".
 - Hard-coding the recipient. Always route through `QSPerson` so
   per-person preferences apply.
-- Pairing an entry push with a "recovered" push. The channel cannot
-  dismiss, so a second push is noise — expose recovery as state, not as
-  a notification (QS-304).
+- Pairing an entry push with a "recovered" push. An `ERROR`-status push
+  saying things are fine is wrong — expose recovery as state, not as a
+  notification (QS-304). QS-319 did exactly that: read
+  `binary_sensor.<load>_lost_control`.
 - Clearing a lost-control *flag* without also resetting the evidence
   behind it. QS-304: anything that clears `unresponsive_since` must also
   reset the relaunch rung — otherwise the next cycle re-crosses the

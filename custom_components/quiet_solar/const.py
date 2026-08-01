@@ -284,6 +284,10 @@ BINARY_SENSOR_SOLAR_FORECAST_OK = "qs_solar_forecast_ok"
 BINARY_SENSOR_CAR_API_OK = "qs_car_api_ok"
 BINARY_SENSOR_CAR_IS_STALE = "qs_car_is_stale"
 BINARY_SENSOR_CAR_IS_SOC_ESTIMATED = "qs_car_is_soc_estimated"
+# QS-319: the per-EPISODE lost-control latch, as a PROBLEM binary sensor on every
+# commandable load. Exposes `has_unacknowledged_lost_control`, NOT the per-command
+# `is_uncontrollable`, which flickers False every time the command slot empties.
+BINARY_SENSOR_LOAD_LOST_CONTROL = "qs_load_lost_control"
 
 SENSOR_SOLAR_FORECAST_AGE = "qs_solar_forecast_age"
 SENSOR_SOLAR_FORECAST_SCORE_PREFIX = "qs_solar_forecast_score_"
@@ -378,6 +382,15 @@ DEVICE_STATUS_CHANGE_CONSTRAINT = "change_constraint"
 DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED = "change_constraint_completed"
 DEVICE_STATUS_CHANGE_ERROR = "device_error"
 DEVICE_STATUS_CHANGE_NOTIFY = "device_notify"
+
+# QS-319: the mobile-app `data.tag` prefix for "Quiet Solar lost control of X"
+# pushes. HA's mobile-app notify platform treats `tag` as a replace-key on both
+# Android and iOS, so a stable per-load tag collapses the series into a single
+# notification whose timestamp updates. Suffixed with the load's `device_id`, which
+# is config-derived and therefore stable across restarts. Deliberately scoped to
+# lost-control pushes only — a generic per-type tag would also collapse unrelated
+# constraint notifications.
+NOTIFICATION_TAG_LOST_CONTROL_PREFIX = "qs_lost_control_"
 
 CAR_CHARGE_TYPE_NOT_PLUGGED = "Not Plugged"
 CAR_CHARGE_TYPE_FAULTED = "Faulted"

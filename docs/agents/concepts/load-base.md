@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-31
+last_verified: 2026-08-01
 ---
 
 # AbstractDevice & AbstractLoad
@@ -101,31 +101,58 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   and hands it to the successor, so the load keeps superseding instead of
   stacking and holds QS-304's saturated 300 s cadence. Releasing it there to
   "restore the invariant" would silently undo that. `_unresponsive_needs_ack` is per **episode**
-  — "we are still in an unresolved lost-control episode" — and it gates the
+  — "we announced a loss and it has not been *acknowledged*" — and it gates the
   ERROR log and the push, never the clock. Conflating them is what produced
   a notification every ~18 min for a device flapping between unreachable and
   answering-but-disobeying: `running_command_num_relaunch_after_invalid` is
   cumulative over a command's life, so the give-up can fire long after the
   threshold was crossed by ordinary relaunches, and each release re-opened
   the guard.
+
+  **QS-319 gave the latch a third role: user-visible state.** It is what the
+  `qs_load_lost_control` PROBLEM binary sensor reads, through the public
+  `has_unacknowledged_lost_control` property — *not* `is_uncontrollable`, which
+  is per-command and flickers False every time the slot empties. Note the
+  semantics the name carries: **acknowledged, not resolved**. A user reset ends
+  the episode while the device may well still be broken; the next ladder climb
+  then opens a new one and the sensor comes back on.
+
+  An episode ends on exactly three things, and every statement of the rule —
+  here, in the code comments, and in `notification-routing.md` — must list all
+  three: a **real ack**, **explicit user remediation**
+  (`_acknowledge_lost_control`), or a **process restart / config-entry reload**,
+  where nothing restores the latch. The latch is now set by the *announce*
+  branch of `_escalate_or_recover` too, before the await, so a notify service
+  that raises cannot resurrect the storm.
 - **`_clear_unresponsive(reason, contact=ContactEvidence...)`.** The argument
   says what the release tells us about the device, and only that decides
   whether an **episode** ended. It is **required** and an `enum`, so a
   forgotten kwarg is a `TypeError` and a typo an `AttributeError` — defaulting
   to the episode-ending value would let a future caller end an incident by
   omission.
-  - `CONFIRMED` (the real ack in `_ack_command`, and the empty-slot re-arm)
-    **clears** the latch, *unconditionally* — an ack is contact whether or not
-    there was a clock left to release.
+  - `CONFIRMED` (the real ack in `_ack_command` — since QS-319 the **only**
+    caller) **clears** the latch, *unconditionally* — an ack is contact whether
+    or not there was a clock left to release.
   - `UNREACHABLE` (the invalid-probe give-up, the only such caller)
     **latches** it — but only when it actually released a live clock. Latching
     a release that released nothing swallowed the load's first genuine push
     forever, and that is the *ordinary* ordering: the give-up fires ~70 s in,
     the escalation threshold is ~1050 s away.
-  - `UNKNOWN` (`_drop_running_command`, the `keep_commands=False` wipe)
-    **leaves it alone**. These are QS changing its mind — the user took
-    control, the load was disabled, an override expired — and say nothing
-    about whether the device answers.
+  - `UNKNOWN` (`_drop_running_command`, the `keep_commands=False` wipe, and —
+    since QS-319 — the empty-slot re-arm) **leaves it alone**. These are QS
+    changing its mind — the user took control, the load was disabled, an
+    override expired, we emptied the slot ourselves — and say nothing about
+    whether the device answers.
+
+  **The empty-slot re-arm moved from `CONFIRMED` to `UNKNOWN` (QS-319).** It
+  was a **fake ack**: nobody answered, *we* emptied the slot. Harmless only
+  while the give-up was the sole latch-setter (it nulls `current_command`, so
+  it skipped the gate). Once the announce branch also latches, `CONFIRMED`
+  there would clear the episode on every cycle that runs with an empty slot —
+  which is the *production* ordering. Blast radius: **the latch and nothing
+  else, not even a log string** — `CONFIRMED` and `UNKNOWN` take the same
+  `else` branch and emit the identical "Lost-control state cleared for load
+  %s: %s" line.
 
   **What the third value is for, precisely.** Measured against the parity
   oracle, a two-valued signal is enough for the flapping scenario on its own.
@@ -133,19 +160,52 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   the override-expiry drop in `check_load_activity_and_constraints` — and
   without it that new drop would re-announce an already-announced incident.
   That it also quiets the two pre-existing drop paths (where `main` does
-  re-announce) is a bonus, not the justification. Do not read it as a general
-  alert-deduplication guarantee: see the storm caveat below.
-- **Five releasers, one writer.** `_clear_unresponsive` is the only writer;
-  it is reached by an ack, by the empty-slot re-arm, by
-  `_drop_running_command` (**unconditionally** — an emptied slot has no
-  owner for the clock whether or not a confirmed command ever existed), by
-  the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up in `check_commands`
-  (QS-307, the one `UNREACHABLE` caller), and by a
-  `keep_commands=False` wipe. All five release the *clock*; which of them end
-  an *episode* is the `contact` question above. It also clears the
-  supersede anchor
-  *ahead of* its own early return, so the two fields cannot
-  desynchronise.
+  re-announce) is a bonus, not the justification. QS-319 gave `UNKNOWN` a
+  second, load-bearing caller — the empty-slot re-arm — so the third value is
+  no longer marginal. Read the guarantee as "one alert per announced episode",
+  never as a blanket rule over unrelated notification types: see the scope
+  note below.
+- **One writer for the *clock*; the *latch* has four writers and five
+  triggers.** These are two different guarantees and QS-319 separated them.
+
+  `_clear_unresponsive` is the only writer of `unresponsive_since`; it is
+  reached by five releasers — an ack, the empty-slot re-arm,
+  `_drop_running_command` (**unconditionally** — an emptied slot has no owner
+  for the clock whether or not a confirmed command ever existed), the
+  `NUM_MAX_INVALID_PROBES_COMMANDS` give-up in `check_commands` (QS-307, the
+  one `UNREACHABLE` caller), and a `keep_commands=False` wipe. All five release
+  the *clock*; which of them end an *episode* is the `contact` question above.
+  It also clears the supersede anchor *ahead of* its own early return, so the
+  two fields cannot desynchronise.
+
+  `_unresponsive_needs_ack` is written from four places:
+
+  | Writer | Effect | Trigger |
+  | --- | --- | --- |
+  | `_escalate_or_recover` announce branch | **sets** | ladder wall crossed, episode announced (QS-319) |
+  | `_clear_unresponsive(CONFIRMED)` | clears | real ack |
+  | `_clear_unresponsive(UNREACHABLE)` | sets | invalid-probe give-up (QS-307) |
+  | `_acknowledge_lost_control` | clears | ← `user_clean_and_reset` (reset button, car auto-reset) |
+  | `_acknowledge_lost_control` | clears | ← `qs_enable_device` setter (enable/disable transition) |
+
+  `_acknowledge_lost_control` **early-returns when no episode is open**: both
+  call sites fire on every reset press and every enable/disable transition, the
+  overwhelming majority with nothing to acknowledge, and an unconditional log
+  would claim an acknowledgement that never happened.
+
+  The `qs_enable_device` clear sits **inside** the setter's
+  `if enabled != self._enabled:` guard, which covers both edges and makes an
+  idempotent re-write unable to reach it — load-bearing, because
+  `switch.py::QSSwitchEntityWithRestore.async_added_to_hass` drives the setter
+  via `async_turn_on/off(for_init=True)` on every HA startup.
+
+  Two deliberate edges. **`user_clean_constraints` is excluded**: it keeps the
+  in-flight command, so the device is still being commanded and still not
+  obeying — the episode is genuinely open. And **`car.py`'s
+  confirmed-departure auto-reset** (`CAR_NOT_HOME_AUTO_RESET_S`) calls
+  `user_clean_and_reset()` with no user involved and cascades to attached
+  chargers, so a car driving away acknowledges an open episode on its charger.
+  Accepted: the failure direction is an *extra* alert, never a suppressed one.
 - **Both clock comparisons go through `_seconds_since`.** It returns
   `None` for "no anchor" and for an anchor in the *future*, which means
   "treat as fully elapsed". A backwards clock step (HA booting without an
@@ -197,19 +257,21 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
 - **A disabled load never shouts.** The escalation branch is gated on
   `qs_enable_device`; the housekeeping half still runs. QS was
   explicitly told to leave the load alone, so it must not push.
-- **`_escalate_or_recover`'s `current_command is not None` gate is
-  load-bearing (QS-307).** Not for `unresponsive_since` — every
-  slot-emptying path releases the clock at its own call site, so there is
-  never a live one left here — but for `_unresponsive_needs_ack`. Reaching
-  the housekeeping arm with `current_command is None` means the give-up ran
-  earlier in **this same cycle** and may have just latched the episode; the
-  release here is `CONFIRMED`, which clears the latch *unconditionally*, so
-  without the gate it would undo that one statement later. The invariant to
-  keep in mind: only the give-up sets the latch, and the give-up nulls
-  `current_command`. Note
-  `_last_supersede_time` is cleared *outside* that gate, on purpose — the
-  two fields answer different questions, so read the comment for which
-  sentence governs which.
+- **`_escalate_or_recover`'s `current_command is not None` gate is kept for
+  minimality, not for the latch (QS-319 rewrote this).** It was
+  load-bearing under QS-307, when the release here was `CONFIRMED` and the
+  give-up was the only latch-setter: reaching the housekeeping arm with
+  `current_command is None` meant the give-up had run earlier in the same cycle
+  and may have just latched the episode, and an unconditional `CONFIRMED` would
+  have undone that one statement later.
+
+  Both halves of that argument are now gone — the release is `UNKNOWN`, which
+  touches no latch, and the announce branch sets the latch too. The gate stays
+  anyway: with `UNKNOWN` it is arguably unnecessary, but removing it would
+  release clocks that are not released today, and there is no evidence behind
+  that behavior change. Deliberate minimality. Note `_last_supersede_time` is
+  cleared *outside* the gate, on purpose — the two fields answer different
+  questions, so read the comment for which sentence governs which.
 - **No shape keeps the clock with an empty slot (QS-307, from #308).** The
   last one that did was the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up: it
   goes through `_ack_command(time, None)`, which nulls `current_command` on
@@ -231,19 +293,17 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   climb back to `NUM_MAX_COMMAND_RELAUNCH`) covers a rung earned *inside* a
   give-up window. The **episode latch** covers a rung earned *before* one,
   which is the case the rung argument alone misses — see "Two clocks, not
-  one" above. Together they hold the measured parity with `main`: an
-  intermittently unreachable device produces **1 alert per 105 min** on both,
-  where the release without the latch produced 5. The supersede **anchor** was
-  already released on that path (in `_escalate_or_recover`'s housekeeping
-  arm, outside the `current_command` gate) so a fresh command's first
-  legitimate supersede is not throttled.
+  one" above. Together they held the measured parity with `main` for the
+  flapping shape: **1 alert per 105 min**, where the release without the latch
+  produced 5. The supersede **anchor** was already released on that path (in
+  `_escalate_or_recover`'s housekeeping arm, outside the `current_command`
+  gate) so a fresh command's first legitimate supersede is not throttled.
 
-  **Scope caveat — this is not general alert deduplication.** A device that
-  stays *reachable* and simply never obeys re-crosses the threshold about every
-  18.5 minutes and alerts every time, on this code and on `main` alike. That is
-  pre-existing and deliberately untouched here; it is tracked in
-  [#319](https://github.com/tmenguy/quiet-solar/issues/319), where the
-  notification policy it needs can be designed properly.
+  **Scope, restated for QS-319.** The rule is now "one alert per announced
+  episode", full stop — the reachable-but-disobeying shape is covered too, at
+  1 alert per 105 min against 5 on `main`, and the service-call count is
+  unchanged at 41. It is still not a blanket rule over unrelated notification
+  types: the tag and the latch are both scoped to lost-control, by decision.
 - **"One service call per 300 s" is per command *identity*, not per
   load.** The relaunch ladder and the supersede throttle are measured on
   two independent anchors, so a relaunch immediately followed by a
@@ -319,10 +379,17 @@ Switching-cost protection (`AbstractDevice`):
   / `_drop_running_command(time, reason)` /
   `check_and_relaunch_command(time)` / `_finish_command_cycle(time)` /
   `_is_supersede_throttled(time)` / `_notify_unresponsive(time,
-  command)` — the QS-304 lost-control surface. `_notify_unresponsive` is
-  a documented no-op on `AbstractDevice` (the battery reaches the same
-  driver and has no notification channel) and is overridden on
-  `AbstractLoad` to push one `DEVICE_STATUS_CHANGE_ERROR`.
+  command)` / `has_unacknowledged_lost_control` /
+  `_acknowledge_lost_control(reason)` — the lost-control surface.
+  `_notify_unresponsive` is a documented no-op on `AbstractDevice` (the battery
+  reaches the same driver and has no notification channel) and is overridden on
+  `AbstractLoad` to push one `DEVICE_STATUS_CHANGE_ERROR`, tagged with
+  `NOTIFICATION_TAG_LOST_CONTROL_PREFIX + device_id` so the mobile app collapses
+  the series (QS-319). `has_unacknowledged_lost_control` is the public,
+  per-episode read that the `qs_load_lost_control` binary sensor exposes; it is
+  readable on every `AbstractDevice`, including ones that will never expose it,
+  so do not add the entity to a battery on the strength of the base-class
+  property.
 - `last_command_execution_time` — in-memory causality anchor, set
   only on real `execute_command` successes (via the shared
   `_anchor_causality_guard_if_executed` helper called from

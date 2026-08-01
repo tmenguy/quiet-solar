@@ -262,7 +262,11 @@ async def test_re_arm_resets_the_ladder_rung_so_the_next_command_starts_fresh():
     # ...and it only crosses the threshold after the real 1050 s of evidence.
     await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
     assert load.is_uncontrollable is True
-    assert len([n for n in load.state_change_notifications if n[1] == DEVICE_STATUS_CHANGE_ERROR]) == 2
+    # QS-319: still ONE. The rung assertions above are this test's subject and are
+    # untouched; this final count used to be `== 2` and that second alert *was* the
+    # storm — the empty-slot re-arm faked an ack, ended the episode and let the very
+    # next ladder climb announce the same unresolved loss all over again.
+    assert len([n for n in load.state_change_notifications if n[1] == DEVICE_STATUS_CHANGE_ERROR]) == 1
 
 
 async def test_relaunch_counters_never_outlive_the_command_they_describe():
@@ -523,6 +527,14 @@ async def test_a_second_lost_control_episode_can_escalate_again(caplog: pytest.L
 # this is between five and six of them.
 STORM_MEASUREMENT_HORIZON_S = 105 * 60
 
+# QS-319: the number of service calls a reachable-but-disobeying load receives over
+# `STORM_MEASUREMENT_HORIZON_S`, measured on the pre-change tree. It tracks the
+# RETRY CADENCE, not the alert policy: it may only change if the relaunch ladder or
+# the supersede throttle changes, never because of #319. The invariant #319 pins is
+# that this number is IDENTICAL before and after the latch/contact fixes — QS keeps
+# trying exactly as hard, it just stops shouting about it.
+BASELINE_SERVICE_CALLS_OVER_HORIZON = 41
+
 
 async def _flap_once(load: NeverAcksLoad, time: datetime) -> datetime:
     """Drop off the network for one give-up window, then answer-but-disobey.
@@ -559,8 +571,10 @@ async def test_a_flapping_device_shouts_once_until_it_answers_again(caplog: pyte
     does not cover that.
 
     What this does NOT cover: a device that stays reachable and simply never obeys.
-    That alerts every ~18.5 min here and on `main` alike — pre-existing, out of
-    scope, tracked as #319.
+    That shape is QS-319's, and is pinned by
+    `test_a_reachable_but_disobeying_load_alerts_once_per_episode` and its production
+    -ordering sibling — also 1 alert per 105 min, since the announce branch latches
+    the episode itself.
     """
     load = NeverAcksLoad(name="pool_house")
     load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
@@ -697,8 +711,10 @@ async def test_a_drop_we_chose_does_not_re_announce_the_episode(caplog: pytest.L
     drop, for a device that never came back.
 
     Scoped deliberately: this pins `_drop_running_command`'s contact contract, NOT a
-    general "only a real ack ever clears the latch" — the empty-slot re-arm clears it
-    too, and #319 owns the reachable-but-disobeying storm.
+    general "only a real ack ever clears the latch". Three things end an episode: a
+    real ack, explicit user remediation (`_acknowledge_lost_control`), and a process
+    restart or config-entry reload. QS-319 took the empty-slot re-arm OFF that list —
+    it was a fake ack and now releases with `UNKNOWN`.
     """
     load = NeverAcksLoad(name="pool_house")
     load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
@@ -995,8 +1011,11 @@ async def test_a_failing_push_does_not_mask_the_device_error(caplog: pytest.LogC
     assert load.unresponsive_since is not None
 
     # Now make BOTH the probe and the push fail, and re-arm the escalation so the
-    # notify is reached again.
+    # notify is reached again. QS-319: the announce also latches the EPISODE, so
+    # clearing the per-command clock alone is no longer enough to reach the push —
+    # the announce branch would short-circuit to the "already announced" INFO.
     load.unresponsive_since = None
+    load._unresponsive_needs_ack = False
     load.probe_error = RuntimeError("the device fell off the bus")
     load.notify_error = RuntimeError("the push channel exploded")
 
@@ -1158,13 +1177,21 @@ async def test_a_failing_push_leaves_the_rung_untouched_because_the_slot_is_full
     """
     load = NeverAcksLoad(name="pool_house")
     time = await drive_until_uncontrollable(load)
-    load.unresponsive_since = None  # re-arm so the notify is reached again
+    # Re-arm so the notify is reached again. QS-319: BOTH the per-command clock and
+    # the per-episode latch, or the announce branch short-circuits and this test
+    # stays green while silently exercising no push at all — which is worse than a
+    # red, because the mutual exclusion it exists to pin would go unasserted.
+    load.unresponsive_since = None
+    load._unresponsive_needs_ack = False
     load.notify_error = RuntimeError("the push channel exploded")
     rung_before = load.running_command_num_relaunch
+    pushes_before = len(load.state_change_notifications)
     assert rung_before >= NUM_MAX_COMMAND_RELAUNCH
 
     await load.check_and_relaunch_command(time)
 
+    # The push really was attempted (the double records before it raises).
+    assert len(load.state_change_notifications) == pushes_before + 1
     assert load.running_command is not None
     assert load.running_command_num_relaunch == rung_before
     assert load.unresponsive_since is not None
@@ -1321,6 +1348,308 @@ async def test_pool_house_incident_regression():
     assert load.is_uncontrollable is True
     errors = [n for n in load.state_change_notifications if n[1] == DEVICE_STATUS_CHANGE_ERROR]
     assert len(errors) == 1
+
+
+# =============================================================================
+# QS-319 — one alert per announced EPISODE, for a reachable-but-disobeying load
+# =============================================================================
+
+
+def _error_notifications(load: NeverAcksLoad) -> list[tuple[datetime, str, str | None]]:
+    """Return only the lost-control pushes recorded on the load."""
+    return [n for n in load.state_change_notifications if n[1] == DEVICE_STATUS_CHANGE_ERROR]
+
+
+async def _drive_reachable_but_disobeying(
+    load: NeverAcksLoad,
+    *,
+    launch_before_check: bool,
+    horizon_s: float = STORM_MEASUREMENT_HORIZON_S,
+    start: datetime = T0,
+) -> datetime:
+    """Drive #319's shape: the probe always answers, the device never obeys.
+
+    `drive()` cannot express this — it only calls `check_and_relaunch_command` and
+    never launches, so the solver half of the load-management cycle is missing and
+    the supersede/drop paths are never reached.
+
+    One real ack first, so the episode measured below is a genuinely new one rather
+    than an artifact of a load that was never in contact.
+
+    `launch_before_check` selects the two orderings the story distinguishes:
+
+    - `False` — the issue's own ordering. The equal-command supersede-drop lands at
+      the END of a cycle, and the next cycle refills the slot before the check, so
+      `_escalate_or_recover` never sees an empty slot.
+    - `True` — the PRODUCTION ordering. `QSHome.update_loads` runs
+      `check_loads_commands` *before* the solver's `launch_command`, so a
+      supersede-drop leaves the slot empty across the cycle boundary and the next
+      `check_and_relaunch_command` reaches the slot-empty release.
+    """
+    load.probe_result = True
+    await load.launch_command(start, CMD_ON)
+    await load.check_and_relaunch_command(start)
+    assert load.current_command == CMD_ON
+
+    load.probe_result = False
+    time = start + timedelta(seconds=CYCLE_S)
+    end = start + timedelta(seconds=horizon_s)
+    while time <= end:
+        if load.running_command is None:
+            await load.launch_command(time, CMD_IDLE)
+        if launch_before_check:
+            await load.launch_command(time, CMD_ON)
+            await load.check_and_relaunch_command(time)
+        else:
+            await load.check_and_relaunch_command(time)
+            await load.launch_command(time, CMD_ON)
+        time = time + timedelta(seconds=CYCLE_S)
+
+    return time
+
+
+async def test_a_reachable_but_disobeying_load_alerts_once_per_episode():
+    """AC1: the reported case — one alert over 105 min, where today there are five.
+
+    A device that answers its probe but never reaches the commanded state used to
+    re-cross the ladder wall about every 18.5 minutes and push every time, because
+    the only escalation guard was the per-COMMAND clock and every slot-emptying path
+    re-armed it. The per-EPISODE latch is what holds the line.
+    """
+    load = NeverAcksLoad(name="cumulus_pool_house")
+
+    await _drive_reachable_but_disobeying(load, launch_before_check=False)
+
+    assert len(_error_notifications(load)) == 1
+
+
+async def test_the_production_ordering_also_alerts_once_per_episode():
+    """AC2: the regression test for the fake ack.
+
+    With the announce-latch alone this still yields five: the slot-empty release in
+    `_escalate_or_recover` claimed `CONFIRMED` — "the command slot emptied with no
+    successor" — when in fact *we* emptied it. Nobody answered, so it must be
+    `UNKNOWN`. This is the ordering production actually runs.
+    """
+    load = NeverAcksLoad(name="cumulus_pool_house")
+
+    await _drive_reachable_but_disobeying(load, launch_before_check=True)
+
+    assert len(_error_notifications(load)) == 1
+
+
+async def test_qs_keeps_trying_at_exactly_the_same_cadence():
+    """AC8: the fix changes ALERTS only — the service-call count must not move.
+
+    A "fix" that quietened the push by giving up on the device would be a
+    regression, not a fix. Pinned to a named constant so the failure message says
+    which invariant broke; the invariant is identity across the change, not the
+    literal number.
+    """
+    load = NeverAcksLoad(name="cumulus_pool_house")
+
+    await _drive_reachable_but_disobeying(load, launch_before_check=False)
+
+    assert len(load.executed_commands) == BASELINE_SERVICE_CALLS_OVER_HORIZON
+
+
+async def test_a_genuinely_new_episode_still_alerts_after_a_real_ack():
+    """AC3: the latch suppresses a re-announcement, never a NEW announcement.
+
+    Break → alert → the device finally answers → break again → two alerts. Without
+    the real ack in the middle this is the same episode and must stay quiet, which
+    `test_a_flapping_device_shouts_once_until_it_answers_again` pins.
+    """
+    load = NeverAcksLoad(name="cumulus_pool_house")
+    time = await _drive_reachable_but_disobeying(load, launch_before_check=False)
+    assert len(_error_notifications(load)) == 1
+
+    time = await _recover_with_a_real_ack(load, time)
+
+    load.probe_result = False
+    await load.launch_command(time, CMD_OFF)
+    await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+    assert load.is_uncontrollable is True
+    assert len(_error_notifications(load)) == 2
+
+
+async def test_a_failing_push_still_latches_the_episode(caplog: pytest.LogCaptureFixture):
+    """AC4: delivery is best-effort, but the guard must not depend on it.
+
+    The latch is written BEFORE the await for exactly this reason: a notify service
+    that raises must not resurrect the storm. The raise still propagates out of
+    `_notify_unresponsive` and is still swallowed by `_finish_command_cycle`, so the
+    cycle is not killed — unchanged from today.
+    """
+    load = NeverAcksLoad(name="cumulus_pool_house")
+    load.notify_error = RuntimeError("the push channel exploded")
+    load._ack_command(T0 - timedelta(seconds=60), copy_command(CMD_ON))
+    await load.launch_command(T0, CMD_IDLE)
+
+    with caplog.at_level(logging.ERROR):
+        time = await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+    # The push was ATTEMPTED (the double records before it raises) and blew up...
+    assert len(_error_notifications(load)) == 1
+    assert count_log(caplog, "Error escalating the command state for load cumulus_pool_house") == 1
+    # ...and the episode is latched all the same.
+    assert load._unresponsive_needs_ack is True
+    assert load.has_unacknowledged_lost_control is True
+
+    # Re-arm the per-COMMAND clock only, as a slot-emptying path would: the next
+    # ladder climb must not attempt a second push.
+    load.unresponsive_since = None
+    await load.check_and_relaunch_command(time)
+
+    assert len(_error_notifications(load)) == 1
+
+
+# =============================================================================
+# QS-319 §3b — explicit user remediation acknowledges an open episode
+# =============================================================================
+
+ACKNOWLEDGED_LOG = "Lost-control episode acknowledged for load"
+
+
+async def _break_again(load: NeverAcksLoad, time: datetime) -> datetime:
+    """Command the still-disobeying load afresh and climb the ladder once more."""
+    await load.launch_command(time, CMD_ON)
+    return await drive(load, time + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+
+async def test_the_reset_button_acknowledges_the_episode_and_re_arms(caplog: pytest.LogCaptureFixture):
+    """AC5: without this, a user who resets a broken load is silenced until reboot.
+
+    Every `UNKNOWN` release leaves the latch set — including the ones the *user*
+    drives. `user_clean_and_reset` is an acknowledgement in the plainest sense: they
+    have seen the problem and acted on it.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    time = await drive_until_uncontrollable(load)
+    assert load.has_unacknowledged_lost_control is True
+
+    with caplog.at_level(logging.INFO):
+        await load.user_clean_and_reset()
+
+    assert load.has_unacknowledged_lost_control is False
+    assert count_log(caplog, ACKNOWLEDGED_LOG) == 1
+
+    await _break_again(load, time)
+    assert len(_error_notifications(load)) == 2
+
+
+async def test_a_disable_re_enable_acknowledges_the_episode_and_re_arms(caplog: pytest.LogCaptureFixture):
+    """AC5, the other half: toggling the enable switch is remediation too.
+
+    The clear sits inside the setter's `if enabled != self._enabled:` guard, so it
+    covers BOTH edges. Only the disabling edge finds an episode open here, which is
+    why the acknowledgement is logged exactly once across the pair.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    time = await drive_until_uncontrollable(load)
+    assert load.has_unacknowledged_lost_control is True
+
+    with caplog.at_level(logging.INFO):
+        load.qs_enable_device = False
+        assert load.has_unacknowledged_lost_control is False
+        load.qs_enable_device = True
+
+    assert count_log(caplog, ACKNOWLEDGED_LOG) == 1
+
+    await _break_again(load, time)
+    assert len(_error_notifications(load)) == 2
+
+
+async def test_an_idempotent_enable_write_neither_clears_nor_re_announces():
+    """AC6: `switch.py` re-asserts this setter on every HA startup.
+
+    `QSSwitchEntityWithRestore.async_added_to_hass` drives `async_turn_on/off(
+    for_init=True)` at boot, and a config-entry options re-apply does the same. The
+    `enabled != self._enabled` guard makes it structurally impossible for either to
+    end an episode by accident.
+
+    The setter never pushes, so the *subsequent ladder climb* is what makes this
+    non-vacuous: it is the thing that would have re-announced.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    time = await drive_until_uncontrollable(load)
+    assert load.qs_enable_device is True
+    assert load.has_unacknowledged_lost_control is True
+
+    load.qs_enable_device = True
+
+    assert load.has_unacknowledged_lost_control is True
+
+    # Re-arm the per-command clock, as any slot-emptying path would, and climb again.
+    load.unresponsive_since = None
+    await load.check_and_relaunch_command(time)
+
+    assert len(_error_notifications(load)) == 1
+
+
+def test_acknowledging_with_no_open_episode_is_a_silent_no_op(caplog: pytest.LogCaptureFixture):
+    """AC6b: both call sites fire constantly, the overwhelming majority for nothing.
+
+    Every reset press and every enable/disable transition reaches
+    `_acknowledge_lost_control`. An unconditional log would claim an acknowledgement
+    that never happened, on a codebase whose rule is "log unavailability once, don't
+    spam logs".
+    """
+    load = NeverAcksLoad(name="pool_house")
+    assert load.has_unacknowledged_lost_control is False
+
+    with caplog.at_level(logging.INFO):
+        load._acknowledge_lost_control("the reset button was pressed")
+
+    assert load.has_unacknowledged_lost_control is False
+    assert count_log(caplog, ACKNOWLEDGED_LOG) == 0
+
+
+async def test_a_reset_while_still_broken_clears_the_latch_and_then_re_alerts():
+    """AC7: "acknowledged" is not "resolved", and the sensor says so.
+
+    The user resets a device that is still disobeying. The episode ends — they have
+    seen it — so the sensor goes off. The device has not improved, so the next ladder
+    climb opens a NEW episode and it comes back on. Surprising, and intended.
+    """
+    load = NeverAcksLoad(name="pool_house")
+    time = await drive_until_uncontrollable(load)
+    assert load.has_unacknowledged_lost_control is True
+
+    await load.user_clean_and_reset()
+
+    assert load.has_unacknowledged_lost_control is False
+
+    await _break_again(load, time)
+
+    assert load.has_unacknowledged_lost_control is True
+    assert len(_error_notifications(load)) == 2
+
+
+async def test_the_episode_latch_is_never_persisted():
+    """AC14: decision 3 — a restart must remain a genuine "try to recover".
+
+    Nothing *clears* the latch on restart: the device object is simply rebuilt with
+    `_unresponsive_needs_ack = False` by `__init__`, so there is nothing to hunt for.
+    Persisting it would reintroduce the QS-307 failure where a latch carried into a
+    process that has announced nothing silences the first genuine alert.
+
+    The stated cost: a permanently broken device alerts once more per HA restart or
+    config-entry reload — and reloads happen on any options edit — with the sensor
+    reading off for the ~18 minutes the ladder takes to re-cross.
+    """
+    load = await _uncontrollable_load()
+    assert load.has_unacknowledged_lost_control is True
+
+    saved: dict = {}
+    load.update_to_be_saved_extra_device_info(saved)
+
+    assert saved, "the AbstractLoad override must still write the fields it owns"
+    assert [key for key in saved if "unresponsive" in key or "lost_control" in key] == []
+
+    # Reconstruction, not clearing, is what ends the episode across a restart.
+    assert NeverAcksLoad(name="pool_house").has_unacknowledged_lost_control is False
 
 
 # =============================================================================

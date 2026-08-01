@@ -98,6 +98,24 @@ class MinimalTestHome:
         else:
             return [power / self.voltage, 0.0, 0.0]
 
+    # QS-319: the `qs_enable_device` setter moves the device between the home's
+    # enabled and disabled registries, so a pure-domain test of the disable /
+    # re-enable transition needs these four. No-ops on purpose — this double models
+    # voltage and budgeting, not membership, and the setter's other collaborator
+    # (`_exposed_entities`) is already `hasattr`-guarded.
+
+    def remove_device(self, device) -> None:
+        """Ignore removal — this double keeps no device registry."""
+
+    def add_device(self, device) -> None:
+        """Ignore addition — this double keeps no device registry."""
+
+    def add_disabled_device(self, device) -> None:
+        """Ignore the disabled registry — this double keeps none."""
+
+    def remove_disabled_device(self, device) -> None:
+        """Ignore the disabled registry — this double keeps none."""
+
 
 class MinimalTestLoad(AbstractLoad):
     """Minimal load implementation for testing constraints and solver.
@@ -202,12 +220,29 @@ class NeverAcksLoad(MinimalTestLoad):
         return self.suppress_override
 
     async def on_device_state_change(
-        self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
+        self,
+        time: datetime,
+        device_change_type: str,
+        title: str | None = None,
+        message: str | None = None,
+        *,
+        notification_tag: str | None = None,
     ):
         """Record the notification, or blow up like a real push channel can.
 
         `QSChargerGeneric.on_device_state_change` dereferences optional car state
         before its inner try/except, so a push really can raise.
+
+        QS-319: `notification_tag` mirrors the keyword-only argument the
+        production overrides take. It is deliberately NOT recorded — the
+        recorded tuple stays a 3-tuple — because the tag is an HA-layer payload
+        key and its assertions live in `tests/ha_tests`. A missing parameter
+        here would raise a `TypeError` that `_finish_command_cycle` swallows,
+        which shows up as "notifications stopped being recorded" rather than as
+        a red test.
+
+        The append stays ABOVE the raise: it is what lets a test distinguish
+        "a push was attempted and failed" from "no push was attempted".
         """
         self.state_change_notifications.append((time, device_change_type, message))
         if self.notify_error is not None:

@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-31
+last_verified: 2026-08-01
 ---
 
 # User override
@@ -97,7 +97,14 @@ an externally-detected override are constraint-driven:
   and the 180s post-override cooldown has elapsed.
 - `user_clean_and_reset` clears ALL override fields (state, time,
   reset-ask time, first-cmd-reset flag) plus the causality anchor —
-  the reset button breaks any override loop.
+  the reset button breaks any override loop. QS-319 extended it: it
+  also **acknowledges an open lost-control episode**
+  (`_acknowledge_lost_control`), because a user who presses reset has
+  seen the problem and acted. So does the `qs_enable_device` setter, on
+  either edge of an enable/disable transition. Deliberately NOT
+  `user_clean_constraints`: it keeps the in-flight command, so the
+  device is still being commanded and still not obeying. See
+  [load-base.md](load-base.md) for the latch's full transition table.
 - The legacy timer reset stays as fallback for an override without a
   constraint (e.g. restored from storage); whichever mechanism fires
   first nulls the fields, making the other a no-op.
