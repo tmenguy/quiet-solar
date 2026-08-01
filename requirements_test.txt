@@ -7,6 +7,12 @@ pytest-timeout==2.4.0
 pytest-xdist==3.8.0
 pytest-testmon==2.2.0  # QS-276: test-impact selection for the --impacted inner loop
 diff-cover==10.3.0     # QS-276: diff-scoped coverage verdict for --impacted
+# QS-292: shard splitter for the CI test matrix in pr-quality.yml
+pytest-split==0.11.0
+# QS-292: twin of the `pip install coverage==7.14.1` literal in
+# pr-quality.yml's aggregation job — the shards' data must be written and
+# read by the same version. Both move together in one edit.
+coverage==7.14.1
 
 # Mock and testing utilities
 pytest-homeassistant-custom-component==0.13.347

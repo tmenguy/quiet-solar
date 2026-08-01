@@ -149,7 +149,7 @@ When adding a new device type, agents must touch:
 
 ### Coverage
 
-- **100% test coverage is MANDATORY and NON-NEGOTIABLE.** Every PR must maintain 100% coverage — enforced authoritatively in **CI** on every PR (`pr-quality.yml`, whole-repo `--cov-fail-under=100`).
+- **100% test coverage is MANDATORY and NON-NEGOTIABLE.** Every PR must maintain 100% coverage — enforced authoritatively in **CI** on every PR (`pr-quality.yml`: four parallel `pytest tests/ -n auto --splits 4 --group N` shards whose data is combined into one `coverage report --fail-under=100`).
 - **Local-vs-CI split (QS-276).** Local commits run the `--impacted` inner loop (the lines *you changed* are 100% covered, in ~seconds); the whole-repo 100% guarantee lives in CI. `--impacted` deliberately cannot detect coverage lost in *unchanged* code — only CI's whole-repo gate catches that.
 - `scripts/qs/quality_gate.py` is the single test entry point (owns cache, xdist, sysmon, scope detection, `--impacted`/`--seed-testmon`). Raw `pytest` bypasses all of it.
 - Impacted inner-loop gate — the implement phase ALWAYS runs it before commit/PR and never substitutes the full gate locally (the only local full-gate run is an explicit user request): `python scripts/qs/quality_gate.py --impacted`. It self-heals a drifted testmon baseline automatically (QS-283) — no manual file deletion ever.

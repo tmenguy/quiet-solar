@@ -871,10 +871,10 @@ class TestPytestIniRegression:
 
 
 class TestCiWorkflowConfig:
-    """Regression guard for .github/workflows/pr-quality.yml."""
+    """Regression guard for .github/workflows/pr-quality.yml (QS-292 shape)."""
 
-    def test_workflow_yaml_is_valid_and_uses_xdist_sysmon(self) -> None:
-        """Workflow parses as YAML, test job uses -n auto and COVERAGE_CORE=sysmon."""
+    @staticmethod
+    def _load_workflow() -> dict:  # type: ignore[type-arg]
         try:
             import yaml
         except ImportError:
@@ -884,17 +884,80 @@ class TestCiWorkflowConfig:
         wf_path = repo_root / ".github" / "workflows" / "pr-quality.yml"
         if not wf_path.exists():
             pytest.skip("workflow file missing")
+        return yaml.safe_load(wf_path.read_text())  # type: ignore[no-any-return]
 
-        data = yaml.safe_load(wf_path.read_text())
-        # Find the `test` job
-        test_job = data["jobs"]["test"]
-        steps = test_job["steps"]
-        run_steps = [s for s in steps if "run" in s and "pytest" in s.get("run", "")]
-        assert run_steps, "no pytest step found in test job"
+    def test_shard_job_uses_xdist_sysmon(self) -> None:
+        """The shard job's pytest step uses -n auto and COVERAGE_CORE=sysmon.
+
+        The step is selected BY NAME (`Run shard …`), not by "first step
+        whose run contains pytest" — test-shard has two pytest steps and
+        the collect-only one comes first and carries neither flag.
+        """
+        data = self._load_workflow()
+        shard_job = data["jobs"]["test-shard"]
+        run_steps = [
+            s for s in shard_job["steps"] if s.get("name", "").startswith("Run shard")
+        ]
+        assert run_steps, "no 'Run shard …' step found in test-shard job"
         pytest_step = run_steps[0]
         assert "-n auto" in pytest_step["run"] or "--numprocesses auto" in pytest_step["run"]
         env = pytest_step.get("env", {})
         assert env.get("COVERAGE_CORE") == "sysmon"
+
+    def test_required_check_name_is_pinned(self) -> None:
+        """The aggregation job's name is the LITERAL required status check.
+
+        Branch protection on `main` requires exactly the string
+        `Tests (100% Coverage)`; renaming it blocks every PR forever.
+        """
+        data = self._load_workflow()
+        assert data["jobs"]["test"]["name"] == "Tests (100% Coverage)"
+
+    def test_aggregation_runs_even_when_a_shard_fails(self) -> None:
+        """`if: always()` + a needs.test-shard.result guard step.
+
+        Without them a failing shard SKIPS the aggregation job, and
+        branch protection treats a skipped required check as passing.
+        (`if` is a safe YAML key — unlike `on`, it is not a YAML 1.1
+        boolean.)
+        """
+        data = self._load_workflow()
+        test_job = data["jobs"]["test"]
+        assert test_job["if"] == "always()"
+        assert any(
+            "needs.test-shard.result" in str(s.get("if", "")) for s in test_job["steps"]
+        ), "no step in jobs.test guards on needs.test-shard.result"
+
+    def test_split_counts_agree(self) -> None:
+        """The three hard-coded shard counts agree.
+
+        len(matrix.shard), the `--splits N` in the shard pytest command,
+        and the `--splits N` passed to ci_reconcile_shards.py must all
+        name the same number.
+        """
+        data = self._load_workflow()
+        shard_job = data["jobs"]["test-shard"]
+        matrix_len = len(shard_job["strategy"]["matrix"]["shard"])
+
+        run_steps = [
+            s for s in shard_job["steps"] if s.get("name", "").startswith("Run shard")
+        ]
+        assert run_steps
+        match = re.search(r"--splits (\d+)", run_steps[0]["run"])
+        assert match, "no --splits flag in the shard pytest command"
+        pytest_splits = int(match.group(1))
+
+        reconcile_steps = [
+            s
+            for s in data["jobs"]["test"]["steps"]
+            if "ci_reconcile_shards.py" in s.get("run", "")
+        ]
+        assert reconcile_steps, "no ci_reconcile_shards.py step in jobs.test"
+        match = re.search(r"--splits (\d+)", reconcile_steps[0]["run"])
+        assert match, "no --splits flag in the reconcile command"
+        reconcile_splits = int(match.group(1))
+
+        assert matrix_len == pytest_splits == reconcile_splits
 
 
 # --- B1: requirements_test.txt includes pytest-xdist ---

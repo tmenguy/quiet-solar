@@ -37,8 +37,7 @@ all four; use it only for ad-hoc single-node debugging.
 # left by a killed run with NO manual file deletion ever required.
 python scripts/qs/quality_gate.py --impacted
 
-# Full quality gate (pytest 100% cov + ruff + mypy + translations;
-# the translations value-check is local-full-gate only until #292 lands).
+# Full quality gate (pytest 100% cov + ruff + mypy + translations).
 # Authoritative full-suite gate — enforced in CI on every PR; the only
 # local run is an EXPLICIT user request. Detecting coverage lost in
 # UNCHANGED code is CI's exclusive job (--impacted cannot see it); never
@@ -134,6 +133,15 @@ The detached seed accepts `--detached` (own process group) and
 `--seed-token <T>` (per-run identity); a newer seed automatically preempts
 an earlier still-running one (last-wins), and a stale baseline is always
 safe (new worktrees just over-select tests).
+
+**Carve-out — CI workflows (QS-292).** `.github/workflows/*.yml`
+invoke `pytest` and `coverage` directly, by design. The raw-`pytest`
+grammar rule and the "`quality_gate.py` is the single test entry
+point" rule govern *interactive and agent* commands, not CI. Where
+the PR suite is sharded, the job providing the required status check
+on `main` ends in a single authoritative fail-under-100 coverage
+verdict over the whole of `custom_components/quiet_solar/` — spelled
+`pytest --cov-fail-under=100` or `coverage report --fail-under=100`.
 
 **UI-only fast path.** When only `custom_components/quiet_solar/ui/*.j2`
 templates and `custom_components/quiet_solar/ui/resources/**` assets

@@ -21,8 +21,7 @@ Expected outcome:
 - TDD-implemented code under `custom_components/quiet_solar/` and tests.
 - `python scripts/qs/quality_gate.py --impacted` passes (changed lines
   100% covered; the whole-suite gate — pytest 100% cov + ruff + mypy +
-  translations — runs authoritatively in CI on every PR; translations
-  value-check is local-full-gate only until #292 lands).
+  translations — runs authoritatively in CI on every PR).
 - For change sets touching any `tests/qs`-pinned non-Python file
   (agent files, commands, workflow docs, `.claude/settings.json`) —
   even when Python files changed too —
