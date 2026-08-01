@@ -18,12 +18,15 @@ Source of truth:
 - ``pr_number``: from ``gh pr list --head <branch>`` (if open)
 - ``worktree``: current working directory
 - ``harness``: from :mod:`scripts.qs.harness`
+- ``title`` and ``pr_number``: their two ``gh`` calls are fetched
+  concurrently (they dominate startup); do not re-serialize them
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from harness import detect as detect_harness  # type: ignore[import-not-found]
@@ -52,12 +55,21 @@ def build_context(issue_override: int | None = None) -> dict:
     branch = get_current_branch()
     issue = issue_override or get_issue_from_branch(branch)
 
-    title = _issue_title(issue) if issue else ""
-
-    story_path: Path | None = find_story_file(issue) if issue else None
-    review_fix_path: Path | None = find_latest_review_fix(issue) if issue else None
-
-    pr_info = find_pr_for_branch(branch) if branch else None
+    # The two ``gh`` calls are independent (one needs only ``issue``, the
+    # other only ``branch``) and dominate startup, so they overlap.
+    # ``subprocess.run`` blocks in ``os.waitpid`` with the GIL released, so
+    # the two children genuinely run at once. ``shutdown(wait=True)`` on
+    # ``with``-exit is deliberate: it joins the other future rather than
+    # abandoning a live subprocess — do not "fix" it with
+    # ``cancel_futures=True``.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        title_future = pool.submit(_issue_title, issue) if issue else None
+        pr_future = pool.submit(find_pr_for_branch, branch) if branch else None
+        # Local git work runs while both gh calls are in flight.
+        story_path: Path | None = find_story_file(issue) if issue else None
+        review_fix_path: Path | None = find_latest_review_fix(issue) if issue else None
+        title = title_future.result() if title_future else ""
+        pr_info = pr_future.result() if pr_future else None
 
     return {
         "harness": detect_harness(),
