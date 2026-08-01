@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-07-30
+last_verified: 2026-07-31
 ---
 
 # User override
@@ -80,6 +80,18 @@ an externally-detected override are constraint-driven:
   phantom-acked: `launch_command` drops it at the drop point and
   `force_relaunch_command` drops a stale suppressed `running_command`
   (both via `is_command_suppressed_by_override`).
+- **And the mirror image (QS-307): when the override ENDS, its own
+  command is dropped.** Nulling `external_user_initiated_state` also
+  disables the suppression drop above, so an override-aligned command
+  still in flight would keep being relaunched after the override was
+  over. Expiry is the one place that knows the override just ended, so
+  it owns that drop — for the *aligned* command only; anything else is
+  a genuine solver intent. Note this is the first command-slot mutation
+  inside `check_load_activity_and_constraints`, and three of that
+  method's callers run outside `_update_loads_lock`, so both
+  `launch_command` and `force_relaunch_command` re-check the slot after
+  their `await` rather than assuming they still own the command they
+  launched. See [load-base.md](load-base.md).
 - A state mismatch only classifies as a NEW override when the entity
   state is newer than `last_command_execution_time` (causality guard)
   and the 180s post-override cooldown has elapsed.
@@ -95,6 +107,36 @@ an externally-detected override are constraint-driven:
   smaller than the configured value, a still-valid override can be
   dropped on restart — accepted conservative direction (drop early
   rather than keep poison).
+
+**An override ALWAYS expires, even on a dead load (QS-307).** The
+override lifecycle's clock-driven branches — expiry, the reset-ask
+follow-up, the post-override cooldown drain — run regardless of what
+the command slot holds. They read no entity state, so an unresponsive
+device cannot freeze them. Only *detection* is gated on
+`is_load_command_set()`; see the "split gate" section of
+[bistate-duration-devices.md](bistate-duration-devices.md). (A load that
+cannot have an override at all is still gated out entirely, by
+`support_user_override()` on the outer gate — and a stored override on
+such a load is dropped at restore rather than left for a lifecycle that
+will never run.)
+
+Before QS-307 the whole block sat behind that gate, and QS-304's
+saturating retry ladder meant the gate could stay shut forever: an
+override on a load that stopped obeying was pinned permanently, so
+`is_user_overridden()` stayed True and the load never returned to
+controlled consumption or to the solver.
+
+**The lifecycle does not end at expiry.**
+`reset_override_state_and_set_reset_ask_time` nulls the override state
+but arms `asked_for_reset_user_initiated_state_time`, and
+`get_override_state()` reports `ASKED FOR RESET` while that is set — so
+`is_user_overridden()` is still `True` and
+`get_device_power_latest_possible_valid_value(ignore_auto_and_user_overridden_load=True)`
+still returns `0.0`. Any change that lets the override expire but not
+the cooldown has not fixed anything; it has moved the bug one step
+later. When debugging a stuck override, walk all three clock branches —
+they are the self-heal, and they are deliberately independent of
+command state.
 
 ## Key types / structures
 

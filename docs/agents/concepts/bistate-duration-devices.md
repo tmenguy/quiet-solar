@@ -10,7 +10,7 @@ covers:
   - custom_components/quiet_solar/ha_model/radiator.py
   - custom_components/quiet_solar/ha_model/bistate_transport.py
   - custom_components/quiet_solar/ha_model/water_boiler.py
-last_verified: 2026-06-05
+last_verified: 2026-07-31
 ---
 
 # Bistate-duration devices (pool, on/off duration, water boiler, climate, radiator)
@@ -102,6 +102,96 @@ the solver picks the cheapest contiguous (or split) windows.
 `QSOnOffDuration`: warmer water → longer filter duration. The
 extension overrides the duration calculation but inherits the rest
 of the on/off behaviour unchanged.
+
+**The split gate (QS-307).** The override **lifecycle** is not gated on
+command state; only **detection** is:
+
+```text
+if qs_enable_device is not False and support_user_override():
+    if <override aged past override_duration>:      # unconditional
+        <drop an override-ALIGNED running_command>
+    elif <reset-ask follow-up flag set>:            # unconditional
+    else:
+        <post-override cooldown drain>              # unconditional
+        if is_load_command_set(time):
+            <detection: reads entity state>
+```
+
+The three unconditional branches never read entity state — they are pure
+clock/flag arithmetic — so nothing about an in-flight command makes them
+unsafe. Detection is different: while a command is landing, observed state
+≠ wanted state is expected, and classifying that as a user action would be
+a false positive, so `is_load_command_set` (which requires
+`running_command is None and current_command is not None`) still guards it.
+
+Gating the *whole* block was the bug: since QS-304 made the relaunch backoff
+saturate and retry forever, the gate could stay shut indefinitely, so an
+override on a load that stopped obeying never expired — the load was
+permanently excluded from controlled consumption and from the solver, and
+that flowed into the persisted forecast. Both death modes are covered: a
+*visible but disobeying* entity keeps `running_command` set forever, while an
+*unavailable* one reaches the invalid-probe give-up, which nulls
+`current_command` — `is_load_command_set` is False on either arm.
+
+Four things about this shape are load-bearing:
+
+1. **The lifecycle is THREE branches, not two.** Expiry does not finish the
+   job: it hands off to `asked_for_reset_user_initiated_state_time` (the
+   180 s "too soon to re-override" window), and while that is set
+   `get_override_state()` returns `ASKED FOR RESET`, so
+   `is_user_overridden()` is still `True` and the load is still worth `0.0`
+   to power accounting. The drain must hoist too, or the load expires its
+   override and stays out of controlled consumption anyway. Only the
+   *suppression* half stays inside detection.
+2. **`support_user_override()` stays on the OUTER gate; only
+   `is_load_command_set` moved inward.** The two answer different questions:
+   "am I waiting on a command" (unrelated to clock arithmetic, so splitting it
+   out is the actual fix) versus "can this load have an override at all" (a load
+   that cannot needs no lifecycle, ever). QS-307 briefly moved this one down too,
+   which ran the whole override lifecycle every cycle for boost-only
+   `QSBiStateDuration` loads, and reverted it. (Chargers are unaffected either
+   way: `QSChargerGeneric` is not a `QSBiStateDuration`, overrides
+   `check_load_activity_and_constraints` outright, and its
+   `support_user_override()` returns `True`.) The case that motivated the move —
+   a load reconfigured to boost-only holding a live override nothing could
+   clear — is handled at the restore boundary instead:
+   `use_saved_extra_device_info` already drops stale and future-dated overrides,
+   and now also drops the override *state* when `support_user_override()` is
+   false. A reconfigure reloads the entry. Note this covers the stored override
+   fields, not a persisted override *constraint*, which self-heals at its
+   `end_of_constraint` exactly as on `main`.
+3. **Expiry drops an override-*aligned* in-flight command.** Reachable only
+   after the hoist (the old gate guaranteed an empty slot here). Nulling the
+   override state also disables `force_relaunch_command`'s suppression drop,
+   so the **ended** override's own service call would keep being relaunched
+   for up to a full ladder while the real post-expiry intent stacked behind
+   it. Alignment is `expected_state_from_command(running_command) ==
+   external_user_initiated_state`; anything else is a genuine solver intent
+   and must survive `keep_commands=True`.
+4. **The clock comparisons use plain subtraction, on purpose.** A future-dated
+   anchor gives a negative age, which is never past the threshold, so the
+   override simply lasts a little longer. Do **not** "fix" this by routing
+   through a clock-safe helper: `_seconds_since`'s "a future anchor means fully
+   elapsed" is right for the retry ladder it was written for, and on an override
+   it means *destroy what the user just set* — state nulled, aligned command
+   dropped, constraint wiped. QS-307 tried it, and a ±60 s tolerance band on top
+   of it, and reverted both. Expiring late is the benign direction.
+
+The `qs_enable_device` guard is deliberate, not incidental:
+`is_load_command_set` returned False for a disabled load, so dropping the
+gate without it would newly expire overrides on loads QS was told to leave
+alone. It is defence in depth — production callers arrive via
+`do_run_check_load_activity_and_constraints`, which already short-circuits on
+a disabled load — and `None`/unset is deliberately treated as **enabled**,
+like every other `is not False` guard on the load.
+
+**Non-goal, do not "fix":** QS-307 changed **no** detection behaviour. Fresh
+detection on an unresponsive load is not merely gated, it is unsafe — for a
+dead device the state mismatch is permanent, so "matches neither expectation"
+stops meaning "a user acted" and a dead multi-mode load sitting in some
+leftover mode would be classified as a user override with nobody involved.
+On a 2-state switch it is unconstructible anyway (the state can only ever be
+one of the two expectations).
 
 **Override semantics (QS-256):**
 

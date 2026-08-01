@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/device.py
-last_verified: 2026-07-30
+last_verified: 2026-07-31
 ---
 
 # External control detection
@@ -57,8 +57,17 @@ When external control is detected:
 This is the structural defence behind "embrace uncertainty" —
 quiet-solar doesn't assume it has exclusive control of the device.
 
-**Detection rules (QS-256).** Three guards keep false positives out
-of the bistate detection in
+**Detection rules (QS-256).** Detection sits behind
+`support_user_override()` (the outer gate — can this load have an override
+at all) and `is_load_command_set(time)`, which QS-307 moved inward so it
+guards detection *only* and no longer freezes the override lifecycle
+around it (see the "split gate" section of
+[bistate-duration-devices.md](bistate-duration-devices.md)). Detection
+behaviour is unchanged by that story: while a command is landing,
+observed state ≠ wanted state is expected, so classifying it as a user
+action would be a false positive.
+
+Three guards then keep false positives out of the bistate detection in
 `QSBiStateDuration.check_load_activity_and_constraints`:
 
 1. **Causality** — a mismatch counts only if the entity state's
@@ -71,7 +80,12 @@ of the bistate detection in
    freshness → no override is classified.
 2. **Cooldown** — after an override resets, no new override is
    classified for `USER_OVERRIDE_STATE_BACK_DURATION_S` (180s),
-   bounded by half the override window.
+   bounded by half the override window. QS-307 split this in two: the
+   *suppression* stays here (an open window forces
+   `is_command_overridden_state_changed = False`), while the window's
+   **expiry** moved out to the lifecycle above, because a timer draining
+   is not a detection decision and must not need a healthy command slot
+   to happen.
 3. **Constraint-driven end** — an override to the idle state pushes a
    `TimeBasedHoldOffConstraint` so the solver natively sees the
    pinned-off window and the override ends through the constraint-ack

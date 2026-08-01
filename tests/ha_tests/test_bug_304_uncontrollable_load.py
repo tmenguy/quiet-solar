@@ -1,9 +1,9 @@
 """QS-304: HA-layer behaviour when QS loses control of a load.
 
 Covers the parts of the story that only exist above the domain boundary: the
-`qs_load_uncontrollable` binary sensor, the mobile push, the absence of
-collateral damage on power accounting, the off-grid contract, and the fact that
-QS never touches the user's `qs_enable_device` switch.
+mobile push, the absence of collateral damage on power accounting, the off-grid
+contract, and the fact that QS never touches the user's `qs_enable_device`
+switch.
 """
 
 from __future__ import annotations
@@ -95,25 +95,40 @@ def test_is_load_command_set_truth_table_is_unmodified():
     body>"`, which broke on any reformat or comment while letting a real semantic
     change through if it happened to reformat identically. The behavioural truth
     table over the three inputs it actually reads is both stricter and stable.
+
+    QS-307 widened the table with an `unresponsive_since` column. That story moved
+    this predicate INWARD in `check_load_activity_and_constraints` — from the whole
+    user-override block down to detection only — and the tempting shortcut was to
+    make it lost-control-aware instead. It must stay indifferent: it is read by
+    three power-accounting call sites that reach the persisted consumption
+    forecast, so widening it there would move billed energy.
     """
     load = NeverAcksLoad(name="accounting_probe")
     time = T0
 
-    # (enabled, running_command, current_command, expected)
+    # (enabled, running_command, current_command, unresponsive_since, expected)
     cases = [
-        (True, None, None, False),
-        (True, None, CMD_ON, True),
-        (True, CMD_IDLE, None, False),
-        (True, CMD_IDLE, CMD_ON, False),
-        (False, None, CMD_ON, False),
-        (False, CMD_IDLE, CMD_ON, False),
+        (True, None, None, None, False),
+        (True, None, None, T0, False),
+        (True, None, CMD_ON, None, True),
+        (True, None, CMD_ON, T0, True),
+        (True, CMD_IDLE, None, None, False),
+        (True, CMD_IDLE, None, T0, False),
+        (True, CMD_IDLE, CMD_ON, None, False),
+        (True, CMD_IDLE, CMD_ON, T0, False),
+        (False, None, CMD_ON, None, False),
+        (False, None, CMD_ON, T0, False),
+        (False, CMD_IDLE, CMD_ON, None, False),
+        (False, CMD_IDLE, CMD_ON, T0, False),
     ]
 
-    for enabled, running, current, expected in cases:
+    for enabled, running, current, unresponsive_since, expected in cases:
         load._enabled = enabled
         load.running_command = None if running is None else copy_command(running)
         load.current_command = None if current is None else copy_command(current)
-        assert load.is_load_command_set(time) is expected, (enabled, running, current)
+        load.unresponsive_since = unresponsive_since
+        context = (enabled, running, current, unresponsive_since)
+        assert load.is_load_command_set(time) is expected, context
 
 
 def _accounting_snapshot(home: QSHome, load, time: datetime) -> dict:

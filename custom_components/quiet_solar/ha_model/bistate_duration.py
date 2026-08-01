@@ -22,7 +22,7 @@ from ..home_model.constraints import (
     TimeBasedHoldOffConstraint,
     TimeBasedSimplePowerLoadConstraint,
 )
-from ..home_model.load import AbstractLoad
+from ..home_model.load import CLOCK_SKEW_TOLERANCE_S, AbstractLoad
 
 if TYPE_CHECKING:
     from .bistate_transport import BistateTransport
@@ -199,12 +199,16 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         # review fix QS-256#03: a future-dated reset-ask timestamp keeps the
         # post-override cooldown permanently active (negative age is always
         # below the cooldown window) — same future-dated drop as the override
-        # timestamp, with the same 60s skew tolerance
+        # timestamp, with the same `CLOCK_SKEW_TOLERANCE_S` band. Restore boundary
+        # only — the runtime comparisons use plain subtraction (QS-307).
         if self.asked_for_reset_user_initiated_state_time is not None:
             ask_age_s = (datetime.now(pytz.UTC) - self.asked_for_reset_user_initiated_state_time).total_seconds()
-            if ask_age_s < -60.0:
+            # QS-307: a load that cannot hold an override has no lifecycle to drain a
+            # restored reset-ask, so drop it here — a reconfigure reloads the entry.
+            if ask_age_s < -CLOCK_SKEW_TOLERANCE_S or not self.support_user_override():
                 _LOGGER.info(
-                    "use_saved_extra_device_info: dropping future-dated stored reset-ask time for load %s (age %ss)",
+                    "use_saved_extra_device_info: dropping future-dated or unsupported stored "
+                    "reset-ask time for load %s (age %ss)",
                     self.name,
                     int(ask_age_s),
                 )
@@ -221,9 +225,14 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
             # review fix QS-256#02: a clearly future-dated timestamp (clock
             # skew, NTP correction) is poison too — drop rather than keep,
             # with a small tolerance for benign skew
-            if age_s > 3600.0 * self.override_duration or age_s < -60.0:
+            # QS-307: same reason as the reset-ask above — nothing could expire it.
+            if (
+                age_s > 3600.0 * self.override_duration
+                or age_s < -CLOCK_SKEW_TOLERANCE_S
+                or not self.support_user_override()
+            ):
                 _LOGGER.info(
-                    "use_saved_extra_device_info: dropping expired or future-dated "
+                    "use_saved_extra_device_info: dropping expired, future-dated or unsupported "
                     "stored user override %s for load %s (age %ss)",
                     self.external_user_initiated_state,
                     self.name,
@@ -693,7 +702,10 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
         do_push_constraint_after = None
 
         # we want to check that the load hasn't been changed externally from the system:
-        if self.is_load_command_set(time) and self.support_user_override():
+        # QS-307: only override DETECTION is gated on `is_load_command_set` (below);
+        # the lifecycle branches read no entity state, so an unresponsive device must
+        # not freeze them. See `docs/agents/concepts/bistate-duration-devices.md`.
+        if self.qs_enable_device is not False and self.support_user_override():
             # we need to know if the state we have is compatible with the current command
             # well more if it has been set ON or any other stuff externally so that we don't want to reset it to OFF
             # because the user wanted to force the state of the load
@@ -714,12 +726,23 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                     tzinfo=pytz.UTC
                 )
 
+            # Plain subtraction on purpose: a future-dated anchor is negative, so the
+            # override just lasts longer. Reading it as "fully elapsed" would destroy a
+            # live user override — strictly worse than expiring late (QS-307).
             if self.external_user_initiated_state_time is not None and (
                 time - self.external_user_initiated_state_time
             ).total_seconds() > (3600.0 * self.override_duration):
                 _LOGGER.info(
                     f"External state time is long, reset from {self.external_user_initiated_state} for load {self.name} "
                 )
+                # Nulling the override state below disables the suppression drop, so
+                # the override's OWN command must go with it. ALIGNED only — anything
+                # else is a solver intent `keep_commands=True` must preserve.
+                if (
+                    self.running_command is not None
+                    and self.expected_state_from_command(self.running_command) == self.external_user_initiated_state
+                ):
+                    self._drop_running_command("the user override this command was serving expired")
                 # we need to reset the external user initiated state
                 self.reset_override_state_and_set_reset_ask_time(time)
                 do_force_next_solve = True
@@ -729,17 +752,32 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                 self.constraint_reset_and_reset_commands_if_needed(
                     keep_commands=True
                 )  # remove any constraint if any we will add it back if needed below
+            elif self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
+                # do nothing below, just ask for a proper constraint evaluation to kill the current override:
+                has_a_running_override = False
+                do_force_next_solve = True
+                self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
+                self.constraint_reset_and_reset_commands_if_needed(
+                    keep_commands=True
+                )  # remove any constraint if any we will add it back if needed below
             else:
-                if self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done is not None:
-                    # do nothing below, just ask for a proper constraint evaluation to kill the current override:
-                    has_a_running_override = False
-                    do_force_next_solve = True
-                    self.asked_for_reset_user_initiated_state_time_first_cmd_reset_done = None
-                    self.constraint_reset_and_reset_commands_if_needed(
-                        keep_commands=True
-                    )  # remove any constraint if any we will add it back if needed below
+                # The cooldown drain: expiry only hands off to this timer, and
+                # `get_override_state()` reports ASKED FOR RESET while it is set. Only
+                # the *suppression* half stays inside detection, below.
+                if self.asked_for_reset_user_initiated_state_time is not None:
+                    # review fix QS-256#02: coerce a legacy tz-naive
+                    # reset-ask timestamp before the subtraction
+                    if self.asked_for_reset_user_initiated_state_time.tzinfo is None:
+                        self.asked_for_reset_user_initiated_state_time = (
+                            self.asked_for_reset_user_initiated_state_time.replace(tzinfo=pytz.UTC)
+                        )
+                    if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() >= min(
+                        float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
+                    ):
+                        # long enough ask to check the fact that the override should be finished
+                        self.asked_for_reset_user_initiated_state_time = None
 
-                else:
+                if self.is_load_command_set(time):
                     for i, ct in enumerate(self._constraints):
                         if (
                             ct.load_param is not None
@@ -849,21 +887,11 @@ class QSBiStateDuration(HADeviceMixin, AbstractLoad):
                             is_command_overridden_state_changed = False
 
                     if self.asked_for_reset_user_initiated_state_time is not None:
-                        # review fix QS-256#02: coerce a legacy tz-naive
-                        # reset-ask timestamp before the subtraction
-                        if self.asked_for_reset_user_initiated_state_time.tzinfo is None:
-                            self.asked_for_reset_user_initiated_state_time = (
-                                self.asked_for_reset_user_initiated_state_time.replace(tzinfo=pytz.UTC)
-                            )
-                        if (time - self.asked_for_reset_user_initiated_state_time).total_seconds() < min(
-                            float(USER_OVERRIDE_STATE_BACK_DURATION_S), (3600.0 * self.override_duration) / 2.0
-                        ):
-                            # small time window after asking for reset, do not consider the command overridden
-                            # too soon to launch an override again
-                            is_command_overridden_state_changed = False
-                        else:
-                            # long enough ask to check the fact that the override should be finished
-                            self.asked_for_reset_user_initiated_state_time = None
+                        # small time window after asking for reset, do not consider the command overridden
+                        # too soon to launch an override again.
+                        # The window's EXPIRY lives above the detection gate (QS-307),
+                        # so reaching here means the window is still open.
+                        is_command_overridden_state_changed = False
 
                     if is_command_overridden_state_changed:
                         # "back to normal" — user overrides back to base mode state
