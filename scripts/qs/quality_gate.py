@@ -295,24 +295,54 @@ def _pytest_workers() -> str | None:
 _SERIAL_MAX_TESTS = 50
 
 
+def _workers_env_is_explicit() -> bool:
+    """True iff `QS_QG_PYTEST_WORKERS` carries a value we can act on verbatim.
+
+    Provenance cannot come from `_pytest_workers()`'s return value (`"auto"` for
+    both unset and `auto`), so it is read from the environment here. Review-fix
+    #01 nice-to-have 11: a MALFORMED value is deliberately NOT explicit —
+    `_pytest_workers()` already warns and falls back to `"auto"` for `autoo` /
+    `-1` / `4x`, and honouring the typo as a deliberate xdist request silently
+    cost a small target its serial fast path. Accepted spellings mirror
+    `_pytest_workers()` exactly: empty, `0`, case-insensitive `auto`, or a
+    positive integer.
+    """
+    raw = os.environ.get(_WORKERS_ENV)
+    if raw is None:
+        return False
+    val = raw.strip()
+    if val == "" or val == "0" or val.lower() == "auto":
+        return True
+    try:
+        return int(val) > 0
+    except ValueError:
+        return False
+
+
 def _resolve_files_workers(count: int | None) -> str | None:
     """Worker count for `check_pytest_files`, or None for single-process.
 
     QS-290 (S-1). Decision order:
 
-    | Condition                          | Result                     |
-    | ---------------------------------- | -------------------------- |
-    | `QS_QG_PYTEST_WORKERS` **present** | `_pytest_workers()` verbatim |
-    | xdist unavailable                  | serial (unchanged)         |
-    | `count is None` (unknown)          | `-n auto`                  |
-    | `count <= _SERIAL_MAX_TESTS`       | serial (fast path)         |
-    | otherwise                          | `-n auto`                  |
+    | Condition                            | Result                       |
+    | ------------------------------------ | ---------------------------- |
+    | `QS_QG_PYTEST_WORKERS` **valid**     | `_pytest_workers()` verbatim |
+    | xdist unavailable                    | serial (unchanged)           |
+    | `count is None` (unknown)            | `-n auto`                    |
+    | `count <= _SERIAL_MAX_TESTS`         | serial (fast path)           |
+    | otherwise                            | `-n auto`                    |
 
-    Explicitness is detected with `os.environ.get(...) is not None`, NOT from
+    Explicitness is detected from the environment, NOT from
     `_pytest_workers()`'s return value: that returns `"auto"` both when the
     var is unset and when it is set to `auto`, so it cannot carry provenance.
     An explicit request must win over the threshold in BOTH directions
     (`0` → serial on a huge target; `8` → `-n 8` on a tiny one).
+
+    A MALFORMED value (`autoo`, `-1`, `4x`) counts as UNSET, not as an explicit
+    request (review-fix #01 nice-to-have 11): `_pytest_workers()` warns and falls
+    back to `"auto"` for those, and treating the typo as deliberate silently
+    forced xdist onto a 3-test target, losing the fast path with no way for the
+    user to tell why. The warning still fires — only the provenance changes.
 
     Emits the fast-path rationale on stderr directly rather than via `_emit`
     (which would double-prefix). The `[pytest]` prefix is neutral because this
@@ -322,7 +352,7 @@ def _resolve_files_workers(count: int | None) -> str | None:
     if workers is None:
         # xdist missing, or an explicit serial request — nothing to demote.
         return None
-    if os.environ.get(_WORKERS_ENV) is not None:
+    if _workers_env_is_explicit():
         return workers
     if count is not None and count <= _SERIAL_MAX_TESTS:
         sys.stderr.write(
@@ -519,7 +549,18 @@ _PERCENT_SUFFIX_RE = re.compile(r"\s*\[\s*\d+%\]\s*$")
 # SELECTED total under deselection. `_clean_pytest_line` must strip this shape
 # too: otherwise a progress line stops being "all progress characters" and
 # both the mid-run tally and `_parse_pytest_output` silently under-count.
-_COUNT_SUFFIX_RE = re.compile(r"\s*\[\s*(\d+)\s*/\s*(\d+)\s*\]\s*$")
+# Only the TOTAL is captured: the leading `current` is non-capturing (review-fix
+# #01 nice-to-have 14) so a future edit cannot silently shift the group index the
+# denominator is read from.
+_COUNT_SUFFIX_RE = re.compile(r"\s*\[\s*(?:\d+)\s*/\s*(\d+)\s*\]\s*$")
+
+# QS-290 review-fix #01 nice-to-have 17: `total_tests` sentinel meaning "unknown
+# — learn the denominator from the run's own `[N/M]` output". A negative value is
+# impossible as a real test count, so it can never collide with a genuine 0
+# (which means "this target really has no tests" and IS authoritative). Kept as a
+# sentinel value rather than a second parameter: four reviewers rejected
+# re-splitting the one-parameter design.
+_LEARN_FROM_STREAM = -1
 # S2: track xfailed/xpassed/skipped as separate keys; recognize the
 # `error`/`errors` singular/plural collapse on the parser side.
 _COUNT_RE = re.compile(r"(\d+) (passed|failed|errors?|skipped|xfailed|xpassed)")
@@ -625,11 +666,14 @@ def _collect_test_count(targets: list[str]) -> int | None:
     two consumers — the progress denominator AND the xdist-or-serial worker
     decision in `check_pytest_files`.
 
-    Returns `None` — explicitly NOT 0 — when the count line is absent
-    (a collection error, an unexpected pytest output format). The
-    distinction matters: `None` means *unknown*, and a caller must then
-    fall back to `-n auto` rather than mistake it for a tiny run that
-    deserves the serial fast path.
+    Returns `None` — explicitly NOT 0 — when the count is unknown: the count
+    line is absent (an unexpected pytest output format), **or pytest exited
+    non-zero** (review-fix #01 should-fix 7 — a partially-failed collection
+    prints `"5 tests collected, 2 errors"`, so a parseable count is NOT proof
+    the collection succeeded, and trusting it routed a broken collection onto
+    the serial fast path). The distinction matters: `None` means *unknown*, and
+    a caller must then fall back to `-n auto` rather than mistake it for a tiny
+    run that deserves the serial fast path.
 
     Uses `subprocess.Popen` directly (rather than `_run`) so the test
     suite can assert this subprocess gets utf-8/replace decoding AND does
@@ -646,6 +690,8 @@ def _collect_test_count(targets: list[str]) -> int | None:
         cwd=str(REPO_ROOT),
     )
     count_stdout, _ = count_proc.communicate()
+    if count_proc.returncode != 0:
+        return None
     for line in count_stdout.split("\n"):
         m = _COLLECTED_RE.match(line.strip())
         if m:
@@ -663,16 +709,20 @@ def _stream_pytest(
     format as check_pytest(). The main subprocess runs with
     `COVERAGE_CORE=sysmon` for faster coverage tracking.
 
-    `total_tests` (QS-290, S-1/S-5) — ONE parameter, two modes:
+    `total_tests` (QS-290, S-1/S-5) — ONE parameter, three modes:
 
     - `None` → collect the denominator here, against the whole `TESTS_DIR`
       tree. That is the full gate's (`check_pytest`) and the seed path's
       (`seed_testmon`) semantics: they really do run everything.
-    - an `int` → the caller already knows the count; spawn NOTHING extra.
-      `check_pytest_files` passes the count it needed anyway for its
-      worker decision, and `_run_impacted_pass` passes `0` — testmon's
-      selection size is unknowable up front, so the denominator is learned
-      from the run's own `[N/M]` progress suffix instead (S-5).
+    - `_LEARN_FROM_STREAM` → unknown; read it off the run's own `[N/M]`
+      progress suffix (S-5). `_run_impacted_pass` uses this because testmon's
+      selection size is unknowable up front, and `check_pytest_files` uses it
+      when its collect probe came back unknown.
+    - any other `int` → the caller already knows the count; spawn NOTHING extra
+      and treat it as authoritative. `check_pytest_files` passes the count it
+      needed anyway for its worker decision. A genuine `0` is authoritative
+      too — a stray `[N/M]` must not redefine it (review-fix #01
+      nice-to-have 17).
 
     It replaced the old `collect_targets` parameter: with both present,
     forwarding an unknown (`None`) count re-triggered a whole-tree collect
@@ -685,7 +735,10 @@ def _stream_pytest(
     on non-ASCII content (Unicode ellipses, curly quotes in parametrize
     ids, non-ASCII assertion messages).
     """
-    if total_tests is None:
+    learn_from_stream = total_tests == _LEARN_FROM_STREAM
+    if learn_from_stream:
+        total_tests = 0
+    elif total_tests is None:
         total_tests = _collect_test_count([str(TESTS_DIR)]) or 0
 
     milestone_every = max(1, total_tests // 10) if total_tests > 0 else 50
@@ -725,13 +778,13 @@ def _stream_pytest(
         # what a testmon pass cannot know up front, and previously the reason a
         # whole-tree `--collect-only` subprocess was spawned to produce a
         # denominator that was also WRONG for this path (it printed
-        # `done (0/6912)` for a 0-selected run). Only fill an unknown (0)
-        # denominator: a caller-supplied count already paid for a real
-        # collection and stays authoritative.
-        if total_tests == 0:
+        # `done (0/6912)` for a 0-selected run). Only fill a denominator the
+        # caller declared UNKNOWN: a caller-supplied count already paid for a
+        # real collection and stays authoritative — including a genuine 0.
+        if learn_from_stream and total_tests == 0:
             seen = _COUNT_SUFFIX_RE.search(_XDIST_PREFIX_RE.sub("", line).rstrip())
             if seen:
-                total_tests = int(seen.group(2))
+                total_tests = int(seen.group(1))
                 milestone_every = max(1, total_tests // 10)
 
         cleaned = _clean_pytest_line(line)
@@ -760,20 +813,26 @@ def _stream_pytest(
     # Final count line uses the authoritative parser (summary line wins).
     # S2: include skipped/xfailed/xpassed in the total so suites with xfail
     # markers don't appear short. Suppress zero-count labels for readability.
+    # Review-fix #01 nice-to-have 10: emitted UNCONDITIONALLY. The previous
+    # `total_tests > 0 or final_total > 0` guard silently dropped this line on a
+    # 0-test run — which is the single most common inner-loop invocation, a `.py`
+    # edit testmon deselects to 0 tests — leaving nothing at all between
+    # `selecting impacted tests (testmon)…` and the verdict. The old
+    # `done (0/6912)` had the wrong denominator but did confirm the pass ran;
+    # `done (0/0)` is both honest and present.
     counts = _parse_pytest_output(stdout_text)
     final_total = sum(counts[k] for k in _COUNT_KEYS)
-    if total_tests > 0 or final_total > 0:
-        denom = total_tests if total_tests > 0 else final_total
-        parts = [
-            f"passed={counts['passed']}",
-            f"failed={counts['failed']}",
-            f"errors={counts['errors']}",
-        ]
-        for optional_key in ("skipped", "xfailed", "xpassed"):
-            if counts[optional_key]:
-                parts.append(f"{optional_key}={counts[optional_key]}")
-        sys.stderr.write(f"  pytest: done ({final_total}/{denom}) | {' '.join(parts)}\n")
-        sys.stderr.flush()
+    denom = total_tests if total_tests > 0 else final_total
+    parts = [
+        f"passed={counts['passed']}",
+        f"failed={counts['failed']}",
+        f"errors={counts['errors']}",
+    ]
+    for optional_key in ("skipped", "xfailed", "xpassed"):
+        if counts[optional_key]:
+            parts.append(f"{optional_key}={counts[optional_key]}")
+    sys.stderr.write(f"  pytest: done ({final_total}/{denom}) | {' '.join(parts)}\n")
+    sys.stderr.flush()
 
     passed = proc.returncode == 0
     coverage = None
@@ -853,9 +912,12 @@ def check_pytest_files(test_files: list[str]) -> dict:
 
     Honours `_pytest_workers()` for xdist parallelization — same resolver as
     the full gate (`check_pytest`), so `QS_QG_PYTEST_WORKERS` overrides apply
-    here too. Silent serial fallback when xdist is missing or explicitly
-    disabled (no stderr warning; only the full gate warns to avoid duplicate
-    noise from the dev-only fast path and `--quick`).
+    here too. Serial fallback is SILENT when xdist is missing or explicitly
+    disabled (only the full gate warns about those, to avoid duplicate noise
+    from the dev-only fast path and `--quick`) — but the QS-290 threshold
+    demotion below DOES announce itself, since that one is our own decision
+    rather than the environment's (review-fix #01 nice-to-have 13: this
+    docstring previously claimed "no stderr warning" without qualification).
 
     QS-290 (S-1) serial fast path: xdist's spin-up (one whole-target
     collection per worker, each re-importing the HA-heavy conftest) costs
@@ -881,8 +943,10 @@ def check_pytest_files(test_files: list[str]) -> dict:
     if workers is not None:
         cmd.extend(["-n", workers])
     # An unknown count (`None`) must NOT be forwarded: `_stream_pytest` would
-    # read it as "collect the whole tree yourself" and spawn a second probe.
-    return _stream_pytest(cmd, total_tests=count if count is not None else 0)
+    # read it as "collect the whole tree yourself" and spawn a second probe. It
+    # maps to the explicit learn-from-the-stream sentinel rather than to `0`,
+    # which is a real (authoritative) count — review-fix #01 nice-to-have 17.
+    return _stream_pytest(cmd, total_tests=count if count is not None else _LEARN_FROM_STREAM)
 
 
 def check_ruff_lint(fix: bool = False) -> dict:
@@ -1099,8 +1163,9 @@ COVERAGE_DATA = REPO_ROOT / ".coverage"
 _FETCH_TIMEOUT_SECONDS = 15.0
 
 # QS-290 (S-7): skip the `--impacted` `git fetch origin main` when the
-# per-worktree `FETCH_HEAD` marker is younger than this. Repeat inner-loop
-# runs within a TDD burst re-fetch the same ref for nothing.
+# per-worktree `FETCH_HEAD` marker shows `origin/main` was fetched more
+# recently than this. Repeat inner-loop runs within a TDD burst re-fetch the
+# same ref for nothing.
 #
 # Safe by construction: a stale base is OLDER, so diff-cover's changed-line
 # set is a SUPERSET — a TTL hit can turn a PASS into a FAIL, never a FAIL into
@@ -1108,7 +1173,12 @@ _FETCH_TIMEOUT_SECONDS = 15.0
 # semantics, so any such test would assert the mock.) After a force-push of
 # main the stale ref may not be an ancestor at all, but the window is 10
 # minutes and the existing code already tolerates a stale base when a fetch
-# fails — so this is not a new class of risk. CI always fetches fresh.
+# fails — so this is not a new class of risk.
+#
+# CI always fetches fresh — and `_resolve_diff_base` now ENFORCES that by
+# bypassing the TTL under `_is_ci()` (review-fix #01 should-fix 4). Previously
+# this line was an unbacked assertion: `actions/checkout` leaves a seconds-old
+# `FETCH_HEAD`, which would have made CI skip its own fetch.
 _FETCH_TTL_SECONDS = 600.0
 
 # QS-276 review-fix NH1: bound the diff-cover subprocess too — a
@@ -1183,8 +1253,48 @@ def _is_ci() -> bool:
     return os.environ.get("GITHUB_ACTIONS", "").strip().lower() in _CI_TRUTHY
 
 
+# QS-290 S-7 / review-fix #01 should-fix 5: `FETCH_HEAD`'s last field for a
+# fetched branch is `branch '<name>' of <remote-url>`, tab-separated after the
+# sha and an optional `not-for-merge` flag. Verified against real git for
+# `git fetch origin main`, `git fetch origin <other>`, and a bare
+# `git fetch origin` (which lists main plus `not-for-merge` siblings). Kept in
+# sync with the branch `_fetch_origin_main` actually fetches.
+_FETCH_HEAD_MAIN_FIELD = "branch 'main' of "
+
+
+def _fetch_head_records_main(marker: Path) -> bool:
+    """True iff `FETCH_HEAD`'s content records a fetch that brought `main` down.
+
+    Review-fix #01 should-fix 5: `FETCH_HEAD` records the last fetch of
+    *anything*. `gh pr checkout <n>` (fetches `refs/pull/N/head`),
+    `git fetch origin <other-branch>`, a second remote, an editor plugin
+    fetching tags — each rewrites the marker without advancing `origin/main`.
+    A fresh mtime alone therefore cannot support the claim the skip line makes,
+    and the "staleness is bounded at 10 minutes" argument justifying the whole
+    TTL would not hold.
+
+    Reading the content is what makes the marker measure the thing the TTL
+    claims. `main` flagged `not-for-merge` still counts — the ref came down,
+    which is all the TTL needs.
+
+    (Keying the TTL on `refs/remotes/origin/main`'s mtime instead — the
+    reviewer's literal suggestion — was rejected on measurement: after a clone
+    that ref is PACKED, so the loose path does not exist at all, and even when
+    loose git does not rewrite it when a fetch finds no new commits. A quiet
+    main is the common case, so that marker would make the TTL never hit and
+    delete the feature's entire benefit.)
+    """
+    try:
+        content = marker.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return any(
+        line.split("\t")[-1].startswith(_FETCH_HEAD_MAIN_FIELD) for line in content.splitlines()
+    )
+
+
 def _fetch_head_age() -> float | None:
-    """Age in seconds of the per-worktree `FETCH_HEAD` marker, or None.
+    """Age in seconds since `origin/main` was last fetched, or None if unknown.
 
     QS-290 (S-7). The marker path is resolved via
     `git rev-parse --git-path FETCH_HEAD` rather than hardcoded: in a LINKED
@@ -1192,9 +1302,26 @@ def _fetch_head_age() -> float | None:
     itself is a *file*, so a literal `.git/FETCH_HEAD` would be a path under a
     non-directory and the TTL would silently never hit.
 
-    None (= "unknown, do not skip") on any `rev-parse` failure, empty output,
-    or an unreadable / absent marker, so an unknown always degrades to
-    fetching exactly as before the TTL existed.
+    None (= "unknown, do not skip") on every uncertainty, so an unknown always
+    degrades to fetching exactly as before the TTL existed:
+
+    - any `rev-parse` failure or empty output;
+    - an absent / unreadable marker;
+    - **a 0-byte marker** (review-fix #01 must-fix 3). A FAILED fetch still
+      bumps the mtime but truncates the file — verified against real git with
+      the remote removed: rc=128, mtime advanced, size 0. Reading that as
+      freshness meant the first offline run warned "diff base may be stale vs
+      CI" and then every run for the next 10 minutes silently skipped, never
+      retrying even seconds after connectivity returned. The TTL would have
+      switched OFF the very warning QS-276 S1 added to keep a failed fetch
+      observable;
+    - a marker that records a fetch of something other than `main`
+      (should-fix 5, see `_fetch_head_records_main`);
+    - **a future mtime** (review-fix #01 should-fix 6). The previous
+      `max(0.0, …)` clamped an impossible timestamp to age 0.0, skipping the
+      fetch for the entire duration of the skew rather than for 10 minutes —
+      reproducible via an NTP step correction, VM suspend/resume, dual boot, or
+      a network share whose server clock runs ahead.
     """
     probe = _run(["git", "rev-parse", "--git-path", "FETCH_HEAD"])
     if probe.returncode != 0:
@@ -1202,16 +1329,24 @@ def _fetch_head_age() -> float | None:
     raw = probe.stdout.strip()
     if not raw:
         return None
+    marker = REPO_ROOT / raw
     try:
-        mtime = (REPO_ROOT / raw).stat().st_mtime
+        stat = marker.stat()
     except OSError:
         # Absent marker (never fetched in this worktree) or an unreadable path.
         return None
-    return max(0.0, time.time() - mtime)
+    if stat.st_size == 0:
+        return None
+    if not _fetch_head_records_main(marker):
+        return None
+    age = time.time() - stat.st_mtime
+    if age < 0:
+        return None
+    return age
 
 
 def _fmt_fetch_age(age: float) -> str:
-    """Render a FETCH_HEAD age compactly for the skip line: `12s` / `3m`."""
+    """Render the since-last-fetch age compactly for the skip line: `12s` / `3m`."""
     return f"{int(age)}s" if age < 60 else f"{int(age // 60)}m"
 
 
@@ -1251,30 +1386,44 @@ def _resolve_diff_base() -> str | None:
     a warning emitted); if nothing reachable resolves, we return None and
     the caller applies the no-base policy (warn-skip locally, exit 4 CI).
 
-    QS-290 (S-7): the fetch is TTL-cached on `FETCH_HEAD`'s mtime. If the base
-    then fails to resolve, the fetch is retried ONCE — a skipped fetch must
-    never be the reason we give up (a fresh worktree with a stale marker copy
-    could otherwise report "no diff base" and exit 4 in CI).
+    QS-290 (S-7): the fetch is TTL-cached on when `origin/main` was last
+    fetched. If the base then fails to resolve, the fetch is retried ONCE — a
+    skipped fetch must never be the reason we give up (a fresh worktree with a
+    stale marker copy could otherwise report "no diff base" and exit 4 in CI).
+
+    Review-fix #01 should-fix 4: the TTL is **bypassed under CI**. The
+    `_FETCH_TTL_SECONDS` rationale asserts "CI always fetches fresh", and
+    nothing enforced it — `actions/checkout` leaves a seconds-old `FETCH_HEAD`,
+    so a CI `--impacted` would have skipped its own fetch and resolved against
+    whatever base checkout happened to leave. The retry-once path only rescues
+    `base is None`, not resolvable-but-stale, so the bypass is the safe default.
     """
-    age = _fetch_head_age()
+    # CI: don't even probe the marker — the answer cannot change the decision.
+    age = None if _is_ci() else _fetch_head_age()
     if age is not None and age < _FETCH_TTL_SECONDS:
         skipped_fetch = True
-        _emit("impacted", f"diff base: fetch skipped (FETCH_HEAD {_fmt_fetch_age(age)} old)")
+        _emit("impacted", f"diff base: fetch skipped (origin/main fetched {_fmt_fetch_age(age)} ago)")
     else:
         skipped_fetch = False
         _fetch_origin_main()
     base = _resolve_base_ladder()
     if base is None and skipped_fetch:
         _fetch_origin_main()
-        base = _resolve_base_ladder()
+        # Review-fix #01 nice-to-have 12: the first walk already emitted any NH2
+        # shallow-clone warning; repeating it for the same invocation is noise.
+        base = _resolve_base_ladder(warn=False)
     return base
 
 
-def _resolve_base_ladder() -> str | None:
+def _resolve_base_ladder(warn: bool = True) -> str | None:
     """Walk `origin/main` → `main` → upstream merge-base; no fetching.
 
     Split out of `_resolve_diff_base` (QS-290 S-7) so the TTL retry can re-walk
     the ladder after a fetch without recursing or re-probing the marker.
+
+    `warn=False` suppresses only the NH2 unreachable-ref warning (review-fix #01
+    nice-to-have 12) — the chosen-base line still prints, since the retry is
+    exactly the pass whose outcome the reader needs.
     """
     for ref in ("origin/main", "main"):
         if _run(["git", "rev-parse", "--verify", ref]).returncode != 0:
@@ -1284,7 +1433,8 @@ def _resolve_base_ladder() -> str | None:
             # NH2 (#05): name the chosen base so an unexpected diff-cover range is debuggable.
             _emit("impacted", f"diff base: {ref}")
             return ref
-        _emit("impacted", f"warning: {ref} has no merge-base with HEAD (shallow clone?) — skipping")
+        if warn:
+            _emit("impacted", f"warning: {ref} has no merge-base with HEAD (shallow clone?) — skipping")
     upstream = _run(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
     tracked = upstream.stdout.strip()
     if upstream.returncode == 0 and tracked:
@@ -1307,19 +1457,40 @@ def _impacted_early_exit_paths() -> list[str] | None:
     diff-cover has no Python lines to score. `--impacted` was ALREADY blind
     here; skipping the work changes the cost, not the verdict.
 
-    **Merge-base, not two-dot.** `git diff --name-only <merge-base>` compares
-    the merge-base tree against the WORKING tree, so it is a genuine superset
-    of diff-cover's three-dot `base...HEAD` range in both directions:
+    **A UNION of three listings, all scoped to the merge-base.** No single git
+    diff is a superset of diff-cover's three-dot `base...HEAD` range, so we take
+    the union of three (review-fix #01 must-fix 2 — a single working-tree diff
+    was NOT a superset, and the earlier docstring wrongly claimed it was):
 
-    - it covers committed + staged + unstaged edits, plus (via `ls-files
-      --others`) untracked files, which `--include-untracked` makes diff-cover
-      score;
-    - it still contains a `.py` file your branch changed that main already
-      holds with IDENTICAL content (a landed cherry-pick / squash-merge), which
-      a two-dot `git diff <main-tip>` would silently omit while diff-cover
-      scored it — a false PASS;
-    - it excludes main's OWN commits since the fork, which a two-dot diff would
-      drag in, making any branch slightly behind main never early-exit.
+    1. `git diff <merge-base>` — merge-base tree vs the WORKING tree. Covers
+       staged and unstaged edits. Note this ALONE is not enough: a `.py`
+       changed in a branch commit but restored to merge-base content in the
+       worktree disappears from it, while diff-cover still scores that commit's
+       added lines. That was a real false PASS.
+    2. `git diff <merge-base> HEAD` — the committed range. Two-dot against an
+       already-resolved merge-base is exactly `base...HEAD`, i.e. precisely
+       diff-cover's range, so this rung makes the superset claim true by
+       construction rather than by argument.
+    3. `git ls-files --others --exclude-standard` — untracked files, which
+       diff-cover scores via `--include-untracked`.
+
+    Scoping every rung to the merge-base (rather than to main's tip) also keeps
+    main's OWN commits since the fork out of the set — a two-dot diff against
+    the tip would drag them in and stop any branch behind main from ever
+    early-exiting.
+
+    **NUL-delimited, never line-delimited** (review-fix #01 must-fix 1).
+    `core.quotePath` defaults to TRUE, so `git diff --name-only` and
+    `git ls-files --others` C-quote non-ASCII paths *and wrap them in double
+    quotes*: `"tests/test_donn\\303\\251es.py"`. That does not end in `.py`, so
+    a change set whose only Python file had a non-ASCII character anywhere in
+    its path took the "no Python files changed" exit and the gate returned 0
+    having run neither testmon nor diff-cover — a silent fail-OPEN in the one
+    function whose contract is fail-closed. `-z` emits the raw byte path and
+    removes the entire quoting class; `-c core.quotePath=false` would be weaker,
+    still breaking on a path containing a literal newline. For the same reason
+    fields are NOT stripped: a `-z` field is already exact, and stripping would
+    corrupt a path with leading or trailing spaces.
 
     **Zero-arg and total** so ONE `patch.object` in a test silences every git
     call at this seat. If the base resolve lived in `check_impacted`, its `_run`
@@ -1345,17 +1516,17 @@ def _impacted_early_exit_paths() -> list[str] | None:
     merge_base = mb.stdout.strip()
     if mb.returncode != 0 or not merge_base:
         return None
-    # Committed + staged + unstaged, merge-base tree vs working tree.
-    diff = _run(["git", "diff", "--name-only", merge_base])
-    if diff.returncode != 0:
-        return None
-    # Untracked files — diff-cover scores them via `--include-untracked`.
-    others = _run(["git", "ls-files", "--others", "--exclude-standard"])
-    if others.returncode != 0:
-        return None
-    return sorted(
-        {line.strip() for line in (diff.stdout + "\n" + others.stdout).splitlines() if line.strip()}
-    )
+    paths: set[str] = set()
+    for cmd in (
+        ["git", "diff", "--name-only", "-z", merge_base],
+        ["git", "diff", "--name-only", "-z", merge_base, "HEAD"],
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+    ):
+        listing = _run(cmd)
+        if listing.returncode != 0:
+            return None
+        paths.update(field for field in listing.stdout.split("\0") if field)
+    return sorted(paths)
 
 
 # QS-290 (S-4): the non-`.py` PASS explanation. ASCII only, emitted through
@@ -1674,10 +1845,10 @@ def _run_impacted_pass(base: str) -> tuple[str, bool]:
     # against stale data instead of failing loudly.
     COVERAGE_XML.unlink(missing_ok=True)
     _emit("impacted", f"selecting impacted tests (testmon) vs base {base}")
-    # QS-290 (S-5): `total_tests=0` — spawn NO collect-only probe. testmon's
-    # selection size is unknowable before the run, so the denominator is
-    # learned from the pass's own `[N/M]` progress suffix instead.
-    result = _stream_pytest(_build_testmon_cmd(), total_tests=0)
+    # QS-290 (S-5): spawn NO collect-only probe. testmon's selection size is
+    # unknowable before the run, so the denominator is learned from the pass's
+    # own `[N/M]` progress suffix instead.
+    result = _stream_pytest(_build_testmon_cmd(), total_tests=_LEARN_FROM_STREAM)
     if not result["passed"]:
         _emit("impacted", "FAIL (selected tests failed)")
         return _IMPACTED_TESTS_FAILED, ran_select_all

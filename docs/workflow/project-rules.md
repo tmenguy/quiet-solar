@@ -36,7 +36,8 @@ all four; use it only for ad-hoc single-node debugging.
 # the baseline and re-checks once — recovering from a drifted baseline
 # left by a killed run with NO manual file deletion ever required.
 # QS-290: a change set with NO .py file at all EXITS EARLY — no pytest,
-# no diff-cover, no `git fetch` (two git calls instead of 10-24 s).
+# no diff-cover, no `git fetch` — a handful of local git calls instead
+# of 10-24 s of work.
 # testmon fingerprints AST blocks in .py files only, so such a run could
 # never select a test, and diff-cover has no Python lines to score: the
 # verdict was ALREADY vacuous, the exit only stops paying for it. The
@@ -44,10 +45,16 @@ all four; use it only for ad-hoc single-node debugging.
 # unstaged + untracked), a superset of diff-cover's three-dot range, and
 # any git failure fails CLOSED (no exit). See "non-Python change sets"
 # below for what to run instead.
-# QS-290: the `origin/main` fetch is TTL-cached on FETCH_HEAD's mtime
-# (10 min), so a TDD burst stops re-fetching. A stale base is OLDER, so
-# the changed-line set is a superset — a TTL hit can only turn a PASS
-# into a FAIL, never a FAIL into a PASS.
+# QS-290: the `origin/main` fetch is TTL-cached (10 min) on FETCH_HEAD,
+# so a TDD burst stops re-fetching. A stale base is OLDER, so the
+# changed-line set is a superset — a TTL hit can only turn a PASS into a
+# FAIL, never a FAIL into a PASS. The skip is deliberately conservative:
+# it requires FETCH_HEAD to be non-empty (a FAILED fetch truncates it to
+# 0 bytes while still bumping the mtime), to actually record a `main`
+# fetch (a `gh pr checkout` or another-branch fetch rewrites it without
+# advancing origin/main), and to carry a non-future mtime (clock skew).
+# Any of those being off just means "fetch as usual". CI always bypasses
+# the TTL entirely.
 python scripts/qs/quality_gate.py --impacted
 
 # Full quality gate (pytest 100% cov + ruff + mypy + translations;
@@ -127,16 +134,23 @@ an explicit test path you already know; `--cache` accelerates repeated
 *full*-gate runs. `--impacted` is mutually exclusive with
 `--quick`/`--cache`/`--no-cache`/`--full`/`--fix`.
 
-**Non-Python change sets — `--quick tests/qs` is the ONLY real check
-(QS-290).** When a change set contains no `.py` file at all (agent
-files, commands, workflow docs, `.j2` templates, JS/CSS assets),
-`--impacted` exits early and checks **nothing**: testmon fingerprints
-AST blocks in `.py` files only, so it could never select a test, and
-diff-cover has no Python lines to score. Its green is honest but
-empty — it was equally empty before the early exit, which merely
-stopped paying 10–24 s for it. So for such change sets
-`python scripts/qs/quality_gate.py --quick tests/qs` is not a
-supplement, it is **the** verification, and it stays mandatory.
+**Non-Python change sets — `--quick` is the ONLY real check (QS-290).**
+When a change set contains no `.py` file at all, `--impacted` exits
+early and checks **nothing**: testmon fingerprints AST blocks in `.py`
+files only, so it could never select a test, and diff-cover has no
+Python lines to score. Its green is honest but empty — it was equally
+empty before the early exit, which merely stopped paying 10–24 s for it.
+So a `--quick` run is not a supplement there, it is **the**
+verification, and it stays mandatory. Which target depends on what
+changed — matching the hint the gate itself prints:
+
+| Non-Python change | Run |
+| --- | --- |
+| agent files, commands, workflow docs, `.claude/settings.json` | `python scripts/qs/quality_gate.py --quick tests/qs` |
+| `ui/*.j2` templates, `ui/resources/**` JS/CSS | `python scripts/qs/quality_gate.py --quick tests/test_dashboard_rendering.py` |
+
+(A failed git probe does **not** take the early exit — it fails closed
+and the full pipeline runs.)
 
 *Deferred baseline re-sync (accepted cost shift).* A non-`.py` run on a
 **stale** `.testmondata` used to select-all and re-sync the baseline as
