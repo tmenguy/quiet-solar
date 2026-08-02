@@ -35,10 +35,12 @@ family, one view.
 
 from __future__ import annotations
 
+import ast
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from datetime import time as dt_time
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -67,6 +69,7 @@ from custom_components.quiet_solar.ha_model.bistate_duration import (
 )
 from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_OFF, CMD_ON, LoadCommand, copy_command
 from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
+from custom_components.quiet_solar.home_model import load as load_module
 from custom_components.quiet_solar.home_model.load import NUM_MAX_INVALID_PROBES_COMMANDS
 from tests.conftest import FakeHass
 from tests.factories import create_minimal_home_model
@@ -864,13 +867,14 @@ T_PRESS = T_RELAUNCH + timedelta(seconds=1)
 _LOAD_LOGGER = "custom_components.quiet_solar.home_model.load"
 
 
-def _spy_on_acks(pump: _StuckPump) -> list[LoadCommand | None]:
+def _spy_on_acks(pump: _StuckPump, monkeypatch: pytest.MonkeyPatch) -> list[LoadCommand | None]:
     """Record every command `_ack_command` is called with from now on.
 
     A phantom ack is the corruption this story is about, and its visible traces
     (`current_command`, `num_on_off`, the counters) are all reachable by other
     paths too. Recording the call itself is what makes "did not ack" an assertion
-    about the bug rather than about its footprint.
+    about the bug rather than about its footprint. `monkeypatch` so the patch is
+    restored at teardown rather than leaking off the instance.
     """
     acked: list[LoadCommand | None] = []
     real_ack = pump._ack_command
@@ -879,7 +883,7 @@ def _spy_on_acks(pump: _StuckPump) -> list[LoadCommand | None]:
         acked.append(command)
         return real_ack(time, command)
 
-    pump._ack_command = _record  # type: ignore[method-assign]
+    monkeypatch.setattr(pump, "_ack_command", _record)
     return acked
 
 
@@ -971,7 +975,65 @@ async def test_the_dispatch_generation_only_ever_moves_forward():
     assert pump._running_command_generation > first
 
 
-async def test_a_press_that_supersedes_mid_relaunch_cannot_ack_the_command_it_replaced(caplog):
+def test_every_running_command_write_site_is_sanctioned():
+    """Review fix #01/6: the "one way in" install invariant, enforced.
+
+    The generation guard is sound only while every NEW-dispatch slot write bumps
+    the tag — i.e. goes through `_install_running_command`. That invariant was
+    held by a docstring alone, and QS-320 exists precisely because a future
+    install site can silently reopen it. This scans the whole package for direct
+    `self.running_command = ...` assignments and fails on any site outside the
+    sanctioned five, matched by enclosing function (not line number, so the test
+    does not rot on unrelated edits):
+
+    - `constraint_reset_and_reset_commands_if_needed` — the reset wipe (`None`)
+    - `_ack_command` — the ack clear (`None`)
+    - `abandon_running_command` — the abandon clear (`None`)
+    - `_install_running_command` — THE install, the only generation bump
+    - `launch_command` — absorb ONLY: an equal-valued object for the SAME
+      dispatch, deliberately generation-neutral
+    """
+    package = Path(load_module.__file__).resolve().parents[1]
+    sanctioned = {
+        ("load.py", "constraint_reset_and_reset_commands_if_needed"),
+        ("load.py", "_ack_command"),
+        ("load.py", "abandon_running_command"),
+        ("load.py", "_install_running_command"),
+        ("load.py", "launch_command"),
+    }
+
+    found: set[tuple[str, str]] = set()
+    for py_file in sorted(package.rglob("*.py")):
+        tree = ast.parse(py_file.read_text(encoding="utf-8"))
+        # (node, enclosing function name) worklist, so each write is keyed by its def
+        stack: list[tuple[ast.AST, str]] = [(tree, "<module>")]
+        while stack:
+            node, func = stack.pop()
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                func = node.name
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign | ast.AugAssign):
+                targets = [node.target]
+            for target in targets:
+                if (
+                    isinstance(target, ast.Attribute)
+                    and target.attr == "running_command"
+                    and isinstance(target.value, ast.Name)
+                    and target.value.id == "self"
+                ):
+                    found.add((py_file.name, func))
+            stack.extend((child, func) for child in ast.iter_child_nodes(node))
+
+    assert found == sanctioned, (
+        f"unsanctioned `self.running_command =` write site(s): {sorted(found - sanctioned)} — "
+        "a new dispatch install MUST go through `_install_running_command` so the "
+        "generation tag is bumped, or QS-320 silently reopens"
+    )
+
+
+async def test_a_press_that_supersedes_mid_relaunch_cannot_ack_the_command_it_replaced(caplog, monkeypatch):
     """AC1/AC8/AC9/AC10/AC12 — the headline bug, at `force_relaunch_command`.
 
     The relaunch ladder's service call for `CMD_ON` is in flight when the user
@@ -988,7 +1050,7 @@ async def test_a_press_that_supersedes_mid_relaunch_cannot_ack_the_command_it_re
     assert pump.is_uncontrollable is True  # pre-race: the supersede branch is armed
     rung_before = pump.running_command_num_relaunch
     num_on_off_before = pump.num_on_off
-    acked = _spy_on_acks(pump)
+    acked = _spy_on_acks(pump, monkeypatch)
 
     pump.race_at = T_PRESS
     pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
@@ -1022,7 +1084,37 @@ async def test_a_press_that_supersedes_mid_relaunch_cannot_ack_the_command_it_re
     assert _race_log(caplog, "force_relaunch_command", "replaced")
 
 
-async def test_a_press_that_supersedes_the_first_dispatch_cannot_be_acked_by_it():
+async def test_a_superseded_dispatch_cannot_rewind_the_causality_anchor():
+    """Review fix #01/1: the anchor is monotonic — it never moves backwards.
+
+    `_anchor_causality_guard_if_executed` sits ABOVE the ownership guard on
+    purpose (a service call physically landed, whoever owns the slot). But the
+    replacing dispatch may have already anchored a NEWER instant: here the press
+    obeys, so its `CMD_IDLE` really lands, anchors `T_PRESS` and acks. When the
+    superseded dispatch then resumes and anchors its older `T_RELAUNCH`, a plain
+    assignment rewinds the causality floor by one second — and the freshness test
+    in `check_load_activity_and_constraints` then classifies the entity state QS
+    itself just caused as an external user override, freezing the load for
+    `override_duration` hours on QS's own command.
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    _arm_for_supersede(pump)
+    # the press must really land: its execute moves the entity and anchors T_PRESS
+    pump.obeys = True
+
+    pump.race_at = T_PRESS
+    pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+
+    await pump.force_relaunch_command(T_RELAUNCH)
+
+    # the press's dispatch went the whole way: executed, anchored, acked
+    assert pump.current_command == CMD_IDLE
+    assert pump.running_command is None
+    # and the stale resumer did not drag the anchor one second into the past
+    assert pump.last_command_execution_time == T_PRESS
+
+
+async def test_a_press_that_supersedes_the_first_dispatch_cannot_be_acked_by_it(monkeypatch):
     """AC2/AC8 — the same bug at `launch_command`, the first place a command reaches.
 
     The entity is unavailable, so both probes return `None`: the outer dispatch falls
@@ -1036,7 +1128,7 @@ async def test_a_press_that_supersedes_the_first_dispatch_cannot_be_acked_by_it(
     pump._last_supersede_time = None
     pump.obeys = False
     pump.hass.states.set(PUMP_ENTITY, STATE_UNAVAILABLE, last_changed=T_RELAUNCH)
-    acked = _spy_on_acks(pump)
+    acked = _spy_on_acks(pump, monkeypatch)
 
     pump.race_at = T_PRESS
     pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: clean and reset")
@@ -1050,9 +1142,12 @@ async def test_a_press_that_supersedes_the_first_dispatch_cannot_be_acked_by_it(
     assert pump.current_command == CMD_ON  # NOT the phantom `CMD_IDLE`
     assert acked == []
     assert pump.is_load_command_set(T_RELAUNCH) is False
+    # review fix #01/2: the execute returned True, so the device ANSWERED — proven
+    # contact must end the lost-control episode even though the ack is withheld
+    assert pump.unresponsive_since is None
 
 
-async def test_a_reset_that_reinstalls_an_identical_command_is_not_acked_by_the_old_one():
+async def test_a_reset_that_reinstalls_an_identical_command_is_not_acked_by_the_old_one(monkeypatch):
     """AC3 — route B, the case a value-equality guard silently misses.
 
     "Clean and reset" `reset()`s the whole command state and then installs a fresh
@@ -1073,7 +1168,7 @@ async def test_a_reset_that_reinstalls_an_identical_command_is_not_acked_by_the_
     pump.running_command_last_launch = T_RELAUNCH
     pump.obeys = False
     pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_RELAUNCH)
-    acked = _spy_on_acks(pump)
+    acked = _spy_on_acks(pump, monkeypatch)
 
     pump.race_at = T_PRESS
     pump.race_action = lambda t: pump.user_clean_and_reset()
@@ -1089,7 +1184,7 @@ async def test_a_reset_that_reinstalls_an_identical_command_is_not_acked_by_the_
 
 
 @pytest.mark.parametrize("race_result", [True, None], ids=["service-call-lands", "service-call-impossible"])
-async def test_an_absorbed_command_still_belongs_to_the_caller_in_flight(race_result):
+async def test_an_absorbed_command_still_belongs_to_the_caller_in_flight(race_result, monkeypatch):
     """AC4 — absorb must NOT trip the guard. The mirror of AC1.
 
     The absorb branch fires when the incoming command equals the one in flight and
@@ -1106,14 +1201,17 @@ async def test_an_absorbed_command_still_belongs_to_the_caller_in_flight(race_re
     pump = _make_pump(pump_class=_RacingPump)
     pump.external_user_initiated_state = None
     pump.running_command = copy_command(CMD_IDLE)  # setup-only direct write
-    pump.running_command_first_launch = T_RELAUNCH
-    pump.running_command_last_launch = T_RELAUNCH
+    pump.running_command_first_launch = T_RELAUNCH - timedelta(seconds=1)
+    # review fix #01/4: the setup stamp must DIFFER from the relaunch instant, or
+    # the "still stamped" assertion below holds whether or not the stamp was
+    # rewritten and the clause AC4 exists to prove is unobservable
+    pump.running_command_last_launch = T_RELAUNCH - timedelta(seconds=1)
     pump.obeys = False
     pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_RELAUNCH)
     pump.race_result = race_result
     slot_before = pump.running_command
     generation_before = pump._running_command_generation
-    acked = _spy_on_acks(pump)
+    acked = _spy_on_acks(pump, monkeypatch)
 
     pump.race_at = T_PRESS
     pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
@@ -1136,7 +1234,7 @@ async def test_an_absorbed_command_still_belongs_to_the_caller_in_flight(race_re
         assert pump.running_command is not slot_before
 
 
-async def test_check_commands_cannot_ack_a_command_the_probe_never_saw():
+async def test_check_commands_cannot_ack_a_command_the_probe_never_saw(monkeypatch):
     """AC5 — the third site. `check_commands` had no post-await re-check at all.
 
     Its await is the probe, and real subclasses do await I/O there —
@@ -1146,7 +1244,7 @@ async def test_check_commands_cannot_ack_a_command_the_probe_never_saw():
     """
     pump = _make_pump(pump_class=_ProbeRacingPump)
     _arm_for_supersede(pump)
-    acked = _spy_on_acks(pump)
+    acked = _spy_on_acks(pump, monkeypatch)
 
     pump.probe_race_at = T_PRESS
     pump.probe_race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
@@ -1161,6 +1259,39 @@ async def test_check_commands_cannot_ack_a_command_the_probe_never_saw():
     # that told us nothing about the current occupant
     assert command_acked_or_good is False
     assert res == timedelta(0)
+
+
+async def test_a_confirming_probe_ends_the_lost_control_episode_even_when_the_slot_changed_hands(monkeypatch):
+    """Review fix #01/2: contact evidence must not ride on the ack.
+
+    A `True` probe proves the device ANSWERED — that is dispatch-independent
+    contact (`ContactEvidence.CONFIRMED` is documented as "an ack is contact
+    whether or not a clock was live"). On `main` the phantom ack cleared the
+    episode as a side effect; QS-320 correctly removed the ack, but the contact
+    signal must survive on its own, or a live lost-control episode outlasts
+    demonstrated contact and the next solver command supersedes (an extra service
+    call) instead of stacking.
+
+    The ack, the stamp and the counters stay withheld — only the episode ends.
+    """
+    pump = _make_pump(pump_class=_ProbeRacingPump)
+    _arm_for_supersede(pump)
+    assert pump.unresponsive_since == T_RELAUNCH
+    acked = _spy_on_acks(pump, monkeypatch)
+
+    pump.probe_race_at = T_PRESS
+    pump.probe_race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+    pump.probe_race_result = True
+
+    _res, command_acked_or_good = await pump.check_commands(T_RELAUNCH)
+
+    # proven contact: the episode is over, the shout latch dropped with it
+    assert pump.unresponsive_since is None
+    assert pump._unresponsive_needs_ack is False
+    # but the ack is still withheld — the probe confirmed the PREVIOUS occupant
+    assert acked == []
+    assert pump.current_command == CMD_ON
+    assert command_acked_or_good is False
 
 
 async def test_check_commands_hands_no_invalid_probe_strike_to_the_successor():
@@ -1186,9 +1317,12 @@ async def test_check_commands_hands_no_invalid_probe_strike_to_the_successor():
     # and no staleness computed from the previous dispatch's stamp (pre-fix: -1 s,
     # because the press's stamp is LATER than the relaunch instant)
     assert res == timedelta(0)
+    # review fix #01/2: a `None` probe is NOT contact — the episode-ending clear is
+    # gated on `is True`, so the lost-control episode survives here
+    assert pump.unresponsive_since == T_RELAUNCH
 
 
-async def test_check_commands_cannot_ack_none_onto_an_emptied_slot(caplog):
+async def test_check_commands_cannot_ack_none_onto_an_emptied_slot(caplog, monkeypatch):
     """AC7/AC12 — `check_commands` also carried an unguarded EMPTIED-slot hole.
 
     With no post-await check, an emptied slot reached `_ack_command(time, None)`,
@@ -1212,7 +1346,7 @@ async def test_check_commands_cannot_ack_none_onto_an_emptied_slot(caplog):
     pump.hass.states.set(PUMP_ENTITY, "off", last_changed=T_RELAUNCH)
     # `abandon_running_command` leaves the stack alone, so the tail must still see it
     pump._stacked_command = copy_command(CMD_ON)
-    acked = _spy_on_acks(pump)
+    acked = _spy_on_acks(pump, monkeypatch)
 
     pump.probe_race_at = T_PRESS
     pump.probe_race_action = _sync_race(lambda: pump._drop_running_command("test: the user emptied the slot"))

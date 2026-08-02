@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
   - custom_components/quiet_solar/ha_model/device.py
-last_verified: 2026-08-01
+last_verified: 2026-08-02
 ---
 
 # External control detection
@@ -74,7 +74,10 @@ Three guards then keep false positives out of the bistate detection in
    `last_changed` is NEWER than the load's
    `last_command_execution_time` (set on real service-call executions
    and anchored at storage restore when a `current_command` is
-   restored). A stale state — e.g. a lagging template-switch mirror
+   restored; **monotonic** since QS-320 review fix #01/1, so a
+   superseded dispatch resuming mid-race cannot rewind the floor and
+   turn QS's own state change into a classified override). A stale
+   state — e.g. a lagging template-switch mirror
    right after an HA restart — is not a user action. Conservative
    edge: `last_changed = None` while an anchor exists cannot prove
    freshness → no override is classified.

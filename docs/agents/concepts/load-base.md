@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-01
+last_verified: 2026-08-02
 ---
 
 # AbstractDevice & AbstractLoad
@@ -135,14 +135,18 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   That it also quiets the two pre-existing drop paths (where `main` does
   re-announce) is a bonus, not the justification. Do not read it as a general
   alert-deduplication guarantee: see the storm caveat below.
-- **Five releasers, one writer.** `_clear_unresponsive` is the only writer;
+- **Seven releasers, one writer.** `_clear_unresponsive` is the only writer;
   it is reached by an ack, by the empty-slot re-arm, by
   `_drop_running_command` (**unconditionally** — an emptied slot has no
   owner for the clock whether or not a confirmed command ever existed), by
   the `NUM_MAX_INVALID_PROBES_COMMANDS` give-up in `check_commands`
-  (QS-307, the one `UNREACHABLE` caller), and by a
-  `keep_commands=False` wipe. All five release the *clock*; which of them end
-  an *episode* is the `contact` question above. It also clears the
+  (QS-307, the one `UNREACHABLE` caller), by a
+  `keep_commands=False` wipe, and — QS-320 review fix #01/2 — by the
+  disowned-slot bail-outs in `launch_command` and `check_commands` when the
+  result was `True`: proven contact ends the episode even though the ack is
+  withheld. `force_relaunch_command`'s bail-out deliberately does NOT clear
+  (AC1 pins `unresponsive_since` surviving it). All of them release the
+  *clock*; which of them end an *episode* is the `contact` question above. It also clears the
   supersede anchor
   *ahead of* its own early return, so the two fields cannot
   desynchronise.
@@ -271,9 +275,9 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   launches `CMD_IDLE` of its own (QS-320). The invariant relied upon is
   therefore **ownership**, not emptiness: a completion path writes
   nothing about its own dispatch's outcome unless
-  `_slot_still_holds(launched_command, launched_generation, site)` says
-  the slot still carries that dispatch's `_running_command_generation`
-  tag. The clock is still only ever cleared alongside the command state
+  `_slot_still_holds(launched_command_name, launched_generation, site,
+  ctxt)` says the slot still carries that dispatch's
+  `_running_command_generation` tag. The clock is still only ever cleared alongside the command state
   it describes.
 
 Switching-cost protection (`AbstractDevice`):
@@ -331,8 +335,9 @@ Switching-cost protection (`AbstractDevice`):
   driver and has no notification channel) and is overridden on
   `AbstractLoad` to push one `DEVICE_STATUS_CHANGE_ERROR`.
 - `_install_running_command(command, time)` /
-  `_slot_still_holds(launched_command, launched_generation, site, ctxt)`
-  / `_running_command_generation` — the QS-320 dispatch-ownership
+  `_slot_still_holds(launched_command_name, launched_generation, site,
+  ctxt)` — the name is a plain `str`, only ever logged — /
+  `_running_command_generation` — the QS-320 dispatch-ownership
   surface, all on `AbstractDevice`. The installer is the **one way in**
   to the command slot and returns the tag the guards compare; absorb
   deliberately bypasses it (an equal-valued object for the *same*
@@ -348,7 +353,11 @@ Switching-cost protection (`AbstractDevice`):
   probe-already-set branch) and
   initialized to "now" at storage restore when a `current_command` is
   restored. Never serialized. Cleared by `user_clean_and_reset`,
-  which also clears ALL user-override fields (QS-256).
+  which also clears ALL user-override fields (QS-256). The helper is
+  **monotonic** (QS-320 review fix #01/1): it sits above the ownership
+  guard, so a superseded dispatch resuming after its replacement
+  anchored a newer instant must not rewind the causality floor — a
+  rewound floor classifies QS's own state change as a user override.
 
 ## Common mistakes
 
