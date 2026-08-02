@@ -130,9 +130,10 @@ def build_context(issue_override: int | None = None) -> dict:
         pr_future: Future | None = None
         try:
             # Inside the ``try`` so the drain below covers it: if this
-            # ``submit`` raises (thread exhaustion) or an interrupt lands
-            # between the two, ``title_future`` is already in flight and
-            # would otherwise never be settled (review fix #03 C).
+            # ``submit`` raises (thread exhaustion), ``title_future`` is
+            # already in flight and would otherwise never be settled
+            # (review fix #03 C). The window *before* the ``try`` — the
+            # title submit itself — is not covered.
             pr_future = (
                 pool.submit(find_pr_for_branch, branch, stdin=subprocess.DEVNULL)
                 if branch
