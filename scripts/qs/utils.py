@@ -24,14 +24,24 @@ def run(
     check: bool = True,
     capture: bool = True,
     cwd: str | None = None,
+    stdin: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run a command, returning the completed process."""
+    """Run a command, returning the completed process.
+
+    ``stdin`` is an **opt-in** passthrough to :func:`subprocess.run`.
+    ``capture_output=True`` does not redirect stdin, so by default a child
+    inherits the caller's TTY — which every existing caller relies on, and
+    which ``stdin=None`` preserves exactly. Callers that launch children
+    *concurrently* pass ``subprocess.DEVNULL`` so two of them cannot race
+    for the same terminal on an auth prompt (review fix QS-291 #01 S2).
+    """
     return subprocess.run(
         cmd,
         capture_output=capture,
         text=True,
         check=check,
         cwd=cwd,
+        stdin=stdin,
     )
 
 
@@ -288,11 +298,18 @@ def auto_commit_and_push(
     return {"committed": True, "pushed": pushed, "files": files}
 
 
-def find_pr_for_branch(branch: str) -> dict | None:
-    """Return ``{"pr_number", "url"}`` for the open PR on ``branch``, else None."""
+def find_pr_for_branch(branch: str, *, stdin: int | None = None) -> dict | None:
+    """Return ``{"pr_number", "url"}`` for the open PR on ``branch``, else None.
+
+    ``stdin`` is forwarded to :func:`run` — ``context.py`` passes
+    ``subprocess.DEVNULL`` because it issues this call concurrently with a
+    second ``gh`` child. Default ``None`` leaves every other caller's
+    behaviour untouched.
+    """
     result = run_gh(
         ["pr", "list", "--head", branch, "--json", "number,url,state"],
         check=False,
+        stdin=stdin,
     )
     if result.returncode != 0:
         return None
