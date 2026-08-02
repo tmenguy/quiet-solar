@@ -16,6 +16,10 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements_test.txt
 
       - name: Install dependencies
         run: |
@@ -38,6 +42,10 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements_test.txt
 
       - name: Install dependencies
         run: |
@@ -47,27 +55,182 @@ jobs:
       - name: MyPy type check
         run: mypy custom_components/quiet_solar/
 
-  test:
-    name: Tests (100% Coverage)
+  test-shard:
+    name: Tests shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Least privilege: this job `pip install`s third-party packages, so
+    # it must not hold a writable token.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Don't leave the token in the git credential store while
+          # third-party package code runs.
+          persist-credentials: false
 
       - name: Set up Python 3.14
         uses: actions/setup-python@v6
         with:
           python-version: '3.14'
+          cache: 'pip'
+          cache-dependency-path: |
+            requirements.txt
+            requirements_test.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements_test.txt
 
-      - name: Run tests with 100% coverage
+      - name: Record total collected test count
+        if: matrix.shard == 1
+        env:
+          TZ: Europe/Paris
+        run: |
+          set -euo pipefail
+          if ! pytest tests/ --collect-only -q > collect-output.txt 2>&1; then
+            echo "::error::pytest collection failed — output below"
+            cat collect-output.txt
+            exit 1
+          fi
+          # Accept both `N tests collected` and the deselected form
+          # `N/M tests collected (K deselected)`, taking N — the number
+          # actually selected. `|| true` keeps a no-match from dying
+          # under `set -e` with no diagnostic.
+          total="$(grep -oE '^[0-9]+(/[0-9]+)? tests? collected' collect-output.txt \
+            | head -1 | grep -oE '^[0-9]+' || true)"
+          if [ -z "${total}" ]; then
+            echo "::error::could not parse the pytest collect summary — tail below"
+            tail -20 collect-output.txt
+            exit 1
+          fi
+          echo "${total}" > total-collected.txt
+          cat total-collected.txt
+
+      # Each shard's terminal coverage report shows only what THAT shard
+      # exercised — roughly 58-70% of the package, which is expected and
+      # is not a regression. Only the aggregation job's combined report
+      # is a verdict. (`--cov-report=` cannot silence these: pytest-cov
+      # clears the report list only when '' is its SOLE member, and
+      # pytest.ini's addopts already contributes `term-missing`.)
+      - name: Run shard ${{ matrix.shard }}
         env:
           TZ: Europe/Paris
           COVERAGE_CORE: sysmon
-        run: pytest tests/ -n auto --cov=custom_components/quiet_solar --cov-report=term-missing --cov-fail-under=100
+          COVERAGE_FILE: .coverage.shard-${{ matrix.shard }}
+        run: >-
+          pytest tests/ -n auto
+          --splits 4 --group ${{ matrix.shard }}
+          --cov=custom_components/quiet_solar
+          --junitxml=junit-shard-${{ matrix.shard }}.xml
+
+      - name: Upload shard data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-data-${{ matrix.shard }}
+          # `total-collected.txt` exists only on shard 1;
+          # `if-no-files-found` is evaluated on the aggregate match set,
+          # so shards 2-4 still satisfy it via the other two entries.
+          path: |
+            .coverage.shard-${{ matrix.shard }}*
+            junit-shard-${{ matrix.shard }}.xml
+            total-collected.txt
+          include-hidden-files: true
+          if-no-files-found: error
+          overwrite: true
+          # Long enough that a "Re-run failed jobs" days later still
+          # finds the shard data. At 1 day the aggregation job could go
+          # permanently un-clearable by re-running it alone.
+          retention-days: 5
+
+  # The job `name:` below is the LITERAL required status check on `main`
+  # (verified: `gh api repos/:owner/:repo/branches/main/protection`
+  # returns required_status_checks.contexts == ["Tests (100% Coverage)"]).
+  # Renaming it blocks every PR forever. Do not touch.
+  test:
+    name: Tests (100% Coverage)
+    needs: test-shard
+    # `!cancelled()` — NOT `always()`. Both keep this required check
+    # from being SKIPPED when a shard fails (branch protection counts a
+    # skipped required check as passing), but `always()` also fires on
+    # cancellation and would turn a cancelled run into a hard red.
+    if: ${{ !cancelled() }}
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # A failing shard must surface here as a hard red, since test
+      # failures now live in a `Tests shard N/4` job that is NOT the
+      # required context.
+      - name: Fail if any shard failed
+        if: needs.test-shard.result != 'success'
+        run: |
+          echo "::error::test-shard result was '${{ needs.test-shard.result }}'"
+          echo "::error::See the 'Tests shard N/4' jobs for the failing tests."
+          exit 1
+
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # D-14: value-level translations check. Invokes the SAME entry
+      # point as the local gate's `check_translations`
+      # (`bash scripts/generate-translations.sh`), so the two cannot
+      # disagree on the STALENESS verdict — the whole point of D-14.
+      #
+      # One deliberate asymmetry: the local gate ignores the generator's
+      # exit code ("may fail for unrelated integrations"), whereas a
+      # hard generator failure — absent strings.json, unresolvable
+      # `[%key:…%]` — is red here. CI is intentionally the stricter of
+      # the two, and says so instead of dying on a bare traceback.
+      #
+      # `git add -A` before diffing: `git diff` alone cannot see
+      # UNTRACKED files, so a PR that DELETES en.json would have the
+      # generator recreate it and pass vacuously.
+      - name: Check translations/en.json is freshly generated
+        run: |
+          set -euo pipefail
+          if ! bash scripts/generate-translations.sh; then
+            echo "::error::scripts/generate-translations.sh failed — check strings.json for an absent file or an unresolvable [%key:...%] reference"
+            exit 1
+          fi
+          git add -A -- custom_components/quiet_solar/translations/
+          git diff --cached --exit-code -- custom_components/quiet_solar/translations/ \
+            || { echo "::error::translations are stale — run 'bash scripts/generate-translations.sh' and commit the result"; exit 1; }
+
+      # Twin of the `coverage==7.14.1` pin in requirements_test.txt —
+      # the shards' data must be written and read by the same version.
+      # Both move together in one edit.
+      - name: Install coverage
+        run: pip install coverage==7.14.1
+
+      - name: Download shard data
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-data-*
+          path: shard-data
+          merge-multiple: true
+
+      - name: Reconcile test counts
+        run: python3 scripts/qs/ci_reconcile_shards.py shard-data --splits 4
+
+      - name: Combine coverage and enforce 100%
+        run: |
+          coverage combine shard-data
+          coverage report --show-missing --fail-under=100
 
   hacs-validate:
     name: HACS Validation

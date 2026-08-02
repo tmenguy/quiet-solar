@@ -119,9 +119,13 @@ would let a production line covered *only* by a domain integration test
 report 0% and FAIL `--impacted` with no local remedy (review-fix MF1).
 The self-tests never cover `custom_components/quiet_solar`, so ignoring
 that one file cannot change the diff-cover verdict; it just keeps the
-loop fast. CI's whole-repo gate (`pr-quality.yml`, `pytest tests/ -n auto
---cov-fail-under=100`) ignores nothing, so it runs every test — domain
-integration and self-tests alike — for the authoritative 100%.
+loop fast. CI's whole-repo gate (`pr-quality.yml`: N parallel
+`pytest tests/ -n auto --cov=custom_components/quiet_solar --splits N
+--group <i>` shards whose data is combined into one
+`coverage report --fail-under=100`) ignores no test, so it runs every
+test — domain integration and self-tests alike — for the authoritative
+100%. The shard count lives only in the workflow;
+`tests/test_quality_gate.py` pins its four copies to each other.
 
 ## Key types / structures
 
