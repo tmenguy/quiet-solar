@@ -152,12 +152,13 @@ changed — matching the hint the gate itself prints:
 (A failed git probe does **not** take the early exit — it fails closed
 and the full pipeline runs.)
 
-*Deferred baseline re-sync (accepted cost shift).* A non-`.py` run on a
-**stale** `.testmondata` used to select-all and re-sync the baseline as
-a side effect; it no longer does, so that re-sync is deferred to your
-next `.py` run (which will select more tests than usual, once). This
-changes cost, never a verdict: the stale-DB run's verdict was equally
-vacuous, and a stale baseline is always safe — it over-selects.
+*Cold baselines do not take the exit.* The exit requires a **warm**
+`.testmondata`, because "testmon could never select a test" is only true
+while it has a baseline: against a cold or purged one testmon
+select-alls, and those over-selected tests can fail. Skipping them would
+turn a real failure into a PASS, so a cold baseline falls through to the
+full run instead. On a warm baseline the deferred re-sync is a pure cost
+shift: the next `.py` run selects more tests than usual, once.
 
 **Raw-`pytest` grammar rule.** Allowed: `pytest <path>::<nodeid> [-v]`
 — the positional argument MUST contain `::`. Forbidden as a habitual

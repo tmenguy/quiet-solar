@@ -661,7 +661,18 @@ def _parse_pytest_output(text: str) -> dict[str, int]:
     return summary if summary is not None else tally
 
 
-_COLLECTED_RE = re.compile(r"(\d+) tests? collected")
+# pytest prints `N tests collected` normally, and `S/N tests collected
+# (D deselected)` whenever anything deselects — a `-k`/`-m` in `pytest.ini`'s
+# `addopts` (a `slow` marker is already declared here) or a
+# `pytest_collection_modifyitems` hook. Both forms verified against real pytest.
+# The optional leading group captures the SELECTED count, which is what actually
+# runs and therefore the only count the worker decision may use.
+#
+# This is matched with `.search`, not `.match`: anchoring at position 0 made the
+# `S/` prefix unparseable, so the probe returned None, `_resolve_files_workers`
+# always answered `-n auto`, and the serial fast path silently stopped existing
+# — no warning, no symptom but the lost seconds.
+_COLLECTED_RE = re.compile(r"(?:(\d+)/)?(\d+) tests? collected")
 
 # pytest's exit code for "no tests were collected" — a KNOWN zero, not a failure.
 _PYTEST_RC_NO_TESTS = 5
@@ -716,16 +727,21 @@ def _collect_test_count(targets: list[str]) -> int | None:
     try:
         count_stdout, _ = count_proc.communicate(timeout=_COLLECT_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
+        # Reap it. `kill()` alone leaves the child unwaited with both pipes
+        # open, so CPython emits `ResourceWarning: subprocess N is still
+        # running` into the middle of the gate's own output.
         count_proc.kill()
+        count_proc.communicate()
         return None
     if count_proc.returncode == _PYTEST_RC_NO_TESTS:
         return 0
     if count_proc.returncode != 0:
         return None
     for line in count_stdout.split("\n"):
-        m = _COLLECTED_RE.match(line.strip())
+        m = _COLLECTED_RE.search(line)
         if m:
-            return int(m.group(1))
+            selected, collected = m.groups()
+            return int(selected if selected is not None else collected)
     return None
 
 
@@ -1896,33 +1912,54 @@ _IMPACTED_DIFF_COVER_TIMEOUT = "diff_cover_timeout"
 _IMPACTED_CHANGED_LINES_UNCOVERED = "changed_lines_uncovered"
 
 
+def _testmon_baseline_warm() -> bool:
+    """True iff `.testmondata` is present and non-empty, i.e. testmon has a
+    baseline to select against and will NOT select-all.
+
+    Existence AND size come from a SINGLE `stat()` inside a try/except so the
+    file vanishing between a probe and a read (a concurrent
+    `--seed-testmon`/`--impacted` run, another worktree, a mid-purge) cannot
+    crash the gate. A vanished or unreadable baseline reads as cold, matching
+    the module's tolerate-vanish concurrency model.
+    """
+    try:
+        return TESTMON_DATA.stat().st_size > 0
+    except OSError:
+        # FileNotFoundError (vanished baseline) plus any other transient stat
+        # failure — treat all as cold.
+        return False
+
+
 def _run_impacted_pass(base: str) -> tuple[str, bool]:
     """Run ONE testmon-selected pass against `base`; return `(verdict, ran_select_all)`.
 
-    Pipeline: DB hygiene (`_ensure_testmon_db_safe`, which may purge a corrupt /
-    schema-mismatched baseline) → reset accumulated coverage iff the baseline is
-    now absent (so the pass starts clean) → testmon-selected tests under `--cov`
-    (writes coverage.xml) → diff-cover --fail-under=100 on the changed lines.
-    Factored out of `check_impacted` (QS-283 A4) so the self-heal retry can
-    re-run the SAME pass against the already-resolved base — no second
-    `git fetch` / tooling probe.
+    Pipeline: reset accumulated coverage iff the baseline is absent (so the pass
+    starts clean) → testmon-selected tests under `--cov` (writes coverage.xml) →
+    diff-cover --fail-under=100 on the changed lines. Factored out of
+    `check_impacted` (QS-283 A4) so the self-heal retry can re-run the SAME pass
+    against the already-resolved base — no second `git fetch` / tooling probe.
 
-    `ran_select_all` reports whether THIS pass ran as a select-all: it is the
-    post-hygiene `.testmondata` absence, so it is True both for a genuinely
-    fresh baseline AND when hygiene just purged a corrupt/schema-mismatched DB
-    mid-pass. `check_impacted` uses it to suppress a pointless self-heal retry
-    when the first pass already select-all'd (review fix #01). Returns one of
-    the `_IMPACTED_*` verdicts paired with that flag.
+    DB hygiene (`_ensure_testmon_db_safe`) is the CALLER's job, run once before
+    the non-`.py` early exit. It used to live here, which meant a change set
+    that took the exit never got its `.testmondata` checked at all — a corrupt
+    baseline survived indefinitely while a developer on a doc-only stretch kept
+    getting 0 back in milliseconds.
+
+    `ran_select_all` reports whether THIS pass ran as a select-all: the
+    `.testmondata` absence, so it is True both for a genuinely fresh baseline
+    AND when the caller's hygiene just purged a corrupt/schema-mismatched DB.
+    `check_impacted` uses it to suppress a pointless self-heal retry when the
+    first pass already select-all'd. Returns one of the `_IMPACTED_*` verdicts
+    paired with that flag.
     """
-    _ensure_testmon_db_safe()
     # QS-278: a missing `.testmondata` here (first-ever run, or just purged by
-    # the hygiene above as corrupt/schema-mismatched) means testmon is about to
+    # the caller's hygiene as corrupt/schema-mismatched) means testmon is about to
     # select ALL tests — a fresh baseline. Reset the accumulated `--cov-append`
     # coverage data so it reflects only this clean full run, never stale lines
     # from an earlier branch state. When the DB exists, accumulation is
     # intentional. `ran_select_all` records this select-all decision for the
-    # caller's self-heal gate (review fix #01: a baseline purged mid-pass means
-    # this pass IS the clean select-all, so no retry can improve on it).
+    # caller's self-heal gate: a baseline purged by hygiene means this pass IS
+    # the clean select-all, so no retry can improve on it.
     ran_select_all = not TESTMON_DATA.exists()
     if ran_select_all:
         _reset_coverage_data()
@@ -2033,6 +2070,23 @@ def check_impacted() -> int:
     # run's report.
     _clean_orphan_cov_shards()
 
+    # QS-283 A4 trigger gate: capture the incremental signal BEFORE any
+    # DB-purging hygiene step runs. A non-empty `.testmondata` means testmon has
+    # a warm baseline and is about to INCREMENTALLY select a subset — the only
+    # case where a changed-line FAIL might be a testmon/coverage desync worth
+    # self-healing. An absent/empty DB means this run already select-alls
+    # (ground truth), so a FAIL is genuine and the retry is skipped — no wasted
+    # select-all on the normal TDD-red case. (`_clean_orphan_cov_shards` above
+    # only ever touches `.coverage.*` shards, never `.testmondata`, so it cannot
+    # disturb this signal.)
+    was_incremental = _testmon_baseline_warm()
+
+    # DB hygiene must run BEFORE the early exit, not inside `_run_impacted_pass`:
+    # the exit returns without ever reaching that pass, so a corrupt
+    # `.testmondata` would never be purged and a developer on a doc-only stretch
+    # would keep getting 0 back in milliseconds while the DB stayed broken.
+    _ensure_testmon_db_safe()
+
     # QS-290 (S-4): a change set with no `.py` file at all makes this whole
     # gate structurally vacuous — testmon fingerprints only `.py`, so it could
     # never select a test, and diff-cover has no Python lines to score. Exit
@@ -2042,16 +2096,25 @@ def check_impacted() -> int:
     # `None` means "unknown" (a git failure) and must fall through — see
     # `_impacted_early_exit_paths`.
     #
-    # Caveat (recorded in docs/workflow/project-rules.md): on a STALE testmon DB
-    # a non-`.py` run today select-alls and re-syncs the baseline as a side
-    # effect; it no longer will, deferring that re-sync to the next `.py` run.
-    # That is a cost shift, not a verdict change — the stale-DB run's verdict was
-    # equally vacuous.
-    early_exit_paths = _impacted_early_exit_paths()
-    if early_exit_paths is not None and not any(p.endswith(".py") for p in early_exit_paths):
-        for line in _IMPACTED_NON_PY_LINES:
-            _emit("impacted", line)
-        return 0
+    # GATED ON A WARM BASELINE, and the probe is re-read POST-hygiene. "testmon
+    # could never select a test" holds only while `.testmondata` is usable:
+    # against a cold one testmon select-alls, proven with real testmon —
+    #
+    #     COLD (no .testmondata), note.txt changed -> 1 passed     (select-all)
+    #     WARM,                   note.txt changed -> no tests ran (0 selected)
+    #
+    # so on a cold baseline a doc-only change that breaks a doc-pinned guard
+    # test exited 1 before this feature and would return 0 after it: a false
+    # PASS, which is the one defect class a quality gate must never ship. The
+    # probe must be the POST-hygiene one — a corrupt DB looks warm but has just
+    # been purged, after which testmon select-alls too. Cold falls through to
+    # the full pass, exactly as before this feature existed.
+    if _testmon_baseline_warm():
+        early_exit_paths = _impacted_early_exit_paths()
+        if early_exit_paths is not None and not any(p.endswith(".py") for p in early_exit_paths):
+            for line in _IMPACTED_NON_PY_LINES:
+                _emit("impacted", line)
+            return 0
 
     base = _resolve_diff_base()
     if base is None:
@@ -2060,30 +2123,6 @@ def check_impacted() -> int:
             return 4
         _emit("impacted", "no diff base resolvable — skipping diff-coverage check (offline/fresh worktree)")
         return 0
-
-    # QS-283 A4 trigger gate: capture the incremental signal BEFORE any
-    # DB-purging hygiene step runs — i.e. before `_run_impacted_pass` calls
-    # `_ensure_testmon_db_safe`. (QS-290: `_clean_orphan_cov_shards` now runs
-    # earlier, above the early exit, but it only ever touches `.coverage.*`
-    # shards and never `.testmondata`, so the invariant is unaffected.)
-    # A non-empty `.testmondata` means testmon
-    # has a warm baseline and is about to INCREMENTALLY select a subset — the
-    # only case where a changed-line FAIL might be a testmon/coverage desync
-    # worth self-healing. An absent/empty DB means this run already select-alls
-    # (ground truth), so a FAIL is genuine and the retry is skipped — no wasted
-    # select-all on the normal TDD-red case.
-    #
-    # Review fix #02: derive existence AND size from a SINGLE `stat()` inside a
-    # try/except so the file vanishing (a concurrent `--seed-testmon`/`--impacted`
-    # run, another worktree, or a mid-`_purge_testmon_db`) between a probe and a
-    # read cannot crash the gate — a vanished/unreadable baseline is treated as
-    # non-incremental, matching the module's tolerate-vanish concurrency model.
-    try:
-        was_incremental = TESTMON_DATA.stat().st_size > 0
-    except OSError:
-        # OSError covers FileNotFoundError (vanished baseline) plus any other
-        # transient stat failure — treat all as non-incremental.
-        was_incremental = False
 
     verdict, ran_select_all = _run_impacted_pass(base)
     if verdict == _IMPACTED_PASS:
