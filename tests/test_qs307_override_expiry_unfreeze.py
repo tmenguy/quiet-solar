@@ -998,12 +998,14 @@ def test_every_running_command_write_site_is_sanctioned():
     # ambiguous — `constraint_reset_and_reset_commands_if_needed` exists on both
     # `AbstractDevice` and `AbstractLoad`, so a write added to an override of any
     # sanctioned name would have been silently sanctioned by name-match.
+    # Review fix #03/5: paths are PACKAGE-RELATIVE, so a second `load.py` anywhere
+    # in the package cannot collide with the sanctioned entries.
     sanctioned = {
-        ("load.py", "AbstractDevice.constraint_reset_and_reset_commands_if_needed"),
-        ("load.py", "AbstractDevice._ack_command"),
-        ("load.py", "AbstractDevice.abandon_running_command"),
-        ("load.py", "AbstractDevice._install_running_command"),
-        ("load.py", "AbstractDevice.launch_command"),
+        ("home_model/load.py", "AbstractDevice.constraint_reset_and_reset_commands_if_needed"),
+        ("home_model/load.py", "AbstractDevice._ack_command"),
+        ("home_model/load.py", "AbstractDevice.abandon_running_command"),
+        ("home_model/load.py", "AbstractDevice._install_running_command"),
+        ("home_model/load.py", "AbstractDevice.launch_command"),
     }
 
     def flattened(target: ast.expr):
@@ -1017,7 +1019,15 @@ def test_every_running_command_write_site_is_sanctioned():
             yield target
 
     def binding_targets(node: ast.AST) -> list[ast.expr]:
-        """Every syntactic form that can bind `self.running_command` (#02/6)."""
+        """The ACCIDENTAL syntactic forms that can bind `self.running_command`.
+
+        #02/6 + #03/1: assignment (plain, annotated, augmented), `for` loops,
+        `with ... as`, and comprehension for-targets (`[0 for self.running_command
+        in cmds]` parses AND binds at runtime; `iter_child_nodes` reaches the
+        `comprehension` node under all four comprehension kinds). Deliberate
+        evasion (aliased `setattr`, `object.__setattr__`, exec, C extensions) is
+        OUTSIDE this lint's threat model — see `is_sneaky_write_of_running_command`.
+        """
         if isinstance(node, ast.Assign):
             return node.targets
         if isinstance(node, ast.AnnAssign | ast.AugAssign):
@@ -1026,23 +1036,52 @@ def test_every_running_command_write_site_is_sanctioned():
             return [node.target]
         if isinstance(node, ast.withitem) and node.optional_vars is not None:
             return [node.optional_vars]
+        if isinstance(node, ast.comprehension):
+            return [node.target]
         return []
 
-    def is_setattr_of_running_command(node: ast.AST) -> bool:
-        """`setattr(obj, "running_command", ...)` evades target-based scanning (#02/6)."""
+    def is_sneaky_write_of_running_command(node: ast.AST) -> bool:
+        """Call/subscript forms a target-based scan misses (#02/6, #03/3).
+
+        Covers the cheap accidental spellings: bare `setattr(...)`,
+        `builtins.setattr(...)`. The `self.__dict__["running_command"] = x`
+        subscript-store is caught by the leaf matcher below. Deliberate evasion
+        (aliasing `setattr`, `object.__setattr__`, exec) is out of scope.
+        """
+        if not (isinstance(node, ast.Call) and len(node.args) >= 2):
+            return False
+        is_setattr = (isinstance(node.func, ast.Name) and node.func.id == "setattr") or (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "setattr"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "builtins"
+        )
+        return is_setattr and isinstance(node.args[1], ast.Constant) and node.args[1].value == "running_command"
+
+    def is_running_command_leaf(leaf: ast.expr) -> bool:
+        """`self.running_command` or `self.__dict__["running_command"]` (#03/3)."""
+        if (
+            isinstance(leaf, ast.Attribute)
+            and leaf.attr == "running_command"
+            and isinstance(leaf.value, ast.Name)
+            and leaf.value.id == "self"
+        ):
+            return True
         return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "setattr"
-            and len(node.args) >= 2
-            and isinstance(node.args[1], ast.Constant)
-            and node.args[1].value == "running_command"
+            isinstance(leaf, ast.Subscript)
+            and isinstance(leaf.slice, ast.Constant)
+            and leaf.slice.value == "running_command"
+            and isinstance(leaf.value, ast.Attribute)
+            and leaf.value.attr == "__dict__"
+            and isinstance(leaf.value.value, ast.Name)
+            and leaf.value.value.id == "self"
         )
 
     found: set[tuple[str, str]] = set()
     for py_file in sorted(package.rglob("*.py")):
         # `filename=` so a syntax error names the file, not `<unknown>` (#02/5)
         tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        rel_path = py_file.relative_to(package).as_posix()
         # (node, dotted qualifier) worklist: ClassDef and function defs both extend
         # the qualifier, so each write is keyed by its class-qualified location
         stack: list[tuple[ast.AST, str]] = [(tree, "")]
@@ -1050,17 +1089,12 @@ def test_every_running_command_write_site_is_sanctioned():
             node, qual = stack.pop()
             if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
                 qual = f"{qual}.{node.name}" if qual else node.name
-            if is_setattr_of_running_command(node):
-                found.add((py_file.name, qual or "<module>"))
+            if is_sneaky_write_of_running_command(node):
+                found.add((rel_path, qual or "<module>"))
             for target in binding_targets(node):
                 for leaf in flattened(target):
-                    if (
-                        isinstance(leaf, ast.Attribute)
-                        and leaf.attr == "running_command"
-                        and isinstance(leaf.value, ast.Name)
-                        and leaf.value.id == "self"
-                    ):
-                        found.add((py_file.name, qual or "<module>"))
+                    if is_running_command_leaf(leaf):
+                        found.add((rel_path, qual or "<module>"))
             stack.extend((child, qual) for child in ast.iter_child_nodes(node))
 
     # Both directions reported (#02/7): an extra site is a QS-320 reopening; a

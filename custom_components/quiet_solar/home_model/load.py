@@ -876,8 +876,20 @@ class AbstractDevice:
         - the successor's OWN supersede-throttle stamp survives the clear's
           unconditional null: it was written by the racing press seconds ago and
           keeps the one-service-call-per-window invariant honest.
+
+        The zero-relaunches premise is BEST-EFFORT (review fix #03/4): across a
+        pathologically long probe await (> 300 s — a device probe with no client
+        timeout), the successor may have earned rungs of its own, which this
+        discards, restarting its backoff at 50 s. Failure direction is benign —
+        briefly faster retries against a device that just proved contact, never
+        a re-announce (rung 0 moves the threshold away and the latch is down).
         """
         self.running_command_num_relaunch = 0
+        # The snapshot/restore is only MEANINGFUL on the replaced arm, where the
+        # stamp is the racing press's own (review fix #03/7). On the dropped
+        # (emptied-slot) arm it restores whatever the drop path left — today
+        # `None`, benign. A future drop-path change must not rely on this restore
+        # to re-arm a stale throttle stamp.
         successor_supersede_time = self._last_supersede_time
         self._clear_unresponsive(reason, contact=ContactEvidence.CONFIRMED)
         self._last_supersede_time = successor_supersede_time
@@ -1272,7 +1284,7 @@ class AbstractDevice:
             # NOT dead code: the slot can be replaced or emptied underneath it.
             probed_generation = self._running_command_generation
             _LOGGER.info(
-                "check command %s for this load %s) (#%s)",
+                "check command %s for this load %s (#%s)",
                 probed_command.command,
                 self.name,
                 self.running_command_num_relaunch_after_invalid,
@@ -1289,6 +1301,14 @@ class AbstractDevice:
                 # the probe told us nothing about whatever is in the slot now, so
                 # "not confirmed this cycle, re-check next cycle" is the safe answer.
                 # It starts no relaunch and raises no alarm by itself.
+                #
+                # Known one-cycle false negative (review fix #03/2, not a bug): an
+                # equal-valued press landing mid-probe ABSORBS (generation-neutral)
+                # and its own path can then ack, emptying the slot — the resumer
+                # reads slot None + generation unchanged as "dropped" and returns
+                # False for a dispatch that WAS acked. Nothing is lost: the ack is
+                # already recorded, it self-heals next cycle, and the error
+                # direction is conservative — the opposite of the QS-320 bug.
                 command_acked_or_good = False
                 if is_command_set is True:
                     # QS-320 review fix #01/2: a `True` probe proves the device
@@ -1642,7 +1662,7 @@ class AbstractDevice:
 
             self.running_command_last_launch = time
             if is_command_set is None:
-                _LOGGER.info("impossible to force command %s for this load %s)", launched_command.command, self.name)
+                _LOGGER.info("impossible to force command %s for this load %s", launched_command.command, self.name)
             elif is_command_set is True:
                 self._ack_command(time, launched_command)
             else:
