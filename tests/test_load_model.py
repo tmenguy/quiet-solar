@@ -1503,9 +1503,17 @@ class TestCheckCommands:
         load.probe_if_command_set = probe_none
 
         time_now = datetime.now(tz=pytz.UTC)
-        await load.check_commands(time_now)
+        load.running_command_last_launch = time_now - timedelta(seconds=42)
+        res, command_acked_or_good = await load.check_commands(time_now)
 
         assert load.running_command_num_relaunch_after_invalid == 1
+        # QS-320: the invalid-probe block and the `is True: … elif …` block are TWO
+        # separate statements, so a `None` probe falls through to the staleness arm
+        # and still assigns `res`. Folding them into one `if/elif` chain — an easy
+        # accident when adding a guard — would silently return `timedelta(0)` here
+        # and the relaunch ladder would stop seeing how stale the command is.
+        assert res == timedelta(seconds=42)
+        assert command_acked_or_good is False
 
     @pytest.mark.asyncio
     async def test_check_commands_max_invalid_kills_command(self):
