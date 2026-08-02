@@ -35,6 +35,26 @@ all four; use it only for ad-hoc single-node debugging.
 # changed-line miss from an INCREMENTAL run it automatically rebuilds
 # the baseline and re-checks once — recovering from a drifted baseline
 # left by a killed run with NO manual file deletion ever required.
+# QS-290: a change set with NO .py file at all EXITS EARLY — no pytest,
+# no diff-cover, no `git fetch` — a handful of local git calls instead
+# of 10-24 s of work.
+# testmon fingerprints AST blocks in .py files only, so such a run could
+# never select a test, and diff-cover has no Python lines to score: the
+# verdict was ALREADY vacuous, the exit only stops paying for it. The
+# change set is computed against the MERGE-BASE (committed + staged +
+# unstaged + untracked), a superset of diff-cover's three-dot range, and
+# any git failure fails CLOSED (no exit). See "non-Python change sets"
+# below for what to run instead.
+# QS-290: the `origin/main` fetch is TTL-cached (10 min) on FETCH_HEAD,
+# so a TDD burst stops re-fetching. A stale base is OLDER, so the
+# changed-line set is a superset — a TTL hit can only turn a PASS into a
+# FAIL, never a FAIL into a PASS. The skip is deliberately conservative:
+# it requires FETCH_HEAD to be non-empty (a FAILED fetch truncates it to
+# 0 bytes while still bumping the mtime), to actually record a `main`
+# fetch (a `gh pr checkout` or another-branch fetch rewrites it without
+# advancing origin/main), and to carry a non-future mtime (clock skew).
+# Any of those being off just means "fetch as usual". CI always bypasses
+# the TTL entirely.
 python scripts/qs/quality_gate.py --impacted
 
 # Full quality gate (pytest 100% cov + ruff + mypy + translations).
@@ -55,7 +75,15 @@ python scripts/qs/quality_gate.py --fix
 python scripts/qs/quality_gate.py --json
 
 # Fast iteration on one or more EXPLICIT test paths (files or dirs).
-# Uses xdist + sysmon, skips coverage / ruff / mypy / translations.
+# Uses sysmon, skips coverage / ruff / mypy / translations.
+# QS-290: xdist is used only ABOVE a small-run threshold (50 collected
+# tests). At or below it the run is single-process — xdist's per-worker
+# collection re-imports the HA-heavy conftest and costs more than the
+# parallelism saves (43 tests: serial 11.5 s vs xdist 16.8 s). The
+# decision is announced on stderr. `QS_QG_PYTEST_WORKERS=auto` forces
+# xdist back; an explicit value of that var always wins over the
+# threshold, in both directions. Large targets (e.g. `tests/qs`, 680+
+# tests) keep `-n auto` unchanged.
 # The canonical TDD red/green/refactor command while you iterate on a
 # known test target; --impacted is the pre-commit gate that finds the
 # impacted tests for you.
@@ -104,6 +132,36 @@ coverage, self-heals a drifted baseline); `--quick` is for hammering
 an explicit test path you already know; `--cache` accelerates repeated
 *full*-gate runs. `--impacted` is mutually exclusive with
 `--quick`/`--cache`/`--no-cache`/`--full`/`--fix`.
+
+**Non-Python change sets — `--quick` is the ONLY real check (QS-290).**
+When a change set contains no `.py` file at all, `--impacted` exits
+early and checks **nothing**: testmon fingerprints AST blocks in `.py`
+files only, so it could never select a test, and diff-cover has no
+Python lines to score. Its green is honest but empty — it was equally
+empty before the early exit, which merely stopped paying 10–24 s for it.
+So a `--quick` run is not a supplement there, it is **the**
+verification, and it stays mandatory. Which target depends on what
+changed — matching the hint the gate itself prints:
+
+| Non-Python change | Run |
+| --- | --- |
+| agent files, commands, workflow docs, `.claude/settings.json` | `python scripts/qs/quality_gate.py --quick tests/qs` |
+| `ui/*.j2` templates, `ui/resources/**` JS/CSS | `python scripts/qs/quality_gate.py --quick tests/test_dashboard_rendering.py` |
+
+(A failed git probe does **not** take the early exit — it fails closed
+and the full pipeline runs.)
+
+*Cold baselines do not take the exit.* The exit requires a **warm**
+`.testmondata`, because "testmon could never select a test" is only true
+while it has a baseline: against a cold or purged one testmon
+select-alls, and those over-selected tests can fail. Skipping them would
+turn a real failure into a PASS, so a cold baseline falls through to the
+full run instead. On a warm baseline the deferred re-sync is a pure cost
+shift: the next `.py` run selects more tests than usual, once. One gap
+remains (#341): after a package install/upgrade/removal or a Python
+micro bump, testmon resets its environment fingerprint and would
+select-all, but the baseline still looks warm — so a non-`.py` run can
+be optimistic there until the next `.py` change set.
 
 **Raw-`pytest` grammar rule.** Allowed: `pytest <path>::<nodeid> [-v]`
 — the positional argument MUST contain `::`. Forbidden as a habitual

@@ -3,7 +3,8 @@ description: >-
   Phase 3 variant for dev-environment changes only (scripts/, .claude/,
   .cursor/, .opencode/, legacy/, docs/, .github/, top-level config).
   Same TDD flow as qs-implement-task but narrower edit scope; the
-  pre-commit gate is --impacted (coverage-vacuous on dev-only trees).
+  pre-commit gate is --impacted (coverage-vacuous on dev-only trees, and
+  a no-op entirely when the change set contains no .py file).
   Use when create-plan selected implement-setup-task as the next
   phase.
 mode: primary
@@ -68,8 +69,9 @@ permission:
 
 Narrower-scoped variant of `qs-implement-task`. Edits only dev-environment
 paths. The pre-commit gate is `--impacted` (coverage-vacuous on
-dev-only trees; the tooling's own testmon-selected tests still run —
-see step 4).
+dev-only trees). Read step 4 before trusting a green: when the change
+set contains a `.py` file the tooling's own testmon-selected tests run,
+but a change set with no `.py` file at all is checked by nothing.
 
 ## Discover the task context first
 
@@ -140,14 +142,37 @@ substitute, the full gate locally:
 python scripts/qs/quality_gate.py --impacted
 ```
 
-It runs the testmon-selected tests and verifies any changed lines
-under `custom_components/quiet_solar/` are 100% covered, self-healing a
+When the change set contains a `.py` file it runs the testmon-selected
+tests and verifies any changed lines under
+`custom_components/quiet_solar/` are 100% covered, self-healing a
 drifted testmon baseline automatically (no manual file deletion ever).
 Dev-only changes (`scripts/`, `docs/`, agent files) carry no delta to
 `custom_components/quiet_solar/` coverage specifically, so that side of
-`--impacted` is a fast no-op — but the gate/tooling's own correctness is
-still guarded by its testmon-selected tests under `--impacted` (and the
-whole-repo gate in CI). The whole-repo 100% gate is enforced in **CI** on every PR — the
+`--impacted` is a fast no-op.
+
+`.py` presence decides whether the gate *runs* anything — it does not by
+itself tell you the run verified anything:
+
+- **Change set contains a `.py` file.** The pass runs, and the
+  gate/tooling's own correctness is guarded to the extent testmon
+  selects tests for it (plus the whole-repo gate in CI). Two caveats: a
+  `.py` edit can still select **zero** tests (testmon fingerprints AST
+  blocks, so a comment-only or formatting-only edit selects nothing),
+  and the impacted pass **excludes `tests/test_quality_gate.py`** by
+  path — so a change to `scripts/qs/quality_gate.py` is *never* covered
+  by `--impacted`. For quality-gate changes always also run
+  `python scripts/qs/quality_gate.py --quick tests/test_quality_gate.py`.
+- **Change set has no `.py` file at all** — docs-only, agent-file-only, a
+  commands-only edit. `--impacted` exits early and checks **nothing**
+  (QS-290): testmon could never select a test and diff-cover has no
+  Python lines to score. That green is honest but empty, so the
+  `--quick tests/qs` run below is your ONLY real verification, not a
+  supplement.
+- **A git probe failed.** The early exit **fails closed** — no exit, the
+  full pipeline runs. So "no output about the exit" never means "the
+  exit silently fired".
+
+The whole-repo 100% gate is enforced in **CI** on every PR — the
 only local full-gate run is an explicit user request:
 
 ```bash
@@ -186,7 +211,7 @@ explaining why the docs are unaffected. See
 ### 5. Commit, push, open PR (automatic)
 
 ```bash
-git add scripts/ .claude/ .cursor/ .opencode/ legacy/ docs/ .github/ CLAUDE.md AGENTS.md .cursorrules opencode.json
+git add scripts/ tests/qs/ tests/test_quality_gate.py .claude/ .cursor/ .opencode/ legacy/ docs/ .github/ CLAUDE.md AGENTS.md .cursorrules opencode.json
 git commit -m "QS-{{issue}}: {{short summary}}"
 git push origin {{branch}}
 

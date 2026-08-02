@@ -77,6 +77,11 @@ NON-NEGOTIABLE — and a test-impact subset can never prove it. So the
 guarantee is split: `--impacted` proves *changed lines* locally; the
 **whole-repo 100% gate runs authoritatively in CI** on every PR.
 
+**Non-Python change sets check nothing (QS-290).** A change set with no
+`.py` file exits early and verifies nothing — see
+[project-rules.md](../../workflow/project-rules.md) "Non-Python change
+sets" for the canonical statement and what to run instead.
+
 **Hard limitation — read this.** `--impacted` guarantees the lines you
 *changed* are covered. It does **not** detect coverage lost in
 *unchanged* code — e.g. deleting a test that was the sole cover of an

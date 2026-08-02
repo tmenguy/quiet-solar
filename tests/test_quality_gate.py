@@ -56,6 +56,33 @@ def _patch_full_scope():
     )
 
 
+_DEFAULT_EARLY_EXIT_PATHS = ["custom_components/quiet_solar/home_model/load.py"]
+
+# A real sentinel object, so the default is not a
+# `str` masquerading as a `list[str] | None` behind a blanket `type: ignore`.
+# `None` cannot be the default here — it is a MEANINGFUL value (git failed →
+# unknown → no early exit) that several tests pass deliberately.
+_KEEP_PY = object()
+
+
+def _patch_early_exit(paths: list[str] | None | object = _KEEP_PY):
+    """Patch QS-290's non-`.py` early-exit seam in `check_impacted`.
+
+    The seam (`_impacted_early_exit_paths`) is deliberately zero-arg and total:
+    ONE patch here silences EVERY git call at that seat. Every
+    `check_impacted` test must patch it, because the default working-tree state
+    is not controllable from a unit test — a genuinely non-`.py` tree would make
+    the exit fire and turn assertions about the downstream pipeline into
+    vacuous greens (or env-dependent failures, e.g. `test_no_base_in_ci_returns_4`
+    returning 0).
+
+    Default (the `_KEEP_PY` sentinel): a single `.py` path, so the exit provably
+    does NOT fire.
+    """
+    resolved = _DEFAULT_EARLY_EXIT_PATHS if paths is _KEEP_PY else paths
+    return patch.object(quality_gate, "_impacted_early_exit_paths", return_value=resolved)
+
+
 def _patch_all_gates(results: list[dict] | None = None):
     """Context manager that patches all five gate check functions."""
     r = results or _make_all_pass_results()
@@ -1771,22 +1798,73 @@ class TestQuickMode:
 
     def test_quick_emits_banner(
         self,
+        monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """`--quick` prints a `[quick] running ...` banner to stderr."""
+        """`--quick` prints a `[quick] running ...` banner to stderr.
+
+        The xdist half of the banner is environment-dependent (see the two
+        tests below), so this pins the environment explicitly rather than
+        inheriting it. Without that, the test passes locally — where the venv
+        has xdist — and fails on CI, which has no venv at all and so correctly
+        prints `single-process`.
+        """
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
         result = {"name": "pytest", "passed": True, "detail": ""}
         with (
             patch(
                 "sys.argv",
                 ["quality_gate.py", "--quick", "tests/test_foo.py", "tests/ha_tests"],
             ),
+            patch.object(quality_gate, "_has_xdist", return_value=True),
             patch.object(quality_gate, "check_pytest_files", return_value=result),
             pytest.raises(SystemExit),
         ):
             quality_gate.main()
         err = capsys.readouterr().err
         assert err.startswith("[quick] running "), f"banner missing/wrong: {err!r}"
-        assert "xdist + sysmon" in err, f"banner missing 'xdist + sysmon': {err!r}"
+        # QS-290 (S-1): xdist is now conditional on the small-run threshold, so
+        # the banner must not promise it unconditionally.
+        assert "xdist + sysmon" not in err, f"banner still claims unconditional xdist: {err!r}"
+        assert f"xdist above {quality_gate._SERIAL_MAX_TESTS} tests" in err, f"banner missing threshold: {err!r}"
+
+    def test_quick_banner_does_not_promise_xdist_when_unavailable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The banner printed "xdist above N tests" unconditionally, so it still
+        promised xdist when xdist is absent or `QS_QG_PYTEST_WORKERS=0` — the same
+        over-claim this change removes from the "xdist + sysmon" wording."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        result = {"name": "pytest", "passed": True, "detail": ""}
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", "tests/test_foo.py"]),
+            patch.object(quality_gate, "_has_xdist", return_value=False),
+            patch.object(quality_gate, "check_pytest_files", return_value=result),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        err = capsys.readouterr().err
+        assert err.startswith("[quick] running "), err
+        assert "xdist" not in err, err
+        assert "single-process" in err, err
+
+    def test_quick_banner_does_not_promise_xdist_when_disabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", "0")
+        result = {"name": "pytest", "passed": True, "detail": ""}
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", "tests/test_foo.py"]),
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "check_pytest_files", return_value=result),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        assert "xdist" not in capsys.readouterr().err
 
     def test_quick_rejects_empty_args(
         self,
@@ -1841,19 +1919,26 @@ class TestQuickMode:
         workers_value: str | None,
         expected_in_cmd: bool,
     ) -> None:
-        """`check_pytest_files` adds `-n <workers>` iff `_pytest_workers()` returns one."""
+        """`check_pytest_files` adds `-n <workers>` iff `_pytest_workers()` returns one.
+
+        QS-290: the collected count is pinned ABOVE `_SERIAL_MAX_TESTS` so the
+        serial fast path cannot demote the `auto`/`4` params — this test is
+        about the resolver's value reaching the argv, not the threshold.
+        """
         captured: dict = {}
 
-        def fake_stream(
-            cmd: list[str],
-            collect_targets: list[str] | None = None,
-        ) -> dict:
+        def fake_stream(cmd: list[str], total_tests: int | None = None) -> dict:
             captured["cmd"] = cmd
-            captured["collect_targets"] = collect_targets
+            captured["total_tests"] = total_tests
             return {"name": "pytest", "passed": True, "detail": ""}
 
         with (
             patch.object(quality_gate, "_pytest_workers", return_value=workers_value),
+            patch.object(
+                quality_gate,
+                "_collect_test_count",
+                return_value=quality_gate._SERIAL_MAX_TESTS + 1,
+            ),
             patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
         ):
             quality_gate.check_pytest_files(["tests/test_x.py"])
@@ -2004,6 +2089,808 @@ class TestQuickMode:
         assert "must be non-empty" in err, f"empty-path message missing/changed: {err!r}"
 
 
+# --- QS-290 S-1: serial fast path for small test-file runs ---
+
+
+class _CountingFakePopen:
+    """A `subprocess.Popen` stand-in that records every spawned argv.
+
+    `collect_stdout` is what the `--collect-only` probe reads via
+    `communicate()`; `run_stdout` is streamed line-by-line as the main
+    pytest run's stdout. `returncode` is what the main run exits with.
+    """
+
+    calls: list[list[str]] = []
+    collect_stdout = "0 tests collected\n"
+    collect_returncode = 0
+    run_stdout = ""
+    run_returncode = 0
+
+    def __init__(self, cmd, **kwargs):  # type: ignore[no-untyped-def]
+        type(self).calls.append(list(cmd))
+        self._is_collect = "--collect-only" in cmd
+        text = type(self).collect_stdout if self._is_collect else type(self).run_stdout
+        self.stdout = io.StringIO(text)
+        self.stderr = io.StringIO("")
+        self.returncode = (
+            type(self).collect_returncode if self._is_collect else type(self).run_returncode
+        )
+
+    def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+        return (self.stdout.getvalue(), "")
+
+    def wait(self):  # type: ignore[no-untyped-def]
+        return self.returncode
+
+
+def _fake_popen(
+    *,
+    collect_stdout: str = "0 tests collected\n",
+    collect_returncode: int = 0,
+    run_stdout: str = "",
+    run_returncode: int = 0,
+) -> type[_CountingFakePopen]:
+    """Build a fresh `_CountingFakePopen` subclass with its own `calls` list."""
+    return type(
+        "FakePopen",
+        (_CountingFakePopen,),
+        {
+            "calls": [],
+            "collect_stdout": collect_stdout,
+            "collect_returncode": collect_returncode,
+            "run_stdout": run_stdout,
+            "run_returncode": run_returncode,
+        },
+    )
+
+
+class TestCollectTestCount:
+    """QS-290 (S-1): `_collect_test_count` is the extracted collect-only probe.
+
+    It returns `int` on a parseable count and `None` when the count is
+    unknown — `None` is NOT 0: callers must fall back to `-n auto` rather
+    than mistake an unparseable probe for a tiny run.
+    """
+
+    def test_returns_parsed_count(self) -> None:
+        fake = _fake_popen(collect_stdout="123 tests collected in 1.2s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x/tests"]) == 123
+        assert len(fake.calls) == 1
+        assert "--collect-only" in fake.calls[0]
+        assert "/x/tests" in fake.calls[0]
+
+    @pytest.mark.parametrize(
+        ("stdout", "expected"),
+        [
+            ("3 tests collected in 0.00s\n", 3),
+            ("1/3 tests collected (2 deselected) in 0.00s\n", 1),
+            ("12/340 tests collected (328 deselected) in 1.20s\n", 12),
+        ],
+        ids=["plain", "deselected", "deselected-large"],
+    )
+    def test_parses_the_deselection_form(self, stdout: str, expected: int) -> None:
+        """pytest prints `N/M tests collected (K deselected)` whenever anything
+        deselects — a `-k`/`-m` in `pytest.ini`'s `addopts` (a `slow` marker is
+        already declared here) or a `pytest_collection_modifyitems` hook.
+
+        Verified against real pytest:
+            plain:       `3 tests collected in 0.01s`
+            deselected:  `1/3 tests collected (2 deselected) in 0.00s`
+
+        `.match()` anchors at position 0, so the `1/` prefix made this return
+        `None` → `_resolve_files_workers` always answered `-n auto` → the serial
+        fast path this story exists to deliver silently stopped existing, with
+        no warning and no symptom but the lost seconds. The SELECTED count is
+        the numerator — that is what actually runs.
+        """
+        fake = _fake_popen(collect_stdout=stdout)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) == expected
+
+    def test_a_parametrize_id_cannot_masquerade_as_the_summary(self) -> None:
+        """`.search()` is unanchored, so a parametrized test ID printed by
+        `--collect-only` can satisfy the pattern BEFORE the real summary line.
+
+        Verified: a param value of `"12/340 tests collected (328 deselected)"`
+        yields an id the probe parses, returning 12 for a 3-test file — silently
+        corrupting both the worker decision and the progress denominator, with
+        no symptom. Latent today only because `TestCollectTestCount` happens to
+        pin `ids=[...]`; dropping that would arm it. Real ids always begin with
+        the file path, so anchoring at column 0 is immune.
+        """
+        fake = _fake_popen(
+            collect_stdout=(
+                "tests/test_x.py::test_p[12/340 tests collected (328 deselected)]\n"
+                "3 tests collected in 0.01s\n"
+            )
+        )
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) == 3
+
+    def test_returns_one_for_singular_wording(self) -> None:
+        fake = _fake_popen(collect_stdout="1 test collected in 0.1s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) == 1
+
+    def test_returns_none_when_unparseable(self) -> None:
+        fake = _fake_popen(collect_stdout="ERROR: file or directory not found\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) is None
+
+    def test_nonzero_returncode_is_unknown(self) -> None:
+        """A partially-failed collection prints a
+        parseable count (`"5 tests collected, 2 errors"`) alongside a non-zero
+        exit. Trusting that number silently routed a broken collection onto the
+        serial fast path. A non-zero rc is exactly the "unknown" the docstring
+        already argues must degrade to `-n auto`."""
+        fake = _fake_popen(
+            collect_stdout="5 tests collected, 2 errors in 0.4s\n",
+            collect_returncode=2,
+        )
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) is None
+
+    def test_zero_returncode_with_a_count_is_trusted(self) -> None:
+        """The negative half: a clean collection is still used."""
+        fake = _fake_popen(collect_stdout="5 tests collected in 0.4s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) == 5
+
+    def test_exit_5_is_a_known_zero_not_unknown(self) -> None:
+        """pytest exits **5** for "no tests collected" — a KNOWN count of zero.
+
+        Verified: `pytest --collect-only -q test_empty.py` prints
+        `no tests collected` and exits 5. Folding that into "unknown" made
+        `_resolve_files_workers` return `-n auto` and spin up xdist for a target
+        with zero tests — precisely the fixed overhead S-1 exists to remove — and
+        left the "a genuine 0 is authoritative" branch unreachable from this
+        caller. A partial collection (`5 tests collected, 2 errors`) exits **2**,
+        so the protection against trusting that count is untouched.
+        """
+        fake = _fake_popen(collect_stdout="no tests collected in 0.01s\n", collect_returncode=5)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) == 0
+
+    @pytest.mark.parametrize("rc", [1, 2, 3, 4], ids=["failures", "interrupted", "internal", "usage"])
+    def test_other_nonzero_codes_stay_unknown(self, rc: int) -> None:
+        fake = _fake_popen(collect_stdout="5 tests collected, 2 errors\n", collect_returncode=rc)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) is None
+
+    def test_probe_is_bounded_by_a_timeout(self) -> None:
+        """Every other inner-loop subprocess in this module is bounded (`_run`'s
+        `timeout`, used for `git fetch` and diff-cover). An unbounded collection
+        probe could block the sub-15 s promise indefinitely."""
+        seen: dict = {}
+        killed: list[bool] = []
+
+        class HangingPopen(_CountingFakePopen):
+            calls: list[list[str]] = []
+            _n = 0
+
+            def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+                type(self)._n += 1
+                if type(self)._n == 1:
+                    seen.update(kw)
+                    raise subprocess.TimeoutExpired(cmd=["pytest"], timeout=kw.get("timeout"))
+                # A real `communicate()` after `kill()` returns normally — it is
+                # how the child gets reaped.
+                return ("", "")
+
+            def kill(self):  # type: ignore[no-untyped-def]
+                killed.append(True)
+
+        with patch.object(quality_gate.subprocess, "Popen", HangingPopen):
+            assert quality_gate._collect_test_count(["/x"]) is None
+        assert seen.get("timeout") == quality_gate._COLLECT_TIMEOUT_SECONDS
+        assert killed, "the hung probe must be killed so it cannot outlive the gate"
+
+    def test_reaping_communicate_is_bounded(self) -> None:
+        """The reap must not become an unbounded hang.
+
+        If collection leaves a grandchild holding the inherited stdout/stderr
+        pipes (a conftest or plugin that spawns a helper at import), `SIGKILL`
+        reaches only the direct child, so an unbounded reap turns the 60 s
+        collect budget into an indefinite stall of the whole gate — strictly
+        worse than the `ResourceWarning` the reap exists to remove.
+        """
+        seen: list[dict] = []
+
+        class WedgedPopen(_CountingFakePopen):
+            calls: list[list[str]] = []
+
+            def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+                seen.append(kw)
+                raise subprocess.TimeoutExpired(cmd=["pytest"], timeout=kw.get("timeout"))
+
+            def kill(self):  # type: ignore[no-untyped-def]
+                pass
+
+        with patch.object(quality_gate.subprocess, "Popen", WedgedPopen):
+            # A second TimeoutExpired from the reap must be swallowed, not raised.
+            assert quality_gate._collect_test_count(["/x"]) is None
+        assert len(seen) == 2, seen
+        assert seen[1].get("timeout") == quality_gate._COLLECT_REAP_TIMEOUT_SECONDS
+
+    def test_killed_probe_is_reaped(self) -> None:
+        """`kill()` alone leaves the child unreaped with both pipes open, so
+        CPython prints `ResourceWarning: subprocess N is still running` into the
+        middle of gate output. The kill must be followed by a `communicate()`.
+        """
+        events: list[str] = []
+
+        class HangingPopen(_CountingFakePopen):
+            calls: list[list[str]] = []
+
+            def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+                events.append("communicate")
+                if len(events) == 1:  # the first (timed-out) wait
+                    raise subprocess.TimeoutExpired(cmd=["pytest"], timeout=1)
+                return ("", "")
+
+            def kill(self):  # type: ignore[no-untyped-def]
+                events.append("kill")
+
+        with patch.object(quality_gate.subprocess, "Popen", HangingPopen):
+            assert quality_gate._collect_test_count(["/x"]) is None
+        assert events == ["communicate", "kill", "communicate"], events
+
+    def test_pins_utf8_replace_and_no_coverage_core(self) -> None:
+        """Same encoding contract as the run it precedes (S5), and the probe
+        must NOT inherit `COVERAGE_CORE` (coverage is inactive at collection)."""
+        seen: dict = {}
+
+        class FakePopen(_CountingFakePopen):
+            calls: list[list[str]] = []
+
+            def __init__(self, cmd, **kwargs):  # type: ignore[no-untyped-def]
+                seen.update(kwargs)
+                super().__init__(cmd, **kwargs)
+
+        with patch.object(quality_gate.subprocess, "Popen", FakePopen):
+            quality_gate._collect_test_count(["/x"])
+        assert seen.get("encoding") == "utf-8"
+        assert seen.get("errors") == "replace"
+        assert "env" not in seen, f"the probe must inherit the parent env verbatim: {seen!r}"
+
+
+class TestStreamPytestTotalTests:
+    """QS-290 (S-1/S-5): `_stream_pytest` takes ONE `total_tests` parameter.
+
+    `None` → collect the whole `TESTS_DIR` denominator itself (the full-gate
+    and seed paths). An int → trust the caller and spawn NOTHING extra.
+    The old `collect_targets` parameter is gone.
+    """
+
+    def test_int_total_spawns_no_collect_subprocess(self) -> None:
+        fake = _fake_popen(run_stdout="..\n2 passed in 0.1s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=7)
+        assert len(fake.calls) == 1, f"expected only the run, got {fake.calls!r}"
+        assert not any("--collect-only" in c for c in fake.calls)
+
+    def test_none_total_collects_tests_dir(self) -> None:
+        fake = _fake_popen(collect_stdout="9 tests collected\n", run_stdout="")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=None)
+        assert len(fake.calls) == 2
+        assert str(quality_gate.TESTS_DIR) in fake.calls[0]
+
+    def test_collect_targets_parameter_is_gone(self) -> None:
+        """The two-parameter overload the delta-auditor flagged must not exist."""
+        import inspect
+
+        params = inspect.signature(quality_gate._stream_pytest).parameters
+        assert "collect_targets" not in params
+        assert list(params) == ["cmd", "total_tests"], list(params)
+
+    # --- 0 must not double as "unknown" ---
+
+    def test_learn_sentinel_is_distinct_from_a_genuine_zero(self) -> None:
+        """`0` meant both "genuinely no tests" and "unknown, learn from the
+        stream", which contradicted the `None`-vs-`0` care taken in
+        `_collect_test_count`. A named negative sentinel is impossible as a real
+        count, so it cannot collide, and keeps ONE parameter (four reviewers
+        rejected re-splitting it)."""
+        assert quality_gate._LEARN_FROM_STREAM < 0
+
+    def test_genuine_zero_does_not_learn_from_the_stream(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A caller that KNOWS the target collects 0 tests is authoritative; a
+        stray `[N/M]` must not silently redefine its denominator."""
+        fake = _fake_popen(run_stdout="..            [ 2/99]\n2 passed in 0.1s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=0)
+        err = capsys.readouterr().err
+        assert "/99" not in err, err
+
+    def test_learn_sentinel_does_learn_from_the_stream(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        fake = _fake_popen(run_stdout="..            [ 2/20]\n2 passed in 0.1s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
+        assert "(2/20)" in capsys.readouterr().err
+
+    # --- Keep a terminal line on a 0-test run ---
+
+    def test_zero_selected_run_still_reports_done(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The single most common inner-loop invocation is a `.py` change that
+        testmon deselects to 0 tests. The `total_tests > 0 or final_total > 0`
+        guard made the `pytest: done (…)` line vanish there, leaving NOTHING
+        between `selecting impacted tests (testmon)…` and the verdict. The old
+        `done (0/6912)` had the wrong denominator but did confirm the pass ran.
+        """
+        fake = _fake_popen(run_stdout="no tests ran in 0.4s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
+        err = capsys.readouterr().err
+        assert "pytest: done (0/0)" in err, err
+        assert "passed=0 failed=0 errors=0" in err, err
+
+
+class TestSerialFastPath:
+    """QS-290 (S-1, AC7/AC8): `check_pytest_files` skips the xdist spin-up for
+    small targets, using ONE collect-only probe for both the denominator and
+    the worker decision."""
+
+    @staticmethod
+    def _run(
+        count: int | None,
+        *,
+        env_workers: str | None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> dict:
+        if env_workers is None:
+            monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        else:
+            monkeypatch.setenv("QS_QG_PYTEST_WORKERS", env_workers)
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str], total_tests: int | None = None) -> dict:
+            captured["cmd"] = cmd
+            captured["total_tests"] = total_tests
+            return {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "_collect_test_count", return_value=count),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest_files(["tests/test_x.py"])
+        return captured
+
+    def test_at_threshold_runs_serial(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        cap = self._run(quality_gate._SERIAL_MAX_TESTS, env_workers=None, monkeypatch=monkeypatch)
+        assert "-n" not in cap["cmd"], cap["cmd"]
+        assert cap["total_tests"] == quality_gate._SERIAL_MAX_TESTS
+        err = capsys.readouterr().err
+        assert err.startswith("[pytest] "), err
+        assert f"{quality_gate._SERIAL_MAX_TESTS} tests <= {quality_gate._SERIAL_MAX_TESTS}" in err, err
+        assert "single-process" in err, err
+
+    def test_just_above_threshold_uses_xdist(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        cap = self._run(quality_gate._SERIAL_MAX_TESTS + 1, env_workers=None, monkeypatch=monkeypatch)
+        assert cap["cmd"][cap["cmd"].index("-n") + 1] == "auto"
+        assert cap["total_tests"] == quality_gate._SERIAL_MAX_TESTS + 1
+
+    def test_unknown_count_uses_xdist_and_learn_sentinel(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AC7: `None` is unknown → `-n auto`, and NOT forwarded as `None` (which
+        `_stream_pytest` would read as "collect the whole tree yourself" and
+        spawn a second probe).
+
+        The forwarded value is now the explicit
+        `_LEARN_FROM_STREAM` sentinel rather than `0`, so a genuine zero-test
+        target stays distinguishable from an unknown one.
+        """
+        cap = self._run(None, env_workers=None, monkeypatch=monkeypatch)
+        assert cap["cmd"][cap["cmd"].index("-n") + 1] == "auto"
+        assert cap["total_tests"] == quality_gate._LEARN_FROM_STREAM
+
+    def test_explicit_zero_is_routed_through_the_provenance_check(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`QS_QG_PYTEST_WORKERS=0` must be honoured *as an explicit request*, not
+        as a side effect of an earlier `workers is None` return.
+
+        Observable difference: an explicit serial request is the user's decision,
+        so the threshold banner (which explains OUR decision) must stay silent —
+        and it must stay silent even on a target that would trip the threshold.
+        """
+        cap = self._run(3, env_workers="0", monkeypatch=monkeypatch)
+        assert "-n" not in cap["cmd"], cap["cmd"]
+        assert "single-process (skipping xdist spin-up)" not in capsys.readouterr().err
+
+    @pytest.mark.parametrize("value", ["", "0", "auto", "4"], ids=["empty", "zero", "auto", "count"])
+    def test_valid_values_are_explicit(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", value)
+        assert quality_gate._workers_env_is_explicit() is True
+
+    @pytest.mark.parametrize("value", ["autoo", "-1", "4x", "abc"], ids=["typo", "neg", "suffix", "word"])
+    def test_malformed_values_are_not_explicit(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", value)
+        assert quality_gate._workers_env_is_explicit() is False
+
+    def test_unset_is_not_explicit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        assert quality_gate._workers_env_is_explicit() is False
+
+    # --- a malformed value is not an explicit request ---
+
+    @pytest.mark.parametrize("bad", ["autoo", "-1", "4x"], ids=["typo", "negative", "suffix"])
+    def test_malformed_env_value_does_not_count_as_explicit(
+        self, bad: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`_pytest_workers()` warns and falls back to `"auto"` for a malformed
+        value. The `os.environ.get(...) is not None` provenance check then read
+        the typo as deliberate and forced xdist onto a 3-test target, silently
+        losing the fast path. "Invalid" must behave as "unset"."""
+        cap = self._run(3, env_workers=bad, monkeypatch=monkeypatch)
+        assert "-n" not in cap["cmd"], cap["cmd"]
+        err = capsys.readouterr().err
+        assert "invalid QS_QG_PYTEST_WORKERS" in err, err  # the warning still fires
+        assert "single-process" in err, err
+
+    def test_env_zero_forces_serial_on_a_big_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AC8: an explicit `0` is honored verbatim even for 1000 tests."""
+        cap = self._run(1000, env_workers="0", monkeypatch=monkeypatch)
+        assert "-n" not in cap["cmd"], cap["cmd"]
+
+    def test_env_eight_forces_xdist_on_a_tiny_target(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC8: an explicit `8` beats the threshold for a 3-test target — and the
+        serial banner must NOT be printed."""
+        cap = self._run(3, env_workers="8", monkeypatch=monkeypatch)
+        assert cap["cmd"][cap["cmd"].index("-n") + 1] == "8"
+        assert "single-process" not in capsys.readouterr().err
+
+    def test_env_auto_forces_xdist_on_a_tiny_target(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`_pytest_workers()` returns `"auto"` both when unset and when set to
+        `auto`, so provenance must come from `os.environ.get(...) is not None`."""
+        cap = self._run(3, env_workers="auto", monkeypatch=monkeypatch)
+        assert cap["cmd"][cap["cmd"].index("-n") + 1] == "auto"
+
+    def test_no_xdist_stays_serial_without_banner(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+
+        def fake_stream(cmd: list[str], total_tests: int | None = None) -> dict:
+            return {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=False),
+            patch.object(quality_gate, "_collect_test_count", return_value=3),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            quality_gate.check_pytest_files(["tests/test_x.py"])
+        assert "single-process" not in capsys.readouterr().err
+
+    def test_argv_requests_the_count_progress_style(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On an unknown count `check_pytest_files` forwards `_LEARN_FROM_STREAM`,
+        but with a plain `-q` argv pytest prints `[NN%]` — the `[N/M]` shape never
+        appears and the denominator is never learned, so mid-run progress silently
+        vanished on exactly that path (the retired whole-tree `--collect-only`
+        used to supply a denominator here)."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        cap = self._run(None, env_workers=None, monkeypatch=monkeypatch)
+        cmd = cap["cmd"]
+        assert "-o" in cmd, cmd
+        assert cmd[cmd.index("-o") + 1] == "console_output_style=count", cmd
+
+    def test_progress_is_emitted_on_the_unknown_count_path(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """End-to-end: unknown count → the run's own `[N/M]` yields progress."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        fake = _fake_popen(
+            collect_stdout="ERROR: unparseable\n",
+            collect_returncode=3,
+            run_stdout="..  [ 2/20]\n..  [ 4/20]\n4 passed in 0.2s\n",
+        )
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate.subprocess, "Popen", fake),
+        ):
+            quality_gate.check_pytest_files(["tests/test_x.py"])
+        assert "(2/20)" in capsys.readouterr().err
+
+    def test_zero_test_target_runs_serial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`--quick` on a path with no tests (pytest rc 5 → a KNOWN 0) takes the
+        serial fast path instead of booting xdist for nothing."""
+        cap = self._run(0, env_workers=None, monkeypatch=monkeypatch)
+        assert "-n" not in cap["cmd"], cap["cmd"]
+        assert cap["total_tests"] == 0
+
+    def test_exactly_one_collect_only_subprocess(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AC7: one `--collect-only` spawn per `check_pytest_files` call — the
+        count feeds BOTH the worker decision and the progress denominator."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        fake = _fake_popen(collect_stdout="3 tests collected\n")
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate.subprocess, "Popen", fake),
+        ):
+            quality_gate.check_pytest_files(["tests/test_x.py"])
+        collect_spawns = [c for c in fake.calls if "--collect-only" in c]
+        assert len(collect_spawns) == 1, f"expected 1 collect-only spawn, got {fake.calls!r}"
+        assert len(fake.calls) == 2, fake.calls
+
+    def test_dev_only_scope_path_gets_the_fast_path(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC7: the fast path lands in `check_pytest_files`, which also serves
+        `main()`'s dev-only scope — intentional (1–3 changed test files)."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str], total_tests: int | None = None) -> dict:
+            captured["cmd"] = cmd
+            return {"name": "pytest", "passed": True, "detail": ""}
+
+        with (
+            patch("sys.argv", ["quality_gate.py", "--json"]),
+            patch.object(quality_gate, "_get_changed_files", return_value=["tests/test_x.py"]),
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "_collect_test_count", return_value=4),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        assert "-n" not in captured["cmd"], captured["cmd"]
+        assert "single-process" in capsys.readouterr().err
+
+
+class TestFullGateUntouchedByFastPath:
+    """QS-290 AC11: `check_pytest` keeps whole-tree collection AND `-n auto`."""
+
+    def test_full_gate_still_collects_tests_dir_and_requests_auto(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        fake = _fake_popen(collect_stdout="3 tests collected\n")
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate.subprocess, "Popen", fake),
+        ):
+            quality_gate.check_pytest()
+        assert len(fake.calls) == 2, fake.calls
+        assert str(quality_gate.TESTS_DIR) in fake.calls[0]
+        run_cmd = fake.calls[1]
+        # A 3-test whole-tree count must NOT demote the full gate to serial.
+        assert run_cmd[run_cmd.index("-n") + 1] == "auto", run_cmd
+
+
+class TestPytestExitCodeFidelity:
+    """QS-290 AC13 (permanent): a non-zero pytest exit propagates through
+    `_stream_pytest` / `check_pytest_files` on BOTH argv shapes, and the
+    reported count matches what pytest reported.
+
+    This story rewrites the very code path used to verify itself, so a
+    vacuous green is the specific risk worth a permanent guard.
+    """
+
+    _STDOUT = "..F\n2 passed, 1 failed in 0.3s\n"
+
+    @pytest.mark.parametrize(
+        ("count", "expect_xdist"),
+        [(3, False), (500, True)],
+        ids=["serial", "xdist"],
+    )
+    def test_failure_propagates_and_count_is_reported(
+        self,
+        count: int,
+        expect_xdist: bool,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        fake = _fake_popen(
+            collect_stdout=f"{count} tests collected\n",
+            run_stdout=self._STDOUT,
+            run_returncode=1,
+        )
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate.subprocess, "Popen", fake),
+        ):
+            result = quality_gate.check_pytest_files(["tests/test_x.py"])
+
+        assert result["passed"] is False
+        assert result["returncode"] == 1
+        run_cmd = fake.calls[1]
+        assert ("-n" in run_cmd) is expect_xdist, run_cmd
+        err = capsys.readouterr().err
+        # pytest reported 2 passed + 1 failed → the terminal line reports 3.
+        assert "done (3/" in err, err
+        assert "passed=2 failed=1" in err, err
+
+    @pytest.mark.parametrize("rc", [1, 2, 5], ids=["failures", "collect-error", "internal"])
+    def test_stream_pytest_surfaces_raw_returncode(self, rc: int) -> None:
+        fake = _fake_popen(run_stdout=self._STDOUT, run_returncode=rc)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            result = quality_gate._stream_pytest(["pytest"], total_tests=3)
+        assert result["returncode"] == rc
+        assert result["passed"] is False
+
+
+# --- QS-290 S-5: denominator from the run's own output, no collect-only ---
+
+
+class TestCountProgressSuffix:
+    """QS-290 (S-5, AC6): `-o console_output_style=count` makes pytest print
+    `[N/M]` instead of `[NN%]`, under `-q` in BOTH serial and xdist mode, and
+    it reports the SELECTED count under deselection. `_clean_pytest_line` must
+    strip that shape too, or a progress line stops being "all progress
+    characters" and the dot tally silently breaks.
+    """
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "... [3/3]",
+            "...                     [  3/682]",
+            "[gw0] ...                [ 69/682]",
+            "... [43%]",
+        ],
+        ids=["count-tight", "count-padded", "xdist-count", "legacy-percent"],
+    )
+    def test_progress_suffixes_are_stripped(self, raw: str) -> None:
+        assert quality_gate._clean_pytest_line(raw) == "..."
+
+    def test_stripped_line_still_tallies(self) -> None:
+        text = "..F                    [  3/100]\n"
+        counts = quality_gate._parse_pytest_output(text)
+        assert counts["passed"] == 2
+        assert counts["failed"] == 1
+
+    def test_count_suffix_re_captures_only_the_total(self) -> None:
+        """The `current` group was captured but
+        never used, so a future edit could silently shift `group(2)`."""
+        m = quality_gate._COUNT_SUFFIX_RE.search("...   [ 69/682]")
+        assert m is not None
+        assert m.groups() == ("682",), m.groups()
+
+    def test_build_testmon_cmd_requests_count_style(self) -> None:
+        """AC6: the impacted pass asks pytest for the count style so the
+        denominator can be read off the run itself."""
+        with patch.object(quality_gate, "_pytest_workers", return_value=None):
+            cmd = quality_gate._build_testmon_cmd()
+        assert "-o" in cmd
+        assert cmd[cmd.index("-o") + 1] == "console_output_style=count"
+
+
+class TestStreamPytestLearnsDenominator:
+    """QS-290 (S-5, AC6): with `total_tests=0`, `_stream_pytest` learns the
+    denominator from the first `[N/M]` suffix in the stream instead of paying
+    for an upfront `--collect-only` subprocess.
+    """
+
+    def test_learns_total_from_stream_and_emits_existing_format(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        stream = "..                 [ 2/20]\n..                 [ 4/20]\n4 passed in 0.2s\n"
+        fake = _fake_popen(run_stdout=stream)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
+        assert len(fake.calls) == 1, f"no collect-only may be spawned: {fake.calls!r}"
+        err = capsys.readouterr().err
+        # The emitted line keeps TODAY's format — QS-299's --seed-testmon-follow
+        # parses this exact shape.
+        assert "  pytest: 10% (2/20) | passed=2 failed=0 errors=0" in err, err
+        assert "  pytest: done (4/20) | passed=4 failed=0 errors=0" in err, err
+
+    def test_no_count_suffix_emits_no_percentage_and_falls_back(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC6: with no `[N/M]` ever seen, no percentage line is emitted and the
+        terminal line's denominator falls back to the observed count."""
+        fake = _fake_popen(run_stdout="...\n3 passed in 0.1s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
+        err = capsys.readouterr().err
+        assert "%" not in err, err
+        assert "  pytest: done (3/3) | passed=3 failed=0 errors=0" in err, err
+
+    def test_non_progress_line_cannot_seed_the_denominator(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The learn block latched the FIRST line anywhere in the stream matching
+        `[N/M]`, not the first *progress* line. Collection errors print before any
+        progress, so a traceback or source line ending in that shape — e.g.
+        `RATIO = SCALE[1/2]` — set a bogus denominator for the whole run and the
+        progress line then read `100% (2/2)` for a 40-test run. Cosmetic (the
+        verdict comes from the exit code), but actively misleading.
+        """
+        stream = (
+            "ERROR collecting tests/test_x.py\n"
+            "    RATIO = SCALE[1/2]\n"
+            "....  [ 4/40]\n"
+            "4 passed in 0.2s\n"
+        )
+        fake = _fake_popen(run_stdout=stream)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
+        err = capsys.readouterr().err
+        assert "/2)" not in err, f"a non-progress line seeded the denominator: {err!r}"
+        assert "(4/40)" in err, err
+
+    def test_caller_count_wins_over_the_stream(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """A caller-supplied count is authoritative — the stream must not
+        overwrite it (the `--quick` path already paid for a real collection)."""
+        fake = _fake_popen(run_stdout="..                 [ 2/20]\n2 passed in 0.1s\n")
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=2)
+        assert "  pytest: done (2/2) |" in capsys.readouterr().err
+
+    def test_emitted_progress_line_round_trips_through_parse_seed_progress(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC5/AC6 (QS-299 guard): a progress line captured from a REAL
+        `_stream_pytest` emission — fake pytest stdout through the real
+        formatter — still parses via `_parse_seed_progress`."""
+        stream = "..                 [ 2/20]\n..                 [ 4/20]\n4 passed in 0.2s\n"
+        fake = _fake_popen(run_stdout=stream)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
+        assert quality_gate._parse_seed_progress(capsys.readouterr().err) == (20, 4, 20)
+
+
+class TestImpactedPassNoCollectOnly:
+    """QS-290 (S-5, AC4/AC5): the impacted pass spawns no collect-only probe;
+    the seed path keeps its whole-tree denominator."""
+
+    def test_run_impacted_pass_learns_its_denominator(self, tmp_path: Path) -> None:
+        xml = tmp_path / "coverage.xml"
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str], total_tests: int | None = None) -> dict:
+            captured["total_tests"] = total_tests
+            xml.write_text("<coverage/>")
+            return {"name": "pytest", "passed": True}
+
+        with (
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", tmp_path / ".testmondata"),
+            patch.object(quality_gate, "_reset_coverage_data"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+            patch.object(quality_gate, "_run", return_value=_cp(0, stdout="100%")),
+        ):
+            quality_gate._run_impacted_pass("origin/main")
+        assert captured["total_tests"] == quality_gate._LEARN_FROM_STREAM, (
+            "the impacted pass must not ask _stream_pytest to collect a denominator"
+        )
+
+    def test_seed_testmon_keeps_its_collect_only_denominator(self) -> None:
+        """AC5: unchanged path — its 3–5 s is noise inside a ~20-minute select-all."""
+        captured: dict = {}
+
+        def fake_stream(cmd: list[str], total_tests: int | None = None) -> dict:
+            captured["total_tests"] = total_tests
+            return {"name": "pytest", "passed": True, "returncode": 0}
+
+        with (
+            patch.object(quality_gate, "_testmon_available", return_value=True),
+            patch.object(quality_gate, "_claim_and_preempt"),
+            patch.object(quality_gate, "_rebuild_testmon_baseline"),
+            patch.object(quality_gate, "_write_completion_if_owner"),
+            patch.object(quality_gate, "_stream_pytest", side_effect=fake_stream),
+        ):
+            assert quality_gate.seed_testmon(token="T") == 0
+        assert captured["total_tests"] is None, (
+            "seed_testmon must keep the whole-tree collect-only denominator"
+        )
+
+
 # --- QS-208 T1.1: _is_ui_asset detector ---
 
 
@@ -2104,6 +2991,99 @@ class TestDetectScopeUIOnly:
         )
         assert info["scope"] == "ui-only"
         assert info["changed_test_files"] == ["tests/test_dashboard_rendering.py"]
+
+
+# --- QS-290 D-18: truthful --full scope reason + reason pluralization ---
+
+
+class TestDetectScopeReasonPluralization:
+    """QS-290 (D-18, AC10): the dev-only / ui-only reason strings must agree
+    with themselves grammatically — `(1 file)`, not `(1 files)`.
+
+    There was previously NO assertion anywhere on the dev-only reason
+    string (the `_detect_scope` call sites in the main() tests supply it as
+    a patched *input*), so the mis-pluralization survived untested.
+    """
+
+    def test_dev_only_singular(self) -> None:
+        info = quality_gate._detect_scope(["docs/workflow/project-rules.md"])
+        assert info["scope"] == "dev-only"
+        assert info["reason"] == "only dev/test files changed (1 file)"
+
+    def test_dev_only_plural(self) -> None:
+        info = quality_gate._detect_scope(["docs/a.md", "scripts/qs/quality_gate.py"])
+        assert info["scope"] == "dev-only"
+        assert info["reason"] == "only dev/test files changed (2 files)"
+
+    def test_ui_only_singular(self) -> None:
+        info = quality_gate._detect_scope(["custom_components/quiet_solar/ui/a.j2"])
+        assert info["scope"] == "ui-only"
+        assert info["reason"] == "only UI assets and dev files changed (1 UI asset, 1 file)"
+
+    def test_ui_only_plural(self) -> None:
+        info = quality_gate._detect_scope(
+            [
+                "custom_components/quiet_solar/ui/a.j2",
+                "custom_components/quiet_solar/ui/resources/b.js",
+                "docs/c.md",
+            ]
+        )
+        assert info["scope"] == "ui-only"
+        assert info["reason"] == "only UI assets and dev files changed (2 UI assets, 3 files)"
+
+
+class TestFullFlagScopeReason:
+    """QS-290 (D-18, AC10): `--full` forces `scope = "full"` but used to keep
+    `_detect_scope`'s reason, printing the self-contradicting
+    `scope: FULL (only dev/test files changed (1 files))`.
+    """
+
+    @staticmethod
+    def _run_main_full(scope_info: dict) -> None:
+        """Drive `main() --full` with a patched `_detect_scope`.
+
+        Callers read stderr via `capsys` (this
+        used to `return ""`, which every caller ignored).
+        """
+        with (
+            patch("sys.argv", ["quality_gate.py", "--full", "--json"]),
+            patch.object(quality_gate, "_get_changed_files", return_value=["x"]),
+            patch.object(quality_gate, "_detect_scope", return_value=scope_info),
+            _patch_all_gates(),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+
+    def test_full_flag_on_dev_only_tree_prints_flag_reason(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        self._run_main_full(
+            {
+                "scope": "dev-only",
+                "changed_test_files": [],
+                "reason": "only dev/test files changed (1 file)",
+            }
+        )
+        err = capsys.readouterr().err
+        assert "scope: FULL (--full flag)" in err, err
+        assert "only dev/test files changed" not in err, err
+
+    def test_full_flag_keeps_production_reason_when_already_full(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The substitution must NOT clobber a genuinely useful full-scope
+        reason (`production files changed: …`) when the detected scope was
+        already `full`."""
+        self._run_main_full(
+            {
+                "scope": "full",
+                "changed_test_files": [],
+                "reason": "production files changed: custom_components/quiet_solar/home_model/load.py",
+            }
+        )
+        err = capsys.readouterr().err
+        assert "scope: FULL (production files changed: " in err, err
+        assert "--full flag" not in err, err
 
 
 # --- QS-208 T1.3 + T1.4: main() dispatches ui-only branch correctly ---
@@ -2294,18 +3274,32 @@ class TestResolveDiffBase:
         upstream: tuple[int, str] = (1, ""),
         merge_base: tuple[int, str] = (1, ""),
         reachable: dict[str, int] | None = None,
+        git_path: tuple[int, str] = (1, ""),
+        remote_url: tuple[int, str] = (0, "github"),
     ):
         """Build a `_run` side_effect keyed on the git subcommand.
 
         `reachable` (NH2) maps a candidate ref → returncode for the
         `git merge-base <ref> HEAD` reachability probe; default 0
         (reachable) so the pre-NH2 tests keep passing unchanged.
+
+        `remote_url` answers `git remote get-url origin`; the default matches the
+        `_marker` helper's FETCH_HEAD content so the TTL can arm.
+
+        `git_path` (QS-290 S-7) answers `git rev-parse --git-path FETCH_HEAD`.
+        The default `(1, "")` means "no marker resolvable" → fetch exactly as
+        before the TTL existed. Without this EXPLICIT arm an unmatched
+        `--git-path` fell into the `@{u}` arm and passed only by luck.
         """
         reachable = reachable or {}
 
         def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
             if cmd[:2] == ["git", "fetch"]:
                 return _cp(0)
+            if cmd[:3] == ["git", "rev-parse", "--git-path"]:
+                return _cp(git_path[0], stdout=git_path[1])
+            if cmd[:2] == ["git", "remote"]:
+                return _cp(remote_url[0], stdout=remote_url[1])
             if cmd[:3] == ["git", "rev-parse", "--verify"]:
                 return _cp(rev_parse.get(cmd[3], 1))
             if cmd[:2] == ["git", "rev-parse"]:  # @{u} upstream lookup
@@ -2326,11 +3320,22 @@ class TestResolveDiffBase:
         # review-fix NH2 (#05): the chosen base is announced for debuggability.
         assert "diff base: origin/main" in capsys.readouterr().err
 
-    def test_fetches_origin_main_first(self) -> None:
+    @staticmethod
+    def _fetch_calls(mock_run) -> list:  # type: ignore[no-untyped-def]
+        """Select the `git fetch` invocations by PREDICATE, not by index.
+
+        QS-290 (S-7) put the `rev-parse --git-path FETCH_HEAD` TTL probe ahead
+        of the fetch, so index 0 is no longer the fetch.
+        """
+        return [c for c in mock_run.call_args_list if c.args[0][:2] == ["git", "fetch"]]
+
+    def test_fetches_origin_main_before_resolving_refs(self) -> None:
         with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 0})) as mock_run:
             quality_gate._resolve_diff_base()
-        first = mock_run.call_args_list[0].args[0]
-        assert first == ["git", "fetch", "origin", "main"]
+        argvs = [c.args[0] for c in mock_run.call_args_list]
+        fetch_idx = argvs.index(["git", "fetch", "origin", "main"])
+        verify_idx = next(i for i, a in enumerate(argvs) if a[:3] == ["git", "rev-parse", "--verify"])
+        assert fetch_idx < verify_idx, argvs
 
     def test_falls_back_to_local_main(self) -> None:
         with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 1, "main": 0})):
@@ -2365,9 +3370,9 @@ class TestResolveDiffBase:
         """review-fix S1: the hot-path fetch must pass a subprocess timeout."""
         with patch.object(quality_gate, "_run", side_effect=self._router({"origin/main": 0})) as mock_run:
             quality_gate._resolve_diff_base()
-        fetch_call = mock_run.call_args_list[0]
-        assert fetch_call.args[0] == ["git", "fetch", "origin", "main"]
-        assert fetch_call.kwargs.get("timeout") == quality_gate._FETCH_TIMEOUT_SECONDS
+        fetch_calls = self._fetch_calls(mock_run)
+        assert len(fetch_calls) == 1, [c.args[0] for c in mock_run.call_args_list]
+        assert fetch_calls[0].kwargs.get("timeout") == quality_gate._FETCH_TIMEOUT_SECONDS
 
     def test_fetch_failure_emits_warning(self, capsys: pytest.CaptureFixture[str]) -> None:
         """review-fix S1: a non-zero/timed-out fetch warns so a stale base is observable."""
@@ -2405,6 +3410,379 @@ class TestResolveDiffBase:
         )
         with patch.object(quality_gate, "_run", side_effect=router):
             assert quality_gate._resolve_diff_base() is None
+
+
+class TestFetchTtl:
+    """QS-290 (S-7, AC9): `--impacted` TTL-caches its `git fetch origin main`.
+
+    Repeat `.py` runs inside a 10-minute window skip the ~0.5 s (15 s-capped)
+    fetch. Staleness direction is safe by construction: an older base yields a
+    SUPERSET of changed lines, so a TTL hit can turn a PASS into a FAIL, never
+    a FAIL into a PASS.
+    """
+
+    def _router(self, marker: Path | None, **kw):  # type: ignore[no-untyped-def]
+        return TestResolveDiffBase._router(
+            kw.pop("rev_parse", {"origin/main": 0}),
+            git_path=(0, str(marker)) if marker is not None else (1, ""),
+            **kw,
+        )
+
+    # --- the TTL must be armed only by a fetch of ORIGIN's main ---
+
+    def test_marker_recording_another_remotes_main_still_fetches(self, tmp_path: Path) -> None:
+        """`branch 'main' of <url>` carries the URL, and matching only the prefix
+        accepted ANY remote's main. Verified in a two-remote clone: after
+        `git fetch upstream main` the marker reads `branch 'main' of …/upstream`
+        while `origin/main` — the ref the base ladder actually resolves — was
+        never fetched and may be arbitrarily stale. That is the standard fork
+        workflow (`origin` = fork, `upstream` = canonical), and the skip line
+        claims `origin/main`, so the marker must support that claim.
+        """
+        marker = self._marker(
+            tmp_path, age_seconds=1, content="beef\t\tbranch 'main' of https://host/upstream\n"
+        )
+        router = self._router(marker, remote_url=(0, "https://host/fork"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_marker_recording_origins_main_skips(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        marker = self._marker(
+            tmp_path, age_seconds=30, content="beef\t\tbranch 'main' of https://host/fork\n"
+        )
+        router = self._router(marker, remote_url=(0, "https://host/fork"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert TestResolveDiffBase._fetch_calls(mock_run) == []
+        assert "fetch skipped" in capsys.readouterr().err
+
+    def test_dot_git_suffix_does_not_break_the_match(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """git STRIPS a trailing `.git` when writing FETCH_HEAD but
+        `git remote get-url origin` keeps it — verified on this very repo
+        (`…/quiet-solar.git` vs `…/quiet-solar`) and in a local clone with an
+        explicit `.git` path. A naive equality check would therefore never match
+        and would silently disable the TTL everywhere — the same
+        feature-deleting trap that ruled out keying on `refs/remotes/origin/main`.
+        """
+        marker = self._marker(
+            tmp_path, age_seconds=30, content="beef\t\tbranch 'main' of https://host/repo\n"
+        )
+        router = self._router(marker, remote_url=(0, "https://host/repo.git"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            quality_gate._resolve_diff_base()
+        assert TestResolveDiffBase._fetch_calls(mock_run) == []
+        assert "fetch skipped" in capsys.readouterr().err
+
+    def test_unresolvable_origin_url_still_fetches(self, tmp_path: Path) -> None:
+        """No `origin` remote at all (or any probe failure) → unknown → fetch."""
+        marker = self._marker(tmp_path, age_seconds=30)
+        router = self._router(marker, remote_url=(128, ""))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_empty_origin_url_still_fetches(self, tmp_path: Path) -> None:
+        marker = self._marker(tmp_path, age_seconds=30)
+        router = self._router(marker, remote_url=(0, "  \n"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    @pytest.fixture(autouse=True)
+    def _not_ci(self):
+        """The TTL is now bypassed under CI, so
+        every test here must state that it is exercising the LOCAL path."""
+        with patch.object(quality_gate, "_is_ci", return_value=False):
+            yield
+
+    @staticmethod
+    def _marker(
+        tmp_path: Path,
+        age_seconds: float,
+        content: str = "deadbeef\t\tbranch 'main' of github\n",
+    ) -> Path:
+        marker = tmp_path / "FETCH_HEAD"
+        marker.write_text(content)
+        stamp = time.time() - age_seconds
+        os.utime(marker, (stamp, stamp))
+        return marker
+
+    def test_marker_path_comes_from_git_rev_parse_git_path(self, tmp_path: Path) -> None:
+        """AC9: the marker is resolved via git, never hardcoded — in a LINKED
+        worktree `.git` is a FILE, so a literal `.git/FETCH_HEAD` would be a
+        path under a non-directory and the TTL would silently never hit."""
+        marker = self._marker(tmp_path, age_seconds=60)
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            quality_gate._resolve_diff_base()
+        probes = [c.args[0] for c in mock_run.call_args_list if c.args[0][:2] == ["git", "rev-parse"]]
+        assert ["git", "rev-parse", "--git-path", "FETCH_HEAD"] in probes, probes
+
+    def test_inside_ttl_skips_fetch_and_emits_skip_line(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        marker = self._marker(tmp_path, age_seconds=180)
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert TestResolveDiffBase._fetch_calls(mock_run) == []
+        err = capsys.readouterr().err
+        assert "fetch skipped (origin/main fetched 3m ago)" in err, err
+
+    def test_skip_line_renders_seconds_under_a_minute(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        marker = self._marker(tmp_path, age_seconds=12)
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)):
+            quality_gate._resolve_diff_base()
+        assert "fetch skipped (origin/main fetched 12s ago)" in capsys.readouterr().err
+
+    def test_outside_ttl_fetches(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        marker = self._marker(tmp_path, age_seconds=quality_gate._FETCH_TTL_SECONDS + 5)
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+        assert "fetch skipped" not in capsys.readouterr().err
+
+    def test_missing_marker_fetches(self, tmp_path: Path) -> None:
+        absent = tmp_path / "FETCH_HEAD"  # never created
+        with patch.object(quality_gate, "_run", side_effect=self._router(absent)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_rev_parse_failure_fetches(self) -> None:
+        """A failing `--git-path` probe → fetch exactly as before the TTL."""
+        with patch.object(quality_gate, "_run", side_effect=self._router(None)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_empty_git_path_stdout_fetches(self) -> None:
+        """A zero-rc probe with empty stdout is unusable — fetch."""
+        router = TestResolveDiffBase._router({"origin/main": 0}, git_path=(0, "  \n"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_fetch_failure_warning_survives_the_ttl_path(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC9: on the fetch-taken path the S1 stale-base warning is unchanged."""
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:3] == ["git", "rev-parse", "--git-path"]:
+                return _cp(1)
+            if cmd[:2] == ["git", "fetch"]:
+                return _cp(124, stderr="timed out after 15.0s")
+            if cmd[:3] == ["git", "rev-parse", "--verify"] and cmd[3] == "origin/main":
+                return _cp(0)
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0)
+            return _cp(1)
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert "git fetch origin main` failed/timed out" in capsys.readouterr().err
+
+    def test_unresolvable_base_after_a_skip_retries_with_the_fetch(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC9: if the base fails to resolve after a TTL-skipped fetch, retry
+        ONCE with the fetch — the skip must never be the reason we give up."""
+        marker = self._marker(tmp_path, age_seconds=60)
+        state = {"fetched": False}
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:3] == ["git", "rev-parse", "--git-path"]:
+                return _cp(0, stdout=str(marker))
+            if cmd[:2] == ["git", "remote"]:
+                return _cp(0, stdout="github")
+            if cmd[:2] == ["git", "fetch"]:
+                state["fetched"] = True
+                return _cp(0)
+            if cmd[:3] == ["git", "rev-parse", "--verify"]:
+                # origin/main only becomes resolvable once the fetch has run.
+                return _cp(0 if state["fetched"] and cmd[3] == "origin/main" else 1)
+            if cmd[:2] == ["git", "rev-parse"]:
+                return _cp(1)
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0)
+            raise AssertionError(f"unexpected cmd {cmd!r}")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1, "exactly one retry fetch"
+        err = capsys.readouterr().err
+        assert "fetch skipped" in err, err
+
+    def test_no_infinite_retry_when_the_fetch_cannot_help(self, tmp_path: Path) -> None:
+        """The retry is bounded: an unresolvable base still returns None after
+        exactly one extra fetch."""
+        marker = self._marker(tmp_path, age_seconds=60)
+        router = self._router(marker, rev_parse={"origin/main": 1, "main": 1}, upstream=(1, ""))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() is None
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    # --- A FAILED fetch must not read as freshness ---
+
+    def test_zero_byte_marker_still_fetches(self, tmp_path: Path) -> None:
+        """A failed fetch (offline / dropped VPN / hung remote) still bumps
+        `FETCH_HEAD`'s mtime but TRUNCATES it to 0 bytes — verified against real
+        git: rc=128, mtime advanced, size 0. Treating that as freshness
+        suppressed the QS-276 S1 stale-base warning for the whole 10-minute
+        window and never retried, even seconds after connectivity returned. The
+        TTL would have turned an existing safety net OFF.
+        """
+        marker = self._marker(tmp_path, age_seconds=5, content="")
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_failed_fetch_warning_is_not_suppressed_on_the_next_run(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The consequence that actually bites: the S1 warning must keep firing
+        run after run while the remote is unreachable."""
+        marker = self._marker(tmp_path, age_seconds=5, content="")
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:3] == ["git", "rev-parse", "--git-path"]:
+                return _cp(0, stdout=str(marker))
+            if cmd[:2] == ["git", "remote"]:
+                return _cp(0, stdout="github")
+            if cmd[:2] == ["git", "fetch"]:
+                return _cp(128, stderr="Could not read from remote repository.")
+            if cmd[:3] == ["git", "rev-parse", "--verify"] and cmd[3] == "origin/main":
+                return _cp(0)
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0)
+            return _cp(1)
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            quality_gate._resolve_diff_base()
+        assert "git fetch origin main` failed/timed out" in capsys.readouterr().err
+
+    # --- Never skip in CI ---
+
+    def test_ci_bypasses_the_ttl(self, tmp_path: Path) -> None:
+        """`actions/checkout` leaves a seconds-old `FETCH_HEAD`, so without an
+        explicit bypass a CI `--impacted` would skip its own fetch and resolve
+        against whatever base checkout happened to leave. The constant's comment
+        already claimed "CI always fetches fresh"; now something enforces it."""
+        marker = self._marker(tmp_path, age_seconds=1)
+        with (
+            patch.object(quality_gate, "_is_ci", return_value=True),
+            patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run,
+        ):
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_ci_bypass_does_not_even_probe_the_marker(self, tmp_path: Path) -> None:
+        """Cheaper and clearer: under CI the marker is irrelevant, so don't ask."""
+        marker = self._marker(tmp_path, age_seconds=1)
+        with (
+            patch.object(quality_gate, "_is_ci", return_value=True),
+            patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run,
+        ):
+            quality_gate._resolve_diff_base()
+        probes = [c.args[0] for c in mock_run.call_args_list if c.args[0][:3] == ["git", "rev-parse", "--git-path"]]
+        assert probes == [], probes
+
+    # --- The marker must record a MAIN fetch ---
+
+    def test_marker_recording_another_branch_still_fetches(self, tmp_path: Path) -> None:
+        """`FETCH_HEAD` records the last fetch of *anything*. `gh pr checkout
+        <n>`, `git fetch origin <other-branch>`, a tag fetch from an editor
+        plugin — each rewrites the marker without advancing `origin/main`. So a
+        fresh mtime alone cannot support the claim that origin/main is fresh.
+        Verified against real git: `git fetch origin other` writes
+        `branch 'other' of …`.
+        """
+        marker = self._marker(
+            tmp_path, age_seconds=1, content="cafe1234\t\tbranch 'other' of /tmp/up\n"
+        )
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_marker_recording_main_among_several_refs_skips(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A bare `git fetch origin` brings main down too and marks the other
+        refs `not-for-merge`; that IS a legitimate skip. Verified format:
+        `<sha>\\tnot-for-merge\\tbranch 'other' of …`."""
+        marker = self._marker(
+            tmp_path,
+            age_seconds=30,
+            content=(
+                "aaaa1111\t\tbranch 'main' of github\n"
+                "bbbb2222\tnot-for-merge\tbranch 'other' of github\n"
+            ),
+        )
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert TestResolveDiffBase._fetch_calls(mock_run) == []
+        assert "fetch skipped" in capsys.readouterr().err
+
+    def test_main_only_as_not_for_merge_still_counts(self, tmp_path: Path) -> None:
+        """main can appear flagged `not-for-merge` (e.g. fetched while on another
+        branch). The ref still came down, so the skip is legitimate."""
+        marker = self._marker(
+            tmp_path, age_seconds=30, content="aaaa1111\tnot-for-merge\tbranch 'main' of github\n"
+        )
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            quality_gate._resolve_diff_base()
+        assert TestResolveDiffBase._fetch_calls(mock_run) == []
+
+    def test_unreadable_marker_still_fetches(self, tmp_path: Path) -> None:
+        """A directory where the marker should be (or any read error) is unknown."""
+        weird = tmp_path / "FETCH_HEAD"
+        weird.mkdir()
+        with patch.object(quality_gate, "_run", side_effect=self._router(weird)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    # --- A future mtime is unknown, not fresh ---
+
+    def test_future_mtime_still_fetches(self, tmp_path: Path) -> None:
+        """`max(0.0, now - mtime)` turned an impossible timestamp into age 0.0,
+        so the fetch was skipped for the ENTIRE duration of the skew, not for 10
+        minutes. Reproduces on an NTP step, VM suspend/resume, dual boot, or a
+        network share whose server clock runs ahead. `None` — the module's
+        established "unknown, do not skip" convention — is the right answer."""
+        marker = self._marker(tmp_path, age_seconds=-3600)  # one hour in the FUTURE
+        with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    # --- No duplicate NH2 warning on the retry ---
+
+    def test_shallow_clone_warning_is_not_duplicated_by_the_retry(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Skip → ladder warns and returns None → fetch → ladder walks again.
+
+        The NH2 "no merge-base with HEAD (shallow clone?)" line must be emitted
+        ONCE PER CANDIDATE REF (two here: `origin/main` and `main`) — i.e. only
+        on the first walk. Before the fix the retry walked the ladder again and
+        printed all of them a second time, for four lines total.
+        """
+        marker = self._marker(tmp_path, age_seconds=60)
+        router = self._router(
+            marker,
+            rev_parse={"origin/main": 0, "main": 0},
+            reachable={"origin/main": 1, "main": 1},
+            upstream=(1, ""),
+        )
+        with patch.object(quality_gate, "_run", side_effect=router):
+            assert quality_gate._resolve_diff_base() is None
+        err = capsys.readouterr().err
+        assert err.count("no merge-base with HEAD") == 2, (
+            f"expected one warning per candidate ref on the FIRST walk only; got:\n{err}"
+        )
 
 
 class TestRunTimeout:
@@ -2714,6 +4092,9 @@ class TestCheckImpacted:
     def test_no_base_in_ci_returns_4(self) -> None:
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value=None),
             patch.object(quality_gate, "_is_ci", return_value=True),
         ):
@@ -2722,6 +4103,9 @@ class TestCheckImpacted:
     def test_no_base_locally_warns_and_passes(self) -> None:
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value=None),
             patch.object(quality_gate, "_is_ci", return_value=False),
         ):
@@ -2730,6 +4114,7 @@ class TestCheckImpacted:
     def test_selected_tests_fail_returns_1(self) -> None:
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             # Isolate _run to the diff-cover call: the cmd builder probes
@@ -2751,6 +4136,7 @@ class TestCheckImpacted:
 
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             # QS-283 A4: an absent DB → select-all (was_incremental False), so a
@@ -2780,6 +4166,7 @@ class TestCheckImpacted:
 
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
@@ -2797,6 +4184,7 @@ class TestCheckImpacted:
         missing = tmp_path / "coverage.xml"  # never created
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", missing),
@@ -2816,6 +4204,7 @@ class TestCheckImpacted:
 
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe") as mock_safe,
             patch.object(quality_gate, "COVERAGE_XML", xml),
@@ -2841,6 +4230,7 @@ class TestCheckImpacted:
         xml.write_text("<coverage>STALE from a previous run</coverage>")
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "COVERAGE_XML", xml),
@@ -2865,6 +4255,7 @@ class TestCheckImpacted:
 
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "TESTMON_DATA", absent_db),
@@ -2891,6 +4282,7 @@ class TestCheckImpacted:
 
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "TESTMON_DATA", present_db),
@@ -2902,6 +4294,649 @@ class TestCheckImpacted:
         ):
             assert quality_gate.check_impacted() == 0
         mock_reset.assert_not_called()
+
+
+class TestImpactedEarlyExitPaths:
+    """QS-290 (S-4, AC2): `_impacted_early_exit_paths` against REAL git.
+
+    The helper must return a genuine SUPERSET of the paths diff-cover would
+    consider, or the early exit becomes a false PASS. It is exercised against
+    throwaway repos rather than mocks precisely because the claim under test is
+    about git's diff semantics, not about our control flow.
+
+    Zero-arg and total by design: it resolves the base itself. With the base
+    resolve left in `check_impacted`, that `_run` call would sit OUTSIDE the
+    seam and still fire in every test that patches `_run` wholesale — defeating
+    the "patch one seam" remedy the 16 existing call sites rely on.
+    """
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=str(repo), check=True, capture_output=True, text=True
+        ).stdout
+
+    @pytest.fixture
+    def repo(self, tmp_path: Path) -> Path:
+        """A repo on branch `feature`, forked from `main`, with one doc edit."""
+        repo = tmp_path / "repo"
+        (repo / "docs").mkdir(parents=True)
+        (repo / "docs" / "a.md").write_text("base\n")
+        (repo / "mod.py").write_text("A = 1\n")
+        self._git(repo, "init", "-q", "-b", "main")
+        self._git(repo, "config", "user.email", "t@t.co")
+        self._git(repo, "config", "user.name", "t")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "base")
+        self._git(repo, "checkout", "-qb", "feature")
+        (repo / "docs" / "a.md").write_text("edited\n")
+        return repo
+
+    def _paths(self, repo: Path) -> list[str] | None:
+        with patch.object(quality_gate, "REPO_ROOT", repo):
+            return quality_gate._impacted_early_exit_paths()
+
+    @staticmethod
+    def _has_py(paths: list[str] | None) -> bool:
+        assert paths is not None
+        return any(p.endswith(".py") for p in paths)
+
+    def test_doc_only_change_has_no_python(self, repo: Path) -> None:
+        paths = self._paths(repo)
+        assert paths == ["docs/a.md"], paths
+
+    def test_untracked_py_defeats_the_exit(self, repo: Path) -> None:
+        (repo / "brand_new.py").write_text("def f():\n    return 1\n")
+        assert self._has_py(self._paths(repo))
+
+    def test_staged_only_py_defeats_the_exit(self, repo: Path) -> None:
+        (repo / "mod.py").write_text("A = 2\n")
+        self._git(repo, "add", "mod.py")
+        assert self._has_py(self._paths(repo))
+
+    def test_unstaged_only_py_defeats_the_exit(self, repo: Path) -> None:
+        (repo / "mod.py").write_text("A = 2\n")
+        assert self._has_py(self._paths(repo))
+
+    def test_committed_only_py_defeats_the_exit(self, repo: Path) -> None:
+        (repo / "mod.py").write_text("A = 2\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "code")
+        assert self._has_py(self._paths(repo))
+
+    def test_deleted_py_defeats_the_exit(self, repo: Path) -> None:
+        self._git(repo, "rm", "-q", "mod.py")
+        assert self._has_py(self._paths(repo))
+
+    def test_py_matching_mains_content_defeats_the_exit(self, repo: Path) -> None:
+        """The merge-base case — the false-PASS hole a two-dot diff would open.
+
+        The branch changes `mod.py`, and main independently lands the SAME
+        content (cherry-pick / squash-merge already merged). `git diff
+        <main-tip>` sees identical content and lists nothing, while diff-cover's
+        three-dot `main...HEAD` range DOES score those lines.
+        """
+        (repo / "mod.py").write_text("A = 2\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "feature change")
+        self._git(repo, "checkout", "-q", "main")
+        (repo / "mod.py").write_text("A = 2\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "same content on main")
+        self._git(repo, "checkout", "-q", "feature")
+
+        # Contrast: the rejected two-dot form is blind to the .py here.
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", "main")
+        # The three-dot range diff-cover uses is NOT blind.
+        assert "mod.py" in self._git(repo, "diff", "--name-only", "main...HEAD")
+        # So neither is our merge-base-based helper.
+        assert self._has_py(self._paths(repo))
+
+    def test_branch_behind_main_still_early_exits(self, repo: Path) -> None:
+        """The other hole a two-dot diff would open: main's OWN `.py` commits
+        would appear in `git diff main`, so a branch even slightly behind main
+        could never early-exit — the feature would be dead on arrival."""
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "doc edit")
+        self._git(repo, "checkout", "-q", "main")
+        (repo / "other.py").write_text("B = 1\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "main advances")
+        self._git(repo, "checkout", "-q", "feature")
+
+        # Contrast: two-dot drags in main's own new .py.
+        assert "other.py" in self._git(repo, "diff", "--name-only", "main")
+        # Merge-base scoping keeps the change set ours alone.
+        assert self._paths(repo) == ["docs/a.md"]
+
+    # --- Core.quotePath must not fail the exit OPEN ---
+
+    NON_ASCII_PY = "tests/test_données.py"
+
+    def test_non_ascii_tracked_py_defeats_the_exit(self, repo: Path) -> None:
+        """`core.quotePath` defaults to TRUE, so `git diff --name-only` emits
+        `"tests/test_donn\\303\\251es.py"` — C-quoted, WITH surrounding double
+        quotes. That string does not end in `.py`, so the only Python file in
+        the change set became invisible and the gate returned 0 having run
+        NOTHING: a silent fail-OPEN in the one function whose contract is
+        fail-closed. NUL-delimited output removes the whole quoting class.
+        """
+        (repo / "tests").mkdir()
+        (repo / self.NON_ASCII_PY).write_text("def f():\n    return 1\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "non-ascii py")
+        paths = self._paths(repo)
+        assert paths is not None
+        assert self.NON_ASCII_PY in paths, paths
+        assert not any(p.startswith('"') for p in paths), f"C-quoted path leaked: {paths!r}"
+        assert self._has_py(paths)
+
+    def test_non_ascii_untracked_py_defeats_the_exit(self, repo: Path) -> None:
+        """`git ls-files --others` quotes too, so the untracked half needs `-z`
+        just as much as the diff half."""
+        (repo / "tests").mkdir()
+        (repo / self.NON_ASCII_PY).write_text("def f():\n    return 1\n")
+        paths = self._paths(repo)
+        assert paths is not None
+        assert self.NON_ASCII_PY in paths, paths
+        assert self._has_py(paths)
+
+    def test_quote_path_is_actually_on_in_this_repo(self, repo: Path) -> None:
+        """Pin the premise: if git ever changed its default, or the repo set
+        `core.quotePath=false`, the two tests above would pass vacuously and
+        stop guarding anything."""
+        (repo / "tests").mkdir()
+        (repo / self.NON_ASCII_PY).write_text("x = 1\n")
+        quoted = self._git(repo, "ls-files", "--others", "--exclude-standard")
+        assert '\\303\\251' in quoted, (
+            f"expected C-quoted output from plain git (proving -z is load-bearing); got {quoted!r}"
+        )
+
+    def test_path_with_a_literal_newline_defeats_the_exit(self, repo: Path) -> None:
+        """Why `-z` rather than `-c core.quotePath=false`: the latter still
+        breaks on a path containing a literal newline, which splits into two
+        bogus fields."""
+        weird = "tests/we\nird.py"
+        (repo / "tests").mkdir()
+        (repo / weird).write_text("y = 1\n")
+        paths = self._paths(repo)
+        assert paths is not None
+        assert weird in paths, paths
+        assert self._has_py(paths)
+
+    # --- Union the committed range ---
+
+    def test_py_reverted_in_the_worktree_defeats_the_exit(self, repo: Path) -> None:
+        """`git diff <mb>` compares the merge-base tree to the WORKING tree, so
+        a `.py` changed in a branch COMMIT but restored to merge-base content in
+        the worktree vanished from it — while diff-cover's three-dot
+        `base...HEAD` still scores that commit's added lines. The exit fired and
+        returned 0 on a change set diff-cover would very likely have FAILed.
+        """
+        (repo / "mod.py").write_text("A = 1\n\n\ndef added():\n    return 2\n")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-qm", "add a function")
+        # Restore merge-base content in the worktree only (commit still has it).
+        (repo / "mod.py").write_text("A = 1\n")
+
+        # Premise: the working-tree diff alone is blind here...
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", "main")
+        # ...while the range diff-cover actually uses is not.
+        assert "mod.py" in self._git(repo, "diff", "--name-only", "main...HEAD")
+        # So the union must see it.
+        assert self._has_py(self._paths(repo))
+
+    def test_staged_py_reverted_in_the_worktree_defeats_the_exit(self, repo: Path) -> None:
+        """The INDEX is invisible to the other three rungs.
+
+        `git diff <mb>` bypasses the index, `git diff <mb> HEAD` sees only
+        commits, and `ls-files --others` only untracked files. So a `.py` whose
+        STAGED content differs from the merge-base while its WORKTREE content
+        equals it appears in none of them — yet diff-cover scores it
+        (`GitDiffReporter` is built with `ignore_staged=False`, so
+        `git diff --cached -U0` is in its range) and, worse, it is exactly what
+        the `git commit` immediately after this pre-commit gate will land.
+
+        Same trigger class via `git apply --cached`, or `git add -p` followed by
+        `git restore --source=HEAD --worktree <file>`.
+        """
+        mb = self._git(repo, "merge-base", "main", "HEAD").strip()
+        (repo / "mod.py").write_text("A = 2\n")
+        self._git(repo, "add", "mod.py")
+        # Revert the WORKTREE to merge-base content, leaving the index changed —
+        # one of the real trigger sequences (`git add -p` then restore).
+        self._git(repo, "restore", "--source", mb, "--worktree", "mod.py")
+        assert (repo / "mod.py").read_text() == "A = 1\n"
+
+        # Premise: none of the other three rungs can see it.
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", mb)
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", mb, "HEAD")
+        assert "mod.py" not in self._git(repo, "ls-files", "--others", "--exclude-standard")
+        # ...while what `git commit` would land plainly contains it.
+        assert "mod.py" in self._git(repo, "diff", "--cached", "--name-only", mb)
+
+        paths = self._paths(repo)
+        assert paths is not None
+        assert "mod.py" in paths, paths
+        assert self._has_py(paths)
+
+    def test_committed_range_is_unioned_not_substituted(self, repo: Path) -> None:
+        """The committed range is an ADDITION: a worktree-only edit that was
+        never committed must still be reported."""
+        (repo / "unstaged.py").write_text("Z = 1\n")
+        self._git(repo, "add", "unstaged.py")
+        paths = self._paths(repo)
+        assert paths is not None
+        assert "unstaged.py" in paths, paths
+
+    def test_prefers_origin_main_over_local_main(self, repo: Path) -> None:
+        """Base ladder rung 1. `origin/main` is created as a real remote-tracking
+        ref pointing at the fork point, so a resolvable `origin/main` is used."""
+        head = self._git(repo, "rev-parse", "main").strip()
+        self._git(repo, "update-ref", "refs/remotes/origin/main", head)
+        with patch.object(quality_gate, "_run", wraps=quality_gate._run) as spy:
+            self._paths(repo)
+        verified = [c.args[0][3] for c in spy.call_args_list if c.args[0][:3] == ["git", "rev-parse", "--verify"]]
+        assert verified == ["origin/main"], verified
+
+    @pytest.mark.parametrize(
+        "failing",
+        [
+            ("git", "rev-parse", "--verify"),
+            ("git", "merge-base"),
+            ("git", "diff", "--name-only", "-z"),
+            ("git", "ls-files"),
+        ],
+        ids=["base", "merge-base", "diff", "ls-files"],
+    )
+    def test_fail_closed_on_any_git_failure(self, failing: tuple[str, ...]) -> None:
+        """AC2: a non-zero return from ANY git call → None → no exit.
+
+        `_get_changed_files` silently drops failed calls; copying that here
+        would convert a git failure into a false PASS.
+
+        The two `git diff` rungs are both covered by the `diff` id, which
+        matches either invocation; the index rung has its own case below.
+        """
+        prefix = list(failing)
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[: len(prefix)] == prefix:
+                return _cp(128, stderr="fatal: git said no")
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0, stdout="deadbeef\n")
+            return _cp(0, stdout="")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            assert quality_gate._impacted_early_exit_paths() is None
+
+    def test_fail_closed_when_only_the_committed_range_fails(self) -> None:
+        """The NEW call must fail closed on its own,
+        not merely be covered by a prefix that also matches the older one."""
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0, stdout="deadbeef\n")
+            # The committed range is the only diff with a trailing "HEAD".
+            if cmd[:2] == ["git", "diff"] and cmd[-1] == "HEAD":
+                return _cp(128, stderr="fatal")
+            return _cp(0, stdout="")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            assert quality_gate._impacted_early_exit_paths() is None
+
+    def test_fail_closed_when_only_the_index_rung_fails(self) -> None:
+        """The index rung must fail closed on its own."""
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0, stdout="deadbeef\n")
+            if cmd[:2] == ["git", "diff"] and "--cached" in cmd:
+                return _cp(128, stderr="fatal")
+            return _cp(0, stdout="")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            assert quality_gate._impacted_early_exit_paths() is None
+
+    def test_all_git_output_is_nul_delimited(self) -> None:
+        """Every path-listing call must pass `-z`, or
+        the C-quoting fail-open returns through whichever one was missed."""
+        seen: list[list[str]] = []
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            seen.append(cmd)
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0, stdout="deadbeef\n")
+            return _cp(0, stdout="")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            quality_gate._impacted_early_exit_paths()
+        listing = [c for c in seen if c[:2] == ["git", "diff"] or c[:2] == ["git", "ls-files"]]
+        assert len(listing) == 4, listing
+        for cmd in listing:
+            assert "-z" in cmd, f"path-listing call without -z: {cmd!r}"
+
+    def test_empty_merge_base_stdout_fails_closed(self) -> None:
+        """A zero-rc `merge-base` with no sha is unusable — do NOT early-exit."""
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            return _cp(0, stdout="")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            assert quality_gate._impacted_early_exit_paths() is None
+
+
+class TestImpactedNonPyEarlyExit:
+    """QS-290 (S-4, AC1/AC3/AC4): a non-`.py` `--impacted` run does no work.
+
+    testmon fingerprints AST blocks in `.py` files only — verified with a
+    positive control: editing `docs/workflow/overview.md`, the very file a
+    test module reads and asserts on at runtime, selects ZERO tests. So
+    `--impacted` was ALREADY blind here — provided the baseline is WARM.
+    Against a cold `.testmondata` testmon select-alls instead, so the exit is
+    gated on warmth; see the cold-baseline tests below.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _warm_baseline(self, tmp_path_factory: pytest.TempPathFactory):
+        """Pin a warm baseline: the exit now requires one.
+
+        Without this the "exit fires" tests inherit the ambient `.testmondata` —
+        green locally, red on CI, which has no baseline at all. (Same class of
+        environment assumption that broke `test_quick_emits_banner` on CI.)
+        Tests exercising the COLD path re-patch `TESTMON_DATA` themselves.
+        """
+        db = tmp_path_factory.mktemp("warm") / ".testmondata"
+        db.write_bytes(b"warm-baseline")
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            yield
+
+    def test_returns_0_without_spawning_anything(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            _patch_early_exit(["docs/workflow/project-rules.md", "CLAUDE.md"]),
+            patch.object(quality_gate, "_resolve_diff_base") as mock_base,
+            patch.object(quality_gate, "_stream_pytest") as mock_stream,
+            patch.object(quality_gate, "_run") as mock_run,
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_base.assert_not_called()  # no base resolve → no git fetch
+        mock_stream.assert_not_called()  # no pytest
+        mock_run.assert_not_called()  # no diff-cover, no git at all
+        err = capsys.readouterr().err
+        assert "no Python files changed" in err, err
+        assert "--quick tests/qs" in err, err
+
+    def test_no_git_fetch_argv_on_the_exit_path(self) -> None:
+        """AC3: assert on the argv, not just on `_resolve_diff_base` — the
+        fetch must be unreachable however it is spelled."""
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_run", return_value=_cp(0)) as mock_run,
+            patch.object(quality_gate, "_stream_pytest"),
+        ):
+            assert quality_gate.check_impacted() == 0
+        argvs = [c.args[0] for c in mock_run.call_args_list]
+        assert not any(a[:2] == ["git", "fetch"] for a in argvs), argvs
+
+    def test_empty_change_set_also_exits(self) -> None:
+        """Nothing changed at all → diff-cover has nothing to score → vacuous."""
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            _patch_early_exit([]),
+            patch.object(quality_gate, "_resolve_diff_base") as mock_base,
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_base.assert_not_called()
+
+    def test_unknown_paths_do_not_exit(self) -> None:
+        """`None` (a git failure) must fall through to the full pipeline."""
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            _patch_early_exit(None),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            assert quality_gate.check_impacted() == 4
+
+    @pytest.mark.parametrize("sidecar", ["-wal", "-shm"], ids=["wal", "shm"])
+    def test_sidecars_alongside_the_primary_are_not_warm(
+        self, tmp_path: Path, sidecar: str
+    ) -> None:
+        """`st_size > 0` is only a PROXY for "testmon has a usable baseline",
+        and it is unsound while sidecars sit next to the primary.
+
+        Reproduced against real testmon 2.2.0 — a `pytest --testmon` killed
+        mid-run leaves:
+
+            .testmondata 4096 B   .testmondata-wal 140112   .testmondata-shm 32768
+
+        `PRAGMA user_version` still reads 14, so `_ensure_testmon_db_safe` does
+        NOT purge, and the orphan-sidecar branch only fires when the primary is
+        ABSENT — which this is not. So the baseline reads "warm" while testmon
+        actually select-alls: a non-`.py` change against that DB ran **40
+        passed**, versus `no tests ran` against a cleanly seeded one.
+
+        The same sidecar signature covers an in-flight `--seed-testmon` /
+        rebuild, whose window is minutes long on a 7 000-test suite.
+
+        Note this test does NOT use the class's `_warm_baseline` fixture shape:
+        that writes 13 bytes of non-SQLite, which pins *size*, not usability.
+        """
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"\x00" * 4096)
+        assert quality_gate.__dict__  # sanity: module imported
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            assert quality_gate._testmon_baseline_warm() is True  # control
+            (tmp_path / f".testmondata{sidecar}").write_bytes(b"x")
+            assert quality_gate._testmon_baseline_warm() is False
+
+    def test_sidecar_state_does_not_early_exit(self, tmp_path: Path) -> None:
+        """End-to-end: an interrupted/in-flight baseline must fall through to
+        the full pass rather than returning a vacuous 0."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"\x00" * 4096)
+        (tmp_path / ".testmondata-wal").write_bytes(b"stale frames")
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            assert quality_gate.check_impacted() == 4
+
+    def test_primary_alone_still_early_exits(self, tmp_path: Path) -> None:
+        """Negative half: no sidecars → warm → the fast path survives."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"\x00" * 4096)
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base") as mock_base,
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_base.assert_not_called()
+
+    def test_cold_baseline_does_not_early_exit(self, tmp_path: Path) -> None:
+        """A COLD `.testmondata` makes the exit a VERDICT change, not a cost shift.
+
+        The exit assumes testmon "could never select a test" for a non-`.py`
+        change set. That holds only for a WARM baseline. Proven against real
+        testmon:
+
+            COLD (no .testmondata), note.txt changed -> 1 passed     (select-all)
+            WARM,                   note.txt changed -> no tests ran (0 selected)
+
+        So a doc-only change that breaks a doc-pinned guard test exited 1 before
+        this PR and would return 0 after — a false PASS, the one defect class a
+        quality gate must never ship. This PR's OWN guard tests
+        (`test_impacted_non_py_honesty.py`, `TestProjectRulesDocGuards`) are
+        precisely the tests a cold-baseline doc-only change would stop running.
+        """
+        absent = tmp_path / ".testmondata"  # never created → cold
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", absent),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            # Falls through to the full pipeline; the no-base CI branch proves
+            # we got past the seam rather than returning its 0.
+            assert quality_gate.check_impacted() == 4
+
+    def test_empty_baseline_does_not_early_exit(self, tmp_path: Path) -> None:
+        """A present-but-zero-length `.testmondata` is equally cold."""
+        empty = tmp_path / ".testmondata"
+        empty.write_bytes(b"")
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", empty),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            assert quality_gate.check_impacted() == 4
+
+    def test_corrupt_baseline_purged_by_hygiene_does_not_early_exit(
+        self, tmp_path: Path
+    ) -> None:
+        """The warm probe must be read AFTER hygiene.
+
+        A present, non-empty but CORRUPT `.testmondata` looks warm, yet
+        `_ensure_testmon_db_safe` purges it — after which testmon select-alls.
+        Gating on the pre-hygiene signal alone would leave exactly the hole
+        this fix closes.
+        """
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"not a sqlite database")
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            # Real hygiene runs, detects corruption, purges → cold → no exit.
+            assert quality_gate.check_impacted() == 4
+        assert not db.exists(), "the corrupt baseline must have been purged"
+
+    def test_warm_baseline_still_early_exits(self, tmp_path: Path) -> None:
+        """The negative half: the fast path must NOT be silently disabled."""
+        warm = tmp_path / ".testmondata"
+        warm.write_bytes(b"warm-baseline")
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", warm),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base") as mock_base,
+            patch.object(quality_gate, "_stream_pytest") as mock_stream,
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_base.assert_not_called()
+        mock_stream.assert_not_called()
+
+    def test_vanished_baseline_does_not_early_exit(self) -> None:
+        """An unreadable / vanished baseline is treated as cold, not warm."""
+        fake_db = MagicMock()
+        fake_db.stat.side_effect = FileNotFoundError
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", fake_db),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            assert quality_gate.check_impacted() == 4
+
+    def test_hygiene_runs_before_the_seam(self, tmp_path: Path) -> None:
+        """AC3: `_clean_orphan_cov_shards` must be hoisted ABOVE the seam — the
+        exit returns before the old seat would ever have been reached, so
+        without the hoist an orphan-shard-leaving crash would never be reaped
+        on a non-`.py` run."""
+        manager = MagicMock()
+        # A real path, not a MagicMock: the warm probe now also checks for
+        # `-wal`/`-shm` siblings, and every attribute of a MagicMock is truthy.
+        warm = tmp_path / ".testmondata"
+        warm.write_bytes(b"\x00" * 4096)
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "TESTMON_DATA", warm),
+            patch.object(quality_gate, "_clean_orphan_cov_shards") as mock_clean,
+            patch.object(quality_gate, "_ensure_testmon_db_safe") as mock_safe,
+            patch.object(
+                quality_gate, "_impacted_early_exit_paths", return_value=["docs/a.md"]
+            ) as mock_seam,
+        ):
+            manager.attach_mock(mock_clean, "clean")
+            manager.attach_mock(mock_safe, "safe")
+            manager.attach_mock(mock_seam, "seam")
+            assert quality_gate.check_impacted() == 0
+        # DB hygiene is hoisted above the seam too: the exit returns before
+        # `_run_impacted_pass`, so otherwise a corrupt `.testmondata` is NEVER
+        # purged and a developer on a doc-only stretch keeps returning 0 in
+        # milliseconds while the DB stays broken.
+        assert [c[0] for c in manager.mock_calls] == ["clean", "safe", "seam"], manager.mock_calls
+
+    def test_py_in_change_set_runs_the_pass_with_no_collect_only(self, tmp_path: Path) -> None:
+        """AC4: on a change set CONTAINING a `.py` file the exit provably does
+        not fire — a testmon pass IS spawned, and no spawned argv contains
+        `--collect-only` (the denominator now comes from the run itself)."""
+        xml = tmp_path / "coverage.xml"
+        base_fake = _fake_popen(run_stdout="..            [ 2/2]\n2 passed in 0.1s\n")
+
+        class fake(base_fake):  # noqa: N801 — a throwaway Popen stand-in
+            """Writes coverage.xml on exit, like the real pytest-cov run."""
+
+            calls: list[list[str]] = []
+
+            def wait(self):  # type: ignore[no-untyped-def]
+                xml.write_text("<coverage/>")
+                return super().wait()
+
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            _patch_early_exit(["docs/a.md", "custom_components/quiet_solar/home_model/load.py"]),
+            patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", tmp_path / ".testmondata"),
+            patch.object(quality_gate, "_reset_coverage_data"),
+            patch.object(quality_gate, "COVERAGE_XML", xml),
+            patch.object(quality_gate, "_build_testmon_cmd", return_value=["pytest"]),
+            patch.object(quality_gate.subprocess, "Popen", fake),
+            patch.object(quality_gate, "_run", return_value=_cp(0, stdout="100%")),
+        ):
+            assert quality_gate.check_impacted() == 0
+        assert len(fake.calls) == 1, f"expected exactly the testmon pass, got {fake.calls!r}"
+        assert not any("--collect-only" in c for c in fake.calls), fake.calls
 
 
 class TestTestmonSchemaVersion:
@@ -3025,9 +5060,11 @@ class TestCheckImpactedSelfHeal:
         mock_pass = MagicMock(side_effect=list(zip(verdicts, flags)))
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "TESTMON_DATA", db),
             patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
             patch.object(quality_gate, "_run_impacted_pass", mock_pass),
         ):
@@ -3087,14 +5124,23 @@ class TestCheckImpactedSelfHeal:
         mock_pass = MagicMock(side_effect=[(self.CHANGED, False)])
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "TESTMON_DATA", fake_db),
             patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            # Hygiene is hoisted into `check_impacted`, so it is no longer
+            # covered by the `_run_impacted_pass` mock. Left real, it would
+            # `sqlite3.connect(str(MagicMock))` and create a file literally
+            # named `<MagicMock id=...>` in the repo root.
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
             patch.object(quality_gate, "_rebuild_testmon_baseline") as mock_rebuild,
             patch.object(quality_gate, "_run_impacted_pass", mock_pass),
         ):
             assert quality_gate.check_impacted() == 1  # must not raise
-        fake_db.stat.assert_called_once()
+        # The warm probe is read TWICE now: once pre-hygiene (the QS-283
+        # self-heal signal) and once post-hygiene (the early-exit gate). What
+        # matters is that a vanishing baseline raises through neither.
+        assert fake_db.stat.call_count >= 1
         mock_rebuild.assert_not_called()  # non-incremental → no self-heal retry
         assert mock_pass.call_count == 1
         assert "rebuilding testmon baseline" not in capsys.readouterr().err
@@ -3149,6 +5195,7 @@ class TestCheckImpactedSelfHeal:
 
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "TESTMON_DATA", db),
             patch.object(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage"),
@@ -3195,6 +5242,7 @@ class TestCheckImpactedSelfHeal:
 
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value="origin/main"),
             patch.object(quality_gate, "TESTMON_DATA", db),
             patch.object(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage"),
@@ -4780,6 +6828,17 @@ class TestProjectRulesDocGuards:
     def _rules(self) -> str:
         return (Path(__file__).resolve().parent.parent / "docs" / "workflow" / "project-rules.md").read_text()
 
+    def _rules_flat(self) -> str:
+        """`project-rules.md` with runs of whitespace collapsed to single spaces.
+
+        Review-fix #01 lesson (same root cause as nice-to-have 21): the doc is
+        hard-wrapped, so where a phrase happens to break across lines is an
+        accident of formatting and must not be part of a guard's contract.
+        Phrase guards run against this; guards for runnable single-line commands
+        keep using the raw text.
+        """
+        return " ".join(self._rules().split())
+
     def test_seed_testmon_carveout_heading_present(self) -> None:
         rules = self._rules()
         assert "Carve-out — `--seed-testmon`" in rules
@@ -4804,6 +6863,54 @@ class TestProjectRulesDocGuards:
         proto = (Path(__file__).resolve().parent.parent / "docs" / "workflow" / "phase-protocols.md").read_text()
         assert "quality_gate.py --seed-testmon-status" in proto
         assert ".testmondata.seed.log" in proto
+
+    def test_non_python_early_exit_documented(self) -> None:
+        """QS-290 (S-4, task 7): the canonical statement that a non-`.py`
+        `--impacted` run checks NOTHING, and that `--quick tests/qs` is the
+        verification rather than a supplement, must live in project-rules.md —
+        it is the one behavioural consequence a reader could otherwise
+        mistake for a real green."""
+        flat = self._rules_flat()
+        assert "Non-Python change sets" in flat
+        assert "exits early and checks **nothing**" in flat
+        assert "is not a supplement there, it is **the** verification" in flat
+        # nice-to-have 18: the doc's UI hint must agree with `_IMPACTED_NON_PY_LINES`.
+        for hint in quality_gate._IMPACTED_NON_PY_LINES:
+            for target in re.findall(r"--quick [\w./]+", hint):
+                assert f"quality_gate.py {target}" in self._rules(), (
+                    f"the gate prints {target!r} but project-rules.md does not: the two "
+                    "hints must not send the reader to different commands"
+                )
+        # should-fix 8's fail-closed qualification belongs in the doc too.
+        assert "fails closed" in flat
+        # The exit is only sound on a WARM baseline; the doc must not promise a
+        # blanket "cost shift, never a verdict" — against a cold baseline
+        # testmon select-alls and those tests can fail.
+        assert "Cold baselines do not take the exit" in flat
+        assert "changes cost, never a verdict" not in flat, (
+            "this claim is false for a cold baseline — the exit is gated on warmth"
+        )
+        # The warmth gate is not airtight: testmon's environment fingerprint
+        # (#341) still slips through, so the doc must not claim it is.
+        assert "#341" in flat, "the known-gap caveat must stay documented"
+
+    def test_serial_fast_path_documented(self) -> None:
+        """QS-290 (S-1, task 7): `--quick`'s comment block claimed
+        "Uses xdist + sysmon" unconditionally. That is now false below the
+        threshold."""
+        flat = self._rules_flat()
+        assert "Uses xdist + sysmon" not in flat, "the unconditional-xdist claim must be gone"
+        assert "single-process" in flat
+        assert f"{quality_gate._SERIAL_MAX_TESTS} collected" in flat
+
+    def test_testing_layers_cross_references_rather_than_restating(self) -> None:
+        """The agent-facing concept doc points at the canonical statement
+        instead of duplicating it (a second copy is a second thing to drift)."""
+        layers = (
+            Path(__file__).resolve().parent.parent / "docs" / "agents" / "concepts" / "testing-layers.md"
+        ).read_text()
+        assert "Non-Python change sets" in layers
+        assert "project-rules.md" in layers
 
     def test_seed_testmon_follow_documented_in_both_places(self) -> None:
         """QS-299 AC#10: `--seed-testmon-follow` appears in BOTH the command-help
