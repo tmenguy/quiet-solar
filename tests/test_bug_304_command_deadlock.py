@@ -1185,13 +1185,13 @@ async def test_a_failing_push_leaves_the_rung_untouched_because_the_slot_is_full
     load._unresponsive_needs_ack = False
     load.notify_error = RuntimeError("the push channel exploded")
     rung_before = load.running_command_num_relaunch
-    pushes_before = len(load.state_change_notifications)
+    pushes_before = len(_error_notifications(load))
     assert rung_before >= NUM_MAX_COMMAND_RELAUNCH
 
     await load.check_and_relaunch_command(time)
 
     # The push really was attempted (the double records before it raises).
-    assert len(load.state_change_notifications) == pushes_before + 1
+    assert len(_error_notifications(load)) == pushes_before + 1
     assert load.running_command is not None
     assert load.running_command_num_relaunch == rung_before
     assert load.unresponsive_since is not None

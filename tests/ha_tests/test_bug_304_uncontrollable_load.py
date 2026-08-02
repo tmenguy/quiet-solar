@@ -508,6 +508,7 @@ async def test_the_lost_control_push_carries_a_stable_collapsing_tag(
     assert charger.is_uncontrollable is True
     assert len(notify_calls) == 1
     service_data = notify_calls[0][1]
+    assert service_data is not None
     assert "lost control" in service_data["message"]
     assert service_data["data"] == {"tag": _expected_lost_control_tag(charger.device_id)}
 
@@ -625,6 +626,7 @@ def _lost_control_sensor(device):
 
 async def _refresh(hass: HomeAssistant, sensor, time: datetime) -> str:
     """Drive one update cycle for `sensor` and return its resulting HA state."""
+    # Sync HA `@callback` despite the `async_` name — do not `await` it.
     sensor.async_update_callback(time)
     await hass.async_block_till_done()
     return hass.states.get(sensor.entity_id).state
