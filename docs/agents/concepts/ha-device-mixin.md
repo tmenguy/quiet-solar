@@ -4,7 +4,7 @@ slug: ha-device-mixin
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/device.py
-last_verified: 2026-07-02
+last_verified: 2026-08-01
 ---
 
 # HADeviceMixin — the bridge layer

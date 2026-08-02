@@ -2810,7 +2810,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         )
 
     async def on_device_state_change(
-        self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
+        self,
+        time: datetime,
+        device_change_type: str,
+        title: str | None = None,
+        message: str | None = None,
+        *,
+        notification_tag: str | None = None,
     ):
 
         if self.car:
@@ -2835,6 +2841,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             mobile_app_url=mobile_app_url,
             title=title,
             message=message,
+            # QS-319: the recipient may be the car's person, but the tag keys on the
+            # CHARGER's `device_id` either way — it identifies the failing device,
+            # not who hears about it. So a car swapped mid-episode does not re-alert.
+            notification_tag=notification_tag,
         )
 
     def get_car_score(self, car: QSCar, time: datetime, cache: dict) -> float:

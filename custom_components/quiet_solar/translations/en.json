@@ -450,6 +450,9 @@
             "qs_home_real_off_grid": {
                 "name": "Real off-grid state"
             },
+            "qs_load_lost_control": {
+                "name": "Lost control"
+            },
             "qs_piloted_device_activated": {
                 "name": "Piloted Device Activated"
             },

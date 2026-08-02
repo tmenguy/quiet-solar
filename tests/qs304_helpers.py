@@ -17,6 +17,12 @@ from custom_components.quiet_solar.home_model.load import (
 # The observed quiet-solar load-management cycle period.
 CYCLE_S = 7
 
+# The announce-branch ERROR needle — the one log line only `_escalate_or_recover`'s
+# announce emits, which is what distinguishes §2's path from the QS-307 give-up
+# (which also latches and also pushes nothing). Shared here (review fix QS-319#01/5)
+# so the pure-domain and HA test modules cannot drift apart on a reworded line.
+LOST_CONTROL_LOG = "Lost control of load"
+
 # Cumulative wall time of the growing part of the ladder: 50 + 100 + ... + 300.
 LADDER_TOTAL_S = sum(COMMAND_RELAUNCH_BASE_DELAY_S * (n + 1) for n in range(NUM_MAX_COMMAND_RELAUNCH))
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,6 +22,7 @@ from .const import (
     BINARY_SENSOR_HOME_IS_OFF_GRID,
     BINARY_SENSOR_HOME_PERSISTENCE_HEALTH,
     BINARY_SENSOR_HOME_REAL_OFF_GRID,
+    BINARY_SENSOR_LOAD_LOST_CONTROL,
     BINARY_SENSOR_PILOTED_DEVICE_ACTIVATED,
     BINARY_SENSOR_SOLAR_FORECAST_OK,
     DOMAIN,
@@ -28,7 +31,7 @@ from .entity import QSDeviceEntity
 from .ha_model.car import QSCar
 from .ha_model.home import QSHome
 from .ha_model.solar import QSSolar
-from .home_model.load import AbstractDevice, PilotedDevice
+from .home_model.load import AbstractDevice, AbstractLoad, PilotedDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,6 +46,29 @@ def create_ha_binary_sensor_for_PilotedDevice(device: PilotedDevice):
         value_fn=lambda d, key: d.is_piloted_device_activated,
     )
     entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=piloted_activated))
+
+    return entities
+
+
+def create_ha_binary_sensor_for_AbstractLoad(device: AbstractLoad) -> list[QSBaseBinarySensor]:
+    """Create binary sensors for any commandable load.
+
+    QS-319: the lost-control episode used to be internal state only — after the push
+    scrolled off the phone, nothing in Home Assistant said the device was still
+    broken. This is the automation hook and the dashboard state for it.
+    """
+    entities = []
+
+    lost_control = QSBinarySensorEntityDescription(
+        key=BINARY_SENSOR_LOAD_LOST_CONTROL,
+        translation_key=BINARY_SENSOR_LOAD_LOST_CONTROL,
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        # An explicit `value_fn` is required: the fallback reads
+        # `getattr(device, key, False)`, and the key is the entity id, not the
+        # property name.
+        value_fn=lambda d, key: d.has_unacknowledged_lost_control,
+    )
+    entities.append(QSBaseBinarySensor(data_handler=device.data_handler, device=device, description=lost_control))
 
     return entities
 
@@ -137,8 +163,15 @@ def create_ha_binary_sensor(device: AbstractDevice):
     """Create binary sensors for a device."""
     ret = []
 
+    # Each arm below is an independent `if` that EXTENDS the list — deliberately not
+    # an `if/elif` chain, so a device matching several arms gets every matching set
+    # of entities. Do not "simplify" this into `elif`.
     if isinstance(device, PilotedDevice):
         ret.extend(create_ha_binary_sensor_for_PilotedDevice(device))
+
+    if isinstance(device, AbstractLoad):
+        # QS-319: every commandable load gains the lost-control PROBLEM sensor.
+        ret.extend(create_ha_binary_sensor_for_AbstractLoad(device))
 
     if isinstance(device, QSCar):
         ret.extend(create_ha_binary_sensor_for_QSCar(device))
