@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-07-30
+last_verified: 2026-08-01
 ---
 
 # Charger Dynamic Budgeting — the tactical layer

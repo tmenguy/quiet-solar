@@ -103,8 +103,12 @@ an externally-detected override are constraint-driven:
   seen the problem and acted. So does the `qs_enable_device` setter, on
   either edge of an enable/disable transition. Deliberately NOT
   `user_clean_constraints`: it keeps the in-flight command, so the
-  device is still being commanded and still not obeying. See
-  [load-base.md](load-base.md) for the latch's full transition table.
+  device is still being commanded and still not obeying. An
+  acknowledgement also suppresses a not-yet-delivered announce push:
+  `_escalate_or_recover` re-checks the latch at send time (review fix
+  QS-319#01/6), so remediation landing in that window does not still
+  buzz the phone. See [load-base.md](load-base.md) for the latch's
+  full transition table.
 - The legacy timer reset stays as fallback for an override without a
   constraint (e.g. restored from storage); whichever mechanism fires
   first nulls the fields, making the other a no-op.

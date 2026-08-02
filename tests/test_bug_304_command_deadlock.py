@@ -41,6 +41,7 @@ from tests.qs304_helpers import (
     CYCLE_S,
     LADDER_TOTAL_S,
     LADDER_WALL_S,
+    LOST_CONTROL_LOG,
     count_log,
     drive,
     expected_relaunches,
@@ -48,7 +49,6 @@ from tests.qs304_helpers import (
 
 T0 = datetime(2026, 7, 27, 12, 12, 19, tzinfo=pytz.UTC)
 
-LOST_CONTROL_LOG = "Lost control of load"
 REGAINED_CONTROL_LOG = "Lost-control state cleared for load"
 # QS-307 review fix #01: the give-up releases the clock without being a recovery,
 # and says so in its own words rather than borrowing the recovery line's.
@@ -1586,6 +1586,67 @@ async def test_an_idempotent_enable_write_neither_clears_nor_re_announces():
     await load.check_and_relaunch_command(time)
 
     assert len(_error_notifications(load)) == 1
+
+
+class RemediatedInTheAnnounceWindowLoad(NeverAcksLoad):
+    """Simulate user remediation landing between the latch write and the send.
+
+    Review fix QS-319#01/6. On today's tree no `await` separates the two, so the
+    event loop cannot produce this interleave — but `check_and_relaunch_command` is
+    reachable unlocked from `button.py`, and any future await inserted between the
+    announce and the trailing push would open the window for real. The latch is
+    intercepted as a property so the acknowledgement fires the instant the announce
+    branch arms it, which is the worst-case timing of that window.
+    """
+
+    def __init__(self, **kwargs):
+        """Prime the interception fields before the base class writes the latch."""
+        self._latch_value = False
+        self.remediate_on_announce = False
+        super().__init__(**kwargs)
+
+    @property
+    def _unresponsive_needs_ack(self) -> bool:
+        """Read through to the intercepted latch storage."""
+        return self._latch_value
+
+    @_unresponsive_needs_ack.setter
+    def _unresponsive_needs_ack(self, value: bool) -> None:
+        """Store the latch, then let the parked remediation acknowledge it."""
+        self._latch_value = value
+        if value and self.remediate_on_announce:
+            # The user's reset was waiting on the other side of the window: it runs
+            # through the real production helper, so this stays an acknowledgement,
+            # not a bare flag write.
+            self._acknowledge_lost_control("the user reset the device")
+
+
+async def test_remediation_in_the_announce_window_skips_the_push(caplog: pytest.LogCaptureFixture):
+    """An episode acknowledged before delivery must not still buzz the phone.
+
+    Review fix QS-319#01/6: the latch write stays BEFORE the push (a raising notify
+    service must not resurrect the storm — that ordering is untouched), and only
+    DELIVERY is gated: the send re-checks the latch, so a push for an episode the
+    user just acknowledged is dropped rather than arriving while the sensor already
+    reads off.
+    """
+    load = RemediatedInTheAnnounceWindowLoad(name="pool_house")
+    load.remediate_on_announce = True
+    await load.launch_command(T0, CMD_IDLE)
+
+    with caplog.at_level(logging.INFO):
+        await drive(load, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
+
+    # The announce itself still happened — the ERROR line is the ladder-wall record,
+    # and the escalation clock is armed exactly as before...
+    assert count_log(caplog, LOST_CONTROL_LOG) == 1
+    assert load.unresponsive_since is not None
+    # ...the latch write happened and was then genuinely acknowledged (the
+    # remediation helper only logs when it found the latch set)...
+    assert count_log(caplog, ACKNOWLEDGED_LOG) == 1
+    assert load.has_unacknowledged_lost_control is False
+    # ...and the push for the acknowledged episode was never delivered.
+    assert _error_notifications(load) == []
 
 
 def test_acknowledging_with_no_open_episode_is_a_silent_no_op(caplog: pytest.LogCaptureFixture):

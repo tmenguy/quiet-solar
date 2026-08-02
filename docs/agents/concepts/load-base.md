@@ -320,7 +320,12 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   secondary failure (a raising probe reached again through
   `force_relaunch_command`, or a push blowing up) must not replace the
   real device exception on its way to `QSHome`'s per-load log. The push
-  is issued last, for the same reason.
+  is issued last, for the same reason — and it re-checks the latch at
+  send time (review fix QS-319#01/6): the announce branch's latch write
+  stays *before* the push (a raising notify must not resurrect the
+  storm), but delivery is skipped if user remediation acknowledged the
+  episode in between, so a push cannot land for an episode the sensor
+  already reports as over.
 - **No lock.** `QSDataHandler._update_loads_lock` guards only
   `async_update_loads`; `button.py` calls `user_clean_and_reset`,
   `user_clean_constraints`, `mark_current_constraint_has_done` and

@@ -126,7 +126,11 @@ alarm at 3am is supposed to wake you).
   swapping cars mid-episode does not re-alert. Scoped to lost-control pushes
   only (a generic per-type tag would collapse unrelated constraint
   notifications), and shipped **inside** `data`, never top-level — standard
-  notify platforms ignore unknown `data` keys.
+  notify platforms ignore unknown `data` keys. Two same-type loads whose
+  names slugify identically share a `device_id` and therefore share the tag,
+  so their pushes replace each other on the phone — inherited from the
+  pre-existing (and unlikely) `device_id` slug collision, where entity
+  `unique_id`s collide first; not worth its own guard.
 
   The nested `data` dict stays **conditional** on `mobile_app_url is not None
   or notification_tag is not None`. Creating it unconditionally would ship

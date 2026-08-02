@@ -1359,11 +1359,22 @@ class AbstractDevice:
             if self.current_command is not None:
                 self._clear_unresponsive("the command slot emptied with no successor", contact=ContactEvidence.UNKNOWN)
 
-        if unresponsive_command is not None:
+        if unresponsive_command is not None and self._unresponsive_needs_ack:
             # The push goes LAST: it is the only part that can realistically raise
             # (a subclass may dereference optional state), so nothing that matters is
             # sequenced behind it. `unresponsive_since` is already written, so the
             # once-only guard holds even if it fails.
+            #
+            # QS-319 review fix #01/6: the latch is re-checked at send time. This
+            # does NOT invert the "latch before the await" reasoning — the write in
+            # the announce branch stays where it is, so a raising notify service
+            # still cannot resurrect the storm; only DELIVERY is gated here. What it
+            # closes: user remediation (`user_clean_and_reset`, the enable setter —
+            # both reachable unlocked from `button.py`) acknowledging the episode
+            # between the latch write and this send, which would otherwise push for
+            # an episode the sensor already reports as over. No await separates the
+            # two on today's tree, so the event loop cannot open that window yet;
+            # the guard is what keeps a future await inserted above from shipping it.
             await self._notify_unresponsive(time, unresponsive_command)
 
     async def force_relaunch_command(self, time: datetime):

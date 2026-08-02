@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -48,7 +50,7 @@ def create_ha_binary_sensor_for_PilotedDevice(device: PilotedDevice):
     return entities
 
 
-def create_ha_binary_sensor_for_AbstractLoad(device: AbstractLoad):
+def create_ha_binary_sensor_for_AbstractLoad(device: AbstractLoad) -> list[QSBaseBinarySensor]:
     """Create binary sensors for any commandable load.
 
     QS-319: the lost-control episode used to be internal state only — after the push
@@ -161,13 +163,14 @@ def create_ha_binary_sensor(device: AbstractDevice):
     """Create binary sensors for a device."""
     ret = []
 
+    # Each arm below is an independent `if` that EXTENDS the list — deliberately not
+    # an `if/elif` chain, so a device matching several arms gets every matching set
+    # of entities. Do not "simplify" this into `elif`.
     if isinstance(device, PilotedDevice):
         ret.extend(create_ha_binary_sensor_for_PilotedDevice(device))
 
-    # Each arm is an independent `if` that EXTENDS the list — deliberately not an
-    # `if/elif` chain, so a device matching two arms gets both sets of entities.
-    # Do not "simplify" this into `elif`.
     if isinstance(device, AbstractLoad):
+        # QS-319: every commandable load gains the lost-control PROBLEM sensor.
         ret.extend(create_ha_binary_sensor_for_AbstractLoad(device))
 
     if isinstance(device, QSCar):

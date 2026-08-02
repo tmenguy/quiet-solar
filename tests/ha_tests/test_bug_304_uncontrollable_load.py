@@ -45,7 +45,7 @@ from tests.factories import (
     RaisingCheckLoad,
     attach_minimal_load_to_home,
 )
-from tests.qs304_helpers import CYCLE_S, LADDER_WALL_S, count_log
+from tests.qs304_helpers import CYCLE_S, LADDER_WALL_S, LOST_CONTROL_LOG, count_log
 
 from .const import MOCK_BATTERY_CONFIG, MOCK_CHARGER_CONFIG
 
@@ -318,7 +318,7 @@ async def test_entry_pushes_once_and_recovery_pushes_never(
         await _drive(charger, time, 600)
 
     assert charger.is_uncontrollable is False
-    assert count_log(caplog, "Lost control of load") == 1
+    assert count_log(caplog, LOST_CONTROL_LOG) == 1
     assert count_log(caplog, "Lost-control state cleared for load") == 1
     assert len(notify_calls) == 1
 
@@ -606,7 +606,7 @@ async def test_a_charger_with_no_recipient_still_latches_the_episode(
         await _drive(charger, T0 + timedelta(seconds=CYCLE_S), LADDER_WALL_S)
 
     assert notify_calls == []
-    assert count_log(caplog, "Lost control of load") == 1
+    assert count_log(caplog, LOST_CONTROL_LOG) == 1
     assert charger.has_unacknowledged_lost_control is True
 
     await hass.config_entries.async_unload(charger_entry.entry_id)
@@ -693,6 +693,7 @@ async def test_the_lost_control_sensor_is_unavailable_on_a_disabled_load(
     charger, charger_entry = await _add_charger(hass, "charger_qs319_disabled")
 
     sensor = _lost_control_sensor(charger)
+    assert sensor is not None
     assert await _refresh(hass, sensor, T0) == "off"
 
     charger.qs_enable_device = False
