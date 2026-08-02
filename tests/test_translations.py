@@ -123,8 +123,3 @@ def test_translations_en_matches_strings_structure() -> None:
     strings = _load_strings()
     en = _load_translations_en()
     _assert_same_key_structure(strings, en)
-
-
-def test_ac2_probe():
-    """AC-2 probe: deliberately failing. Do not merge."""
-    assert False, "AC-2 probe"
