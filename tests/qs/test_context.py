@@ -9,10 +9,10 @@ behavioural contract of the overlap itself:
 
 - :func:`test_gh_calls_run_concurrently` (the barrier proof)
 - the ``title-raises`` case of :func:`test_gh_failure_paths` (delta 1)
-- :func:`test_local_git_failure_surfaces_sibling_gh_error` and
-  :func:`test_both_gh_calls_raising_surfaces_both`
+- :func:`test_local_git_failure_surfaces_sibling_gh_error`,
+  :func:`test_both_gh_calls_raising_surfaces_both` and
+  :func:`test_base_exception_in_worker_still_drains_sibling`
 - :func:`test_parallel_gh_calls_get_devnull_stdin`
-- :func:`test_thread_exhaustion_falls_back_to_sequential`
 
 No case count is stated on purpose — it rots (review fix #01 N5).
 
@@ -53,6 +53,15 @@ GH_PR_BOOM = "boom: gh pr list"
 RaiseTarget = Literal["issue", "pr"]
 
 
+class _Interrupt(BaseException):
+    """A ``BaseException`` that is *not* an ``Exception`` (review fix #02 R1).
+
+    Stands in for the real ones a worker can surface —
+    ``KeyboardInterrupt`` from a SIGINT delivered to the process alone, or
+    ``SystemExit`` — without those two's side effects on the test runner.
+    """
+
+
 class _Call(NamedTuple):
     """One recorded ``utils.run`` invocation."""
 
@@ -73,6 +82,7 @@ def _make_fake_run(
     gh_rc: dict[str, int] | None = None,
     barrier: threading.Barrier | None = None,
     raise_on: Sequence[RaiseTarget] = (),
+    raise_cls: type[BaseException] = RuntimeError,
     git_root_fails: bool = False,
 ) -> tuple[Callable[..., subprocess.CompletedProcess[str]], list[_Call]]:
     """Return ``(fake_run, recorder)`` matching ``utils.run``'s signature.
@@ -90,7 +100,8 @@ def _make_fake_run(
     (review fix #01 N4): both targets are honoured — a silent no-op for
     ``"pr"`` is what blocked the "both raise" case — and a sequence is
     what lets one case raise from both. Unsupported values assert rather
-    than no-op. ``git_root_fails`` makes ``git rev-parse --show-toplevel``
+    than no-op; ``raise_cls`` picks the class they raise, defaulting to
+    ``RuntimeError``. ``git_root_fails`` makes ``git rev-parse --show-toplevel``
     raise ``CalledProcessError`` the way ``check=True`` would, which is
     how the local git work is failed while both ``gh`` futures are in
     flight.
@@ -127,11 +138,11 @@ def _make_fake_run(
             barrier.wait()
         if head == GH_ISSUE:
             if "issue" in raise_on:
-                raise RuntimeError(GH_ISSUE_BOOM)
+                raise raise_cls(GH_ISSUE_BOOM)
             return _completed(cmd, f"{title}\n", returncode=codes.get("issue", 0))
         if head == GH_PR:
             if "pr" in raise_on:
-                raise RuntimeError(GH_PR_BOOM)
+                raise raise_cls(GH_PR_BOOM)
             return _completed(cmd, PR_JSON, returncode=codes.get("pr", 0))
         raise AssertionError(f"unexpected command: {cmd}")
 
@@ -489,54 +500,28 @@ def test_local_git_failure_surfaces_sibling_gh_error(
     assert len(_select(recorder, GH_PR)) == 1
 
 
-def test_thread_exhaustion_falls_back_to_sequential(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_base_exception_in_worker_still_drains_sibling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """``pool.submit`` raising ``RuntimeError`` degrades to inline calls.
+    """A ``BaseException`` from a worker must not skip the drain.
 
-    Thread-pool creation is a failure mode the serial code never had: under
-    a low ``ulimit -u`` / pids cgroup, ``submit`` raises
-    ``RuntimeError: can't start new thread`` and every agent startup would
-    traceback. The fallback runs the same two helpers inline — slower, but
-    a full context and exit 0 (review fix #01 N2).
+    ``ThreadPoolExecutor`` catches ``BaseException`` in its work item and
+    hands it to the future, so ``future.result()`` can re-raise one. Under
+    an ``except Exception`` drain that escape route bypasses the sibling
+    retrieval and silently discards the other failure — the S1 hole,
+    reopened on a narrow path (review fix #02 R1).
     """
     import context  # type: ignore[import-not-found]
     import utils  # type: ignore[import-not-found]
 
-    def no_threads(self: object, fn: Callable, /, *args: object, **kwargs: object) -> object:
-        raise RuntimeError("can't start new thread")
-
-    fake_run, recorder = _make_fake_run(branch="QS_42", repo_root=tmp_path)
-    monkeypatch.setattr(utils, "run", fake_run)
-    monkeypatch.setattr(context.ThreadPoolExecutor, "submit", no_threads)
-
-    _run_main(monkeypatch, [])
-    ctx = json.loads(capsys.readouterr().out)
-
-    assert ctx["title"] == "Fake title"
-    assert ctx["pr_number"] == 7
-    assert len(_select(recorder, GH_ISSUE)) == 1
-    assert len(_select(recorder, GH_PR)) == 1
-
-
-def test_thread_exhaustion_fallback_still_propagates_failures(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The inline fallback keeps the raising contract identical to the pooled path."""
-    import context  # type: ignore[import-not-found]
-    import utils  # type: ignore[import-not-found]
-
-    def no_threads(self: object, fn: Callable, /, *args: object, **kwargs: object) -> object:
-        raise RuntimeError("can't start new thread")
-
     fake_run, recorder = _make_fake_run(
-        branch="QS_42", repo_root=tmp_path, raise_on=("issue",)
+        branch="QS_42", repo_root=tmp_path, raise_on=("issue", "pr"), raise_cls=_Interrupt
     )
     monkeypatch.setattr(utils, "run", fake_run)
-    monkeypatch.setattr(context.ThreadPoolExecutor, "submit", no_threads)
     monkeypatch.setattr("sys.argv", ["context.py"])
 
-    with pytest.raises(RuntimeError, match=GH_ISSUE_BOOM):
+    with pytest.raises(_Interrupt, match=GH_ISSUE_BOOM) as exc:
         context.main()
 
     assert len(_select(recorder, GH_PR)) == 1
+    assert any(GH_PR_BOOM in note for note in _notes(exc.value))

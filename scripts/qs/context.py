@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -60,28 +59,6 @@ def _issue_title(issue: int) -> str:
     return result.stdout.strip()
 
 
-def _submit(pool: ThreadPoolExecutor, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Future:
-    """Submit ``fn`` to ``pool``, degrading to an inline call if no thread starts.
-
-    ``ThreadPoolExecutor`` spawns worker threads lazily on ``submit``, so a
-    low ``ulimit -u`` / pids cgroup surfaces as
-    ``RuntimeError: can't start new thread`` here — a hard failure the
-    serial code never had. Running ``fn`` inline and wrapping the outcome
-    in an already-resolved future costs the overlap but keeps one single
-    retrieval path below, rather than duplicating the whole block into a
-    serial fallback (review fix #01 N2).
-    """
-    try:
-        return pool.submit(fn, *args, **kwargs)
-    except RuntimeError:
-        future: Future = Future()
-        try:
-            future.set_result(fn(*args, **kwargs))
-        except Exception as exc:
-            future.set_exception(exc)
-        return future
-
-
 def _settle(future: Future | None, default: Any) -> tuple[Any, BaseException | None]:
     """Retrieve a future's outcome as ``(value, exception)`` without raising.
 
@@ -89,13 +66,17 @@ def _settle(future: Future | None, default: Any) -> tuple[Any, BaseException | N
     ``concurrent.futures`` does not log an unretrieved future exception, so
     a sibling failure would otherwise be discarded without a trace
     (review fix #01 S1). Prior art:
-    ``quality_gate.py::_run_cheap_gates_parallel``.
+    ``quality_gate.py::_run_cheap_gates_parallel`` — which catches
+    ``Exception``; this catches ``BaseException`` deliberately, because a
+    worker's ``BaseException`` would otherwise skip the drain and reopen
+    that exact hole on a narrow path (review fix #02 R1). The caller
+    re-raises, so nothing is swallowed.
     """
     if future is None:
         return default, None
     try:
         return future.result(), None
-    except Exception as exc:
+    except BaseException as exc:
         return default, exc
 
 
@@ -128,16 +109,21 @@ def build_context(issue_override: int | None = None) -> dict:
     # ``with``-exit is deliberate: it joins the other future rather than
     # abandoning a live subprocess — do not "fix" it with
     # ``cancel_futures=True``.
+    #
+    # Thread-pool exhaustion (low ``ulimit -u`` / pids cgroup) is an
+    # accepted risk: ``submit`` queues the work item *before* the thread
+    # start that raises, so an "inline fallback" cannot un-queue it and
+    # double-executes the call (review fix #02 M1). Do not add one.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        title_future = _submit(pool, _issue_title, issue) if has_issue else None
+        title_future = pool.submit(_issue_title, issue) if has_issue else None
         pr_future = (
-            _submit(pool, find_pr_for_branch, branch, stdin=subprocess.DEVNULL) if branch else None
+            pool.submit(find_pr_for_branch, branch, stdin=subprocess.DEVNULL) if branch else None
         )
         try:
             # Local git work runs while both gh calls are in flight.
             story_path: Path | None = find_story_file(issue) if has_issue else None
             review_fix_path: Path | None = find_latest_review_fix(issue) if has_issue else None
-        except Exception as local_exc:
+        except BaseException as local_exc:
             # The local work failed with both children still running: drain
             # them so neither exception is discarded, then let the local
             # error propagate as the primary one (review fix #01 S1).
