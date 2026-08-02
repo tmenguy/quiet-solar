@@ -10,8 +10,12 @@ behavioural contract of the overlap itself:
 - :func:`test_gh_calls_run_concurrently` (the barrier proof)
 - the ``title-raises`` case of :func:`test_gh_failure_paths` (delta 1)
 - :func:`test_local_git_failure_surfaces_sibling_gh_error`,
-  :func:`test_both_gh_calls_raising_surfaces_both` and
-  :func:`test_base_exception_in_worker_still_drains_sibling`
+  :func:`test_both_gh_calls_raising_surfaces_both`,
+  :func:`test_base_exception_in_worker_still_drains_sibling` and
+  :func:`test_pr_only_failure_propagates_without_a_note`
+- :func:`test_caller_side_interrupt_is_not_settled_as_a_worker_outcome` —
+  the one case that drives a helper directly rather than ``main()``; see
+  its docstring for why
 - :func:`test_parallel_gh_calls_get_devnull_stdin`
 
 No case count is stated on purpose — it rots (review fix #01 N5).
@@ -525,3 +529,74 @@ def test_base_exception_in_worker_still_drains_sibling(
 
     assert len(_select(recorder, GH_PR)) == 1
     assert any(GH_PR_BOOM in note for note in _notes(exc.value))
+
+
+def test_pr_only_failure_propagates_without_a_note(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A PR-only hard failure raises — the other half of the AC5 ordering.
+
+    No case reached the ``raise pr_exc`` leg: the parametrized rows never
+    raise from the PR side alone, the one ``raise_on=("pr",)`` case also
+    fails the local git work, and the both-raise case surfaces the title
+    error first. Deleting that leg would silently swallow a PR-side
+    exception and print a context with ``pr_number: null`` at exit 0 — on a
+    normal, non-interrupt path. `--cov` never measures `scripts/qs`, so the
+    gate cannot catch it; only this case can (review fix #03 D).
+    """
+    import context  # type: ignore[import-not-found]
+    import utils  # type: ignore[import-not-found]
+
+    fake_run, recorder = _make_fake_run(branch="QS_42", repo_root=tmp_path, raise_on=("pr",))
+    monkeypatch.setattr(utils, "run", fake_run)
+    monkeypatch.setattr("sys.argv", ["context.py"])
+
+    with pytest.raises(RuntimeError, match=GH_PR_BOOM) as exc:
+        context.main()
+
+    # The title call succeeded, so there is no sibling failure to note.
+    assert _notes(exc.value) == []
+    assert len(_select(recorder, GH_ISSUE)) == 1
+
+
+@pytest.mark.parametrize("worker_failed", [False, True], ids=["worker-ok", "worker-failed"])
+def test_caller_side_interrupt_is_not_settled_as_a_worker_outcome(worker_failed: bool) -> None:
+    """An interrupt hitting *our* ``result()`` wait is not the worker's outcome.
+
+    ``except BaseException`` alone cannot tell "the worker failed" from "the
+    wait we are sitting in was interrupted". Conflating them swallowed the
+    interrupt, discarded the worker's real failure, and mislabelled the
+    interrupt as ``concurrent gh call also failed: ...``. ``_settle`` must
+    re-raise instead of settling, which also makes the bogus note
+    unreachable — ``_note_sibling`` is only ever called on a *settled*
+    outcome (review fix #03 A).
+
+    This drives ``_settle`` directly rather than ``main()``, against the
+    module's convention, on purpose: the end-to-end alternative is patching
+    ``Future.result`` process-wide, which reaches far beyond the code under
+    test — the same unsoundness that made the deleted N2 tests pass against
+    broken code. A ``Future`` subclass touches nothing global. The
+    worker-origin half stays end-to-end in
+    :func:`test_base_exception_in_worker_still_drains_sibling`.
+    """
+    import context  # type: ignore[import-not-found]
+
+    class _InterruptedWait(context.Future):  # type: ignore[misc, name-defined]
+        """A future whose ``result()`` wait is interrupted at the caller."""
+
+        def result(self, timeout: float | None = None) -> object:
+            raise _Interrupt("interrupted while waiting")
+
+    future = _InterruptedWait()
+    worker_error = RuntimeError("worker's real failure")
+    if worker_failed:
+        future.set_exception(worker_error)
+    else:
+        future.set_result("worker value")
+
+    # The interrupt propagates rather than being recorded as an outcome.
+    with pytest.raises(_Interrupt, match="interrupted while waiting"):
+        context._settle(future, "default")
+
+    # And the worker's own exception was never substituted for it.
+    assert future.exception(timeout=0) is (worker_error if worker_failed else None)

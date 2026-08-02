@@ -71,12 +71,23 @@ def _settle(future: Future | None, default: Any) -> tuple[Any, BaseException | N
     worker's ``BaseException`` would otherwise skip the drain and reopen
     that exact hole on a narrow path (review fix #02 R1). The caller
     re-raises, so nothing is swallowed.
+
+    The ``done()``/``exception()`` guard separates the two things a
+    ``BaseException`` here can mean: the *worker's* outcome (settle it) or
+    an interrupt landing in *our own* ``result()`` wait (propagate it). The
+    latter must not be settled — doing so swallowed the interrupt,
+    discarded the worker's real failure, and mislabelled the interrupt as a
+    concurrent ``gh`` failure (review fix #03 A). ``exception(timeout=0)``
+    does not block on a done future and returns ``None`` for a successful
+    one.
     """
     if future is None:
         return default, None
     try:
         return future.result(), None
     except BaseException as exc:
+        if not future.done() or future.exception(timeout=0) is not exc:
+            raise
         return default, exc
 
 
@@ -116,10 +127,17 @@ def build_context(issue_override: int | None = None) -> dict:
     # double-executes the call (review fix #02 M1). Do not add one.
     with ThreadPoolExecutor(max_workers=2) as pool:
         title_future = pool.submit(_issue_title, issue) if has_issue else None
-        pr_future = (
-            pool.submit(find_pr_for_branch, branch, stdin=subprocess.DEVNULL) if branch else None
-        )
+        pr_future: Future | None = None
         try:
+            # Inside the ``try`` so the drain below covers it: if this
+            # ``submit`` raises (thread exhaustion) or an interrupt lands
+            # between the two, ``title_future`` is already in flight and
+            # would otherwise never be settled (review fix #03 C).
+            pr_future = (
+                pool.submit(find_pr_for_branch, branch, stdin=subprocess.DEVNULL)
+                if branch
+                else None
+            )
             # Local git work runs while both gh calls are in flight.
             story_path: Path | None = find_story_file(issue) if has_issue else None
             review_fix_path: Path | None = find_latest_review_fix(issue) if has_issue else None
