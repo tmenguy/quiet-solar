@@ -158,7 +158,11 @@ while it has a baseline: against a cold or purged one testmon
 select-alls, and those over-selected tests can fail. Skipping them would
 turn a real failure into a PASS, so a cold baseline falls through to the
 full run instead. On a warm baseline the deferred re-sync is a pure cost
-shift: the next `.py` run selects more tests than usual, once.
+shift: the next `.py` run selects more tests than usual, once. One gap
+remains (#341): after a package install/upgrade/removal or a Python
+micro bump, testmon resets its environment fingerprint and would
+select-all, but the baseline still looks warm — so a non-`.py` run can
+be optimistic there until the next `.py` change set.
 
 **Raw-`pytest` grammar rule.** Allowed: `pytest <path>::<nodeid> [-v]`
 — the positional argument MUST contain `::`. Forbidden as a habitual

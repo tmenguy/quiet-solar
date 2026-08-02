@@ -668,11 +668,16 @@ def _parse_pytest_output(text: str) -> dict[str, int]:
 # The optional leading group captures the SELECTED count, which is what actually
 # runs and therefore the only count the worker decision may use.
 #
-# This is matched with `.search`, not `.match`: anchoring at position 0 made the
-# `S/` prefix unparseable, so the probe returned None, `_resolve_files_workers`
-# always answered `-n auto`, and the serial fast path silently stopped existing
-# — no warning, no symptom but the lost seconds.
-_COLLECTED_RE = re.compile(r"(?:(\d+)/)?(\d+) tests? collected")
+# ANCHORED at column 0 and matched against the stripped line. Both halves
+# matter: without the optional `S/` group the deselection form was unparseable,
+# so the probe returned None, `_resolve_files_workers` always answered
+# `-n auto`, and the serial fast path silently stopped existing. But an
+# UNANCHORED search is equally unsafe in the other direction — `--collect-only`
+# echoes parametrized test IDs, and an id embedding this shape (verified:
+# a param value of `"12/340 tests collected (328 deselected)"`) would be parsed
+# as the summary and yield 12 for a 3-test file. Real ids always begin with the
+# file path, so anchoring is immune.
+_COLLECTED_RE = re.compile(r"^(?:(\d+)/)?(\d+) tests? collected")
 
 # pytest's exit code for "no tests were collected" — a KNOWN zero, not a failure.
 _PYTEST_RC_NO_TESTS = 5
@@ -682,6 +687,10 @@ _PYTEST_RC_NO_TESTS = 5
 # indefinitely. Generous, since a cold whole-tree collection legitimately takes
 # 3-6 s; expiry degrades to "unknown" (`-n auto`), never to a wrong count.
 _COLLECT_TIMEOUT_SECONDS = 60.0
+
+# Bound for reaping an already-killed probe. Short: the child is dead, so this
+# only waits on pipes a grandchild might still hold.
+_COLLECT_REAP_TIMEOUT_SECONDS = 5.0
 
 
 def _collect_test_count(targets: list[str]) -> int | None:
@@ -730,15 +739,23 @@ def _collect_test_count(targets: list[str]) -> int | None:
         # Reap it. `kill()` alone leaves the child unwaited with both pipes
         # open, so CPython emits `ResourceWarning: subprocess N is still
         # running` into the middle of the gate's own output.
+        #
+        # The reap is itself bounded: SIGKILL reaches only the direct child, so
+        # a grandchild holding the inherited pipes (a conftest or plugin that
+        # spawns a helper at import) would otherwise turn this into an
+        # indefinite stall of the whole gate — strictly worse than the
+        # ResourceWarning. A wedged reap is given up on; the warning is the
+        # lesser evil.
         count_proc.kill()
-        count_proc.communicate()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            count_proc.communicate(timeout=_COLLECT_REAP_TIMEOUT_SECONDS)
         return None
     if count_proc.returncode == _PYTEST_RC_NO_TESTS:
         return 0
     if count_proc.returncode != 0:
         return None
     for line in count_stdout.split("\n"):
-        m = _COLLECTED_RE.search(line)
+        m = _COLLECTED_RE.match(line.strip())
         if m:
             selected, collected = m.groups()
             return int(selected if selected is not None else collected)
@@ -1913,21 +1930,51 @@ _IMPACTED_CHANGED_LINES_UNCOVERED = "changed_lines_uncovered"
 
 
 def _testmon_baseline_warm() -> bool:
-    """True iff `.testmondata` is present and non-empty, i.e. testmon has a
-    baseline to select against and will NOT select-all.
+    """True iff testmon has a baseline it will actually select against, i.e.
+    it will NOT select-all.
 
     Existence AND size come from a SINGLE `stat()` inside a try/except so the
     file vanishing between a probe and a read (a concurrent
     `--seed-testmon`/`--impacted` run, another worktree, a mid-purge) cannot
     crash the gate. A vanished or unreadable baseline reads as cold, matching
     the module's tolerate-vanish concurrency model.
+
+    **A `-wal`/`-shm` sidecar next to the primary reads as COLD.** Size alone is
+    only a proxy for usability, and it is unsound in exactly the states that
+    leave sidecars behind — verified against real testmon 2.2.0:
+
+    - an INTERRUPTED run (Ctrl-C, OOM, laptop sleep) leaves `.testmondata` at
+      4096 B with a populated `-wal`. `PRAGMA user_version` still reads 14, so
+      `_ensure_testmon_db_safe` does not purge it, and its orphan-sidecar branch
+      only fires when the primary is ABSENT. A non-`.py` change against that DB
+      ran **40 passed** (select-all) where a cleanly seeded one ran `no tests`;
+    - an IN-FLIGHT `--seed-testmon` / `_rebuild_testmon_baseline`, whose window
+      is minutes long on a 7 000-test suite.
+
+    In both, treating the baseline as warm would let the non-`.py` early exit
+    return 0 where the pre-exit gate ran the suite. One `exists()` pair closes
+    both, and errs the safe way: a spurious cold reading only costs a full pass.
+
+    KNOWN GAP — see issue #341. A package install/upgrade/removal, or a Python
+    MICRO bump, resets testmon's environment fingerprint so it select-alls while
+    the file looks perfectly warm (size > 0, `user_version` 14, no sidecars).
+    That state is persistent rather than transient, because the exit never runs
+    pytest and so never refreshes the fingerprint. Accepted for now: `--impacted`
+    is the LOCAL pre-commit gate and CI runs the whole suite authoritatively, so
+    the blast radius is a developer learning from CI rather than broken code
+    reaching main.
     """
     try:
-        return TESTMON_DATA.stat().st_size > 0
+        if TESTMON_DATA.stat().st_size <= 0:
+            return False
     except OSError:
         # FileNotFoundError (vanished baseline) plus any other transient stat
         # failure — treat all as cold.
         return False
+    return not any(
+        (TESTMON_DATA.parent / (TESTMON_DATA.name + suffix)).exists()
+        for suffix in ("-wal", "-shm")
+    )
 
 
 def _run_impacted_pass(base: str) -> tuple[str, bool]:

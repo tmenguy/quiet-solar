@@ -2037,6 +2037,26 @@ class TestCollectTestCount:
         with patch.object(quality_gate.subprocess, "Popen", fake):
             assert quality_gate._collect_test_count(["/x"]) == expected
 
+    def test_a_parametrize_id_cannot_masquerade_as_the_summary(self) -> None:
+        """`.search()` is unanchored, so a parametrized test ID printed by
+        `--collect-only` can satisfy the pattern BEFORE the real summary line.
+
+        Verified: a param value of `"12/340 tests collected (328 deselected)"`
+        yields an id the probe parses, returning 12 for a 3-test file — silently
+        corrupting both the worker decision and the progress denominator, with
+        no symptom. Latent today only because `TestCollectTestCount` happens to
+        pin `ids=[...]`; dropping that would arm it. Real ids always begin with
+        the file path, so anchoring at column 0 is immune.
+        """
+        fake = _fake_popen(
+            collect_stdout=(
+                "tests/test_x.py::test_p[12/340 tests collected (328 deselected)]\n"
+                "3 tests collected in 0.01s\n"
+            )
+        )
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) == 3
+
     def test_returns_one_for_singular_wording(self) -> None:
         fake = _fake_popen(collect_stdout="1 test collected in 0.1s\n")
         with patch.object(quality_gate.subprocess, "Popen", fake):
@@ -2114,6 +2134,33 @@ class TestCollectTestCount:
             assert quality_gate._collect_test_count(["/x"]) is None
         assert seen.get("timeout") == quality_gate._COLLECT_TIMEOUT_SECONDS
         assert killed, "the hung probe must be killed so it cannot outlive the gate"
+
+    def test_reaping_communicate_is_bounded(self) -> None:
+        """The reap must not become an unbounded hang.
+
+        If collection leaves a grandchild holding the inherited stdout/stderr
+        pipes (a conftest or plugin that spawns a helper at import), `SIGKILL`
+        reaches only the direct child, so an unbounded reap turns the 60 s
+        collect budget into an indefinite stall of the whole gate — strictly
+        worse than the `ResourceWarning` the reap exists to remove.
+        """
+        seen: list[dict] = []
+
+        class WedgedPopen(_CountingFakePopen):
+            calls: list[list[str]] = []
+
+            def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+                seen.append(kw)
+                raise subprocess.TimeoutExpired(cmd=["pytest"], timeout=kw.get("timeout"))
+
+            def kill(self):  # type: ignore[no-untyped-def]
+                pass
+
+        with patch.object(quality_gate.subprocess, "Popen", WedgedPopen):
+            # A second TimeoutExpired from the reap must be swallowed, not raised.
+            assert quality_gate._collect_test_count(["/x"]) is None
+        assert len(seen) == 2, seen
+        assert seen[1].get("timeout") == quality_gate._COLLECT_REAP_TIMEOUT_SECONDS
 
     def test_killed_probe_is_reaped(self) -> None:
         """`kill()` alone leaves the child unreaped with both pipes open, so
@@ -3896,6 +3943,8 @@ class TestCheckImpacted:
     def test_no_base_in_ci_returns_4(self) -> None:
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
             _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value=None),
             patch.object(quality_gate, "_is_ci", return_value=True),
@@ -3905,6 +3954,8 @@ class TestCheckImpacted:
     def test_no_base_locally_warns_and_passes(self) -> None:
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
             _patch_early_exit(),
             patch.object(quality_gate, "_resolve_diff_base", return_value=None),
             patch.object(quality_gate, "_is_ci", return_value=False),
@@ -4512,6 +4563,70 @@ class TestImpactedNonPyEarlyExit:
         ):
             assert quality_gate.check_impacted() == 4
 
+    @pytest.mark.parametrize("sidecar", ["-wal", "-shm"], ids=["wal", "shm"])
+    def test_sidecars_alongside_the_primary_are_not_warm(
+        self, tmp_path: Path, sidecar: str
+    ) -> None:
+        """`st_size > 0` is only a PROXY for "testmon has a usable baseline",
+        and it is unsound while sidecars sit next to the primary.
+
+        Reproduced against real testmon 2.2.0 — a `pytest --testmon` killed
+        mid-run leaves:
+
+            .testmondata 4096 B   .testmondata-wal 140112   .testmondata-shm 32768
+
+        `PRAGMA user_version` still reads 14, so `_ensure_testmon_db_safe` does
+        NOT purge, and the orphan-sidecar branch only fires when the primary is
+        ABSENT — which this is not. So the baseline reads "warm" while testmon
+        actually select-alls: a non-`.py` change against that DB ran **40
+        passed**, versus `no tests ran` against a cleanly seeded one.
+
+        The same sidecar signature covers an in-flight `--seed-testmon` /
+        rebuild, whose window is minutes long on a 7 000-test suite.
+
+        Note this test does NOT use the class's `_warm_baseline` fixture shape:
+        that writes 13 bytes of non-SQLite, which pins *size*, not usability.
+        """
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"\x00" * 4096)
+        assert quality_gate.__dict__  # sanity: module imported
+        with patch.object(quality_gate, "TESTMON_DATA", db):
+            assert quality_gate._testmon_baseline_warm() is True  # control
+            (tmp_path / f".testmondata{sidecar}").write_bytes(b"x")
+            assert quality_gate._testmon_baseline_warm() is False
+
+    def test_sidecar_state_does_not_early_exit(self, tmp_path: Path) -> None:
+        """End-to-end: an interrupted/in-flight baseline must fall through to
+        the full pass rather than returning a vacuous 0."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"\x00" * 4096)
+        (tmp_path / ".testmondata-wal").write_bytes(b"stale frames")
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+        ):
+            assert quality_gate.check_impacted() == 4
+
+    def test_primary_alone_still_early_exits(self, tmp_path: Path) -> None:
+        """Negative half: no sidecars → warm → the fast path survives."""
+        db = tmp_path / ".testmondata"
+        db.write_bytes(b"\x00" * 4096)
+        with (
+            patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
+            patch.object(quality_gate, "_clean_orphan_cov_shards"),
+            patch.object(quality_gate, "_ensure_testmon_db_safe"),
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            _patch_early_exit(["docs/a.md"]),
+            patch.object(quality_gate, "_resolve_diff_base") as mock_base,
+        ):
+            assert quality_gate.check_impacted() == 0
+        mock_base.assert_not_called()
+
     def test_cold_baseline_does_not_early_exit(self, tmp_path: Path) -> None:
         """A COLD `.testmondata` makes the exit a VERDICT change, not a cost shift.
 
@@ -4614,14 +4729,16 @@ class TestImpactedNonPyEarlyExit:
         ):
             assert quality_gate.check_impacted() == 4
 
-    def test_hygiene_runs_before_the_seam(self) -> None:
+    def test_hygiene_runs_before_the_seam(self, tmp_path: Path) -> None:
         """AC3: `_clean_orphan_cov_shards` must be hoisted ABOVE the seam — the
         exit returns before the old seat would ever have been reached, so
         without the hoist an orphan-shard-leaving crash would never be reaped
         on a non-`.py` run."""
         manager = MagicMock()
-        warm = MagicMock()
-        warm.stat.return_value.st_size = 1
+        # A real path, not a MagicMock: the warm probe now also checks for
+        # `-wal`/`-shm` siblings, and every attribute of a MagicMock is truthy.
+        warm = tmp_path / ".testmondata"
+        warm.write_bytes(b"\x00" * 4096)
         with (
             patch.object(quality_gate, "_impacted_tooling_available", return_value=True),
             patch.object(quality_gate, "TESTMON_DATA", warm),
@@ -6670,6 +6787,9 @@ class TestProjectRulesDocGuards:
         assert "changes cost, never a verdict" not in flat, (
             "this claim is false for a cold baseline — the exit is gated on warmth"
         )
+        # The warmth gate is not airtight: testmon's environment fingerprint
+        # (#341) still slips through, so the doc must not claim it is.
+        assert "#341" in flat, "the known-gap caveat must stay documented"
 
     def test_serial_fast_path_documented(self) -> None:
         """QS-290 (S-1, task 7): `--quick`'s comment block claimed
