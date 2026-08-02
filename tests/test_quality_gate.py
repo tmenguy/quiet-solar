@@ -1647,15 +1647,25 @@ class TestQuickMode:
 
     def test_quick_emits_banner(
         self,
+        monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        """`--quick` prints a `[quick] running ...` banner to stderr."""
+        """`--quick` prints a `[quick] running ...` banner to stderr.
+
+        The xdist half of the banner is environment-dependent (see the two
+        tests below), so this pins the environment explicitly rather than
+        inheriting it. Without that, the test passes locally — where the venv
+        has xdist — and fails on CI, which has no venv at all and so correctly
+        prints `single-process`.
+        """
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
         result = {"name": "pytest", "passed": True, "detail": ""}
         with (
             patch(
                 "sys.argv",
                 ["quality_gate.py", "--quick", "tests/test_foo.py", "tests/ha_tests"],
             ),
+            patch.object(quality_gate, "_has_xdist", return_value=True),
             patch.object(quality_gate, "check_pytest_files", return_value=result),
             pytest.raises(SystemExit),
         ):
