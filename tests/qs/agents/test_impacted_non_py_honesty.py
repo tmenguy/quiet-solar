@@ -17,20 +17,20 @@ The contract pinned here:
 
 1. no claim that testmon-selected tests guard anything may stand
    UNSCOPED — each must carry the "change set contains a `.py` file"
-   condition (review-fix #01 nice-to-have 21 asserts this **semantically**
-   rather than by rejecting one exact phrasing);
+   condition. This is asserted **semantically**, not by rejecting one
+   exact phrasing: an earlier version matched a single literal string
+   (line break included), which a copy-edit could sidestep while
+   restoring an equally false claim in different words;
 2. the body must state that a non-`.py` change set checks nothing;
 3. it must name `--quick tests/qs` as the verification in that case,
    not merely as a supplement;
 4. it must say the early exit **fails closed** on a git-probe failure,
-   so "no exit message" never reads as "the exit fired silently"
-   (review-fix #01 should-fix 8);
+   so "no exit message" never reads as "the exit fired silently";
 5. it must name `--quick tests/test_quality_gate.py` for gate changes,
    since the impacted pass `--ignore`s that file BY PATH — a `.py`
-   change is not automatically a verified one (should-fix 8);
+   change is not automatically a verified one;
 6. its automatic `git add` must stage the dev-tooling tests, or a guard
-   like this one can be written and then left uncommitted
-   (should-fix 9).
+   like this one can be written and then left uncommitted.
 
 Mirrored across all three harnesses (Claude / Cursor / OpenCode) so an
 edit to one harness alone fails, matching the harness-sync rule in
@@ -56,7 +56,7 @@ HARNESS_DIRS: tuple[Path, ...] = (
 
 AGENT_NAME = "qs-implement-setup-task"
 
-# Review-fix #01 nice-to-have 21: assert the SEMANTIC, not one phrasing.
+# Assert the SEMANTIC, not one phrasing.
 # The original guard rejected a single exact string (including its line break),
 # so a copy-edit could restore an unconditional claim in different words while
 # every test still passed.
@@ -152,7 +152,7 @@ def test_names_quick_tests_qs_as_the_verification(harness_dir: Path) -> None:
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
 def test_states_the_early_exit_fails_closed(harness_dir: Path) -> None:
-    """Review-fix #01 should-fix 8: `.py` presence is not the WHOLE decision.
+    """`.py` presence is not the WHOLE decision.
 
     A failed git probe does not take the exit — silence about the exit never
     means the exit fired.
@@ -166,7 +166,7 @@ def test_states_the_early_exit_fails_closed(harness_dir: Path) -> None:
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
 def test_names_the_quality_gate_self_test_target(harness_dir: Path) -> None:
-    """Review-fix #01 should-fix 8: a `.py` change is not automatically covered.
+    """A `.py` change is not automatically covered.
 
     The impacted pass excludes `tests/test_quality_gate.py` BY PATH, so a change
     to the gate itself is never verified by `--impacted` — the agent must be told
@@ -185,7 +185,7 @@ def test_names_the_quality_gate_self_test_target(harness_dir: Path) -> None:
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
 def test_staging_command_includes_dev_tooling_tests(harness_dir: Path) -> None:
-    """Review-fix #01 should-fix 9: the automatic `git add` must stage the tests.
+    """The automatic `git add` must stage the tests.
 
     This agent is permitted to write dev-tooling tests, but its staging command
     omitted `tests/` entirely — so an agent could commit prose changes while

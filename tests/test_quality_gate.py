@@ -57,7 +57,7 @@ def _patch_full_scope():
 
 _DEFAULT_EARLY_EXIT_PATHS = ["custom_components/quiet_solar/home_model/load.py"]
 
-# Review-fix #01 nice-to-have 16: a real sentinel object, so the default is not a
+# A real sentinel object, so the default is not a
 # `str` masquerading as a `list[str] | None` behind a blanket `type: ignore`.
 # `None` cannot be the default here — it is a MEANINGFUL value (git failed →
 # unknown → no early exit) that several tests pass deliberately.
@@ -68,7 +68,7 @@ def _patch_early_exit(paths: list[str] | None | object = _KEEP_PY):
     """Patch QS-290's non-`.py` early-exit seam in `check_impacted`.
 
     The seam (`_impacted_early_exit_paths`) is deliberately zero-arg and total:
-    ONE patch here silences ALL FOUR git calls at that seat. Every
+    ONE patch here silences EVERY git call at that seat. Every
     `check_impacted` test must patch it, because the default working-tree state
     is not controllable from a unit test — a genuinely non-`.py` tree would make
     the exit fire and turn assertions about the downstream pipeline into
@@ -1667,6 +1667,44 @@ class TestQuickMode:
         assert "xdist + sysmon" not in err, f"banner still claims unconditional xdist: {err!r}"
         assert f"xdist above {quality_gate._SERIAL_MAX_TESTS} tests" in err, f"banner missing threshold: {err!r}"
 
+    def test_quick_banner_does_not_promise_xdist_when_unavailable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """The banner printed "xdist above N tests" unconditionally, so it still
+        promised xdist when xdist is absent or `QS_QG_PYTEST_WORKERS=0` — the same
+        over-claim this change removes from the "xdist + sysmon" wording."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        result = {"name": "pytest", "passed": True, "detail": ""}
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", "tests/test_foo.py"]),
+            patch.object(quality_gate, "_has_xdist", return_value=False),
+            patch.object(quality_gate, "check_pytest_files", return_value=result),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        err = capsys.readouterr().err
+        assert err.startswith("[quick] running "), err
+        assert "xdist" not in err, err
+        assert "single-process" in err, err
+
+    def test_quick_banner_does_not_promise_xdist_when_disabled(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", "0")
+        result = {"name": "pytest", "passed": True, "detail": ""}
+        with (
+            patch("sys.argv", ["quality_gate.py", "--quick", "tests/test_foo.py"]),
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate, "check_pytest_files", return_value=result),
+            pytest.raises(SystemExit),
+        ):
+            quality_gate.main()
+        assert "xdist" not in capsys.readouterr().err
+
     def test_quick_rejects_empty_args(
         self,
         capsys: pytest.CaptureFixture[str],
@@ -1972,7 +2010,7 @@ class TestCollectTestCount:
             assert quality_gate._collect_test_count(["/x"]) is None
 
     def test_nonzero_returncode_is_unknown(self) -> None:
-        """Review-fix #01 should-fix 7: a partially-failed collection prints a
+        """A partially-failed collection prints a
         parseable count (`"5 tests collected, 2 errors"`) alongside a non-zero
         exit. Trusting that number silently routed a broken collection onto the
         serial fast path. A non-zero rc is exactly the "unknown" the docstring
@@ -1989,6 +2027,49 @@ class TestCollectTestCount:
         fake = _fake_popen(collect_stdout="5 tests collected in 0.4s\n")
         with patch.object(quality_gate.subprocess, "Popen", fake):
             assert quality_gate._collect_test_count(["/x"]) == 5
+
+    def test_exit_5_is_a_known_zero_not_unknown(self) -> None:
+        """pytest exits **5** for "no tests collected" — a KNOWN count of zero.
+
+        Verified: `pytest --collect-only -q test_empty.py` prints
+        `no tests collected` and exits 5. Folding that into "unknown" made
+        `_resolve_files_workers` return `-n auto` and spin up xdist for a target
+        with zero tests — precisely the fixed overhead S-1 exists to remove — and
+        left the "a genuine 0 is authoritative" branch unreachable from this
+        caller. A partial collection (`5 tests collected, 2 errors`) exits **2**,
+        so the protection against trusting that count is untouched.
+        """
+        fake = _fake_popen(collect_stdout="no tests collected in 0.01s\n", collect_returncode=5)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) == 0
+
+    @pytest.mark.parametrize("rc", [1, 2, 3, 4], ids=["failures", "interrupted", "internal", "usage"])
+    def test_other_nonzero_codes_stay_unknown(self, rc: int) -> None:
+        fake = _fake_popen(collect_stdout="5 tests collected, 2 errors\n", collect_returncode=rc)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            assert quality_gate._collect_test_count(["/x"]) is None
+
+    def test_probe_is_bounded_by_a_timeout(self) -> None:
+        """Every other inner-loop subprocess in this module is bounded (`_run`'s
+        `timeout`, used for `git fetch` and diff-cover). An unbounded collection
+        probe could block the sub-15 s promise indefinitely."""
+        seen: dict = {}
+        killed: list[bool] = []
+
+        class HangingPopen(_CountingFakePopen):
+            calls: list[list[str]] = []
+
+            def communicate(self, *a, **kw):  # type: ignore[no-untyped-def]
+                seen.update(kw)
+                raise subprocess.TimeoutExpired(cmd=["pytest"], timeout=kw.get("timeout"))
+
+            def kill(self):  # type: ignore[no-untyped-def]
+                killed.append(True)
+
+        with patch.object(quality_gate.subprocess, "Popen", HangingPopen):
+            assert quality_gate._collect_test_count(["/x"]) is None
+        assert seen.get("timeout") == quality_gate._COLLECT_TIMEOUT_SECONDS
+        assert killed, "the hung probe must be killed so it cannot outlive the gate"
 
     def test_pins_utf8_replace_and_no_coverage_core(self) -> None:
         """Same encoding contract as the run it precedes (S5), and the probe
@@ -2039,7 +2120,7 @@ class TestStreamPytestTotalTests:
         assert "collect_targets" not in params
         assert list(params) == ["cmd", "total_tests"], list(params)
 
-    # --- review-fix #01 nice-to-have 17: 0 must not double as "unknown" ---
+    # --- 0 must not double as "unknown" ---
 
     def test_learn_sentinel_is_distinct_from_a_genuine_zero(self) -> None:
         """`0` meant both "genuinely no tests" and "unknown, learn from the
@@ -2068,7 +2149,7 @@ class TestStreamPytestTotalTests:
             quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
         assert "(2/20)" in capsys.readouterr().err
 
-    # --- review-fix #01 nice-to-have 10: keep a terminal line on a 0-test run ---
+    # --- Keep a terminal line on a 0-test run ---
 
     def test_zero_selected_run_still_reports_done(
         self, capsys: pytest.CaptureFixture[str]
@@ -2139,7 +2220,7 @@ class TestSerialFastPath:
         `_stream_pytest` would read as "collect the whole tree yourself" and
         spawn a second probe).
 
-        Review-fix #01 nice-to-have 17: the forwarded value is now the explicit
+        The forwarded value is now the explicit
         `_LEARN_FROM_STREAM` sentinel rather than `0`, so a genuine zero-test
         target stays distinguishable from an unknown one.
         """
@@ -2147,7 +2228,35 @@ class TestSerialFastPath:
         assert cap["cmd"][cap["cmd"].index("-n") + 1] == "auto"
         assert cap["total_tests"] == quality_gate._LEARN_FROM_STREAM
 
-    # --- review-fix #01 nice-to-have 11: a typo is not an explicit request ---
+    def test_explicit_zero_is_routed_through_the_provenance_check(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """`QS_QG_PYTEST_WORKERS=0` must be honoured *as an explicit request*, not
+        as a side effect of an earlier `workers is None` return.
+
+        Observable difference: an explicit serial request is the user's decision,
+        so the threshold banner (which explains OUR decision) must stay silent —
+        and it must stay silent even on a target that would trip the threshold.
+        """
+        cap = self._run(3, env_workers="0", monkeypatch=monkeypatch)
+        assert "-n" not in cap["cmd"], cap["cmd"]
+        assert "single-process (skipping xdist spin-up)" not in capsys.readouterr().err
+
+    @pytest.mark.parametrize("value", ["", "0", "auto", "4"], ids=["empty", "zero", "auto", "count"])
+    def test_valid_values_are_explicit(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", value)
+        assert quality_gate._workers_env_is_explicit() is True
+
+    @pytest.mark.parametrize("value", ["autoo", "-1", "4x", "abc"], ids=["typo", "neg", "suffix", "word"])
+    def test_malformed_values_are_not_explicit(self, value: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("QS_QG_PYTEST_WORKERS", value)
+        assert quality_gate._workers_env_is_explicit() is False
+
+    def test_unset_is_not_explicit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        assert quality_gate._workers_env_is_explicit() is False
+
+    # --- a malformed value is not an explicit request ---
 
     @pytest.mark.parametrize("bad", ["autoo", "-1", "4x"], ids=["typo", "negative", "suffix"])
     def test_malformed_env_value_does_not_count_as_explicit(
@@ -2198,6 +2307,42 @@ class TestSerialFastPath:
         ):
             quality_gate.check_pytest_files(["tests/test_x.py"])
         assert "single-process" not in capsys.readouterr().err
+
+    def test_argv_requests_the_count_progress_style(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """On an unknown count `check_pytest_files` forwards `_LEARN_FROM_STREAM`,
+        but with a plain `-q` argv pytest prints `[NN%]` — the `[N/M]` shape never
+        appears and the denominator is never learned, so mid-run progress silently
+        vanished on exactly that path (the retired whole-tree `--collect-only`
+        used to supply a denominator here)."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        cap = self._run(None, env_workers=None, monkeypatch=monkeypatch)
+        cmd = cap["cmd"]
+        assert "-o" in cmd, cmd
+        assert cmd[cmd.index("-o") + 1] == "console_output_style=count", cmd
+
+    def test_progress_is_emitted_on_the_unknown_count_path(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """End-to-end: unknown count → the run's own `[N/M]` yields progress."""
+        monkeypatch.delenv("QS_QG_PYTEST_WORKERS", raising=False)
+        fake = _fake_popen(
+            collect_stdout="ERROR: unparseable\n",
+            collect_returncode=3,
+            run_stdout="..  [ 2/20]\n..  [ 4/20]\n4 passed in 0.2s\n",
+        )
+        with (
+            patch.object(quality_gate, "_has_xdist", return_value=True),
+            patch.object(quality_gate.subprocess, "Popen", fake),
+        ):
+            quality_gate.check_pytest_files(["tests/test_x.py"])
+        assert "(2/20)" in capsys.readouterr().err
+
+    def test_zero_test_target_runs_serial(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """`--quick` on a path with no tests (pytest rc 5 → a KNOWN 0) takes the
+        serial fast path instead of booting xdist for nothing."""
+        cap = self._run(0, env_workers=None, monkeypatch=monkeypatch)
+        assert "-n" not in cap["cmd"], cap["cmd"]
+        assert cap["total_tests"] == 0
 
     def test_exactly_one_collect_only_subprocess(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """AC7: one `--collect-only` spawn per `check_pytest_files` call — the
@@ -2342,7 +2487,7 @@ class TestCountProgressSuffix:
         assert counts["failed"] == 1
 
     def test_count_suffix_re_captures_only_the_total(self) -> None:
-        """Review-fix #01 nice-to-have 14: the `current` group was captured but
+        """The `current` group was captured but
         never used, so a future edit could silently shift `group(2)`."""
         m = quality_gate._COUNT_SUFFIX_RE.search("...   [ 69/682]")
         assert m is not None
@@ -2388,6 +2533,29 @@ class TestStreamPytestLearnsDenominator:
         err = capsys.readouterr().err
         assert "%" not in err, err
         assert "  pytest: done (3/3) | passed=3 failed=0 errors=0" in err, err
+
+    def test_non_progress_line_cannot_seed_the_denominator(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The learn block latched the FIRST line anywhere in the stream matching
+        `[N/M]`, not the first *progress* line. Collection errors print before any
+        progress, so a traceback or source line ending in that shape — e.g.
+        `RATIO = SCALE[1/2]` — set a bogus denominator for the whole run and the
+        progress line then read `100% (2/2)` for a 40-test run. Cosmetic (the
+        verdict comes from the exit code), but actively misleading.
+        """
+        stream = (
+            "ERROR collecting tests/test_x.py\n"
+            "    RATIO = SCALE[1/2]\n"
+            "....  [ 4/40]\n"
+            "4 passed in 0.2s\n"
+        )
+        fake = _fake_popen(run_stdout=stream)
+        with patch.object(quality_gate.subprocess, "Popen", fake):
+            quality_gate._stream_pytest(["pytest"], total_tests=quality_gate._LEARN_FROM_STREAM)
+        err = capsys.readouterr().err
+        assert "/2)" not in err, f"a non-progress line seeded the denominator: {err!r}"
+        assert "(4/40)" in err, err
 
     def test_caller_count_wins_over_the_stream(self, capsys: pytest.CaptureFixture[str]) -> None:
         """A caller-supplied count is authoritative — the stream must not
@@ -2609,7 +2777,7 @@ class TestFullFlagScopeReason:
     def _run_main_full(scope_info: dict) -> None:
         """Drive `main() --full` with a patched `_detect_scope`.
 
-        Callers read stderr via `capsys` (review-fix #01 nice-to-have 15: this
+        Callers read stderr via `capsys` (this
         used to `return ""`, which every caller ignored).
         """
         with (
@@ -2842,12 +3010,16 @@ class TestResolveDiffBase:
         merge_base: tuple[int, str] = (1, ""),
         reachable: dict[str, int] | None = None,
         git_path: tuple[int, str] = (1, ""),
+        remote_url: tuple[int, str] = (0, "github"),
     ):
         """Build a `_run` side_effect keyed on the git subcommand.
 
         `reachable` (NH2) maps a candidate ref → returncode for the
         `git merge-base <ref> HEAD` reachability probe; default 0
         (reachable) so the pre-NH2 tests keep passing unchanged.
+
+        `remote_url` answers `git remote get-url origin`; the default matches the
+        `_marker` helper's FETCH_HEAD content so the TTL can arm.
 
         `git_path` (QS-290 S-7) answers `git rev-parse --git-path FETCH_HEAD`.
         The default `(1, "")` means "no marker resolvable" → fetch exactly as
@@ -2861,6 +3033,8 @@ class TestResolveDiffBase:
                 return _cp(0)
             if cmd[:3] == ["git", "rev-parse", "--git-path"]:
                 return _cp(git_path[0], stdout=git_path[1])
+            if cmd[:2] == ["git", "remote"]:
+                return _cp(remote_url[0], stdout=remote_url[1])
             if cmd[:3] == ["git", "rev-parse", "--verify"]:
                 return _cp(rev_parse.get(cmd[3], 1))
             if cmd[:2] == ["git", "rev-parse"]:  # @{u} upstream lookup
@@ -2989,9 +3163,74 @@ class TestFetchTtl:
             **kw,
         )
 
+    # --- the TTL must be armed only by a fetch of ORIGIN's main ---
+
+    def test_marker_recording_another_remotes_main_still_fetches(self, tmp_path: Path) -> None:
+        """`branch 'main' of <url>` carries the URL, and matching only the prefix
+        accepted ANY remote's main. Verified in a two-remote clone: after
+        `git fetch upstream main` the marker reads `branch 'main' of …/upstream`
+        while `origin/main` — the ref the base ladder actually resolves — was
+        never fetched and may be arbitrarily stale. That is the standard fork
+        workflow (`origin` = fork, `upstream` = canonical), and the skip line
+        claims `origin/main`, so the marker must support that claim.
+        """
+        marker = self._marker(
+            tmp_path, age_seconds=1, content="beef\t\tbranch 'main' of https://host/upstream\n"
+        )
+        router = self._router(marker, remote_url=(0, "https://host/fork"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_marker_recording_origins_main_skips(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        marker = self._marker(
+            tmp_path, age_seconds=30, content="beef\t\tbranch 'main' of https://host/fork\n"
+        )
+        router = self._router(marker, remote_url=(0, "https://host/fork"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert TestResolveDiffBase._fetch_calls(mock_run) == []
+        assert "fetch skipped" in capsys.readouterr().err
+
+    def test_dot_git_suffix_does_not_break_the_match(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """git STRIPS a trailing `.git` when writing FETCH_HEAD but
+        `git remote get-url origin` keeps it — verified on this very repo
+        (`…/quiet-solar.git` vs `…/quiet-solar`) and in a local clone with an
+        explicit `.git` path. A naive equality check would therefore never match
+        and would silently disable the TTL everywhere — the same
+        feature-deleting trap that ruled out keying on `refs/remotes/origin/main`.
+        """
+        marker = self._marker(
+            tmp_path, age_seconds=30, content="beef\t\tbranch 'main' of https://host/repo\n"
+        )
+        router = self._router(marker, remote_url=(0, "https://host/repo.git"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            quality_gate._resolve_diff_base()
+        assert TestResolveDiffBase._fetch_calls(mock_run) == []
+        assert "fetch skipped" in capsys.readouterr().err
+
+    def test_unresolvable_origin_url_still_fetches(self, tmp_path: Path) -> None:
+        """No `origin` remote at all (or any probe failure) → unknown → fetch."""
+        marker = self._marker(tmp_path, age_seconds=30)
+        router = self._router(marker, remote_url=(128, ""))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
+    def test_empty_origin_url_still_fetches(self, tmp_path: Path) -> None:
+        marker = self._marker(tmp_path, age_seconds=30)
+        router = self._router(marker, remote_url=(0, "  \n"))
+        with patch.object(quality_gate, "_run", side_effect=router) as mock_run:
+            assert quality_gate._resolve_diff_base() == "origin/main"
+        assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
+
     @pytest.fixture(autouse=True)
     def _not_ci(self):
-        """Review-fix #01 should-fix 4: the TTL is now bypassed under CI, so
+        """The TTL is now bypassed under CI, so
         every test here must state that it is exercising the LOCAL path."""
         with patch.object(quality_gate, "_is_ci", return_value=False):
             yield
@@ -3093,6 +3332,8 @@ class TestFetchTtl:
         def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
             if cmd[:3] == ["git", "rev-parse", "--git-path"]:
                 return _cp(0, stdout=str(marker))
+            if cmd[:2] == ["git", "remote"]:
+                return _cp(0, stdout="github")
             if cmd[:2] == ["git", "fetch"]:
                 state["fetched"] = True
                 return _cp(0)
@@ -3120,7 +3361,7 @@ class TestFetchTtl:
             assert quality_gate._resolve_diff_base() is None
         assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
 
-    # --- review-fix #01 must-fix 3: a FAILED fetch must not read as freshness ---
+    # --- A FAILED fetch must not read as freshness ---
 
     def test_zero_byte_marker_still_fetches(self, tmp_path: Path) -> None:
         """A failed fetch (offline / dropped VPN / hung remote) still bumps
@@ -3145,6 +3386,8 @@ class TestFetchTtl:
         def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
             if cmd[:3] == ["git", "rev-parse", "--git-path"]:
                 return _cp(0, stdout=str(marker))
+            if cmd[:2] == ["git", "remote"]:
+                return _cp(0, stdout="github")
             if cmd[:2] == ["git", "fetch"]:
                 return _cp(128, stderr="Could not read from remote repository.")
             if cmd[:3] == ["git", "rev-parse", "--verify"] and cmd[3] == "origin/main":
@@ -3157,7 +3400,7 @@ class TestFetchTtl:
             quality_gate._resolve_diff_base()
         assert "git fetch origin main` failed/timed out" in capsys.readouterr().err
 
-    # --- review-fix #01 should-fix 4: never skip in CI ---
+    # --- Never skip in CI ---
 
     def test_ci_bypasses_the_ttl(self, tmp_path: Path) -> None:
         """`actions/checkout` leaves a seconds-old `FETCH_HEAD`, so without an
@@ -3183,7 +3426,7 @@ class TestFetchTtl:
         probes = [c.args[0] for c in mock_run.call_args_list if c.args[0][:3] == ["git", "rev-parse", "--git-path"]]
         assert probes == [], probes
 
-    # --- review-fix #01 should-fix 5: the marker must record a MAIN fetch ---
+    # --- The marker must record a MAIN fetch ---
 
     def test_marker_recording_another_branch_still_fetches(self, tmp_path: Path) -> None:
         """`FETCH_HEAD` records the last fetch of *anything*. `gh pr checkout
@@ -3210,8 +3453,8 @@ class TestFetchTtl:
             tmp_path,
             age_seconds=30,
             content=(
-                "aaaa1111\t\tbranch 'main' of /tmp/up\n"
-                "bbbb2222\tnot-for-merge\tbranch 'other' of /tmp/up\n"
+                "aaaa1111\t\tbranch 'main' of github\n"
+                "bbbb2222\tnot-for-merge\tbranch 'other' of github\n"
             ),
         )
         with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
@@ -3223,7 +3466,7 @@ class TestFetchTtl:
         """main can appear flagged `not-for-merge` (e.g. fetched while on another
         branch). The ref still came down, so the skip is legitimate."""
         marker = self._marker(
-            tmp_path, age_seconds=30, content="aaaa1111\tnot-for-merge\tbranch 'main' of /tmp/up\n"
+            tmp_path, age_seconds=30, content="aaaa1111\tnot-for-merge\tbranch 'main' of github\n"
         )
         with patch.object(quality_gate, "_run", side_effect=self._router(marker)) as mock_run:
             quality_gate._resolve_diff_base()
@@ -3237,7 +3480,7 @@ class TestFetchTtl:
             assert quality_gate._resolve_diff_base() == "origin/main"
         assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
 
-    # --- review-fix #01 should-fix 6: a future mtime is unknown, not fresh ---
+    # --- A future mtime is unknown, not fresh ---
 
     def test_future_mtime_still_fetches(self, tmp_path: Path) -> None:
         """`max(0.0, now - mtime)` turned an impossible timestamp into age 0.0,
@@ -3250,14 +3493,18 @@ class TestFetchTtl:
             assert quality_gate._resolve_diff_base() == "origin/main"
         assert len(TestResolveDiffBase._fetch_calls(mock_run)) == 1
 
-    # --- review-fix #01 nice-to-have 12: no duplicate NH2 warning on the retry ---
+    # --- No duplicate NH2 warning on the retry ---
 
     def test_shallow_clone_warning_is_not_duplicated_by_the_retry(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Skip → ladder warns and returns None → fetch → ladder walks again.
-        The NH2 "no merge-base with HEAD (shallow clone?)" line must not print
-        twice for one invocation."""
+
+        The NH2 "no merge-base with HEAD (shallow clone?)" line must be emitted
+        ONCE PER CANDIDATE REF (two here: `origin/main` and `main`) — i.e. only
+        on the first walk. Before the fix the retry walked the ladder again and
+        printed all of them a second time, for four lines total.
+        """
         marker = self._marker(tmp_path, age_seconds=60)
         router = self._router(
             marker,
@@ -3897,7 +4144,7 @@ class TestImpactedEarlyExitPaths:
         # Merge-base scoping keeps the change set ours alone.
         assert self._paths(repo) == ["docs/a.md"]
 
-    # --- review-fix #01 must-fix 1: core.quotePath must not fail the exit OPEN ---
+    # --- Core.quotePath must not fail the exit OPEN ---
 
     NON_ASCII_PY = "tests/test_données.py"
 
@@ -3952,7 +4199,7 @@ class TestImpactedEarlyExitPaths:
         assert weird in paths, paths
         assert self._has_py(paths)
 
-    # --- review-fix #01 must-fix 2: union the committed range ---
+    # --- Union the committed range ---
 
     def test_py_reverted_in_the_worktree_defeats_the_exit(self, repo: Path) -> None:
         """`git diff <mb>` compares the merge-base tree to the WORKING tree, so
@@ -3973,6 +4220,40 @@ class TestImpactedEarlyExitPaths:
         assert "mod.py" in self._git(repo, "diff", "--name-only", "main...HEAD")
         # So the union must see it.
         assert self._has_py(self._paths(repo))
+
+    def test_staged_py_reverted_in_the_worktree_defeats_the_exit(self, repo: Path) -> None:
+        """The INDEX is invisible to the other three rungs.
+
+        `git diff <mb>` bypasses the index, `git diff <mb> HEAD` sees only
+        commits, and `ls-files --others` only untracked files. So a `.py` whose
+        STAGED content differs from the merge-base while its WORKTREE content
+        equals it appears in none of them — yet diff-cover scores it
+        (`GitDiffReporter` is built with `ignore_staged=False`, so
+        `git diff --cached -U0` is in its range) and, worse, it is exactly what
+        the `git commit` immediately after this pre-commit gate will land.
+
+        Same trigger class via `git apply --cached`, or `git add -p` followed by
+        `git restore --source=HEAD --worktree <file>`.
+        """
+        mb = self._git(repo, "merge-base", "main", "HEAD").strip()
+        (repo / "mod.py").write_text("A = 2\n")
+        self._git(repo, "add", "mod.py")
+        # Revert the WORKTREE to merge-base content, leaving the index changed —
+        # one of the real trigger sequences (`git add -p` then restore).
+        self._git(repo, "restore", "--source", mb, "--worktree", "mod.py")
+        assert (repo / "mod.py").read_text() == "A = 1\n"
+
+        # Premise: none of the other three rungs can see it.
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", mb)
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", mb, "HEAD")
+        assert "mod.py" not in self._git(repo, "ls-files", "--others", "--exclude-standard")
+        # ...while what `git commit` would land plainly contains it.
+        assert "mod.py" in self._git(repo, "diff", "--cached", "--name-only", mb)
+
+        paths = self._paths(repo)
+        assert paths is not None
+        assert "mod.py" in paths, paths
+        assert self._has_py(paths)
 
     def test_committed_range_is_unioned_not_substituted(self, repo: Path) -> None:
         """The committed range is an ADDITION: a worktree-only edit that was
@@ -4009,8 +4290,8 @@ class TestImpactedEarlyExitPaths:
         `_get_changed_files` silently drops failed calls; copying that here
         would convert a git failure into a false PASS.
 
-        Review-fix #01 must-fix 2 added a fifth call (the committed range); it
-        is covered by the `diff` id, which matches both diff invocations.
+        The two `git diff` rungs are both covered by the `diff` id, which
+        matches either invocation; the index rung has its own case below.
         """
         prefix = list(failing)
 
@@ -4025,7 +4306,7 @@ class TestImpactedEarlyExitPaths:
             assert quality_gate._impacted_early_exit_paths() is None
 
     def test_fail_closed_when_only_the_committed_range_fails(self) -> None:
-        """Review-fix #01 must-fix 2: the NEW call must fail closed on its own,
+        """The NEW call must fail closed on its own,
         not merely be covered by a prefix that also matches the older one."""
 
         def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
@@ -4039,8 +4320,21 @@ class TestImpactedEarlyExitPaths:
         with patch.object(quality_gate, "_run", side_effect=_side_effect):
             assert quality_gate._impacted_early_exit_paths() is None
 
+    def test_fail_closed_when_only_the_index_rung_fails(self) -> None:
+        """The index rung must fail closed on its own."""
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0, stdout="deadbeef\n")
+            if cmd[:2] == ["git", "diff"] and "--cached" in cmd:
+                return _cp(128, stderr="fatal")
+            return _cp(0, stdout="")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            assert quality_gate._impacted_early_exit_paths() is None
+
     def test_all_git_output_is_nul_delimited(self) -> None:
-        """Review-fix #01 must-fix 1: every path-listing call must pass `-z`, or
+        """Every path-listing call must pass `-z`, or
         the C-quoting fail-open returns through whichever one was missed."""
         seen: list[list[str]] = []
 
@@ -4053,7 +4347,7 @@ class TestImpactedEarlyExitPaths:
         with patch.object(quality_gate, "_run", side_effect=_side_effect):
             quality_gate._impacted_early_exit_paths()
         listing = [c for c in seen if c[:2] == ["git", "diff"] or c[:2] == ["git", "ls-files"]]
-        assert len(listing) == 3, listing
+        assert len(listing) == 4, listing
         for cmd in listing:
             assert "-z" in cmd, f"path-listing call without -z: {cmd!r}"
 
@@ -4074,7 +4368,7 @@ class TestImpactedNonPyEarlyExit:
     positive control: editing `docs/workflow/overview.md`, the very file a
     test module reads and asserts on at runtime, selects ZERO tests. So
     `--impacted` was ALREADY blind here; the early exit changes the cost
-    (10.7–23.5 s → two git calls), not the verdict.
+    (10.7–23.5 s → a handful of local git calls), not the verdict.
     """
 
     def test_returns_0_without_spawning_anything(
