@@ -59,12 +59,20 @@ jobs:
     name: Tests shard ${{ matrix.shard }}/4
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Least privilege: this job `pip install`s third-party packages, so
+    # it must not hold a writable token.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Don't leave the token in the git credential store while
+          # third-party package code runs.
+          persist-credentials: false
 
       - name: Set up Python 3.14
         uses: actions/setup-python@v6
@@ -86,11 +94,31 @@ jobs:
           TZ: Europe/Paris
         run: |
           set -euo pipefail
-          pytest tests/ --collect-only -q \
-            | grep -oE '^[0-9]+ tests? collected' \
-            | grep -oE '^[0-9]+' > total-collected.txt
+          if ! pytest tests/ --collect-only -q > collect-output.txt 2>&1; then
+            echo "::error::pytest collection failed — output below"
+            cat collect-output.txt
+            exit 1
+          fi
+          # Accept both `N tests collected` and the deselected form
+          # `N/M tests collected (K deselected)`, taking N — the number
+          # actually selected. `|| true` keeps a no-match from dying
+          # under `set -e` with no diagnostic.
+          total="$(grep -oE '^[0-9]+(/[0-9]+)? tests? collected' collect-output.txt \
+            | head -1 | grep -oE '^[0-9]+' || true)"
+          if [ -z "${total}" ]; then
+            echo "::error::could not parse the pytest collect summary — tail below"
+            tail -20 collect-output.txt
+            exit 1
+          fi
+          echo "${total}" > total-collected.txt
           cat total-collected.txt
 
+      # Each shard's terminal coverage report shows only what THAT shard
+      # exercised — roughly 58-70% of the package, which is expected and
+      # is not a regression. Only the aggregation job's combined report
+      # is a verdict. (`--cov-report=` cannot silence these: pytest-cov
+      # clears the report list only when '' is its SOLE member, and
+      # pytest.ini's addopts already contributes `term-missing`.)
       - name: Run shard ${{ matrix.shard }}
         env:
           TZ: Europe/Paris
@@ -117,7 +145,10 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           overwrite: true
-          retention-days: 1
+          # Long enough that a "Re-run failed jobs" days later still
+          # finds the shard data. At 1 day the aggregation job could go
+          # permanently un-clearable by re-running it alone.
+          retention-days: 5
 
   # The job `name:` below is the LITERAL required status check on `main`
   # (verified: `gh api repos/:owner/:repo/branches/main/protection`
@@ -126,13 +157,19 @@ jobs:
   test:
     name: Tests (100% Coverage)
     needs: test-shard
-    if: always()
+    # `!cancelled()` — NOT `always()`. Both keep this required check
+    # from being SKIPPED when a shard fails (branch protection counts a
+    # skipped required check as passing), but `always()` also fires on
+    # cancellation and would turn a cancelled run into a hard red.
+    if: ${{ !cancelled() }}
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      # With a plain `needs:`, a failing shard would SKIP this job, and
-      # branch protection treats a skipped required check as passing.
-      # `if: always()` plus this guard makes that a hard red.
+      # A failing shard must surface here as a hard red, since test
+      # failures now live in a `Tests shard N/4` job that is NOT the
+      # required context.
       - name: Fail if any shard failed
         if: needs.test-shard.result != 'success'
         run: |
@@ -141,6 +178,8 @@ jobs:
           exit 1
 
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Set up Python 3.14
         uses: actions/setup-python@v6
@@ -148,12 +187,28 @@ jobs:
           python-version: '3.14'
 
       # D-14: value-level translations check. Invokes the SAME entry
-      # point as the local gate's `check_translations`, so the two can
-      # never disagree.
+      # point as the local gate's `check_translations`
+      # (`bash scripts/generate-translations.sh`), so the two cannot
+      # disagree on the STALENESS verdict — the whole point of D-14.
+      #
+      # One deliberate asymmetry: the local gate ignores the generator's
+      # exit code ("may fail for unrelated integrations"), whereas a
+      # hard generator failure — absent strings.json, unresolvable
+      # `[%key:…%]` — is red here. CI is intentionally the stricter of
+      # the two, and says so instead of dying on a bare traceback.
+      #
+      # `git add -A` before diffing: `git diff` alone cannot see
+      # UNTRACKED files, so a PR that DELETES en.json would have the
+      # generator recreate it and pass vacuously.
       - name: Check translations/en.json is freshly generated
         run: |
-          bash scripts/generate-translations.sh
-          git diff --exit-code -- custom_components/quiet_solar/translations/ \
+          set -euo pipefail
+          if ! bash scripts/generate-translations.sh; then
+            echo "::error::scripts/generate-translations.sh failed — check strings.json for an absent file or an unresolvable [%key:...%] reference"
+            exit 1
+          fi
+          git add -A -- custom_components/quiet_solar/translations/
+          git diff --cached --exit-code -- custom_components/quiet_solar/translations/ \
             || { echo "::error::translations are stale — run 'bash scripts/generate-translations.sh' and commit the result"; exit 1; }
 
       # Twin of the `coverage==7.14.1` pin in requirements_test.txt —

@@ -134,13 +134,15 @@ The detached seed accepts `--detached` (own process group) and
 an earlier still-running one (last-wins), and a stale baseline is always
 safe (new worktrees just over-select tests).
 
-**Carve-out — CI workflows (QS-292).** `.github/workflows/*.yml`
-invoke `pytest` and `coverage` directly, by design. The raw-`pytest`
-grammar rule and the "`quality_gate.py` is the single test entry
-point" rule govern *interactive and agent* commands, not CI. Where
-the PR suite is sharded, the job providing the required status check
-on `main` ends in a single authoritative fail-under-100 coverage
-verdict over the whole of `custom_components/quiet_solar/` — spelled
+**Carve-out — CI test workflows (QS-292).**
+`.github/workflows/pr-quality.yml` and
+`.github/workflows/release.yml` invoke `pytest` and `coverage`
+directly, by design. The raw-`pytest` grammar rule and the
+"`quality_gate.py` is the single test entry point" rule govern
+*interactive and agent* commands, not CI. Where the PR suite is
+sharded, the job providing the required status check on `main` ends in
+a single authoritative fail-under-100 coverage verdict over the whole
+of `custom_components/quiet_solar/` — spelled
 `pytest --cov-fail-under=100` or `coverage report --fail-under=100`.
 
 **UI-only fast path.** When only `custom_components/quiet_solar/ui/*.j2`

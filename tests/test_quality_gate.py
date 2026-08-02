@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -874,17 +875,18 @@ class TestCiWorkflowConfig:
     """Regression guard for .github/workflows/pr-quality.yml (QS-292 shape)."""
 
     @staticmethod
-    def _load_workflow() -> dict:  # type: ignore[type-arg]
+    def _load_workflow(filename: str = "pr-quality.yml") -> dict[str, Any]:
         try:
             import yaml
         except ImportError:
             pytest.skip("PyYAML not installed")
 
         repo_root = Path(__file__).resolve().parent.parent
-        wf_path = repo_root / ".github" / "workflows" / "pr-quality.yml"
+        wf_path = repo_root / ".github" / "workflows" / filename
         if not wf_path.exists():
             pytest.skip("workflow file missing")
-        return yaml.safe_load(wf_path.read_text())  # type: ignore[no-any-return]
+        loaded: dict[str, Any] = yaml.safe_load(wf_path.read_text())
+        return loaded
 
     def test_shard_job_uses_xdist_sysmon(self) -> None:
         """The shard job's pytest step uses -n auto and COVERAGE_CORE=sysmon.
@@ -895,9 +897,7 @@ class TestCiWorkflowConfig:
         """
         data = self._load_workflow()
         shard_job = data["jobs"]["test-shard"]
-        run_steps = [
-            s for s in shard_job["steps"] if s.get("name", "").startswith("Run shard")
-        ]
+        run_steps = [s for s in shard_job["steps"] if s.get("name", "").startswith("Run shard")]
         assert run_steps, "no 'Run shard …' step found in test-shard job"
         pytest_step = run_steps[0]
         assert "-n auto" in pytest_step["run"] or "--numprocesses auto" in pytest_step["run"]
@@ -914,50 +914,138 @@ class TestCiWorkflowConfig:
         assert data["jobs"]["test"]["name"] == "Tests (100% Coverage)"
 
     def test_aggregation_runs_even_when_a_shard_fails(self) -> None:
-        """`if: always()` + a needs.test-shard.result guard step.
+        """`if: !cancelled()` + a needs.test-shard.result guard step.
 
         Without them a failing shard SKIPS the aggregation job, and
         branch protection treats a skipped required check as passing.
-        (`if` is a safe YAML key — unlike `on`, it is not a YAML 1.1
-        boolean.)
+        `!cancelled()` gives identical anti-skip protection to
+        `always()` WITHOUT turning a cancelled run into a hard red
+        (review fix #01 S3). (`if` is a safe YAML key — unlike `on`, it
+        is not a YAML 1.1 boolean.)
         """
         data = self._load_workflow()
         test_job = data["jobs"]["test"]
-        assert test_job["if"] == "always()"
-        assert any(
-            "needs.test-shard.result" in str(s.get("if", "")) for s in test_job["steps"]
-        ), "no step in jobs.test guards on needs.test-shard.result"
+        condition = str(test_job["if"])
+        assert "cancelled()" in condition and "!" in condition, (
+            f"jobs.test `if` must be a !cancelled() guard, got {condition!r}"
+        )
+        assert "always()" not in condition, (
+            "always() also fires on cancellation, turning a cancelled run into a hard red"
+        )
+        assert any("needs.test-shard.result" in str(s.get("if", "")) for s in test_job["steps"]), (
+            "no step in jobs.test guards on needs.test-shard.result"
+        )
+
+    def test_translations_value_check_lives_in_required_job(self) -> None:
+        """D-14: the translations check must sit INSIDE the required context.
+
+        `Tests (100% Coverage)` is the only required status check on
+        `main`, so a value-stale en.json is blocked only if the check
+        runs in that job. A future edit could delete the step and every
+        other gate would stay green (review fix #01 S7).
+        """
+        data = self._load_workflow()
+        steps = data["jobs"]["test"]["steps"]
+        gen_steps = [s for s in steps if "generate-translations.sh" in s.get("run", "")]
+        assert gen_steps, "no generate-translations.sh step in the required `test` job"
+        # The check is only meaningful if the regenerated output is then
+        # compared — a bare generator call always exits 0.
+        assert any("git diff" in s.get("run", "") for s in gen_steps), (
+            "generate-translations.sh runs but its output is never diffed"
+        )
 
     def test_split_counts_agree(self) -> None:
-        """The three hard-coded shard counts agree.
+        """All four hard-coded shard counts agree.
 
         len(matrix.shard), the `--splits N` in the shard pytest command,
-        and the `--splits N` passed to ci_reconcile_shards.py must all
-        name the same number.
+        the `--splits N` passed to ci_reconcile_shards.py, and the `/N`
+        suffix in the shard job's display name (review fix #01 S10a —
+        moving to 6 shards would otherwise leave job names reading `/4`).
         """
         data = self._load_workflow()
         shard_job = data["jobs"]["test-shard"]
         matrix_len = len(shard_job["strategy"]["matrix"]["shard"])
 
-        run_steps = [
-            s for s in shard_job["steps"] if s.get("name", "").startswith("Run shard")
-        ]
+        run_steps = [s for s in shard_job["steps"] if s.get("name", "").startswith("Run shard")]
         assert run_steps
         match = re.search(r"--splits (\d+)", run_steps[0]["run"])
         assert match, "no --splits flag in the shard pytest command"
         pytest_splits = int(match.group(1))
 
-        reconcile_steps = [
-            s
-            for s in data["jobs"]["test"]["steps"]
-            if "ci_reconcile_shards.py" in s.get("run", "")
-        ]
+        reconcile_steps = [s for s in data["jobs"]["test"]["steps"] if "ci_reconcile_shards.py" in s.get("run", "")]
         assert reconcile_steps, "no ci_reconcile_shards.py step in jobs.test"
         match = re.search(r"--splits (\d+)", reconcile_steps[0]["run"])
         assert match, "no --splits flag in the reconcile command"
         reconcile_splits = int(match.group(1))
 
-        assert matrix_len == pytest_splits == reconcile_splits
+        match = re.search(r"/(\d+)\s*$", shard_job["name"])
+        assert match, f"shard job name has no /N suffix: {shard_job['name']!r}"
+        name_splits = int(match.group(1))
+
+        assert matrix_len == pytest_splits == reconcile_splits == name_splits
+
+    def test_coverage_pin_matches_requirements(self) -> None:
+        """The aggregation job's `coverage==` pin twins requirements_test.txt.
+
+        The shards' data must be written and read by the same coverage
+        version; bumping one side only silently breaks that invariant
+        (review fix #01 S10b).
+        """
+        data = self._load_workflow()
+        wf_pins = {
+            m.group(1)
+            for s in data["jobs"]["test"]["steps"]
+            if (m := re.search(r"coverage==([\d.]+)", s.get("run", "")))
+        }
+        assert len(wf_pins) == 1, f"expected exactly one coverage== pin, got {wf_pins}"
+
+        repo_root = Path(__file__).resolve().parent.parent
+        reqs = (repo_root / "requirements_test.txt").read_text()
+        match = re.search(r"^coverage==([\d.]+)", reqs, re.MULTILINE)
+        assert match, "no top-level coverage== pin in requirements_test.txt"
+        assert wf_pins == {match.group(1)}, (
+            f"workflow pins coverage {wf_pins}, requirements_test.txt pins {match.group(1)}"
+        )
+
+    def test_shard_and_aggregation_jobs_are_hardened(self) -> None:
+        """Both new jobs drop credentials and declare least-privilege perms.
+
+        Each runs `pip install` from third-party packages; leaving the
+        git credential store populated hands a compromised dependency a
+        usable token (review fix #01 S4, zizmor `artipacked` /
+        `excessive-permissions`).
+        """
+        data = self._load_workflow()
+        for job_name in ("test-shard", "test"):
+            job = data["jobs"][job_name]
+            assert job.get("permissions") == {"contents": "read"}, (
+                f"jobs.{job_name} lacks `permissions: contents: read`"
+            )
+            checkouts = [s for s in job["steps"] if "actions/checkout" in str(s.get("uses", ""))]
+            assert checkouts, f"jobs.{job_name} has no checkout step"
+            for step in checkouts:
+                assert step.get("with", {}).get("persist-credentials") is False, (
+                    f"jobs.{job_name} checkout must set persist-credentials: false"
+                )
+
+    def test_release_workflow_is_aligned(self) -> None:
+        """AC-7 / D-15: release.yml matches pr-quality's pytest invocation.
+
+        Nothing else in `tests/` references release.yml, so the exact
+        drift D-15 documents could silently recur (review fix #01 S8).
+        """
+        data = self._load_workflow("release.yml")
+        steps = data["jobs"]["quality-gate"]["steps"]
+
+        pytest_steps = [s for s in steps if "pytest" in s.get("run", "")]
+        assert pytest_steps, "no pytest step in release.yml quality-gate job"
+        step = pytest_steps[0]
+        assert "-n auto" in step["run"] or "--numprocesses auto" in step["run"]
+        assert step.get("env", {}).get("COVERAGE_CORE") == "sysmon"
+
+        setup_steps = [s for s in steps if "actions/setup-python" in str(s.get("uses", ""))]
+        assert setup_steps, "no setup-python step in release.yml"
+        assert setup_steps[0].get("with", {}).get("cache") == "pip"
 
 
 # --- B1: requirements_test.txt includes pytest-xdist ---
@@ -2377,9 +2465,7 @@ class TestRunTimeout:
         with patch.object(
             quality_gate.subprocess,
             "run",
-            side_effect=subprocess.TimeoutExpired(
-                cmd=["x"], timeout=5.0, output="partial out", stderr="partial err"
-            ),
+            side_effect=subprocess.TimeoutExpired(cmd=["x"], timeout=5.0, output="partial out", stderr="partial err"),
         ):
             result = quality_gate._run(["x"], timeout=5.0)
         assert result.returncode == 124
@@ -2655,9 +2741,7 @@ class TestCheckImpacted:
             assert quality_gate.check_impacted() == 1
         mock_run.assert_not_called()  # diff-cover never runs if tests failed
 
-    def test_diff_coverage_below_100_returns_1(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_diff_coverage_below_100_returns_1(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         xml = tmp_path / "coverage.xml"
         absent_db = tmp_path / ".testmondata"  # never created → select-all, no self-heal
 
@@ -2840,9 +2924,7 @@ class TestTestmonSchemaVersion:
 class TestResetCoverageData:
     """QS-278: `_reset_coverage_data` clears the persistent coverage data."""
 
-    def test_removes_primary_data_and_xdist_shards(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_removes_primary_data_and_xdist_shards(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # #01-5: shards are globbed from COVERAGE_DATA's own dir — patching it
         # alone must clear both the primary file and the shards.
         data = tmp_path / ".coverage"
@@ -2856,9 +2938,7 @@ class TestResetCoverageData:
         assert not data.exists()
         assert not shard.exists()
 
-    def test_is_noop_when_no_data_present(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_is_noop_when_no_data_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Absent data must not raise (first-ever run)."""
         monkeypatch.setattr(quality_gate, "COVERAGE_DATA", tmp_path / ".coverage")
         quality_gate._reset_coverage_data()  # must not raise
@@ -2868,9 +2948,7 @@ class TestCleanOrphanCovShards:
     """QS-283 A1 (AC#1): `_clean_orphan_cov_shards` reaps only `.coverage.*`
     shards; the combined `.coverage` survives."""
 
-    def test_removes_shard_but_keeps_combined_coverage(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_removes_shard_but_keeps_combined_coverage(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         combined = tmp_path / ".coverage"
         combined.write_text("combined")
         shard = tmp_path / ".coverage.host.4242.XYZ"
@@ -2882,18 +2960,14 @@ class TestCleanOrphanCovShards:
         assert combined.exists(), "the combined .coverage must survive (warm baseline)"
         assert not shard.exists(), "a pre-existing orphan shard must be removed"
 
-    def test_is_noop_when_no_shards_present(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_is_noop_when_no_shards_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         combined = tmp_path / ".coverage"
         combined.write_text("combined")
         monkeypatch.setattr(quality_gate, "COVERAGE_DATA", combined)
         quality_gate._clean_orphan_cov_shards()  # must not raise
         assert combined.exists()
 
-    def test_uses_same_glob_as_reset_coverage_data(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_uses_same_glob_as_reset_coverage_data(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The two helpers must share the shard-matching rule (they differ
         ONLY in whether the primary `.coverage` is also unlinked)."""
         combined = tmp_path / ".coverage"
@@ -2966,14 +3040,10 @@ class TestCheckImpactedSelfHeal:
         db.write_bytes(b"warm-baseline")  # present + non-empty → was_incremental True
         return db
 
-    def test_incremental_false_fail_recovers_to_pass(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_incremental_false_fail_recovers_to_pass(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """An incremental changed-line FAIL that is a desync recovers to PASS
         after exactly one rebuild + retry; the self-heal notice is emitted."""
-        rc, mock_rebuild, mock_pass = self._run(
-            db=self._incremental_db(tmp_path), verdicts=[self.CHANGED, self.PASS]
-        )
+        rc, mock_rebuild, mock_pass = self._run(db=self._incremental_db(tmp_path), verdicts=[self.CHANGED, self.PASS])
         assert rc == 0
         mock_rebuild.assert_called_once()
         assert mock_pass.call_count == 2, "exactly one rebuild + one retry"
@@ -3007,9 +3077,7 @@ class TestCheckImpactedSelfHeal:
         mock_rebuild.assert_not_called()
         assert mock_pass.call_count == 1
 
-    def test_testmondata_vanishing_before_stat_is_non_incremental(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_testmondata_vanishing_before_stat_is_non_incremental(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Review fix #02: if `.testmondata` is unlinked (concurrent run / other
         worktree / mid-purge) so `TESTMON_DATA.stat()` raises `FileNotFoundError`,
         `check_impacted` must NOT crash — it treats the run as non-incremental
@@ -3036,9 +3104,7 @@ class TestCheckImpactedSelfHeal:
     ) -> None:
         """A never-failed PASS is distinguishable from a recovered PASS: no
         rebuild, no self-heal notice."""
-        rc, mock_rebuild, mock_pass = self._run(
-            db=self._incremental_db(tmp_path), verdicts=[self.PASS]
-        )
+        rc, mock_rebuild, mock_pass = self._run(db=self._incremental_db(tmp_path), verdicts=[self.PASS])
         assert rc == 0
         mock_rebuild.assert_not_called()
         assert mock_pass.call_count == 1
@@ -3047,9 +3113,7 @@ class TestCheckImpactedSelfHeal:
     def test_non_retriable_verdict_exits_1_without_retry(self, tmp_path: Path) -> None:
         """A non-changed-line failure (e.g. selected tests failed) is genuine
         even on an incremental run — it must not trigger the self-heal."""
-        rc, mock_rebuild, mock_pass = self._run(
-            db=self._incremental_db(tmp_path), verdicts=[self.TESTS_FAILED]
-        )
+        rc, mock_rebuild, mock_pass = self._run(db=self._incremental_db(tmp_path), verdicts=[self.TESTS_FAILED])
         assert rc == 1
         mock_rebuild.assert_not_called()
         assert mock_pass.call_count == 1
@@ -3353,9 +3417,7 @@ class TestWriteSeedStatus:
             quality_gate._write_seed_status("ok", returncode=0)
         mock_replace.assert_called_once()
 
-    def test_best_effort_swallows_and_cleans_up_on_failure(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_best_effort_swallows_and_cleans_up_on_failure(self, capsys: pytest.CaptureFixture[str]) -> None:
         """A write failure must NOT raise (never abort the detached rebuild),
         the temp file must still be unlinked by the `finally`, AND a single
         diagnostic line is emitted (review-fix #02)."""
@@ -3392,9 +3454,7 @@ class TestPidAlive:
     # review-fix #04: `_pid_alive` is total — an untrusted pid that makes
     # os.kill raise anything other than PermissionError is treated as dead,
     # never propagating out of the read-only status query.
-    @pytest.mark.parametrize(
-        "exc", [OverflowError, ValueError, TypeError], ids=["overflow", "value", "type"]
-    )
+    @pytest.mark.parametrize("exc", [OverflowError, ValueError, TypeError], ids=["overflow", "value", "type"])
     def test_dead_on_other_os_kill_errors(self, exc: type[Exception]) -> None:
         with patch.object(quality_gate.os, "kill", side_effect=exc):
             assert quality_gate._pid_alive(10**19) is False
@@ -3501,9 +3561,7 @@ class TestSeedTestmonStatus:
         [5, "x", None, [1], 3.14],
         ids=["int", "str", "null", "array", "float"],
     )
-    def test_non_dict_payload_exits_3(
-        self, payload: object, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_non_dict_payload_exits_3(self, payload: object, capsys: pytest.CaptureFixture[str]) -> None:
         self._write(payload)
         assert quality_gate.seed_testmon_status() == 3  # no AttributeError
         assert "unreadable" in capsys.readouterr().out.lower()
@@ -3526,9 +3584,7 @@ class TestSeedTestmonStatus:
         ],
         ids=["no-pid", "pid-null", "pid-str", "pid-float", "pid-zero", "pid-neg", "pid-bool"],
     )
-    def test_running_with_bad_pid_exits_3(
-        self, marker: dict, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_running_with_bad_pid_exits_3(self, marker: dict, capsys: pytest.CaptureFixture[str]) -> None:
         """A `running` marker without a positive, non-bool int pid is
         unreadable — never reaches `_pid_alive`/`os.kill`."""
         self._write(marker)
@@ -3541,9 +3597,7 @@ class TestSeedTestmonStatus:
         mock_kill.assert_not_called()
         assert "unreadable" in capsys.readouterr().out.lower()
 
-    def test_running_out_of_range_pid_interrupted_no_crash(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_running_out_of_range_pid_interrupted_no_crash(self, capsys: pytest.CaptureFixture[str]) -> None:
         """review-fix #04 must-fix: a positive pid beyond pid_t (10**19) passes
         the positivity guard, reaches the real os.kill (→ OverflowError), and is
         treated as dead → interrupted (exit 1), never crashing the query."""
@@ -3593,9 +3647,7 @@ class TestSeedTestmonStatus:
         assert "still running" in out.lower()
         assert "an unknown time" in out
 
-    def test_incomplete_missing_returncode_prints_placeholder(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_incomplete_missing_returncode_prints_placeholder(self, capsys: pytest.CaptureFixture[str]) -> None:
         self._write({"state": "incomplete"})
         assert quality_gate.seed_testmon_status() == 1
         out = capsys.readouterr().out
@@ -4008,9 +4060,7 @@ class TestSeedTestmonTokenPreemption:
                 "_stream_pytest",
                 # a fresher seed claims the marker while we run.
                 side_effect=lambda *a, **k: (
-                    quality_gate.SEED_STATUS.write_text(
-                        json.dumps({"state": "running", "token": "winner"})
-                    ),
+                    quality_gate.SEED_STATUS.write_text(json.dumps({"state": "running", "token": "winner"})),
                     {"returncode": 0},
                 )[1],
             ),
@@ -4067,7 +4117,9 @@ class TestMarkerElapsed:
             assert quality_gate._marker_elapsed({"started": 40.0}) == 60.0
 
     @pytest.mark.parametrize(
-        "started", [None, "x", True, float("inf"), float("nan"), 10**400], ids=["none", "str", "bool", "inf", "nan", "huge"]
+        "started",
+        [None, "x", True, float("inf"), float("nan"), 10**400],
+        ids=["none", "str", "bool", "inf", "nan", "huge"],
     )
     def test_bad_started_is_zero(self, started: object) -> None:
         with patch.object(quality_gate.time, "time", return_value=100.0):
@@ -4186,9 +4238,7 @@ class TestSeedTestmonFollow:
         assert "safe to close" in out
         assert out.isascii()
 
-    def test_stale_foreign_marker_then_own_claim_streams_progress(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_stale_foreign_marker_then_own_claim_streams_progress(self, capsys: pytest.CaptureFixture[str]) -> None:
         """review-fix #01 (finding #1) MUST-FIX: a stale foreign marker present at
         startup must NOT trigger a spurious exit 5 — once our own seed claims the
         marker within the grace window we stream our own progress to completion."""
@@ -4545,9 +4595,7 @@ class TestSeedFollowCli:
         ],
         ids=["seed+status", "seed+follow", "status+follow", "status+seed", "follow+seed", "follow+status"],
     )
-    def test_seed_modes_pairwise_mutex_exits_2(
-        self, pair: list[str], capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_seed_modes_pairwise_mutex_exits_2(self, pair: list[str], capsys: pytest.CaptureFixture[str]) -> None:
         """review-fix #02 (finding #2): the three seed subcommands are pairwise
         mutually exclusive via ONE centralized, order-independent check — neither
         the seed side nor the follow side silently wins."""
@@ -4624,9 +4672,7 @@ class TestImpactedCli:
         ],
         ids=["impacted", "cache", "no-cache", "full", "fix", "quick"],
     )
-    def test_seed_testmon_mutex_exits_2(
-        self, conflict: list[str], capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_seed_testmon_mutex_exits_2(self, conflict: list[str], capsys: pytest.CaptureFixture[str]) -> None:
         """review-fix M1: --seed-testmon combined with any execution mode is a usage error."""
         with (
             patch("sys.argv", ["quality_gate.py", "--seed-testmon", *conflict]),
@@ -4667,9 +4713,7 @@ class TestImpactedCli:
         ],
         ids=["impacted", "cache", "no-cache", "full", "fix", "quick"],
     )
-    def test_seed_testmon_status_mutex_exits_2(
-        self, conflict: list[str], capsys: pytest.CaptureFixture[str]
-    ) -> None:
+    def test_seed_testmon_status_mutex_exits_2(self, conflict: list[str], capsys: pytest.CaptureFixture[str]) -> None:
         """AC#5: --seed-testmon-status combined with an execution mode is a usage
         error (seed-mode pairs → test_seed_modes_pairwise_mutex_exits_2)."""
         with (
@@ -4734,9 +4778,7 @@ class TestProjectRulesDocGuards:
     """review-fix N2: content guard for the AC#12 doc edits (not just drift-checker)."""
 
     def _rules(self) -> str:
-        return (
-            Path(__file__).resolve().parent.parent / "docs" / "workflow" / "project-rules.md"
-        ).read_text()
+        return (Path(__file__).resolve().parent.parent / "docs" / "workflow" / "project-rules.md").read_text()
 
     def test_seed_testmon_carveout_heading_present(self) -> None:
         rules = self._rules()
@@ -4759,9 +4801,7 @@ class TestProjectRulesDocGuards:
         """review-fix #04 (AC#9): pin the phase-protocols.md step-5 completion
         -signal note, symmetric to the project-rules guard above so a drift /
         revert of the step-5 line is caught."""
-        proto = (
-            Path(__file__).resolve().parent.parent / "docs" / "workflow" / "phase-protocols.md"
-        ).read_text()
+        proto = (Path(__file__).resolve().parent.parent / "docs" / "workflow" / "phase-protocols.md").read_text()
         assert "quality_gate.py --seed-testmon-status" in proto
         assert ".testmondata.seed.log" in proto
 
@@ -4805,7 +4845,7 @@ class TestFinishTaskFollowerAgents:
     @pytest.mark.parametrize("rel", _AGENTS)
     def test_no_rm_f_marker(self, rel: str) -> None:
         """The new seed must READ the predecessor marker to preempt it — never rm."""
-        assert "rm -f \"$MAIN_DIR/.testmondata.seed-status\"" not in self._text(rel)
+        assert 'rm -f "$MAIN_DIR/.testmondata.seed-status"' not in self._text(rel)
 
     @pytest.mark.parametrize("rel", _AGENTS)
     def test_streams_follower_inline(self, rel: str) -> None:
@@ -4929,9 +4969,7 @@ class TestFinishTaskRefreshesBaseline:
         background+monitor prose is allowed to differ)."""
         blocks = []
         for harness in (".claude", ".cursor", ".opencode"):
-            body = (
-                Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md"
-            ).read_text()
+            body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
             # Anchor on the token generation and the exact detached-launch
             # redirect line — both code-adjacent, so per-harness follower prose
             # after the fence can't truncate the slice inconsistently.
@@ -5115,7 +5153,13 @@ class TestImpactedIntegrationRealTestmon:
 
         def _dc(*extra: str) -> subprocess.CompletedProcess[str]:
             return subprocess.run(
-                [quality_gate._venv_tool("diff-cover"), str(xml), f"--compare-branch={base}", *extra, "--fail-under=100"],
+                [
+                    quality_gate._venv_tool("diff-cover"),
+                    str(xml),
+                    f"--compare-branch={base}",
+                    *extra,
+                    "--fail-under=100",
+                ],
                 cwd=str(repo),
                 capture_output=True,
                 text=True,
