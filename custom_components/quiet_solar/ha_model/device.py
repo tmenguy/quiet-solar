@@ -699,9 +699,17 @@ class HADeviceMixin:
         return SENSOR_CONSTRAINT_SENSOR
 
     async def on_device_state_change(
-        self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
+        self,
+        time: datetime,
+        device_change_type: str,
+        title: str | None = None,
+        message: str | None = None,
+        *,
+        notification_tag: str | None = None,
     ):
-        await self.on_device_state_change_helper(time, device_change_type, title=title, message=message)
+        await self.on_device_state_change_helper(
+            time, device_change_type, title=title, message=message, notification_tag=notification_tag
+        )
 
     async def on_device_state_change_helper(self, time: datetime, device_change_type: str, **kwargs):
 
@@ -710,6 +718,8 @@ class HADeviceMixin:
         mobile_app_url = kwargs.get("mobile_app_url", self.mobile_app_url)
         title = kwargs.get("title", f"What will happen for {load_name}?")
         message = kwargs.get("message", None)
+        # QS-319: the mobile-app replace-key. Only the lost-control push sets it.
+        notification_tag = kwargs.get("notification_tag", None)
 
         if message is None:
             if device_change_type == DEVICE_STATUS_CHANGE_CONSTRAINT:
@@ -741,10 +751,20 @@ class HADeviceMixin:
                 "title": title,
                 "message": message,
             }
-            if mobile_app_url is not None:
+            # QS-319: the nested dict stays CONDITIONAL. Creating it unconditionally
+            # would ship `"data": {}` on every previously-bare notification — a shape
+            # change to a path shared by every QS notification, for the sake of one
+            # of them. A URL-less, tag-less notification stays byte-identical.
+            if mobile_app_url is not None or notification_tag is not None:
                 data["data"] = {}
+            if mobile_app_url is not None:
                 data["data"]["url"] = mobile_app_url
                 data["data"]["clickAction"] = mobile_app_url
+            if notification_tag is not None:
+                # Inside `data`, never at the top level: the tag is a mobile-app
+                # convention, and standard notify platforms ignore unknown `data`
+                # keys rather than rejecting the payload.
+                data["data"]["tag"] = notification_tag
 
             _LOGGER.info("Full Sending notification for load %s app: %s with: %s", load_name, mobile_app, data)
 

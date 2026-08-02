@@ -31,6 +31,7 @@ from ..const import (
     DEVICE_STATUS_CHANGE_CONSTRAINT_COMPLETED,
     DEVICE_STATUS_CHANGE_ERROR,
     LOAD_TYPE_DASHBOARD_DEFAULT_SECTION,
+    NOTIFICATION_TAG_LOST_CONTROL_PREFIX,
     OVERRIDE_STATE_ASKED_FOR_RESET,
     OVERRIDE_STATE_NO_OVERRIDE,
     OVERRIDE_STATE_PREFIX,
@@ -453,6 +454,11 @@ class AbstractDevice:
     async def user_clean_and_reset(self):
         _LOGGER.info("user_clean_and_reset device %s", self.name)
         self.clear_all_user_originated()
+        # QS-319: pressing reset is explicit remediation, so it ends any open
+        # lost-control episode. Cleared BEFORE `reset()` — ordering is not
+        # load-bearing today (the wipe releases with `UNKNOWN`, which never *sets*
+        # the latch) but a future widening of `UNKNOWN` must not silently break this.
+        self._acknowledge_lost_control("the user reset the device")
         self.reset()
 
     async def user_clean_constraints(self):
@@ -466,6 +472,12 @@ class AbstractDevice:
     @qs_enable_device.setter
     def qs_enable_device(self, enabled: bool):
         if enabled != self._enabled:
+            # QS-319: inside the guard on purpose. It covers BOTH edges (disable and
+            # re-enable), and an idempotent re-write cannot reach it — which matters
+            # because `switch.py::QSSwitchEntityWithRestore.async_added_to_hass`
+            # drives this setter via `async_turn_on/off(for_init=True)` on every HA
+            # startup, and a config-entry options re-apply does the same.
+            self._acknowledge_lost_control("the user changed the device's enabled state")
             self.reset()
             self._enabled = enabled
             if self.home is not None:
@@ -833,6 +845,45 @@ class AbstractDevice:
             _LOGGER.info("Lost-control clock released without contact for load %s: %s", self.name, reason)
         else:
             _LOGGER.info("Lost-control state cleared for load %s: %s", self.name, reason)
+
+    def _acknowledge_lost_control(self, reason: str) -> None:
+        """Treat explicit user remediation as acknowledging an open episode.
+
+        QS-319: with the announce-latch in place, every `UNKNOWN` release leaves the
+        latch set — including the paths the *user* drives. Without this, disabling a
+        broken load, re-enabling it and letting it break again produced no alert at
+        all until the next restart. A user who resets or re-enables a device has seen
+        the problem and acted, which is precisely what "acknowledged" means.
+
+        The early return is deliberate. Both call sites fire on every reset press and
+        every enable/disable transition, the overwhelming majority with no episode
+        open; logging unconditionally would claim an acknowledgement that never
+        happened.
+        """
+        if not self._unresponsive_needs_ack:
+            return
+
+        self._unresponsive_needs_ack = False
+        _LOGGER.info("Lost-control episode acknowledged for load %s: %s", self.name, reason)
+
+    @property
+    def has_unacknowledged_lost_control(self) -> bool:
+        """Whether an announced lost-control episode is still unacknowledged.
+
+        QS-319: the public, per-EPISODE read of `_unresponsive_needs_ack`, exposed to
+        Home Assistant as the `qs_load_lost_control` PROBLEM binary sensor.
+        Deliberately NOT `is_uncontrollable`, which is per-COMMAND and flickers False
+        every time the slot empties.
+
+        "Unacknowledged", not "unresolved": explicit user remediation acknowledges an
+        episode (see `_acknowledge_lost_control`) while the device may well still be
+        broken. The next ladder climb then re-announces and this returns True again.
+
+        Readable on every `AbstractDevice`, including ones that will never expose it
+        — a battery latches and logs but never pushes, and gets no entity. Do not add
+        the sensor to non-loads on the strength of this property alone.
+        """
+        return self._unresponsive_needs_ack
 
     def abandon_running_command(self, reason: str) -> None:
         """Drop the stale in-flight command without faking an ack.
@@ -1382,7 +1433,11 @@ class AbstractDevice:
             if self._unresponsive_needs_ack:
                 # QS-307: same episode, no contact since. The clock still has to be
                 # re-armed (it drives supersede-vs-stack) but there is nothing new to
-                # tell anyone. Logged so the ladder wall stays visible in user logs.
+                # tell anyone. Logged so the ladder wall stays visible in user logs —
+                # and QS-319 makes this the DOMINANT path for a device that stays
+                # reachable and simply never obeys, so it is also that device's
+                # per-climb diagnostic (a battery, which never pushes, keeps only
+                # this).
                 _LOGGER.info(
                     "Lost-control clock re-armed for load %s: command %s still unconfirmed after %s relaunches, "
                     "incident already announced, not re-notifying",
@@ -1401,6 +1456,15 @@ class AbstractDevice:
                     self.running_command,
                     self.running_command_num_relaunch,
                 )
+                # QS-319: announcing an episode latches it, so the ladder can climb
+                # again — as it does about every 18.5 min for a reachable device that
+                # never obeys — without shouting twice. Written BEFORE the await for
+                # the same reason `unresponsive_since` is: a notify service that
+                # raises must not resurrect the storm. The episode ends on exactly
+                # three things — a real ack, explicit user remediation
+                # (`_acknowledge_lost_control`), or a process restart / config-entry
+                # reload, where nothing restores the latch.
+                self._unresponsive_needs_ack = True
                 unresponsive_command = self.running_command
         else:
             unresponsive_command = None
@@ -1423,21 +1487,39 @@ class AbstractDevice:
             # legitimate supersede.
             self._last_supersede_time = None
 
-            # Gated because the release below is `CONFIRMED`, which clears the
-            # episode latch. Only the give-up sets that latch, and it nulls
-            # `current_command`, so reaching here means either nothing latched this
-            # cycle or something legitimately ended the episode afterwards — e.g. a
-            # promoted stacked command that acked (QS-307).
+            # QS-319: `UNKNOWN`, not `CONFIRMED`. Nobody answered here — *we* emptied
+            # the slot, and the previous `CONFIRMED` was a fake ack. It was harmless
+            # only while the give-up was the sole latch-setter (it nulls
+            # `current_command`, so it skipped the gate below). Now that announcing
+            # also latches, claiming contact here would clear the episode on every
+            # cycle that runs with an empty slot — which is the PRODUCTION ordering,
+            # since `check_loads_commands` runs before the solver's `launch_command`
+            # and a supersede-drop therefore leaves the slot empty across the cycle
+            # boundary. The latch would never survive, and the once-per-episode rule
+            # would do nothing in the field.
+            #
+            # The gate stays: with `UNKNOWN` it is arguably unnecessary, but removing
+            # it would release clocks that are not released today — a behavior change
+            # with no evidence behind it.
             if self.current_command is not None:
-                self._clear_unresponsive(
-                    "the command slot emptied with no successor", contact=ContactEvidence.CONFIRMED
-                )
+                self._clear_unresponsive("the command slot emptied with no successor", contact=ContactEvidence.UNKNOWN)
 
-        if unresponsive_command is not None:
+        if unresponsive_command is not None and self._unresponsive_needs_ack:
             # The push goes LAST: it is the only part that can realistically raise
             # (a subclass may dereference optional state), so nothing that matters is
             # sequenced behind it. `unresponsive_since` is already written, so the
             # once-only guard holds even if it fails.
+            #
+            # QS-319 review fix #01/6: the latch is re-checked at send time. This
+            # does NOT invert the "latch before the await" reasoning — the write in
+            # the announce branch stays where it is, so a raising notify service
+            # still cannot resurrect the storm; only DELIVERY is gated here. What it
+            # closes: user remediation (`user_clean_and_reset`, the enable setter —
+            # both reachable unlocked from `button.py`) acknowledging the episode
+            # between the latch write and this send, which would otherwise push for
+            # an episode the sensor already reports as over. No await separates the
+            # two on today's tree, so the event loop cannot open that window yet;
+            # the guard is what keeps a future await inserted above from shipping it.
             await self._notify_unresponsive(time, unresponsive_command)
 
     async def force_relaunch_command(self, time: datetime):
@@ -1894,25 +1976,40 @@ class AbstractLoad(AbstractDevice):
             self._last_hash_state = new_hash
 
     async def on_device_state_change(
-        self, time: datetime, device_change_type: str, title: str | None = None, message: str | None = None
+        self,
+        time: datetime,
+        device_change_type: str,
+        title: str | None = None,
+        message: str | None = None,
+        *,
+        notification_tag: str | None = None,
     ):
-        pass
+        """Announce a device state change — a no-op at the domain layer.
+
+        QS-319: `notification_tag` is keyword-only so no positional caller can
+        misbind it onto `title` or `message`. It is a mobile-app payload key,
+        meaningful only to `ha_model`, which overrides this.
+        """
 
     async def _notify_unresponsive(self, time: datetime, command: LoadCommand) -> None:
         """Push one notification when QS loses control of this load.
 
-        QS-304: entry only. There is no recovery push — the channel is a
-        fire-and-forget mobile push with no notification id, so nothing could
-        be dismissed. That is exactly why the guard has to be tight: pushes
-        accumulate on the phone and cannot be collapsed afterwards.
+        QS-304: entry only. There is no recovery push — sending an ERROR-status push
+        to say things are fine would be wrong, and recovery is exposed as state
+        instead (see `has_unacknowledged_lost_control`).
 
-        QS-307 (from #308): the clock is released on every slot-emptying path
-        now, and `_unresponsive_needs_ack` stops that release re-announcing an
-        incident already announced — a device flapping in and out of reach
-        pushes once, not once per ~18 min. It does NOT deduplicate alerts for a
-        device that stays reachable and simply never obeys; that re-crosses the
-        threshold about every 18.5 min and pushes each time, here and on `main`
-        alike. Pre-existing, tracked in #319.
+        QS-319 (delivery): the push carries a stable per-load
+        `data.tag`, which the mobile-app notify platform treats as a replace-key on
+        Android and iOS. The series therefore collapses into ONE notification on the
+        phone instead of accumulating. The tag keys on `device_id`, which is
+        config-derived and so survives a restart.
+
+        QS-319 (frequency): `_unresponsive_needs_ack` is now set by the announce
+        branch itself, so an announced episode is alerted exactly once — including
+        for a device that stays *reachable* and simply never obeys, which used to
+        re-cross the ladder wall and push about every 18.5 minutes forever. The
+        episode ends on a real ack, on explicit user remediation, or on a process
+        restart / config-entry reload (where nothing restores the latch).
         """
         await self.on_device_state_change(
             time,
@@ -1921,6 +2018,7 @@ class AbstractLoad(AbstractDevice):
                 f"Quiet Solar lost control of `{self.name}`: the command "
                 f"`{command.command}` was sent repeatedly but the device never confirmed it"
             ),
+            notification_tag=f"{NOTIFICATION_TAG_LOST_CONTROL_PREFIX}{self.device_id}",
         )
 
     def get_update_value_callback_for_constraint_class(
