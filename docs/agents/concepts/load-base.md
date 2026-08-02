@@ -117,9 +117,13 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   the episode while the device may well still be broken; the next ladder climb
   then opens a new one and the sensor comes back on.
 
-  An episode ends on exactly three things, and every statement of the rule —
+  An episode ends on exactly four things, and every statement of the rule —
   here, in the code comments, and in `notification-routing.md` — must list all
-  three: a **real ack**, **explicit user remediation**
+  four: a **real ack**, **proven contact on a slot that changed hands**
+  (`_confirmed_contact_on_disowned_slot`, QS-320 — the disowned-slot bail-outs
+  in `launch_command`/`check_commands` when the result was `True`; it also
+  resets the successor's inherited rung so the ladder cannot instantly
+  re-announce), **explicit user remediation**
   (`_acknowledge_lost_control`), or a **process restart / config-entry reload**,
   where nothing restores the latch. The latch is now set by the *announce*
   branch of `_escalate_or_recover` too, before the await, so a notify service
@@ -130,9 +134,12 @@ Relaunch, escalation and supersession (`AbstractDevice`, QS-304):
   forgotten kwarg is a `TypeError` and a typo an `AttributeError` — defaulting
   to the episode-ending value would let a future caller end an incident by
   omission.
-  - `CONFIRMED` (the real ack in `_ack_command` — since QS-319 the **only**
-    caller) **clears** the latch, *unconditionally* — an ack is contact whether
-    or not there was a clock left to release.
+  - `CONFIRMED` (three callers on the merged tree: the real ack in
+    `_ack_command`, and — via `_confirmed_contact_on_disowned_slot`, QS-320 —
+    the disowned-slot bail-outs in `launch_command` and `check_commands`)
+    **clears** the latch, *unconditionally* — an ack is contact whether
+    or not there was a clock left to release, and so is a `True` result about
+    a slot that changed hands.
   - `UNREACHABLE` (the invalid-probe give-up, the only such caller)
     **latches** it — but only when it actually released a live clock. Latching
     a release that released nothing swallowed the load's first genuine push
@@ -417,8 +424,11 @@ Switching-cost protection (`AbstractDevice`):
   dispatch must stay generation-neutral). The generation is **never
   reset** — not by `reset()`, not by `abandon_running_command` — because
   a rewind would let a tag captured before the reset compare equal to
-  one issued after it. It is a convention with an obvious front door,
-  not enforcement: there is no lint.
+  one issued after it. The write-site half of the convention IS now
+  test-enforced: `test_every_running_command_write_site_is_sanctioned`
+  fails on any `self.running_command` write outside the five sanctioned
+  class-qualified sites. Only the never-reset-the-generation half
+  remains convention, protected by docstring and AC13 alone.
 - `last_command_execution_time` — in-memory causality anchor, set
   only on real `execute_command` successes (via the shared
   `_anchor_causality_guard_if_executed` helper called from

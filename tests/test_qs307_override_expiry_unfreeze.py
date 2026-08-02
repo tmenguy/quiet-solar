@@ -70,7 +70,7 @@ from custom_components.quiet_solar.ha_model.bistate_duration import (
 from custom_components.quiet_solar.home_model.commands import CMD_IDLE, CMD_OFF, CMD_ON, LoadCommand, copy_command
 from custom_components.quiet_solar.home_model.constraints import TimeBasedSimplePowerLoadConstraint
 from custom_components.quiet_solar.home_model import load as load_module
-from custom_components.quiet_solar.home_model.load import NUM_MAX_INVALID_PROBES_COMMANDS
+from custom_components.quiet_solar.home_model.load import NUM_MAX_COMMAND_RELAUNCH, NUM_MAX_INVALID_PROBES_COMMANDS
 from tests.conftest import FakeHass
 from tests.factories import create_minimal_home_model
 from tests.qs304_helpers import CYCLE_S, LADDER_WALL_S, drive
@@ -994,40 +994,81 @@ def test_every_running_command_write_site_is_sanctioned():
       dispatch, deliberately generation-neutral
     """
     package = Path(load_module.__file__).resolve().parents[1]
+    # Review fix #02/2: keys are CLASS-QUALIFIED. `(basename, bare-function)` was
+    # ambiguous — `constraint_reset_and_reset_commands_if_needed` exists on both
+    # `AbstractDevice` and `AbstractLoad`, so a write added to an override of any
+    # sanctioned name would have been silently sanctioned by name-match.
     sanctioned = {
-        ("load.py", "constraint_reset_and_reset_commands_if_needed"),
-        ("load.py", "_ack_command"),
-        ("load.py", "abandon_running_command"),
-        ("load.py", "_install_running_command"),
-        ("load.py", "launch_command"),
+        ("load.py", "AbstractDevice.constraint_reset_and_reset_commands_if_needed"),
+        ("load.py", "AbstractDevice._ack_command"),
+        ("load.py", "AbstractDevice.abandon_running_command"),
+        ("load.py", "AbstractDevice._install_running_command"),
+        ("load.py", "AbstractDevice.launch_command"),
     }
+
+    def flattened(target: ast.expr):
+        """Yield leaf targets through tuple/list/starred unpacking (#02/6)."""
+        if isinstance(target, ast.Tuple | ast.List):
+            for element in target.elts:
+                yield from flattened(element)
+        elif isinstance(target, ast.Starred):
+            yield from flattened(target.value)
+        else:
+            yield target
+
+    def binding_targets(node: ast.AST) -> list[ast.expr]:
+        """Every syntactic form that can bind `self.running_command` (#02/6)."""
+        if isinstance(node, ast.Assign):
+            return node.targets
+        if isinstance(node, ast.AnnAssign | ast.AugAssign):
+            return [node.target]
+        if isinstance(node, ast.For | ast.AsyncFor):
+            return [node.target]
+        if isinstance(node, ast.withitem) and node.optional_vars is not None:
+            return [node.optional_vars]
+        return []
+
+    def is_setattr_of_running_command(node: ast.AST) -> bool:
+        """`setattr(obj, "running_command", ...)` evades target-based scanning (#02/6)."""
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "running_command"
+        )
 
     found: set[tuple[str, str]] = set()
     for py_file in sorted(package.rglob("*.py")):
-        tree = ast.parse(py_file.read_text(encoding="utf-8"))
-        # (node, enclosing function name) worklist, so each write is keyed by its def
-        stack: list[tuple[ast.AST, str]] = [(tree, "<module>")]
+        # `filename=` so a syntax error names the file, not `<unknown>` (#02/5)
+        tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        # (node, dotted qualifier) worklist: ClassDef and function defs both extend
+        # the qualifier, so each write is keyed by its class-qualified location
+        stack: list[tuple[ast.AST, str]] = [(tree, "")]
         while stack:
-            node, func = stack.pop()
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-                func = node.name
-            targets: list[ast.expr] = []
-            if isinstance(node, ast.Assign):
-                targets = node.targets
-            elif isinstance(node, ast.AnnAssign | ast.AugAssign):
-                targets = [node.target]
-            for target in targets:
-                if (
-                    isinstance(target, ast.Attribute)
-                    and target.attr == "running_command"
-                    and isinstance(target.value, ast.Name)
-                    and target.value.id == "self"
-                ):
-                    found.add((py_file.name, func))
-            stack.extend((child, func) for child in ast.iter_child_nodes(node))
+            node, qual = stack.pop()
+            if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                qual = f"{qual}.{node.name}" if qual else node.name
+            if is_setattr_of_running_command(node):
+                found.add((py_file.name, qual or "<module>"))
+            for target in binding_targets(node):
+                for leaf in flattened(target):
+                    if (
+                        isinstance(leaf, ast.Attribute)
+                        and leaf.attr == "running_command"
+                        and isinstance(leaf.value, ast.Name)
+                        and leaf.value.id == "self"
+                    ):
+                        found.add((py_file.name, qual or "<module>"))
+            stack.extend((child, qual) for child in ast.iter_child_nodes(node))
 
+    # Both directions reported (#02/7): an extra site is a QS-320 reopening; a
+    # missing one means a sanctioned function was renamed/moved and the sanction
+    # list must follow it.
     assert found == sanctioned, (
-        f"unsanctioned `self.running_command =` write site(s): {sorted(found - sanctioned)} — "
+        f"unsanctioned `self.running_command` write site(s): {sorted(found - sanctioned)}; "
+        f"sanctioned site(s) no longer found (renamed/moved?): {sorted(sanctioned - found)} — "
         "a new dispatch install MUST go through `_install_running_command` so the "
         "generation tag is bumped, or QS-320 silently reopens"
     )
@@ -1292,6 +1333,120 @@ async def test_a_confirming_probe_ends_the_lost_control_episode_even_when_the_sl
     assert acked == []
     assert pump.current_command == CMD_ON
     assert command_acked_or_good is False
+
+
+# The instant of the "following cycle" in the two re-announce tests below: past
+# `T_PRESS` so the successor's launch stamp is in the past, and well inside even
+# the rung-0 backoff (50 s) so the cycle relaunches nothing.
+T_NEXT = T_PRESS + timedelta(seconds=5)
+
+
+def _arm_announced_episode(pump: _StuckPump) -> None:
+    """Saturate the ladder and mark the episode as already announced (QS-319).
+
+    `unresponsive_since` is only ever set once the rung reaches
+    `NUM_MAX_COMMAND_RELAUNCH`, and announcing sets the latch — so this is the
+    ONLY state in which the disowned-slot CONFIRMED clear can fire on a replaced
+    slot in production (a press can only supersede while `is_uncontrollable`).
+    """
+    pump.running_command_num_relaunch = NUM_MAX_COMMAND_RELAUNCH
+    pump._unresponsive_needs_ack = True
+
+
+async def test_proven_contact_on_a_replaced_slot_does_not_reannounce_the_episode(caplog, monkeypatch):
+    """Review fix #02/1, `check_commands` site: contact must END the episode, not restart it.
+
+    The #01/2 CONFIRMED clear drops both the clock and the QS-319 announce latch
+    — but the successor installed by the racing press inherits a saturated rung
+    it never earned. Unfixed, the very next `_escalate_or_recover` pass re-marks
+    the clock and, with the latch down, takes the ANNOUNCE branch: a fresh
+    "Lost control of load" ERROR with an inherited relaunch count, a second push,
+    and an on→off→on flap of the `qs_load_lost_control` PROBLEM sensor —
+    milliseconds after the device demonstrably answered. The ladder's premise is
+    "device not answering"; a confirming probe disproves it, so the successor
+    starts at rung 0. The clear also wiped `_last_supersede_time` — here the
+    stamp the successor's OWN supersede wrote a second earlier, so the
+    one-per-window throttle invariant lost its anchor; it is preserved.
+    """
+    pump = _make_pump(pump_class=_ProbeRacingPump)
+    _arm_for_supersede(pump)
+    _arm_announced_episode(pump)
+    pushes: list[LoadCommand] = []
+
+    async def _spy_push(time, command):
+        pushes.append(command)
+
+    monkeypatch.setattr(pump, "_notify_unresponsive", _spy_push)
+
+    pump.probe_race_at = T_PRESS
+    pump.probe_race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+    pump.probe_race_result = True
+
+    with caplog.at_level(logging.INFO, logger=_LOAD_LOGGER):
+        await pump.check_commands(T_RELAUNCH)
+
+        # the successor performed zero relaunches of its own: rung reset, episode
+        # over, and its own supersede stamp survives the clear
+        assert pump.running_command_num_relaunch == 0
+        assert pump._last_supersede_time == T_PRESS
+        assert pump.unresponsive_since is None
+        assert pump.has_unacknowledged_lost_control is False
+
+        # the following driver cycle must not re-mark, re-announce or re-push
+        await pump.check_and_relaunch_command(T_NEXT)
+
+    assert not any("Lost control of load" in message for message in caplog.messages)
+    assert pushes == []
+    # the QS-319 pin: no PROBLEM-sensor re-flap — False, and it STAYS False
+    assert pump.has_unacknowledged_lost_control is False
+    assert pump.unresponsive_since is None
+    assert pump.running_command == CMD_IDLE  # the successor is intact and in flight
+
+
+async def test_proven_contact_on_a_replaced_first_dispatch_does_not_reannounce_the_episode(caplog, monkeypatch):
+    """Review fix #02/1, `launch_command` site: same scenario, one cycle later.
+
+    Identical mechanics, but the disowned-slot clear fires in `launch_command`,
+    so the spurious re-announce would land on the NEXT `check_and_relaunch_command`
+    cycle — with the PROBLEM sensor reading "resolved" across a full cycle
+    boundary in between, a real off→on edge for any automation on it.
+    """
+    pump = _make_pump(pump_class=_RacingPump)
+    pump.external_user_initiated_state = None
+    pump._ack_command(T_RELAUNCH, copy_command(CMD_ON))  # confirmed of record, slot -> None
+    pump.unresponsive_since = T_RELAUNCH
+    _arm_announced_episode(pump)
+    pump._last_supersede_time = None
+    pump.obeys = False
+    pump.hass.states.set(PUMP_ENTITY, "on", last_changed=T_RELAUNCH)
+    pushes: list[LoadCommand] = []
+
+    async def _spy_push(time, command):
+        pushes.append(command)
+
+    monkeypatch.setattr(pump, "_notify_unresponsive", _spy_push)
+
+    pump.race_at = T_PRESS
+    pump.race_action = lambda t: pump.launch_command(t, CMD_IDLE, ctxt="button: mark constraint done")
+
+    with caplog.at_level(logging.INFO, logger=_LOAD_LOGGER):
+        # `CMD_OFF`: differs from the confirmed `CMD_ON` (no early return) and from
+        # the press's `CMD_IDLE` (no absorb), and the entity reads `on` so the probe
+        # returns False and the dispatch reaches the execute where the race lands
+        await pump.launch_command(T_RELAUNCH, CMD_OFF, ctxt="solver dispatch")
+
+        assert pump.running_command_num_relaunch == 0
+        assert pump._last_supersede_time == T_PRESS
+        assert pump.unresponsive_since is None
+        assert pump.has_unacknowledged_lost_control is False
+
+        await pump.check_and_relaunch_command(T_NEXT)
+
+    assert not any("Lost control of load" in message for message in caplog.messages)
+    assert pushes == []
+    assert pump.has_unacknowledged_lost_control is False
+    assert pump.unresponsive_since is None
+    assert pump.running_command == CMD_IDLE
 
 
 async def test_check_commands_hands_no_invalid_probe_strike_to_the_successor():

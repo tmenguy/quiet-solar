@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/device.py
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-01
+last_verified: 2026-08-02
 ---
 
 # Notification routing
@@ -75,15 +75,21 @@ alarm at 3am is supposed to wake you).
   **One alert per announced episode** (QS-319). `_unresponsive_needs_ack` is
   set by the announce branch of `_escalate_or_recover` itself, *before* the
   await, so a notify service that raises cannot resurrect the storm. An
-  episode ends on exactly three things, and every statement of the rule must
-  list all three:
+  episode ends on exactly four things, and every statement of the rule must
+  list all four:
 
   1. a **real ack** (`_ack_command` → `_clear_unresponsive(...,
      CONFIRMED)`) — the device answered;
-  2. **explicit user remediation** — `_acknowledge_lost_control`, called from
+  2. **proven contact on a slot that changed hands** (QS-320,
+     `_confirmed_contact_on_disowned_slot`) — a `True` result reaching the
+     disowned-slot bail-out in `launch_command` or `check_commands`: the
+     device answered about a dispatch that was superseded mid-await, so the
+     ack is withheld but the episode still ends, and the successor's
+     inherited rung resets so the ladder cannot instantly re-announce;
+  3. **explicit user remediation** — `_acknowledge_lost_control`, called from
      `user_clean_and_reset` (the reset button) and from the
      `qs_enable_device` setter's `enabled != self._enabled` guard;
-  3. a **process restart or config-entry reload**, where nothing restores the
+  4. a **process restart or config-entry reload**, where nothing restores the
      latch (see below).
 
   This covers both shapes. A device dropping off the network intermittently

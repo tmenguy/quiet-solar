@@ -719,6 +719,13 @@ class AbstractDevice:
         state change QS itself caused as an external user override. `None` means
         "no anchor" and accepts any value; the restore-time write and the
         `user_clean_and_reset` clear stay plain assignments on purpose.
+
+        Known limitation (review fix #02/8, documented on purpose, no code): after
+        a backwards wall-clock step (NTP correction), subsequent real executions
+        carry older timestamps and are refused, pinning the anchor "in the
+        future" — genuine user flips are then suppressed as QS-caused until wall
+        time catches up. Environmental and rare; the monotonic property is worth
+        more than this corner, so do NOT add clock-step detection here.
         """
         if is_command_set is True:
             prev = self.last_command_execution_time
@@ -845,6 +852,35 @@ class AbstractDevice:
             _LOGGER.info("Lost-control clock released without contact for load %s: %s", self.name, reason)
         else:
             _LOGGER.info("Lost-control state cleared for load %s: %s", self.name, reason)
+
+    def _confirmed_contact_on_disowned_slot(self, reason: str) -> None:
+        """End the lost-control episode on proven contact when the slot changed hands.
+
+        QS-320 review fix #02/1: the CONFIRMED clear alone backfired under QS-319.
+        Whenever it fires on a REPLACED slot the successor holds a rung inherited
+        from the superseded command (`abandon_running_command` preserves it), and
+        that rung is saturated by construction — a press can only supersede while
+        `is_uncontrollable`. Clearing clock + latch while leaving the rung at max
+        let the very next `_escalate_or_recover` pass re-mark the clock and take
+        the ANNOUNCE branch: a fresh "Lost control" ERROR with an inherited count,
+        a second push and an on→off→on flap of the PROBLEM sensor — milliseconds
+        after the device demonstrably answered.
+
+        So, on top of the clear:
+
+        - the successor's rung resets to 0 — the ladder's premise is "device not
+          answering" and the contact just disproved it; the successor has made
+          zero relaunches of its own (precedent: the empty-slot housekeeping arm
+          resets the rung too). AC9's inheritance pin is untouched — that covers
+          the supersede/relaunch hand-off, a different event;
+        - the successor's OWN supersede-throttle stamp survives the clear's
+          unconditional null: it was written by the racing press seconds ago and
+          keeps the one-service-call-per-window invariant honest.
+        """
+        self.running_command_num_relaunch = 0
+        successor_supersede_time = self._last_supersede_time
+        self._clear_unresponsive(reason, contact=ContactEvidence.CONFIRMED)
+        self._last_supersede_time = successor_supersede_time
 
     def _acknowledge_lost_control(self, reason: str) -> None:
         """Treat explicit user remediation as acknowledging an open episode.
@@ -1047,6 +1083,12 @@ class AbstractDevice:
         Takes the command NAME (a plain `str`), not the `LoadCommand`: the value is
         only ever logged, and a `str` removes any dereference-safety question from
         the failure path (review fix #01/10).
+
+        The "dropped"/"replaced" log label is BEST-EFFORT (review fix #02/4): it
+        reflects the slot state at resume time, not the full intervening history.
+        A slot that was replaced, whose replacement then emptied before this
+        resumer ran, logs as "dropped". The guard's verdict is unaffected — only
+        the label's forensic value is.
         """
         if self.running_command is not None and self._running_command_generation == launched_generation:
             return True
@@ -1187,10 +1229,8 @@ class AbstractDevice:
                 # Contact is dispatch-independent (see `ContactEvidence.CONFIRMED`), so
                 # the episode ends even though the ack is withheld — on `main` the
                 # phantom ack cleared it as a side effect; the signal now stands alone.
-                self._clear_unresponsive(
-                    "the device answered while the command slot changed hands",
-                    contact=ContactEvidence.CONFIRMED,
-                )
+                # #02/1: via the helper, so the successor's inherited rung goes too.
+                self._confirmed_contact_on_disowned_slot("the device answered while the command slot changed hands")
             return
 
         if is_command_set is None:
@@ -1257,9 +1297,9 @@ class AbstractDevice:
                     # stay withheld. Gated on `is True`: a `None`/`False` probe is
                     # not contact. NOT mirrored in `force_relaunch_command` — the
                     # probe/execute asymmetry is deliberate, see its guard.
-                    self._clear_unresponsive(
-                        "the probe confirmed contact while the command slot changed hands",
-                        contact=ContactEvidence.CONFIRMED,
+                    # #02/1: via the helper, so the successor's inherited rung goes too.
+                    self._confirmed_contact_on_disowned_slot(
+                        "the probe confirmed contact while the command slot changed hands"
                     )
             # A flag rather than an `else:` wrapper or an early `return`: the wrapper
             # would re-indent the whole body for no behaviour, and the early return
@@ -1461,9 +1501,10 @@ class AbstractDevice:
                 # never obeys — without shouting twice. Written BEFORE the await for
                 # the same reason `unresponsive_since` is: a notify service that
                 # raises must not resurrect the storm. The episode ends on exactly
-                # three things — a real ack, explicit user remediation
-                # (`_acknowledge_lost_control`), or a process restart / config-entry
-                # reload, where nothing restores the latch.
+                # four things — a real ack, proven contact on a slot that changed
+                # hands (`_confirmed_contact_on_disowned_slot`, QS-320), explicit
+                # user remediation (`_acknowledge_lost_control`), or a process
+                # restart / config-entry reload, where nothing restores the latch.
                 self._unresponsive_needs_ack = True
                 unresponsive_command = self.running_command
         else:
@@ -2008,8 +2049,10 @@ class AbstractLoad(AbstractDevice):
         branch itself, so an announced episode is alerted exactly once — including
         for a device that stays *reachable* and simply never obeys, which used to
         re-cross the ladder wall and push about every 18.5 minutes forever. The
-        episode ends on a real ack, on explicit user remediation, or on a process
-        restart / config-entry reload (where nothing restores the latch).
+        episode ends on a real ack, on proven contact on a slot that changed hands
+        (`_confirmed_contact_on_disowned_slot`, QS-320), on explicit user
+        remediation, or on a process restart / config-entry reload (where nothing
+        restores the latch).
         """
         await self.on_device_state_change(
             time,
