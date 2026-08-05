@@ -1,6 +1,6 @@
-name: Bug Report
-description: Report a bug or unexpected behavior
-labels: ["bug"]
+name: Bug (product)
+description: Report a bug or unexpected behavior in the Quiet Solar integration
+labels: ["bug", "kind:bug", "target:product", "scale:task"]
 body:
   - type: textarea
     id: description
@@ -28,10 +28,15 @@ body:
     validations:
       required: true
 
-
   - type: textarea
     id: logs
     attributes:
       label: Relevant Log Output
       description: Paste any relevant log output (debug level preferred)
       render: text
+
+  - type: input
+    id: parent_epic
+    attributes:
+      label: Parent epic
+      description: issue number of the epic this belongs to, e.g. 321 — leave empty if none

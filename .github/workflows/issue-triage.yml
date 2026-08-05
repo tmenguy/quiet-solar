@@ -13,26 +13,34 @@ jobs:
       - name: Label by keywords
         uses: actions/github-script@v7
         with:
+          # QS-332 (#293): word-boundary regexes instead of naive
+          # substring matching — 'ev' no longer fires on "dev",
+          # 'ui' no longer fires on "quiet", and bare 'config'/'setup'
+          # (which matched every factory issue) are narrowed to
+          # config-flow/config-entry phrases. New: area:dev-pipeline
+          # for harness/pipeline keywords.
           script: |
             const title = context.payload.issue.title.toLowerCase();
             const body = (context.payload.issue.body || '').toLowerCase();
             const text = title + ' ' + body;
             const labels = [];
 
-            if (text.includes('solver') || text.includes('constraint'))
+            if (/\bsolver\b/.test(text) || /\bconstraints?\b/.test(text))
               labels.push('area:solver');
-            if (text.includes('charger') || text.includes('ocpp') || text.includes('wallbox'))
+            if (/\bchargers?\b/.test(text) || /\bocpp\b/.test(text) || /\bwallbox\b/.test(text))
               labels.push('area:charger');
-            if (text.includes('car') || text.includes('vehicle') || text.includes('ev'))
+            if (/\bcars?\b/.test(text) || /\bvehicles?\b/.test(text) || /\bev\b/.test(text))
               labels.push('area:car');
-            if (text.includes('battery') || text.includes('storage'))
+            if (/\bbatter(y|ies)\b/.test(text) || /\bstorage\b/.test(text))
               labels.push('area:battery');
-            if (text.includes('person') || text.includes('presence'))
+            if (/\bpersons?\b/.test(text) || /\bpresence\b/.test(text))
               labels.push('area:person');
-            if (text.includes('dashboard') || text.includes('ui'))
+            if (/\bdashboards?\b/.test(text) || /\bui\b/.test(text))
               labels.push('area:ui');
-            if (text.includes('config') || text.includes('setup'))
+            if (/\bconfig[ _-]?flow\b/.test(text) || /\bconfig entr(y|ies)\b/.test(text))
               labels.push('area:config');
+            if (/\b(harness|pipeline|agents?|workflow|worktree|quality gate|lanes?|launcher|testmon)\b/.test(text))
+              labels.push('area:dev-pipeline');
 
             if (labels.length > 0) {
               await github.rest.issues.addLabels({

@@ -15,6 +15,8 @@
       "Bash(python **/scripts/qs/create_issue.py:*)",
       "Bash(python scripts/qs/context.py:*)",
       "Bash(python **/scripts/qs/context.py:*)",
+      "Bash(python scripts/qs/targets.py:*)",
+      "Bash(python **/scripts/qs/targets.py:*)",
       "Bash(python scripts/qs/next_step.py:*)",
       "Bash(python **/scripts/qs/next_step.py:*)",
       "Bash(python scripts/qs/cleanup_worktree.py:*)",

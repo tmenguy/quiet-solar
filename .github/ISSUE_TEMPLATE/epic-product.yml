@@ -1,0 +1,23 @@
+name: Epic (product)
+description: A large product initiative decomposed into child tasks (no branch/worktree of its own)
+labels: ["scale:epic", "target:product"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What does the product gain when this epic is done?
+    validations:
+      required: true
+
+  - type: textarea
+    id: decomposition
+    attributes:
+      label: Decomposition sketch
+      description: Rough list of the child tasks you foresee (each becomes its own issue)
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or references

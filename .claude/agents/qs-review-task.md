@@ -29,6 +29,15 @@ Capture `issue`, `title`, `branch`, `story_file`, `pr_number`,
 review (run `/implement-task` or `/implement-setup-task` first,
 whichever the story scope requires).
 
+**Lane (QS-332).** Also capture `lane` from the context JSON, then read
+`docs/workflow/lanes/<lane>.md` — that file is this task's phase
+protocol. If `lane` is empty (a pre-existing worktree / legacy
+in-flight task — every new task is labelled at birth), fall back to
+[docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
+and surface the backfill guidance: the issue still needs its axis
+labels (`gh issue edit <N> --add-label ...`). This phase is read-only
+with respect to the gate, so it may proceed on the fallback.
+
 ## Phase protocol
 
 ### 1. Fetch the PR diff

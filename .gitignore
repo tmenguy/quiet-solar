@@ -204,3 +204,4 @@ custom_components/volkswagencarnet
 # a SIGKILL or OOM kill can leave behind, and any `.json.bak` an older
 # revision of the writer may have left in an existing worktree.
 .claude/settings.local.json*
+.lane_check_cache

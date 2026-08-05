@@ -1,0 +1,23 @@
+name: Epic (factory / dev pipeline)
+description: A large dev-pipeline initiative decomposed into child tasks (no branch/worktree of its own)
+labels: ["scale:epic", "target:factory", "area:dev-pipeline"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What does the development pipeline gain when this epic is done?
+    validations:
+      required: true
+
+  - type: textarea
+    id: decomposition
+    attributes:
+      label: Decomposition sketch
+      description: Rough list of the child tasks you foresee (each becomes its own issue)
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context or references

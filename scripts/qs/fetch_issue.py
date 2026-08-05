@@ -4,7 +4,11 @@
 Usage:
     python scripts/qs/fetch_issue.py --issue 42
 
-Output: JSON with issue number, title, body, labels, and derived type.
+Output: JSON with issue number, title, body, labels, the parsed lane
+axes (``kind``/``target``/``scale``/``lane``), ``parent_epic`` and
+``declaration_complete`` (QS-332). The axis parsing and the
+declaration truth table live in :mod:`targets` — one table, three
+consumers.
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+
+import targets
 
 from utils import output_json, run_gh
 
@@ -36,22 +42,22 @@ def main() -> None:
         sys.exit(1)
 
     label_names = [lb["name"] for lb in data.get("labels", [])]
-
-    # Derive story type from labels: bug > enhancement/feature > default (feature)
-    if "bug" in label_names:
-        story_type = "bug"
-    elif any(lb in label_names for lb in ("enhancement", "feature")):
-        story_type = "feature"
-    else:
-        story_type = "feature"
+    body = data.get("body", "")
+    axes = targets.parse_axes(label_names)
+    declaration_ok, _missing, _message = targets.validate_declaration(label_names)
 
     output_json({
         "issue_number": data["number"],
         "title": data.get("title", ""),
-        "body": data.get("body", ""),
+        "body": body,
         "labels": label_names,
         "state": data.get("state", ""),
-        "story_type": story_type,
+        "kind": axes["kind"],
+        "target": axes["target"],
+        "scale": axes["scale"],
+        "lane": axes["lane"],
+        "parent_epic": targets.parse_parent_epic(body),
+        "declaration_complete": declaration_ok,
         "branch": f"QS_{data['number']}",
     })
 

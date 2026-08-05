@@ -1,0 +1,29 @@
+name: Feature (factory / dev pipeline)
+description: Suggest an enhancement to the development pipeline, agents, scripts, or quality gate
+labels: ["enhancement", "kind:feature", "target:factory", "scale:task", "area:dev-pipeline"]
+body:
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use Case
+      description: Describe the problem or need this enhancement addresses
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How do you envision this working?
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context or references
+
+  - type: input
+    id: parent_epic
+    attributes:
+      label: Parent epic
+      description: issue number of the epic this belongs to, e.g. 321 — leave empty if none

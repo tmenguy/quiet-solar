@@ -82,6 +82,17 @@ python scripts/qs/context.py
 Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
 `latest_review_fix`.
 
+
+**Lane (QS-332).** Also capture `lane` from the context JSON, then read
+`docs/workflow/lanes/<lane>.md` — that file is this task's phase
+protocol. If `lane` is empty (a pre-existing worktree / legacy
+in-flight task — every new task is labelled at birth), fall back to
+[docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
+and surface the backfill guidance: the issue still needs its axis
+labels (`gh issue edit <N> --add-label ...`). In this implement
+phase the labels must be resolved **before the first commit** — the
+first `--impacted` run fails otherwise (the gate is the backstop, not
+a parallel path).
 Read [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 if you haven't this session.
 
@@ -180,6 +191,13 @@ python scripts/qs/quality_gate.py        # full gate, on EXPLICIT request only
 ```
 
 Pass on a green gate; fix on red.
+
+**Lane-declaration FAIL (QS-332 ask-and-backfill).** If the gate fails
+with `lane check FAILED` (the task's issue has a missing/incomplete
+lane declaration), ask the user which lane the task belongs to, run the
+exact `gh issue edit <N> --add-label ...` command the gate printed,
+then re-run the gate. Do this before the first commit — the gate fails
+until the declaration exists.
 
 **Changes to `tests/qs`-pinned non-Python files.** For change sets
 touching any `tests/qs`-pinned non-Python file (agent files, commands,

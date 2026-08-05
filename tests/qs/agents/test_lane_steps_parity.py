@@ -1,0 +1,126 @@
+"""QS-332: pin the three lane step kinds across the three harnesses.
+
+Canonical list (review I-2/R2-08 — kept consistent with story task 11
+and AC-5):
+
+(a) the **declaration step** — including the amended speed-rule wording —
+    in ``qs-setup-task`` ×3;
+(b) the **lane-read step** in the 4 orchestrators
+    (qs-create-plan, qs-implement-task, qs-implement-setup-task,
+    qs-review-task) ×3;
+(c) the **ask-and-backfill-on-declaration-FAIL step** in the implement
+    variants ×2 ×3.
+
+There is deliberately NO Lane-note relay step — surfacing the crossing
+in the PR body is machine-owned by ``create_pr.py`` (review N-4), pinned
+in ``tests/qs/test_create_pr.py``. ``qs-finish-task`` is deliberately
+excluded from (b): it has no lane-sensitive behaviour while lanes are
+identical (story D2, review SG2-03).
+
+Pattern follows ``test_doc_maintenance_parity.py``.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+HARNESS_DIRS: tuple[Path, ...] = (
+    REPO_ROOT / ".claude" / "agents",
+    REPO_ROOT / ".cursor" / "agents",
+    REPO_ROOT / ".opencode" / "agents",
+)
+
+LANE_READ_AGENT_NAMES: tuple[str, ...] = (
+    "qs-create-plan",
+    "qs-implement-task",
+    "qs-implement-setup-task",
+    "qs-review-task",
+)
+
+IMPLEMENT_AGENT_NAMES: tuple[str, ...] = (
+    "qs-implement-task",
+    "qs-implement-setup-task",
+)
+
+
+def _harness_id(p: Path) -> str:
+    return p.parent.name.lstrip(".")
+
+
+def _body(harness_dir: Path, agent_name: str) -> str:
+    path = harness_dir / f"{agent_name}.md"
+    assert path.is_file(), f"Missing agent file: {path}"
+    return path.read_text(encoding="utf-8")
+
+
+# --- (a) the declaration step in qs-setup-task ------------------------------
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_setup_task_carries_the_declaration_step(harness_dir: Path) -> None:
+    body = _body(harness_dir, "qs-setup-task")
+    assert "Lane declaration" in body
+    # Existing-issue path: use-if-complete / ask-only-missing.
+    assert "declaration_complete" in body
+    assert "exactly the missing axes" in body
+    # New-issue path: the labels passthrough and the six options.
+    assert "--labels" in body
+    assert "harness feature" in body
+    # The optional piggybacked epic question (review SG-C3).
+    assert "part of an epic?" in body
+    # The bright-line trigger (review PC-08): explicit words only.
+    assert "explicit lane name" in body
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_setup_task_speed_rule_is_amended(harness_dir: Path) -> None:
+    """The old absolute speed rule would contradict the one permitted
+    lane/epic question (review planner R2, story task 11)."""
+    body = _body(harness_dir, "qs-setup-task")
+    assert "except" in body and "the single lane/epic question" in body
+    assert "The launcher must come within a few seconds" not in body
+
+
+# --- (b) the lane-read step in the 4 orchestrators --------------------------
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+@pytest.mark.parametrize("agent_name", LANE_READ_AGENT_NAMES)
+def test_orchestrators_read_their_lane_file(harness_dir: Path, agent_name: str) -> None:
+    body = _body(harness_dir, agent_name)
+    assert "docs/workflow/lanes/<lane>.md" in body, (
+        f"{harness_dir / f'{agent_name}.md'}: missing the lane-read step "
+        "(read docs/workflow/lanes/<lane>.md, <lane> from context.py)"
+    )
+    # Empty-lane fallback for pre-existing worktrees / legacy tasks.
+    assert "phase-protocols.md" in body
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_finish_task_is_deliberately_not_wired(harness_dir: Path) -> None:
+    """qs-finish-task has no lane-sensitive behaviour while lanes are
+    identical — wiring it now would be a step with no reader (SG2-03).
+    A lane PR that diverges finish behaviour adds the wiring then."""
+    body = _body(harness_dir, "qs-finish-task")
+    assert "docs/workflow/lanes/<lane>.md" not in body
+
+
+# --- (c) ask-and-backfill in the implement variants -------------------------
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+@pytest.mark.parametrize("agent_name", IMPLEMENT_AGENT_NAMES)
+def test_implement_variants_carry_ask_and_backfill(
+    harness_dir: Path, agent_name: str
+) -> None:
+    body = _body(harness_dir, agent_name)
+    assert "lane check FAILED" in body, (
+        f"{harness_dir / f'{agent_name}.md'}: missing the "
+        "ask-and-backfill-on-declaration-FAIL step"
+    )
+    assert "gh issue edit" in body
+    assert "re-run the gate" in body

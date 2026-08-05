@@ -5,12 +5,33 @@ Usage:
     python scripts/qs/create_pr.py --title "..." --summary "..." [--issue N] [--risk CRITICAL]
 
 Output: JSON with PR number and URL.
+
+QS-332 (B5) — two machine-owned additions, both fed by ONE
+``gh issue view N --json body,labels`` call:
+
+- **auto-``Refs``**: a parent epic declared in the issue body
+  (``targets.parse_parent_epic`` — explicit, never guessed) is appended
+  inside the fixes-line slot (``Fixes #N`` then ``Refs #E``) so a child
+  PR never auto-closes its epic. No CLI override flags by design
+  (review SG2-01): the escape hatch for a wrong ``Refs`` is editing the
+  issue body, the declared source of truth.
+- **Lane note**: the changed files are classified against the issue's
+  declared ``target:*`` label; when the diff crosses targets, a
+  ``## Lane note`` section listing the crossing files verbatim is
+  injected into the PR body. Recomputed from ``targets.classify`` — no
+  sentinel-string parsing of gate output (review N-4/DP2-02).
+
+A failing/unparseable issue lookup degrades to today's body (no Refs,
+no note) rather than blocking the PR.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+
+import targets
 
 from utils import (
     detect_risk_level,
@@ -22,6 +43,45 @@ from utils import (
     run_gh,
     run_git,
 )
+
+
+def _epic_and_lane_note(issue: int, changed: list[str]) -> tuple[int | None, str]:
+    """Return ``(parent_epic, lane_note_section)`` for the PR body.
+
+    One ``gh issue view --json body,labels`` call feeds both. Any failure
+    (non-zero exit, bad JSON) degrades to ``(None, "")`` — the PR body
+    stays byte-identical to today's.
+    """
+    result = run_gh(["issue", "view", str(issue), "--json", "body,labels"], check=False)
+    if result.returncode != 0:
+        return None, ""
+    try:
+        data = json.loads(result.stdout)
+        issue_body = data.get("body", "") or ""
+        labels = [lb["name"] for lb in data.get("labels", [])]
+    except (json.JSONDecodeError, TypeError, KeyError):
+        return None, ""
+
+    epic = targets.parse_parent_epic(issue_body)
+
+    declared = targets.parse_axes(labels)["target"]
+    lane_section = ""
+    if declared:
+        opposite = "product" if declared == "factory" else "factory"
+        crossing = [f for f in changed if targets.classify(f) == opposite]
+        if crossing:
+            file_list = "".join(f"- `{f}`\n" for f in crossing)
+            lane_section = (
+                "\n## Lane note\n"
+                f"This task declares `target:{declared}` but the diff touches "
+                f"{opposite}-classified files:\n\n"
+                f"{file_list}\n"
+                f"Verify these serve the declared {declared} purpose "
+                "(purpose, not path, is the classifier). If the "
+                f"{opposite}-side portion is substantial, consider splitting "
+                "the issue.\n"
+            )
+    return epic, lane_section
 
 
 def main() -> None:
@@ -71,6 +131,11 @@ def main() -> None:
 
     # Build PR body
     fixes_line = f"\nFixes #{issue}\n" if issue else ""
+    lane_section = ""
+    if issue:
+        epic, lane_section = _epic_and_lane_note(issue, changed)
+        if epic is not None:
+            fixes_line = f"\nFixes #{issue}\nRefs #{epic}\n"
     body = f"""## Summary
 {args.summary}
 {fixes_line}
@@ -86,7 +151,7 @@ def main() -> None:
 
 ## Risk assessment
 {chr(10).join(risk_lines)}
-
+{lane_section}
 ---
 Generated with [Claude Code](https://claude.com/claude-code)"""
 

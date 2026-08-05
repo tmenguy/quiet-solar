@@ -232,6 +232,35 @@ jobs:
           coverage combine shard-data
           coverage report --show-missing --fail-under=100
 
+  # QS-332 (B1): the lane check as its own job — NOT a step in the
+  # existing jobs, whose tokens are deliberately `contents: read`-only.
+  # It needs `issues: read` to fetch the task issue's lane labels.
+  # `--branch "${{ github.head_ref }}"` is load-bearing: a pull_request
+  # checkout is a detached merge ref where `git branch --show-current`
+  # is empty, which would silently no-op the check (review N-1).
+  # Declaration-missing or a `gh` failure exits non-zero (CI fails
+  # closed); a cross-target diff warns into GITHUB_STEP_SUMMARY and
+  # never fails.
+  lane-check:
+    name: Lane Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The change set is origin/main...HEAD — the fetch must reach
+          # the merge base.
+          fetch-depth: 0
+
+      - name: Lane check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/qs/quality_gate.py --lane-check
+          --branch "${{ github.head_ref }}"
+
   hacs-validate:
     name: HACS Validation
     runs-on: ubuntu-latest

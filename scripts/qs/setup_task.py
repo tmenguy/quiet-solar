@@ -14,8 +14,11 @@ the agent should surface to the user).
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
+
+import targets  # type: ignore[import-not-found]
 
 from harness import canonicalize as canonicalize_harness  # type: ignore[import-not-found]
 from harness import detect as detect_harness
@@ -29,8 +32,42 @@ from utils import (  # type: ignore[import-not-found]
     get_main_worktree,
     get_worktree_dir,
     output_json,
+    run_gh,
     run_git,
 )
+
+
+def check_declaration(issue: int) -> None:
+    """Refuse to proceed unless ``issue`` carries a complete lane declaration.
+
+    QS-332 B2 — enforcement by construction: this runs BEFORE any
+    branch/worktree work. One ``gh issue view --json labels`` call
+    (``check=False`` with an explicit JSON-error path, like its peers);
+    the validity rule itself lives in :func:`targets.validate_declaration`
+    (one truth table, three consumers). The refusal message carries the
+    exact shape-aware ``gh issue edit --add-label`` backfill command.
+    """
+    result = run_gh(["issue", "view", str(issue), "--json", "labels"], check=False)
+    if result.returncode != 0:
+        output_json({
+            "error": f"Failed to fetch labels for issue #{issue}",
+            "detail": result.stderr.strip(),
+        })
+        sys.exit(1)
+    try:
+        labels = [lb["name"] for lb in json.loads(result.stdout).get("labels", [])]
+    except (json.JSONDecodeError, TypeError, KeyError):
+        output_json({"error": "Invalid JSON from gh CLI", "detail": result.stdout.strip()})
+        sys.exit(1)
+
+    ok, missing, message = targets.validate_declaration(labels)
+    if not ok:
+        output_json({
+            "error": f"issue #{issue} has no complete lane declaration — refusing to proceed",
+            "missing": missing,
+            "detail": message.replace("<N>", str(issue)),
+        })
+        sys.exit(1)
 
 # Public mapping (review-fix #04 SF1) — promoted to match the
 # round-3 SF1 rename of next_step.LAUNCHERS. The two dispatch tables
@@ -76,6 +113,11 @@ def main() -> None:
 
     issue = args.issue_number
     branch = f"QS_{issue}"
+
+    # QS-332 B2: an issue must be born in exactly one lane; refuse an
+    # undeclared/inconsistent one before touching git.
+    check_declaration(issue)
+
     main_dir = get_main_worktree()
 
     run_git(["fetch", "origin"], cwd=str(main_dir))

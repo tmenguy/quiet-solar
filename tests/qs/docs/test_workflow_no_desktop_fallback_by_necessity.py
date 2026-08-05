@@ -46,8 +46,13 @@ RETRACTED_INFERENCE = "fallback path by necessity"
 
 
 def _scanned_files() -> list[Path]:
-    """Return the workflow docs plus `CLAUDE.md` — the surface-routing prose."""
-    files = sorted((REPO_ROOT / "docs" / "workflow").glob("*.md"))
+    """Return the workflow docs plus `CLAUDE.md` — the surface-routing prose.
+
+    Recursive glob (QS-332): `docs/workflow/lanes/*.md` are full copies
+    of `phase-protocols.md` and future divergent lane protocols — a
+    non-recursive glob would silently skip them.
+    """
+    files = sorted((REPO_ROOT / "docs" / "workflow").rglob("*.md"))
     files.append(REPO_ROOT / "CLAUDE.md")
     return files
 

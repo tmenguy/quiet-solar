@@ -83,6 +83,8 @@ def _make_fake_run(
     branch: str,
     repo_root: Path,
     title: str = "Fake title",
+    labels: Sequence[str] = (),
+    body: str = "",
     gh_rc: dict[str, int] | None = None,
     barrier: threading.Barrier | None = None,
     raise_on: Sequence[RaiseTarget] = (),
@@ -143,7 +145,16 @@ def _make_fake_run(
         if head == GH_ISSUE:
             if "issue" in raise_on:
                 raise raise_cls(GH_ISSUE_BOOM)
-            return _completed(cmd, f"{title}\n", returncode=codes.get("issue", 0))
+            # QS-332: `_issue_fields` fetches `--json title,labels,body`
+            # in one call; the fake answers with that JSON shape.
+            issue_json = json.dumps(
+                {
+                    "title": title,
+                    "labels": [{"name": name} for name in labels],
+                    "body": body,
+                }
+            )
+            return _completed(cmd, f"{issue_json}\n", returncode=codes.get("issue", 0))
         if head == GH_PR:
             if "pr" in raise_on:
                 raise raise_cls(GH_PR_BOOM)
@@ -231,8 +242,83 @@ def test_stdout_is_byte_identical(
         "pr_number": 7,
         "pr_url": PR_URL,
         "worktree": str(tmp_path),
+        "labels": [],
+        "kind": "",
+        "target": "",
+        "scale": "",
+        "lane": "",
+        "parent_epic": None,
     }
     assert capsys.readouterr().out == json.dumps(expected, indent=2) + "\n"
+
+
+def test_stdout_is_byte_identical_labelled_task(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The labelled-task twin of the byte pin (QS-332).
+
+    Pins the appended-key emission contract — ``labels``, ``kind``,
+    ``target``, ``scale``, ``lane``, ``parent_epic``, in that order after
+    the pre-existing keys — with every axis populated and the parent epic
+    resolved from the body's ``Refs`` line.
+    """
+    import utils  # type: ignore[import-not-found]
+
+    fake_run, _recorder = _make_fake_run(
+        branch="QS_42",
+        repo_root=tmp_path,
+        labels=["enhancement", "kind:feature", "target:factory", "scale:task"],
+        body="intro\n\nRefs #321\n",
+    )
+    monkeypatch.setattr(utils, "run", fake_run)
+
+    _run_main(monkeypatch, [])
+
+    expected = {
+        "harness": "claude-code",
+        "branch": "QS_42",
+        "issue": 42,
+        "title": "Fake title",
+        "story_file": "",
+        "story_exists": False,
+        "latest_review_fix": "",
+        "pr_number": 7,
+        "pr_url": PR_URL,
+        "worktree": str(tmp_path),
+        "labels": ["enhancement", "kind:feature", "target:factory", "scale:task"],
+        "kind": "feature",
+        "target": "factory",
+        "scale": "task",
+        "lane": "feature-factory",
+        "parent_epic": 321,
+    }
+    assert capsys.readouterr().out == json.dumps(expected, indent=2) + "\n"
+
+
+def test_epic_lane_derivation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An epic-shaped declaration derives ``epic-<target>`` with no kind."""
+    import utils  # type: ignore[import-not-found]
+
+    fake_run, _recorder = _make_fake_run(
+        branch="QS_42",
+        repo_root=tmp_path,
+        labels=["pinned", "scale:epic", "target:factory"],
+    )
+    monkeypatch.setattr(utils, "run", fake_run)
+
+    _run_main(monkeypatch, [])
+    ctx = json.loads(capsys.readouterr().out)
+
+    assert ctx["lane"] == "epic-factory"
+    assert ctx["kind"] == ""
+    assert ctx["scale"] == "epic"
+    assert ctx["parent_epic"] is None
 
 
 # ---------------------------------------------------------------------------

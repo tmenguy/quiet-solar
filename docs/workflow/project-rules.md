@@ -281,6 +281,30 @@ Each command delegates to a static agent under `.claude/agents/` (or
 `.cursor/agents/`). Agents discover task context at runtime from
 `git branch --show-current` — there is no per-task agent rendering.
 
+### Lanes & axes (QS-332)
+
+Every task is born in exactly one of **6 lanes** — {bug, feature, epic}
+× {product, factory} — declared at setup as GitHub labels: exactly one
+`target:*` (`product`/`factory`), plus `scale:task` with exactly one
+`kind:*` (`bug`/`feature`) for tasks, or `scale:epic` with **no kind**
+for epics. `scale:task` is the implicit CLI default but is always
+applied explicitly as a label. The lane protocol files live in
+`docs/workflow/lanes/<lane>.md`; `python scripts/qs/context.py` exposes
+`labels`, `kind`, `target`, `scale`, `lane`, `parent_epic`. The domain
+module is `scripts/qs/targets.py` (path classification, declaration
+truth table, parent-epic parsing) — one machine-readable definition,
+consumed by `fetch_issue.py`, `setup_task.py`, and the quality gate.
+
+The **lane check** runs in `--impacted`, the full gate, and the CI
+`--lane-check` job: a **missing declaration fails**; a **cross-target
+diff warns loudly but never fails** — purpose, not path, is the
+classifier (a product-declared fix that must also enhance a test tool
+stays a product task). The warning lists the crossing files and always
+prints the split recommendation; splitting is at human discretion.
+`create_pr.py` auto-appends `Refs #<epic>` toward a declared parent
+epic and machine-injects a `## Lane note` when the diff crosses the
+declared target.
+
 **Commit authorization**: agents are authorized to commit and push as
 part of their defined workflow steps (e.g., the implement-task agent
 auto-commits and opens a PR after the quality gate passes). Outside of
