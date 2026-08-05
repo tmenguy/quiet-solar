@@ -86,6 +86,35 @@ def test_unlabelled_issue_reports_empty_axes(
     assert out["declaration_complete"] is False
 
 
+def test_null_body_and_labels_degrade_instead_of_crashing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review-fix #02 (must-fix): the API can return present-but-null
+    fields (`"body": null`, `"labels": null`). Fix plan #01 guarded the
+    other two `parse_parent_epic` consumers (`context.py`,
+    `create_pr.py`) but missed this one — iterating `None` and
+    `re.search(None)` raised a raw traceback instead of the script's
+    structured JSON. Twin of
+    `test_context.py::test_null_body_from_the_api_degrades_to_no_parent_epic`.
+    """
+    out = _run_main(
+        monkeypatch,
+        capsys,
+        {
+            "number": 9,
+            "title": "null fields",
+            "body": None,
+            "labels": None,
+            "state": "OPEN",
+        },
+    )
+    assert out["labels"] == []
+    assert out["body"] == ""
+    assert out["parent_epic"] is None
+    assert out["declaration_complete"] is False
+    assert out["lane"] == ""
+
+
 def test_story_type_is_gone(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

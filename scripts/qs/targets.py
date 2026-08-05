@@ -188,6 +188,12 @@ def validate_declaration(labels: list[str]) -> tuple[bool, list[str], str]:
         elif not axes[axis]:
             missing.append(axis)
             problems.append(f"exactly one {axis}:* label is required")
+            # Review-fix #02: a single NON-CANONICAL value (`kind:chore`,
+            # `target:banana`) lands here — len==1 but `parse_axes`
+            # yields "". Without removing the stray label, obeying the
+            # printed remediation produced a duplicate-axis failure on
+            # the next run (a guaranteed second round-trip).
+            remove.extend(present)
             if axis == "scale" and not is_epic_shape:
                 # The implicit CLI default (D1) — deterministic, so it
                 # may appear in a verbatim-runnable command.

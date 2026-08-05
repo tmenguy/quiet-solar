@@ -230,6 +230,50 @@ def test_validate_declaration_two_scales_is_invalid(targets) -> None:
     assert "scale:task / scale:epic" in message
 
 
+@pytest.mark.parametrize(
+    ("labels", "stray", "choices"),
+    [
+        (
+            ["kind:chore", "target:product", "scale:task"],
+            "kind:chore",
+            "kind:bug / kind:feature",
+        ),
+        (
+            ["kind:bug", "target:banana", "scale:task"],
+            "target:banana",
+            "target:product / target:factory",
+        ),
+    ],
+)
+def test_validate_declaration_non_canonical_value_remediation_converges(
+    targets, labels: list[str], stray: str, choices: str
+) -> None:
+    """Review-fix #02 (should-fix): a single non-canonical axis value
+    (`kind:chore`, `target:banana`) fired the missing-axis branch but
+    never removed the stray label — obeying the printed remediation
+    produced a duplicate-axis failure on the next run (a guaranteed
+    second round-trip). The remediation must remove the unrecognized
+    label AND prompt the canonical addition, in one executable set."""
+    ok, missing, message = targets.validate_declaration(labels)
+    assert not ok
+    assert f'gh issue edit <N> --remove-label "{stray}"' in message
+    assert choices in message
+    # Still executable verbatim: no pipe alternatives anywhere.
+    assert "|" not in message
+
+
+def test_validate_declaration_non_canonical_scale_still_adds_task_default(
+    targets,
+) -> None:
+    """`scale:sprint` is removed AND the deterministic `scale:task`
+    default is still offered as a runnable command."""
+    _ok, _missing, message = targets.validate_declaration(
+        ["kind:bug", "target:product", "scale:sprint"]
+    )
+    assert 'gh issue edit <N> --remove-label "scale:sprint"' in message
+    assert 'gh issue edit <N> --add-label "scale:task"' in message
+
+
 def test_validate_declaration_epic_shape_message_has_no_kind(targets) -> None:
     """Shape-aware: an epic missing its target is not asked to grow a kind."""
     ok, missing, message = targets.validate_declaration(["scale:epic"])
