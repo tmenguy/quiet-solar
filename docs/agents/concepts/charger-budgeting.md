@@ -33,7 +33,10 @@ is at least the deadband** — the floor matters, because an unbounded flip term
 makes near-zero dither log every cycle — and a stuck-at-`NaN` or
 stuck-at-`inf` sensor counts as *unchanged*, so a broken sensor cannot
 re-inflate the log to the full cycle rate. `detach_car()` clears the memos, so
-each charge session gets a fresh first line, and a disabled charger's key is
+each charge session gets a fresh first line — **except** the car-qualified
+`get_car_score:*` keys (QS-342), which describe every candidate car rather
+than the departed session and survive the detach so churn cannot re-emit a
+per-car decomposition burst. A disabled charger's key is
 evicted so a re-enable is always announced. `QSChargerGeneric` extends
 `_has_state_to_reset()` (see [load-base.md](load-base.md)) because its reset
 override destroys the user-initiated `do_force_next_charge` /
@@ -119,10 +122,14 @@ state matching a regret-consistent allocation is a fixed point.
 
 **Known limitations:**
 
-- *Plug-time correlation is dead after an HA restart*: car plug probes are
+- *Plug-time correlation is dead after an HA restart for plug sessions
+  already active before the restart*: car plug probes are
   recorder-bootstrapped (3 days) but the charger's synthetic
-  `is_there_a_car_plugged` probe is in-memory-only since restart, so
-  `plug_time_bump` is structurally 0 exactly when it is needed. Follow-up:
+  `is_there_a_car_plugged` probe is in-memory-only since restart, so for a
+  pre-restart session the compared durations never realign and
+  `plug_time_bump` is structurally 0 exactly when it is needed. A session
+  that starts *after* the restart has both clocks aligned and is
+  unaffected. Follow-up:
   <https://github.com/tmenguy/quiet-solar/issues/344>.
 - *Residual failure mode*: a car GPS-jittering across a 0.5 m bucket edge
   produces alternating strict-score winners that no tie-break sees.
@@ -132,7 +139,12 @@ state matching a regret-consistent allocation is a fixed point.
 quantised tuple `(plug_bump, plug_time_bump, dist_bump)` only — a
 deliberate INFO exception to the QS-306 volume rules, because this line is
 what makes allocation incidents diagnosable without a recorder-DB
-forensic session.
+forensic session. Volume bound: changed values are rate-limited to ~1 line
+per (charger, car) per `_CHANGED_RELOG_MIN_INTERVAL_S` (60 s) — so a tuple
+flapping across a quantisation edge every ~7 s cycle cannot track the
+cycle rate — and unchanged values re-emit on the 900 s heartbeat; these
+memo keys survive `detach_car()` (see above), so attach/detach churn
+cannot defeat the suppression either.
 
 ### Charge-origin tagging & `get_charge_type()` (QS-274)
 

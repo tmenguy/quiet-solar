@@ -27,6 +27,7 @@ from custom_components.quiet_solar.const import (
     CONF_CHARGER_LONGITUDE,
     USER_ORIGINATED_CAR_NAME,
 )
+from custom_components.quiet_solar.ha_model.charger import _CHANGED_RELOG_MIN_INTERVAL_S
 from tests.utils.charger_harness import (
     create_charger,
     make_hass,
@@ -107,10 +108,13 @@ def _make_incident_fixture(pin_buzz: bool = True) -> SimpleNamespace:
 
 
 def _run_allocation_round(chargers, time) -> None:
-    """One full allocation round: each charger picks then applies its own row."""
+    """One full allocation round: each charger picks then applies its own row.
+
+    Per the story recipe: attach only when the returned car actually changed.
+    """
     for charger in chargers:
         car = charger.get_best_car(time)
-        if car is not None:
+        if car is not None and charger.car is not car:
             charger.attach_car(car, time)
 
 
@@ -122,13 +126,17 @@ def _allocation(fx) -> dict:
 
 
 def _spy_detach(charger) -> list:
-    """Wrap `detach_car` so post-convergence oscillation is observable."""
+    """Wrap `detach_car` so post-convergence oscillation is observable.
+
+    Forwards any arguments: a real oscillation must surface as a non-empty
+    `calls` list, never as a `TypeError` inside the spy.
+    """
     original = charger.detach_car
     calls: list[str] = []
 
-    def spy():
+    def spy(*args, **kwargs):
         calls.append(charger.name)
-        original()
+        original(*args, **kwargs)
 
     charger.detach_car = spy
     return calls
@@ -344,6 +352,41 @@ def test_allocation_is_caller_independent(parking_car, portail_car, caller_name)
     assert caller.get_best_car(T0) is fx.cars[FIXED_POINT[caller_name]]
 
 
+def _setup_scenario(fx, scenario):
+    """Set up one scenario family; return the expected global allocation."""
+    if scenario == "regret_no_alternative":
+        _patch_scores(fx.parking, {"Zoe": 100.0, "IDBuzz": 100.0})
+        _patch_scores(fx.portail, {"Zoe": 100.0})  # IDBuzz has no alternative
+        return {"wallbox_parking": fx.buzz, "wallbox_portail": fx.zoe}
+    if scenario == "all_equal_stable_order":
+        _patch_scores(fx.parking, {"Zoe": 100.0, "IDBuzz": 100.0})
+        _patch_scores(fx.portail, {"Zoe": 100.0, "IDBuzz": 100.0})
+        return {"wallbox_parking": fx.buzz, "wallbox_portail": fx.zoe}
+    if scenario == "stickiness":
+        _patch_scores(fx.parking, {"Zoe": 100.0, "IDBuzz": 100.0})
+        _patch_scores(fx.portail, {"Zoe": 100.0, "IDBuzz": 100.0})
+        fx.portail.attach_car(fx.zoe, T0 - timedelta(seconds=60))
+        return {"wallbox_parking": fx.buzz, "wallbox_portail": fx.zoe}
+    assert scenario == "generic_fallback"  # real incident scores, Zoe only
+    return {"wallbox_parking": fx.zoe, "wallbox_portail": fx.portail._default_generic_car}
+
+
+@pytest.mark.parametrize("caller_name", ["wallbox_parking", "wallbox_portail"])
+@pytest.mark.parametrize(
+    "scenario",
+    ["regret_no_alternative", "all_equal_stable_order", "stickiness", "generic_fallback"],
+)
+def test_scenario_families_are_caller_independent(scenario, caller_name):
+    # Story section B: caller independence holds "for each scenario above" —
+    # a fresh fixture per caller gives every charger the IDENTICAL attachment
+    # state, and each caller's own row must agree with the same global
+    # allocation.
+    fx = _make_incident_fixture(pin_buzz=(scenario != "generic_fallback"))
+    expected = _setup_scenario(fx, scenario)
+    caller = fx.chargers[caller_name]
+    assert caller.get_best_car(T0) is expected[caller_name]
+
+
 # =============================================================================
 # C1 — score-decomposition INFO-on-change logging (AC5)
 # =============================================================================
@@ -377,14 +420,65 @@ def test_get_car_score_decomposition_logs_once_then_on_change(caplog):
     assert len(_decomposition_lines(caplog)) == 1
 
     # Crossing a bucket edge (≈11 m shift) changes the quantised tuple → one
-    # new line.
+    # new line, once past the changed-value rate-limit floor.
     fx.zoe.get_car_coordinates = MagicMock(return_value=(ZOE_COORDS[0] + 0.0001, ZOE_COORDS[1]))
-    time += timedelta(seconds=10)
+    time = T0 + timedelta(seconds=_CHANGED_RELOG_MIN_INTERVAL_S + 10)
     fx.parking.get_car_score(fx.zoe, time, {})
+    assert len(_decomposition_lines(caplog)) == 2
+
+    # A change WITHIN the floor window is rate-limited: no new line.
+    fx.zoe.get_car_coordinates = MagicMock(return_value=ZOE_COORDS)
+    fx.parking.get_car_score(fx.zoe, time + timedelta(seconds=7), {})
     assert len(_decomposition_lines(caplog)) == 2
 
     # Unchanged value re-emits once the 900 s heartbeat elapses (pins the
     # bounded-volume claim).
+    fx.zoe.get_car_coordinates = MagicMock(return_value=(ZOE_COORDS[0] + 0.0001, ZOE_COORDS[1]))
     time += timedelta(seconds=901)
     fx.parking.get_car_score(fx.zoe, time, {})
     assert len(_decomposition_lines(caplog)) == 3
+
+
+def test_get_car_score_decomposition_rate_limited_when_tuple_oscillates(caplog):
+    # A car GPS-jittering ACROSS a 0.5 m bucket edge alternates the change key
+    # on every ~7 s allocation cycle (the incident's churn class): emissions
+    # must stay bounded by the changed-value floor, not track the cycle rate.
+    fx = _make_incident_fixture()
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+
+    in_bucket = ZOE_COORDS
+    other_bucket = (ZOE_COORDS[0] + 0.0001, ZOE_COORDS[1])  # ≈11 m: different bucket
+
+    cycles = 40
+    step_s = 7
+    for i in range(cycles):
+        coords = other_bucket if i % 2 else in_bucket
+        fx.zoe.get_car_coordinates = MagicMock(return_value=coords)
+        fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=i * step_s), {})
+
+    span_s = (cycles - 1) * step_s  # 273 s of sustained flapping
+    bound = 1 + span_s // _CHANGED_RELOG_MIN_INTERVAL_S + 1  # first line + ≤1/floor
+    lines = _decomposition_lines(caplog)
+    assert 2 <= len(lines) <= bound  # bounded, yet still emitting on change
+
+
+def test_detach_car_preserves_get_car_score_memo(caplog):
+    # `detach_car` wipes the QS-306 memos describing the departed session, but
+    # the `get_car_score:{car}` keys are car-qualified and cover EVERY candidate
+    # car: they must survive, or attach/detach churn re-emits one decomposition
+    # line per car per detach even with unchanged tuples.
+    fx = _make_incident_fixture()
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+
+    fx.parking.attach_car(fx.zoe, T0)
+    fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=7), {})
+    assert len(_decomposition_lines(caplog)) == 1
+
+    fx.parking.detach_car()
+
+    # Unchanged tuple right after the detach: no re-emission burst.
+    fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=14), {})
+    assert len(_decomposition_lines(caplog)) == 1
+
+    # The non-get_car_score memos are still cleared (QS-306 fresh-session rule).
+    assert all(key.startswith("get_car_score:") for key in fx.parking._log_on_change_state)

@@ -227,6 +227,13 @@ CHARGER_START_STOP_RETRY_S = 90
 # sourced from SOLVER_STEP_S despite the numeric coincidence.
 _RELOG_UNCHANGED_AFTER_S = 900  # max gap between two emissions for one key
 _POWER_LOG_DEADBAND_W = 100.0  # ignore sub-100W jitter on the available-power line
+# QS-342 (review fix #01): rate limit for CHANGED-value re-emissions of a key —
+# distinct from the 900 s unchanged-value heartbeat above. A value oscillating on
+# every ~7 s allocation cycle (e.g. a car GPS-jittering across a 0.5 m distance
+# bucket edge) must not track the cycle rate: with this floor a key emits at most
+# ~1 changed line per minute, while a genuine change after a quiet period still
+# logs immediately (the last emission is then typically older than the floor).
+_CHANGED_RELOG_MIN_INTERVAL_S = 60
 
 
 class QSChargerStates(StrEnum):
@@ -660,6 +667,7 @@ class LogOnChangeMixin:
         msg: str,
         *args: object,
         deadband: float | None = None,
+        min_interval_s: float | None = None,
     ) -> None:
         """Log `msg` at INFO if `value` changed for `key`, or if 900 s elapsed.
 
@@ -667,6 +675,13 @@ class LogOnChangeMixin:
         receives. `|elapsed|` is used so a backwards clock jump cannot silence a
         key. The timer is re-stamped on every emission, so the constant bounds the
         gap between emissions rather than imposing a fixed cadence.
+
+        `min_interval_s` (QS-342) additionally rate-limits CHANGED-value
+        emissions: after an emission for `key`, a different value is suppressed
+        until the floor elapses. The memo is deliberately NOT updated on
+        suppression, so the next post-floor call still compares against the last
+        *emitted* value — a value flapping between two states cannot silence
+        itself by landing back on the previous one at floor expiry.
         """
         state = self._log_on_change_state
         if state is None:
@@ -678,12 +693,13 @@ class LogOnChangeMixin:
             # the subtraction. A logging helper must never be load-bearing, so bail to
             # logging instead of propagating out of the caller's control cycle.
             comparable = (prev_time.tzinfo is None) == (time.tzinfo is None)
-            if (
-                comparable
-                and abs((time - prev_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S
-                and _is_unchanged(prev_value, value, deadband)
-            ):
-                return
+            if comparable:
+                elapsed = abs((time - prev_time).total_seconds())
+                unchanged = _is_unchanged(prev_value, value, deadband)
+                if unchanged and elapsed < _RELOG_UNCHANGED_AFTER_S:
+                    return
+                if not unchanged and min_interval_s is not None and elapsed < min_interval_s:
+                    return
         state[key] = (value, time)
         _LOGGER.info(msg, *args)
 
@@ -3009,9 +3025,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             # incident diagnosable only via a recorder-DB forensic session, so it is
             # a DELIBERATE INFO exception to the "debug for non-user-facing" rule.
             # Change key = the quantised tuple ONLY: raw distance and the attach
-            # delta are payload, so GPS jitter inside a 0.5 m bucket emits nothing;
-            # the 900 s heartbeat bounds steady-state volume to ~1 line per
-            # (charger, car) per window.
+            # delta are payload, so GPS jitter inside a 0.5 m bucket emits nothing.
+            # Volume bound (review fix #01): changed values are rate-limited to
+            # ~1 line per key per _CHANGED_RELOG_MIN_INTERVAL_S (a tuple flapping
+            # across a quantisation edge every cycle cannot track the cycle rate),
+            # and unchanged values re-emit on the 900 s heartbeat — so a key emits
+            # at most ~1 line per minute worst-case, ~1 per 900 s steady-state.
             self.log_info_on_change(
                 f"get_car_score:{car.name}",
                 (score_plug_bump, score_plug_time_bump, score_dist_bump),
@@ -3025,6 +3044,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 score_plug_bump,
                 score_plug_time_bump,
                 connected_time_delta,
+                min_interval_s=_CHANGED_RELOG_MIN_INTERVAL_S,
             )
 
         if score is None:
@@ -3092,6 +3112,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # QS-342: deterministic charger order. Defensive only — the tie-break
         # cascade below scans ALL tied pairs so it is already caller-independent;
         # sorting just removes the historical `[self, others…]` positional bias.
+        # Known bounded transient: `self` joins unconditionally while OTHER
+        # chargers must pass `is_plugged(for_duration=CHARGER_CHECK_STATE_WINDOW_S)`,
+        # so for ≤ that window after a second charger plugs in, different callers
+        # can see different charger sets — self-healing once the window elapses.
         active_chargers.sort(key=lambda c: c.name)
 
         cache = {}
@@ -3153,6 +3177,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     continue
 
                 for score, car in chargers_scores[charger]:
+                    # Exact float `==` tie detection is safe: every score component
+                    # is integer-valued by construction (quantised bumps), so tied
+                    # pairs carry the identical float. A future fractional component
+                    # would silently kill the tie-break — keep the bumps quantised.
                     if score != best_cur_score:
                         continue
 
@@ -3181,6 +3209,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     # HA config-entry titles).
                     ranked.append(((-regret, -sticky, charger.name, car.name), charger, car))
 
+            # `ranked` is never empty here: `best_cur_score` was found by scanning
+            # exactly the same (unassigned charger × score list) pair set the tied-
+            # pair scan iterates. Assert the coupling rather than adding a dead
+            # `if not ranked: break` branch the 100% coverage gate could never see.
+            assert ranked, "QS-342: tied-pair scan found no pair at the max score"
             _, best_cur_charger, best_cur_car = min(ranked, key=lambda item: item[0])
 
             assigned_chargers[best_cur_charger] = best_cur_car
@@ -4154,7 +4187,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # them would suppress the first line of the NEXT charge session whenever the
         # new car reports the same value inside the 900 s window — and the last
         # emitted record would name the wrong car.
-        self._log_on_change_state = None
+        # QS-342 (review fix #01): EXCEPT the `get_car_score:{car}` keys — those are
+        # car-qualified and describe every candidate car on this charger, not the
+        # departed session; wiping them would re-emit one decomposition line per car
+        # after every detach, defeating the on-change suppression under churn.
+        # Collapse to None when nothing survives (the QS-306 fresh-session shape).
+        if self._log_on_change_state is not None:
+            kept = {k: v for k, v in self._log_on_change_state.items() if k.startswith("get_car_score:")}
+            self._log_on_change_state = kept or None
 
     # update in place the power steps
     def update_power_steps(self):
