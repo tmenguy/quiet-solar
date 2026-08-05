@@ -105,14 +105,28 @@ def test_lane_check_job_spec() -> None:
     # The change set is origin/main...HEAD — must reach the merge base.
     assert checkout["with"]["fetch-depth"] == 0
 
+    # Review-fix #01 must-fix: the job must pin the SAME interpreter as
+    # every other job — ubuntu-latest's system Python is 3.12 and
+    # quality_gate.py uses 3.14-only syntax, so without this step the
+    # fail-closed job blocks every PR with a SyntaxError.
+    setup_python = next(
+        s for s in job["steps"] if "setup-python" in s.get("uses", "")
+    )
+    assert setup_python["with"]["python-version"] == "3.14"
+
     run_step = next(s for s in job["steps"] if "run" in s)
     # `gh` reads GH_TOKEN; preinstalled on ubuntu-latest, no install step.
     assert run_step["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert "quality_gate.py --lane-check" in run_step["run"]
     # Detached-HEAD fallback (review N-1): a pull_request checkout has an
     # empty `git branch --show-current`; GITHUB_HEAD_REF is the PR's
-    # source branch on every pull_request event.
-    assert '--branch "${{ github.head_ref }}"' in run_step["run"]
+    # source branch on every pull_request event. Review-fix #01 must-fix:
+    # `head_ref` is attacker-controlled on fork PRs and Actions expands
+    # `${{ }}` BEFORE the shell sees the line — script injection. It must
+    # reach the shell through an env var, never direct interpolation.
+    assert run_step["env"]["HEAD_REF"] == "${{ github.head_ref }}"
+    assert '--branch "$HEAD_REF"' in run_step["run"]
+    assert "${{" not in run_step["run"]
 
 
 def test_other_pr_quality_jobs_keep_read_only_tokens() -> None:

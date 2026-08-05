@@ -125,9 +125,11 @@ python scripts/qs/quality_gate.py        # full gate, on EXPLICIT request only
 
 **Lane-declaration FAIL (QS-332 ask-and-backfill).** If the gate fails
 with `lane check FAILED` (the task's issue has a missing/incomplete
-lane declaration), ask the user which lane the task belongs to, run the
-exact `gh issue edit <N> --add-label ...` command the gate printed,
-then re-run the gate. Do this before the first commit — the gate fails
+lane declaration), ask the user which lane the task belongs to, then
+apply the remediation the gate printed — its `gh issue edit <N>
+--remove-label`/`--add-label` commands run verbatim, plus the additions
+where the message says to substitute the user's chosen value — then
+re-run the gate. Do this before the first commit — the gate fails
 until the declaration exists.
 
 If `--impacted` fails, fix the **code/tests** — never switch to the

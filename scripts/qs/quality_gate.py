@@ -1680,6 +1680,13 @@ _IMPACTED_NON_PY_LINES = (
 LANE_CACHE_FILE = REPO_ROOT / ".lane_check_cache"
 _LANE_CACHE_TTL_S = 600.0
 
+# Bound on the `gh issue view` label fetch (review-fix #01): it sits on
+# the `--impacted` pre-commit hot path, and with a half-dead network
+# (VPN drop, dead DNS — the QS-276 S1 scenario) and a cold/expired cache
+# an unbounded call hangs the sub-15s gate indefinitely. A timeout
+# surfaces as rc 124 → the normal `!= 0 → None → local warn+skip` path.
+_LANE_GH_TIMEOUT_S = 10.0
+
 
 class LaneCheckResult(NamedTuple):
     """`_check_lane_targets`'s verdict (review R2-12). The helper never
@@ -1715,12 +1722,13 @@ def _resolve_lane_issue(branch_override: str | None = None) -> tuple[int, str] |
     branch = result.stdout.strip() if result.returncode == 0 else ""
     if not branch and _is_ci() and branch_override:
         branch = branch_override.strip()
-    if not branch.startswith("QS_"):
+    # Pure digits only (review-fix #01): `int()` accepts underscore
+    # digit-grouping, so `QS_332_2` (a plausible "second attempt" branch)
+    # parsed as issue #3322 and the gate enforced the WRONG issue's
+    # declaration. `isdigit()` also rejects the empty suffix.
+    if not branch.startswith("QS_") or not branch[3:].isdigit():
         return None
-    try:
-        return int(branch[3:]), branch
-    except ValueError:
-        return None
+    return int(branch[3:]), branch
 
 
 def _read_lane_label_cache(issue: int, branch: str) -> list[str] | None:
@@ -1736,7 +1744,8 @@ def _read_lane_label_cache(issue: int, branch: str) -> list[str] | None:
         return None
     ts = data.get("time")
     now = time.time()
-    # A future mtime (clock skew) or an expired TTL both mean "fetch".
+    # A future stored `time` field (clock skew) or an expired TTL both
+    # mean "fetch". (The check reads the JSON field, not the file mtime.)
     if not isinstance(ts, (int, float)) or ts > now or now - ts > _LANE_CACHE_TTL_S:
         return None
     labels = data.get("labels")
@@ -1755,7 +1764,10 @@ def _fetch_lane_labels(issue: int, branch: str) -> list[str] | None:
     if cached is not None:
         return cached
     try:
-        result = _run(["gh", "issue", "view", str(issue), "--json", "labels"])
+        result = _run(
+            ["gh", "issue", "view", str(issue), "--json", "labels"],
+            timeout=_LANE_GH_TIMEOUT_S,
+        )
     except OSError:
         return None
     if result.returncode != 0:
@@ -1778,6 +1790,39 @@ def _fetch_lane_labels(issue: int, branch: str) -> list[str] | None:
     return labels
 
 
+def _lane_changed_files() -> list[str] | None:
+    """The lane check's own change set, or ``None`` when git failed.
+
+    Review-fix #01 — three properties `_get_changed_files` lacks, each
+    load-bearing here:
+
+    - **Fail-closed**: any non-zero git exit yields ``None`` (reaching
+      `_check_lane_targets`'s gh-failure semantics: local warn + skip,
+      CI fail closed). `_get_changed_files` silently drops failed calls,
+      which made the documented CI fail-closed arm unreachable where CI
+      actually runs.
+    - **NUL-delimited** (`-z`): `core.quotePath` C-quotes non-ASCII
+      paths, which would classify `unknown` forever — the same treatment
+      QS-290 gave `_impacted_early_exit_paths`.
+    - **Tracked paths only** (no `ls-files --others` rung): an untracked
+      local scratch file must not earn the loud cross-target banner that
+      CI — which classifies tracked diffs only — would not print for the
+      same tree. The untracked union stays in
+      `_impacted_early_exit_paths`, for the early-exit decision alone.
+    """
+    paths: set[str] = set()
+    for cmd in (
+        ["git", "diff", "--name-only", "-z", "origin/main...HEAD"],
+        ["git", "diff", "--name-only", "-z", "HEAD"],
+        ["git", "diff", "--name-only", "-z", "--cached"],
+    ):
+        listing = _run(cmd)
+        if listing.returncode != 0:
+            return None
+        paths.update(field for field in listing.stdout.split("\0") if field)
+    return sorted(paths)
+
+
 def _lane_unavailable(reason: str, fyi: str | None) -> LaneCheckResult:
     """Map an unreadable input (gh failure / git failure): local warn +
     skip (offline must not brick the gate); CI fail closed — CI has a
@@ -1792,20 +1837,22 @@ def _lane_unavailable(reason: str, fyi: str | None) -> LaneCheckResult:
     return LaneCheckResult(warning=f"lane check: {reason} — skipping (local)", fyi=fyi)
 
 
-def _check_lane_targets(
-    changed_files: list[str] | None, branch_override: str | None = None
-) -> LaneCheckResult:
+def _check_lane_targets(branch_override: str | None = None) -> LaneCheckResult:
     """Steps 0-4 of the QS-332 lane check. Never exits, never prints.
 
-    Skipped (all-None result) when no `QS_<N>` issue is resolvable.
-    `changed_files is None` (a git failure upstream) has exactly the
-    `gh`-failure semantics: local warn + skip, CI fail closed.
+    Skipped (all-None result) when no `QS_<N>` issue is resolvable —
+    checked FIRST, so a non-task branch pays no git calls. The change
+    set is the helper's own fail-closed `_lane_changed_files()`
+    (review-fix #01: identical semantics at all three call sites, and a
+    git failure — `None` — gets exactly the `gh`-failure treatment:
+    local warn + skip, CI fail closed).
     """
     resolved = _resolve_lane_issue(branch_override)
     if resolved is None:
         return LaneCheckResult()
     issue, branch = resolved
 
+    changed_files = _lane_changed_files()
     if changed_files is None:
         return _lane_unavailable("the change set could not be computed (git failure)", None)
 
@@ -1883,7 +1930,7 @@ def run_lane_check(branch_override: str | None) -> int:
     """The `--lane-check` subcommand (reviews CR-3 + N-1): lane steps 0-4
     only — no pytest, no coverage. In CI the warning is additionally
     surfaced machine-owned via `GITHUB_STEP_SUMMARY` (review N-4)."""
-    result = _check_lane_targets(_get_changed_files(), branch_override)
+    result = _check_lane_targets(branch_override)
     rc = _emit_lane_check(result)
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if result.warning and summary_path:
@@ -2390,16 +2437,18 @@ def check_impacted() -> int:
     # been purged, after which testmon select-alls too. Cold falls through to
     # the full pass, exactly as before this feature existed.
     # QS-332 (B1), call site 1: after `_ensure_testmon_db_safe()` and
-    # BEFORE the warm-baseline early-exit block, with the change set
-    # computed UNCONDITIONALLY — the hook must run on a pure-docs change
-    # set too (a missing declaration fails and a cross-target diff warns
-    # there as well). `None` (git failure) is handled inside
-    # `_check_lane_targets` with gh-failure semantics: local warn + skip,
-    # CI fail closed.
-    early_exit_paths = _impacted_early_exit_paths()
-    if _emit_lane_check(_check_lane_targets(early_exit_paths)):
+    # BEFORE the warm-baseline early-exit block — the hook must run on a
+    # pure-docs change set too (a missing declaration fails and a
+    # cross-target diff warns there as well). The check computes its own
+    # tracked-only, fail-closed change set (review-fix #01) —
+    # `_impacted_early_exit_paths`'s union stays the early-exit input
+    # ONLY, because its untracked rung would banner local scratch files
+    # CI never sees; a git failure inside the check gets gh-failure
+    # semantics (local warn + skip, CI fail closed).
+    if _emit_lane_check(_check_lane_targets()):
         return 1
 
+    early_exit_paths = _impacted_early_exit_paths()
     if _testmon_baseline_warm():
         if early_exit_paths is not None and not any(p.endswith(".py") for p in early_exit_paths):
             for line in _IMPACTED_NON_PY_LINES:
@@ -3473,10 +3522,13 @@ def main() -> None:
     # Detect scope
     changed_files = _get_changed_files()
 
-    # QS-332 (B1), call site 2: the full gate. Between the change-set
-    # computation and scope detection; a missing declaration fails the
-    # gate, a cross-target diff warns on stderr and never fails.
-    if _emit_lane_check(_check_lane_targets(changed_files)):
+    # QS-332 (B1), call site 2: the full gate, before scope detection.
+    # A missing declaration fails the gate, a cross-target diff warns on
+    # stderr and never fails. The check computes its own fail-closed
+    # change set (review-fix #01) — `_get_changed_files` above maps git
+    # failures to `[]`, which would silently degrade the check to
+    # declaration-only.
+    if _emit_lane_check(_check_lane_targets()):
         sys.exit(1)
 
     scope_info = _detect_scope(changed_files)

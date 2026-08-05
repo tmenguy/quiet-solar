@@ -77,10 +77,14 @@ def _issue_fields(issue: int) -> dict:
         return _empty_issue_fields()
     try:
         data = json.loads(result.stdout)
+        # `or ""` / `or []` (QS-332 review-fix #01): the API can return a
+        # present-but-null field (`"body": null`), and a bare `.get`
+        # default doesn't catch that — `parse_parent_epic(None)` raises.
+        # Mirrors `create_pr.py`'s guard.
         return {
-            "title": data.get("title", ""),
-            "labels": [lb["name"] for lb in data.get("labels", [])],
-            "body": data.get("body", ""),
+            "title": data.get("title") or "",
+            "labels": [lb["name"] for lb in data.get("labels") or []],
+            "body": data.get("body") or "",
         }
     except (json.JSONDecodeError, TypeError, KeyError):
         return _empty_issue_fields()

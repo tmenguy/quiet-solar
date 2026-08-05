@@ -46,7 +46,10 @@ _FACTORY_PREFIXES = (
 )
 
 # Copied from ``quality_gate._is_dev_only``'s basename list — see the
-# module docstring for why this is a copy, not an import.
+# module docstring for why this is a copy, not an import — plus the
+# review-fix #01 additions: known repo-root factory files that would
+# otherwise earn a perpetual unknown-FYI (`pytest.ini`, the OpenCode
+# harness config, the dev-env shell setup).
 _FACTORY_BASENAMES = frozenset(
     {
         "CLAUDE.md",
@@ -57,8 +60,15 @@ _FACTORY_BASENAMES = frozenset(
         "setup.cfg",
         "requirements.txt",
         "requirements_test.txt",
+        "pytest.ini",
+        "opencode.json",
+        "setenv.sh",
     }
 )
+
+# Review-fix #01: `hacs.json` is product-defining (it describes the
+# shipped integration to HACS).
+_PRODUCT_BASENAMES = frozenset({"hacs.json"})
 
 # ``docs/agents/`` is product BY EPIC RULING — the drift checker ties it
 # to product source.
@@ -70,9 +80,10 @@ _PRODUCT_PREFIXES = (
 )
 
 # Enumerated neutrality (silent): every task commits its story;
-# ``docs/epics/`` is target-neutral by epic rule.
+# ``docs/epics/`` is target-neutral by epic rule; `LICENSE` belongs to
+# the repo, not a target (review-fix #01).
 _NEUTRAL_PREFIXES = ("docs/stories/", "docs/epics/")
-_NEUTRAL_BASENAMES = frozenset({"README.md"})
+_NEUTRAL_BASENAMES = frozenset({"README.md", "LICENSE"})
 
 
 def classify(path: str) -> str:
@@ -93,6 +104,8 @@ def classify(path: str) -> str:
     if "/" not in path:
         if path in _FACTORY_BASENAMES:
             return "factory"
+        if path in _PRODUCT_BASENAMES:
+            return "product"
         if path in _NEUTRAL_BASENAMES:
             return "neutral"
     return "unknown"
@@ -140,52 +153,78 @@ def validate_declaration(labels: list[str]) -> tuple[bool, list[str], str]:
       assumed when ``scale`` is missing/ambiguous).
 
     ``missing`` lists the invalid-or-missing axis names. ``message`` is
-    shape-aware (task vs epic) and carries the exact backfill command
-    with an ``<N>`` placeholder for the issue number — callers substitute
-    it (``message.replace("<N>", str(issue))``).
+    shape-aware (task vs epic) and its remediation is **executable
+    verbatim** (review-fix #01): every printed ``gh issue edit`` command
+    contains only concrete labels — ``--remove-label`` for duplicate-axis
+    labels (remove all, then re-add the chosen one) and for an epic's
+    stray ``kind:*``; ``--add-label`` only for the deterministic
+    ``scale:task`` default. Axes whose value is the user's choice are
+    prose (``kind:bug / kind:feature``), never ``a|b`` alternatives baked
+    into a command. The one placeholder is ``<N>`` — callers substitute
+    the issue number (``message.replace("<N>", str(issue))``).
     """
-    kind_labels = [lb for lb in labels if lb.startswith("kind:")]
     axes = parse_axes(labels)
     is_epic_shape = "scale:epic" in labels and "scale:task" not in labels
 
+    def _axis_labels(axis: str) -> list[str]:
+        return sorted(lb for lb in labels if lb.startswith(f"{axis}:"))
+
     missing: list[str] = []
     problems: list[str] = []
-    suggestions: list[str] = []
+    remove: list[str] = []  # concrete labels to remove (executable)
+    add: list[str] = []  # concrete, deterministic labels to add
+    choose: list[str] = []  # user-chosen additions, described in prose
 
-    if not axes["target"]:
-        missing.append("target")
-        problems.append("exactly one target:* label is required")
-        suggestions.append("target:product|target:factory")
+    def _check_axis(axis: str, choices: str) -> None:
+        present = _axis_labels(axis)
+        if len(present) > 1:
+            missing.append(axis)
+            problems.append(
+                f"exactly one {axis}:* label is required "
+                f"({len(present)} present: {', '.join(present)})"
+            )
+            remove.extend(present)
+            choose.append(f"exactly one of {choices}")
+        elif not axes[axis]:
+            missing.append(axis)
+            problems.append(f"exactly one {axis}:* label is required")
+            if axis == "scale" and not is_epic_shape:
+                # The implicit CLI default (D1) — deterministic, so it
+                # may appear in a verbatim-runnable command.
+                add.append("scale:task")
+            else:
+                choose.append(f"exactly one of {choices}")
 
-    if not axes["scale"]:
-        missing.append("scale")
-        problems.append("exactly one scale:* label is required")
-        if not is_epic_shape:
-            suggestions.append("scale:task")
+    _check_axis("target", "target:product / target:factory")
+    _check_axis("scale", "scale:task / scale:epic")
 
     if is_epic_shape:
+        kind_labels = _axis_labels("kind")
         if kind_labels:
             missing.append("kind")
-            problems.append(
-                "an epic carries no kind:* label — remove "
-                + ", ".join(sorted(kind_labels))
-            )
-    elif not axes["kind"]:
-        missing.append("kind")
-        problems.append("exactly one kind:* label is required")
-        suggestions.append("kind:bug|kind:feature")
+            problems.append("an epic carries no kind:* label")
+            remove.extend(kind_labels)
+    else:
+        _check_axis("kind", "kind:bug / kind:feature")
 
     if not missing:
         return True, [], ""
 
     shape = "epic" if is_epic_shape else "task"
-    message = f"incomplete lane declaration ({shape}): " + "; ".join(problems)
-    if suggestions:
-        message += (
-            "\nbackfill with: gh issue edit <N> --add-label "
-            f'"{",".join(suggestions)}"'
+    lines = [f"incomplete lane declaration ({shape}): " + "; ".join(problems)]
+    if remove or add:
+        lines.append("fix with (run exactly as printed):")
+        if remove:
+            lines.append(f'  gh issue edit <N> --remove-label "{",".join(remove)}"')
+        if add:
+            lines.append(f'  gh issue edit <N> --add-label "{",".join(add)}"')
+    if choose:
+        lines.append(
+            "then add, via gh issue edit <N> --add-label, with the user's "
+            "chosen value substituted:"
         )
-    return False, missing, message
+        lines.extend(f"  {item}" for item in choose)
+    return False, missing, "\n".join(lines)
 
 
 # --- parse_parent_epic() (story D4) ----------------------------------------
@@ -193,14 +232,19 @@ def validate_declaration(labels: list[str]) -> tuple[bool, list[str], str]:
 _PARENT_EPIC_SECTION = re.compile(
     r"^###\s+Parent epic\s*$", re.IGNORECASE | re.MULTILINE
 )
-_REFS_RE = re.compile(r"\bRefs #(\d+)")
+# Case-insensitive (review-fix #01): GitHub's own keyword matching is,
+# and `_PARENT_EPIC_SECTION` above already is — `refs #321` must count.
+_REFS_RE = re.compile(r"\bRefs #(\d+)", re.IGNORECASE)
+# The structured field accepts the repo's own issue convention too
+# (review-fix #01): `321`, `#321`, `QS-321`, `qs-321`, `QS-#321`.
+_PARENT_EPIC_VALUE = re.compile(r"(?:QS-)?#?(\d+)", re.IGNORECASE)
 
 
 def parse_parent_epic(body: str) -> int | None:
     """Resolve the declared parent epic from an issue body, or ``None``.
 
     The structured issue-form section (a ``### Parent epic`` heading whose
-    following non-empty line is ``#?(\\d+)``) wins over free-text
+    following non-empty line is ``(?:QS-)?#?(\\d+)``) wins over free-text
     cross-references (review PC-05); fallback is the first ``Refs #N``.
     Explicit, never guessed.
     """
@@ -210,7 +254,7 @@ def parse_parent_epic(body: str) -> int | None:
             stripped = line.strip()
             if not stripped:
                 continue
-            match = re.fullmatch(r"#?(\d+)", stripped)
+            match = _PARENT_EPIC_VALUE.fullmatch(stripped)
             if match:
                 return int(match.group(1))
             break  # first non-empty line is not a number — fall back

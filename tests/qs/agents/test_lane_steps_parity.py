@@ -101,6 +101,32 @@ def test_orchestrators_read_their_lane_file(harness_dir: Path, agent_name: str) 
 
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+@pytest.mark.parametrize("agent_name", LANE_READ_AGENT_NAMES)
+def test_lane_block_is_a_clean_mirrored_paragraph(
+    harness_dir: Path, agent_name: str
+) -> None:
+    """Review-fix #01: the lane-read block must sit between exactly one
+    blank line on each side in every copy — some copies had a doubled
+    blank above and NO blank below (two rendered paragraphs merged).
+    These files are pinned mirrors; whitespace drift is exactly the
+    class the parity tests exist to prevent, and the substring pins
+    above don't see it."""
+    body = _body(harness_dir, agent_name)
+    start = body.index("**Lane (QS-332).**")
+    assert body[start - 2 : start] == "\n\n", "one blank line before the block"
+    assert body[start - 3 : start] != "\n\n\n", "no doubled blank line before"
+    tail = body[start:]
+    sentinel = next(
+        marker
+        for marker in ("a parallel path).\n", "on the fallback.\n")
+        if marker in tail
+    )
+    end = tail.index(sentinel) + len(sentinel)
+    assert tail[end] == "\n", "one blank line after the block"
+    assert tail[end : end + 2] != "\n\n", "no doubled blank line after"
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
 def test_finish_task_is_deliberately_not_wired(harness_dir: Path) -> None:
     """qs-finish-task has no lane-sensitive behaviour while lanes are
     identical — wiring it now would be a step with no reader (SG2-03).
@@ -124,3 +150,9 @@ def test_implement_variants_carry_ask_and_backfill(
     )
     assert "gh issue edit" in body
     assert "re-run the gate" in body
+    # Review-fix #01: the gate's remediation may include `--remove-label`
+    # lines and user-chosen substitutions — the step must say "apply the
+    # remediation", not "run the exact --add-label command" (which is no
+    # longer always the printed shape).
+    assert "apply the remediation the gate printed" in body
+    assert "run the exact `gh issue edit <N> --add-label ...` command" not in body

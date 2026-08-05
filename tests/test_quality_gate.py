@@ -7510,19 +7510,36 @@ def _patch_lane_labels(labels: list[str] | None):
     return patch.object(quality_gate, "_fetch_lane_labels", return_value=labels)
 
 
+def _patch_lane_files(paths: list[str] | None):
+    """Patch the fail-closed lane change-set seam (review-fix #01: the
+    lane check computes its own tracked-only, NUL-delimited change set —
+    `None` means a git failure and must reach the fail-closed arm)."""
+    return patch.object(quality_gate, "_lane_changed_files", return_value=paths)
+
+
 class TestLaneCheckHelper:
     """`_check_lane_targets` — never exits, never prints (review R2-12);
     the result object carries `declaration_missing` / `warning` / `fyi`
     and each call site maps it."""
 
     def test_skips_silently_when_no_issue_resolvable(self) -> None:
-        with patch.object(quality_gate, "_resolve_lane_issue", return_value=None):
-            res = quality_gate._check_lane_targets(["custom_components/quiet_solar/a.py"])
+        with (
+            patch.object(quality_gate, "_resolve_lane_issue", return_value=None),
+            patch.object(quality_gate, "_lane_changed_files") as files_mock,
+        ):
+            res = quality_gate._check_lane_targets()
         assert res == quality_gate.LaneCheckResult(None, None, None)
+        # Review-fix #01: the change-set git calls only run once an issue
+        # resolves — a non-task branch pays nothing.
+        files_mock.assert_not_called()
 
     def test_missing_declaration_fails_with_shape_aware_backfill(self) -> None:
-        with _patch_lane_issue(), _patch_lane_labels(["bug"]):
-            res = quality_gate._check_lane_targets(["docs/workflow/x.md"])
+        with (
+            _patch_lane_issue(),
+            _patch_lane_labels(["bug"]),
+            _patch_lane_files(["docs/workflow/x.md"]),
+        ):
+            res = quality_gate._check_lane_targets()
         assert res.declaration_missing is not None
         assert "gh issue edit 332 --add-label" in res.declaration_missing
         assert "<N>" not in res.declaration_missing
@@ -7535,8 +7552,12 @@ class TestLaneCheckHelper:
             "tests/test_a.py",
             "docs/stories/QS-332.story.md",  # neutral — never listed
         ]
-        with _patch_lane_issue(), _patch_lane_labels(_LANE_FACTORY_TASK):
-            res = quality_gate._check_lane_targets(files)
+        with (
+            _patch_lane_issue(),
+            _patch_lane_labels(_LANE_FACTORY_TASK),
+            _patch_lane_files(files),
+        ):
+            res = quality_gate._check_lane_targets()
         assert res.declaration_missing is None
         assert res.warning is not None
         assert "custom_components/quiet_solar/a.py" in res.warning
@@ -7549,16 +7570,24 @@ class TestLaneCheckHelper:
 
     def test_no_crossing_means_no_warning(self) -> None:
         files = ["scripts/qs/x.py", "docs/workflow/lanes/bug-product.md", "README.md"]
-        with _patch_lane_issue(), _patch_lane_labels(_LANE_FACTORY_TASK):
-            res = quality_gate._check_lane_targets(files)
+        with (
+            _patch_lane_issue(),
+            _patch_lane_labels(_LANE_FACTORY_TASK),
+            _patch_lane_files(files),
+        ):
+            res = quality_gate._check_lane_targets()
         assert res == quality_gate.LaneCheckResult(None, None, None)
 
     def test_unknown_paths_are_fyi_and_neutral_stays_silent(self) -> None:
-        files = ["hacs.json", "docs/stories/QS-332.story.md", "scripts/x.sh"]
-        with _patch_lane_issue(), _patch_lane_labels(_LANE_FACTORY_TASK):
-            res = quality_gate._check_lane_targets(files)
+        files = ["mystery.bin", "docs/stories/QS-332.story.md", "scripts/x.sh"]
+        with (
+            _patch_lane_issue(),
+            _patch_lane_labels(_LANE_FACTORY_TASK),
+            _patch_lane_files(files),
+        ):
+            res = quality_gate._check_lane_targets()
         assert res.fyi is not None
-        assert "hacs.json" in res.fyi
+        assert "mystery.bin" in res.fyi
         assert "docs/stories/QS-332.story.md" not in res.fyi
         assert res.warning is None
         assert res.declaration_missing is None
@@ -7566,8 +7595,12 @@ class TestLaneCheckHelper:
     def test_epic_declaration_is_valid_and_classified_against_its_target(self) -> None:
         """A `scale:epic` declaration has no kind and is NOT asked to grow
         one (review PC-11); the crossing check runs against its target."""
-        with _patch_lane_issue(), _patch_lane_labels(["scale:epic", "target:factory"]):
-            res = quality_gate._check_lane_targets(["custom_components/quiet_solar/a.py"])
+        with (
+            _patch_lane_issue(),
+            _patch_lane_labels(["scale:epic", "target:factory"]),
+            _patch_lane_files(["custom_components/quiet_solar/a.py"]),
+        ):
+            res = quality_gate._check_lane_targets()
         assert res.declaration_missing is None
         assert res.warning is not None
 
@@ -7575,9 +7608,10 @@ class TestLaneCheckHelper:
         with (
             _patch_lane_issue(),
             _patch_lane_labels(None),
+            _patch_lane_files(["scripts/qs/x.py"]),
             patch.object(quality_gate, "_is_ci", return_value=False),
         ):
-            res = quality_gate._check_lane_targets(["scripts/qs/x.py"])
+            res = quality_gate._check_lane_targets()
         assert res.declaration_missing is None
         assert res.warning is not None  # the skip notice rides the warning channel
 
@@ -7585,9 +7619,10 @@ class TestLaneCheckHelper:
         with (
             _patch_lane_issue(),
             _patch_lane_labels(None),
+            _patch_lane_files(["scripts/qs/x.py"]),
             patch.object(quality_gate, "_is_ci", return_value=True),
         ):
-            res = quality_gate._check_lane_targets(["scripts/qs/x.py"])
+            res = quality_gate._check_lane_targets()
         assert res.declaration_missing is not None
 
     @pytest.mark.parametrize("is_ci", [False, True], ids=["local", "ci"])
@@ -7597,9 +7632,10 @@ class TestLaneCheckHelper:
         with (
             _patch_lane_issue(),
             _patch_lane_labels(_LANE_FACTORY_TASK),
+            _patch_lane_files(None),
             patch.object(quality_gate, "_is_ci", return_value=is_ci),
         ):
-            res = quality_gate._check_lane_targets(None)
+            res = quality_gate._check_lane_targets()
         if is_ci:
             assert res.declaration_missing is not None
         else:
@@ -7803,7 +7839,8 @@ class TestLaneCheckImpactedCallSite:
         before the warm-baseline block."""
         with (
             self._base_patches(),
-            _patch_early_exit(["docs/agents/concepts/solver.md"]),  # product-classified
+            _patch_early_exit(["docs/agents/concepts/solver.md"]),
+            _patch_lane_files(["docs/agents/concepts/solver.md"]),  # product-classified
             _patch_lane_issue(),
             _patch_lane_labels(_LANE_FACTORY_TASK),
         ):
@@ -7812,11 +7849,35 @@ class TestLaneCheckImpactedCallSite:
         assert "docs/agents/concepts/solver.md" in err
         assert "no Python files changed" in err  # the early exit still fired
 
+    def test_untracked_scratch_file_never_warns(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Review-fix #01: the lane classification runs on the TRACKED
+        change set only — an untracked local scratch file under a product
+        prefix (present in `_impacted_early_exit_paths`'s union, which
+        keeps it for the early-exit decision) must not earn the loud
+        cross-target banner that CI would not print for the same tree."""
+        with (
+            self._base_patches(),
+            _patch_early_exit(
+                ["docs/workflow/x.md", "custom_components/quiet_solar/scratch.py"]
+            ),
+            _patch_lane_files(["docs/workflow/x.md"]),  # tracked only
+            _patch_lane_issue(),
+            _patch_lane_labels(_LANE_FACTORY_TASK),
+            patch.object(quality_gate, "_resolve_diff_base", return_value=None),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+        ):
+            assert quality_gate.check_impacted() == 0
+        err = capsys.readouterr().err
+        assert "LANE WARNING" not in err
+
     def test_pure_docs_missing_declaration_fails(self) -> None:
         """A missing declaration FAILS even on a pure-docs change set."""
         with (
             self._base_patches(),
             _patch_early_exit(["docs/workflow/x.md"]),
+            _patch_lane_files(["docs/workflow/x.md"]),
             _patch_lane_issue(),
             _patch_lane_labels([]),
         ):
@@ -7828,6 +7889,7 @@ class TestLaneCheckImpactedCallSite:
         with (
             self._base_patches(),
             _patch_early_exit(None),
+            _patch_lane_files(None),
             _patch_lane_issue(),
             _patch_lane_labels(_LANE_FACTORY_TASK),
             patch.object(quality_gate, "_resolve_diff_base", return_value=None),
@@ -7840,6 +7902,7 @@ class TestLaneCheckImpactedCallSite:
         with (
             self._base_patches(),
             _patch_early_exit(None),
+            _patch_lane_files(None),
             _patch_lane_issue(),
             _patch_lane_labels(_LANE_FACTORY_TASK),
             patch.object(quality_gate, "_is_ci", return_value=True),
@@ -7864,6 +7927,7 @@ class TestLaneCheckMainCallSite:
         with (
             patch("sys.argv", ["quality_gate.py", "--json"]),
             patch.object(quality_gate, "_get_changed_files", return_value=["scripts/qs/x.py"]),
+            _patch_lane_files(["scripts/qs/x.py"]),
             _patch_lane_issue(),
             _patch_lane_labels([]),
             _patch_all_gates() as mocks,
@@ -7884,8 +7948,9 @@ class TestLaneCheckMainCallSite:
             patch.object(
                 quality_gate,
                 "_get_changed_files",
-                return_value=["custom_components/quiet_solar/a.py", "hacs.json"],
+                return_value=["custom_components/quiet_solar/a.py", "mystery.bin"],
             ),
+            _patch_lane_files(["custom_components/quiet_solar/a.py", "mystery.bin"]),
             _patch_lane_issue(),
             _patch_lane_labels(_LANE_FACTORY_TASK),
             _patch_full_scope(),
@@ -7898,7 +7963,7 @@ class TestLaneCheckMainCallSite:
         output = json.loads(captured.out)  # must not raise
         assert output["all_passed"] is True
         assert "custom_components/quiet_solar/a.py" in captured.err
-        assert "hacs.json" in captured.err  # the unknown-path FYI
+        assert "mystery.bin" in captured.err  # the unknown-path FYI
 
     def test_quick_mode_never_runs_the_lane_check(self) -> None:
         with (
@@ -7973,7 +8038,6 @@ class TestLaneCheckSubcommand:
     def test_forwards_branch_override_and_runs_no_gates(self) -> None:
         with (
             patch("sys.argv", ["quality_gate.py", "--lane-check", "--branch", "QS_45"]),
-            patch.object(quality_gate, "_get_changed_files", return_value=["scripts/x.sh"]),
             patch.object(
                 quality_gate,
                 "_check_lane_targets",
@@ -7984,9 +8048,25 @@ class TestLaneCheckSubcommand:
         ):
             quality_gate.main()
         assert exc_info.value.code == 0
-        lane_mock.assert_called_once_with(["scripts/x.sh"], "QS_45")
+        lane_mock.assert_called_once_with("QS_45")
         for m in mocks:
             m.assert_not_called()
+
+    def test_git_failure_in_ci_fails_closed_end_to_end(self) -> None:
+        """Review-fix #01: `_get_changed_files` maps git failures to `[]`,
+        which silently degraded the CI job to declaration-only. The lane
+        check now computes its own FAIL-CLOSED change set: a git failure
+        (`None`) in CI exits non-zero from the subcommand."""
+        with (
+            patch("sys.argv", ["quality_gate.py", "--lane-check"]),
+            _patch_lane_files(None),
+            _patch_lane_issue(),
+            _patch_lane_labels(_LANE_FACTORY_TASK),
+            patch.object(quality_gate, "_is_ci", return_value=True),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+        assert exc_info.value.code == 1
 
     def test_warning_lands_in_github_step_summary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -7995,11 +8075,7 @@ class TestLaneCheckSubcommand:
         monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
         with (
             patch("sys.argv", ["quality_gate.py", "--lane-check"]),
-            patch.object(
-                quality_gate,
-                "_get_changed_files",
-                return_value=["custom_components/quiet_solar/a.py"],
-            ),
+            _patch_lane_files(["custom_components/quiet_solar/a.py"]),
             _patch_lane_issue(),
             _patch_lane_labels(_LANE_FACTORY_TASK),
             pytest.raises(SystemExit) as exc_info,
@@ -8014,10 +8090,154 @@ class TestLaneCheckSubcommand:
         monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
         with (
             patch("sys.argv", ["quality_gate.py", "--lane-check"]),
-            patch.object(quality_gate, "_get_changed_files", return_value=["scripts/x.sh"]),
+            _patch_lane_files(["scripts/x.sh"]),
             _patch_lane_issue(),
             _patch_lane_labels([]),
             pytest.raises(SystemExit) as exc_info,
         ):
             quality_gate.main()
         assert exc_info.value.code == 1
+
+
+class TestResolveLaneIssueUnderscore:
+    """Review-fix #01: `int()` accepts underscore digit-grouping, so a
+    branch `QS_332_2` parsed as issue #3322 and the gate enforced the
+    wrong issue's declaration."""
+
+    def _patch_branch(self, branch: str):
+        def fake_run(cmd, **kwargs):
+            assert cmd == ["git", "branch", "--show-current"]
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{branch}\n", stderr="")
+
+        return patch.object(quality_gate, "_run", side_effect=fake_run)
+
+    @pytest.mark.parametrize("branch", ["QS_332_2", "QS_1_000", "QS_", "QS_x2"])
+    def test_non_pure_digit_suffix_resolves_to_none(self, branch: str) -> None:
+        with self._patch_branch(branch):
+            assert _REAL_RESOLVE_LANE_ISSUE(None) is None
+
+    def test_ci_override_with_underscore_grouping_is_rejected_too(self) -> None:
+        with self._patch_branch(""), patch.object(quality_gate, "_is_ci", return_value=True):
+            assert _REAL_RESOLVE_LANE_ISSUE("QS_332_2") is None
+
+
+class TestFetchLaneLabelsTimeout:
+    """Review-fix #01: the `gh issue view` call sits on the `--impacted`
+    pre-commit hot path — it must carry a bounded timeout (a half-dead
+    network with a cold cache must not hang the sub-15s gate). rc 124
+    maps to the existing `!= 0 → None → local warn+skip` path."""
+
+    def test_gh_call_carries_a_bounded_timeout(self, tmp_path: Path) -> None:
+        seen_timeouts: list[float | None] = []
+
+        def fake_run(cmd, timeout=None, **kwargs):
+            seen_timeouts.append(timeout)
+            payload = json.dumps({"labels": [{"name": n} for n in _LANE_FACTORY_TASK]})
+            return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr="")
+
+        with (
+            patch.object(quality_gate, "LANE_CACHE_FILE", tmp_path / "c"),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+            patch.object(quality_gate, "_run", side_effect=fake_run),
+        ):
+            quality_gate._fetch_lane_labels(332, "QS_332")
+        assert len(seen_timeouts) == 1
+        assert seen_timeouts[0] is not None and seen_timeouts[0] > 0
+
+    def test_timeout_rc_124_degrades_to_none(self, tmp_path: Path) -> None:
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 124, stdout="", stderr="timed out")
+
+        with (
+            patch.object(quality_gate, "LANE_CACHE_FILE", tmp_path / "c"),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+            patch.object(quality_gate, "_run", side_effect=fake_run),
+        ):
+            assert quality_gate._fetch_lane_labels(332, "QS_332") is None
+
+
+class TestLaneChangedFiles:
+    """Review-fix #01: the lane check's own change-set helper — tracked
+    paths only, NUL-delimited (`-z`, the QS-290 non-ASCII treatment),
+    returncode-checked and FAIL-CLOSED (`None` on any git failure, so the
+    CI fail-closed arm of `_check_lane_targets` is reachable where CI
+    actually runs)."""
+
+    def _fake_run(self, outputs: dict[str, tuple[int, str]]):
+        def fake_run(cmd, **kwargs):
+            key = " ".join(cmd)
+            for fragment, (rc, out) in outputs.items():
+                if fragment in key:
+                    return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
+            raise AssertionError(f"unexpected command: {cmd}")
+
+        return patch.object(quality_gate, "_run", side_effect=fake_run)
+
+    def test_union_of_the_three_tracked_diffs_sorted(self) -> None:
+        with self._fake_run(
+            {
+                "origin/main...HEAD": (0, "b.md\0a.py\0"),
+                "--cached": (0, "c.md\0"),
+                "diff --name-only -z HEAD": (0, "a.py\0d.md\0"),
+            }
+        ):
+            assert quality_gate._lane_changed_files() == ["a.py", "b.md", "c.md", "d.md"]
+
+    @pytest.mark.parametrize(
+        "failing", ["origin/main...HEAD", "--cached", "diff --name-only -z HEAD"]
+    )
+    def test_any_git_failure_returns_none(self, failing: str) -> None:
+        outputs = {
+            "origin/main...HEAD": (0, "a.py\0"),
+            "--cached": (0, ""),
+            "diff --name-only -z HEAD": (0, ""),
+        }
+        outputs[failing] = (128, "")
+        with self._fake_run(outputs):
+            assert quality_gate._lane_changed_files() is None
+
+    def test_non_ascii_paths_arrive_unquoted(self) -> None:
+        """`-z` emits raw bytes — no `core.quotePath` C-quoting, so
+        `docs/workflow/données.md` classifies factory, not unknown."""
+        with self._fake_run(
+            {
+                "origin/main...HEAD": (0, "docs/workflow/données.md\0"),
+                "--cached": (0, ""),
+                "diff --name-only -z HEAD": (0, ""),
+            }
+        ):
+            files = quality_gate._lane_changed_files()
+        assert files == ["docs/workflow/données.md"]
+        import targets as targets_mod
+
+        assert targets_mod.classify(files[0]) == "factory"
+
+    def test_untracked_files_are_not_listed(self) -> None:
+        """No `git ls-files --others` rung — tracked diffs only (the
+        untracked union stays in `_impacted_early_exit_paths`, for the
+        early-exit decision alone)."""
+        commands: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            commands.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        with patch.object(quality_gate, "_run", side_effect=fake_run):
+            assert quality_gate._lane_changed_files() == []
+        assert all("ls-files" not in " ".join(cmd) for cmd in commands)
+
+
+class TestSeedModeSkipsLaneCheck:
+    """Review-fix #01: AC-5's "never runs in --seed-testmon" clause was
+    unpinned (only the `--quick` half had a dedicated skip test)."""
+
+    def test_seed_testmon_never_runs_the_lane_check(self) -> None:
+        with (
+            patch("sys.argv", ["quality_gate.py", "--seed-testmon"]),
+            patch.object(quality_gate, "_check_lane_targets") as lane_mock,
+            patch.object(quality_gate, "seed_testmon", return_value=0),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            quality_gate.main()
+        assert exc_info.value.code == 0
+        lane_mock.assert_not_called()

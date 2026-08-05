@@ -59,12 +59,18 @@ def targets_fixture():
         ("tests/ha_tests/test_home.py", "product"),
         ("docs/agents/concepts/solver.md", "product"),
         ("docs/product/roadmap.md", "product"),
+        # --- known top-level files (review-fix #01: enumerable now,
+        # instead of a perpetual unknown-FYI) ---
+        ("hacs.json", "product"),
+        ("pytest.ini", "factory"),
+        ("opencode.json", "factory"),
+        ("setenv.sh", "factory"),
+        ("LICENSE", "neutral"),
         # --- enumerated neutral (silent) ---
         ("docs/stories/QS-332.story.md", "neutral"),
         ("docs/epics/QS-321.md", "neutral"),
         ("README.md", "neutral"),
         # --- unknown fallthrough (FYI-printed by the gate) ---
-        ("hacs.json", "unknown"),
         ("some/random/path.txt", "unknown"),
         ("info.md", "unknown"),
         # a nested file matching a factory BASENAME is not top-level
@@ -151,21 +157,31 @@ def test_validate_declaration_complete_epic(targets) -> None:
 
 
 def test_validate_declaration_epic_with_kind_is_invalid(targets) -> None:
+    """Review-fix #01: the remedy for an epic carrying a kind is an
+    EXECUTABLE `--remove-label` command (previously nothing was printed
+    at all — an agent obeying the output entered a fail loop)."""
     ok, _missing, message = targets.validate_declaration(
         ["scale:epic", "target:product", "kind:bug"]
     )
     assert not ok
-    assert "kind" in message
+    assert 'gh issue edit <N> --remove-label "kind:bug"' in message
 
 
 def test_validate_declaration_empty_labels(targets) -> None:
     ok, missing, message = targets.validate_declaration(["bug"])
     assert not ok
     assert set(missing) == {"kind", "target", "scale"}
-    # The message carries the shape-aware backfill command with an <N>
-    # placeholder callers substitute with the issue number.
-    assert "gh issue edit <N> --add-label" in message
-    assert "scale:task" in message
+    # Review-fix #01: every printed command is placeholder-free (apart
+    # from <N>, which callers substitute) and runnable verbatim — only
+    # the DETERMINISTIC label (scale:task) appears in a command; the
+    # user-chosen axes are prose, never `a|b` alternatives baked into
+    # the command.
+    assert 'gh issue edit <N> --add-label "scale:task"' in message
+    assert "kind:bug|kind:feature" not in message
+    assert "target:product|target:factory" not in message
+    assert "kind:bug / kind:feature" in message
+    assert "target:product / target:factory" in message
+    assert "user's chosen value" in message
 
 
 def test_validate_declaration_partial_reports_only_missing_axes(targets) -> None:
@@ -174,32 +190,44 @@ def test_validate_declaration_partial_reports_only_missing_axes(targets) -> None
     )
     assert not ok
     assert missing == ["target"]
-    assert "target:product" in message
-    assert "kind:" not in message.split("--add-label")[-1]
+    # Nothing deterministic to add and nothing to remove → NO verbatim
+    # command is printed (running one would create junk labels); the
+    # choice is prose.
+    assert "run exactly as printed" not in message
+    assert 'gh issue edit <N> --add-label "' not in message
+    assert 'gh issue edit <N> --remove-label "' not in message
+    assert "target:product / target:factory" in message
+    assert "kind:bug" not in message
 
 
 def test_validate_declaration_two_targets_is_invalid(targets) -> None:
-    ok, missing, _message = targets.validate_declaration(
+    ok, missing, message = targets.validate_declaration(
         ["kind:bug", "target:product", "target:factory", "scale:task"]
     )
     assert not ok
     assert "target" in missing
+    # Executable remedy: remove BOTH, then re-add the chosen one.
+    assert 'gh issue edit <N> --remove-label "target:factory,target:product"' in message
+    assert "target:product / target:factory" in message
 
 
 def test_validate_declaration_two_kinds_is_invalid(targets) -> None:
-    ok, missing, _message = targets.validate_declaration(
+    ok, missing, message = targets.validate_declaration(
         ["kind:bug", "kind:feature", "target:product", "scale:task"]
     )
     assert not ok
     assert "kind" in missing
+    assert 'gh issue edit <N> --remove-label "kind:bug,kind:feature"' in message
 
 
 def test_validate_declaration_two_scales_is_invalid(targets) -> None:
-    ok, missing, _message = targets.validate_declaration(
+    ok, missing, message = targets.validate_declaration(
         ["kind:bug", "target:product", "scale:task", "scale:epic"]
     )
     assert not ok
     assert "scale" in missing
+    assert 'gh issue edit <N> --remove-label "scale:epic,scale:task"' in message
+    assert "scale:task / scale:epic" in message
 
 
 def test_validate_declaration_epic_shape_message_has_no_kind(targets) -> None:
@@ -241,6 +269,23 @@ def test_parse_parent_epic_no_response_falls_back_to_refs(targets) -> None:
     assert targets.parse_parent_epic(body) == 321
 
 
+@pytest.mark.parametrize("value", ["QS-321", "qs-321", "QS-#321"])
+def test_parse_parent_epic_accepts_the_repo_issue_convention(
+    targets, value: str
+) -> None:
+    """Review-fix #01: the forms hint "e.g. 321" but the repo's own
+    convention spells issues `QS-321` — the structured field must not
+    silently drop it (letting a stray `Refs` elsewhere win)."""
+    body = f"Refs #999\n\n### Parent epic\n\n{value}\n"
+    assert targets.parse_parent_epic(body) == 321
+
+
+def test_parse_parent_epic_refs_is_case_insensitive(targets) -> None:
+    """Review-fix #01: GitHub's own keyword matching is case-insensitive,
+    and `_PARENT_EPIC_SECTION` already is — `refs #321` must count."""
+    assert targets.parse_parent_epic("some text\n\nrefs #321\n") == 321
+
+
 def test_parse_parent_epic_none(targets) -> None:
     assert targets.parse_parent_epic("plain body, no epic") is None
     assert targets.parse_parent_epic("") is None
@@ -252,12 +297,12 @@ def test_parse_parent_epic_none(targets) -> None:
 
 
 def test_main_classifies_paths(targets, capsys: pytest.CaptureFixture[str]) -> None:
-    targets.main(["scripts/qs/targets.py", "custom_components/x.py", "hacs.json"])
+    targets.main(["scripts/qs/targets.py", "custom_components/x.py", "mystery.bin"])
     out = capsys.readouterr().out.splitlines()
     assert out == [
         "factory\tscripts/qs/targets.py",
         "product\tcustom_components/x.py",
-        "unknown\thacs.json",
+        "unknown\tmystery.bin",
     ]
 
 

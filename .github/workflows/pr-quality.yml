@@ -254,12 +254,26 @@ jobs:
           # the merge base.
           fetch-depth: 0
 
+      # Same interpreter as every other job (review-fix #01 must-fix:
+      # the system Python is 3.12 and quality_gate.py uses 3.14-only
+      # syntax — without this pin the fail-closed job blocks every PR).
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # HEAD_REF goes through an env var, never direct `${{ }}`
+      # interpolation into `run:` (review-fix #01 must-fix): branch
+      # names may contain `"`/`$`/backtick and `head_ref` is
+      # attacker-controlled on fork PRs — direct expansion is script
+      # injection with GH_TOKEN in env.
       - name: Lane check
         env:
           GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
         run: >-
           python scripts/qs/quality_gate.py --lane-check
-          --branch "${{ github.head_ref }}"
+          --branch "$HEAD_REF"
 
   hacs-validate:
     name: HACS Validation

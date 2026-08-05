@@ -297,6 +297,33 @@ def test_stdout_is_byte_identical_labelled_task(
     assert capsys.readouterr().out == json.dumps(expected, indent=2) + "\n"
 
 
+def test_null_body_from_the_api_degrades_to_no_parent_epic(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Review-fix #01: `gh` can return `"body": null` (present-but-null),
+    and `data.get("body", "")` passes the `None` straight to
+    `targets.parse_parent_epic` → `TypeError`. Mirror `create_pr.py`'s
+    `or ""` guard: the context degrades to `parent_epic: null` instead
+    of crashing."""
+    import utils  # type: ignore[import-not-found]
+
+    fake_run, _recorder = _make_fake_run(
+        branch="QS_42",
+        repo_root=tmp_path,
+        labels=["kind:feature", "target:factory", "scale:task"],
+        body=None,  # type: ignore[arg-type]  # deliberate: JSON null
+    )
+    monkeypatch.setattr(utils, "run", fake_run)
+
+    _run_main(monkeypatch, [])
+    ctx = json.loads(capsys.readouterr().out)
+
+    assert ctx["parent_epic"] is None
+    assert ctx["lane"] == "feature-factory"
+
+
 def test_epic_lane_derivation(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
