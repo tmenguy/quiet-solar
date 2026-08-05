@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-01
+last_verified: 2026-08-05
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -86,6 +86,53 @@ Then `apply_budget_strategy()`:
 - `CHARGER_ADAPTATION_WINDOW_S = 45` — stability requirement before
   rebalancing.
 - `CHARGER_STATE_REFRESH_INTERVAL_S = 14` — state-polling cadence.
+
+### Car↔charger allocation tie-break (QS-342)
+
+`QSChargerGeneric.get_best_car` runs a greedy per-charger allocation over
+all plugged chargers: each charger scores every car (`get_car_score`) and
+the loop repeatedly assigns the best remaining (charger, car) pair. Two
+QS-342 facts to internalise:
+
+- **Exact score ties are a NORMAL operating case.** The dominant score
+  component is the distance bump, quantised in **0.5 m buckets** over 50 m
+  (deliberate — car GPS jitters by metres; finer resolution would make the
+  allocation flap with noise). Cars sleeping in their usual spots between
+  two wallboxes tie *every night*. Never "fix" a tie by sharpening the
+  distance resolution.
+- **Ties are resolved by a deterministic cascade**, evaluated over ALL
+  (charger, car) pairs at the max remaining score (not just each charger's
+  list head): **regret → stickiness → stable (charger name, car name)
+  order**. Regret = the pair's score minus the car's best score on any
+  *other unassigned* charger (no alternative → 0, i.e. regret = own score);
+  it is recomputed at every greedy iteration, skipping already-assigned
+  chargers (their score lists are stale by design). Stickiness prefers the
+  charger the car is currently attached to, so symmetric steady states
+  don't swap-flap. The stable order assumes **unique device names**
+  (enforced de facto by HA config-entry titles).
+
+**Steal semantics:** an attached car is displaced *only* by a strictly
+higher score, or by an **equal score with strictly higher regret** — the
+latter is required so a crossed pairing (leftover of the pre-fix
+ping-pong) recovers to the regret-consistent allocation. Any attachment
+state matching a regret-consistent allocation is a fixed point.
+
+**Known limitations:**
+
+- *Plug-time correlation is dead after an HA restart*: car plug probes are
+  recorder-bootstrapped (3 days) but the charger's synthetic
+  `is_there_a_car_plugged` probe is in-memory-only since restart, so
+  `plug_time_bump` is structurally 0 exactly when it is needed. Follow-up:
+  <https://github.com/tmenguy/quiet-solar/issues/344>.
+- *Residual failure mode*: a car GPS-jittering across a 0.5 m bucket edge
+  produces alternating strict-score winners that no tie-break sees.
+  Steal-margin hysteresis stays out of scope until observed in the field.
+
+`get_car_score` logs its decomposition at INFO-on-change keyed on the
+quantised tuple `(plug_bump, plug_time_bump, dist_bump)` only — a
+deliberate INFO exception to the QS-306 volume rules, because this line is
+what makes allocation incidents diagnosable without a recorder-DB
+forensic session.
 
 ### Charge-origin tagging & `get_charge_type()` (QS-274)
 

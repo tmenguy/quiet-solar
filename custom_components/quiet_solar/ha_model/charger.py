@@ -3005,8 +3005,26 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     score_plug_time_bump,
                 )
 
-            _LOGGER.debug(
-                f"get_car_score: {car.name} for {self.name} score: {score} dist_bump: {score_dist_bump} dist: {int(dist * 100) / 100.0}m plug_bump: {score_plug_bump} plug_time_bump {score_plug_time_bump} connected {connected_time_delta}"
+            # QS-342: the score decomposition is the single data point that made the
+            # incident diagnosable only via a recorder-DB forensic session, so it is
+            # a DELIBERATE INFO exception to the "debug for non-user-facing" rule.
+            # Change key = the quantised tuple ONLY: raw distance and the attach
+            # delta are payload, so GPS jitter inside a 0.5 m bucket emits nothing;
+            # the 900 s heartbeat bounds steady-state volume to ~1 line per
+            # (charger, car) per window.
+            self.log_info_on_change(
+                f"get_car_score:{car.name}",
+                (score_plug_bump, score_plug_time_bump, score_dist_bump),
+                time,
+                "get_car_score: %s for %s score: %s dist_bump: %s dist: %.2fm plug_bump: %s plug_time_bump: %s connected: %s",
+                car.name,
+                self.name,
+                score,
+                score_dist_bump,
+                dist,
+                score_plug_bump,
+                score_plug_time_bump,
+                connected_time_delta,
             )
 
         if score is None:
@@ -3071,6 +3089,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             if charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
                 active_chargers.append(charger)
 
+        # QS-342: deterministic charger order. Defensive only — the tie-break
+        # cascade below scans ALL tied pairs so it is already caller-independent;
+        # sorting just removes the historical `[self, others…]` positional bias.
+        active_chargers.sort(key=lambda c: c.name)
+
         cache = {}
 
         chargers_scores = {}
@@ -3099,27 +3122,66 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         while True:
             # assign the biggest score of the bunch
 
-            best_cur_score = None
-            best_cur_charger = None
-            best_cur_car = None
+            # QS-342: exact score ties are a NORMAL operating case (0.5 m distance
+            # buckets — cars sleeping in their usual spots tie every night). The old
+            # head-of-list strict `>` scan made the calling charger win every tie,
+            # which caused an attach/detach ping-pong between chargers and orphaned
+            # the car whose row was discarded. Deterministic cascade instead:
+            # max score → regret → stickiness → stable (charger name, car name).
 
+            # Find the maximum remaining score over ALL (charger, car) pairs of all
+            # unassigned chargers — not just each list's head: a tied car buried
+            # behind another tied car in one charger's list must still be able to
+            # win elsewhere.
+            best_cur_score = None
             for charger in active_chargers:
                 if charger in assigned_chargers:
                     continue
 
-                if len(chargers_scores[charger]) == 0:
-                    continue
-
-                score, car = chargers_scores[charger][0]
                 # score > 0 by construction (see the get_car_score loop above)
-                if best_cur_score is None or score > best_cur_score:
-                    best_cur_score = score
-                    best_cur_car = car
-                    best_cur_charger = charger
+                for score, _car in chargers_scores[charger]:
+                    if best_cur_score is None or score > best_cur_score:
+                        best_cur_score = score
 
-            if best_cur_car is None:
+            if best_cur_score is None:
                 # no more changes to do
                 break
+
+            ranked = []
+            for charger in active_chargers:
+                if charger in assigned_chargers:
+                    continue
+
+                for score, car in chargers_scores[charger]:
+                    if score != best_cur_score:
+                        continue
+
+                    # Regret: how much this car loses if not assigned here — its tied
+                    # score minus its best score on any OTHER unassigned charger (no
+                    # other positive-score option → alternative 0, regret = own score).
+                    # Chargers already in assigned_chargers MUST be skipped: their
+                    # score lists are stale by design (only cars are removed on
+                    # assignment, never chargers).
+                    best_alternative = 0.0
+                    for other in active_chargers:
+                        if other is charger or other in assigned_chargers:
+                            continue
+                        for other_score, other_car in chargers_scores[other]:
+                            if other_car.name == car.name and other_score > best_alternative:
+                                best_alternative = other_score
+                    regret = best_cur_score - best_alternative
+
+                    # Stickiness: among equal-regret tied pairs, prefer the charger
+                    # this car is currently attached to (keeps symmetric steady
+                    # states stable — no swap flapping).
+                    sticky = 1 if (charger.car is not None and charger.car.name == car.name) else 0
+
+                    # Stable order: charger name then car name — arbitrary but
+                    # identical for every caller (device names are unique de facto:
+                    # HA config-entry titles).
+                    ranked.append(((-regret, -sticky, charger.name, car.name), charger, car))
+
+            _, best_cur_charger, best_cur_car = min(ranked, key=lambda item: item[0])
 
             assigned_chargers[best_cur_charger] = best_cur_car
             assigned_chargers_score[best_cur_charger] = best_cur_score

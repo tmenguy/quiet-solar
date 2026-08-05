@@ -342,6 +342,9 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
 
         # Mock chargers
         mock_charger2 = MagicMock()
+        # QS-342: `name=` is reserved in the MagicMock constructor, so set it after
+        # creation — the deterministic allocation order sorts chargers by name.
+        mock_charger2.name = "Charger2"
         mock_charger2.qs_enable_device = True
         mock_charger2.car = mock_car2
         mock_charger2.get_user_originated = MagicMock(return_value=None)
