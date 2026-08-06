@@ -23,6 +23,7 @@ from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CAR_NAME,
 )
 from custom_components.quiet_solar.ha_model.charger import (
+    _CHANGED_RELOG_MIN_INTERVAL_S,
     _POWER_LOG_DEADBAND_W,
     _RELOG_UNCHANGED_AFTER_S,
     CHARGER_ADAPTATION_WINDOW_S,
@@ -216,7 +217,8 @@ def test_log_info_on_change_only_mutates_its_own_state(caplog: pytest.LogCapture
     after = vars(host)
     assert set(after) - set(before) == {"_log_on_change_state"}
     assert set(before) - set(after) == set()
-    assert host._log_on_change_state == {"k": ("v", T0)}
+    # Third field: QS-342's suppressed-change counter (0 = no banked churn).
+    assert host._log_on_change_state == {"k": ("v", T0, 0)}
 
 
 def test_log_info_on_change_resets_the_timer_on_every_emission(caplog: pytest.LogCaptureFixture) -> None:
@@ -792,7 +794,12 @@ async def test_s11_best_car_logged_once_per_window(caplog: pytest.LogCaptureFixt
     assert len(_messages(caplog, "with score", logging.INFO, CHARGER_LOGGER)) == 2
 
     scores["CarB"] = 100.0
-    assert charger.get_best_car(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 70)).name == car_b.name
+    # QS-342: this site now carries a changed-value rate floor, so the swap must sit
+    # at least `_CHANGED_RELOG_MIN_INTERVAL_S` after the previous emission (+63) for
+    # the winner change to be emitted rather than banked. The NH7 intent below —
+    # every record names the car that actually won — is unchanged.
+    swap_at = _RELOG_UNCHANGED_AFTER_S + 63 + _CHANGED_RELOG_MIN_INTERVAL_S + 7
+    assert charger.get_best_car(T0 + timedelta(seconds=swap_at)).name == car_b.name
     records = _messages(caplog, "with score", logging.INFO, CHARGER_LOGGER)
     assert len(records) == 3
     # NH7: the records must name the car that actually won each time.

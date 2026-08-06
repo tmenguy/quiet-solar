@@ -50,7 +50,11 @@ FIXED_POINT = {"wallbox_parking": "IDBuzz", "wallbox_portail": "Zoe"}
 
 
 def _pin_car(car, coords) -> None:
-    """Pin a car to the incident matrix: plugged (both call forms) + fixed GPS."""
+    """Pin a car to the incident matrix: fixed GPS + `is_car_plugged` → True.
+
+    Patching `is_car_plugged` covers both call forms (`for_duration` set and
+    unset), so `plug_bump` is 5 rather than the instant-fallback 2.
+    """
     car.get_car_coordinates = MagicMock(return_value=coords)
     car.is_car_plugged = MagicMock(return_value=True)
 
@@ -169,7 +173,7 @@ def _apply_attachment_state(fx, parking_car, portail_car, time) -> None:
 
 
 # =============================================================================
-# Incident replay (expected red on pre-fix code)
+# Incident replay (historical TDD note: was red on pre-A1 code, green since A1)
 # =============================================================================
 
 
@@ -198,7 +202,7 @@ def test_incident_replay_idbuzz_gets_parking():
 
 
 # =============================================================================
-# Start-state × execution-order sweep (expected red on pre-fix code)
+# Start-state × execution-order sweep (historical TDD note: was red pre-A1)
 # =============================================================================
 
 
@@ -392,6 +396,14 @@ def test_scenario_families_are_caller_independent(scenario, caller_name):
 # =============================================================================
 
 
+def _messages(caplog, fragment: str) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == CHARGER_LOGGER and fragment in record.getMessage()
+    ]
+
+
 def _decomposition_lines(caplog) -> list[str]:
     return [
         record.getMessage()
@@ -419,10 +431,18 @@ def test_get_car_score_decomposition_logs_once_then_on_change(caplog):
     fx.parking.get_car_score(fx.zoe, time, {})
     assert len(_decomposition_lines(caplog)) == 1
 
+    # KEY-COMPOSITION ORACLE (do not fold into the step above): in-bucket jitter
+    # with the last emission OLDER than the rate floor. The floor can no longer
+    # explain the silence, so this fails if the change key ever grows a raw
+    # (unquantised) component — raw distance here.
+    fx.zoe.get_car_coordinates = MagicMock(return_value=(ZOE_COORDS[0] + 0.0000005, ZOE_COORDS[1]))
+    time = T0 + timedelta(seconds=_CHANGED_RELOG_MIN_INTERVAL_S + 5)
+    fx.parking.get_car_score(fx.zoe, time, {})
+    assert len(_decomposition_lines(caplog)) == 1
+
     # Crossing a bucket edge (≈11 m shift) changes the quantised tuple → one
-    # new line, once past the changed-value rate-limit floor.
+    # new line (the floor has elapsed since the only emission, at T0).
     fx.zoe.get_car_coordinates = MagicMock(return_value=(ZOE_COORDS[0] + 0.0001, ZOE_COORDS[1]))
-    time = T0 + timedelta(seconds=_CHANGED_RELOG_MIN_INTERVAL_S + 10)
     fx.parking.get_car_score(fx.zoe, time, {})
     assert len(_decomposition_lines(caplog)) == 2
 
@@ -439,6 +459,93 @@ def test_get_car_score_decomposition_logs_once_then_on_change(caplog):
     assert len(_decomposition_lines(caplog)) == 3
 
 
+def test_get_car_score_change_key_ignores_the_attach_delta(caplog):
+    # Second key-composition oracle: `connected_time_delta` grows on every call
+    # while the car stays attached. It is payload, not part of the change key —
+    # scoring 65 s later (floor elapsed, quantised tuple identical) must stay
+    # silent. Fails if the attach delta ever enters the key.
+    fx = _make_incident_fixture()
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+
+    fx.parking.attach_car(fx.zoe, T0)
+    fx.parking.get_car_score(fx.zoe, T0, {})
+    assert len(_decomposition_lines(caplog)) == 1
+
+    later = T0 + timedelta(seconds=_CHANGED_RELOG_MIN_INTERVAL_S + 5)
+    fx.parking.get_car_score(fx.zoe, later, {})
+    assert len(_decomposition_lines(caplog)) == 1
+
+
+def test_get_car_score_excursion_reverting_inside_the_floor_is_disclosed(caplog):
+    # QS-342 review #02 / S1: a tuple excursion that begins AND ends inside the
+    # floor window must not vanish. The memo is not restamped on suppression, so
+    # a revert would otherwise leave the operator a flat trace while the 900 s
+    # heartbeat re-emits the pre-excursion tuple.
+    fx = _make_incident_fixture()
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+
+    fx.parking.get_car_score(fx.zoe, T0, {})
+    assert len(_decomposition_lines(caplog)) == 1
+
+    # Excursion to another bucket for three cycles, all inside the floor.
+    fx.zoe.get_car_coordinates = MagicMock(return_value=(ZOE_COORDS[0] + 0.0001, ZOE_COORDS[1]))
+    for offset in (7, 14, 21):
+        fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=offset), {})
+    assert len(_decomposition_lines(caplog)) == 1
+
+    # Reverts to the pre-excursion bucket, still inside the floor: nothing yet.
+    fx.zoe.get_car_coordinates = MagicMock(return_value=ZOE_COORDS)
+    fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=28), {})
+    assert len(_decomposition_lines(caplog)) == 1
+
+    # Once the floor expires the banked excursion is disclosed, even though the
+    # value now equals the last emitted one.
+    fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=_CHANGED_RELOG_MIN_INTERVAL_S + 5), {})
+    lines = _decomposition_lines(caplog)
+    assert len(lines) == 2
+    assert "suppressed" in lines[1]
+    assert "3" in lines[1]  # the three suppressed changes are counted
+
+
+def test_log_info_on_change_floor_survives_a_tzinfo_mismatch(caplog):
+    # S4: the naive/aware mismatch path cannot compute `elapsed`, so it emits
+    # (a logging helper must never raise). Pin that this is ONE-SHOT: the
+    # emission restamps the key, so the floor governs again immediately after.
+    fx = _make_incident_fixture()
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    charger = fx.parking
+    floor = {"min_interval_s": _CHANGED_RELOG_MIN_INTERVAL_S}
+
+    charger.log_info_on_change("k", "a", T0, "tz probe %s", "aware", **floor)
+    charger.log_info_on_change("k", "b", T0.replace(tzinfo=None), "tz probe %s", "naive", **floor)
+    assert len(_messages(caplog, "tz probe")) == 2
+
+    # Same (naive) clock kind again, changed value inside the floor: suppressed.
+    charger.log_info_on_change(
+        "k", "c", T0.replace(tzinfo=None) + timedelta(seconds=7), "tz probe %s", "naive again", **floor
+    )
+    assert len(_messages(caplog, "tz probe")) == 2
+
+
+def _gaps(offsets: list[int]) -> list[int]:
+    """Simulated-time distances between consecutive emissions."""
+    return [later - earlier for earlier, later in zip(offsets[:-1], offsets[1:], strict=True)]
+
+
+def _emission_offsets(caplog, lines_fn, cycles, step_s, run_cycle) -> list[int]:
+    """Simulated-time offsets (s) at which `lines_fn` gained a line."""
+    offsets: list[int] = []
+    seen = len(lines_fn(caplog))
+    for index in range(cycles):
+        offset = index * step_s
+        run_cycle(index, T0 + timedelta(seconds=offset))
+        current = len(lines_fn(caplog))
+        if current > seen:
+            offsets.append(offset)
+            seen = current
+    return offsets
+
+
 def test_get_car_score_decomposition_rate_limited_when_tuple_oscillates(caplog):
     # A car GPS-jittering ACROSS a 0.5 m bucket edge alternates the change key
     # on every ~7 s allocation cycle (the incident's churn class): emissions
@@ -449,17 +556,47 @@ def test_get_car_score_decomposition_rate_limited_when_tuple_oscillates(caplog):
     in_bucket = ZOE_COORDS
     other_bucket = (ZOE_COORDS[0] + 0.0001, ZOE_COORDS[1])  # ≈11 m: different bucket
 
-    cycles = 40
-    step_s = 7
-    for i in range(cycles):
-        coords = other_bucket if i % 2 else in_bucket
-        fx.zoe.get_car_coordinates = MagicMock(return_value=coords)
-        fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=i * step_s), {})
+    def _cycle(index, time):
+        fx.zoe.get_car_coordinates = MagicMock(return_value=other_bucket if index % 2 else in_bucket)
+        fx.parking.get_car_score(fx.zoe, time, {})
 
-    span_s = (cycles - 1) * step_s  # 273 s of sustained flapping
-    bound = 1 + span_s // _CHANGED_RELOG_MIN_INTERVAL_S + 1  # first line + ≤1/floor
-    lines = _decomposition_lines(caplog)
-    assert 2 <= len(lines) <= bound  # bounded, yet still emitting on change
+    offsets = _emission_offsets(caplog, _decomposition_lines, cycles=40, step_s=7, run_cycle=_cycle)
+
+    # Pin the MECHANISM, not a loose count: consecutive emissions are at least a
+    # floor apart (a floor half as effective would fail), and churn still gets
+    # reported rather than silenced entirely.
+    assert len(offsets) >= 2
+    assert all(gap >= _CHANGED_RELOG_MIN_INTERVAL_S for gap in _gaps(offsets)), offsets
+
+
+def test_get_best_car_log_is_rate_limited_when_the_winner_flips(caplog):
+    # S2: the sibling INFO-on-change site in `get_best_car` is keyed on the
+    # winning car name. The documented residual mode (a car jittering across a
+    # 0.5 m bucket edge flips the strict-score winner) drives it at the full
+    # cycle rate unless it is floored too.
+    fx = _make_incident_fixture()
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    _patch_scores(fx.portail, {})  # never competes: keeps the flip on `parking`
+    scores = {"Zoe": 100.0, "IDBuzz": 90.0}
+    fx.parking.get_car_score = MagicMock(side_effect=lambda car, time, cache: scores.get(car.name, 0.0))
+
+    def _lines(cap):
+        return [
+            record.getMessage()
+            for record in cap.records
+            if record.name == CHARGER_LOGGER and record.getMessage().startswith("get_best_car: ")
+        ]
+
+    def _cycle(index, time):
+        # Strict-score winner flips every cycle — no tie, so the cascade never
+        # sees it (this is the documented bucket-edge residual).
+        scores["Zoe"], scores["IDBuzz"] = (90.0, 100.0) if index % 2 else (100.0, 90.0)
+        fx.parking.get_best_car(time)
+
+    offsets = _emission_offsets(caplog, _lines, cycles=20, step_s=7, run_cycle=_cycle)
+
+    assert len(offsets) >= 2
+    assert all(gap >= _CHANGED_RELOG_MIN_INTERVAL_S for gap in _gaps(offsets)), offsets
 
 
 def test_detach_car_preserves_get_car_score_memo(caplog):
@@ -474,11 +611,17 @@ def test_detach_car_preserves_get_car_score_memo(caplog):
     fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=7), {})
     assert len(_decomposition_lines(caplog)) == 1
 
+    # Seed a NON-score memo so the wipe assertion below is not vacuous: without
+    # it the prefix-only check passes even if the wipe stops clearing anything.
+    fx.parking.log_info_on_change("session", "seeded", T0, "session probe")
+    assert "session" in fx.parking._log_on_change_state
+
     fx.parking.detach_car()
 
     # Unchanged tuple right after the detach: no re-emission burst.
     fx.parking.get_car_score(fx.zoe, T0 + timedelta(seconds=14), {})
     assert len(_decomposition_lines(caplog)) == 1
 
-    # The non-get_car_score memos are still cleared (QS-306 fresh-session rule).
+    # The non-get_car_score memos ARE still cleared (QS-306 fresh-session rule).
+    assert "session" not in fx.parking._log_on_change_state
     assert all(key.startswith("get_car_score:") for key in fx.parking._log_on_change_state)

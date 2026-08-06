@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from enum import StrEnum
-from typing import Any, TypeIs
+from typing import Any, NamedTuple, TypeIs
 
 import pytz
 from haversine import Unit, haversine
@@ -644,6 +644,19 @@ def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool
     return all(_element_unchanged(p, c, deadband) for p, c in zip(prev, current, strict=True))
 
 
+class _LogOnChangeRecord(NamedTuple):
+    """Last EMITTED value for a key, plus churn hidden by the rate floor.
+
+    `suppressed_changes` counts value changes dropped by `min_interval_s` since
+    that emission. It exists so an excursion that reverts inside the floor window
+    still gets disclosed (QS-342 review #02 / S1) instead of vanishing.
+    """
+
+    value: object
+    time: datetime
+    suppressed_changes: int = 0
+
+
 class LogOnChangeMixin:
     """Emit INFO only when a reported value changes, or after 900 s (QS-306).
 
@@ -657,7 +670,7 @@ class LogOnChangeMixin:
     # Annotation WITH an immutable default. Never give this a `{}` default: a mutable
     # class attribute is shared across instances, and the per-charger sites use keys
     # that are not instance-qualified, so every charger would silence the others.
-    _log_on_change_state: dict[str, tuple[object, datetime]] | None = None
+    _log_on_change_state: dict[str, _LogOnChangeRecord] | None = None
 
     def log_info_on_change(
         self,
@@ -669,26 +682,38 @@ class LogOnChangeMixin:
         deadband: float | None = None,
         min_interval_s: float | None = None,
     ) -> None:
-        """Log `msg` at INFO if `value` changed for `key`, or if 900 s elapsed.
+        """Log `msg` at INFO if `value` changed for `key`, after 900 s unchanged, or
+        to disclose churn hidden by the optional `min_interval_s` rate floor.
 
         `time` must be timezone-aware UTC — the same value the caller already
         receives. `|elapsed|` is used so a backwards clock jump cannot silence a
         key. The timer is re-stamped on every emission, so the constant bounds the
         gap between emissions rather than imposing a fixed cadence.
 
-        `min_interval_s` (QS-342) additionally rate-limits CHANGED-value
-        emissions: after an emission for `key`, a different value is suppressed
-        until the floor elapses. The memo is deliberately NOT updated on
-        suppression, so the next post-floor call still compares against the last
-        *emitted* value — a value flapping between two states cannot silence
-        itself by landing back on the previous one at floor expiry.
+        `min_interval_s` (QS-342) rate-limits CHANGED-value emissions: within the
+        floor of the last emission nothing is logged, but each dropped change is
+        BANKED on the key, and the first call at/after floor expiry emits — even
+        if the value has meanwhile reverted to the last emitted one — appending
+        the suppressed count. So a genuine change is delayed by at most the floor
+        and an excursion that both starts and ends inside the window is still
+        reported (it would otherwise be lost entirely: the memo holds the last
+        *emitted* value, so a revert looks unchanged). Per key the floor therefore
+        bounds emissions to ~1 per window; the caller owns the aggregate (one key
+        per charger×car at the `get_car_score` site).
+
+        Non-comparable clocks (naive vs aware under one key) cannot yield an
+        `elapsed`, so that path emits unconditionally rather than raising — a
+        logging helper must never be load-bearing. It is self-limiting: the
+        emission re-stamps the key with `time`, so the very next call on the same
+        clock kind is comparable and floored again.
         """
         state = self._log_on_change_state
         if state is None:
             state = self._log_on_change_state = {}
+        suppressed_changes = 0
         prev = state.get(key)
         if prev is not None:
-            prev_value, prev_time = prev
+            prev_value, prev_time, banked_changes = prev
             # Mixing naive and aware datetimes under one key would raise TypeError on
             # the subtraction. A logging helper must never be load-bearing, so bail to
             # logging instead of propagating out of the caller's control cycle.
@@ -696,12 +721,24 @@ class LogOnChangeMixin:
             if comparable:
                 elapsed = abs((time - prev_time).total_seconds())
                 unchanged = _is_unchanged(prev_value, value, deadband)
-                if unchanged and elapsed < _RELOG_UNCHANGED_AFTER_S:
+                if min_interval_s is not None and elapsed < min_interval_s:
+                    # Under the floor nothing is emitted. Bank a changed value so the
+                    # excursion survives a revert; leave value/time untouched so the
+                    # comparison stays against the last EMITTED state.
+                    if not unchanged:
+                        state[key] = _LogOnChangeRecord(prev_value, prev_time, banked_changes + 1)
                     return
-                if not unchanged and min_interval_s is not None and elapsed < min_interval_s:
+                if unchanged and banked_changes == 0 and elapsed < _RELOG_UNCHANGED_AFTER_S:
                     return
-        state[key] = (value, time)
-        _LOGGER.info(msg, *args)
+                suppressed_changes = banked_changes
+        state[key] = _LogOnChangeRecord(value, time)
+        if suppressed_changes:
+            # Concatenated OUTSIDE the logging call (ruff G003) and only ever with
+            # static format text: the values stay lazy %-args.
+            disclosure = msg + " [+%s change(s) suppressed by the rate floor]"
+            _LOGGER.info(disclosure, *args, suppressed_changes)
+        else:
+            _LOGGER.info(msg, *args)
 
 
 class QSChargerGroup(LogOnChangeMixin):
@@ -3026,11 +3063,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             # a DELIBERATE INFO exception to the "debug for non-user-facing" rule.
             # Change key = the quantised tuple ONLY: raw distance and the attach
             # delta are payload, so GPS jitter inside a 0.5 m bucket emits nothing.
-            # Volume bound (review fix #01): changed values are rate-limited to
-            # ~1 line per key per _CHANGED_RELOG_MIN_INTERVAL_S (a tuple flapping
-            # across a quantisation edge every cycle cannot track the cycle rate),
-            # and unchanged values re-emit on the 900 s heartbeat — so a key emits
-            # at most ~1 line per minute worst-case, ~1 per 900 s steady-state.
+            # Volume bound (review #01, tightened in #02): changed values are
+            # rate-limited to ~1 line per key per _CHANGED_RELOG_MIN_INTERVAL_S (a
+            # tuple flapping across a quantisation edge every cycle cannot track the
+            # cycle rate; churn hidden by the floor is disclosed as a suppressed
+            # count, so nothing is lost), and unchanged values re-emit on the 900 s
+            # heartbeat. Per key: ≤ ~1 line/min worst case, ~1 per 900 s steady
+            # state. Keys are per (charger, car), so the AGGREGATE worst case is
+            # N chargers × M cars per minute — plus one floored key per charger for
+            # the `get_best_car` winner line below.
             self.log_info_on_change(
                 f"get_car_score:{car.name}",
                 (score_plug_bump, score_plug_time_bump, score_dist_bump),
@@ -3153,67 +3194,65 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             # the car whose row was discarded. Deterministic cascade instead:
             # max score → regret → stickiness → stable (charger name, car name).
 
-            # Find the maximum remaining score over ALL (charger, car) pairs of all
-            # unassigned chargers — not just each list's head: a tied car buried
-            # behind another tied car in one charger's list must still be able to
-            # win elsewhere.
-            best_cur_score = None
-            for charger in active_chargers:
-                if charger in assigned_chargers:
-                    continue
-
+            # Every remaining (charger, car) pair of the unassigned chargers — not
+            # just each list's head: a tied car buried behind another tied car in one
+            # charger's list must still be able to win elsewhere. Collected ONCE, so
+            # the max and the tied set are derived from the same list and cannot
+            # drift apart (review #02 / S6: this replaces an `assert` that both
+            # `python -O` would strip and put an AssertionError on the live
+            # allocation path — there is now no invariant left to guard).
+            candidates = [
+                (score, charger, car)
+                for charger in active_chargers
+                if charger not in assigned_chargers
                 # score > 0 by construction (see the get_car_score loop above)
-                for score, _car in chargers_scores[charger]:
-                    if best_cur_score is None or score > best_cur_score:
-                        best_cur_score = score
+                for score, car in chargers_scores[charger]
+            ]
 
-            if best_cur_score is None:
+            if not candidates:
                 # no more changes to do
                 break
 
+            best_cur_score = max(score for score, _charger, _car in candidates)
+
             ranked = []
-            for charger in active_chargers:
-                if charger in assigned_chargers:
+            for score, charger, car in candidates:
+                # Exact float `==` tie detection is safe, and it always matches at
+                # least the candidate `max` just returned: every score component is
+                # an exactly-representable dyadic value (the quantised bumps, plus
+                # the 0.5 home-instant-fallback `dist_bump`, which scales to exactly
+                # 50000.0 — so "integer-valued" is NOT the invariant), and both
+                # sides are the identical expression, so tied pairs carry
+                # bit-identical floats. A future non-dyadic component, or a per-pair
+                # re-derivation of the score, would silently kill the tie-break.
+                if score != best_cur_score:
                     continue
 
-                for score, car in chargers_scores[charger]:
-                    # Exact float `==` tie detection is safe: every score component
-                    # is integer-valued by construction (quantised bumps), so tied
-                    # pairs carry the identical float. A future fractional component
-                    # would silently kill the tie-break — keep the bumps quantised.
-                    if score != best_cur_score:
+                # Regret: how much this car loses if not assigned here — its tied
+                # score minus its best score on any OTHER unassigned charger (no
+                # other positive-score option → alternative 0, regret = own score).
+                # Chargers already in assigned_chargers MUST be skipped: their
+                # score lists are stale by design (only cars are removed on
+                # assignment, never chargers).
+                best_alternative = 0.0
+                for other in active_chargers:
+                    if other is charger or other in assigned_chargers:
                         continue
+                    for other_score, other_car in chargers_scores[other]:
+                        if other_car.name == car.name and other_score > best_alternative:
+                            best_alternative = other_score
+                regret = best_cur_score - best_alternative
 
-                    # Regret: how much this car loses if not assigned here — its tied
-                    # score minus its best score on any OTHER unassigned charger (no
-                    # other positive-score option → alternative 0, regret = own score).
-                    # Chargers already in assigned_chargers MUST be skipped: their
-                    # score lists are stale by design (only cars are removed on
-                    # assignment, never chargers).
-                    best_alternative = 0.0
-                    for other in active_chargers:
-                        if other is charger or other in assigned_chargers:
-                            continue
-                        for other_score, other_car in chargers_scores[other]:
-                            if other_car.name == car.name and other_score > best_alternative:
-                                best_alternative = other_score
-                    regret = best_cur_score - best_alternative
+                # Stickiness: among equal-regret tied pairs, prefer the charger
+                # this car is currently attached to (keeps symmetric steady
+                # states stable — no swap flapping).
+                sticky = 1 if (charger.car is not None and charger.car.name == car.name) else 0
 
-                    # Stickiness: among equal-regret tied pairs, prefer the charger
-                    # this car is currently attached to (keeps symmetric steady
-                    # states stable — no swap flapping).
-                    sticky = 1 if (charger.car is not None and charger.car.name == car.name) else 0
+                # Stable order: charger name then car name — arbitrary but
+                # identical for every caller (device names are unique de facto:
+                # HA config-entry titles).
+                ranked.append(((-regret, -sticky, charger.name, car.name), charger, car))
 
-                    # Stable order: charger name then car name — arbitrary but
-                    # identical for every caller (device names are unique de facto:
-                    # HA config-entry titles).
-                    ranked.append(((-regret, -sticky, charger.name, car.name), charger, car))
-
-            # `ranked` is never empty here: `best_cur_score` was found by scanning
-            # exactly the same (unassigned charger × score list) pair set the tied-
-            # pair scan iterates. Assert the coupling rather than adding a dead
-            # `if not ranked: break` branch the 100% coverage gate could never see.
-            assert ranked, "QS-342: tied-pair scan found no pair at the max score"
             _, best_cur_charger, best_cur_car = min(ranked, key=lambda item: item[0])
 
             assigned_chargers[best_cur_charger] = best_cur_car
@@ -3262,6 +3301,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             else:
                 # Keyed on the car name only: the score is a per-cycle float, so
                 # keying on it would preserve every line.
+                # QS-342 review #02 / S2: floored like the `get_car_score` site. The
+                # residual failure mode this PR documents (a car GPS-jittering across
+                # a 0.5 m bucket edge flips the STRICT-score winner, which no
+                # tie-break sees) drives this key at the full cycle rate otherwise.
                 self.log_info_on_change(
                     "get_best_car",
                     best_car.name,
@@ -3270,6 +3313,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     best_car.name,
                     assigned_chargers_score.get(self),
                     self.name,
+                    min_interval_s=_CHANGED_RELOG_MIN_INTERVAL_S,
                 )
 
         if best_car.charger is not None and best_car.charger != self:
@@ -4192,6 +4236,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # departed session; wiping them would re-emit one decomposition line per car
         # after every detach, defeating the on-change suppression under churn.
         # Collapse to None when nothing survives (the QS-306 fresh-session shape).
+        # Accepted consequence (review #02 / N3): these keys also survive `reset()`,
+        # i.e. the physical-unplug and `qs_enable_device` disable paths. A new
+        # session started within 900 s with the car parked in the same spot gets no
+        # session-start decomposition line — the score is genuinely unchanged, and
+        # re-emitting per detach is what would break the volume bound (a wiped key
+        # has no `prev`, so it escapes the rate floor entirely). The `get_best_car`
+        # winner line, which IS wiped here, remains the per-session anchor.
         if self._log_on_change_state is not None:
             kept = {k: v for k, v in self._log_on_change_state.items() if k.startswith("get_car_score:")}
             self._log_on_change_state = kept or None

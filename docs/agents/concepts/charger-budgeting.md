@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-05
+last_verified: 2026-08-06
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -131,20 +131,36 @@ state matching a regret-consistent allocation is a fixed point.
   that starts *after* the restart has both clocks aligned and is
   unaffected. Follow-up:
   <https://github.com/tmenguy/quiet-solar/issues/344>.
-- *Residual failure mode*: a car GPS-jittering across a 0.5 m bucket edge
-  produces alternating strict-score winners that no tie-break sees.
-  Steal-margin hysteresis stays out of scope until observed in the field.
+- *Residual failure mode — two unhysteresised quantisation edges.* (1) The
+  0.5 m `dist_bump` bucket edge: a car GPS-jittering across it produces
+  alternating **strict-score** winners that no tie-break sees. (2) The
+  `dist <= 3.0` threshold that adds +1 to `plug_bump`: because `plug_bump`
+  is the lowest-order term, a ±1 flip converts an **exact tie** — where
+  stickiness protects the incumbent — into a strict win, which steals with
+  no margin at all. The second edge therefore *bypasses* the cascade rather
+  than being resolved by it, and it is reachable in the incident's own
+  geometry (3.58 / 3.69 / 3.97 m). Steal-margin hysteresis stays out of
+  scope until observed in the field.
 
 `get_car_score` logs its decomposition at INFO-on-change keyed on the
 quantised tuple `(plug_bump, plug_time_bump, dist_bump)` only — a
 deliberate INFO exception to the QS-306 volume rules, because this line is
 what makes allocation incidents diagnosable without a recorder-DB
-forensic session. Volume bound: changed values are rate-limited to ~1 line
-per (charger, car) per `_CHANGED_RELOG_MIN_INTERVAL_S` (60 s) — so a tuple
-flapping across a quantisation edge every ~7 s cycle cannot track the
-cycle rate — and unchanged values re-emit on the 900 s heartbeat; these
-memo keys survive `detach_car()` (see above), so attach/detach churn
-cannot defeat the suppression either.
+forensic session. **Volume bound** (both this site and the sibling
+`get_best_car` winner line are floored): changed values are rate-limited to
+~1 line per key per `_CHANGED_RELOG_MIN_INTERVAL_S` (60 s) — so a value
+flapping across a quantisation edge every ~7 s cycle cannot track the cycle
+rate — and unchanged values re-emit on the 900 s heartbeat. Keys are per
+(charger, car) for the decomposition and per charger for the winner line,
+so the **aggregate** worst case is (N chargers × M cars + N) lines/minute,
+settling to one per key per 900 s. Churn hidden by the floor is not lost:
+suppressed changes are banked and the first emission after the floor
+appends `[+n change(s) suppressed…]`, so an excursion that starts *and*
+ends inside the window is still visible. The decomposition memo keys
+survive `detach_car()` (see above) — and hence `reset()`, i.e. physical
+unplug and device disable — so a new session within 900 s with the car in
+the same spot has no session-start decomposition line; the `get_best_car`
+winner line, which *is* wiped, is the per-session anchor.
 
 ### Charge-origin tagging & `get_charge_type()` (QS-274)
 
