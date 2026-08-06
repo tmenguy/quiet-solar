@@ -323,6 +323,44 @@ def test_equal_score_does_not_steal_attached_car():
 # =============================================================================
 
 
+def _patch_scores_by_object(charger, mapping) -> None:
+    """Score map keyed by object IDENTITY — the only way to tell twins apart."""
+    charger.get_car_score = MagicMock(side_effect=lambda car, time, cache: mapping.get(id(car), 0.0))
+
+
+def test_duplicate_car_names_do_not_orphan_a_charger():
+    """B1 (review #04): regret must use the same relation as removal — the NAME.
+
+    The cascade is effectively over names: removal consumes a whole NAME from every
+    charger's list, and stickiness compares names. A regret scan matching by object
+    identity is the odd one out, and the two rules then stop describing the same set.
+
+    Nothing enforces car-name uniqueness. `CONF_NAME` is a plain `cv.string` in the
+    options flow with no collision validation, the options flow never re-checks
+    `unique_id`, and `add_device` dedups by object identity only (`QSCar` defines no
+    `__eq__`) — so two config entries named "Zoe" yield two distinct `QSCar` objects
+    named "Zoe".
+
+    Under that state an identity scan under-counts alternatives, so regret for the
+    duplicated name inflates (0 -> 100) and it wins round 1; name-based removal then
+    strips its twin off the other charger, which exits the round with nothing and
+    falls back to its generic car. That is exactly the #342 symptom.
+    """
+    fx = _make_incident_fixture(pin_buzz=False)
+    twin = make_real_car(fx.hass, fx.home, name=fx.zoe.name)
+    assert twin is not fx.zoe and twin.name == fx.zoe.name
+    # Sorts after "Zoe", so the stable-order tie-break prefers a twin over it and the
+    # identity/name divergence is observable rather than masked by ordering.
+    spare = make_real_car(fx.hass, fx.home, name="Zzz")
+
+    _patch_scores_by_object(fx.parking, {id(fx.zoe): 100.0, id(spare): 100.0})
+    _patch_scores_by_object(fx.portail, {id(twin): 100.0})
+
+    # Neither plugged charger may end the round without a car (AC4).
+    assert fx.portail.get_best_car(T0) is twin
+    assert fx.parking.get_best_car(T0) is spare
+
+
 def test_losing_charger_falls_back_to_generic_car():
     # Incident matrix but the second car scores 0 (not plugged, no coords, not
     # home): the Zoe ties on both chargers, stable order gives it to parking,
