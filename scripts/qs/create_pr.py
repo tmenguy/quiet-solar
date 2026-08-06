@@ -57,8 +57,13 @@ def _epic_and_lane_note(issue: int, changed: list[str]) -> tuple[int | None, str
         return None, ""
     try:
         data = json.loads(result.stdout)
-        issue_body = data.get("body", "") or ""
-        labels = [lb["name"] for lb in data.get("labels", [])]
+        issue_body = data.get("body") or ""
+        # `or []` (QS-332 review-fix #03): a `"labels": null` response is
+        # valid JSON and its BODY is perfectly readable — the bare
+        # `.get(..., [])` raised `TypeError` into the broad `except`
+        # below and silently dropped the parent-epic `Refs` (and any
+        # Lane note) for no good reason.
+        labels = [lb["name"] for lb in data.get("labels") or []]
     except (json.JSONDecodeError, TypeError, KeyError):
         return None, ""
 

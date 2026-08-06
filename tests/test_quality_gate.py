@@ -8241,3 +8241,62 @@ class TestSeedModeSkipsLaneCheck:
             quality_gate.main()
         assert exc_info.value.code == 0
         lane_mock.assert_not_called()
+
+
+class TestFetchLaneLabelsNullLabels:
+    """Review-fix #03: `"labels": null` is a valid-JSON response the API
+    can return. With a bare `.get("labels", [])` the comprehension raised
+    `TypeError`, was swallowed by the broad `except`, and degraded to
+    `None` — i.e. the gh-FAILURE path (local warn+skip / CI fail closed)
+    for a response that was perfectly readable. The honest answer is an
+    empty label list, which then fails the declaration check on its own
+    merits."""
+
+    def test_null_labels_resolve_to_an_empty_list(self, tmp_path: Path) -> None:
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps({"labels": None}), stderr=""
+            )
+
+        with (
+            patch.object(quality_gate, "LANE_CACHE_FILE", tmp_path / "c"),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+            patch.object(quality_gate, "_run", side_effect=fake_run),
+        ):
+            assert quality_gate._fetch_lane_labels(332, "QS_332") == []
+
+    def test_null_labels_fail_the_declaration_rather_than_the_fetch(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end: the result is a declaration FAILURE (actionable),
+        not a `gh`-unavailable warn+skip (silent locally)."""
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps({"labels": None}), stderr=""
+            )
+
+        with (
+            patch.object(quality_gate, "LANE_CACHE_FILE", tmp_path / "c"),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+            patch.object(quality_gate, "_run", side_effect=fake_run),
+            _patch_lane_issue(),
+            _patch_lane_files(["scripts/qs/x.py"]),
+        ):
+            res = quality_gate._check_lane_targets()
+        assert res.declaration_missing is not None
+        assert "gh issue edit 332" in res.declaration_missing
+
+    def test_malformed_label_entries_degrade_to_none(self, tmp_path: Path) -> None:
+        """A malformed ENTRY (null / no `name`) is genuinely unreadable —
+        it keeps the existing unavailable semantics, unlike a null field."""
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps({"labels": [{"id": 1}]}), stderr=""
+            )
+
+        with (
+            patch.object(quality_gate, "LANE_CACHE_FILE", tmp_path / "c"),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+            patch.object(quality_gate, "_run", side_effect=fake_run),
+        ):
+            assert quality_gate._fetch_lane_labels(332, "QS_332") is None

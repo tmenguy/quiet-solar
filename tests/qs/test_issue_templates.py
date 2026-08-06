@@ -16,12 +16,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TEMPLATE_DIR = REPO_ROOT / ".github" / "ISSUE_TEMPLATE"
 
 # The D3 table: form basename → exact fixed label set.
+#
+# Review-fix #03 (user decision) amends D3: the legacy `bug` /
+# `enhancement` labels are NO LONGER attached. They created a label-set
+# asymmetry between the two birth paths — the web forms emitted them
+# while the agent path (`--labels "kind:bug,target:product,scale:task"`)
+# did not, so the same lane produced two different label sets and skewed
+# any filter keyed on the plain labels. Both paths now produce the
+# axis-only set. Their only code consumer (`story_type`) was deleted by
+# this same task.
 EXPECTED_LABELS = {
-    "bug-product": ["bug", "kind:bug", "target:product", "scale:task"],
-    "feature-product": ["enhancement", "kind:feature", "target:product", "scale:task"],
-    "bug-factory": ["bug", "kind:bug", "target:factory", "scale:task", "area:dev-pipeline"],
+    "bug-product": ["kind:bug", "target:product", "scale:task"],
+    "feature-product": ["kind:feature", "target:product", "scale:task"],
+    "bug-factory": ["kind:bug", "target:factory", "scale:task", "area:dev-pipeline"],
     "feature-factory": [
-        "enhancement",
         "kind:feature",
         "target:factory",
         "scale:task",
@@ -30,6 +38,10 @@ EXPECTED_LABELS = {
     "epic-product": ["scale:epic", "target:product"],
     "epic-factory": ["scale:epic", "target:factory", "area:dev-pipeline"],
 }
+
+# Review-fix #03: pinned as GONE from every form, not merely absent from
+# the table above — a future edit re-adding one must fail loudly.
+LEGACY_LABELS = ("bug", "enhancement")
 
 TASK_FORMS = ("bug-product", "feature-product", "bug-factory", "feature-factory")
 EPIC_FORMS = ("epic-product", "epic-factory")
@@ -59,6 +71,18 @@ def test_legacy_templates_are_gone() -> None:
 @pytest.mark.parametrize("form", sorted(EXPECTED_LABELS))
 def test_form_carries_exactly_its_lane_labels(form: str) -> None:
     assert _load(form)["labels"] == EXPECTED_LABELS[form]
+
+
+@pytest.mark.parametrize("form", sorted(EXPECTED_LABELS))
+def test_no_form_attaches_a_legacy_label(form: str) -> None:
+    """Review-fix #03: both birth paths must produce the SAME label set
+    for a lane — the web forms no longer attach `bug`/`enhancement`."""
+    attached = _load(form)["labels"]
+    assert not set(LEGACY_LABELS) & set(attached), (
+        f"{form}.yml still attaches a legacy label: "
+        f"{sorted(set(LEGACY_LABELS) & set(attached))}. The agent birth "
+        f"path emits axis labels only; the two paths must not disagree."
+    )
 
 
 @pytest.mark.parametrize("form", TASK_FORMS)

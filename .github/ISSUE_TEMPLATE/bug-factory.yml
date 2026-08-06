@@ -1,6 +1,6 @@
 name: Bug (factory / dev pipeline)
 description: Report a bug in the development pipeline, agents, scripts, or quality gate
-labels: ["bug", "kind:bug", "target:factory", "scale:task", "area:dev-pipeline"]
+labels: ["kind:bug", "target:factory", "scale:task", "area:dev-pipeline"]
 body:
   - type: textarea
     id: description

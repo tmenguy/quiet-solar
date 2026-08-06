@@ -1,6 +1,6 @@
 name: Feature (factory / dev pipeline)
 description: Suggest an enhancement to the development pipeline, agents, scripts, or quality gate
-labels: ["enhancement", "kind:feature", "target:factory", "scale:task", "area:dev-pipeline"]
+labels: ["kind:feature", "target:factory", "scale:task", "area:dev-pipeline"]
 body:
   - type: textarea
     id: use_case

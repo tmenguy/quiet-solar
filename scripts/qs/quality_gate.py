@@ -1773,7 +1773,12 @@ def _fetch_lane_labels(issue: int, branch: str) -> list[str] | None:
     if result.returncode != 0:
         return None
     try:
-        labels = [lb["name"] for lb in json.loads(result.stdout).get("labels", [])]
+        # `or []` (QS-332 review-fix #03): a `"labels": null` response is
+        # readable — it means "no labels", which the declaration check
+        # then fails on its own merits (actionable). Routing it through
+        # the `TypeError` arm to `None` claimed `gh` was UNAVAILABLE and
+        # degraded to warn+skip locally / fail-closed in CI instead.
+        labels = [lb["name"] for lb in json.loads(result.stdout).get("labels") or []]
     except (json.JSONDecodeError, TypeError, KeyError):
         return None
     ok, _missing, _message = targets.validate_declaration(labels)

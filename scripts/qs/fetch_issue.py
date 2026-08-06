@@ -35,21 +35,25 @@ def main() -> None:
         output_json({"error": f"Failed to fetch issue #{args.issue}", "detail": result.stderr.strip()})
         sys.exit(1)
 
+    # The label comprehension belongs INSIDE this guard, and the `except`
+    # tuple needs `KeyError` (QS-332 review-fix #03): a malformed entry
+    # (`"labels": [null]`, or one missing `"name"`) otherwise raised a raw
+    # traceback instead of the structured error JSON below — one level
+    # shallower than all three peer consumers (`context.py`,
+    # `create_pr.py`, `setup_task.py`).
+    #
+    # `or []` / `or ""` (review-fix #02): the API can also return a
+    # present-but-NULL field (`"labels": null`, `"body": null`), which a
+    # bare `.get` default does not catch. A null field is readable and
+    # degrades to empty; a malformed ENTRY is not, and errors out.
     try:
         data = json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError):
+        label_names = [lb["name"] for lb in data.get("labels") or []]
+        body = data.get("body") or ""
+    except (json.JSONDecodeError, TypeError, KeyError):
         output_json({"error": "Invalid JSON from gh CLI", "detail": result.stdout.strip()})
         sys.exit(1)
 
-    # `or []` / `or ""` (QS-332 review-fix #02): the API can return a
-    # present-but-null field (`"labels": null`, `"body": null`) — a bare
-    # `.get` default doesn't catch that, and iterating `None` /
-    # `parse_parent_epic(None)` raised a raw traceback instead of this
-    # script's structured error JSON. Same guard as `context.py` and
-    # `create_pr.py` (the fix-plan-#01 pattern, applied to the third
-    # consumer it missed).
-    label_names = [lb["name"] for lb in data.get("labels") or []]
-    body = data.get("body") or ""
     axes = targets.parse_axes(label_names)
     declaration_ok, _missing, _message = targets.validate_declaration(label_names)
 

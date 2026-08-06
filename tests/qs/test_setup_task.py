@@ -91,6 +91,33 @@ def test_conflicting_declaration_refuses(
     assert "target" in json.loads(capsys.readouterr().out)["missing"]
 
 
+def test_null_labels_reports_the_declaration_error_not_invalid_json(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review-fix #03: a valid-JSON response with ``"labels": null`` hit
+    the broad ``except TypeError`` and reported the misleading "Invalid
+    JSON from gh CLI". It is valid JSON — the honest verdict is the
+    ordinary missing-declaration refusal, with its actionable backfill
+    command."""
+    import setup_task
+    import utils
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert cmd[:3] == ["gh", "issue", "view"]
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout=json.dumps({"labels": None}), stderr=""
+        )
+
+    monkeypatch.setattr(utils, "run", fake_run)
+    with pytest.raises(SystemExit) as exc:
+        setup_task.check_declaration(42)
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert "Invalid JSON" not in out["error"]
+    assert "no complete lane declaration" in out["error"]
+    assert "gh issue edit 42 --add-label" in out["detail"]
+
+
 def test_gh_failure_refuses(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

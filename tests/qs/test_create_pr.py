@@ -31,8 +31,14 @@ def _make_fake_run(
     issue_labels: list[str] | None = None,
     changed_files: list[str] | None = None,
     issue_view_rc: int = 0,
+    null_labels: bool = False,
 ):
-    """Return ``(fake_run, seen)``; ``seen`` records every command."""
+    """Return ``(fake_run, seen)``; ``seen`` records every command.
+
+    ``null_labels`` emits a literal JSON ``"labels": null`` (what the API
+    can actually return), which is NOT the same as an empty list — see
+    the review-fix #03 test below.
+    """
     seen: list[list[str]] = []
 
     def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -52,7 +58,9 @@ def _make_fake_run(
             payload = json.dumps(
                 {
                     "body": issue_body,
-                    "labels": [{"name": name} for name in (issue_labels or [])],
+                    "labels": None
+                    if null_labels
+                    else [{"name": name} for name in (issue_labels or [])],
                 }
             )
             return subprocess.CompletedProcess(
@@ -170,6 +178,27 @@ def test_no_crossing_means_no_lane_note(
     )
     _run_main(monkeypatch, fake_run)
     assert "## Lane note" not in _created_body(seen)
+
+
+def test_null_labels_still_emits_the_parent_epic_refs(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Review-fix #03: with a bare ``.get("labels", [])`` a
+    ``"labels": null`` response was caught by the broad ``except
+    TypeError`` and silently dropped a perfectly readable parent-epic
+    ``Refs`` (and any Lane note). The epic comes from the BODY — a null
+    labels field must not cost it."""
+    fake_run, seen = _make_fake_run(
+        issue_body="intro\n\nRefs #321\n",
+        null_labels=True,
+        changed_files=["scripts/qs/targets.py"],
+    )
+    _run_main(monkeypatch, fake_run)
+    body = _created_body(seen)
+    assert "\nFixes #42\nRefs #321\n" in body
+    # No declared target is resolvable, so no Lane note — but the PR is
+    # otherwise intact.
+    assert "## Lane note" not in body
 
 
 def test_issue_view_failure_degrades_to_todays_body(

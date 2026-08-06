@@ -1,6 +1,6 @@
 name: Feature (product)
 description: Suggest a new feature or enhancement for the Quiet Solar integration
-labels: ["enhancement", "kind:feature", "target:product", "scale:task"]
+labels: ["kind:feature", "target:product", "scale:task"]
 body:
   - type: textarea
     id: use_case

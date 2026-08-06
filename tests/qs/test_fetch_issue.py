@@ -127,6 +127,43 @@ def test_story_type_is_gone(
     assert "story_type" not in out
 
 
+@pytest.mark.parametrize(
+    ("labels", "case"),
+    [
+        ([None], "null-entry"),
+        ([{"id": 1}], "entry-without-name"),
+        (["kind:bug"], "entry-is-a-bare-string"),
+    ],
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_malformed_label_entries_degrade_to_structured_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    labels: list,
+    case: str,
+) -> None:
+    """Review-fix #03: the fix-#02 guard covered a null labels *field*,
+    but the `lb["name"]` comprehension sat OUTSIDE the `try` whose
+    `except` also lacked `KeyError` — a malformed entry raised a raw
+    traceback instead of this script's structured error JSON, the exact
+    failure mode round 2 was closing. All three peer consumers keep the
+    comprehension inside the guarded block; this one was a level
+    shallower."""
+    import fetch_issue
+    import utils
+
+    payload = json.dumps(
+        {"number": 5, "title": "t", "body": "", "labels": labels, "state": "OPEN"}
+    )
+    monkeypatch.setattr(utils, "run", lambda cmd, **kw: _completed(stdout=payload))
+    monkeypatch.setattr("sys.argv", ["fetch_issue.py", "--issue", "5"])
+
+    with pytest.raises(SystemExit) as exc:
+        fetch_issue.main()
+    assert exc.value.code == 1
+    assert "error" in json.loads(capsys.readouterr().out)
+
+
 def test_gh_failure_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

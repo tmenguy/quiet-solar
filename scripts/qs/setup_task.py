@@ -55,7 +55,11 @@ def check_declaration(issue: int) -> None:
         })
         sys.exit(1)
     try:
-        labels = [lb["name"] for lb in json.loads(result.stdout).get("labels", [])]
+        # `or []` (QS-332 review-fix #03): `"labels": null` IS valid JSON,
+        # so reporting "Invalid JSON from gh CLI" for it was misleading —
+        # the honest verdict is the ordinary missing-declaration refusal
+        # below, which prints an actionable backfill command.
+        labels = [lb["name"] for lb in json.loads(result.stdout).get("labels") or []]
     except (json.JSONDecodeError, TypeError, KeyError):
         output_json({"error": "Invalid JSON from gh CLI", "detail": result.stdout.strip()})
         sys.exit(1)
