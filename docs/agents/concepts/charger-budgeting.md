@@ -146,21 +146,63 @@ state matching a regret-consistent allocation is a fixed point.
 quantised tuple `(plug_bump, plug_time_bump, dist_bump)` only — a
 deliberate INFO exception to the QS-306 volume rules, because this line is
 what makes allocation incidents diagnosable without a recorder-DB
-forensic session. **Volume bound** (both this site and the sibling
-`get_best_car` winner line are floored): changed values are rate-limited to
-~1 line per key per `_CHANGED_RELOG_MIN_INTERVAL_S` (60 s) — so a value
-flapping across a quantisation edge every ~7 s cycle cannot track the cycle
-rate — and unchanged values re-emit on the 900 s heartbeat. Keys are per
-(charger, car) for the decomposition and per charger for the winner line,
-so the **aggregate** worst case is (N chargers × M cars + N) lines/minute,
-settling to one per key per 900 s. Churn hidden by the floor is not lost:
-suppressed changes are banked and the first emission after the floor
-appends `[+n change(s) suppressed…]`, so an excursion that starts *and*
-ends inside the window is still visible. The decomposition memo keys
-survive `detach_car()` (see above) — and hence `reset()`, i.e. physical
-unplug and device disable — so a new session within 900 s with the car in
-the same spot has no session-start decomposition line; the `get_best_car`
-winner line, which *is* wiped, is the per-session anchor.
+forensic session.
+
+**How the throttle works** (`LogOnChangeMixin.log_info_on_change`).
+Per key the helper remembers the recently-emitted *values* and emits a
+value the first time it is seen, suppressing it while it is still
+remembered (`_RELOG_UNCHANGED_AFTER_S`, 900 s, which doubles as the
+per-value TTL). On top of that each key carries a budget of
+`_LOG_VALUES_PER_WINDOW` (4) emissions per window; further distinct values
+are counted and disclosed as a single
+`[+n further change(s) not shown in the last 900s]` line when the window
+rolls. Both halves are load-bearing:
+
+- **Dedup by value** kills oscillation. An A→B→A flap across a
+  quantisation edge emits A once and B once per window and then goes
+  quiet, so volume is `O(distinct states per window)` rather than
+  `O(transitions)`.
+- **The per-key budget** kills drift, which dedup cannot touch: a value
+  creeping by one quantum per cycle (GPS drifting 0.55 m per ~7 s cycle)
+  is a *new* value every cycle, so dedup alone satisfies "not the same
+  stuff over and over" literally while leaving volume effectively
+  unbounded. Capping the remembered-value map bounds memory, not volume.
+
+**Volume bound.** Per key: **≤ budget + 1 = 5 lines per 900 s**
+(≈ 0.33/min), and this is *data-independent* — oscillation, monotone
+drift and a held-constant value all behave the same. Keys are `N·M`
+(`get_car_score`) + `N` (the merged `get_best_car` winner line) + `N`
+(`detach_from_other_charger`) + `2N` (`update_value_callback_soc`) +
+`N + 1` (group), so the **aggregate** is ≤ `5·(N·M + 5N + 1)` per 900 s.
+For N=3, M=4 that is ≤ 140 lines per 900 s ≈ 13 400/day worst case and
+~2 400/day in steady state. Completeness holds for distinct states: only
+budget *overflow* loses detail, it is disclosed as a count, and it occurs
+only above 4 distinct values per window — the pathological regime, which
+is itself the signal.
+
+`time` is normalised to UTC on entry, so a caller mixing naive and aware
+datetimes under one key can neither raise nor escape the bound.
+
+The log-on-change state deliberately **survives `detach_car()`**. There is
+no session-boundary wipe, and none should be reintroduced: `detach_car()`
+sits on the churn path itself (every change of the `get_best_car` value
+routes through it), so wiping there dropped the key and made the throttle a
+no-op in production. It is also redundant — every key is either
+car-qualified (`get_car_score:{car}`) or carries the car name as its
+*value* (`get_best_car`), so no key can name a stale car. The per-session
+anchors are `update_power_steps`' attach line and the unplug WARNING.
+
+**Historical note (do not re-invent).** Review rounds #01–#03 of QS-342
+each tried a *time floor* on changed values (`_CHANGED_RELOG_MIN_INTERVAL_S`,
+60 s) plus a "banked suppressed-change" counter, and each round fixed the
+previous round's defect while introducing the next. A time floor is
+structurally incapable of completeness — any state whose whole lifetime
+fits inside the window is unobservable — and the bank counted *calls*
+rather than *states*, so it over-reported a held change, under-reported an
+oscillation, and was destroyed outright by the `detach_car()` wipe. The
+incident was never "changes happened too fast"; it was **the same value
+repeated 17 791 times**, which is why the correct primitive is
+de-duplication by value.
 
 ### Charge-origin tagging & `get_charge_type()` (QS-274)
 

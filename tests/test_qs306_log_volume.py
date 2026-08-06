@@ -23,13 +23,16 @@ from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CAR_NAME,
 )
 from custom_components.quiet_solar.ha_model.charger import (
-    _CHANGED_RELOG_MIN_INTERVAL_S,
+    _LOG_VALUES_PER_WINDOW,
     _POWER_LOG_DEADBAND_W,
     _RELOG_UNCHANGED_AFTER_S,
     CHARGER_ADAPTATION_WINDOW_S,
     LogOnChangeMixin,
     QSChargerStatus,
 )
+
+# Per key: `budget` emissions per window plus one overflow-disclosure line.
+_PER_KEY_CEILING = _LOG_VALUES_PER_WINDOW + 1
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
     CMD_AUTO_GREEN_ONLY,
@@ -173,12 +176,15 @@ def test_log_info_on_change_emission_predicate(
     assert len(_messages(caplog, "probe", logging.INFO, CHARGER_LOGGER)) == expected
 
 
-def test_log_info_on_change_survives_a_naive_datetime(caplog: pytest.LogCaptureFixture) -> None:
-    """NH2: a logging helper must never be load-bearing.
+def test_log_info_on_change_normalises_a_naive_datetime(caplog: pytest.LogCaptureFixture) -> None:
+    """NH2, re-cut for QS-342 review #03: normalise rather than branch.
 
     Mixing naive and aware datetimes under one key raises `TypeError` on the
-    subtraction; that exception would propagate out of `dyn_handle` and kill the
-    whole budgeting cycle. Bail to logging instead.
+    subtraction, and that exception would propagate out of `dyn_handle` and kill the
+    whole budgeting cycle — so the helper must not raise. The OLD remedy (detect the
+    mismatch and emit unconditionally) was itself a hole: a caller alternating clock
+    kinds escaped the throttle on every call. Normalising to UTC removes the branch
+    and the hole together.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     host = _Host()
@@ -186,10 +192,12 @@ def test_log_info_on_change_survives_a_naive_datetime(caplog: pytest.LogCaptureF
     host.log_info_on_change("k", 1, T0, "naive %s", "aware")
     host.log_info_on_change("k", 1, T0.replace(tzinfo=None), "naive %s", "naive")
 
-    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 2
-    # The key is re-stamped with the naive value, so the reverse direction is safe too.
+    # Same instant, same value: the naive call is throttled, not treated as new.
+    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 1
+
+    # ... and it stays throttled in the reverse direction too.
     host.log_info_on_change("k", 1, T0, "naive %s", "aware again")
-    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 3
+    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 1
 
 
 def test_log_info_on_change_keeps_state_per_instance(caplog: pytest.LogCaptureFixture) -> None:
@@ -217,8 +225,11 @@ def test_log_info_on_change_only_mutates_its_own_state(caplog: pytest.LogCapture
     after = vars(host)
     assert set(after) - set(before) == {"_log_on_change_state"}
     assert set(before) - set(after) == set()
-    # Third field: QS-342's suppressed-change counter (0 = no banked churn).
-    assert host._log_on_change_state == {"k": ("v", T0, 0)}
+    # QS-342 review #03 record shape: the remembered values, the window anchor, and
+    # this window's budget accounting.
+    record = host._log_on_change_state["k"]
+    assert record.seen == [("v", T0)]
+    assert (record.window_start, record.emitted, record.dropped) == (T0, 1, 0)
 
 
 def test_log_info_on_change_resets_the_timer_on_every_emission(caplog: pytest.LogCaptureFixture) -> None:
@@ -416,15 +427,22 @@ async def test_mf1_near_zero_sign_dither_does_not_re_inflate_the_log(caplog: pyt
 
 
 async def test_mf1_real_export_import_transition_is_still_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """MF1: the floor must not cost us a genuine export <-> import transition."""
+    """MF1: a genuine export <-> import transition is reported, within the budget.
+
+    Every cycle here crosses zero with both sides outside the deadband, so every
+    cycle is a real transition. QS-342 review #03 caps each key at `budget`
+    emissions per window: the transitions ARE reported (this is not silence), but a
+    site flipping on every cycle can no longer track the cycle rate. That trade is
+    deliberate and is what makes the volume bound data-independent — an unbounded
+    site is exactly how the original incident reached 17 791 lines.
+    """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
 
     await _run_oscillating_power_cycles(group, home, watts=150.0)
 
-    # Every cycle crosses zero with both sides outside the deadband, so every cycle
-    # is a real transition and every cycle is reported.
-    assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 10
+    records = _messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)
+    assert 2 <= len(records) <= _PER_KEY_CEILING, records
 
 
 # =============================================================================
@@ -794,16 +812,17 @@ async def test_s11_best_car_logged_once_per_window(caplog: pytest.LogCaptureFixt
     assert len(_messages(caplog, "with score", logging.INFO, CHARGER_LOGGER)) == 2
 
     scores["CarB"] = 100.0
-    # QS-342: this site now carries a changed-value rate floor, so the swap must sit
-    # at least `_CHANGED_RELOG_MIN_INTERVAL_S` after the previous emission (+63) for
-    # the winner change to be emitted rather than banked. The NH7 intent below —
-    # every record names the car that actually won — is unchanged.
-    swap_at = _RELOG_UNCHANGED_AFTER_S + 63 + _CHANGED_RELOG_MIN_INTERVAL_S + 7
+    # QS-342 review #03: no changed-value floor any more, so a genuinely new winner
+    # emits immediately — a value never seen before is never suppressed. The NH7
+    # intent below (every record names the car that actually won) is unchanged.
+    swap_at = _RELOG_UNCHANGED_AFTER_S + 70
     assert charger.get_best_car(T0 + timedelta(seconds=swap_at)).name == car_b.name
     records = _messages(caplog, "with score", logging.INFO, CHARGER_LOGGER)
     assert len(records) == 3
-    # NH7: the records must name the car that actually won each time.
-    assert [car_a.name, car_a.name, car_b.name] == [r.args[0] for r in records]
+    # NH7: the records must name the car that actually won each time. `args[1]` is
+    # the car — `args[0]` is now the branch that decided (D4's merged key).
+    assert [car_a.name, car_a.name, car_b.name] == [r.args[1] for r in records]
+    assert {r.args[0] for r in records} == {"computed"}
 
 
 async def test_sf1_car_swap_is_not_silenced_by_the_memo(caplog: pytest.LogCaptureFixture) -> None:
@@ -838,8 +857,16 @@ async def test_sf1_car_swap_is_not_silenced_by_the_memo(caplog: pytest.LogCaptur
     assert car_b.name in records[1].getMessage()
 
 
-def test_sf1_detach_car_clears_the_memo() -> None:
-    """SF1: the clear is unconditional — it also marks a new session on replug."""
+def test_sf1_log_state_survives_detach_car() -> None:
+    """QS-342 review #03 / D2: the wipe is GONE — it was the defect, not the fix.
+
+    `detach_car()` is on the churn path itself, so wiping the log state there dropped
+    the key on every allocation change and made the throttle a no-op in production.
+    It is also redundant: every key is car-qualified or carries the car name as its
+    value, so no key can name a stale car. The property test that actually matters —
+    a car swap is still announced — is
+    `test_sf1_car_swap_is_not_silenced_by_the_memo` above.
+    """
     hass = make_hass()
     home = make_home()
     charger = create_charger(hass, home, name="DetachCh")
@@ -851,7 +878,7 @@ def test_sf1_detach_car_clears_the_memo() -> None:
 
     charger.detach_car()
 
-    assert charger._log_on_change_state is None
+    assert "get_best_car" in charger._log_on_change_state
 
 
 # =============================================================================
@@ -986,16 +1013,16 @@ async def test_sfg_soc_volume_scales_with_amp_changes_not_cycles(caplog: pytest.
     assert len(records) == len(set(consigns)) == 3, "one line per amp change, not one per cycle"
 
 
-async def test_sfg_soc_volume_ceiling_is_one_line_per_consign_change(
+async def test_sfg_soc_volume_ceiling_is_the_per_key_budget(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The documented CEILING of SF-G, so the cost is explicit rather than implied.
 
-    If the consign genuinely changed on every cycle, every cycle would log. In
-    production that is bounded by the 45 s amp-change cooldown (the S2 site), not by
-    this memo — so the worst realistic case is ~1 line per 45 s, still far below the
-    ~7 s cycle rate. If a future change adds smoothing, this test should fail and
-    force a conscious decision.
+    A consign alternating on every cycle is only TWO distinct values, so dedup alone
+    already collapses it — this used to emit one line per cycle. The per-key budget
+    then caps the pathological case regardless of how many distinct consigns appear.
+    If a future change adds smoothing, this test should fail and force a conscious
+    decision.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     charger, constraint = _make_soc_callback_charger()
@@ -1005,7 +1032,8 @@ async def test_sfg_soc_volume_ceiling_is_one_line_per_consign_change(
         charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=consign)
         await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=7 * cycle))
 
-    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 10
+    # Two distinct consigns -> two lines, not ten.
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 2
 
 
 async def test_s12_literal_percent_is_escaped(caplog: pytest.LogCaptureFixture) -> None:
@@ -1155,7 +1183,7 @@ _B5_SITES = {
         "battery_asked_charge",
         "dyn_handle: full_available_home_power %sW, grid_available_home_power %sW battery_asked_charge %sW",
     ),
-    "S11": ("with score", "get_best_car: %s with score %s for charger %s"),
+    "S11": ("with score", "get_best_car: %s selected %s with score %s for charger %s"),
     "S12": (
         "is_car_charged",
         "update_value_callback (is %%:%s):%s %s  %s/%s (%s/%s) is_car_charged %s cmd %s",

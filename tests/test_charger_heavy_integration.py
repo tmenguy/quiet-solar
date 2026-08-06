@@ -34,6 +34,7 @@ from custom_components.quiet_solar.ha_model.charger import (
     QSChargerGeneric,
     QSChargerGroup,
     QSChargerStatus,
+    QSStateCmd,
 )
 from custom_components.quiet_solar.home_model.commands import CMD_AUTO_GREEN_ONLY, copy_command
 from tests.factories import create_minimal_home_model
@@ -310,9 +311,17 @@ class TestCheckLoadActivityAndConstraints:
 
     @pytest.mark.asyncio
     async def test_plugged_no_car_selected_resets(self, setup_charger):
-        """Test that selecting no car resets the charger."""
+        """Selecting no car resets the charger — once, then the state is idempotent.
+
+        QS-342 review #03 / D6: this reset used to run on EVERY cycle while "no car
+        connected" was selected, emitting six INFO lines each time (~74 000/day from
+        one charger, four times the original incident). It is now gated on there
+        actually being something to reset.
+        """
         charger, home = setup_charger
         time = datetime.now(pytz.UTC)
+        # Something to reset: the state machine is populated.
+        charger._inner_amperage = QSStateCmd()
 
         with (
             patch.object(charger, "is_charger_unavailable", return_value=False),
@@ -325,6 +334,26 @@ class TestCheckLoadActivityAndConstraints:
             result = await charger.check_load_activity_and_constraints(time)
 
         mock_reset.assert_called_once()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_plugged_no_car_selected_is_idempotent(self, setup_charger):
+        """D6: with nothing left to reset the cycle does no work and logs nothing."""
+        charger, home = setup_charger
+        time = datetime.now(pytz.UTC)
+
+        with (
+            patch.object(charger, "is_charger_unavailable", return_value=False),
+            patch.object(charger, "probe_for_possible_needed_reboot", return_value=False),
+            patch.object(charger, "is_not_plugged", return_value=False),
+            patch.object(charger, "is_plugged", return_value=True),
+            patch.object(charger, "get_best_car", return_value=None),
+        ):
+            assert charger._reset_would_change_state(keep_commands=True) is False
+            with patch.object(charger, "reset") as mock_reset:
+                result = await charger.check_load_activity_and_constraints(time)
+
+        mock_reset.assert_not_called()
         assert result is True
 
     @pytest.mark.asyncio

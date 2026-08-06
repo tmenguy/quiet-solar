@@ -1267,13 +1267,30 @@ async def test_charger_check_load_activity_plugged_no_car(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=None)
-    charger_device.reset = MagicMock()
 
     time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+
+    # QS-342 review #03 / D6: the reset is gated on there being state to destroy, so
+    # the "no car connected" state stops re-running a no-op reset (and its six INFO
+    # lines) every cycle. Seed some state so the reset still runs here.
+    charger_device._last_amp_change_time = time
+    assert charger_device._reset_would_change_state(keep_commands=True) is True
+    charger_device.reset = MagicMock()
+
     do_force = await charger_device.check_load_activity_and_constraints(time)
 
     assert do_force is True
     charger_device.reset.assert_called_once()
+
+    # With nothing left to reset the same call does no work at all.
+    charger_device._last_amp_change_time = None
+    assert charger_device._reset_would_change_state(keep_commands=True) is False
+    charger_device.reset = MagicMock()
+
+    do_force = await charger_device.check_load_activity_and_constraints(time)
+
+    assert do_force is True
+    charger_device.reset.assert_not_called()
 
 
 async def test_charger_check_load_activity_force_constraint(
@@ -3390,6 +3407,9 @@ async def test_charger_check_load_activity_plugged_best_car_none(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=None)
+    # QS-342 review #03 / D6: the reset only runs when it would destroy something,
+    # so the no-car state stops re-running a no-op reset every cycle.
+    charger_device._last_amp_change_time = now
     charger_device.reset = MagicMock()
     assert await charger_device.check_load_activity_and_constraints(now) is True
     charger_device.reset.assert_called_once()
