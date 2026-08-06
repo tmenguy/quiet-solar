@@ -77,6 +77,28 @@ def test_setup_task_carries_the_declaration_step(harness_dir: Path) -> None:
 
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_setup_task_epic_lane_creates_no_worktree(harness_dir: Path) -> None:
+    """Review-fix #04 (must-fix): step 2 used to run `setup_task.py`
+    unconditionally, cutting a branch + worktree even for an epic lane —
+    contradicting the epic model this very PR establishes ("No implement
+    phase; no branch, worktree, or PR"; output = a rationale doc on
+    `main` + child issues). The prompt must stop before step 2 for an
+    epic; `setup_task.py` enforces the same invariant machine-side."""
+    # Whitespace-normalised: the prose wraps mid-clause, so a naive
+    # substring scan would pass vacuously (the trap
+    # `test_workflow_no_desktop_fallback_by_necessity.py` documents).
+    body = " ".join(_body(harness_dir, "qs-setup-task").split())
+    assert "no branch, worktree, or PR" in body, (
+        f"{harness_dir / 'qs-setup-task.md'}: the epic lane must not reach "
+        "the branch/worktree step"
+    )
+    # The terminal state is named, so the agent doesn't improvise one.
+    assert "child issues" in body
+    # And the step-2 header states the precondition it now carries.
+    assert "Set up branch and worktree + emit launcher (tasks only)" in body
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
 def test_setup_task_speed_rule_is_amended(harness_dir: Path) -> None:
     """The old absolute speed rule would contradict the one permitted
     lane/epic question (review planner R2, story task 11)."""

@@ -201,6 +201,43 @@ def test_null_labels_still_emits_the_parent_epic_refs(
     assert "## Lane note" not in body
 
 
+@pytest.mark.parametrize("raw", ["null", "[]", "42"])
+def test_non_dict_issue_json_degrades_to_todays_body(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], raw: str
+) -> None:
+    """Review-fix #04: a non-dict top-level value makes `data.get(...)`
+    raise `AttributeError`, which was not in the except tuple — it
+    escaped as a raw traceback instead of the degrade path."""
+    import create_pr
+    import utils
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        head = cmd[:3]
+        if head == GIT_BRANCH:
+            return subprocess.CompletedProcess(cmd, 0, stdout="QS_42\n", stderr="")
+        if head == GH_PR_LIST:
+            return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+        if head == GIT_PUSH:
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if head == GIT_DIFF:
+            return subprocess.CompletedProcess(cmd, 0, stdout="scripts/qs/x.py\n", stderr="")
+        if head == GH_ISSUE_VIEW:
+            return subprocess.CompletedProcess(cmd, 0, stdout=raw, stderr="")
+        if head == GH_PR_CREATE:
+            return subprocess.CompletedProcess(cmd, 0, stdout=PR_URL, stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    seen: list[list[str]] = []
+    orig = fake_run
+
+    def recording(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        seen.append(list(cmd))
+        return orig(cmd, **kwargs)
+
+    _run_main(monkeypatch, recording)
+    assert _created_body(seen) == _expected_plain_body()
+
+
 def test_issue_view_failure_degrades_to_todays_body(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

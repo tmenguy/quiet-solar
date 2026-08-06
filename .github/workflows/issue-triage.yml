@@ -37,7 +37,7 @@ jobs:
               labels.push('area:person');
             if (/\bdashboards?\b/.test(text) || /\bui\b/.test(text))
               labels.push('area:ui');
-            if (/\bconfig[ _-]?flow\b/.test(text) || /\bconfig entr(y|ies)\b/.test(text))
+            if (/\bconfig[ _-]?flow\b/.test(text) || /\bconfig[ _-]?entr(y|ies)\b/.test(text))
               labels.push('area:config');
             if (/\b(harness|pipeline|agents?|workflow|worktree|quality gate|lanes?|launcher|testmon)\b/.test(text))
               labels.push('area:dev-pipeline');

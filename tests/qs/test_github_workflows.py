@@ -56,7 +56,9 @@ def triage_script_fixture() -> str:
         ("area:battery", [r"/\bbatter(y|ies)\b/", r"/\bstorage\b/"]),
         ("area:person", [r"/\bpersons?\b/", r"/\bpresence\b/"]),
         ("area:ui", [r"/\bdashboards?\b/", r"/\bui\b/"]),
-        ("area:config", [r"/\bconfig[ _-]?flow\b/", r"/\bconfig entr(y|ies)\b/"]),
+        # Review-fix #04: separator handling must be symmetric across both
+        # config phrases — `config-entry` / `config_entry` used to miss.
+        ("area:config", [r"/\bconfig[ _-]?flow\b/", r"/\bconfig[ _-]?entr(y|ies)\b/"]),
         (
             "area:dev-pipeline",
             [

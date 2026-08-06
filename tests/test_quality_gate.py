@@ -8300,3 +8300,22 @@ class TestFetchLaneLabelsNullLabels:
             patch.object(quality_gate, "_run", side_effect=fake_run),
         ):
             assert quality_gate._fetch_lane_labels(332, "QS_332") is None
+
+
+class TestFetchLaneLabelsNonDictJson:
+    """Review-fix #04: a non-dict top-level JSON value (`null`, `[]`, `42`)
+    made `data.get(...)` raise `AttributeError`, which was not in the
+    except tuple — it escaped as a raw traceback instead of the `None`
+    (gh-unavailable) degrade path."""
+
+    @pytest.mark.parametrize("raw", ["null", "[]", "42"])
+    def test_non_dict_json_degrades_to_none(self, tmp_path: Path, raw: str) -> None:
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 0, stdout=raw, stderr="")
+
+        with (
+            patch.object(quality_gate, "LANE_CACHE_FILE", tmp_path / "c"),
+            patch.object(quality_gate, "_is_ci", return_value=False),
+            patch.object(quality_gate, "_run", side_effect=fake_run),
+        ):
+            assert quality_gate._fetch_lane_labels(332, "QS_332") is None

@@ -37,8 +37,12 @@ from utils import (  # type: ignore[import-not-found]
 )
 
 
-def check_declaration(issue: int) -> None:
+def check_declaration(issue: int) -> list[str]:
     """Refuse to proceed unless ``issue`` carries a complete lane declaration.
+
+    Returns the issue's label names so the caller can enforce
+    scale-specific invariants without a second ``gh`` call
+    (:func:`refuse_if_epic`).
 
     QS-332 B2 — enforcement by construction: this runs BEFORE any
     branch/worktree work. One ``gh issue view --json labels`` call
@@ -60,7 +64,10 @@ def check_declaration(issue: int) -> None:
         # the honest verdict is the ordinary missing-declaration refusal
         # below, which prints an actionable backfill command.
         labels = [lb["name"] for lb in json.loads(result.stdout).get("labels") or []]
-    except (json.JSONDecodeError, TypeError, KeyError):
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        # `AttributeError` (QS-332 review-fix #04): a non-dict top-level
+        # value (`null`, `[]`, `42`) makes `.get` raise, which used to
+        # escape this guard as a raw traceback.
         output_json({"error": "Invalid JSON from gh CLI", "detail": result.stdout.strip()})
         sys.exit(1)
 
@@ -72,6 +79,40 @@ def check_declaration(issue: int) -> None:
             "detail": message.replace("<N>", str(issue)),
         })
         sys.exit(1)
+    return labels
+
+
+def refuse_if_epic(issue: int, labels: list[str]) -> None:
+    """Refuse to cut a branch/worktree for a ``scale:epic`` issue.
+
+    QS-332 review-fix #04 (must-fix). The epic model
+    (:doc:`docs/epics/QS-321`) is explicit: an epic has **no implement
+    phase; no branch, worktree, or PR** — its output is a rationale
+    document on ``main`` plus child issues. Step 2 of the setup agent used
+    to run this script unconditionally, so picking an epic lane (or
+    passing an existing epic via ``--issue N``) cut a worktree anyway.
+
+    Machine-enforced here rather than prompt-obeyed, matching the story's
+    "machine-checked rather than prompt-obeyed" philosophy, and enforced
+    for ``--no-worktree`` too: that flag still creates a **branch**, which
+    the model forbids as well. Consumes ``check_declaration``'s labels —
+    no extra ``gh`` call.
+    """
+    if targets.parse_axes(labels)["scale"] != "epic":
+        return
+    output_json({
+        "error": (
+            f"issue #{issue} is scale:epic — refusing to create a branch or worktree"
+        ),
+        "scale": "epic",
+        "detail": (
+            "An epic has no implement phase and no branch, worktree, or PR. "
+            "Its output is a rationale document on `main` plus child issues: "
+            "decompose it into child tasks (each child is its own task lane, "
+            "carrying `Refs #<epic>`) and run setup-task on those instead."
+        ),
+    })
+    sys.exit(1)
 
 # Public mapping (review-fix #04 SF1) — promoted to match the
 # round-3 SF1 rename of next_step.LAUNCHERS. The two dispatch tables
@@ -119,8 +160,11 @@ def main() -> None:
     branch = f"QS_{issue}"
 
     # QS-332 B2: an issue must be born in exactly one lane; refuse an
-    # undeclared/inconsistent one before touching git.
-    check_declaration(issue)
+    # undeclared/inconsistent one before touching git. Review-fix #04:
+    # and refuse an EPIC outright — no branch, no worktree (the labels
+    # come from the same fetch, so this costs no extra `gh` call).
+    labels = check_declaration(issue)
+    refuse_if_epic(issue, labels)
 
     main_dir = get_main_worktree()
 

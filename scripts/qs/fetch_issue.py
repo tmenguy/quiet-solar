@@ -48,9 +48,20 @@ def main() -> None:
     # degrades to empty; a malformed ENTRY is not, and errors out.
     try:
         data = json.loads(result.stdout)
+        # `number` belongs inside the guard too (review-fix #04): it was a
+        # bare subscript with no default, so a valid-but-incomplete object
+        # (`{}`, or any object lacking `"number"`) degraded cleanly on the
+        # labels/body path and then crashed with a raw `KeyError`. Unique
+        # to this script — the peer consumers never read `number`.
+        number = data["number"]
         label_names = [lb["name"] for lb in data.get("labels") or []]
         body = data.get("body") or ""
-    except (json.JSONDecodeError, TypeError, KeyError):
+        title = data.get("title") or ""
+        state = data.get("state") or ""
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        # `AttributeError` (review-fix #04): a non-dict top-level value
+        # (`null`, `[]`, `42`) makes `.get` raise, which used to escape
+        # this guard as a raw traceback.
         output_json({"error": "Invalid JSON from gh CLI", "detail": result.stdout.strip()})
         sys.exit(1)
 
@@ -58,18 +69,18 @@ def main() -> None:
     declaration_ok, _missing, _message = targets.validate_declaration(label_names)
 
     output_json({
-        "issue_number": data["number"],
-        "title": data.get("title", ""),
+        "issue_number": number,
+        "title": title,
         "body": body,
         "labels": label_names,
-        "state": data.get("state", ""),
+        "state": state,
         "kind": axes["kind"],
         "target": axes["target"],
         "scale": axes["scale"],
         "lane": axes["lane"],
         "parent_epic": targets.parse_parent_epic(body),
         "declaration_complete": declaration_ok,
-        "branch": f"QS_{data['number']}",
+        "branch": f"QS_{number}",
     })
 
 

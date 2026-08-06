@@ -47,13 +47,82 @@ def test_complete_task_declaration_passes(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_epic_declaration_validates_as_itself(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An epic-shaped declaration is not asked to grow a kind (story D3)."""
+    """An epic-shaped declaration is not asked to grow a kind (story D3).
+
+    Declaration validity and the epic *worktree* refusal are deliberately
+    separate steps: the declaration IS valid — what an epic must not get
+    is a branch/worktree (see the epic-refusal tests below).
+    """
     import setup_task
     import utils
 
     fake_run, _seen = _make_fake_run(["scale:epic", "target:product", "pinned"])
     monkeypatch.setattr(utils, "run", fake_run)
     setup_task.check_declaration(321)
+
+
+# ---------------------------------------------------------------------------
+# Review-fix #04 (must-fix): epic ⇒ NO branch, NO worktree
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv_extra", [[], ["--no-worktree"]], ids=["worktree", "no-worktree"]
+)
+def test_epic_issue_is_refused_before_any_git_work(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv_extra: list[str],
+) -> None:
+    """The epic model (QS-321): "No implement phase; no branch, worktree,
+    or PR" — an epic's output is a rationale doc on `main` + child issues.
+
+    Machine-enforced here rather than prompt-obeyed, and enforced for
+    `--no-worktree` too: that flag still cuts a BRANCH, which the model
+    also forbids. The fake raises on any non-`gh` command, so this also
+    proves nothing git-side ran.
+    """
+    import setup_task
+    import utils
+
+    fake_run, seen = _make_fake_run(["scale:epic", "target:factory"])
+    monkeypatch.setattr(utils, "run", fake_run)
+    monkeypatch.setattr("sys.argv", ["setup_task.py", "321", *argv_extra])
+
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    assert all(cmd[0] == "gh" for cmd in seen)
+
+    out = json.loads(capsys.readouterr().out)
+    assert out["scale"] == "epic"
+    assert "worktree" in out["error"]
+    # Actionable: says what an epic DOES produce instead.
+    assert "child" in out["detail"]
+
+
+def test_task_issue_is_not_refused_as_an_epic(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The guard is scale-specific — a task passes it untouched."""
+    import setup_task
+    import utils
+
+    fake_run, _seen = _make_fake_run(["kind:bug", "target:product", "scale:task"])
+    monkeypatch.setattr(utils, "run", fake_run)
+    labels = setup_task.check_declaration(42)
+    setup_task.refuse_if_epic(42, labels)  # returns without exiting
+
+
+def test_check_declaration_returns_the_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The epic guard reuses `check_declaration`'s already-fetched labels
+    — no second `gh` call on the setup path."""
+    import setup_task
+    import utils
+
+    fake_run, seen = _make_fake_run(["kind:feature", "target:factory", "scale:task"])
+    monkeypatch.setattr(utils, "run", fake_run)
+    labels = setup_task.check_declaration(332)
+    assert labels == ["kind:feature", "target:factory", "scale:task"]
+    assert len([c for c in seen if c[:3] == ["gh", "issue", "view"]]) == 1
 
 
 def test_undeclared_issue_refuses_with_backfill_command(
@@ -116,6 +185,25 @@ def test_null_labels_reports_the_declaration_error_not_invalid_json(
     assert "Invalid JSON" not in out["error"]
     assert "no complete lane declaration" in out["error"]
     assert "gh issue edit 42 --add-label" in out["detail"]
+
+
+@pytest.mark.parametrize("raw", ["null", "[]", "42"])
+def test_non_dict_json_refuses_with_the_structured_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], raw: str
+) -> None:
+    """Review-fix #04: a non-dict top-level value raised `AttributeError`
+    out of the except tuple as a raw traceback."""
+    import setup_task
+    import utils
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=raw, stderr="")
+
+    monkeypatch.setattr(utils, "run", fake_run)
+    with pytest.raises(SystemExit) as exc:
+        setup_task.check_declaration(42)
+    assert exc.value.code == 1
+    assert "error" in json.loads(capsys.readouterr().out)
 
 
 def test_gh_failure_refuses(

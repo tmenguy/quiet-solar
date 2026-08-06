@@ -164,6 +164,46 @@ def test_malformed_label_entries_degrade_to_structured_error(
     assert "error" in json.loads(capsys.readouterr().out)
 
 
+@pytest.mark.parametrize(
+    ("stdout", "case"),
+    [
+        ("{}", "empty-object"),
+        ('{"title": "t", "body": "", "labels": []}', "object-without-number"),
+        ("null", "top-level-null"),
+        ("[]", "top-level-list"),
+        ("42", "top-level-int"),
+    ],
+    ids=lambda v: v if isinstance(v, str) and not v.startswith(("{", "[", "n", "4")) else "",
+)
+def test_incomplete_or_non_dict_json_degrades_to_structured_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stdout: str,
+    case: str,
+) -> None:
+    """Review-fix #04: two remaining holes in the "everything degrades to
+    structured JSON" contract.
+
+    - `data["number"]` was a bare subscript OUTSIDE the guard (finding 2):
+      a valid-but-incomplete object (`{}`) degraded cleanly on the
+      labels/body path and then crashed with a raw `KeyError`. Unique to
+      this script — the peer consumers never read `number`.
+    - A non-dict top-level value (`null`/`[]`/`42`) made `data.get(...)`
+      raise `AttributeError`, which was not in the except tuple
+      (finding 4).
+    """
+    import fetch_issue
+    import utils
+
+    monkeypatch.setattr(utils, "run", lambda cmd, **kw: _completed(stdout=stdout))
+    monkeypatch.setattr("sys.argv", ["fetch_issue.py", "--issue", "5"])
+
+    with pytest.raises(SystemExit) as exc:
+        fetch_issue.main()
+    assert exc.value.code == 1
+    assert "error" in json.loads(capsys.readouterr().out)
+
+
 def test_gh_failure_exits_nonzero(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -64,7 +64,10 @@ def _epic_and_lane_note(issue: int, changed: list[str]) -> tuple[int | None, str
         # below and silently dropped the parent-epic `Refs` (and any
         # Lane note) for no good reason.
         labels = [lb["name"] for lb in data.get("labels") or []]
-    except (json.JSONDecodeError, TypeError, KeyError):
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        # `AttributeError` (QS-332 review-fix #04): a non-dict top-level
+        # value (`null`, `[]`, `42`) makes `.get` raise, which used to
+        # escape this guard as a raw traceback.
         return None, ""
 
     epic = targets.parse_parent_epic(issue_body)

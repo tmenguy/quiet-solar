@@ -86,7 +86,10 @@ def _issue_fields(issue: int) -> dict:
             "labels": [lb["name"] for lb in data.get("labels") or []],
             "body": data.get("body") or "",
         }
-    except (json.JSONDecodeError, TypeError, KeyError):
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        # `AttributeError` (QS-332 review-fix #04): a non-dict top-level
+        # value (`null`, `[]`, `42`) makes `.get` raise. Kept uniform with
+        # the sibling consumers even though this one degrades silently.
         return _empty_issue_fields()
 
 

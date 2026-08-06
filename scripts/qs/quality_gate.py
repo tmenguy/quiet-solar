@@ -1779,7 +1779,10 @@ def _fetch_lane_labels(issue: int, branch: str) -> list[str] | None:
         # the `TypeError` arm to `None` claimed `gh` was UNAVAILABLE and
         # degraded to warn+skip locally / fail-closed in CI instead.
         labels = [lb["name"] for lb in json.loads(result.stdout).get("labels") or []]
-    except (json.JSONDecodeError, TypeError, KeyError):
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        # `AttributeError` (QS-332 review-fix #04): a non-dict top-level
+        # value (`null`, `[]`, `42`) makes `.get` raise, which used to
+        # escape this guard as a raw traceback.
         return None
     ok, _missing, _message = targets.validate_declaration(labels)
     if ok and not _is_ci():

@@ -95,7 +95,22 @@ values** ("bug", "harness feature", "kind:bug target:factory",
 means ask. This is a bright line, not text analysis, so the "do NOT
 analyze the input" rule stands.
 
-### 2. Set up branch and worktree + emit launcher
+### 1c. Epic lanes stop here (no branch, no worktree)
+
+If the resolved lane is `epic-product` or `epic-factory`, the issue is
+the deliverable: an epic has **no implement phase and no branch,
+worktree, or PR** (see
+[docs/epics/QS-321.md](../../docs/epics/QS-321.md)). Its output is a
+rationale document on `main` plus **child issues**.
+
+So for an epic: create/label the issue as above, then **skip step 2
+entirely** — do NOT run `setup_task.py`. Report the epic issue number
+and tell the user the next move is to decompose it into child tasks
+(each child is its own task lane, carrying `Refs #<epic>`; run
+setup-task on those). `setup_task.py` refuses an epic outright, so a
+slip here fails loudly rather than silently cutting a worktree.
+
+### 2. Set up branch and worktree + emit launcher (tasks only)
 
 One command does it all:
 
