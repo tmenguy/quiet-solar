@@ -1,6 +1,6 @@
-name: Feature Request
-description: Suggest a new feature or enhancement
-labels: ["enhancement"]
+name: Feature (product)
+description: Suggest a new feature or enhancement for the Quiet Solar integration
+labels: ["kind:feature", "target:product", "scale:task"]
 body:
   - type: textarea
     id: use_case
@@ -33,3 +33,9 @@ body:
     attributes:
       label: Additional Context
       description: Any other context, screenshots, or references
+
+  - type: input
+    id: parent_epic
+    attributes:
+      label: Parent epic
+      description: issue number of the epic this belongs to, e.g. 321 — leave empty if none

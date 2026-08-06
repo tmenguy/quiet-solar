@@ -1,0 +1,39 @@
+name: Bug (factory / dev pipeline)
+description: Report a bug in the development pipeline, agents, scripts, or quality gate
+labels: ["kind:bug", "target:factory", "scale:task", "area:dev-pipeline"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? How can we reproduce the issue? What was expected to happen?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Pipeline Surface
+      description: Which part of the factory is affected?
+      options:
+        - Quality gate (quality_gate.py)
+        - Agents / phase protocols
+        - Scripts (scripts/qs/)
+        - CI workflows (.github/)
+        - Docs (docs/workflow/, docs/agents/)
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Output
+      description: Paste any relevant command output or logs
+      render: text
+
+  - type: input
+    id: parent_epic
+    attributes:
+      label: Parent epic
+      description: issue number of the epic this belongs to, e.g. 321 — leave empty if none

@@ -30,6 +30,15 @@ python scripts/qs/context.py
 Parse the JSON. You'll get: `issue`, `title`, `branch`, `story_file`,
 `worktree`, `harness`. From here on, refer to these values.
 
+**Lane (QS-332).** Also capture `lane` from the context JSON, then read
+`docs/workflow/lanes/<lane>.md` — that file is this task's phase
+protocol. If `lane` is empty (a pre-existing worktree / legacy
+in-flight task — every new task is labelled at birth), fall back to
+[docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
+and surface the backfill guidance: the issue still needs its axis
+labels (`gh issue edit <N> --add-label ...`). This phase is read-only
+with respect to the gate, so it may proceed on the fallback.
+
 Read [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 and [docs/workflow/project-context.md](../../docs/workflow/project-context.md)
 if you haven't this session.

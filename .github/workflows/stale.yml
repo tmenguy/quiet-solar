@@ -21,7 +21,9 @@ jobs:
             recent activity. It will be closed in 30 days if no further activity occurs.
           days-before-stale: 30
           days-before-close: 30
-          exempt-issue-labels: pinned,security,critical
+          # QS-332: epics live as long as their children — never staled.
+          # PR exemptions unchanged (epics have no PRs).
+          exempt-issue-labels: pinned,security,critical,scale:epic
           exempt-pr-labels: pinned,security,critical
           stale-issue-label: stale
           stale-pr-label: stale

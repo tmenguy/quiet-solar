@@ -232,6 +232,49 @@ jobs:
           coverage combine shard-data
           coverage report --show-missing --fail-under=100
 
+  # QS-332 (B1): the lane check as its own job — NOT a step in the
+  # existing jobs, whose tokens are deliberately `contents: read`-only.
+  # It needs `issues: read` to fetch the task issue's lane labels.
+  # `--branch "${{ github.head_ref }}"` is load-bearing: a pull_request
+  # checkout is a detached merge ref where `git branch --show-current`
+  # is empty, which would silently no-op the check (review N-1).
+  # Declaration-missing or a `gh` failure exits non-zero (CI fails
+  # closed); a cross-target diff warns into GITHUB_STEP_SUMMARY and
+  # never fails.
+  lane-check:
+    name: Lane Check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The change set is origin/main...HEAD — the fetch must reach
+          # the merge base.
+          fetch-depth: 0
+
+      # Same interpreter as every other job (review-fix #01 must-fix:
+      # the system Python is 3.12 and quality_gate.py uses 3.14-only
+      # syntax — without this pin the fail-closed job blocks every PR).
+      - name: Set up Python 3.14
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+
+      # HEAD_REF goes through an env var, never direct `${{ }}`
+      # interpolation into `run:` (review-fix #01 must-fix): branch
+      # names may contain `"`/`$`/backtick and `head_ref` is
+      # attacker-controlled on fork PRs — direct expansion is script
+      # injection with GH_TOKEN in env.
+      - name: Lane check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: >-
+          python scripts/qs/quality_gate.py --lane-check
+          --branch "$HEAD_REF"
+
   hacs-validate:
     name: HACS Validation
     runs-on: ubuntu-latest

@@ -1,0 +1,7 @@
+# QS-332: blank web issues are disabled so every issue born through the
+# GitHub web UI carries its lane labels by construction. Known leak,
+# accepted (story D3): `gh issue create`, the REST/GraphQL API, bots and
+# transferred issues can still produce unlabelled issues; setup-task's
+# ask+backfill and the quality gate's declaration check are the safety
+# net there.
+blank_issues_enabled: false

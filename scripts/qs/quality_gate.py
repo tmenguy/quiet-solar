@@ -77,7 +77,14 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
+
+# QS-332: the gate's first sibling import, resolved the same way every
+# `scripts/qs` module already resolves siblings — the script dir sits on
+# `sys.path` when run as a script, and `tests/test_quality_gate.py`
+# inserts it under pytest. `targets` owns the lane domain (path
+# classification + the declaration truth table); the gate only wires it.
+import targets
 
 # Resolve paths relative to repo root
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1662,6 +1669,287 @@ _IMPACTED_NON_PY_LINES = (
 )
 
 
+# ---------------------------------------------------------------------------
+# QS-332 (B1): the lane check
+# ---------------------------------------------------------------------------
+
+# Label marker-file cache: keyed on (issue, branch), 10-minute TTL,
+# `_is_ci()` bypass. Kept over review SG2-02's drop suggestion — a network
+# call in the `--impacted` pre-commit hot loop is exactly the class of
+# cost QS-290 spent a task TTL-caching.
+LANE_CACHE_FILE = REPO_ROOT / ".lane_check_cache"
+_LANE_CACHE_TTL_S = 600.0
+
+# Bound on the `gh issue view` label fetch (review-fix #01): it sits on
+# the `--impacted` pre-commit hot path, and with a half-dead network
+# (VPN drop, dead DNS — the QS-276 S1 scenario) and a cold/expired cache
+# an unbounded call hangs the sub-15s gate indefinitely. A timeout
+# surfaces as rc 124 → the normal `!= 0 → None → local warn+skip` path.
+_LANE_GH_TIMEOUT_S = 10.0
+
+
+class LaneCheckResult(NamedTuple):
+    """`_check_lane_targets`'s verdict (review R2-12). The helper never
+    exits and never prints; each call site maps the result via
+    `_emit_lane_check`: `declaration_missing` → gate failure (exit
+    non-zero through the site's normal mechanism), `warning`/`fyi` →
+    printed to STDERR (never stdout — `--json` must stay parseable,
+    review DP2-03).
+
+    `declaration_missing` carries anything that must FAIL the gate: a
+    missing/inconsistent declaration, or the CI fail-closed arm of a
+    `gh`/git failure. `warning` carries the cross-target text — or the
+    local warn-and-skip notice. `fyi` carries the unknown-path lines.
+    """
+
+    declaration_missing: str | None = None
+    warning: str | None = None
+    fyi: str | None = None
+
+
+def _resolve_lane_issue(branch_override: str | None = None) -> tuple[int, str] | None:
+    """Resolve `(issue, branch)` from `QS_<N>`, or None (→ check skipped).
+
+    CI fallback (review N-1, found independently by three reviewers): a
+    `pull_request` checkout is a detached merge ref where
+    `git branch --show-current` is empty, which would silently no-op the
+    check in CI. When it yields nothing AND `_is_ci()`, fall back to the
+    `--branch` value the workflow step passes (`${{ github.head_ref }}` —
+    the PR's source branch on every `pull_request` event). Locally the
+    override is ignored: not a task branch means nothing to enforce.
+    """
+    result = _run(["git", "branch", "--show-current"])
+    branch = result.stdout.strip() if result.returncode == 0 else ""
+    if not branch and _is_ci() and branch_override:
+        branch = branch_override.strip()
+    # Pure digits only (review-fix #01): `int()` accepts underscore
+    # digit-grouping, so `QS_332_2` (a plausible "second attempt" branch)
+    # parsed as issue #3322 and the gate enforced the WRONG issue's
+    # declaration. `isdigit()` also rejects the empty suffix.
+    if not branch.startswith("QS_") or not branch[3:].isdigit():
+        return None
+    return int(branch[3:]), branch
+
+
+def _read_lane_label_cache(issue: int, branch: str) -> list[str] | None:
+    if _is_ci():
+        return None
+    try:
+        data = json.loads(LANE_CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if data.get("issue") != issue or data.get("branch") != branch:
+        return None
+    ts = data.get("time")
+    now = time.time()
+    # A future stored `time` field (clock skew) or an expired TTL both
+    # mean "fetch". (The check reads the JSON field, not the file mtime.)
+    if not isinstance(ts, (int, float)) or ts > now or now - ts > _LANE_CACHE_TTL_S:
+        return None
+    labels = data.get("labels")
+    if not isinstance(labels, list) or not all(isinstance(lb, str) for lb in labels):
+        return None
+    return labels
+
+
+def _fetch_lane_labels(issue: int, branch: str) -> list[str] | None:
+    """The issue's label names, TTL-cached; None = `gh` unavailable/failed.
+
+    ONLY complete declarations are cached, so a backfill-then-re-run can
+    never be re-failed by a stale cache.
+    """
+    cached = _read_lane_label_cache(issue, branch)
+    if cached is not None:
+        return cached
+    try:
+        result = _run(
+            ["gh", "issue", "view", str(issue), "--json", "labels"],
+            timeout=_LANE_GH_TIMEOUT_S,
+        )
+    except OSError:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        # `or []` (QS-332 review-fix #03): a `"labels": null` response is
+        # readable — it means "no labels", which the declaration check
+        # then fails on its own merits (actionable). Routing it through
+        # the `TypeError` arm to `None` claimed `gh` was UNAVAILABLE and
+        # degraded to warn+skip locally / fail-closed in CI instead.
+        labels = [lb["name"] for lb in json.loads(result.stdout).get("labels") or []]
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        # `AttributeError` (QS-332 review-fix #04): a non-dict top-level
+        # value (`null`, `[]`, `42`) makes `.get` raise, which used to
+        # escape this guard as a raw traceback.
+        return None
+    ok, _missing, _message = targets.validate_declaration(labels)
+    if ok and not _is_ci():
+        try:
+            LANE_CACHE_FILE.write_text(
+                json.dumps(
+                    {"issue": issue, "branch": branch, "labels": labels, "time": time.time()}
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+    return labels
+
+
+def _lane_changed_files() -> list[str] | None:
+    """The lane check's own change set, or ``None`` when git failed.
+
+    Review-fix #01 — three properties `_get_changed_files` lacks, each
+    load-bearing here:
+
+    - **Fail-closed**: any non-zero git exit yields ``None`` (reaching
+      `_check_lane_targets`'s gh-failure semantics: local warn + skip,
+      CI fail closed). `_get_changed_files` silently drops failed calls,
+      which made the documented CI fail-closed arm unreachable where CI
+      actually runs.
+    - **NUL-delimited** (`-z`): `core.quotePath` C-quotes non-ASCII
+      paths, which would classify `unknown` forever — the same treatment
+      QS-290 gave `_impacted_early_exit_paths`.
+    - **Tracked paths only** (no `ls-files --others` rung): an untracked
+      local scratch file must not earn the loud cross-target banner that
+      CI — which classifies tracked diffs only — would not print for the
+      same tree. The untracked union stays in
+      `_impacted_early_exit_paths`, for the early-exit decision alone.
+    """
+    paths: set[str] = set()
+    for cmd in (
+        ["git", "diff", "--name-only", "-z", "origin/main...HEAD"],
+        ["git", "diff", "--name-only", "-z", "HEAD"],
+        ["git", "diff", "--name-only", "-z", "--cached"],
+    ):
+        listing = _run(cmd)
+        if listing.returncode != 0:
+            return None
+        paths.update(field for field in listing.stdout.split("\0") if field)
+    return sorted(paths)
+
+
+def _lane_unavailable(reason: str, fyi: str | None) -> LaneCheckResult:
+    """Map an unreadable input (gh failure / git failure): local warn +
+    skip (offline must not brick the gate); CI fail closed — CI has a
+    guaranteed token and network, so a failure there is a real error and
+    a silent skip would disable the one enforcement QS-332 adds
+    (review PC-02)."""
+    if _is_ci():
+        return LaneCheckResult(
+            declaration_missing=f"lane check: {reason} — failing closed in CI",
+            fyi=fyi,
+        )
+    return LaneCheckResult(warning=f"lane check: {reason} — skipping (local)", fyi=fyi)
+
+
+def _check_lane_targets(branch_override: str | None = None) -> LaneCheckResult:
+    """Steps 0-4 of the QS-332 lane check. Never exits, never prints.
+
+    Skipped (all-None result) when no `QS_<N>` issue is resolvable —
+    checked FIRST, so a non-task branch pays no git calls. The change
+    set is the helper's own fail-closed `_lane_changed_files()`
+    (review-fix #01: identical semantics at all three call sites, and a
+    git failure — `None` — gets exactly the `gh`-failure treatment:
+    local warn + skip, CI fail closed).
+    """
+    resolved = _resolve_lane_issue(branch_override)
+    if resolved is None:
+        return LaneCheckResult()
+    issue, branch = resolved
+
+    changed_files = _lane_changed_files()
+    if changed_files is None:
+        return _lane_unavailable("the change set could not be computed (git failure)", None)
+
+    # Step 0 — classify every changed file; `unknown` fallthrough paths
+    # print as an FYI so the fail-open set stays visible (review PC-09).
+    classified = [(path, targets.classify(path)) for path in changed_files]
+    unknown = [path for path, cls in classified if cls == "unknown"]
+    fyi = None
+    if unknown:
+        fyi = (
+            "lane check FYI: unclassified path(s) — fail-open by design; a "
+            "recurring path deserves a one-line targets.py classification PR:\n"
+            + "\n".join(f"  - {path}" for path in unknown)
+        )
+
+    # Step 1 — the declared target: branch → issue → labels.
+    labels = _fetch_lane_labels(issue, branch)
+    if labels is None:
+        # Step 2 — gh unavailable/failing.
+        return _lane_unavailable(f"could not fetch labels for issue #{issue}", fyi)
+
+    # Step 3 — labels readable but declaration missing/incomplete → FAIL
+    # with the exact, shape-aware backfill command.
+    ok, _missing, message = targets.validate_declaration(labels)
+    if not ok:
+        text = (
+            f"lane check FAILED: issue #{issue} has no complete lane declaration "
+            f"(QS-332: every task is born in exactly one lane).\n"
+            + message.replace("<N>", str(issue))
+        )
+        return LaneCheckResult(declaration_missing=text, fyi=fyi)
+
+    # Step 4 — a `scale:epic` declaration is valid (no kind expected) and
+    # classifies against its target like any other (review PC-11).
+    declared = targets.parse_axes(labels)["target"]
+    opposite = "product" if declared == "factory" else "factory"
+    crossing = [path for path, cls in classified if cls == opposite]
+    warning = None
+    if crossing:
+        # LOUD, repeats by design on every run (review R2-05): no waiver,
+        # no acknowledgment state. Never a failure — user ruling: purpose,
+        # not path, is the classifier.
+        warning = (
+            "=" * 66
+            + "\nLANE WARNING: this task declares target:"
+            + declared
+            + f" but the diff\ntouches {opposite}-classified files:\n"
+            + "\n".join(f"  - {path}" for path in crossing)
+            + f"\nVerify these serve the declared {declared} purpose (purpose, not"
+            "\npath, is the classifier). If the "
+            + opposite
+            + "-side portion is substantial,"
+            "\nthe recommended remedy is to split the issue: file a separate "
+            + opposite
+            + "\ntask and move those changes there (see docs/epics/QS-321.md)."
+            "\nThis warning never fails the gate; a path that KEEPS warning"
+            "\nwrongly earns a targets.py carve-out PR.\n" + "=" * 66
+        )
+    return LaneCheckResult(warning=warning, fyi=fyi)
+
+
+def _emit_lane_check(result: LaneCheckResult) -> int:
+    """Map a `LaneCheckResult` at a call site: `fyi`/`warning` to stderr
+    (never stdout), `declaration_missing` to stderr + rc 1."""
+    for text in (result.fyi, result.warning):
+        if text:
+            print(text, file=sys.stderr)
+    if result.declaration_missing:
+        print(result.declaration_missing, file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_lane_check(branch_override: str | None) -> int:
+    """The `--lane-check` subcommand (reviews CR-3 + N-1): lane steps 0-4
+    only — no pytest, no coverage. In CI the warning is additionally
+    surfaced machine-owned via `GITHUB_STEP_SUMMARY` (review N-4)."""
+    result = _check_lane_targets(branch_override)
+    rc = _emit_lane_check(result)
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if result.warning and summary_path:
+        try:
+            with open(summary_path, "a", encoding="utf-8") as fh:
+                fh.write("## Lane note\n\n```\n" + result.warning + "\n```\n")
+        except OSError:
+            pass
+    return rc
+
+
 def _testmon_schema_version() -> int | None:
     """The DB schema version (`PRAGMA user_version`) the installed testmon
     expects, probed in VENV_PYTHON — the interpreter pytest actually runs
@@ -2156,8 +2444,20 @@ def check_impacted() -> int:
     # probe must be the POST-hygiene one — a corrupt DB looks warm but has just
     # been purged, after which testmon select-alls too. Cold falls through to
     # the full pass, exactly as before this feature existed.
+    # QS-332 (B1), call site 1: after `_ensure_testmon_db_safe()` and
+    # BEFORE the warm-baseline early-exit block — the hook must run on a
+    # pure-docs change set too (a missing declaration fails and a
+    # cross-target diff warns there as well). The check computes its own
+    # tracked-only, fail-closed change set (review-fix #01) —
+    # `_impacted_early_exit_paths`'s union stays the early-exit input
+    # ONLY, because its untracked rung would banner local scratch files
+    # CI never sees; a git failure inside the check gets gh-failure
+    # semantics (local warn + skip, CI fail closed).
+    if _emit_lane_check(_check_lane_targets()):
+        return 1
+
+    early_exit_paths = _impacted_early_exit_paths()
     if _testmon_baseline_warm():
-        early_exit_paths = _impacted_early_exit_paths()
         if early_exit_paths is not None and not any(p.endswith(".py") for p in early_exit_paths):
             for line in _IMPACTED_NON_PY_LINES:
                 _emit("impacted", line)
@@ -2965,6 +3265,25 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--lane-check",
+        action="store_true",
+        help=(
+            "QS-332: run only the lane check (declaration + cross-target "
+            "classification) — no pytest, no coverage. Mutex with every "
+            "other execution mode. CI passes --branch alongside it."
+        ),
+    )
+    parser.add_argument(
+        "--branch",
+        default=None,
+        metavar="BRANCH",
+        help=(
+            "QS-332: branch-name fallback for --lane-check in CI, where a "
+            "pull_request checkout is a detached merge ref (pass "
+            '"${{ github.head_ref }}"). Only valid with --lane-check.'
+        ),
+    )
+    parser.add_argument(
         "--seed-testmon",
         action="store_true",
         help=(
@@ -3031,6 +3350,28 @@ def main() -> None:
         parser.error(
             "you cannot combine --impacted with --quick, --cache, --no-cache, --full, or --fix"
         )
+
+    # QS-332: --lane-check joins the execution-mode mutex ladder — it is a
+    # self-contained read-only subcommand, incompatible with every other
+    # execution mode (including the seed trio below).
+    if args.lane_check and (
+        args.impacted or args.quick or args.cache or args.no_cache or args.full or args.fix
+    ):
+        parser.error(
+            "you cannot combine --lane-check with --impacted, --quick, --cache, "
+            "--no-cache, --full, or --fix"
+        )
+    if args.lane_check and (
+        args.seed_testmon or args.seed_testmon_status or args.seed_testmon_follow
+    ):
+        parser.error(
+            "you cannot combine --lane-check with --seed-testmon, "
+            "--seed-testmon-status, or --seed-testmon-follow"
+        )
+    # --branch exists solely as the CI detached-HEAD fallback for
+    # --lane-check; anywhere else it is a usage error.
+    if args.branch is not None and not args.lane_check:
+        parser.error("--branch is only valid with --lane-check")
 
     # QS-299 review-fix #02 (finding #2): the three seed subcommands are pairwise
     # mutually exclusive. ONE centralized, symmetric check (order-independent)
@@ -3145,6 +3486,11 @@ def main() -> None:
         )
         sys.exit(0 if result["passed"] else 1)
 
+    # QS-332: --lane-check short-circuits before scope detection, like
+    # --impacted — lane steps 0-4 only, no pytest, no coverage.
+    if args.lane_check:
+        sys.exit(run_lane_check(args.branch))
+
     # --impacted short-circuits before scope detection / caching, exactly
     # like --quick: it is its own gate with a bespoke exit-code table.
     if args.impacted:
@@ -3183,6 +3529,16 @@ def main() -> None:
 
     # Detect scope
     changed_files = _get_changed_files()
+
+    # QS-332 (B1), call site 2: the full gate, before scope detection.
+    # A missing declaration fails the gate, a cross-target diff warns on
+    # stderr and never fails. The check computes its own fail-closed
+    # change set (review-fix #01) — `_get_changed_files` above maps git
+    # failures to `[]`, which would silently degrade the check to
+    # declaration-only.
+    if _emit_lane_check(_check_lane_targets()):
+        sys.exit(1)
+
     scope_info = _detect_scope(changed_files)
     scope = scope_info["scope"]
     if args.full:

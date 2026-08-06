@@ -4,7 +4,11 @@
 Usage:
     python scripts/qs/fetch_issue.py --issue 42
 
-Output: JSON with issue number, title, body, labels, and derived type.
+Output: JSON with issue number, title, body, labels, the parsed lane
+axes (``kind``/``target``/``scale``/``lane``), ``parent_epic`` and
+``declaration_complete`` (QS-332). The axis parsing and the
+declaration truth table live in :mod:`targets` — one table, three
+consumers.
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+
+import targets
 
 from utils import output_json, run_gh
 
@@ -29,30 +35,52 @@ def main() -> None:
         output_json({"error": f"Failed to fetch issue #{args.issue}", "detail": result.stderr.strip()})
         sys.exit(1)
 
+    # The label comprehension belongs INSIDE this guard, and the `except`
+    # tuple needs `KeyError` (QS-332 review-fix #03): a malformed entry
+    # (`"labels": [null]`, or one missing `"name"`) otherwise raised a raw
+    # traceback instead of the structured error JSON below — one level
+    # shallower than all three peer consumers (`context.py`,
+    # `create_pr.py`, `setup_task.py`).
+    #
+    # `or []` / `or ""` (review-fix #02): the API can also return a
+    # present-but-NULL field (`"labels": null`, `"body": null`), which a
+    # bare `.get` default does not catch. A null field is readable and
+    # degrades to empty; a malformed ENTRY is not, and errors out.
     try:
         data = json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError):
+        # `number` belongs inside the guard too (review-fix #04): it was a
+        # bare subscript with no default, so a valid-but-incomplete object
+        # (`{}`, or any object lacking `"number"`) degraded cleanly on the
+        # labels/body path and then crashed with a raw `KeyError`. Unique
+        # to this script — the peer consumers never read `number`.
+        number = data["number"]
+        label_names = [lb["name"] for lb in data.get("labels") or []]
+        body = data.get("body") or ""
+        title = data.get("title") or ""
+        state = data.get("state") or ""
+    except (json.JSONDecodeError, TypeError, KeyError, AttributeError):
+        # `AttributeError` (review-fix #04): a non-dict top-level value
+        # (`null`, `[]`, `42`) makes `.get` raise, which used to escape
+        # this guard as a raw traceback.
         output_json({"error": "Invalid JSON from gh CLI", "detail": result.stdout.strip()})
         sys.exit(1)
 
-    label_names = [lb["name"] for lb in data.get("labels", [])]
-
-    # Derive story type from labels: bug > enhancement/feature > default (feature)
-    if "bug" in label_names:
-        story_type = "bug"
-    elif any(lb in label_names for lb in ("enhancement", "feature")):
-        story_type = "feature"
-    else:
-        story_type = "feature"
+    axes = targets.parse_axes(label_names)
+    declaration_ok, _missing, _message = targets.validate_declaration(label_names)
 
     output_json({
-        "issue_number": data["number"],
-        "title": data.get("title", ""),
-        "body": data.get("body", ""),
+        "issue_number": number,
+        "title": title,
+        "body": body,
         "labels": label_names,
-        "state": data.get("state", ""),
-        "story_type": story_type,
-        "branch": f"QS_{data['number']}",
+        "state": state,
+        "kind": axes["kind"],
+        "target": axes["target"],
+        "scale": axes["scale"],
+        "lane": axes["lane"],
+        "parent_epic": targets.parse_parent_epic(body),
+        "declaration_complete": declaration_ok,
+        "branch": f"QS_{number}",
     })
 
 

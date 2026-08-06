@@ -147,6 +147,20 @@ files it expects to touch:
   `custom_components/quiet_solar/` is touched. Full quality gate
   (pytest 100% + ruff + mypy + translations).
 
+**Lanes (QS-332).** Every task is born in exactly one of 6 lanes —
+{bug, feature, epic} × {product, factory} — declared at setup as GitHub
+labels (`kind:*`, `target:*`, `scale:*`) and exposed by
+`python scripts/qs/context.py` as the `lane` field. Each lane has a
+protocol file `docs/workflow/lanes/<lane>.md`; orchestrator agents read
+their lane file early in the session (falling back to
+[phase-protocols.md](phase-protocols.md) when the lane is undeclared —
+pre-existing worktrees only). The lane files start as byte-identical
+copies of `phase-protocols.md` (enforced by
+`tests/qs/docs/test_lanes.py`); they diverge one PR per lane (#335–#340).
+The quality gate enforces the declaration (missing declaration fails)
+and surfaces cross-target diffs as a loud warning — purpose, not path,
+is the classifier, so a crossing never fails the gate.
+
 ## Harness abstraction
 
 Everything harness-specific lives in `scripts/qs/launchers/*.py` and is

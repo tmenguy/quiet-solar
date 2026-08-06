@@ -65,6 +65,17 @@ python scripts/qs/context.py
 Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
 `latest_review_fix`. The story file is your spec (unless a review fix plan is active — see step 1b).
 
+**Lane (QS-332).** Also capture `lane` from the context JSON, then read
+`docs/workflow/lanes/<lane>.md` — that file is this task's phase
+protocol. If `lane` is empty (a pre-existing worktree / legacy
+in-flight task — every new task is labelled at birth), fall back to
+[docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
+and surface the backfill guidance: the issue still needs its axis
+labels (`gh issue edit <N> --add-label ...`). In this implement
+phase the labels must be resolved **before the first commit** — the
+first `--impacted` run fails otherwise (the gate is the backstop, not
+a parallel path).
+
 Read [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 and [docs/workflow/project-context.md](../../docs/workflow/project-context.md)
 if you haven't this session.
@@ -150,6 +161,15 @@ user request:
 ```bash
 python scripts/qs/quality_gate.py        # full gate, on EXPLICIT request only
 ```
+
+**Lane-declaration FAIL (QS-332 ask-and-backfill).** If the gate fails
+with `lane check FAILED` (the task's issue has a missing/incomplete
+lane declaration), ask the user which lane the task belongs to, then
+apply the remediation the gate printed — its `gh issue edit <N>
+--remove-label`/`--add-label` commands run verbatim, plus the additions
+where the message says to substitute the user's chosen value — then
+re-run the gate. Do this before the first commit — the gate fails
+until the declaration exists.
 
 If `--impacted` fails, fix the **code/tests** — never switch to the
 full gate to diagnose. `--impacted` self-heals; a manual
