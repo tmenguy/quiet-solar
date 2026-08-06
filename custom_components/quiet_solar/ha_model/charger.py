@@ -3239,7 +3239,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     if other is charger or other in assigned_chargers:
                         continue
                     for other_score, other_car in chargers_scores[other]:
-                        if other_car.name == car.name and other_score > best_alternative:
+                        # Identity, not name equality (review #03 / D10): the charger
+                        # exclusion just above already uses `is`, and mixing the two
+                        # would let a distinct car object sharing a name contribute a
+                        # phantom alternative and perturb regret. Every score list is
+                        # built from the SAME `home._cars` iteration, so under the
+                        # documented unique-name invariant `is` and `.name ==` select
+                        # the identical set — this is a no-op by construction, and it
+                        # stops depending on that invariant here.
+                        if other_car is car and other_score > best_alternative:
                             best_alternative = other_score
                 regret = best_cur_score - best_alternative
 
