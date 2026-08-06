@@ -135,10 +135,7 @@ def _run_allocation_round(chargers, time) -> None:
 
 
 def _allocation(fx) -> dict:
-    return {
-        name: (charger.car.name if charger.car is not None else None)
-        for name, charger in fx.chargers.items()
-    }
+    return {name: (charger.car.name if charger.car is not None else None) for name, charger in fx.chargers.items()}
 
 
 def _spy_detach(charger) -> list:
@@ -656,9 +653,7 @@ def _pin_scores(fx, per_charger: dict) -> None:
     """Give each charger a fixed score for the Zoe (0 for anything else)."""
     for charger in (fx.parking, fx.portail):
         charger.get_car_score = MagicMock(
-            side_effect=lambda car, time, cache, _c=charger: (
-                per_charger[_c.name] if car.name == "Zoe" else 0.0
-            )
+            side_effect=lambda car, time, cache, _c=charger: per_charger[_c.name] if car.name == "Zoe" else 0.0
         )
 
 
@@ -686,13 +681,17 @@ async def test_allocation_churn_total_log_volume_over_a_full_window(caplog):
     falls back to its generic car — so no session churn is involved and every line
     above the floor is pure logging defect. Measured 149 lines before this round,
     129 of them from the single unthrottled `Default car used` branch.
+
+    REAL scoring, not a stubbed `get_car_score` (review #04 / B9): stubbing it meant
+    the `get_car_score:{car}` site — the one that produced the original 17 791
+    lines — never fired here, leaving the `N*M` term of the ceiling unexercised.
+    Coordinates are pinned instead, so the whole production path runs.
     """
     fx = _make_incident_fixture(pin_buzz=False)
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     caplog.set_level(logging.INFO, logger=LOAD_LOGGER)
     fx.home._cars = [fx.zoe]
     _drive_real_cycle_path(fx)
-    _pin_scores(fx, {"wallbox_parking": 100.0, "wallbox_portail": 90.0})
 
     await _run_cycles(fx, caplog)
 
@@ -705,6 +704,10 @@ async def test_allocation_churn_total_log_volume_over_a_full_window(caplog):
     assert len(volume) <= ceiling, f"{len(volume)} lines > {ceiling}:\n" + "\n".join(
         sorted({record.getMessage()[:110] for record in volume})
     )
+
+    # The scoring site really did run — otherwise the N*M term is untested and this
+    # whole assertion is weaker than it looks.
+    assert [r for r in caplog.records if r.getMessage().startswith("get_car_score: ")]
 
     # The allocation itself is untouched by any of this.
     assert fx.parking.car is fx.zoe
@@ -722,8 +725,11 @@ async def test_generic_car_fallback_line_is_throttled(caplog):
 
     await _run_cycles(fx, caplog)
 
+    # LOWER bound too (review #04 / B8): a ceiling alone passes if the line vanishes
+    # entirely, and this matches on a reason string that did not exist pre-fix — so
+    # without it the test was vacuously green against the pre-fix revision.
     fallback = [r for r in caplog.records if "generic_fallback" in r.getMessage()]
-    assert len(fallback) <= _PER_KEY_CEILING, fallback
+    assert 1 <= len(fallback) <= _PER_KEY_CEILING, fallback
 
 
 async def test_removed_from_another_charger_is_throttled(caplog):
@@ -739,15 +745,13 @@ async def test_removed_from_another_charger_is_throttled(caplog):
     per_charger = {"wallbox_parking": 100.0, "wallbox_portail": 90.0}
     _pin_scores(fx, per_charger)
     for index in range(129):
-        per_charger["wallbox_parking"], per_charger["wallbox_portail"] = (
-            (90.0, 100.0) if index % 2 else (100.0, 90.0)
-        )
+        per_charger["wallbox_parking"], per_charger["wallbox_portail"] = (90.0, 100.0) if index % 2 else (100.0, 90.0)
         time = T0 + timedelta(seconds=7 * index)
         for charger in (fx.parking, fx.portail):
             await charger.check_load_activity_and_constraints(time)
 
     removed = [r for r in caplog.records if "removed from another charger" in r.getMessage()]
-    assert len(removed) <= _PER_KEY_CEILING, removed
+    assert 1 <= len(removed) <= _PER_KEY_CEILING, removed
 
 
 async def test_user_pinned_car_line_is_throttled(caplog):
@@ -761,15 +765,20 @@ async def test_user_pinned_car_line_is_throttled(caplog):
     await _run_cycles(fx, caplog, cycles=20)
 
     pinned = [r for r in caplog.records if "user_selection" in r.getMessage()]
-    assert len(pinned) <= _PER_KEY_CEILING, pinned
+    assert 1 <= len(pinned) <= _PER_KEY_CEILING, pinned
 
 
-async def test_no_car_selected_state_is_idempotent(caplog):
+async def test_no_car_selected_state_is_quiet(caplog):
     """The single largest volume source: ~74 000 lines/day from one charger.
 
-    Selecting "no car connected" ran a full `reset(keep_commands=True)` EVERY cycle,
-    emitting six INFO lines each time — four times the original incident. Once there
-    is nothing left to reset the state must go completely quiet.
+    Selecting "no car connected" runs a full `reset(keep_commands=True)` EVERY cycle
+    and used to emit six INFO lines each time — four times the original incident.
+
+    The reset itself is NOT skipped (review #04 / B2: gating it on a predicate that
+    mirrors what `reset()` clears is a rot hazard whose failure mode is stale charger
+    state). `reset()` is idempotent, so it keeps running; the volume is fixed where
+    it belongs — the reset chain logs at DEBUG unless it destroyed something, and the
+    announcement is throttled.
     """
     fx = _make_incident_fixture()
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
@@ -780,15 +789,13 @@ async def test_no_car_selected_state_is_idempotent(caplog):
 
     await _run_cycles(fx, caplog, cycles=20)
 
-    # Two chargers x (one merged `get_best_car` key + at most one settling reset).
+    # Two chargers x (one merged `get_best_car` key + the throttled announcement).
     volume = _info_volume(caplog)
-    assert len(volume) <= 2 * (_PER_KEY_CEILING + 6), "\n".join(
-        record.getMessage()[:110] for record in volume
-    )
+    assert len(volume) <= 2 * 2 * _PER_KEY_CEILING, "\n".join(record.getMessage()[:110] for record in volume)
 
-    # And the reset genuinely stops running rather than merely logging less.
+    # The announcement is throttled rather than repeated per cycle...
     reset_lines = [r for r in caplog.records if "CHARGER_NO_CAR_CONNECTED selected option" in r.getMessage()]
-    assert len(reset_lines) <= 2, reset_lines
+    assert 1 <= len(reset_lines) <= 2 * _PER_KEY_CEILING, reset_lines
     assert fx.parking.car is None
 
 
@@ -797,14 +804,18 @@ async def test_force_car_no_charger_is_not_logged_from_the_inner_loop(caplog):
     # that itself runs once per charger per cycle: N^2*M lines per cycle, measured
     # 101 over 20 cycles (~62k/day). It belongs at DEBUG.
     fx = _make_incident_fixture()
-    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    caplog.set_level(logging.DEBUG, logger=CHARGER_LOGGER)
     _drive_real_cycle_path(fx)
     for car in (fx.zoe, fx.buzz):
         car.set_user_originated(USER_ORIGINATED_CHARGER_NAME, FORCE_CAR_NO_CHARGER_CONNECTED)
 
     await _run_cycles(fx, caplog, cycles=20)
 
-    assert [r for r in caplog.records if "FORCE_CAR_NO_CHARGER_CONNECTED" in r.getMessage()] == []
+    forced = [r for r in caplog.records if "FORCE_CAR_NO_CHARGER_CONNECTED" in r.getMessage()]
+    assert [r for r in forced if r.levelno == logging.INFO] == []
+    # LOWER bound (review #04 / B8): the branch really is reached, so the INFO
+    # assertion above is about the LEVEL and not about a dead code path.
+    assert [r for r in forced if r.levelno == logging.DEBUG]
 
 
 def test_same_cycle_duplicate_calls_emit_once(caplog):

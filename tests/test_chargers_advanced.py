@@ -409,26 +409,6 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
         mock_reset.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_check_load_activity_and_constraints_plugged_no_car_is_idempotent(self):
-        """D6: with nothing left to reset the cycle does no work at all."""
-        with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
-            charger = QSChargerGeneric(**self.charger_config)
-
-        time = datetime.now(pytz.UTC)
-        self.assertFalse(charger._reset_would_change_state(keep_commands=True))
-
-        with (
-            patch.object(charger, "is_plugged", return_value=True),
-            patch.object(charger, "get_best_car", return_value=None),
-            patch.object(charger, "get_and_adapt_existing_constraints", return_value=[], create=True),
-            patch.object(charger, "reset") as mock_reset,
-        ):
-            result = await charger.check_load_activity_and_constraints(time)
-
-        self.assertTrue(result)
-        mock_reset.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_check_load_activity_and_constraints_car_change(self):
         """Test check_load_activity_and_constraints when car changes."""
         with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):

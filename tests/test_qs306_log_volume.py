@@ -225,11 +225,11 @@ def test_log_info_on_change_only_mutates_its_own_state(caplog: pytest.LogCapture
     after = vars(host)
     assert set(after) - set(before) == {"_log_on_change_state"}
     assert set(before) - set(after) == set()
-    # QS-342 review #03 record shape: the remembered values, the window anchor, and
-    # this window's budget accounting.
+    # Record shape: observed values (each flagged with whether it was actually
+    # SHOWN — review #04 / B4), the window anchor, and this window's accounting.
     record = host._log_on_change_state["k"]
-    assert record.seen == [("v", T0)]
-    assert (record.window_start, record.emitted, record.dropped) == (T0, 1, 0)
+    assert record.seen == [("v", T0, True)]
+    assert (record.window_start, record.emitted, record.dropped, record.suppressed) == (T0, 1, 0, 0)
 
 
 def test_log_info_on_change_resets_the_timer_on_every_emission(caplog: pytest.LogCaptureFixture) -> None:
@@ -256,6 +256,118 @@ def test_log_info_on_change_keys_are_independent(caplog: pytest.LogCaptureFixtur
     host.log_info_on_change("a", 1, T0 + timedelta(seconds=7), "keyed %s", "a")
 
     assert len(_messages(caplog, "keyed", logging.INFO, CHARGER_LOGGER)) == 2
+
+
+_DISCLOSURE = "log throttle ["
+
+
+def _disclosures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return _messages(caplog, _DISCLOSURE, logging.INFO, CHARGER_LOGGER)
+
+
+def test_b3_budget_overflow_is_disclosed_when_the_window_rolls(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """B3: the overflow branch had no test at all — CI's 100 % gate would have failed.
+
+    No existing run produced `dropped > 0` AND then crossed 900 s (the longest were
+    128-129 cycles x 7 s = 896 s, just under). That left the plan's, AC5's and the
+    doc's central completeness claim entirely unpinned, on a line that builds a
+    format string with extra args and would raise inside `logging` if mismatched.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    # budget + 3 distinct values inside one window: `budget` shown, 3 dropped.
+    overflow = 3
+    for index in range(_LOG_VALUES_PER_WINDOW + overflow):
+        host.log_info_on_change("k", index, T0 + timedelta(seconds=7 * index), "probe %s", index)
+    assert len(_messages(caplog, "probe", logging.INFO, CHARGER_LOGGER)) == _LOG_VALUES_PER_WINDOW
+    assert _disclosures(caplog) == []
+
+    # One call past the window: the disclosure appears, with the right count.
+    host.log_info_on_change("k", "next", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "probe %s", "next")
+
+    disclosures = _disclosures(caplog)
+    assert len(disclosures) == 1
+    message = disclosures[0].getMessage()
+    assert f"{overflow} distinct change(s) not shown" in message, message
+    assert "[k]" in message, message
+    # B6: static text keyed to the KEY — none of the caller's args are stapled on.
+    assert "probe" not in message
+
+
+def test_b6_disclosure_is_not_misattributed_or_duplicated(caplog: pytest.LogCaptureFixture) -> None:
+    """B6: it reused the CURRENT call's msg/args, then logged that same line again."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    for index in range(_LOG_VALUES_PER_WINDOW + 2):
+        host.log_info_on_change("k", index, T0 + timedelta(seconds=7 * index), "car %s state %s", "ZZZ", index)
+    host.log_info_on_change(
+        "k", "fresh", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "car %s state %s", "ZZZ", "fresh"
+    )
+
+    # The disclosure names no car and no state...
+    disclosure = _disclosures(caplog)[0].getMessage()
+    assert "ZZZ" not in disclosure and "fresh" not in disclosure
+
+    # ...and the value line that triggered the roll is logged exactly once.
+    assert len([r for r in caplog.records if r.getMessage() == "car ZZZ state fresh"]) == 1
+
+
+def test_b4_a_budget_dropped_value_is_shown_once_budget_allows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """B4: dropped values got an emission-grade TTL and were then silent forever.
+
+    A value recorded but never shown was stamped as if emitted, so after the window
+    rolled it was STILL TTL-suppressed — and that suppression path returns before
+    the drop counter, so it was not counted the second time either. Reproduced
+    against the previous code: a value present from t=28 s first appeared at
+    t=928 s and was uncounted after the first disclosure.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    for index in range(_LOG_VALUES_PER_WINDOW):
+        host.log_info_on_change("k", index, T0 + timedelta(seconds=7 * index), "probe %s", index)
+    # Budget is now exhausted; this value is observed but dropped.
+    dropped_at = T0 + timedelta(seconds=28)
+    host.log_info_on_change("k", "late", dropped_at, "probe %s", "late")
+    assert _messages(caplog, "probe late", logging.INFO, CHARGER_LOGGER) == []
+
+    # Repeating it inside the window must not inflate the drop count per call.
+    for index in range(5):
+        host.log_info_on_change("k", "late", dropped_at + timedelta(seconds=7 * index), "probe %s", "late")
+
+    # Past the window: disclosed as ONE distinct change, and now actually shown.
+    host.log_info_on_change("k", "late", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "probe %s", "late")
+    assert "1 distinct change(s) not shown" in _disclosures(caplog)[0].getMessage()
+    assert len(_messages(caplog, "probe late", logging.INFO, CHARGER_LOGGER)) == 1
+
+
+def test_b7_dedup_suppressed_repeats_are_counted(caplog: pytest.LogCaptureFixture) -> None:
+    """B7: without this, a pinned key and a calm one produce identical logs.
+
+    `dropped` covers budget overflow only, so a 2-hour ping-pong at the 7 s cycle
+    emitted 16 lines with `dropped == 0` — indistinguishable from a home whose
+    winner genuinely alternates every 7.5 minutes. #342 was diagnosed from volume.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    # One value hammered at the cycle rate for a whole window.
+    repeats = 100
+    for index in range(repeats):
+        host.log_info_on_change("k", "steady", T0 + timedelta(seconds=7 * index), "probe %s", "steady")
+    assert len(_messages(caplog, "probe", logging.INFO, CHARGER_LOGGER)) == 1
+
+    host.log_info_on_change("k", "steady", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "probe %s", "steady")
+
+    disclosure = _disclosures(caplog)[0].getMessage()
+    assert f"{repeats - 1} repeat(s) suppressed" in disclosure, disclosure
+    assert "0 distinct change(s) not shown" in disclosure, disclosure
 
 
 # =============================================================================
@@ -427,22 +539,24 @@ async def test_mf1_near_zero_sign_dither_does_not_re_inflate_the_log(caplog: pyt
 
 
 async def test_mf1_real_export_import_transition_is_still_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """MF1: a genuine export <-> import transition is reported, within the budget.
+    """MF1: the throttle must not cost us a genuine export <-> import transition.
 
     Every cycle here crosses zero with both sides outside the deadband, so every
-    cycle is a real transition. QS-342 review #03 caps each key at `budget`
-    emissions per window: the transitions ARE reported (this is not silence), but a
-    site flipping on every cycle can no longer track the cycle rate. That trade is
-    deliberate and is what makes the volume bound data-independent — an unbounded
-    site is exactly how the original incident reached 17 791 lines.
+    cycle is a real operational event and every cycle is reported.
+
+    Review #04 / B13: this briefly regressed to `2 <= n <= 5` when the default
+    per-key budget was applied here. That budget assumes "many distinct values per
+    window means churn, and the churn is itself the signal" — true for allocation
+    keys, false for telemetry, where the values advance during normal operation.
+    This site now carries `_LOG_TELEMETRY_VALUES_PER_WINDOW`, so the exact count is
+    back and the volume is still bounded.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
 
     await _run_oscillating_power_cycles(group, home, watts=150.0)
 
-    records = _messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)
-    assert 2 <= len(records) <= _PER_KEY_CEILING, records
+    assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 10
 
 
 # =============================================================================

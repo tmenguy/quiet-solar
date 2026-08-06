@@ -337,8 +337,15 @@ class TestCheckLoadActivityAndConstraints:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_plugged_no_car_selected_is_idempotent(self, setup_charger):
-        """D6: with nothing left to reset the cycle does no work and logs nothing."""
+    async def test_plugged_no_car_selected_resets_unconditionally(self, setup_charger):
+        """The reset is NOT gated on a predicate mirroring what it clears.
+
+        Review #03 / D6 added such a gate; review #04 / B2 found the mirror already
+        incomplete. Any enumeration of "what reset clears" rots the moment `reset()`
+        learns a new field, and the failure mode is stale charger state. `reset()` is
+        idempotent, so it simply runs — the log volume it used to cause is fixed in
+        the logging, not by skipping the work.
+        """
         charger, home = setup_charger
         time = datetime.now(pytz.UTC)
 
@@ -348,12 +355,11 @@ class TestCheckLoadActivityAndConstraints:
             patch.object(charger, "is_not_plugged", return_value=False),
             patch.object(charger, "is_plugged", return_value=True),
             patch.object(charger, "get_best_car", return_value=None),
+            patch.object(charger, "reset") as mock_reset,
         ):
-            assert charger._reset_would_change_state(keep_commands=True) is False
-            with patch.object(charger, "reset") as mock_reset:
-                result = await charger.check_load_activity_and_constraints(time)
+            result = await charger.check_load_activity_and_constraints(time)
 
-        mock_reset.assert_not_called()
+        mock_reset.assert_called_once()
         assert result is True
 
     @pytest.mark.asyncio

@@ -1270,11 +1270,10 @@ async def test_charger_check_load_activity_plugged_no_car(
 
     time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
 
-    # QS-342 review #03 / D6: the reset is gated on there being state to destroy, so
-    # the "no car connected" state stops re-running a no-op reset (and its six INFO
-    # lines) every cycle. Seed some state so the reset still runs here.
-    charger_device._last_amp_change_time = time
-    assert charger_device._reset_would_change_state(keep_commands=True) is True
+    # The reset runs on every cycle in this state and is NOT gated on a predicate
+    # enumerating what it clears (review #04 / B2: such a mirror was already
+    # incomplete, and its failure mode is stale charger state). `reset()` is
+    # idempotent; the log volume it used to cause is fixed in the logging.
     charger_device.reset = MagicMock()
 
     do_force = await charger_device.check_load_activity_and_constraints(time)
@@ -1282,15 +1281,12 @@ async def test_charger_check_load_activity_plugged_no_car(
     assert do_force is True
     charger_device.reset.assert_called_once()
 
-    # With nothing left to reset the same call does no work at all.
-    charger_device._last_amp_change_time = None
-    assert charger_device._reset_would_change_state(keep_commands=True) is False
     charger_device.reset = MagicMock()
 
     do_force = await charger_device.check_load_activity_and_constraints(time)
 
     assert do_force is True
-    charger_device.reset.assert_not_called()
+    charger_device.reset.assert_called_once()
 
 
 async def test_charger_check_load_activity_force_constraint(

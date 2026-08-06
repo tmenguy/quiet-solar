@@ -236,11 +236,22 @@ _POWER_LOG_DEADBAND_W = 100.0  # ignore sub-100W jitter on the available-power l
 # (GPS creeping 0.55 m per cycle) is a new value every cycle, so it satisfies "not the
 # same stuff over and over" literally while leaving volume unbounded. The budget is
 # what makes the bound provable and DATA-INDEPENDENT: <= budget + 1 lines per key per
-# window, whatever the value pattern. Overflow is disclosed as a count, never silent.
+# window, whatever the value pattern. Overflow is disclosed as a count on the next
+# call for that key.
 _LOG_VALUES_PER_WINDOW = 4
+# QS-342 (review fix #04 / B12+B13): a LARGER budget for the two genuine-telemetry
+# sites — `dyn_handle`'s available-power line and the SoC callback. The default
+# assumes "many distinct values per window == churn, and the churn is itself the
+# signal", which is true for allocation keys but FALSE here: these values advance
+# monotonically during perfectly normal operation (a charging battery's Wh/%, a
+# home's import/export crossing zero), so the default budget put them in permanent
+# overflow and dropped real operational events. 12 per 900 s is one line per 75 s
+# worst case — still bounded, and enough to keep a genuine transition visible.
+_LOG_TELEMETRY_VALUES_PER_WINDOW = 12
 # Strictly greater than the budget, so the BUDGET binds first and eviction never
 # silently re-inflates volume by forgetting a value that is still being repeated.
 _LOG_MAX_REMEMBERED_VALUES = 8
+_LOG_MAX_REMEMBERED_TELEMETRY_VALUES = _LOG_TELEMETRY_VALUES_PER_WINDOW * 2
 
 
 class QSChargerStates(StrEnum):
@@ -653,22 +664,33 @@ def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool
 
 @dataclass
 class _LogOnChangeRecord:
-    """Recently-emitted values for one key, plus this window's budget accounting.
+    """Recently-OBSERVED values for one key, plus this window's accounting.
 
-    `seen` is a bounded LIST of `(value, last_emitted_time)` scanned linearly with
-    `_is_unchanged` — deliberately NOT a `dict[value, time]`. Two load-bearing
-    reasons: `float('nan')` values would never hit a dict lookup (every read builds
-    a fresh NaN and `NaN != NaN`), silently re-inflating a stuck sensor to the full
-    cycle rate — exactly what `_element_unchanged` guards against; and the deadband
-    comparison is not an equality relation at all, so it cannot be a hash key. A
-    linear scan over at most `_LOG_MAX_REMEMBERED_VALUES` entries keeps both guards
-    and dodges hashability (the soc site's value nests a tuple).
+    `seen` is a bounded LIST of `(value, stamp, was_emitted)` scanned linearly with
+    `_is_unchanged` — deliberately NOT a `dict[value, ...]`, because the deadband
+    comparison is not an equality relation and cannot be a hash key, and the soc
+    site's value nests a tuple (unhashable). A linear scan over at most
+    `_LOG_MAX_REMEMBERED_VALUES` entries dodges hashability entirely and keeps the
+    NaN guard in `_element_unchanged` reachable.
+
+    `was_emitted` is load-bearing (review #04 / B4). Values are recorded whether or
+    not they were shown — recording only on emit would turn `dropped` from a count
+    of distinct values into a count of CALLS — but a value the budget dropped must
+    not carry an emission-grade TTL, or it stays suppressed after the window rolls
+    and is never counted again either. The flag separates "shown, hold it for the
+    TTL" from "seen but dropped, show it as soon as budget allows".
+
+    `suppressed` counts dedup hits (review #04 / B7). Without it a 2-hour ping-pong
+    at the 7 s cycle is byte-identical in the log to a home whose winner genuinely
+    alternates every 7.5 minutes — and the original #342 diagnosis rested entirely
+    on the volume being visibly absurd.
     """
 
-    seen: list[tuple[object, datetime]]
+    seen: list[tuple[object, datetime, bool]]
     window_start: datetime
     emitted: int = 0
     dropped: int = 0
+    suppressed: int = 0
 
 
 class LogOnChangeMixin:
@@ -723,6 +745,20 @@ class LogOnChangeMixin:
         and disclosed as a single overflow line when the window rolls. Per key the
         bound is therefore `budget + 1` lines per window, INDEPENDENT of the data.
 
+        The disclosure also carries the number of dedup-suppressed REPEATS (review
+        #04 / B7), which is the only remaining signal of the incident's defining
+        symptom: a key pinned at the cycle rate and one changing every few minutes
+        otherwise produce identical logs, and #342 was diagnosed from the volume.
+
+        KNOWN RESIDUAL (review #04 / B5): the disclosure is flushed by the next call
+        on the same key, so if a key goes quiet for good — charger unplugged, device
+        disabled, car removed, HA restart — the final window's counts are lost. This
+        is reachable on the incident path itself (`get_best_car` stops being called
+        the instant the charger unplugs). It is accepted rather than fixed: a flush
+        hook would put logging concerns back into charger lifecycle control flow,
+        and cross-session banking is what rounds #01-#03 proved unworkable. So the
+        guarantee is "disclosed on the next call for that key", NOT "never silent".
+
         `time` may be naive: it is normalised to UTC rather than branched on, so
         alternating naive/aware callers can no longer defeat the bound (the old
         non-comparable-clock branch emitted unconditionally). `|elapsed|` is used so
@@ -747,35 +783,57 @@ class LogOnChangeMixin:
             st = state[key] = _LogOnChangeRecord([], time)
 
         if abs((time - st.window_start).total_seconds()) >= _RELOG_UNCHANGED_AFTER_S:
-            if st.dropped:
-                # Concatenated OUTSIDE the logging call (ruff G003) and only ever with
-                # static format text: the values stay lazy %-args.
-                disclosure = msg + " [+%s further change(s) not shown in the last %ss]"
-                _LOGGER.info(disclosure, *args, st.dropped, int(_RELOG_UNCHANGED_AFTER_S))
+            if st.dropped or st.suppressed:
+                # STATIC text, keyed by `key`, with none of the caller's `*args`
+                # (review #04 / B6). Stapling this onto the current call's message
+                # attributed the count to a value that had nothing to do with the
+                # dropped ones, and the same line was then logged again immediately.
+                _LOGGER.info(
+                    "log throttle [%s]: %s distinct change(s) not shown, %s repeat(s) suppressed in the last %ss",
+                    key,
+                    st.dropped,
+                    st.suppressed,
+                    int(_RELOG_UNCHANGED_AFTER_S),
+                )
             st.window_start = time
             st.emitted = 0
             st.dropped = 0
+            st.suppressed = 0
 
         hit = next(
-            (index for index, (seen_value, _t) in enumerate(st.seen) if _is_unchanged(seen_value, value, deadband)),
+            (index for index, (seen_value, _t, _e) in enumerate(st.seen) if _is_unchanged(seen_value, value, deadband)),
             None,
         )
-        if hit is not None and abs((time - st.seen[hit][1]).total_seconds()) < _RELOG_UNCHANGED_AFTER_S:
-            # Still remembered: suppress WITHOUT restamping, so the TTL bounds the gap
-            # between emissions of one value rather than being pushed forward forever
-            # by a value that never changes (that is the 900 s heartbeat).
-            return
-
         if hit is not None:
-            st.seen[hit] = (value, time)
+            _seen_value, seen_time, was_emitted = st.seen[hit]
+            if was_emitted and abs((time - seen_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S:
+                # Still remembered: suppress WITHOUT restamping, so the TTL bounds the
+                # gap between emissions of one value rather than being pushed forward
+                # forever by a value that never changes (the 900 s heartbeat).
+                st.suppressed += 1
+                return
+            if not was_emitted and st.emitted >= budget:
+                # Already counted once this window as a dropped DISTINCT value.
+                # Counting it again per call is what would turn `dropped` into a call
+                # counter (review #04 / B4).
+                st.suppressed += 1
+                return
+
+        will_emit = st.emitted < budget
+        entry = (value, time, will_emit)
+        if hit is not None:
+            st.seen[hit] = entry
         else:
-            st.seen.append((value, time))
+            st.seen.append(entry)
             if len(st.seen) > max_values:
+                # Insertion-ordered, NOT recency-ordered (review #04 / C5): a refreshed
+                # entry is rewritten in place, so this can evict a value seen more
+                # recently than the one it keeps. Harmless — `max_values` exceeds the
+                # budget, so the budget always binds first and eviction can never
+                # re-inflate volume — but it is not an LRU and should not be called one.
                 del st.seen[0]
 
-        # Recorded above whether or not we emit, so an overflowing key counts once per
-        # DISTINCT value rather than once per call.
-        if st.emitted >= budget:
+        if not will_emit:
             st.dropped += 1
             return
 
@@ -986,6 +1044,10 @@ class QSChargerGroup(LogOnChangeMixin):
                     grid_available_home_power,
                     battery_asked_charge,
                     deadband=_POWER_LOG_DEADBAND_W,
+                    # Telemetry, not churn (review #04 / B13): a home crossing between
+                    # import and export is a real operational event, and the default
+                    # budget was dropping them. See _LOG_TELEMETRY_VALUES_PER_WINDOW.
+                    budget=_LOG_TELEMETRY_VALUES_PER_WINDOW,
                     # Single-`prev` semantics: with a deadband, a value SET would
                     # suppress transitive drift (0 -> 99 -> 198, each step inside the
                     # deadband of some remembered neighbour) forever.
@@ -2881,7 +2943,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._boot_last_completed_constraint = None
 
     def reset(self, keep_commands=False):
-        _LOGGER.info("Charger reset %s", self.name)
+        # DEBUG, not INFO (review #04): `reset()` is idempotent and is called on every
+        # cycle in the "no car connected" state, so an unconditional INFO here was
+        # ~74 000 lines/day from one charger. The single INFO marker for "a reset
+        # actually destroyed something" is `Constraint Reset device` in
+        # `constraint_reset_and_reset_commands_if_needed`, which is gated on
+        # `_has_state_to_reset` — a predicate that only ever picks a LOG LEVEL, so a
+        # wrong answer costs a log line rather than charger state.
+        _LOGGER.debug("Charger reset %s", self.name)
         super().reset(keep_commands=keep_commands)
         self.detach_car()
         self._reset_state_machine()
@@ -2891,7 +2960,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self.possible_charge_error_start_time = None
 
     def _reset_state_machine(self):
-        _LOGGER.info("_reset_state_machine: %s", self.name)
+        _LOGGER.debug("_reset_state_machine: %s", self.name)
         self._verified_correct_state_time = None
         self._inner_expected_charge_state = None
         self._inner_amperage = None
@@ -3198,7 +3267,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                 # Stays at ERROR and stays unthrottled: it CLEARS the
                                 # conflicting flag, so it self-heals and cannot repeat.
                                 _LOGGER.error(
-                                    f"get_best_car: {car.name} manually attached to multiple chargers: {self.name} and {charger.name}, detaching from {charger.name}"
+                                    "get_best_car: %s manually attached to multiple chargers: %s and %s, detaching from %s",
+                                    car.name,
+                                    self.name,
+                                    charger.name,
+                                    charger.name,
                                 )
                                 charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)
                             else:
@@ -3237,8 +3310,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # chargers must pass `is_plugged(for_duration=CHARGER_CHECK_STATE_WINDOW_S)`,
         # so for ≤ that window after a second charger plugs in, different callers
         # can see different charger sets — self-healing once the window elapses.
-        # `str(...)`: D12 — a non-comparable `name` would raise TypeError here, and a
-        # sort key must never be able to break the allocation.
+        # `str(...)`: D12, defensive only. It does NOT make the allocation immune to a
+        # non-comparable `name` (review #04 / B10 corrected the original claim): the
+        # `ranked` tuples further down still carry raw `charger.name` / `car.name`, so
+        # such a name would raise TypeError inside `min(ranked, …)` regardless. Both
+        # are unreachable while `name: str` holds; this one is simply free.
         active_chargers.sort(key=lambda c: str(c.name))
 
         cache = {}
@@ -3256,7 +3332,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     # D5: DEBUG, not INFO. This reports a STATIC user setting from
                     # inside a charger x car double loop that itself runs once per
                     # charger per cycle — N^2*M lines/cycle (measured ~62k/day). An
-                    # INFO anchor for the setting belongs in its setter, not here.
+                    # An INFO anchor for the setting would belong in its setter; none
+                    # has been added, so the setting is currently only visible at DEBUG.
                     _LOGGER.debug("get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: %s", car.name)
                     continue
 
@@ -3395,6 +3472,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 # the best is not as good as the boot one ... we will use the boot one for now, whatever the score
                 best_car = self._boot_car
                 reason = "boot_over_computed"
+                # The score reported alongside this reason belongs to the DISCARDED
+                # computed car, not to the boot car that actually won — the boot car
+                # was never scored on this charger, so there is no score to report.
             else:
                 reason = "computed"
 
@@ -3567,49 +3647,6 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             self.car.do_force_next_charge = False
             self.car.do_next_charge_time = None
 
-    def _reset_would_change_state(self, keep_commands: bool = True) -> bool:
-        """Return True when `reset(keep_commands)` would destroy any state.
-
-        QS-342 review #03 / D6. `reset()` is otherwise a per-cycle no-op that still
-        emits six INFO lines, which measured ~74 000 lines/day from a single charger
-        — four times the original incident — while the user has "no car connected"
-        selected. Gating on this predicate makes that state idempotent.
-
-        This must enumerate EVERYTHING the reset chain clears, or the gate would skip
-        real work: `_has_state_to_reset` covers the constraint/command half (including
-        the charger override's user-initiated flags), and the rest mirrors
-        `QSChargerGeneric.reset` field by field — `detach_car`, `_reset_state_machine`,
-        `reset_boot_data`, the two reboot/priority flags, `reset_daily_load_datas` and
-        `_dampen_start_transition`. A new field cleared by `reset()` must be added here.
-        """
-        return (
-            self._has_state_to_reset(keep_commands)
-            # detach_car
-            or self.car is not None
-            or bool(self._power_steps)
-            or self.car_attach_time is not None
-            # _reset_state_machine
-            or self._verified_correct_state_time is not None
-            or self._inner_expected_charge_state is not None
-            or self._inner_amperage is not None
-            or self._inner_num_active_phases is not None
-            or self._last_amp_change_time is not None
-            # QSChargerGeneric.reset's own flags
-            or self._asked_for_reboot_at_time is not None
-            or bool(self.qs_bump_solar_priority)
-            or self.possible_charge_error_start_time is not None
-            # reset_boot_data
-            or self._boot_time is not None
-            or self._boot_car is not None
-            or self._boot_time_adjusted is not None
-            or bool(self._boot_constraints)
-            or self._boot_last_completed_constraint is not None
-            # AbstractDevice.reset
-            or bool(self.num_on_off)
-            or self.last_state_change_time is not None
-            or self._dampen_start_transition is not None
-        )
-
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
@@ -3701,15 +3738,22 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             # user forced a "deconnection"
             if best_car is None:
-                # D6: the reset here runs EVERY cycle while "no car connected" is
-                # selected, and each run emits six INFO lines. Skip it once there is
-                # nothing left to reset — the state is then genuinely unchanged, so
-                # this only ever skips work that is already a no-op.
-                if self._reset_would_change_state(keep_commands=True):
-                    _LOGGER.info(
-                        "check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option"
-                    )
-                    self.reset(keep_commands=True)
+                # UNCONDITIONAL, exactly as before QS-342 review #03 / D6. That round
+                # gated this on a predicate enumerating every field `reset()` clears;
+                # review #04 / B2 then found the enumeration already incomplete. Any
+                # such mirror silently rots the moment `reset()` learns a new field,
+                # and the failure mode is stale charger state — so the gate is gone.
+                # `reset()` is idempotent, so running it every cycle is free; the
+                # ~74 000 lines/day it used to produce were a LOGGING defect, and are
+                # fixed where they belong: the reset chain's own lines are DEBUG
+                # unless the reset did real work, and the line below is throttled.
+                self.log_info_on_change(
+                    "no_car_connected",
+                    self.car is not None,
+                    time,
+                    "check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option",
+                )
+                self.reset(keep_commands=True)
                 return True
 
             elif self.car:
@@ -5342,9 +5386,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         # The key includes `is_target_percent`: the percent and energy callbacks are two
         # delegating entry points, and one shared key would let them thrash. It also
-        # includes the car name as defence in depth — `detach_car()` clears the memo,
-        # but a future path could swap a car without routing through it. The literal
-        # `%` must be `%%` or `record.getMessage()` raises ValueError.
+        # includes the car name because that is what makes the key safe across a car
+        # swap: `detach_car()` no longer clears the log state at all (see the D2
+        # rationale block on `detach_car`), so key qualification is the ONLY guarantee
+        # that a key cannot name a stale car — not defence in depth.
+        # The literal `%` must be `%%` or `record.getMessage()` raises ValueError.
         # The memo covers everything the message PRINTS, so no printed field can go
         # stale for up to 900 s — including `power_consign`, which `LoadCommand.__eq__`
         # compares but the command NAME alone hides. The continuous values are
@@ -5374,6 +5420,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             result_calculus,
             is_car_charged,
             self.current_command,
+            # Telemetry, not churn (review #04 / B12): the Wh/% figures in the value
+            # advance every cycle during a perfectly normal charge, so the default
+            # budget put this key in PERMANENT overflow whenever a car was charging.
+            budget=_LOG_TELEMETRY_VALUES_PER_WINDOW,
+            max_values=_LOG_MAX_REMEMBERED_TELEMETRY_VALUES,
         )
 
         return (result, do_continue_constraint)

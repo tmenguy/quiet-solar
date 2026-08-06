@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-06
+last_verified: 2026-08-07
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -32,12 +32,12 @@ deliberate exceptions: a sign flip (export ↔ import) logs **when either side
 is at least the deadband** — the floor matters, because an unbounded flip term
 makes near-zero dither log every cycle — and a stuck-at-`NaN` or
 stuck-at-`inf` sensor counts as *unchanged*, so a broken sensor cannot
-re-inflate the log to the full cycle rate. `detach_car()` clears the memos, so
-each charge session gets a fresh first line — **except** the car-qualified
-`get_car_score:*` keys (QS-342), which describe every candidate car rather
-than the departed session and survive the detach so churn cannot re-emit a
-per-car decomposition burst. A disabled charger's key is
-evicted so a re-enable is always announced. `QSChargerGeneric` extends
+re-inflate the log to the full cycle rate. `detach_car()` does **not** touch the
+log-on-change state (QS-342 review #03 / D2): it sits on the churn path itself, so
+wiping there dropped the key on every allocation change and made the throttle a
+no-op in production — and it is redundant, because every key is either
+car-qualified or carries the car name as its value. A disabled charger's
+group-level key is still evicted so a re-enable is always announced. `QSChargerGeneric` extends
 `_has_state_to_reset()` (see [load-base.md](load-base.md)) because its reset
 override destroys the user-initiated `do_force_next_charge` /
 `do_next_charge_time` flags.
@@ -149,9 +149,9 @@ what makes allocation incidents diagnosable without a recorder-DB
 forensic session.
 
 **How the throttle works** (`LogOnChangeMixin.log_info_on_change`).
-Per key the helper remembers the recently-emitted *values* and emits a
-value the first time it is seen, suppressing it while it is still
-remembered (`_RELOG_UNCHANGED_AFTER_S`, 900 s, which doubles as the
+Per key the helper remembers the recently-*observed* values (each flagged
+with whether it was actually shown) and emits a value the first time it is
+seen, suppressing it while it is still remembered (`_RELOG_UNCHANGED_AFTER_S`, 900 s, which doubles as the
 per-value TTL). On top of that each key carries a budget of
 `_LOG_VALUES_PER_WINDOW` (4) emissions per window; further distinct values
 are counted and disclosed as a single
@@ -168,17 +168,47 @@ rolls. Both halves are load-bearing:
   stuff over and over" literally while leaving volume effectively
   unbounded. Capping the remembered-value map bounds memory, not volume.
 
-**Volume bound.** Per key: **≤ budget + 1 = 5 lines per 900 s**
-(≈ 0.33/min), and this is *data-independent* — oscillation, monotone
-drift and a held-constant value all behave the same. Keys are `N·M`
+**Volume bound.** Per key: **≤ budget + 1 lines per 900 s**, and this is
+*data-independent* — oscillation, monotone drift and a held-constant value
+all behave the same. Allocation keys use the default budget of 4 (so 5
+lines per 900 s, ≈ 0.33/min); the two **telemetry** sites —
+`dyn_handle`'s available-power line and the SoC callback — use
+`_LOG_TELEMETRY_VALUES_PER_WINDOW` (12) instead. That exception is
+deliberate (review #04 / B12+B13): the default budget assumes many distinct
+values per window means churn, which is true for allocation keys and false
+for telemetry, whose values advance during entirely normal operation (a
+charging battery's Wh/%, a home crossing between import and export). With
+the default those sites sat in permanent overflow during a normal charge
+and dropped real operational events. Keys are `N·M`
 (`get_car_score`) + `N` (the merged `get_best_car` winner line) + `N`
 (`detach_from_other_charger`) + `2N` (`update_value_callback_soc`) +
 `N + 1` (group), so the **aggregate** is ≤ `5·(N·M + 5N + 1)` per 900 s.
 For N=3, M=4 that is ≤ 140 lines per 900 s ≈ 13 400/day worst case and
-~2 400/day in steady state. Completeness holds for distinct states: only
-budget *overflow* loses detail, it is disclosed as a count, and it occurs
-only above 4 distinct values per window — the pathological regime, which
-is itself the signal.
+~2 400/day in steady state. The `2N` SoC term uses the telemetry budget, so the aggregate is
+`5·(N·M + 3N + 1) + 13·2N`. Completeness holds for distinct states: only
+budget *overflow* loses detail, and it is disclosed as a count.
+
+The disclosure line is static text keyed by the throttle key — never the
+caller's own message and arguments — and carries **both** the number of
+distinct changes dropped and the number of dedup-suppressed repeats. That
+repeat count preserves the incident's defining signal: without it a key
+pinned at the 7 s cycle rate and one genuinely changing every few minutes
+produce identical logs, and #342 was diagnosed from the volume being
+visibly absurd.
+
+Two caveats on "never silent":
+
+- The disclosure is flushed by the **next call on the same key**. If a key
+  goes quiet for good — charger unplugged, device disabled, car removed, HA
+  restart — the final window's counts are lost. This is reachable on the
+  incident path itself. Accepted rather than fixed: a flush hook would put
+  logging concerns back into charger lifecycle control flow, and
+  cross-session banking is what rounds #01–#03 proved unworkable.
+- The window roll uses `abs()` on the elapsed time, so a caller alternating
+  between two timestamps 900 s apart would roll the window every call and
+  defeat the budget. Not reachable at any current call site (all pass a
+  monotonically advancing `event_time`), but the "data-independent" claim
+  assumes a sane clock.
 
 `time` is normalised to UTC on entry, so a caller mixing naive and aware
 datetimes under one key can neither raise nor escape the bound.
@@ -191,6 +221,11 @@ no-op in production. It is also redundant — every key is either
 car-qualified (`get_car_score:{car}`) or carries the car name as its
 *value* (`get_best_car`), so no key can name a stale car. The per-session
 anchors are `update_power_steps`' attach line and the unplug WARNING.
+
+A consequence (review #04 / C7): `_log_on_change_state` keys are now never
+pruned, so renaming a car or charger orphans its old keys for the lifetime
+of the process. Bounded by config churn — a handful of small tuples — so it
+is recorded rather than fixed.
 
 **Historical note (do not re-invent).** Review rounds #01–#03 of QS-342
 each tried a *time floor* on changed values (`_CHANGED_RELOG_MIN_INTERVAL_S`,
