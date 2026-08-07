@@ -1267,9 +1267,22 @@ async def test_charger_check_load_activity_plugged_no_car(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=None)
-    charger_device.reset = MagicMock()
 
     time = datetime(2026, 1, 15, 9, 0, tzinfo=pytz.UTC)
+
+    # The reset runs on every cycle in this state and is NOT gated on a predicate
+    # enumerating what it clears (review #04 / B2: such a mirror was already
+    # incomplete, and its failure mode is stale charger state). `reset()` is
+    # idempotent; the log volume it used to cause is fixed in the logging.
+    charger_device.reset = MagicMock()
+
+    do_force = await charger_device.check_load_activity_and_constraints(time)
+
+    assert do_force is True
+    charger_device.reset.assert_called_once()
+
+    charger_device.reset = MagicMock()
+
     do_force = await charger_device.check_load_activity_and_constraints(time)
 
     assert do_force is True
@@ -3390,6 +3403,9 @@ async def test_charger_check_load_activity_plugged_best_car_none(
     charger_device.is_not_plugged = MagicMock(return_value=False)
     charger_device.is_plugged = MagicMock(return_value=True)
     charger_device.get_best_car = MagicMock(return_value=None)
+    # QS-342 review #03 / D6: the reset only runs when it would destroy something,
+    # so the no-car state stops re-running a no-op reset every cycle.
+    charger_device._last_amp_change_time = now
     charger_device.reset = MagicMock()
     assert await charger_device.check_load_activity_and_constraints(now) is True
     charger_device.reset.assert_called_once()

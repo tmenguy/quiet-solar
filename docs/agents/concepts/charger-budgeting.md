@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-01
+last_verified: 2026-08-07
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -32,9 +32,12 @@ deliberate exceptions: a sign flip (export ↔ import) logs **when either side
 is at least the deadband** — the floor matters, because an unbounded flip term
 makes near-zero dither log every cycle — and a stuck-at-`NaN` or
 stuck-at-`inf` sensor counts as *unchanged*, so a broken sensor cannot
-re-inflate the log to the full cycle rate. `detach_car()` clears the memos, so
-each charge session gets a fresh first line, and a disabled charger's key is
-evicted so a re-enable is always announced. `QSChargerGeneric` extends
+re-inflate the log to the full cycle rate. `detach_car()` does **not** touch the
+log-on-change state (QS-342 review #03 / D2): it sits on the churn path itself, so
+wiping there dropped the key on every allocation change and made the throttle a
+no-op in production — and it is redundant, because every key is either
+car-qualified or carries the car name as its value. A disabled charger's
+group-level key is still evicted so a re-enable is always announced. `QSChargerGeneric` extends
 `_has_state_to_reset()` (see [load-base.md](load-base.md)) because its reset
 override destroys the user-initiated `do_force_next_charge` /
 `do_next_charge_time` flags.
@@ -86,6 +89,155 @@ Then `apply_budget_strategy()`:
 - `CHARGER_ADAPTATION_WINDOW_S = 45` — stability requirement before
   rebalancing.
 - `CHARGER_STATE_REFRESH_INTERVAL_S = 14` — state-polling cadence.
+
+### Car↔charger allocation tie-break (QS-342)
+
+`QSChargerGeneric.get_best_car` runs a greedy per-charger allocation over
+all plugged chargers: each charger scores every car (`get_car_score`) and
+the loop repeatedly assigns the best remaining (charger, car) pair. Two
+QS-342 facts to internalise:
+
+- **Exact score ties are a NORMAL operating case.** The dominant score
+  component is the distance bump, quantised in **0.5 m buckets** over 50 m
+  (deliberate — car GPS jitters by metres; finer resolution would make the
+  allocation flap with noise). Cars sleeping in their usual spots between
+  two wallboxes tie *every night*. Never "fix" a tie by sharpening the
+  distance resolution.
+- **Ties are resolved by a deterministic cascade**, evaluated over ALL
+  (charger, car) pairs at the max remaining score (not just each charger's
+  list head): **regret → stickiness → stable (charger name, car name)
+  order**. Regret = the pair's score minus the car's best score on any
+  *other unassigned* charger (no alternative → 0, i.e. regret = own score);
+  it is recomputed at every greedy iteration, skipping already-assigned
+  chargers (their score lists are stale by design). Stickiness prefers the
+  charger the car is currently attached to, so symmetric steady states
+  don't swap-flap. The stable order assumes **unique device names**
+  (enforced de facto by HA config-entry titles).
+
+**Steal semantics:** an attached car is displaced *only* by a strictly
+higher score, or by an **equal score with strictly higher regret** — the
+latter is required so a crossed pairing (leftover of the pre-fix
+ping-pong) recovers to the regret-consistent allocation. Any attachment
+state matching a regret-consistent allocation is a fixed point.
+
+**Known limitations:**
+
+- *Plug-time correlation is dead after an HA restart for plug sessions
+  already active before the restart*: car plug probes are
+  recorder-bootstrapped (3 days) but the charger's synthetic
+  `is_there_a_car_plugged` probe is in-memory-only since restart, so for a
+  pre-restart session the compared durations never realign and
+  `plug_time_bump` is structurally 0 exactly when it is needed. A session
+  that starts *after* the restart has both clocks aligned and is
+  unaffected. Follow-up:
+  <https://github.com/tmenguy/quiet-solar/issues/344>.
+- *Residual failure mode — two unhysteresised quantisation edges.* (1) The
+  0.5 m `dist_bump` bucket edge: a car GPS-jittering across it produces
+  alternating **strict-score** winners that no tie-break sees. (2) The
+  `dist <= 3.0` threshold that adds +1 to `plug_bump`: because `plug_bump`
+  is the lowest-order term, a ±1 flip converts an **exact tie** — where
+  stickiness protects the incumbent — into a strict win, which steals with
+  no margin at all. The second edge therefore *bypasses* the cascade rather
+  than being resolved by it, and it is reachable in the incident's own
+  geometry (3.58 / 3.69 / 3.97 m). Steal-margin hysteresis stays out of
+  scope until observed in the field.
+
+`get_car_score` logs its decomposition at INFO-on-change keyed on the
+quantised tuple `(plug_bump, plug_time_bump, dist_bump)` only — a
+deliberate INFO exception to the QS-306 volume rules, because this line is
+what makes allocation incidents diagnosable without a recorder-DB
+forensic session.
+
+**How the throttle works** (`LogOnChangeMixin.log_info_on_change`).
+Per key the helper remembers the recently-*observed* values (each flagged
+with whether it was actually shown) and emits a value the first time it is
+seen, suppressing it while it is still remembered (`_RELOG_UNCHANGED_AFTER_S`, 900 s, which doubles as the
+per-value TTL). On top of that each key carries a budget of
+`_LOG_VALUES_PER_WINDOW` (4) emissions per window; further distinct values
+are counted and disclosed as a single
+`[+n further change(s) not shown in the last 900s]` line when the window
+rolls. Both halves are load-bearing:
+
+- **Dedup by value** kills oscillation. An A→B→A flap across a
+  quantisation edge emits A once and B once per window and then goes
+  quiet, so volume is `O(distinct states per window)` rather than
+  `O(transitions)`.
+- **The per-key budget** kills drift, which dedup cannot touch: a value
+  creeping by one quantum per cycle (GPS drifting 0.55 m per ~7 s cycle)
+  is a *new* value every cycle, so dedup alone satisfies "not the same
+  stuff over and over" literally while leaving volume effectively
+  unbounded. Capping the remembered-value map bounds memory, not volume.
+
+**Volume bound.** Per key: **≤ budget + 1 lines per 900 s**, and this is
+*data-independent* — oscillation, monotone drift and a held-constant value
+all behave the same. Allocation keys use the default budget of 4 (so 5
+lines per 900 s, ≈ 0.33/min); the two **telemetry** sites —
+`dyn_handle`'s available-power line and the SoC callback — use
+`_LOG_TELEMETRY_VALUES_PER_WINDOW` (12) instead. That exception is
+deliberate (review #04 / B12+B13): the default budget assumes many distinct
+values per window means churn, which is true for allocation keys and false
+for telemetry, whose values advance during entirely normal operation (a
+charging battery's Wh/%, a home crossing between import and export). With
+the default those sites sat in permanent overflow during a normal charge
+and dropped real operational events. Keys are `N·M`
+(`get_car_score`) + `N` (the merged `get_best_car` winner line) + `N`
+(`detach_from_other_charger`) + `2N` (`update_value_callback_soc`) +
+`N + 1` (group), so the **aggregate** is ≤ `5·(N·M + 5N + 1)` per 900 s.
+For N=3, M=4 that is ≤ 140 lines per 900 s ≈ 13 400/day worst case and
+~2 400/day in steady state. The `2N` SoC term uses the telemetry budget, so the aggregate is
+`5·(N·M + 3N + 1) + 13·2N`. Completeness holds for distinct states: only
+budget *overflow* loses detail, and it is disclosed as a count.
+
+The disclosure line is static text keyed by the throttle key — never the
+caller's own message and arguments — and carries **both** the number of
+distinct changes dropped and the number of dedup-suppressed repeats. That
+repeat count preserves the incident's defining signal: without it a key
+pinned at the 7 s cycle rate and one genuinely changing every few minutes
+produce identical logs, and #342 was diagnosed from the volume being
+visibly absurd.
+
+Two caveats on "never silent":
+
+- The disclosure is flushed by the **next call on the same key**. If a key
+  goes quiet for good — charger unplugged, device disabled, car removed, HA
+  restart — the final window's counts are lost. This is reachable on the
+  incident path itself. Accepted rather than fixed: a flush hook would put
+  logging concerns back into charger lifecycle control flow, and
+  cross-session banking is what rounds #01–#03 proved unworkable.
+- The window roll uses `abs()` on the elapsed time, so a caller alternating
+  between two timestamps 900 s apart would roll the window every call and
+  defeat the budget. Not reachable at any current call site (all pass a
+  monotonically advancing `event_time`), but the "data-independent" claim
+  assumes a sane clock.
+
+`time` is normalised to UTC on entry, so a caller mixing naive and aware
+datetimes under one key can neither raise nor escape the bound.
+
+The log-on-change state deliberately **survives `detach_car()`**. There is
+no session-boundary wipe, and none should be reintroduced: `detach_car()`
+sits on the churn path itself (every change of the `get_best_car` value
+routes through it), so wiping there dropped the key and made the throttle a
+no-op in production. It is also redundant — every key is either
+car-qualified (`get_car_score:{car}`) or carries the car name as its
+*value* (`get_best_car`), so no key can name a stale car. The per-session
+anchors are `update_power_steps`' attach line and the unplug WARNING.
+
+A consequence (review #04 / C7): `_log_on_change_state` keys are now never
+pruned, so renaming a car or charger orphans its old keys for the lifetime
+of the process. Bounded by config churn — a handful of small tuples — so it
+is recorded rather than fixed.
+
+**Historical note (do not re-invent).** Review rounds #01–#03 of QS-342
+each tried a *time floor* on changed values (`_CHANGED_RELOG_MIN_INTERVAL_S`,
+60 s) plus a "banked suppressed-change" counter, and each round fixed the
+previous round's defect while introducing the next. A time floor is
+structurally incapable of completeness — any state whose whole lifetime
+fits inside the window is unobservable — and the bank counted *calls*
+rather than *states*, so it over-reported a held change, under-reported an
+oscillation, and was destroyed outright by the `detach_car()` wipe. The
+incident was never "changes happened too fast"; it was **the same value
+repeated 17 791 times**, which is why the correct primitive is
+de-duplication by value.
 
 ### Charge-origin tagging & `get_charge_type()` (QS-274)
 

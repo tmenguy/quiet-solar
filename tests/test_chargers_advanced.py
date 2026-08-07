@@ -23,6 +23,7 @@ from custom_components.quiet_solar.const import (
 from custom_components.quiet_solar.ha_model.charger import (
     QSChargerGeneric,
     QSChargerStates,
+    QSStateCmd,
 )
 
 # Import the necessary classes
@@ -342,6 +343,9 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
 
         # Mock chargers
         mock_charger2 = MagicMock()
+        # QS-342: `name=` is reserved in the MagicMock constructor, so set it after
+        # creation — the deterministic allocation order sorts chargers by name.
+        mock_charger2.name = "Charger2"
         mock_charger2.qs_enable_device = True
         mock_charger2.car = mock_car2
         mock_charger2.get_user_originated = MagicMock(return_value=None)
@@ -380,11 +384,17 @@ class TestQSChargerGenericAdvanced(unittest.IsolatedAsyncioTestCase):
 
     @pytest.mark.asyncio
     async def test_check_load_activity_and_constraints_plugged_no_car(self):
-        """Test check_load_activity_and_constraints when plugged but forced no car."""
+        """Test check_load_activity_and_constraints when plugged but forced no car.
+
+        QS-342 review #03 / D6: the reset is gated on there actually being state to
+        destroy, so the "no car connected" state stops re-running a no-op reset (and
+        its six INFO lines) on every cycle. Seed some state so the reset still runs.
+        """
         with patch("custom_components.quiet_solar.ha_model.charger.entity_registry"):
             charger = QSChargerGeneric(**self.charger_config)
 
         time = datetime.now(pytz.UTC)
+        charger._inner_amperage = QSStateCmd()
 
         with (
             patch.object(charger, "is_plugged", return_value=True),

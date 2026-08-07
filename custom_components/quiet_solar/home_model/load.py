@@ -446,7 +446,8 @@ class AbstractDevice:
 
     # for class overcharging reset
     def reset(self, keep_commands=False):
-        _LOGGER.info("Reset device %s", self.name)
+        # DEBUG: `Constraint Reset device` is the INFO marker for a real reset.
+        _LOGGER.debug("Reset device %s", self.name)
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
         self.reset_daily_load_datas()
         self._dampen_start_transition = None
@@ -1776,14 +1777,29 @@ class AbstractLoad(AbstractDevice):
 
         self.is_load_time_sensitive = False
 
+    # Consumed by BOTH the predicate and the reset below, so the two cannot drift.
+    _DERIVED_CONSTRAINT_FIELDS = (
+        "current_constraint_current_value",
+        "current_constraint_current_energy",
+        "current_constraint_current_percent_completion",
+        "next_or_current_constraint_start_time",
+        "next_or_current_constraint_end_time",
+    )
+
+    def _has_state_to_reset(self, keep_commands: bool) -> bool:
+        """Extend the base predicate with the derived fields this class clears.
+
+        `getattr` for the same `__init__`-ordering reason the base documents.
+        """
+        return super()._has_state_to_reset(keep_commands) or any(
+            getattr(self, field, None) is not None for field in self._DERIVED_CONSTRAINT_FIELDS
+        )
+
     def constraint_reset_and_reset_commands_if_needed(self, keep_commands=True):
         super().constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
 
-        self.current_constraint_current_value = None
-        self.current_constraint_current_energy = None
-        self.current_constraint_current_percent_completion = None
-        self.next_or_current_constraint_start_time = None
-        self.next_or_current_constraint_end_time = None
+        for field in self._DERIVED_CONSTRAINT_FIELDS:
+            setattr(self, field, None)
         self._last_completed_constraint = None
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
@@ -2165,7 +2181,7 @@ class AbstractLoad(AbstractDevice):
         return True
 
     def reset(self, keep_commands=False):
-        _LOGGER.info("Reset load %s", self.name)
+        _LOGGER.debug("Reset load %s", self.name)
         super().reset(keep_commands=keep_commands)
 
     async def ack_completed_constraint(self, time: datetime, constraint: LoadConstraint | None):

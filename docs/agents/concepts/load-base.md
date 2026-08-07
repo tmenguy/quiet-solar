@@ -4,7 +4,7 @@ slug: load-base
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-02
+last_verified: 2026-08-07
 ---
 
 # AbstractDevice & AbstractLoad
@@ -21,9 +21,16 @@ solver's entry point), plus green-only mode, user override state, and
 external-control detection. **Both live in `home_model/load.py` —
 strict zero-HA-import boundary.**
 
-**Log levels (QS-306).** `constraint_reset_and_reset_commands_if_needed()`
-now logs INFO only when there was something to reset, and the
-"no bad constraint found" line is DEBUG. No behavior change.
+**Log levels (QS-306, extended by QS-342).**
+`constraint_reset_and_reset_commands_if_needed()` logs INFO only when there
+was something to reset, and the "no bad constraint found" line is DEBUG.
+`AbstractDevice.reset()` / `AbstractLoad.reset()` (and
+`QSChargerGeneric.reset()` / `_reset_state_machine()`) are DEBUG
+unconditionally: `reset()` is idempotent and runs on every cycle in some
+states, which measured ~74 000 INFO lines/day from a single charger. The
+single INFO marker for "a reset actually destroyed something" is
+`Constraint Reset device`, gated on `_has_state_to_reset`. No behavior
+change.
 
 The "was there anything to reset?" test lives in the overridable
 `_has_state_to_reset(keep_commands)` hook. **Any subclass whose reset
@@ -34,11 +41,26 @@ while the base reports "nothing to reset" at DEBUG. The base term covers
 a queued `_stacked_command`. Every access uses `getattr` with a default: the
 hook runs during `AbstractDevice.__init__`, before those attributes exist.
 
+`AbstractLoad` itself extends the hook for the five derived
+constraint-progress fields its own override nulls
+(`current_constraint_current_*`, `next_or_current_constraint_*`). Those are
+named once in `_DERIVED_CONSTRAINT_FIELDS` and consumed by *both* the
+predicate and the reset, so the two cannot drift — the duplication is what
+let them go uncovered for a whole release (QS-342 review #04 / B2).
+
 `QSChargerGeneric` is the worked example: its override clears the
 user-initiated `do_force_next_charge` / `do_next_charge_time`, so it ORs them
 into the hook. Without that, a user pressing "force next charge" on a charger
 holding no constraints would have the flag destroyed while the log said
 "nothing to reset".
+
+**This hook picks a LOG LEVEL only — never control flow.** QS-342 review #03
+briefly gated a real `reset()` on a charger-side predicate enumerating every
+field the reset clears; review #04 found that enumeration already incomplete.
+Any such mirror rots the moment `reset()` learns a new field, and the failure
+mode there is stale device state rather than a missing log line. If you find
+yourself writing "would this reset do anything?" to decide whether to *call*
+it, don't — `reset()` is idempotent, so just call it.
 
 ## When you need this concept
 

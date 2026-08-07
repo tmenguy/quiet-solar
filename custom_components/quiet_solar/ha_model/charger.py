@@ -3,6 +3,7 @@ import copy
 import logging
 import math
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from datetime import time as dt_time
 from enum import StrEnum
@@ -222,11 +223,21 @@ TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES = 60 * 30
 CHARGER_START_STOP_RETRY_S = 90
 
 
-# QS-306 log-tuning values. Module-private: they are not operator configuration,
-# so they stay here rather than in const.py, and they are deliberately NOT
-# sourced from SOLVER_STEP_S despite the numeric coincidence.
-_RELOG_UNCHANGED_AFTER_S = 900  # max gap between two emissions for one key
+# Log-tuning values. Module-private: not operator configuration, and deliberately
+# NOT sourced from SOLVER_STEP_S despite the numeric coincidence.
+# Per-value dedup TTL, and the length of the per-key budget window.
+_RELOG_UNCHANGED_AFTER_S = 900
 _POWER_LOG_DEADBAND_W = 100.0  # ignore sub-100W jitter on the available-power line
+# Per-key emissions per window. Dedup alone bounds oscillation but not drift (a value
+# creeping one quantum per cycle is a new value every cycle), so the budget is what
+# makes the bound data-independent: <= budget + 1 lines per key per window.
+_LOG_VALUES_PER_WINDOW = 4
+# Telemetry sites (available power, SoC) advance monotonically in normal operation,
+# so the default budget would keep them permanently in overflow.
+_LOG_TELEMETRY_VALUES_PER_WINDOW = 12
+# Strictly greater than the budget, so the budget binds first.
+_LOG_MAX_REMEMBERED_VALUES = 8
+_LOG_MAX_REMEMBERED_TELEMETRY_VALUES = _LOG_TELEMETRY_VALUES_PER_WINDOW * 2
 
 
 class QSChargerStates(StrEnum):
@@ -637,8 +648,28 @@ def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool
     return all(_element_unchanged(p, c, deadband) for p, c in zip(prev, current, strict=True))
 
 
+@dataclass
+class _LogOnChangeRecord:
+    """Recently-observed values for one key, plus this window's accounting.
+
+    `seen` is a bounded list scanned linearly with `_is_unchanged` rather than a
+    dict: the deadband comparison is not an equality relation and cannot be a hash
+    key, and the soc site's value nests a tuple.
+
+    `was_emitted` distinguishes "shown, hold it for the TTL" from "seen but dropped,
+    show it as soon as budget allows". Values are recorded either way, so `dropped`
+    counts distinct values rather than calls.
+    """
+
+    seen: list[tuple[object, datetime, bool]]
+    window_start: datetime
+    emitted: int = 0
+    dropped: int = 0
+    suppressed: int = 0
+
+
 class LogOnChangeMixin:
-    """Emit INFO only when a reported value changes, or after 900 s (QS-306).
+    """Emit INFO once per distinct value per window, within a per-key budget.
 
     NOTE: this deliberately closes over THIS module's `_LOGGER`, so every host emits
     on the `ha_model.charger` logger. Both current hosts live here, and the tests pin
@@ -650,7 +681,7 @@ class LogOnChangeMixin:
     # Annotation WITH an immutable default. Never give this a `{}` default: a mutable
     # class attribute is shared across instances, and the per-charger sites use keys
     # that are not instance-qualified, so every charger would silence the others.
-    _log_on_change_state: dict[str, tuple[object, datetime]] | None = None
+    _log_on_change_state: dict[str, _LogOnChangeRecord] | None = None
 
     def log_info_on_change(
         self,
@@ -660,31 +691,89 @@ class LogOnChangeMixin:
         msg: str,
         *args: object,
         deadband: float | None = None,
+        budget: int = _LOG_VALUES_PER_WINDOW,
+        max_values: int = _LOG_MAX_REMEMBERED_VALUES,
     ) -> None:
-        """Log `msg` at INFO if `value` changed for `key`, or if 900 s elapsed.
+        """Log `msg` at INFO the first time `value` is seen for `key` in a window.
 
-        `time` must be timezone-aware UTC — the same value the caller already
-        receives. `|elapsed|` is used so a backwards clock jump cannot silence a
-        key. The timer is re-stamped on every emission, so the constant bounds the
-        gap between emissions rather than imposing a fixed cadence.
+        Per key: remember observed values, emit each distinct one once, suppress it
+        while still remembered (`_RELOG_UNCHANGED_AFTER_S`, which doubles as the TTL),
+        and cap emissions at `budget` per window. Overflow and dedup-suppressed
+        repeats are reported by one static disclosure line when the window rolls, so
+        a key pinned at the cycle rate stays distinguishable from a calm one.
+
+        `time` may be naive; it is normalised to UTC. `|elapsed|` is used so a
+        backwards clock jump cannot silence a key.
+
+        `max_values=1` restores single-`prev` semantics, which the deadband site
+        needs: with a value set, transitive drift (0 -> 99 -> 198, each step inside
+        the deadband of a remembered neighbour) would be suppressed forever.
+
+        The disclosure is flushed by the next call on the same key, so a key that
+        goes quiet for good loses its final window's counts.
         """
+        # Before any arithmetic: mixing naive and aware datetimes would raise, and a
+        # logging helper must never be load-bearing.
+        if time.tzinfo is None:
+            time = time.replace(tzinfo=pytz.UTC)
+
         state = self._log_on_change_state
         if state is None:
             state = self._log_on_change_state = {}
-        prev = state.get(key)
-        if prev is not None:
-            prev_value, prev_time = prev
-            # Mixing naive and aware datetimes under one key would raise TypeError on
-            # the subtraction. A logging helper must never be load-bearing, so bail to
-            # logging instead of propagating out of the caller's control cycle.
-            comparable = (prev_time.tzinfo is None) == (time.tzinfo is None)
-            if (
-                comparable
-                and abs((time - prev_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S
-                and _is_unchanged(prev_value, value, deadband)
-            ):
+        st = state.get(key)
+        if st is None:
+            st = state[key] = _LogOnChangeRecord([], time)
+
+        if abs((time - st.window_start).total_seconds()) >= _RELOG_UNCHANGED_AFTER_S:
+            if st.dropped or st.suppressed:
+                # Static text keyed by `key`: the caller's `*args` describe the
+                # current value, not the dropped ones.
+                _LOGGER.info(
+                    "log throttle [%s]: %s distinct change(s) not shown, %s repeat(s) suppressed in the last %ss",
+                    key,
+                    st.dropped,
+                    st.suppressed,
+                    int(_RELOG_UNCHANGED_AFTER_S),
+                )
+            st.window_start = time
+            st.emitted = 0
+            st.dropped = 0
+            st.suppressed = 0
+
+        hit = next(
+            (index for index, (seen_value, _t, _e) in enumerate(st.seen) if _is_unchanged(seen_value, value, deadband)),
+            None,
+        )
+        if hit is not None:
+            _seen_value, seen_time, was_emitted = st.seen[hit]
+            if was_emitted and abs((time - seen_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S:
+                # Suppress WITHOUT restamping, so the TTL bounds the gap between
+                # emissions rather than being pushed forward by an unchanging value.
+                st.suppressed += 1
                 return
-        state[key] = (value, time)
+            if not was_emitted and st.emitted >= budget:
+                # Already counted this window; counting again would make `dropped` a
+                # call counter.
+                st.suppressed += 1
+                return
+
+        will_emit = st.emitted < budget
+        entry = (value, time, will_emit)
+        if hit is not None:
+            st.seen[hit] = entry
+        else:
+            st.seen.append(entry)
+            if len(st.seen) > max_values:
+                # Insertion-ordered, not LRU: a refreshed entry is rewritten in place,
+                # so this can evict a more recently seen value. Harmless because the
+                # budget binds before eviction does.
+                del st.seen[0]
+
+        if not will_emit:
+            st.dropped += 1
+            return
+
+        st.emitted += 1
         _LOGGER.info(msg, *args)
 
 
@@ -891,6 +980,12 @@ class QSChargerGroup(LogOnChangeMixin):
                     grid_available_home_power,
                     battery_asked_charge,
                     deadband=_POWER_LOG_DEADBAND_W,
+                    # Telemetry, not churn: import/export crossings are real events.
+                    budget=_LOG_TELEMETRY_VALUES_PER_WINDOW,
+                    # Single-`prev` semantics: with a deadband, a value SET would
+                    # suppress transitive drift (0 -> 99 -> 198, each step inside the
+                    # deadband of some remembered neighbour) forever.
+                    max_values=1,
                 )
 
                 dampened_chargers = {}
@@ -2782,7 +2877,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._boot_last_completed_constraint = None
 
     def reset(self, keep_commands=False):
-        _LOGGER.info("Charger reset %s", self.name)
+        # DEBUG: this runs every cycle in some states. `Constraint Reset device` is
+        # the INFO marker for a reset that actually destroyed something.
+        _LOGGER.debug("Charger reset %s", self.name)
         super().reset(keep_commands=keep_commands)
         self.detach_car()
         self._reset_state_machine()
@@ -2792,7 +2889,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self.possible_charge_error_start_time = None
 
     def _reset_state_machine(self):
-        _LOGGER.info("_reset_state_machine: %s", self.name)
+        _LOGGER.debug("_reset_state_machine: %s", self.name)
         self._verified_correct_state_time = None
         self._inner_expected_charge_state = None
         self._inner_amperage = None
@@ -3005,8 +3102,24 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     score_plug_time_bump,
                 )
 
-            _LOGGER.debug(
-                f"get_car_score: {car.name} for {self.name} score: {score} dist_bump: {score_dist_bump} dist: {int(dist * 100) / 100.0}m plug_bump: {score_plug_bump} plug_time_bump {score_plug_time_bump} connected {connected_time_delta}"
+            # Deliberate INFO exception to the "debug for non-user-facing" rule: this
+            # decomposition is what makes allocation incidents diagnosable without a
+            # recorder-DB session. Change key = the quantised tuple ONLY, so GPS jitter
+            # inside a 0.5 m bucket emits nothing; raw distance and the attach delta
+            # ride along as payload.
+            self.log_info_on_change(
+                f"get_car_score:{car.name}",
+                (score_plug_bump, score_plug_time_bump, score_dist_bump),
+                time,
+                "get_car_score: %s for %s score: %s dist_bump: %s dist: %.2fm plug_bump: %s plug_time_bump: %s connected: %s",
+                car.name,
+                self.name,
+                score,
+                score_dist_bump,
+                dist,
+                score_plug_bump,
+                score_plug_time_bump,
+                connected_time_delta,
             )
 
         if score is None:
@@ -3018,6 +3131,28 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         return score
 
     def get_best_car(self, time: datetime) -> QSCar | None:
+        """Pick this charger's car, announcing the outcome through ONE throttled key.
+
+        The decision lives in `_compute_best_car`; this wrapper is the single exit
+        point, so every branch shares one key, one line shape and one budget.
+        """
+        best_car, reason, score = self._compute_best_car(time)
+        # The change key is `(reason, car_name)` ONLY: the score is a per-cycle float,
+        # so keying on it would preserve every line. It rides along as lazy payload.
+        self.log_info_on_change(
+            "get_best_car",
+            (reason, None if best_car is None else best_car.name),
+            time,
+            "get_best_car: %s selected %s with score %s for charger %s",
+            reason,
+            None if best_car is None else best_car.name,
+            score,
+            self.name,
+        )
+        return best_car
+
+    def _compute_best_car(self, time: datetime) -> tuple[QSCar | None, str, float | None]:
+        """Return `(car, reason, score)`; `reason` names the branch that decided."""
         # find the best car ...
 
         # cleanly handle the case where it has been user forced to a car
@@ -3034,8 +3169,6 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     car = None
 
                 if car is not None:
-                    _LOGGER.info("get_best_car: Best Car from user selection: %s for charger %s", car.name, self.name)
-
                     for charger in self.home._chargers:
                         if charger.qs_enable_device is False:
                             continue
@@ -3045,20 +3178,32 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                 charger.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None
                                 and charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car.name
                             ):
+                                # Unthrottled: it clears the flag, so it cannot repeat.
                                 _LOGGER.error(
-                                    f"get_best_car: {car.name} manually attached to multiple chargers: {self.name} and {charger.name}, detaching from {charger.name}"
+                                    "get_best_car: %s manually attached to multiple chargers: %s and %s, detaching from %s",
+                                    car.name,
+                                    self.name,
+                                    charger.name,
+                                    charger.name,
                                 )
                                 charger.clear_user_originated(USER_ORIGINATED_CAR_NAME)
                             else:
-                                _LOGGER.info(
-                                    f"get_best_car: {car.name} manually attached to charger {self.name}, detaching from {charger.name}"
+                                # D7: repeatable every cycle while the sibling holds the
+                                # car, so it needs the same throttle as the rest.
+                                self.log_info_on_change(
+                                    "manual_attach_conflict",
+                                    (car.name, charger.name),
+                                    time,
+                                    "get_best_car: %s manually attached to charger %s, detaching from %s",
+                                    car.name,
+                                    self.name,
+                                    charger.name,
                                 )
                             charger.detach_car()
 
-                    return car
+                    return car, "user_selection", None
             else:
-                _LOGGER.info("get_best_car: NO GOOD CAR BECAUSE:CHARGER_NO_CAR_CONNECTED")
-                return None
+                return None, "user_no_car", None
 
         active_chargers = [self]
         for charger in self.home._chargers:
@@ -3070,6 +3215,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             if charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
                 active_chargers.append(charger)
+
+        # Defensive only: the cascade below scans all tied pairs, so it is already
+        # caller-independent. Bounded transient: `self` joins unconditionally while
+        # others must pass `is_plugged(for_duration=...)`, so callers can briefly see
+        # different charger sets. `str(...)` is free insurance; `ranked` below still
+        # carries raw names anyway.
+        active_chargers.sort(key=lambda c: str(c.name))
 
         cache = {}
 
@@ -3083,7 +3235,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             for car in self.home._cars:
                 if car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED:
-                    _LOGGER.info("get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: %s", car.name)
+                    # DEBUG: a static user setting reported from inside a charger x car
+                    # double loop, i.e. N^2*M lines per cycle at INFO.
+                    _LOGGER.debug("get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: %s", car.name)
                     continue
 
                 score = charger.get_car_score(car, time, cache)
@@ -3099,27 +3253,66 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         while True:
             # assign the biggest score of the bunch
 
-            best_cur_score = None
-            best_cur_charger = None
-            best_cur_car = None
-
-            for charger in active_chargers:
-                if charger in assigned_chargers:
-                    continue
-
-                if len(chargers_scores[charger]) == 0:
-                    continue
-
-                score, car = chargers_scores[charger][0]
+            # Exact score ties are NORMAL (0.5 m distance buckets), so they get a
+            # deterministic cascade: max score -> regret -> stickiness -> stable
+            # (charger name, car name). Every remaining pair, not just each list's
+            # head — a tied car buried behind another must still win elsewhere — and
+            # collected once so the max and the tied set cannot drift apart.
+            candidates = [
+                (score, charger, car)
+                for charger in active_chargers
+                if charger not in assigned_chargers
                 # score > 0 by construction (see the get_car_score loop above)
-                if best_cur_score is None or score > best_cur_score:
-                    best_cur_score = score
-                    best_cur_car = car
-                    best_cur_charger = charger
+                for score, car in chargers_scores[charger]
+            ]
 
-            if best_cur_car is None:
+            if not candidates:
                 # no more changes to do
                 break
+
+            best_cur_score = max(score for score, _charger, _car in candidates)
+
+            ranked = []
+            for score, charger, car in candidates:
+                # Exact float `==` is safe: every score component is dyadic and both
+                # sides are the identical expression, so tied pairs are bit-identical.
+                # A non-dyadic component would silently kill the tie-break.
+                if score != best_cur_score:
+                    continue
+
+                # Regret: how much this car loses if not assigned here — its tied
+                # score minus its best score on any OTHER unassigned charger (no
+                # other positive-score option → alternative 0, regret = own score).
+                # Chargers already in assigned_chargers MUST be skipped: their
+                # score lists are stale by design (only cars are removed on
+                # assignment, never chargers).
+                best_alternative = 0.0
+                for other in active_chargers:
+                    if other is charger or other in assigned_chargers:
+                        continue
+                    for other_score, other_car in chargers_scores[other]:
+                        # By NAME, like removal and stickiness below. Do not "tidy"
+                        # this to identity: names are not enforced unique, and under
+                        # duplicates the comparators diverge and orphan a charger.
+                        if other_car.name == car.name and other_score > best_alternative:
+                            best_alternative = other_score
+                regret = best_cur_score - best_alternative
+
+                # Stickiness: among equal-regret tied pairs, prefer the charger
+                # this car is currently attached to (keeps symmetric steady
+                # states stable — no swap flapping).
+                # CAVEAT (D13): `charger.car` is LIVE state on other chargers, not a
+                # snapshot — it mutates as those chargers apply their own rows during
+                # the round. See the story's mid-round mutation note; the cascade is
+                # caller-independent regardless, because it scans all tied pairs.
+                sticky = 1 if (charger.car is not None and charger.car.name == car.name) else 0
+
+                # Stable order: charger name then car name — arbitrary but
+                # identical for every caller (device names are unique de facto:
+                # HA config-entry titles).
+                ranked.append(((-regret, -sticky, charger.name, car.name), charger, car))
+
+            _, best_cur_charger, best_cur_car = min(ranked, key=lambda item: item[0])
 
             assigned_chargers[best_cur_charger] = best_cur_car
             assigned_chargers_score[best_cur_charger] = best_cur_score
@@ -3142,11 +3335,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 and self._boot_car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) != FORCE_CAR_NO_CHARGER_CONNECTED
             ):
                 best_car = self._boot_car
-                _LOGGER.info("get_best_car: Best Car from boot data: %s for charger %s", best_car.name, self.name)
+                reason = "boot"
             else:
                 # there is no good car for this charger: get teh charger invited one
                 best_car = self._default_generic_car
-                _LOGGER.info("get_best_car: Default car used: %s", best_car.name)
+                reason = "generic_fallback"
                 if self.home and self.home._cars:
                     _LOGGER.debug(
                         "get_best_car: generic car fallback despite %s real cars existing for charger %s",
@@ -3160,32 +3353,30 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 and self._boot_car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) != FORCE_CAR_NO_CHARGER_CONNECTED
             ):
                 # the best is not as good as the boot one ... we will use the boot one for now, whatever the score
-                _LOGGER.info(
-                    f"get_best_car: Use Best Car from boot data: {self._boot_car.name} instead of computed one {best_car.name} for charger {self.name}"
-                )
                 best_car = self._boot_car
+                # NB: the logged score belongs to the discarded computed car — the boot
+                # car was never scored on this charger.
+                reason = "boot_over_computed"
             else:
-                # Keyed on the car name only: the score is a per-cycle float, so
-                # keying on it would preserve every line.
-                self.log_info_on_change(
-                    "get_best_car",
-                    best_car.name,
-                    time,
-                    "get_best_car: %s with score %s for charger %s",
-                    best_car.name,
-                    assigned_chargers_score.get(self),
-                    self.name,
-                )
+                reason = "computed"
 
         if best_car.charger is not None and best_car.charger != self:
-            # will force a reset of everything
-            _LOGGER.info(
-                f"get_best_car: for charger {self.name}: removed from another charger {best_car.charger.name} and select for charger {self.name}"
+            # D3: THIS is the incident message — "removed from another charger", the
+            # literal line that appeared 17 791 times. It sits inside the ping-pong
+            # condition itself, and until now it was a raw unthrottled f-string.
+            self.log_info_on_change(
+                "detach_from_other_charger",
+                (best_car.name, best_car.charger.name),
+                time,
+                "get_best_car: for charger %s: removed from another charger %s and select for charger %s",
+                self.name,
+                best_car.charger.name,
+                self.name,
             )
             best_car.charger.detach_car()
             # hoping we won't have back and forth between chargers
 
-        return best_car
+        return best_car, reason, assigned_chargers_score.get(self)
 
     def get_car_options(self) -> list[str]:
 
@@ -3429,8 +3620,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             # user forced a "deconnection"
             if best_car is None:
-                _LOGGER.info(
-                    "check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option"
+                # Unconditional: `reset()` is idempotent, so do NOT gate it on a
+                # predicate enumerating what it clears — such a mirror rots and the
+                # failure mode is stale charger state. Volume is handled by logging.
+                self.log_info_on_change(
+                    "no_car_connected",
+                    self.car is not None,
+                    time,
+                    "check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option",
                 )
                 self.reset(keep_commands=True)
                 return True
@@ -4088,11 +4285,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self.car = None
         self._power_steps = []
         self.car_attach_time = None
-        # QS-306: the log-on-change memos describe the car that just left. Keeping
-        # them would suppress the first line of the NEXT charge session whenever the
-        # new car reports the same value inside the 900 s window — and the last
-        # emitted record would name the wrong car.
-        self._log_on_change_state = None
+        # NO log-state wipe here, deliberately. `detach_car()` is on the churn path
+        # itself, so wiping dropped the key on every allocation change and made the
+        # throttle a no-op. It is also redundant: every key is car-qualified or carries
+        # the car name as its value, so none can name a stale car. Do not reintroduce a
+        # "session boundary" wipe here or in `reset()` — neither can distinguish churn
+        # from a boundary, and the attach INFO plus the unplug WARNING already anchor
+        # sessions.
 
     # update in place the power steps
     def update_power_steps(self):
@@ -5048,9 +5247,10 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         # The key includes `is_target_percent`: the percent and energy callbacks are two
         # delegating entry points, and one shared key would let them thrash. It also
-        # includes the car name as defence in depth — `detach_car()` clears the memo,
-        # but a future path could swap a car without routing through it. The literal
-        # `%` must be `%%` or `record.getMessage()` raises ValueError.
+        # includes the car name because that is what makes the key safe across a car
+        # swap: nothing clears the log state on detach, so key qualification is the
+        # only guarantee that a key cannot name a stale car.
+        # The literal `%` must be `%%` or `record.getMessage()` raises ValueError.
         # The memo covers everything the message PRINTS, so no printed field can go
         # stale for up to 900 s — including `power_consign`, which `LoadCommand.__eq__`
         # compares but the command NAME alone hides. The continuous values are
@@ -5080,6 +5280,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             result_calculus,
             is_car_charged,
             self.current_command,
+            # Telemetry, not churn: the Wh/% figures advance every cycle while charging.
+            budget=_LOG_TELEMETRY_VALUES_PER_WINDOW,
+            max_values=_LOG_MAX_REMEMBERED_TELEMETRY_VALUES,
         )
 
         return (result, do_continue_constraint)

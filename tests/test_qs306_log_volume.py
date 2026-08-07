@@ -23,12 +23,16 @@ from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CAR_NAME,
 )
 from custom_components.quiet_solar.ha_model.charger import (
+    _LOG_VALUES_PER_WINDOW,
     _POWER_LOG_DEADBAND_W,
     _RELOG_UNCHANGED_AFTER_S,
     CHARGER_ADAPTATION_WINDOW_S,
     LogOnChangeMixin,
     QSChargerStatus,
 )
+
+# Per key: `budget` emissions per window plus one overflow-disclosure line.
+_PER_KEY_CEILING = _LOG_VALUES_PER_WINDOW + 1
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
     CMD_AUTO_GREEN_ONLY,
@@ -172,12 +176,12 @@ def test_log_info_on_change_emission_predicate(
     assert len(_messages(caplog, "probe", logging.INFO, CHARGER_LOGGER)) == expected
 
 
-def test_log_info_on_change_survives_a_naive_datetime(caplog: pytest.LogCaptureFixture) -> None:
-    """NH2: a logging helper must never be load-bearing.
+def test_log_info_on_change_normalises_a_naive_datetime(caplog: pytest.LogCaptureFixture) -> None:
+    """A naive datetime must neither raise nor become an escape hatch.
 
-    Mixing naive and aware datetimes under one key raises `TypeError` on the
-    subtraction; that exception would propagate out of `dyn_handle` and kill the
-    whole budgeting cycle. Bail to logging instead.
+    Mixing naive and aware datetimes would raise on the subtraction and kill the
+    budgeting cycle. Emitting unconditionally on mismatch would instead let an
+    alternating-clock caller escape the throttle entirely; normalising does neither.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     host = _Host()
@@ -185,10 +189,12 @@ def test_log_info_on_change_survives_a_naive_datetime(caplog: pytest.LogCaptureF
     host.log_info_on_change("k", 1, T0, "naive %s", "aware")
     host.log_info_on_change("k", 1, T0.replace(tzinfo=None), "naive %s", "naive")
 
-    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 2
-    # The key is re-stamped with the naive value, so the reverse direction is safe too.
+    # Same instant, same value: the naive call is throttled, not treated as new.
+    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 1
+
+    # ... and it stays throttled in the reverse direction too.
     host.log_info_on_change("k", 1, T0, "naive %s", "aware again")
-    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 3
+    assert len(_messages(caplog, "naive", logging.INFO, CHARGER_LOGGER)) == 1
 
 
 def test_log_info_on_change_keeps_state_per_instance(caplog: pytest.LogCaptureFixture) -> None:
@@ -216,7 +222,11 @@ def test_log_info_on_change_only_mutates_its_own_state(caplog: pytest.LogCapture
     after = vars(host)
     assert set(after) - set(before) == {"_log_on_change_state"}
     assert set(before) - set(after) == set()
-    assert host._log_on_change_state == {"k": ("v", T0)}
+    # Record shape: observed values (each flagged with whether it was actually
+    # SHOWN — review #04 / B4), the window anchor, and this window's accounting.
+    record = host._log_on_change_state["k"]
+    assert record.seen == [("v", T0, True)]
+    assert (record.window_start, record.emitted, record.dropped, record.suppressed) == (T0, 1, 0, 0)
 
 
 def test_log_info_on_change_resets_the_timer_on_every_emission(caplog: pytest.LogCaptureFixture) -> None:
@@ -243,6 +253,108 @@ def test_log_info_on_change_keys_are_independent(caplog: pytest.LogCaptureFixtur
     host.log_info_on_change("a", 1, T0 + timedelta(seconds=7), "keyed %s", "a")
 
     assert len(_messages(caplog, "keyed", logging.INFO, CHARGER_LOGGER)) == 2
+
+
+_DISCLOSURE = "log throttle ["
+
+
+def _disclosures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return _messages(caplog, _DISCLOSURE, logging.INFO, CHARGER_LOGGER)
+
+
+def test_b3_budget_overflow_is_disclosed_when_the_window_rolls(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Overflow must be disclosed with the right count when the window rolls."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    # budget + 3 distinct values inside one window: `budget` shown, 3 dropped.
+    overflow = 3
+    for index in range(_LOG_VALUES_PER_WINDOW + overflow):
+        host.log_info_on_change("k", index, T0 + timedelta(seconds=7 * index), "probe %s", index)
+    assert len(_messages(caplog, "probe", logging.INFO, CHARGER_LOGGER)) == _LOG_VALUES_PER_WINDOW
+    assert _disclosures(caplog) == []
+
+    # One call past the window: the disclosure appears, with the right count.
+    host.log_info_on_change("k", "next", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "probe %s", "next")
+
+    disclosures = _disclosures(caplog)
+    assert len(disclosures) == 1
+    message = disclosures[0].getMessage()
+    assert f"{overflow} distinct change(s) not shown" in message, message
+    assert "[k]" in message, message
+    # B6: static text keyed to the KEY — none of the caller's args are stapled on.
+    assert "probe" not in message
+
+
+def test_b6_disclosure_is_not_misattributed_or_duplicated(caplog: pytest.LogCaptureFixture) -> None:
+    """B6: it reused the CURRENT call's msg/args, then logged that same line again."""
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    for index in range(_LOG_VALUES_PER_WINDOW + 2):
+        host.log_info_on_change("k", index, T0 + timedelta(seconds=7 * index), "car %s state %s", "ZZZ", index)
+    host.log_info_on_change(
+        "k", "fresh", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "car %s state %s", "ZZZ", "fresh"
+    )
+
+    # The disclosure names no car and no state...
+    disclosure = _disclosures(caplog)[0].getMessage()
+    assert "ZZZ" not in disclosure and "fresh" not in disclosure
+
+    # ...and the value line that triggered the roll is logged exactly once.
+    assert len([r for r in caplog.records if r.getMessage() == "car ZZZ state fresh"]) == 1
+
+
+def test_b4_a_budget_dropped_value_is_shown_once_budget_allows(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A value the budget dropped must be shown once budget allows.
+
+    Stamping it as if emitted left it TTL-suppressed after the window rolled, and
+    that path returns before the drop counter, so it was not counted either.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    for index in range(_LOG_VALUES_PER_WINDOW):
+        host.log_info_on_change("k", index, T0 + timedelta(seconds=7 * index), "probe %s", index)
+    # Budget is now exhausted; this value is observed but dropped.
+    dropped_at = T0 + timedelta(seconds=28)
+    host.log_info_on_change("k", "late", dropped_at, "probe %s", "late")
+    assert _messages(caplog, "probe late", logging.INFO, CHARGER_LOGGER) == []
+
+    # Repeating it inside the window must not inflate the drop count per call.
+    for index in range(5):
+        host.log_info_on_change("k", "late", dropped_at + timedelta(seconds=7 * index), "probe %s", "late")
+
+    # Past the window: disclosed as ONE distinct change, and now actually shown.
+    host.log_info_on_change("k", "late", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "probe %s", "late")
+    assert "1 distinct change(s) not shown" in _disclosures(caplog)[0].getMessage()
+    assert len(_messages(caplog, "probe late", logging.INFO, CHARGER_LOGGER)) == 1
+
+
+def test_b7_dedup_suppressed_repeats_are_counted(caplog: pytest.LogCaptureFixture) -> None:
+    """Dedup-suppressed repeats must be counted, or the rate signal is lost.
+
+    `dropped` covers budget overflow only, so a ping-pong at the cycle rate would
+    otherwise look identical to a winner alternating every few minutes.
+    """
+    caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
+    host = _Host()
+
+    # One value hammered at the cycle rate for a whole window.
+    repeats = 100
+    for index in range(repeats):
+        host.log_info_on_change("k", "steady", T0 + timedelta(seconds=7 * index), "probe %s", "steady")
+    assert len(_messages(caplog, "probe", logging.INFO, CHARGER_LOGGER)) == 1
+
+    host.log_info_on_change("k", "steady", T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 7), "probe %s", "steady")
+
+    disclosure = _disclosures(caplog)[0].getMessage()
+    assert f"{repeats - 1} repeat(s) suppressed" in disclosure, disclosure
+    assert "0 distinct change(s) not shown" in disclosure, disclosure
 
 
 # =============================================================================
@@ -414,14 +526,16 @@ async def test_mf1_near_zero_sign_dither_does_not_re_inflate_the_log(caplog: pyt
 
 
 async def test_mf1_real_export_import_transition_is_still_logged(caplog: pytest.LogCaptureFixture) -> None:
-    """MF1: the floor must not cost us a genuine export <-> import transition."""
+    """MF1: the throttle must not cost us a genuine export <-> import transition.
+
+    Every cycle crosses zero with both sides outside the deadband, so every cycle is
+    a real event. This site uses the telemetry budget for exactly this reason.
+    """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
 
     await _run_oscillating_power_cycles(group, home, watts=150.0)
 
-    # Every cycle crosses zero with both sides outside the deadband, so every cycle
-    # is a real transition and every cycle is reported.
     assert len(_messages(caplog, "battery_asked_charge", logging.INFO, CHARGER_LOGGER)) == 10
 
 
@@ -792,11 +906,17 @@ async def test_s11_best_car_logged_once_per_window(caplog: pytest.LogCaptureFixt
     assert len(_messages(caplog, "with score", logging.INFO, CHARGER_LOGGER)) == 2
 
     scores["CarB"] = 100.0
-    assert charger.get_best_car(T0 + timedelta(seconds=_RELOG_UNCHANGED_AFTER_S + 70)).name == car_b.name
+    # QS-342 review #03: no changed-value floor any more, so a genuinely new winner
+    # emits immediately — a value never seen before is never suppressed. The NH7
+    # intent below (every record names the car that actually won) is unchanged.
+    swap_at = _RELOG_UNCHANGED_AFTER_S + 70
+    assert charger.get_best_car(T0 + timedelta(seconds=swap_at)).name == car_b.name
     records = _messages(caplog, "with score", logging.INFO, CHARGER_LOGGER)
     assert len(records) == 3
-    # NH7: the records must name the car that actually won each time.
-    assert [car_a.name, car_a.name, car_b.name] == [r.args[0] for r in records]
+    # NH7: the records must name the car that actually won each time. `args[1]` is
+    # the car — `args[0]` is now the branch that decided (D4's merged key).
+    assert [car_a.name, car_a.name, car_b.name] == [r.args[1] for r in records]
+    assert {r.args[0] for r in records} == {"computed"}
 
 
 async def test_sf1_car_swap_is_not_silenced_by_the_memo(caplog: pytest.LogCaptureFixture) -> None:
@@ -831,8 +951,13 @@ async def test_sf1_car_swap_is_not_silenced_by_the_memo(caplog: pytest.LogCaptur
     assert car_b.name in records[1].getMessage()
 
 
-def test_sf1_detach_car_clears_the_memo() -> None:
-    """SF1: the clear is unconditional — it also marks a new session on replug."""
+def test_sf1_log_state_survives_detach_car() -> None:
+    """`detach_car()` must NOT clear the log state — that wipe was the defect.
+
+    It sits on the churn path, so wiping dropped the key on every allocation change.
+    The property that matters (a car swap is still announced) is covered by
+    `test_sf1_car_swap_is_not_silenced_by_the_memo` above.
+    """
     hass = make_hass()
     home = make_home()
     charger = create_charger(hass, home, name="DetachCh")
@@ -844,7 +969,7 @@ def test_sf1_detach_car_clears_the_memo() -> None:
 
     charger.detach_car()
 
-    assert charger._log_on_change_state is None
+    assert "get_best_car" in charger._log_on_change_state
 
 
 # =============================================================================
@@ -979,16 +1104,13 @@ async def test_sfg_soc_volume_scales_with_amp_changes_not_cycles(caplog: pytest.
     assert len(records) == len(set(consigns)) == 3, "one line per amp change, not one per cycle"
 
 
-async def test_sfg_soc_volume_ceiling_is_one_line_per_consign_change(
+async def test_sfg_soc_volume_ceiling_is_the_per_key_budget(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """The documented CEILING of SF-G, so the cost is explicit rather than implied.
 
-    If the consign genuinely changed on every cycle, every cycle would log. In
-    production that is bounded by the 45 s amp-change cooldown (the S2 site), not by
-    this memo — so the worst realistic case is ~1 line per 45 s, still far below the
-    ~7 s cycle rate. If a future change adds smoothing, this test should fail and
-    force a conscious decision.
+    An alternating consign is only two distinct values, so dedup collapses it; the
+    budget caps the pathological case. Smoothing added later should fail this.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     charger, constraint = _make_soc_callback_charger()
@@ -998,7 +1120,8 @@ async def test_sfg_soc_volume_ceiling_is_one_line_per_consign_change(
         charger.current_command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=consign)
         await charger.constraint_update_value_callback_percent_soc(constraint, T0 + timedelta(seconds=7 * cycle))
 
-    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 10
+    # Two distinct consigns -> two lines, not ten.
+    assert len(_messages(caplog, _S12_FRAGMENT, logging.INFO, CHARGER_LOGGER)) == 2
 
 
 async def test_s12_literal_percent_is_escaped(caplog: pytest.LogCaptureFixture) -> None:
@@ -1148,7 +1271,7 @@ _B5_SITES = {
         "battery_asked_charge",
         "dyn_handle: full_available_home_power %sW, grid_available_home_power %sW battery_asked_charge %sW",
     ),
-    "S11": ("with score", "get_best_car: %s with score %s for charger %s"),
+    "S11": ("with score", "get_best_car: %s selected %s with score %s for charger %s"),
     "S12": (
         "is_car_charged",
         "update_value_callback (is %%:%s):%s %s  %s/%s (%s/%s) is_car_charged %s cmd %s",
