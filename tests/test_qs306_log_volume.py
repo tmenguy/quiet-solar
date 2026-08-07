@@ -177,14 +177,11 @@ def test_log_info_on_change_emission_predicate(
 
 
 def test_log_info_on_change_normalises_a_naive_datetime(caplog: pytest.LogCaptureFixture) -> None:
-    """NH2, re-cut for QS-342 review #03: normalise rather than branch.
+    """A naive datetime must neither raise nor become an escape hatch.
 
-    Mixing naive and aware datetimes under one key raises `TypeError` on the
-    subtraction, and that exception would propagate out of `dyn_handle` and kill the
-    whole budgeting cycle — so the helper must not raise. The OLD remedy (detect the
-    mismatch and emit unconditionally) was itself a hole: a caller alternating clock
-    kinds escaped the throttle on every call. Normalising to UTC removes the branch
-    and the hole together.
+    Mixing naive and aware datetimes would raise on the subtraction and kill the
+    budgeting cycle. Emitting unconditionally on mismatch would instead let an
+    alternating-clock caller escape the throttle entirely; normalising does neither.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     host = _Host()
@@ -268,13 +265,7 @@ def _disclosures(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 def test_b3_budget_overflow_is_disclosed_when_the_window_rolls(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """B3: the overflow branch had no test at all — CI's 100 % gate would have failed.
-
-    No existing run produced `dropped > 0` AND then crossed 900 s (the longest were
-    128-129 cycles x 7 s = 896 s, just under). That left the plan's, AC5's and the
-    doc's central completeness claim entirely unpinned, on a line that builds a
-    format string with extra args and would raise inside `logging` if mismatched.
-    """
+    """Overflow must be disclosed with the right count when the window rolls."""
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     host = _Host()
 
@@ -319,13 +310,10 @@ def test_b6_disclosure_is_not_misattributed_or_duplicated(caplog: pytest.LogCapt
 def test_b4_a_budget_dropped_value_is_shown_once_budget_allows(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """B4: dropped values got an emission-grade TTL and were then silent forever.
+    """A value the budget dropped must be shown once budget allows.
 
-    A value recorded but never shown was stamped as if emitted, so after the window
-    rolled it was STILL TTL-suppressed — and that suppression path returns before
-    the drop counter, so it was not counted the second time either. Reproduced
-    against the previous code: a value present from t=28 s first appeared at
-    t=928 s and was uncounted after the first disclosure.
+    Stamping it as if emitted left it TTL-suppressed after the window rolled, and
+    that path returns before the drop counter, so it was not counted either.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     host = _Host()
@@ -348,11 +336,10 @@ def test_b4_a_budget_dropped_value_is_shown_once_budget_allows(
 
 
 def test_b7_dedup_suppressed_repeats_are_counted(caplog: pytest.LogCaptureFixture) -> None:
-    """B7: without this, a pinned key and a calm one produce identical logs.
+    """Dedup-suppressed repeats must be counted, or the rate signal is lost.
 
-    `dropped` covers budget overflow only, so a 2-hour ping-pong at the 7 s cycle
-    emitted 16 lines with `dropped == 0` — indistinguishable from a home whose
-    winner genuinely alternates every 7.5 minutes. #342 was diagnosed from volume.
+    `dropped` covers budget overflow only, so a ping-pong at the cycle rate would
+    otherwise look identical to a winner alternating every few minutes.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     host = _Host()
@@ -541,15 +528,8 @@ async def test_mf1_near_zero_sign_dither_does_not_re_inflate_the_log(caplog: pyt
 async def test_mf1_real_export_import_transition_is_still_logged(caplog: pytest.LogCaptureFixture) -> None:
     """MF1: the throttle must not cost us a genuine export <-> import transition.
 
-    Every cycle here crosses zero with both sides outside the deadband, so every
-    cycle is a real operational event and every cycle is reported.
-
-    Review #04 / B13: this briefly regressed to `2 <= n <= 5` when the default
-    per-key budget was applied here. That budget assumes "many distinct values per
-    window means churn, and the churn is itself the signal" — true for allocation
-    keys, false for telemetry, where the values advance during normal operation.
-    This site now carries `_LOG_TELEMETRY_VALUES_PER_WINDOW`, so the exact count is
-    back and the volume is still bounded.
+    Every cycle crosses zero with both sides outside the deadband, so every cycle is
+    a real event. This site uses the telemetry budget for exactly this reason.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     group, _, home = _make_dyn_handle_group(num_chargers=2, battery=make_battery(0.0), available_power_w=1000.0)
@@ -972,13 +952,10 @@ async def test_sf1_car_swap_is_not_silenced_by_the_memo(caplog: pytest.LogCaptur
 
 
 def test_sf1_log_state_survives_detach_car() -> None:
-    """QS-342 review #03 / D2: the wipe is GONE — it was the defect, not the fix.
+    """`detach_car()` must NOT clear the log state — that wipe was the defect.
 
-    `detach_car()` is on the churn path itself, so wiping the log state there dropped
-    the key on every allocation change and made the throttle a no-op in production.
-    It is also redundant: every key is car-qualified or carries the car name as its
-    value, so no key can name a stale car. The property test that actually matters —
-    a car swap is still announced — is
+    It sits on the churn path, so wiping dropped the key on every allocation change.
+    The property that matters (a car swap is still announced) is covered by
     `test_sf1_car_swap_is_not_silenced_by_the_memo` above.
     """
     hass = make_hass()
@@ -1132,11 +1109,8 @@ async def test_sfg_soc_volume_ceiling_is_the_per_key_budget(
 ) -> None:
     """The documented CEILING of SF-G, so the cost is explicit rather than implied.
 
-    A consign alternating on every cycle is only TWO distinct values, so dedup alone
-    already collapses it — this used to emit one line per cycle. The per-key budget
-    then caps the pathological case regardless of how many distinct consigns appear.
-    If a future change adds smoothing, this test should fail and force a conscious
-    decision.
+    An alternating consign is only two distinct values, so dedup collapses it; the
+    budget caps the pathological case. Smoothing added later should fail this.
     """
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
     charger, constraint = _make_soc_callback_charger()

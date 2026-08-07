@@ -446,8 +446,7 @@ class AbstractDevice:
 
     # for class overcharging reset
     def reset(self, keep_commands=False):
-        # DEBUG: see `QSChargerGeneric.reset`. `Constraint Reset device` below is the
-        # INFO marker for a reset that actually destroyed state.
+        # DEBUG: `Constraint Reset device` is the INFO marker for a real reset.
         _LOGGER.debug("Reset device %s", self.name)
         self.constraint_reset_and_reset_commands_if_needed(keep_commands=keep_commands)
         self.reset_daily_load_datas()
@@ -1778,9 +1777,7 @@ class AbstractLoad(AbstractDevice):
 
         self.is_load_time_sensitive = False
 
-    # The derived constraint-progress fields this class's reset clears. Named once
-    # and consumed by BOTH the predicate and the reset below, so the two cannot
-    # drift apart — the duplication is what let QS-342 review #04 / B2 happen.
+    # Consumed by BOTH the predicate and the reset below, so the two cannot drift.
     _DERIVED_CONSTRAINT_FIELDS = (
         "current_constraint_current_value",
         "current_constraint_current_energy",
@@ -1791,14 +1788,6 @@ class AbstractLoad(AbstractDevice):
 
     def _has_state_to_reset(self, keep_commands: bool) -> bool:
         """Extend the base predicate with the derived fields this class clears.
-
-        QS-342 review #04 / B2. The base rule ("subclasses that clear EXTRA state
-        must extend this predicate") was violated here for five fields. That was
-        harmless while the predicate only chose a log level, but QS-342 review #03 /
-        D6 promoted it to control flow gating a real `reset()`, so a `False` verdict
-        now skips work. Verified strandable: with `_constraints` empty and
-        `_last_completed_constraint` None the predicate returned False while
-        `reset()` cleared all five.
 
         `getattr` for the same `__init__`-ordering reason the base documents.
         """

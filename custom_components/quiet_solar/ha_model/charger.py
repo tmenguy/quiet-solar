@@ -223,33 +223,19 @@ TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES = 60 * 30
 CHARGER_START_STOP_RETRY_S = 90
 
 
-# QS-306 log-tuning values. Module-private: they are not operator configuration,
-# so they stay here rather than in const.py, and they are deliberately NOT
-# sourced from SOLVER_STEP_S despite the numeric coincidence.
-# Doubles as the per-VALUE dedup TTL and the length of the per-key budget window
-# (QS-342 review #03 / D1): a value is suppressed while it is still remembered, and
-# a key may emit at most `_LOG_VALUES_PER_WINDOW` lines per window.
+# Log-tuning values. Module-private: not operator configuration, and deliberately
+# NOT sourced from SOLVER_STEP_S despite the numeric coincidence.
+# Per-value dedup TTL, and the length of the per-key budget window.
 _RELOG_UNCHANGED_AFTER_S = 900
 _POWER_LOG_DEADBAND_W = 100.0  # ignore sub-100W jitter on the available-power line
-# QS-342 (review fix #03): per-key emission budget per window. Dedup-by-value alone
-# kills oscillation perfectly and DRIFT not at all — a monotonically drifting value
-# (GPS creeping 0.55 m per cycle) is a new value every cycle, so it satisfies "not the
-# same stuff over and over" literally while leaving volume unbounded. The budget is
-# what makes the bound provable and DATA-INDEPENDENT: <= budget + 1 lines per key per
-# window, whatever the value pattern. Overflow is disclosed as a count on the next
-# call for that key.
+# Per-key emissions per window. Dedup alone bounds oscillation but not drift (a value
+# creeping one quantum per cycle is a new value every cycle), so the budget is what
+# makes the bound data-independent: <= budget + 1 lines per key per window.
 _LOG_VALUES_PER_WINDOW = 4
-# QS-342 (review fix #04 / B12+B13): a LARGER budget for the two genuine-telemetry
-# sites — `dyn_handle`'s available-power line and the SoC callback. The default
-# assumes "many distinct values per window == churn, and the churn is itself the
-# signal", which is true for allocation keys but FALSE here: these values advance
-# monotonically during perfectly normal operation (a charging battery's Wh/%, a
-# home's import/export crossing zero), so the default budget put them in permanent
-# overflow and dropped real operational events. 12 per 900 s is one line per 75 s
-# worst case — still bounded, and enough to keep a genuine transition visible.
+# Telemetry sites (available power, SoC) advance monotonically in normal operation,
+# so the default budget would keep them permanently in overflow.
 _LOG_TELEMETRY_VALUES_PER_WINDOW = 12
-# Strictly greater than the budget, so the BUDGET binds first and eviction never
-# silently re-inflates volume by forgetting a value that is still being repeated.
+# Strictly greater than the budget, so the budget binds first.
 _LOG_MAX_REMEMBERED_VALUES = 8
 _LOG_MAX_REMEMBERED_TELEMETRY_VALUES = _LOG_TELEMETRY_VALUES_PER_WINDOW * 2
 
@@ -664,26 +650,15 @@ def _is_unchanged(prev: object, current: object, deadband: float | None) -> bool
 
 @dataclass
 class _LogOnChangeRecord:
-    """Recently-OBSERVED values for one key, plus this window's accounting.
+    """Recently-observed values for one key, plus this window's accounting.
 
-    `seen` is a bounded LIST of `(value, stamp, was_emitted)` scanned linearly with
-    `_is_unchanged` — deliberately NOT a `dict[value, ...]`, because the deadband
-    comparison is not an equality relation and cannot be a hash key, and the soc
-    site's value nests a tuple (unhashable). A linear scan over at most
-    `_LOG_MAX_REMEMBERED_VALUES` entries dodges hashability entirely and keeps the
-    NaN guard in `_element_unchanged` reachable.
+    `seen` is a bounded list scanned linearly with `_is_unchanged` rather than a
+    dict: the deadband comparison is not an equality relation and cannot be a hash
+    key, and the soc site's value nests a tuple.
 
-    `was_emitted` is load-bearing (review #04 / B4). Values are recorded whether or
-    not they were shown — recording only on emit would turn `dropped` from a count
-    of distinct values into a count of CALLS — but a value the budget dropped must
-    not carry an emission-grade TTL, or it stays suppressed after the window rolls
-    and is never counted again either. The flag separates "shown, hold it for the
-    TTL" from "seen but dropped, show it as soon as budget allows".
-
-    `suppressed` counts dedup hits (review #04 / B7). Without it a 2-hour ping-pong
-    at the 7 s cycle is byte-identical in the log to a home whose winner genuinely
-    alternates every 7.5 minutes — and the original #342 diagnosis rested entirely
-    on the volume being visibly absurd.
+    `was_emitted` distinguishes "shown, hold it for the TTL" from "seen but dropped,
+    show it as soon as budget allows". Values are recorded either way, so `dropped`
+    counts distinct values rather than calls.
     """
 
     seen: list[tuple[object, datetime, bool]]
@@ -695,10 +670,6 @@ class _LogOnChangeRecord:
 
 class LogOnChangeMixin:
     """Emit INFO once per distinct value per window, within a per-key budget.
-
-    QS-306 introduced this as "log only on change"; QS-342 review #03 generalised it
-    to de-duplication by VALUE plus a per-key emission budget — see
-    `log_info_on_change` for the mechanism and the bound it guarantees.
 
     NOTE: this deliberately closes over THIS module's `_LOGGER`, so every host emits
     on the `ha_model.charger` logger. Both current hosts live here, and the tests pin
@@ -725,53 +696,24 @@ class LogOnChangeMixin:
     ) -> None:
         """Log `msg` at INFO the first time `value` is seen for `key` in a window.
 
-        QS-342 review #03 replaced a *time floor on changed values* with
-        de-duplication *by value* plus a per-key emission budget. The incident was
-        never "changes happened too fast" — it was the SAME value repeated 17 791
-        times — and a time floor is structurally unable to satisfy completeness:
-        any state whose whole lifetime fits inside the window is unobservable.
+        Per key: remember observed values, emit each distinct one once, suppress it
+        while still remembered (`_RELOG_UNCHANGED_AFTER_S`, which doubles as the TTL),
+        and cap emissions at `budget` per window. Overflow and dedup-suppressed
+        repeats are reported by one static disclosure line when the window rolls, so
+        a key pinned at the cycle rate stays distinguishable from a calm one.
 
-        The rule: remember the recently-emitted values for a key; emit a value the
-        first time it is seen and suppress it while it is still remembered
-        (`_RELOG_UNCHANGED_AFTER_S`, which doubles as the per-value TTL). An
-        A->B->A oscillation therefore emits A once and B once per window and then
-        goes quiet — volume becomes O(distinct states per window) rather than
-        O(transitions), and nothing is banked, stranded or misattributed.
+        `time` may be naive; it is normalised to UTC. `|elapsed|` is used so a
+        backwards clock jump cannot silence a key.
 
-        Dedup alone is not enough: it is exactly complementary to a time floor,
-        killing oscillation perfectly and DRIFT not at all (a value creeping by one
-        quantum per cycle is a new value every cycle). So each key also gets a
-        budget of `budget` emissions per window; further distinct values are counted
-        and disclosed as a single overflow line when the window rolls. Per key the
-        bound is therefore `budget + 1` lines per window, INDEPENDENT of the data.
+        `max_values=1` restores single-`prev` semantics, which the deadband site
+        needs: with a value set, transitive drift (0 -> 99 -> 198, each step inside
+        the deadband of a remembered neighbour) would be suppressed forever.
 
-        The disclosure also carries the number of dedup-suppressed REPEATS (review
-        #04 / B7), which is the only remaining signal of the incident's defining
-        symptom: a key pinned at the cycle rate and one changing every few minutes
-        otherwise produce identical logs, and #342 was diagnosed from the volume.
-
-        KNOWN RESIDUAL (review #04 / B5): the disclosure is flushed by the next call
-        on the same key, so if a key goes quiet for good — charger unplugged, device
-        disabled, car removed, HA restart — the final window's counts are lost. This
-        is reachable on the incident path itself (`get_best_car` stops being called
-        the instant the charger unplugs). It is accepted rather than fixed: a flush
-        hook would put logging concerns back into charger lifecycle control flow,
-        and cross-session banking is what rounds #01-#03 proved unworkable. So the
-        guarantee is "disclosed on the next call for that key", NOT "never silent".
-
-        `time` may be naive: it is normalised to UTC rather than branched on, so
-        alternating naive/aware callers can no longer defeat the bound (the old
-        non-comparable-clock branch emitted unconditionally). `|elapsed|` is used so
-        a backwards clock jump cannot silence a key.
-
-        `max_values=1` restores single-`prev` semantics, which is what the deadband
-        site needs: with a value *set*, transitive drift (0 -> 99 -> 198, each step
-        inside the deadband of a remembered neighbour) would be suppressed forever.
+        The disclosure is flushed by the next call on the same key, so a key that
+        goes quiet for good loses its final window's counts.
         """
-        # Normalise BEFORE any arithmetic: mixing naive and aware datetimes under one
-        # key would raise TypeError on the subtraction, and a logging helper must
-        # never be load-bearing. Branching on it instead (the old behaviour) let an
-        # alternating-clock caller escape the bound entirely.
+        # Before any arithmetic: mixing naive and aware datetimes would raise, and a
+        # logging helper must never be load-bearing.
         if time.tzinfo is None:
             time = time.replace(tzinfo=pytz.UTC)
 
@@ -784,10 +726,8 @@ class LogOnChangeMixin:
 
         if abs((time - st.window_start).total_seconds()) >= _RELOG_UNCHANGED_AFTER_S:
             if st.dropped or st.suppressed:
-                # STATIC text, keyed by `key`, with none of the caller's `*args`
-                # (review #04 / B6). Stapling this onto the current call's message
-                # attributed the count to a value that had nothing to do with the
-                # dropped ones, and the same line was then logged again immediately.
+                # Static text keyed by `key`: the caller's `*args` describe the
+                # current value, not the dropped ones.
                 _LOGGER.info(
                     "log throttle [%s]: %s distinct change(s) not shown, %s repeat(s) suppressed in the last %ss",
                     key,
@@ -807,15 +747,13 @@ class LogOnChangeMixin:
         if hit is not None:
             _seen_value, seen_time, was_emitted = st.seen[hit]
             if was_emitted and abs((time - seen_time).total_seconds()) < _RELOG_UNCHANGED_AFTER_S:
-                # Still remembered: suppress WITHOUT restamping, so the TTL bounds the
-                # gap between emissions of one value rather than being pushed forward
-                # forever by a value that never changes (the 900 s heartbeat).
+                # Suppress WITHOUT restamping, so the TTL bounds the gap between
+                # emissions rather than being pushed forward by an unchanging value.
                 st.suppressed += 1
                 return
             if not was_emitted and st.emitted >= budget:
-                # Already counted once this window as a dropped DISTINCT value.
-                # Counting it again per call is what would turn `dropped` into a call
-                # counter (review #04 / B4).
+                # Already counted this window; counting again would make `dropped` a
+                # call counter.
                 st.suppressed += 1
                 return
 
@@ -826,11 +764,9 @@ class LogOnChangeMixin:
         else:
             st.seen.append(entry)
             if len(st.seen) > max_values:
-                # Insertion-ordered, NOT recency-ordered (review #04 / C5): a refreshed
-                # entry is rewritten in place, so this can evict a value seen more
-                # recently than the one it keeps. Harmless — `max_values` exceeds the
-                # budget, so the budget always binds first and eviction can never
-                # re-inflate volume — but it is not an LRU and should not be called one.
+                # Insertion-ordered, not LRU: a refreshed entry is rewritten in place,
+                # so this can evict a more recently seen value. Harmless because the
+                # budget binds before eviction does.
                 del st.seen[0]
 
         if not will_emit:
@@ -1044,9 +980,7 @@ class QSChargerGroup(LogOnChangeMixin):
                     grid_available_home_power,
                     battery_asked_charge,
                     deadband=_POWER_LOG_DEADBAND_W,
-                    # Telemetry, not churn (review #04 / B13): a home crossing between
-                    # import and export is a real operational event, and the default
-                    # budget was dropping them. See _LOG_TELEMETRY_VALUES_PER_WINDOW.
+                    # Telemetry, not churn: import/export crossings are real events.
                     budget=_LOG_TELEMETRY_VALUES_PER_WINDOW,
                     # Single-`prev` semantics: with a deadband, a value SET would
                     # suppress transitive drift (0 -> 99 -> 198, each step inside the
@@ -2943,13 +2877,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self._boot_last_completed_constraint = None
 
     def reset(self, keep_commands=False):
-        # DEBUG, not INFO (review #04): `reset()` is idempotent and is called on every
-        # cycle in the "no car connected" state, so an unconditional INFO here was
-        # ~74 000 lines/day from one charger. The single INFO marker for "a reset
-        # actually destroyed something" is `Constraint Reset device` in
-        # `constraint_reset_and_reset_commands_if_needed`, which is gated on
-        # `_has_state_to_reset` — a predicate that only ever picks a LOG LEVEL, so a
-        # wrong answer costs a log line rather than charger state.
+        # DEBUG: this runs every cycle in some states. `Constraint Reset device` is
+        # the INFO marker for a reset that actually destroyed something.
         _LOGGER.debug("Charger reset %s", self.name)
         super().reset(keep_commands=keep_commands)
         self.detach_car()
@@ -3173,18 +3102,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     score_plug_time_bump,
                 )
 
-            # QS-342: the score decomposition is the single data point that made the
-            # incident diagnosable only via a recorder-DB forensic session, so it is
-            # a DELIBERATE INFO exception to the "debug for non-user-facing" rule.
-            # Change key = the quantised tuple ONLY: raw distance and the attach
-            # delta are payload, so GPS jitter inside a 0.5 m bucket emits nothing.
-            # Volume bound (review #03): the helper de-duplicates by VALUE over a
-            # 900 s window and caps each key at `_LOG_VALUES_PER_WINDOW` emissions
-            # plus one overflow-disclosure line. So this key emits ≤ 5 lines per
-            # 900 s REGARDLESS of the value pattern — oscillation across a
-            # quantisation edge, monotone GPS drift, or a value held constant all
-            # behave the same. Keys are per (charger, car), so the aggregate for this
-            # site is ≤ 5·N·M per window.
+            # Deliberate INFO exception to the "debug for non-user-facing" rule: this
+            # decomposition is what makes allocation incidents diagnosable without a
+            # recorder-DB session. Change key = the quantised tuple ONLY, so GPS jitter
+            # inside a 0.5 m bucket emits nothing; raw distance and the attach delta
+            # ride along as payload.
             self.log_info_on_change(
                 f"get_car_score:{car.name}",
                 (score_plug_bump, score_plug_time_bump, score_dist_bump),
@@ -3211,12 +3133,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
     def get_best_car(self, time: datetime) -> QSCar | None:
         """Pick this charger's car, announcing the outcome through ONE throttled key.
 
-        QS-342 review #03 / D4: the winner used to be announced from six separate
-        raw `_LOGGER.info` branches, only one of which was throttled — so the volume
-        bound was a property of one call site rather than of the mechanism, and five
-        branches ran at the full cycle rate. The decision itself lives in
-        `_compute_best_car`; this wrapper is the single exit point, so every branch
-        shares one key (`get_best_car`), one line shape, and one budget.
+        The decision lives in `_compute_best_car`; this wrapper is the single exit
+        point, so every branch shares one key, one line shape and one budget.
         """
         best_car, reason, score = self._compute_best_car(time)
         # The change key is `(reason, car_name)` ONLY: the score is a per-cycle float,
@@ -3234,11 +3152,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         return best_car
 
     def _compute_best_car(self, time: datetime) -> tuple[QSCar | None, str, float | None]:
-        """Return `(car, reason, score)`; `reason` names the branch that decided.
-
-        Split out of `get_best_car` for D4 only — the allocation semantics below are
-        unchanged and must stay that way (see the story's frozen-cascade note).
-        """
+        """Return `(car, reason, score)`; `reason` names the branch that decided."""
         # find the best car ...
 
         # cleanly handle the case where it has been user forced to a car
@@ -3264,8 +3178,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                 charger.get_user_originated(USER_ORIGINATED_CAR_NAME) is not None
                                 and charger.get_user_originated(USER_ORIGINATED_CAR_NAME) == car.name
                             ):
-                                # Stays at ERROR and stays unthrottled: it CLEARS the
-                                # conflicting flag, so it self-heals and cannot repeat.
+                                # Unthrottled: it clears the flag, so it cannot repeat.
                                 _LOGGER.error(
                                     "get_best_car: %s manually attached to multiple chargers: %s and %s, detaching from %s",
                                     car.name,
@@ -3303,18 +3216,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             if charger.is_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
                 active_chargers.append(charger)
 
-        # QS-342: deterministic charger order. Defensive only — the tie-break
-        # cascade below scans ALL tied pairs so it is already caller-independent;
-        # sorting just removes the historical `[self, others…]` positional bias.
-        # Known bounded transient: `self` joins unconditionally while OTHER
-        # chargers must pass `is_plugged(for_duration=CHARGER_CHECK_STATE_WINDOW_S)`,
-        # so for ≤ that window after a second charger plugs in, different callers
-        # can see different charger sets — self-healing once the window elapses.
-        # `str(...)`: D12, defensive only. It does NOT make the allocation immune to a
-        # non-comparable `name` (review #04 / B10 corrected the original claim): the
-        # `ranked` tuples further down still carry raw `charger.name` / `car.name`, so
-        # such a name would raise TypeError inside `min(ranked, …)` regardless. Both
-        # are unreachable while `name: str` holds; this one is simply free.
+        # Defensive only: the cascade below scans all tied pairs, so it is already
+        # caller-independent. Bounded transient: `self` joins unconditionally while
+        # others must pass `is_plugged(for_duration=...)`, so callers can briefly see
+        # different charger sets. `str(...)` is free insurance; `ranked` below still
+        # carries raw names anyway.
         active_chargers.sort(key=lambda c: str(c.name))
 
         cache = {}
@@ -3329,11 +3235,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             for car in self.home._cars:
                 if car.get_user_originated(USER_ORIGINATED_CHARGER_NAME) == FORCE_CAR_NO_CHARGER_CONNECTED:
-                    # D5: DEBUG, not INFO. This reports a STATIC user setting from
-                    # inside a charger x car double loop that itself runs once per
-                    # charger per cycle — N^2*M lines/cycle (measured ~62k/day). An
-                    # An INFO anchor for the setting would belong in its setter; none
-                    # has been added, so the setting is currently only visible at DEBUG.
+                    # DEBUG: a static user setting reported from inside a charger x car
+                    # double loop, i.e. N^2*M lines per cycle at INFO.
                     _LOGGER.debug("get_best_car: FORCE_CAR_NO_CHARGER_CONNECTED car: %s", car.name)
                     continue
 
@@ -3350,20 +3253,11 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         while True:
             # assign the biggest score of the bunch
 
-            # QS-342: exact score ties are a NORMAL operating case (0.5 m distance
-            # buckets — cars sleeping in their usual spots tie every night). The old
-            # head-of-list strict `>` scan made the calling charger win every tie,
-            # which caused an attach/detach ping-pong between chargers and orphaned
-            # the car whose row was discarded. Deterministic cascade instead:
-            # max score → regret → stickiness → stable (charger name, car name).
-
-            # Every remaining (charger, car) pair of the unassigned chargers — not
-            # just each list's head: a tied car buried behind another tied car in one
-            # charger's list must still be able to win elsewhere. Collected ONCE, so
-            # the max and the tied set are derived from the same list and cannot
-            # drift apart (review #02 / S6: this replaces an `assert` that both
-            # `python -O` would strip and put an AssertionError on the live
-            # allocation path — there is now no invariant left to guard).
+            # Exact score ties are NORMAL (0.5 m distance buckets), so they get a
+            # deterministic cascade: max score -> regret -> stickiness -> stable
+            # (charger name, car name). Every remaining pair, not just each list's
+            # head — a tied car buried behind another must still win elsewhere — and
+            # collected once so the max and the tied set cannot drift apart.
             candidates = [
                 (score, charger, car)
                 for charger in active_chargers
@@ -3380,14 +3274,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             ranked = []
             for score, charger, car in candidates:
-                # Exact float `==` tie detection is safe, and it always matches at
-                # least the candidate `max` just returned: every score component is
-                # an exactly-representable dyadic value (the quantised bumps, plus
-                # the 0.5 home-instant-fallback `dist_bump`, which scales to exactly
-                # 50000.0 — so "integer-valued" is NOT the invariant), and both
-                # sides are the identical expression, so tied pairs carry
-                # bit-identical floats. A future non-dyadic component, or a per-pair
-                # re-derivation of the score, would silently kill the tie-break.
+                # Exact float `==` is safe: every score component is dyadic and both
+                # sides are the identical expression, so tied pairs are bit-identical.
+                # A non-dyadic component would silently kill the tie-break.
                 if score != best_cur_score:
                     continue
 
@@ -3402,15 +3291,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     if other is charger or other in assigned_chargers:
                         continue
                     for other_score, other_car in chargers_scores[other]:
-                        # Match by NAME, like the rest of the cascade. This is not an
-                        # oversight and must not be "tidied" to identity (review #04 /
-                        # B1 reverts exactly that): removal after assignment consumes a
-                        # whole NAME from every list, and stickiness compares names, so
-                        # regret must use the same relation or the rules stop describing
-                        # the same set. Car names are NOT enforced unique anywhere, and
-                        # under duplicates an identity scan under-counts alternatives,
-                        # inflates regret for the duplicated name and orphans the other
-                        # charger — the original #342 symptom.
+                        # By NAME, like removal and stickiness below. Do not "tidy"
+                        # this to identity: names are not enforced unique, and under
+                        # duplicates the comparators diverge and orphan a charger.
                         if other_car.name == car.name and other_score > best_alternative:
                             best_alternative = other_score
                 regret = best_cur_score - best_alternative
@@ -3471,10 +3354,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             ):
                 # the best is not as good as the boot one ... we will use the boot one for now, whatever the score
                 best_car = self._boot_car
+                # NB: the logged score belongs to the discarded computed car — the boot
+                # car was never scored on this charger.
                 reason = "boot_over_computed"
-                # The score reported alongside this reason belongs to the DISCARDED
-                # computed car, not to the boot car that actually won — the boot car
-                # was never scored on this charger, so there is no score to report.
             else:
                 reason = "computed"
 
@@ -3738,15 +3620,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             # user forced a "deconnection"
             if best_car is None:
-                # UNCONDITIONAL, exactly as before QS-342 review #03 / D6. That round
-                # gated this on a predicate enumerating every field `reset()` clears;
-                # review #04 / B2 then found the enumeration already incomplete. Any
-                # such mirror silently rots the moment `reset()` learns a new field,
-                # and the failure mode is stale charger state — so the gate is gone.
-                # `reset()` is idempotent, so running it every cycle is free; the
-                # ~74 000 lines/day it used to produce were a LOGGING defect, and are
-                # fixed where they belong: the reset chain's own lines are DEBUG
-                # unless the reset did real work, and the line below is throttled.
+                # Unconditional: `reset()` is idempotent, so do NOT gate it on a
+                # predicate enumerating what it clears — such a mirror rots and the
+                # failure mode is stale charger state. Volume is handled by logging.
                 self.log_info_on_change(
                     "no_car_connected",
                     self.car is not None,
@@ -4409,28 +4285,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         self.car = None
         self._power_steps = []
         self.car_attach_time = None
-        # QS-342 review #03 / D2: there is deliberately NO log-state wipe here.
-        #
-        # The wipe (QS-306, narrowed in review #01) is what made every throttle on
-        # this path a no-op in production: `detach_car()` is on the churn path itself
-        # — every change of the `get_best_car` value routes through it — so the key
-        # was dropped, the next call saw no previous value, and it emitted
-        # unconditionally. Rounds #01-#03 each tuned a throttle that this line then
-        # discarded.
-        #
-        # It is also redundant, which is why deleting it is the minimal fix rather
-        # than a trade-off: no key can ever name a stale car. Every key is either
-        # car-qualified (`get_car_score:{car}`, `update_value_callback_soc:{car}:…`)
-        # or carries the car name as its VALUE (`get_best_car`), so a swapped car
-        # yields a different key or a changed value and emits either way. The
-        # remaining keys live on `QSChargerGroup`, which has no car at all.
-        #
-        # Do NOT reintroduce a "session boundary" wipe here or in `reset()`:
-        # `detach_car()` cannot distinguish churn from a boundary (it is reached from
-        # the unplug edge, the disable setter, the user reset AND from the per-cycle
-        # allocation path), and `reset()` is not a boundary either. The session
-        # anchors already exist: `update_power_steps` emits an INFO per attach and
-        # the unplug WARNING anchors the other end.
+        # NO log-state wipe here, deliberately. `detach_car()` is on the churn path
+        # itself, so wiping dropped the key on every allocation change and made the
+        # throttle a no-op. It is also redundant: every key is car-qualified or carries
+        # the car name as its value, so none can name a stale car. Do not reintroduce a
+        # "session boundary" wipe here or in `reset()` — neither can distinguish churn
+        # from a boundary, and the attach INFO plus the unplug WARNING already anchor
+        # sessions.
 
     # update in place the power steps
     def update_power_steps(self):
@@ -5387,9 +5248,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # The key includes `is_target_percent`: the percent and energy callbacks are two
         # delegating entry points, and one shared key would let them thrash. It also
         # includes the car name because that is what makes the key safe across a car
-        # swap: `detach_car()` no longer clears the log state at all (see the D2
-        # rationale block on `detach_car`), so key qualification is the ONLY guarantee
-        # that a key cannot name a stale car — not defence in depth.
+        # swap: nothing clears the log state on detach, so key qualification is the
+        # only guarantee that a key cannot name a stale car.
         # The literal `%` must be `%%` or `record.getMessage()` raises ValueError.
         # The memo covers everything the message PRINTS, so no printed field can go
         # stale for up to 900 s — including `power_consign`, which `LoadCommand.__eq__`
@@ -5420,9 +5280,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             result_calculus,
             is_car_charged,
             self.current_command,
-            # Telemetry, not churn (review #04 / B12): the Wh/% figures in the value
-            # advance every cycle during a perfectly normal charge, so the default
-            # budget put this key in PERMANENT overflow whenever a car was charging.
+            # Telemetry, not churn: the Wh/% figures advance every cycle while charging.
             budget=_LOG_TELEMETRY_VALUES_PER_WINDOW,
             max_values=_LOG_MAX_REMEMBERED_TELEMETRY_VALUES,
         )

@@ -326,22 +326,13 @@ def _patch_scores_by_object(charger, mapping) -> None:
 
 
 def test_duplicate_car_names_do_not_orphan_a_charger():
-    """B1 (review #04): regret must use the same relation as removal — the NAME.
+    """Regret must match cars by NAME, like removal and stickiness.
 
-    The cascade is effectively over names: removal consumes a whole NAME from every
-    charger's list, and stickiness compares names. A regret scan matching by object
-    identity is the odd one out, and the two rules then stop describing the same set.
-
-    Nothing enforces car-name uniqueness. `CONF_NAME` is a plain `cv.string` in the
-    options flow with no collision validation, the options flow never re-checks
-    `unique_id`, and `add_device` dedups by object identity only (`QSCar` defines no
-    `__eq__`) — so two config entries named "Zoe" yield two distinct `QSCar` objects
-    named "Zoe".
-
-    Under that state an identity scan under-counts alternatives, so regret for the
-    duplicated name inflates (0 -> 100) and it wins round 1; name-based removal then
-    strips its twin off the other charger, which exits the round with nothing and
-    falls back to its generic car. That is exactly the #342 symptom.
+    Car names are not enforced unique (`CONF_NAME` is a plain `cv.string` with no
+    collision validation), so two entries named "Zoe" give two distinct `QSCar`s.
+    An identity-based regret scan then under-counts alternatives, inflates regret
+    for the duplicated name, and lets name-based removal strip its twin off the
+    other charger — which exits with no car. That is the #342 symptom.
     """
     fx = _make_incident_fixture(pin_buzz=False)
     twin = make_real_car(fx.hass, fx.home, name=fx.zoe.name)
@@ -673,19 +664,12 @@ async def _run_cycles(fx, caplog, cycles: int = 129, step_s: int = 7) -> None:
 
 
 async def test_allocation_churn_total_log_volume_over_a_full_window(caplog):
-    """AGGREGATE volume over a full 900 s window, not a per-prefix count.
+    """AGGREGATE volume over a full window, not a per-prefix count.
 
-    Every escaped site is invisible to a prefix-scoped assertion, which is how five
-    of the six winner-announcement branches ran unthrottled through three review
-    rounds. The scenario is a STABLE allocation — parking keeps the Zoe, portail
-    falls back to its generic car — so no session churn is involved and every line
-    above the floor is pure logging defect. Measured 149 lines before this round,
-    129 of them from the single unthrottled `Default car used` branch.
-
-    REAL scoring, not a stubbed `get_car_score` (review #04 / B9): stubbing it meant
-    the `get_car_score:{car}` site — the one that produced the original 17 791
-    lines — never fired here, leaving the `N*M` term of the ceiling unexercised.
-    Coordinates are pinned instead, so the whole production path runs.
+    A prefix-scoped assertion cannot see an escaped site. The allocation is STABLE
+    here (parking keeps the Zoe, portail falls back to generic), so there is no
+    session churn and every line above the floor is a logging defect — 149 before
+    this work. Scoring is real, not stubbed, so the `N*M` term is exercised too.
     """
     fx = _make_incident_fixture(pin_buzz=False)
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
@@ -769,16 +753,10 @@ async def test_user_pinned_car_line_is_throttled(caplog):
 
 
 async def test_no_car_selected_state_is_quiet(caplog):
-    """The single largest volume source: ~74 000 lines/day from one charger.
+    """ "No car connected" ran a full reset every cycle, at six INFO lines each.
 
-    Selecting "no car connected" runs a full `reset(keep_commands=True)` EVERY cycle
-    and used to emit six INFO lines each time — four times the original incident.
-
-    The reset itself is NOT skipped (review #04 / B2: gating it on a predicate that
-    mirrors what `reset()` clears is a rot hazard whose failure mode is stale charger
-    state). `reset()` is idempotent, so it keeps running; the volume is fixed where
-    it belongs — the reset chain logs at DEBUG unless it destroyed something, and the
-    announcement is throttled.
+    The reset still runs (it is idempotent, and gating it on a mirror of what it
+    clears is a rot hazard). The volume is fixed in the logging instead.
     """
     fx = _make_incident_fixture()
     caplog.set_level(logging.INFO, logger=CHARGER_LOGGER)
