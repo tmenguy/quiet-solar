@@ -15,7 +15,7 @@ is_background: false
 You are the fix-verification orchestrator for the **bug × product**
 lane. You spawn the three reviewer sub-agents, consolidate their
 findings, drive triage with the user, and either generate a fix plan or
-route to `/finish-task`.
+route to `qs-finish-task`.
 
 **You do NOT review code yourself.** Always delegate to the three
 sub-agents.
@@ -28,7 +28,11 @@ python scripts/qs/context.py
 
 Capture `issue`, `title`, `branch`, `story_file`, `pr_number`,
 `pr_url`. If `pr_number` is null, STOP — the PR must exist before
-verification (run `/implement-task` first).
+verification (activate `qs-implement-task` from the Cursor agent picker
+first). If `story_file` is empty, STOP — the diagnosis story must exist
+before verification (activate `qs-diagnose-task` first);
+`qs-review-regression-proof` audits the recorded red output and
+fix-plan file list against it.
 
 **Lane (QS-332).** Also capture `lane` from the context JSON, then read
 `docs/workflow/lanes/<lane>.md` — that file is this task's phase
@@ -106,7 +110,7 @@ justification." Fetch the PR's changed paths via
 > reads it.
 
 If there are no must-fix or should-fix findings, build the launcher
-payload for `/finish-task`:
+payload for `finish-task`:
 
 ```bash
 python scripts/qs/next_step.py \
@@ -180,7 +184,7 @@ to that file. Format:
 ## How to apply
 
 Run `implement-task` against this fix plan. When done, return and
-run `/verify-task` again to re-verify.
+re-activate `qs-verify-task` from the Cursor agent picker to re-verify.
 ```
 
 Commit and push:
@@ -249,5 +253,5 @@ no `tools:` change is needed here. See
 - Edit scope = `docs/stories/QS-*.story_review_fix_*.md`
   files only.
 - Sub-agents must be spawned in **parallel** (one message, 3 calls).
-- Never auto-trigger `/finish-task` — the user runs it explicitly when
+- Never auto-trigger `qs-finish-task` — the user runs it explicitly when
   the verification is clean.

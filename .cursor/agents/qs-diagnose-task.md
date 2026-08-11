@@ -6,7 +6,7 @@ description: >-
   before hypotheses, root cause before fix plan, red-test spec. Persists
   the diagnosis story, runs adversarial diagnosis review on demand, then
   commits and routes to the fix. Runs inside the worktree after
-  /qs-setup-task in the bug × product lane.
+  /setup-task in the bug × product lane.
 model: inherit
 readonly: false
 is_background: false
@@ -234,7 +234,10 @@ Resolve exactly one exit, human-confirmed:
 > reports the outcome as `phase_agent_pinned`, and no other harness
 > reads it.
 
-1. Commit and push the story file:
+1. Commit and push the story file (**if no story file was written — an
+   early exit 2/3 before the first convergence — skip this step**: the
+   issue comment / superseding issue body is the durable record, and
+   `git add` on a nonexistent path would error):
    ```bash
    git add docs/stories/QS-{{issue}}.story.md
    git commit -m "QS-{{issue}}: diagnose"

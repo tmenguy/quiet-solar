@@ -27,7 +27,10 @@ python scripts/qs/context.py
 
 Capture `issue`, `title`, `branch`, `story_file`, `pr_number`,
 `pr_url`. If `pr_number` is null, STOP — the PR must exist before
-verification (run `/implement-task` first).
+verification (run `/implement-task` first). If `story_file` is empty,
+STOP — the diagnosis story must exist before verification (run
+`/diagnose-task` first); `qs-review-regression-proof` audits the
+recorded red output and fix-plan file list against it.
 
 **Lane (QS-332).** Also capture `lane` from the context JSON, then read
 `docs/workflow/lanes/<lane>.md` — that file is this task's phase

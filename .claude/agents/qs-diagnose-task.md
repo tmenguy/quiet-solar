@@ -226,7 +226,10 @@ Resolve exactly one exit, human-confirmed:
 
 ## Commit and hand off (at FINALIZE)
 
-1. Commit and push the story file:
+1. Commit and push the story file (**if no story file was written — an
+   early exit 2/3 before the first convergence — skip this step**: the
+   issue comment / superseding issue body is the durable record, and
+   `git add` on a nonexistent path would error):
    ```bash
    git add docs/stories/QS-{{issue}}.story.md
    git commit -m "QS-{{issue}}: diagnose"

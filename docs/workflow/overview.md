@@ -13,8 +13,9 @@ isolated in `scripts/qs/launchers/`.
 ```
 
 The **bug × product** lane (QS-335) diverges into a diagnose-first flow:
-`create-plan` → `diagnose-task` and `review-task` → `verify-task` for
-that lane only (`setup → diagnose → fix → verify → finish`). See
+`create-plan` is replaced by `diagnose-task` and `review-task` by
+`verify-task` for that lane only
+(`setup → diagnose → fix → verify → finish`). See
 [lanes/bug-product.md](lanes/bug-product.md).
 
 | Phase            | Where it runs        | What it produces                            |

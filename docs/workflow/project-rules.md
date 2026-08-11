@@ -273,7 +273,7 @@ which phase to use — infer from context.
 | "Diagnose task" (bug × product lane)                         | `claude --agent qs-diagnose-task`        | `/diagnose-task`   |
 | "Implement task" (inside worktree)                           | `claude --agent qs-implement-task`       | `/implement-task`  |
 | "Review PR #5" or "review task"                              | `claude --agent qs-review-task`          | `/review-task`     |
-| "Verify task" (bug × product lane)                          | `claude --agent qs-verify-task`          | `/verify-task`     |
+| "Verify task" (bug × product lane)                           | `claude --agent qs-verify-task`          | `/verify-task`     |
 | "Merge PR #5" or "finish task"                               | `claude --agent qs-finish-task`          | `/finish-task`     |
 | "Create a release"                                           | `claude --agent qs-release` on main      | `/release`         |
 | Bug fix / small fix                                          | `claude --agent qs-setup-task` on main   | `/setup-task`      |

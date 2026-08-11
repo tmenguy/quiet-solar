@@ -59,7 +59,10 @@ python scripts/qs/context.py
 
 Capture `issue`, `title`, `branch`, `story_file`, `pr_number`,
 `pr_url`. If `pr_number` is null, STOP — the PR must exist before
-verification (run `implement-task` first).
+verification (run `implement-task` first). If `story_file` is empty,
+STOP — the diagnosis story must exist before verification (activate
+`qs-diagnose-task` first); `qs-review-regression-proof` audits the
+recorded red output and fix-plan file list against it.
 
 **Lane (QS-332).** Also capture `lane` from the context JSON, then read
 `docs/workflow/lanes/<lane>.md` — that file is this task's phase
@@ -365,5 +368,10 @@ explicit `LSP` tool (diagnostics + navigation). See
 - Edit scope = `docs/stories/QS-*.story_review_fix_*.md`
   files only.
 - Sub-agents must be spawned in **parallel** (one message, 3 calls).
-- Never auto-trigger `finish-task` — the user runs it explicitly when
-  the verification is clean.
+- The zero-findings fast path only **spawns** the `qs-finish-task`
+  session (the sanctioned handoff); it never performs finish-task's own
+  merge/cleanup work — the user drives that inside the finish-task
+  session. Never run any merge, branch-delete, or worktree-cleanup here.
+  (Parity note: the byte-frozen `qs-review-task` peer keeps the older
+  blanket "never auto-trigger finish-task" wording — same spawn-only
+  behaviour, wording not mirrored back per AC-4.)
