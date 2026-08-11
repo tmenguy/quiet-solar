@@ -48,6 +48,23 @@ IMPLEMENT_AGENT_NAMES: tuple[str, ...] = (
     "qs-implement-setup-task",
 )
 
+# The lane-read block's terminal sentence, per agent (review-fix #06):
+# the previous first-match tuple scanned the whole file remainder, so a
+# marker phrase appearing in a later paragraph of another agent's body
+# could hijack the block boundary and make the whitespace assertions
+# inspect arbitrary bytes (vacuous pass or spurious fail). The
+# implement variants end on the before-first-commit rule; diagnose-task
+# ends on the lane-independent story-overwrite guard (review-fix
+# #05/#06); the rest end on the read-only fallback sentence.
+LANE_BLOCK_TERMINALS: dict[str, str] = {
+    "qs-create-plan": "on the fallback.\n",
+    "qs-implement-task": "a parallel path).\n",
+    "qs-implement-setup-task": "a parallel path).\n",
+    "qs-review-task": "on the fallback.\n",
+    "qs-diagnose-task": "convergence\noverwrites it.\n",
+    "qs-verify-task": "on the fallback.\n",
+}
+
 
 def _harness_id(p: Path) -> str:
     return p.parent.name.lstrip(".")
@@ -140,17 +157,10 @@ def test_lane_block_is_a_clean_mirrored_paragraph(
     assert body[start - 2 : start] == "\n\n", "one blank line before the block"
     assert body[start - 3 : start] != "\n\n\n", "no doubled blank line before"
     tail = body[start:]
-    # Review-fix #05: qs-diagnose-task's block gained the empty-lane
-    # story-overwrite guard, so its terminal sentence is now the guard's
-    # ("...convergence overwrites it."), not "on the fallback.".
-    sentinel = next(
-        marker
-        for marker in (
-            "a parallel path).\n",
-            "convergence overwrites it.\n",
-            "on the fallback.\n",
-        )
-        if marker in tail
+    sentinel = LANE_BLOCK_TERMINALS[agent_name]
+    assert sentinel in tail, (
+        f"{harness_dir / f'{agent_name}.md'}: lane block missing its "
+        f"terminal sentence {sentinel!r}"
     )
     end = tail.index(sentinel) + len(sentinel)
     assert tail[end] == "\n", "one blank line after the block"

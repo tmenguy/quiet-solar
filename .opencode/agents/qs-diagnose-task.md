@@ -13,7 +13,7 @@ permission:
   read: allow
   edit:
     "*": deny
-    "docs/stories/**": allow
+    "docs/stories/QS-*.story.md": allow
   bash:
     "*": ask
     "echo *": allow
@@ -24,10 +24,10 @@ permission:
     "ls *": allow
     "wc *": allow
     "find *": allow
-    "git status*": allow
-    "git log*": allow
-    "git diff*": allow
-    "git fetch*": allow
+    "git status *": allow
+    "git log *": allow
+    "git diff *": allow
+    "git fetch *": allow
     "git add *": allow
     "git commit *": allow
     "git push *": allow
@@ -71,10 +71,11 @@ in-flight task — every new task is labelled at birth), fall back to
 [docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
 and surface the backfill guidance: the issue still needs its axis
 labels (`gh issue edit <N> --add-label ...`). This phase is read-only
-with respect to the gate, so it may proceed on the fallback — with
-one guard: if the story file already exists and lacks the bug story
-template sections, it is likely a committed feature plan, so confirm
-with the user before the first DIAGNOSE convergence overwrites it.
+with respect to the gate, so it may proceed on the fallback.
+Independent of lane: if the story file already exists and lacks the
+bug story template sections, it is likely a committed feature plan —
+confirm with the user before the first DIAGNOSE convergence
+overwrites it.
 
 **Lane-mismatch guard.** If `lane` is non-empty and not `bug-product`,
 STOP — this diagnose phase is bug × product only, and its DIAGNOSE

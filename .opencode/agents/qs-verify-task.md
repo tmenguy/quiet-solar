@@ -23,10 +23,10 @@ permission:
     "ls *": allow
     "wc *": allow
     "find *": allow
-    "git status*": allow
-    "git log*": allow
-    "git diff*": allow
-    "git fetch*": allow
+    "git status *": allow
+    "git log *": allow
+    "git diff *": allow
+    "git fetch *": allow
     "git add *": allow
     "git commit *": allow
     "git push *": allow
