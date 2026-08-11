@@ -199,7 +199,8 @@ workflow — no user confirmation needed for any of these three.
 diagnose-first flow replaces it with `verify-task`. Set
 `NEXT_PHASE = review-task`, or `NEXT_PHASE = verify-task` when the
 `lane` from `context.py` is `bug-product`, and substitute that value in
-the `--next-cmd` flag and the handoff below.
+the `--next-cmd` flag and the handoff below — except the fallback
+line, which carries both branches literally.
 
 Build the launcher payload for the resolved next phase (**substitute
 `{{NEXT_PHASE}}`** first):

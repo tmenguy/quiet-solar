@@ -103,7 +103,7 @@ doc now covers a deleted/renamed source), add a
 updating `docs/agents/` or providing a `## Doc maintenance`
 justification." Fetch the PR's changed paths via
 `gh pr diff {{pr_number}} --name-only` (uncapped — the
-`--json files` form truncates at 100 files). See
+`gh pr view --json files` form truncates at 100 files). See
 [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 "Doc maintenance".
 
@@ -173,6 +173,10 @@ decisions?".
 
 ### 6. Fix plan (if any fixes)
 
+If every decision is "skip", there is no fix plan to write: record
+the skip decisions (post the triage summary as a PR comment) and emit
+the same finish-task handoff as step 4.
+
 If any decisions are "fix", the next implement phase is
 **`implement-task`** — a bug × product fix is product code and never
 routes through `implement-setup-task`.
@@ -214,7 +218,7 @@ Commit and push:
 
 ```bash
 git add docs/stories/QS-{{issue}}.story_review_fix_*.md
-git commit -m "QS-{{issue}}: review fix plan #NN"
+git commit -m "QS-{{issue}}: review fix plan #NN" -- "docs/stories/QS-{{issue}}.story_review_fix_*.md"
 git push origin {{branch}}
 ```
 

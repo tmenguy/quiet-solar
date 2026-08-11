@@ -452,7 +452,7 @@ def test_false_branch_carries_the_stale_pin_hazard(filename: str) -> None:
 
 
 @pytest.mark.parametrize("filename", ["qs-review-task.md", "qs-verify-task.md"])
-def test_review_task_carries_the_stale_pin_hazard_at_both_handoffs(
+def test_handoff_orchestrators_carry_the_stale_pin_hazard_at_both_handoffs(
     filename: str,
 ) -> None:
     """``qs-review-task`` / ``qs-verify-task`` hand off twice, so each needs

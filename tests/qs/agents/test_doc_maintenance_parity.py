@@ -35,10 +35,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# The six orchestrator agents that AC-9 requires us to update (QS-335
-# added the two bug × product lane orchestrators qs-diagnose-task and
-# qs-verify-task, which lift the create-plan / review-task
-# doc-maintenance step).
+# The six orchestrator agents that carry the doc-maintenance step:
+# four required by QS-185 AC-9, plus the two bug × product lane
+# orchestrators qs-diagnose-task and qs-verify-task (QS-335), which
+# lift the create-plan / review-task doc-maintenance step.
 DOC_MAINTENANCE_AGENT_NAMES: tuple[str, ...] = (
     "qs-create-plan",
     "qs-implement-task",

@@ -59,7 +59,10 @@ evidence before hypotheses, hypotheses before cause, cause before plan.
   eliminate each against the evidence. **Hard rule: no fix plan until
   the root cause is stated in one sentence with file/function
   references.** Insufficient evidence → ask, don't guess; staying in
-  DIAGNOSE across sessions is normal.
+  DIAGNOSE across sessions is normal. A fresh session that finds the
+  story file already existing and carrying the bug-template sections
+  reads it first and adopts it as the current diagnosis state
+  (resume, don't restart).
 - **Reproduction** — **demonstrate when feasible**: the agent may run
   throwaway, uncommitted scripts/snippets via Bash to show the
   hypothesis live (nothing is committed in this phase). Always produce

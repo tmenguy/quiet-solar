@@ -54,14 +54,15 @@ IMPLEMENT_AGENT_NAMES: tuple[str, ...] = (
 # could hijack the block boundary and make the whitespace assertions
 # inspect arbitrary bytes (vacuous pass or spurious fail). The
 # implement variants end on the before-first-commit rule; diagnose-task
-# ends on the lane-independent story-overwrite guard (review-fix
-# #05/#06); the rest end on the read-only fallback sentence.
+# ends on the lane-independent story-overwrite guard's cold-start
+# resume sentence (review-fix #05/#06/#07); the rest end on the
+# read-only fallback sentence.
 LANE_BLOCK_TERMINALS: dict[str, str] = {
     "qs-create-plan": "on the fallback.\n",
     "qs-implement-task": "a parallel path).\n",
     "qs-implement-setup-task": "a parallel path).\n",
     "qs-review-task": "on the fallback.\n",
-    "qs-diagnose-task": "convergence\noverwrites it.\n",
+    "qs-diagnose-task": "adopt it\nas the current diagnosis state (resume, don't restart).\n",
     "qs-verify-task": "on the fallback.\n",
 }
 

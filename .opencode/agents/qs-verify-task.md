@@ -63,9 +63,9 @@ Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
 `pr_number`, `pr_url`. If `pr_number` is null, STOP — there is no
 **open** PR on this branch (`context.py` resolves open PRs only): check
 `gh pr list --head {{branch}} --state all` first — a merged/closed PR
-means a stale worktree, not a missing fix; only if no PR exists at all,
-run `implement-task` first. If `story_file` is empty, STOP — the
-diagnosis story must exist before verification (activate
+means a stale worktree, not a missing fix; only if no PR exists at
+all, activate `qs-implement-task` first. If `story_file` is empty,
+STOP — the diagnosis story must exist before verification (activate
 `qs-diagnose-task` first); `qs-review-regression-proof` audits the
 recorded red output and fix-plan file list against it.
 
@@ -137,7 +137,7 @@ doc now covers a deleted/renamed source), add a
 updating `docs/agents/` or providing a `## Doc maintenance`
 justification." Fetch the PR's changed paths via
 `gh pr diff {{pr_number}} --name-only` (uncapped — the
-`--json files` form truncates at 100 files). See
+`gh pr view --json files` form truncates at 100 files). See
 [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 "Doc maintenance".
 
@@ -229,6 +229,10 @@ decisions?".
 
 ### 6. Fix plan (if any fixes)
 
+If every decision is "skip", there is no fix plan to write: record
+the skip decisions (post the triage summary as a PR comment) and emit
+the same finish-task handoff as step 4.
+
 If any decisions are "fix", the next implement phase is
 **`implement-task`** — a bug × product fix is product code and never
 routes through `implement-setup-task`.
@@ -270,7 +274,7 @@ Commit and push:
 
 ```bash
 git add docs/stories/QS-{{issue}}.story_review_fix_*.md
-git commit -m "QS-{{issue}}: review fix plan #NN"
+git commit -m "QS-{{issue}}: review fix plan #NN" -- "docs/stories/QS-{{issue}}.story_review_fix_*.md"
 git push origin {{branch}}
 ```
 

@@ -75,7 +75,9 @@ with respect to the gate, so it may proceed on the fallback.
 Independent of lane: if the story file already exists and lacks the
 bug story template sections, it is likely a committed feature plan —
 confirm with the user before the first DIAGNOSE convergence
-overwrites it.
+overwrites it. If it exists and already carries the bug-template
+sections, it is an in-progress diagnosis — read it first and adopt it
+as the current diagnosis state (resume, don't restart).
 
 **Lane-mismatch guard.** If `lane` is non-empty and not `bug-product`,
 STOP — this diagnose phase is bug × product only, and its DIAGNOSE
@@ -298,7 +300,7 @@ Resolve exactly one exit, human-confirmed:
    commit") **but keep the `git push`**:
    ```bash
    git add docs/stories/QS-{{issue}}.story.md
-   git commit -m "QS-{{issue}}: diagnose"
+   git commit -m "QS-{{issue}}: diagnose" -- docs/stories/QS-{{issue}}.story.md
    git push -u origin {{branch}}
    ```
 2. Build the launcher payload for the next phase so the user has a
