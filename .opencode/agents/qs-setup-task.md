@@ -147,10 +147,18 @@ slip here fails loudly rather than silently cutting a worktree.
 
 ### 2. Set up branch and worktree + emit launcher (tasks only)
 
-One command does it all:
+**Resolve the next phase from the lane (QS-335).** The next phase is
+`create-plan` for every lane **except** `bug-product`, whose
+diagnose-first flow replaces it with `diagnose-task`. Set
+`NEXT_PHASE = create-plan`, or `NEXT_PHASE = diagnose-task` when the
+resolved lane (step 1b) is `bug-product`, and substitute that value in
+the `--next-cmd` flag below and in every handoff site in step 3.
+
+One command does it all (**substitute `{{NEXT_PHASE}}`** with the value
+you just resolved):
 
 ```bash
-python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "create-plan" --harness opencode
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "{{NEXT_PHASE}}" --harness opencode
 ```
 
 **Why setup-task stays print-for-user**: the new worktree is a
@@ -160,9 +168,9 @@ generated script runs ``opencode <worktree> --agent <name>`` against
 the new workspace's OpenCode instance. We cannot ``spawn_session.py``
 across workspaces — the HTTP API only knows about the current
 workspace. Sibling OpenCode agents (``qs-create-plan``,
-``qs-implement-task``, ``qs-implement-setup-task``,
-``qs-review-task``) execute ``new_context`` in-band because they stay
-in the same worktree.
+``qs-diagnose-task``, ``qs-implement-task``, ``qs-implement-setup-task``,
+``qs-review-task``, ``qs-verify-task``) execute ``new_context`` in-band
+because they stay in the same worktree.
 
 For `--no-worktree`, pass `--no-worktree`. The script:
 - creates branch `QS_{{issue_number}}` from `origin/main`
@@ -192,12 +200,15 @@ Task #{{issue_number}} set up.
   Worktree:  {{worktree_path}}
   Branch:    QS_{{issue_number}}  (HEAD already checked out)
 
-Next phase: create-plan.
+Next phase: {{NEXT_PHASE}}.
 
-Preferred (activate `qs-create-plan` from the OpenCode agent picker,
+Preferred (activate `qs-{{NEXT_PHASE}}` from the OpenCode agent picker,
 or paste the spawn-session one-liner below into a fresh terminal):
   {{new_context}}
 ```
+
+(For the `bug-product` lane this routes to `/diagnose-task` instead of
+`/create-plan`; every other lane routes to `/create-plan`.)
 
 If `pycharm_context` is present in the payload, mention it as a bridge
 for IDE-embedded terminals (clipboard / AppleScript helpers).

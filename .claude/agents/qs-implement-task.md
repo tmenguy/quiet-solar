@@ -186,12 +186,20 @@ workflow — no user confirmation needed for any of these three.
 
 ### 6. Tell the user the next command
 
-Build the launcher payload for `/review-task` so the user has a copy/paste
-command to open a fresh interactive `claude --agent qs-review-task` session:
+**Resolve the next phase from the lane (QS-335).** The next phase is
+`review-task` for every lane **except** `bug-product`, whose
+diagnose-first flow replaces it with `verify-task`. Set
+`NEXT_PHASE = review-task`, or `NEXT_PHASE = verify-task` when the
+`lane` from `context.py` is `bug-product`, and substitute that value in
+the `--next-cmd` flag and every handoff site below.
+
+Build the launcher payload for the resolved next phase so the user has a
+copy/paste command to open a fresh interactive `claude --agent
+qs-{{NEXT_PHASE}}` session (**substitute `{{NEXT_PHASE}}`** first):
 
 ```bash
 python scripts/qs/next_step.py \
-    --next-cmd "review-task" \
+    --next-cmd "{{NEXT_PHASE}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
     --title "{{title}}" \
@@ -211,24 +219,24 @@ entirely (pin sentence and bullets) and route the user to the Preferred
 ✅ Committed and pushed to {{branch}}.
 ✅ PR #{{pr_number}} opened: {{pr_url}}
 
-Next phase: review-task.
+Next phase: {{NEXT_PHASE}}.
 
-Preferred (opens a fresh interactive `claude --agent qs-review-task` session):
+Preferred (opens a fresh interactive `claude --agent qs-{{NEXT_PHASE}}` session):
   {{new_context}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
 kept for any chat without a CLI launcher; the GUI can instead run the phase
 agent directly, see `docs/workflow/harness.md`):
-  /review-task
+  /review-task — or `/verify-task` when the lane is `bug-product`
 
-[Claude Code GUI] the worktree should now be pinned to `qs-review-task` in
+[Claude Code GUI] the worktree should now be pinned to `qs-{{NEXT_PHASE}}` in
 `.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
 whether that write happened — it is always skipped on a main checkout).
 The GUI displays the active agent nowhere, so if the phase looks wrong,
 use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
   • Select directory `{{worktree}}`
-  • Name it `QS_{{issue}} review-task`
+  • Name it `QS_{{issue}} {{NEXT_PHASE}}`
   • See `docs/workflow/harness.md` →
     "GUI launch surface (Claude Code Desktop)".
 ```

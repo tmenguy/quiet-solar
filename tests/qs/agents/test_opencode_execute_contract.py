@@ -59,9 +59,11 @@ SUBSTITUTION_REMINDER = "**Before running** — substitute"
 
 OPENCODE_EXECUTE_AGENTS = (
     "qs-create-plan",
+    "qs-diagnose-task",
     "qs-implement-task",
     "qs-implement-setup-task",
     "qs-review-task",
+    "qs-verify-task",
 )
 
 
@@ -166,17 +168,21 @@ def test_opencode_agent_no_emoji_in_success_block(name: str) -> None:
     )
 
 
-def test_opencode_review_task_has_two_execute_blocks() -> None:
-    """review-task has 2 next_step.py callsites — both must auto-execute.
+@pytest.mark.parametrize("filename", ["qs-review-task.md", "qs-verify-task.md"])
+def test_opencode_review_task_has_two_execute_blocks(filename: str) -> None:
+    """review-task / verify-task each have 2 next_step.py callsites — both
+    must auto-execute.
 
     Counts occurrences of the EXECUTE_MARKER. Asserts ``>= 2`` so the
     test is robust to future prose elaboration; the lower bound is
-    what matters.
+    what matters. QS-335: qs-verify-task is the bug × product lane's
+    review-variant and hands off twice (zero-findings + fix-plan), same
+    as qs-review-task.
     """
-    body = (OPENCODE_DIR / "qs-review-task.md").read_text(encoding="utf-8")
+    body = (OPENCODE_DIR / filename).read_text(encoding="utf-8")
     count = body.count(EXECUTE_MARKER)
     assert count >= 2, (
-        f"qs-review-task.md should auto-execute both new_context "
+        f"{filename} should auto-execute both new_context "
         f"callsites (zero-findings + fix-plan); found {count} "
         f"occurrences of {EXECUTE_MARKER!r}."
     )

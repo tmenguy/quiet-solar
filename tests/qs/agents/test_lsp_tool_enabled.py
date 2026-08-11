@@ -54,6 +54,9 @@ LSP_INCLUDE_AGENTS: tuple[str, ...] = (
     "qs-review-edge-case-hunter",
     "qs-review-acceptance-auditor",
     "qs-setup-task",
+    "qs-diagnose-task",
+    "qs-verify-task",
+    "qs-diag-root-cause-skeptic",
 )
 
 # Context-starved (blind) reviewers + merge/release agents. They must
@@ -67,6 +70,8 @@ LSP_EXCLUDE_AGENTS: tuple[str, ...] = (
     "qs-review-coderabbit",
     "qs-finish-task",
     "qs-release",
+    "qs-diag-fix-minimalist",
+    "qs-review-regression-proof",
 )
 
 PYRIGHT_PLUGIN_ID = "pyright-lsp@claude-plugins-official"

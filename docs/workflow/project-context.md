@@ -23,6 +23,9 @@ agent can run directly instead — see
 [harness.md](harness.md) → "GUI launch surface (Claude Code Desktop)"):
 
 - **`qs-setup-task`** → **`qs-create-plan`** → **`qs-implement-task`** → **`qs-review-task`** → **`qs-finish-task`** → **`qs-release`**
+  - bug × product lane (QS-335): **`qs-create-plan`** → **`qs-diagnose-task`**
+    and **`qs-review-task`** → **`qs-verify-task`** (see
+    [lanes/bug-product.md](lanes/bug-product.md))
 
 Agents are defined in `.claude/agents/` (and mirrored to `.cursor/agents/`
 and `.opencode/agents/` — bodies must stay in sync per the harness-sync

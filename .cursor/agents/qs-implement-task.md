@@ -194,11 +194,19 @@ workflow — no user confirmation needed for any of these three.
 > reports the outcome as `phase_agent_pinned`, and no other harness
 > reads it.
 
-Build the launcher payload for the review phase:
+**Resolve the next phase from the lane (QS-335).** The next phase is
+`review-task` for every lane **except** `bug-product`, whose
+diagnose-first flow replaces it with `verify-task`. Set
+`NEXT_PHASE = review-task`, or `NEXT_PHASE = verify-task` when the
+`lane` from `context.py` is `bug-product`, and substitute that value in
+the `--next-cmd` flag and the handoff below.
+
+Build the launcher payload for the resolved next phase (**substitute
+`{{NEXT_PHASE}}`** first):
 
 ```bash
 python scripts/qs/next_step.py \
-    --next-cmd "review-task" \
+    --next-cmd "{{NEXT_PHASE}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
     --title "{{title}}" \
@@ -212,10 +220,13 @@ Parse the JSON; capture `new_context`. Then print:
 ✅ Committed and pushed to {{branch}}.
 ✅ PR #{{pr_number}} opened: {{pr_url}}
 
-Next phase: review-task.
-Select qs-review-task from the Cursor agent picker, then paste:
+Next phase: {{NEXT_PHASE}}.
+Select qs-{{NEXT_PHASE}} from the Cursor agent picker, then paste:
   {{new_context}}
 ```
+
+(For the `bug-product` lane this routes to `/verify-task` instead of
+`/review-task`; every other lane routes to `/review-task`.)
 
 ## Code intelligence (LSP)
 

@@ -232,16 +232,23 @@ workflow — no user confirmation needed for any of these three.
 > reports the outcome as `phase_agent_pinned`, and no other harness
 > reads it.
 
-Build the launcher payload for the review phase so the user has a copy/paste
-command to open a fresh session bound to `qs-review-task`:
+**Resolve the next phase from the lane (QS-335).** The next phase is
+`review-task` for every lane **except** `bug-product`, whose
+diagnose-first flow replaces it with `verify-task`. Set
+`NEXT_PHASE = review-task`, or `NEXT_PHASE = verify-task` when the
+`lane` from `context.py` is `bug-product` (i.e. routes to `/verify-task`
+instead of `/review-task`), and substitute that value everywhere below.
 
-**Before running** — substitute `{{worktree}}`, `{{issue}}`, and
-`{{title}}` with the values you captured earlier; the `--next-cmd`
-value is fixed (`review-task`):
+Build the launcher payload for the resolved next phase so the user has a
+copy/paste command to open a fresh session bound to `qs-{{NEXT_PHASE}}`:
+
+**Before running** — substitute `{{NEXT_PHASE}}` with the value you just
+resolved, plus `{{worktree}}`, `{{issue}}`, and `{{title}}` with the
+values you captured earlier:
 
 ```bash
 python scripts/qs/next_step.py \
-    --next-cmd "review-task" \
+    --next-cmd "{{NEXT_PHASE}}" \
     --work-dir "{{worktree}}" \
     --issue {{issue}} \
     --title "{{title}}" \
@@ -273,15 +280,15 @@ Parse the stdout of that command as JSON. The success contract is
 **binary**:
 
 - ``status == "session_created"`` AND ``agent`` equals `qs-` followed
-  by the phase name passed to `--next-cmd` (here: `qs-review-task`
-  since `--next-cmd "review-task"` was passed) → success; report to
+  by the phase name passed to `--next-cmd` (`qs-review-task`, or
+  `qs-verify-task` for the `bug-product` lane) → success; report to
   the user:
 
   ```text
   [OK] Implementation complete — quality gate passed.
   [OK] Committed and pushed to {{branch}}.
   [OK] PR #{{pr_number}} opened: {{pr_url}}
-  [OK] Next phase session created: qs-review-task
+  [OK] Next phase session created: qs-{{NEXT_PHASE}}
        (visible in the OpenCode session list on the left)
   ```
 

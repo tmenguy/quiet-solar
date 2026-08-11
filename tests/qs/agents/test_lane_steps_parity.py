@@ -39,6 +39,8 @@ LANE_READ_AGENT_NAMES: tuple[str, ...] = (
     "qs-implement-task",
     "qs-implement-setup-task",
     "qs-review-task",
+    "qs-diagnose-task",
+    "qs-verify-task",
 )
 
 IMPLEMENT_AGENT_NAMES: tuple[str, ...] = (

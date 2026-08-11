@@ -85,9 +85,13 @@ class UnknownPhaseError(ValueError):
 PHASE_TO_AGENT: dict[str, str] = {
     "setup-task": "qs-setup-task",
     "create-plan": "qs-create-plan",
+    # QS-335: bug × product lane replaces create-plan with diagnose-task.
+    "diagnose-task": "qs-diagnose-task",
     "implement-task": "qs-implement-task",
     "implement-setup-task": "qs-implement-setup-task",
     "review-task": "qs-review-task",
+    # QS-335: bug × product lane replaces review-task with verify-task.
+    "verify-task": "qs-verify-task",
     "finish-task": "qs-finish-task",
     "release": "qs-release",
 }

@@ -16,9 +16,11 @@ import pytest
 _KNOWN_PHASES = (
     "setup-task",
     "create-plan",
+    "diagnose-task",
     "implement-task",
     "implement-setup-task",
     "review-task",
+    "verify-task",
     "finish-task",
     "release",
 )

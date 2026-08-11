@@ -112,10 +112,18 @@ slip here fails loudly rather than silently cutting a worktree.
 
 ### 2. Set up branch and worktree + emit launcher (tasks only)
 
-One command does it all:
+**Resolve the next phase from the lane (QS-335).** The next phase is
+`create-plan` for every lane **except** `bug-product`, whose
+diagnose-first flow replaces it with `diagnose-task`. Set
+`NEXT_PHASE = create-plan`, or `NEXT_PHASE = diagnose-task` when the
+resolved lane (step 1b) is `bug-product`, and substitute that value in
+the `--next-cmd` flag below and in every handoff site in step 3.
+
+One command does it all (**substitute `{{NEXT_PHASE}}`** with the value
+you just resolved):
 
 ```bash
-python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/create-plan" --harness cursor
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/{{NEXT_PHASE}}" --harness cursor
 ```
 
 For `--no-worktree`, pass `--no-worktree`. The script:
@@ -143,11 +151,14 @@ Task #{{issue_number}} set up.
   Worktree:  {{worktree_path}}
   Branch:    QS_{{issue_number}}  (HEAD already checked out)
 
-Next phase: create-plan.
-Open the worktree as a new Cursor workspace, select qs-create-plan
+Next phase: {{NEXT_PHASE}}.
+Open the worktree as a new Cursor workspace, select qs-{{NEXT_PHASE}}
 from the agent picker, then paste:
   {{new_context}}
 ```
+
+(For the `bug-product` lane this routes to `/diagnose-task` instead of
+`/create-plan`; every other lane routes to `/create-plan`.)
 
 Do NOT attempt to spawn the next agent in this session — the ergonomic
 flow is one session per phase.

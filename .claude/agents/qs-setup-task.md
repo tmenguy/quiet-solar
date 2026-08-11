@@ -112,10 +112,18 @@ slip here fails loudly rather than silently cutting a worktree.
 
 ### 2. Set up branch and worktree + emit launcher (tasks only)
 
-One command does it all:
+**Resolve the next phase from the lane (QS-335).** The next phase is
+`create-plan` for every lane **except** `bug-product`, whose
+diagnose-first flow replaces it with `diagnose-task`. Set
+`NEXT_PHASE = create-plan`, or `NEXT_PHASE = diagnose-task` when the
+resolved lane (step 1b) is `bug-product`, and substitute that value in
+the `--next-cmd` flag below and in every handoff site in step 3.
+
+One command does it all (**substitute `{{NEXT_PHASE}}`** with the value
+you just resolved):
 
 ```bash
-python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/create-plan" --harness claude-code
+python scripts/qs/setup_task.py {{issue_number}} --title "{{title}}" --next-cmd "/{{NEXT_PHASE}}" --harness claude-code
 ```
 
 For `--no-worktree`, pass `--no-worktree`. The script:
@@ -135,9 +143,9 @@ interactive `claude --agent qs-create-plan` session) and the slash-command
 fallback (degraded one-shot UX; the GUI can instead run the phase agent
 directly, see [docs/workflow/harness.md](../../docs/workflow/harness.md)).
 
-The launcher attempts to pin `qs-create-plan` into the new worktree's
+The launcher attempts to pin `qs-{{NEXT_PHASE}}` into the new worktree's
 `.claude/settings.local.json`, so a Claude Code GUI session opened on that
-directory boots as the plan orchestrator without any `--agent` flag. Check
+directory boots as the next-phase orchestrator without any `--agent` flag. Check
 the payload's `phase_agent_pinned` before promising it: with
 `--no-worktree` the work dir **is** the main checkout, which is never
 pinned, so that run always reports `false`.
@@ -152,24 +160,24 @@ Task #{{issue_number}} set up.
   Worktree:  {{worktree_path}}
   Branch:    QS_{{issue_number}}  (HEAD already checked out)
 
-Next phase: create-plan.
+Next phase: {{NEXT_PHASE}}.
 
-Preferred (opens a fresh interactive `claude --agent qs-create-plan` session):
+Preferred (opens a fresh interactive `claude --agent qs-{{NEXT_PHASE}}` session):
   {{new_context}}
 
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
 kept for any chat without a CLI launcher; the GUI can instead run the phase
 agent directly, see `docs/workflow/harness.md`):
-  /create-plan
+  /create-plan — or `/diagnose-task` when the lane is `bug-product`
 
-[Claude Code GUI] the worktree should now be pinned to `qs-create-plan` in
+[Claude Code GUI] the worktree should now be pinned to `qs-{{NEXT_PHASE}}` in
 `.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
 whether that write happened — it is always skipped on a main checkout).
 The GUI displays the active agent nowhere, so if the phase looks wrong,
 use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
   • Select directory `{{worktree_path}}`
-  • Name it `QS_{{issue_number}} create-plan`
+  • Name it `QS_{{issue_number}} {{NEXT_PHASE}}`
   • See `docs/workflow/harness.md` →
     "GUI launch surface (Claude Code Desktop)".
 ```

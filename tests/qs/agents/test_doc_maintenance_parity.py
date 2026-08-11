@@ -3,16 +3,20 @@
 QS-185 introduced an addressable documentation hierarchy under
 ``docs/agents/`` plus a drift-checker script
 (``scripts/qs/check_doc_drift.py``). For the drift checker to be
-useful, four agent bodies must invoke it at the right phase:
+useful, six agent bodies must invoke it at the right phase:
 
 - ``qs-create-plan``      — during plan drafting, run
   ``check_doc_drift.py --paths <planned_files>``.
+- ``qs-diagnose-task``    — during diagnosis (bug × product lane), same
+  ``--paths`` form as create-plan.
 - ``qs-implement-task``   — at the quality gate, run
   ``check_doc_drift.py`` on the staged diff.
 - ``qs-implement-setup-task`` — same.
 - ``qs-review-task``      — during consolidation, flag a must-fix
   finding if the PR shows no ``## Doc maintenance`` justification
   and ``check_doc_drift.py`` would have failed.
+- ``qs-verify-task``      — the bug × product lane's review-variant,
+  same PR-diff audit as qs-review-task.
 
 Body content is mirrored across three harnesses (Claude / Cursor /
 OpenCode) — the frontmatter format is harness-specific and stays
@@ -31,12 +35,17 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# The four orchestrator agents that AC-9 requires us to update.
+# The six orchestrator agents that AC-9 requires us to update (QS-335
+# added the two bug × product lane orchestrators qs-diagnose-task and
+# qs-verify-task, which lift the create-plan / review-task
+# doc-maintenance step).
 DOC_MAINTENANCE_AGENT_NAMES: tuple[str, ...] = (
     "qs-create-plan",
     "qs-implement-task",
     "qs-implement-setup-task",
     "qs-review-task",
+    "qs-diagnose-task",
+    "qs-verify-task",
 )
 
 # Three harnesses to mirror across.
@@ -63,8 +72,9 @@ IMPLEMENT_AGENT_NAMES: tuple[str, ...] = (
 
 # Review-variant agents (post-PR): the doc-maintenance step inspects
 # the PR diff, not a "staged" diff (no canonical staged state exists
-# at review time). Pinned post-review-fix #01 S1.
-REVIEW_AGENT_NAMES: tuple[str, ...] = ("qs-review-task",)
+# at review time). Pinned post-review-fix #01 S1. QS-335: qs-verify-task
+# is the bug × product lane's review-variant, lifted from qs-review-task.
+REVIEW_AGENT_NAMES: tuple[str, ...] = ("qs-review-task", "qs-verify-task")
 
 
 # Review-fix #01 N6: strip the leading dot from harness ids so

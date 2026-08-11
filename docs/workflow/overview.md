@@ -12,6 +12,11 @@ isolated in `scripts/qs/launchers/`.
                                                                             (independent)
 ```
 
+The **bug × product** lane (QS-335) diverges into a diagnose-first flow:
+`create-plan` → `diagnose-task` and `review-task` → `verify-task` for
+that lane only (`setup → diagnose → fix → verify → finish`). See
+[lanes/bug-product.md](lanes/bug-product.md).
+
 | Phase            | Where it runs        | What it produces                            |
 | ---------------- | -------------------- | ------------------------------------------- |
 | `setup-task`     | main checkout        | issue, branch `QS_<N>`, worktree            |
@@ -65,8 +70,10 @@ The pipeline runs two fundamentally different kinds of agent, and the
 launcher distinction matters.
 
 **Phase orchestrators** (`qs-setup-task`, `qs-create-plan`,
-`qs-implement-task`, `qs-implement-setup-task`, `qs-review-task`,
-`qs-finish-task`, `qs-release`) are meant to run as **interactive
+`qs-diagnose-task`, `qs-implement-task`, `qs-implement-setup-task`,
+`qs-review-task`, `qs-verify-task`, `qs-finish-task`, `qs-release`;
+`qs-diagnose-task` / `qs-verify-task` run only in the bug × product
+lane) are meant to run as **interactive
 `claude --agent qs-<phase>` sessions**. Claude Code launches a fresh
 session whose system prompt IS the agent body, and the user converses
 with the persona mid-flight — answering clarifying questions in
