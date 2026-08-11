@@ -12,6 +12,7 @@ from homeassistant.const import STATE_UNKNOWN
 from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CAR_NAME,
     CHARGER_NO_CAR_CONNECTED,
+    DEVICE_STATUS_CHANGE_ERROR,
     CONF_CHARGER_DEVICE_OCPP,
     CONF_CHARGER_DEVICE_WALLBOX,
     CONF_CHARGER_MAX_CHARGE,
@@ -28,9 +29,12 @@ from custom_components.quiet_solar.const import (
     FORCE_CAR_NO_CHARGER_CONNECTED,
 )
 from custom_components.quiet_solar.ha_model.charger import (
+    CHARGER_FAULT_NOTIFY_DEBOUNCE_S,
+    CHARGER_STATE_REFRESH_INTERVAL_S,
     QSChargerGeneric,
     QSChargerGroup,
     QSChargerOCPP,
+    QSChargerStates,
     QSChargerStatus,
     QSChargerWallbox,
     QSStateCmd,
@@ -877,3 +881,303 @@ def test_wallbox_low_level_checks() -> None:
     assert plugged is True
     assert plugged_time == state.last_updated
     assert charging is True
+
+
+# ==========================================================================
+# QS-346: `_last_attached_car` — plug-state rescue survives a detach
+# ==========================================================================
+
+
+def _make_rescue_car(name: str = "Zoe", *, plugged: bool = True, charger=None) -> MagicMock:
+    """Build a car double for the `_check_plugged_val` rescue arm."""
+    car = MagicMock()
+    car.name = name
+    car.charger = charger
+    car.is_car_plugged = MagicMock(return_value=plugged)
+    return car
+
+
+def test_detach_car_records_last_attached_car() -> None:
+    """QS-346: `detach_car()` remembers the car it detaches (record line)."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    charger = create_charger_generic(hass, home)
+
+    car = _make_rescue_car()
+    charger.car = car
+
+    charger.detach_car()
+
+    assert charger.car is None
+    assert charger._last_attached_car is car
+    # a genuine detach leaves the remembered car homed to no charger
+    assert car.charger is None
+
+
+def test_check_plugged_val_trusts_remembered_car_ac1() -> None:
+    """AC 1: with no attached car, a remembered (unhomed) car keeps `is_plugged` alive."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    charger = create_charger_generic(hass, home)
+    time = datetime.now(pytz.UTC)
+
+    zoe = _make_rescue_car(plugged=True, charger=None)
+    charger.car = None
+    charger._last_attached_car = zoe
+
+    with (
+        patch.object(charger, "get_last_state_value_duration", return_value=(None, time)),
+        patch.object(charger, "get_sensor_latest_possible_valid_value", return_value=QSChargerStates.PLUGGED),
+    ):
+        res = charger.is_plugged(time, for_duration=15.0)
+
+    assert res is True
+    zoe.is_car_plugged.assert_called_once()
+
+
+def test_check_plugged_val_physical_unplug_wins_ac2() -> None:
+    """AC 2: a remembered car whose own sensor says not-plugged yields `is_not_plugged`."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    charger = create_charger_generic(hass, home)
+    time = datetime.now(pytz.UTC)
+
+    zoe = _make_rescue_car(plugged=False, charger=None)
+    charger.car = None
+    charger._last_attached_car = zoe
+
+    with (
+        patch.object(charger, "get_last_state_value_duration", return_value=(None, time)),
+        patch.object(charger, "get_sensor_latest_possible_valid_value", return_value=QSChargerStates.UN_PLUGGED),
+    ):
+        res = charger.is_not_plugged(time, for_duration=15.0)
+
+    assert res is True
+
+
+def test_check_plugged_val_skips_cross_charger_car_ac3() -> None:
+    """AC 3: a remembered car now homed to charger B is NOT trusted by charger A."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    charger_a = create_charger_generic(hass, home, name="ChargerA")
+    time = datetime.now(pytz.UTC)
+
+    other_charger = MagicMock()
+    zoe = _make_rescue_car(plugged=True, charger=other_charger)  # re-homed to B
+    charger_a.car = None
+    charger_a._last_attached_car = zoe
+
+    with (
+        patch.object(charger_a, "get_last_state_value_duration", return_value=(None, time)),
+        patch.object(charger_a, "get_sensor_latest_possible_valid_value", return_value=QSChargerStates.PLUGGED),
+    ):
+        res = charger_a.is_plugged(time, for_duration=15.0)
+
+    assert res is None
+    zoe.is_car_plugged.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_physical_unplug_clears_last_attached_car_ac2() -> None:
+    """AC 2: a physical unplug cycle clears `_last_attached_car`."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    charger = create_charger_generic(hass, home)
+    time = datetime.now(pytz.UTC)
+
+    charger._last_attached_car = _make_rescue_car(charger=None)
+    charger.car = None
+    charger._boot_time = None
+    charger._asked_for_reboot_at_time = None
+
+    with (
+        patch.object(charger, "is_charger_unavailable", return_value=False),
+        patch.object(charger, "is_charger_faulted", return_value=False),
+        patch.object(charger, "is_not_plugged", return_value=True),
+        patch.object(charger, "set_charging_num_phases", new=AsyncMock(return_value=True)),
+    ):
+        await charger.check_load_activity_and_constraints(time)
+
+    assert charger._last_attached_car is None
+
+
+# ==========================================================================
+# QS-346: one alert per fault episode (AC 5 notify half, AC 6)
+# ==========================================================================
+
+
+def _create_faulted_ocpp_charger(hass, home, name: str, time: datetime) -> QSChargerOCPP:
+    """Build a QSChargerOCPP whose unfiltered status probe reads ``Faulted``."""
+    device = MagicMock()
+    device.name = name
+    device.name_by_user = None
+
+    entry = MagicMock()
+    entry.entity_id = f"sensor.{name.lower()}_status_connector"
+
+    device_reg = MagicMock()
+    device_reg.async_get.return_value = device
+    entity_reg = MagicMock()
+    entity_reg.async_entries_for_device.return_value = [entry]
+
+    with (
+        patch("custom_components.quiet_solar.ha_model.charger.device_registry.async_get", return_value=device_reg),
+        patch("custom_components.quiet_solar.ha_model.charger.entity_registry.async_get", return_value=entity_reg),
+    ):
+        charger = QSChargerOCPP(
+            hass=hass,
+            home=home,
+            config_entry=MagicMock(),
+            name=name,
+            **{
+                CONF_CHARGER_MIN_CHARGE: 6,
+                CONF_CHARGER_MAX_CHARGE: 32,
+                CONF_IS_3P: True,
+                CONF_MONO_PHASE: 1,
+                CONF_CHARGER_DEVICE_OCPP: f"device.{name.lower()}",
+            },
+        )
+    _seed_fault(charger, time)
+    return charger
+
+
+def _seed_fault(charger: QSChargerOCPP, time: datetime) -> None:
+    """Seed a contiguous ``Faulted`` status on the unfiltered probe."""
+    uf = charger.charger_status_sensor_unfiltered
+    fault_start = time - timedelta(seconds=3 * CHARGER_STATE_REFRESH_INTERVAL_S)
+    charger._entity_probed_state[uf] = [(fault_start, "Faulted", {})]
+    charger._entity_probed_last_valid_state[uf] = (fault_start, "Faulted", {})
+
+
+def _clear_fault(charger: QSChargerOCPP) -> None:
+    """Clear the fault: the unfiltered probe no longer reports any faulted value."""
+    uf = charger.charger_status_sensor_unfiltered
+    charger._entity_probed_state[uf] = []
+    charger._entity_probed_last_valid_state[uf] = None
+
+
+def _install_notify_spies(charger: QSChargerOCPP):
+    """Patch the two notification channels and neutralise the plug branches.
+
+    ``is_charger_faulted`` is made a toggle so the state machine (the code under
+    test) can be driven deterministically across the debounce boundary; the raw
+    status string in the alert still comes from the seeded unfiltered probe.
+    """
+    charger.on_device_state_change = AsyncMock()
+    charger.home.async_notify_all_mobile_apps = AsyncMock()
+    charger.is_not_plugged = MagicMock(return_value=None)
+    charger.is_plugged = MagicMock(return_value=None)
+    charger.is_charger_unavailable = MagicMock(return_value=False)
+    charger.is_charger_faulted = MagicMock(return_value=True)
+
+
+@pytest.mark.asyncio
+async def test_fault_alert_fires_once_after_debounce_with_car_ac5() -> None:
+    """AC 5: exactly one alert of each kind once the fault has held for the debounce."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    t0 = datetime.now(pytz.UTC)
+    charger = _create_faulted_ocpp_charger(hass, home, "Faulty", t0)
+
+    car = MagicMock()
+    car.name = "Zoe"
+    charger.car = car
+    charger.car_attach_time = t0
+    _install_notify_spies(charger)
+
+    # first faulted cycle: arm the timer, do not alert yet
+    await charger.check_load_activity_and_constraints(t0)
+    charger.on_device_state_change.assert_not_called()
+    charger.home.async_notify_all_mobile_apps.assert_not_called()
+    assert charger._charger_fault_since == t0
+
+    # once the debounce has elapsed: exactly one of each
+    t_fire = t0 + timedelta(seconds=CHARGER_FAULT_NOTIFY_DEBOUNCE_S + 1)
+    await charger.check_load_activity_and_constraints(t_fire)
+
+    charger.on_device_state_change.assert_called_once()
+    args, kwargs = charger.on_device_state_change.call_args
+    assert args[1] == DEVICE_STATUS_CHANGE_ERROR
+    message = kwargs["message"]
+    assert "Faulty" in message  # charger name
+    assert "Zoe" in message  # car name
+    assert "Faulted" in message  # raw status
+    assert "unplug and replug" in message
+
+    charger.home.async_notify_all_mobile_apps.assert_called_once()
+    b_args, _ = charger.home.async_notify_all_mobile_apps.call_args
+    assert b_args[0] == "Charger error — action needed"
+    assert b_args[1] == message
+
+    # further cycles in the same episode, including across a reset(keep_commands=True)
+    await charger.check_load_activity_and_constraints(t_fire + timedelta(seconds=5))
+    charger.reset(keep_commands=True)
+    await charger.check_load_activity_and_constraints(t_fire + timedelta(seconds=10))
+    charger.on_device_state_change.assert_called_once()
+    charger.home.async_notify_all_mobile_apps.assert_called_once()
+
+    # recovery, then a brand-new fault episode -> one more of each
+    charger.is_charger_faulted.return_value = False
+    _clear_fault(charger)
+    await charger.check_load_activity_and_constraints(t_fire + timedelta(seconds=20))
+    assert charger._charger_fault_since is None
+    assert charger._charger_fault_notified is False
+
+    t1 = t_fire + timedelta(seconds=30)
+    _seed_fault(charger, t1)
+    charger.is_charger_faulted.return_value = True
+    await charger.check_load_activity_and_constraints(t1)
+    await charger.check_load_activity_and_constraints(t1 + timedelta(seconds=CHARGER_FAULT_NOTIFY_DEBOUNCE_S + 1))
+    assert charger.on_device_state_change.call_count == 2
+    assert charger.home.async_notify_all_mobile_apps.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_fault_alert_charger_only_message_when_no_car_ac5() -> None:
+    """AC 5: with no car and no remembered car, the broadcast uses the charger-only text."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    t0 = datetime.now(pytz.UTC)
+    charger = _create_faulted_ocpp_charger(hass, home, "Faulty", t0)
+
+    charger.car = None
+    charger._last_attached_car = None
+    _install_notify_spies(charger)
+
+    await charger.check_load_activity_and_constraints(t0)
+    await charger.check_load_activity_and_constraints(t0 + timedelta(seconds=CHARGER_FAULT_NOTIFY_DEBOUNCE_S + 1))
+
+    charger.home.async_notify_all_mobile_apps.assert_called_once()
+    _, kwargs = charger.on_device_state_change.call_args
+    message = kwargs["message"]
+    assert "Please check the charger" in message
+    assert "unplug and replug" not in message
+
+
+@pytest.mark.asyncio
+async def test_fault_that_clears_before_debounce_never_alerts_ac6() -> None:
+    """AC 6: a fault clearing before the debounce fires nothing and resets the timer."""
+    hass = create_mock_hass()
+    home = create_mock_home(hass)
+    t0 = datetime.now(pytz.UTC)
+    charger = _create_faulted_ocpp_charger(hass, home, "Faulty", t0)
+
+    charger.car = None
+    charger._last_attached_car = None
+    _install_notify_spies(charger)
+
+    await charger.check_load_activity_and_constraints(t0)
+    assert charger._charger_fault_since == t0
+
+    # still faulted but well under the debounce -> silence
+    await charger.check_load_activity_and_constraints(t0 + timedelta(seconds=CHARGER_FAULT_NOTIFY_DEBOUNCE_S - 5))
+    charger.on_device_state_change.assert_not_called()
+
+    # fault clears before the debounce elapsed -> timer reset, nothing sent
+    charger.is_charger_faulted.return_value = False
+    _clear_fault(charger)
+    await charger.check_load_activity_and_constraints(t0 + timedelta(seconds=CHARGER_FAULT_NOTIFY_DEBOUNCE_S - 1))
+    assert charger._charger_fault_since is None
+    assert charger._charger_fault_notified is False
+    charger.on_device_state_change.assert_not_called()
+    charger.home.async_notify_all_mobile_apps.assert_not_called()

@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/device.py
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-02
+last_verified: 2026-08-11
 ---
 
 # Notification routing
@@ -165,6 +165,37 @@ mobile app collapses the series), and the state is no longer invisible — the
 `has_unacknowledged_lost_control` on every commandable load, which is
 precisely "expose recovery as state, not as a notification". The recovery
 *policy* is unchanged; only these two factual claims were wrong.
+
+### Charger faults alert the person AND the household (QS-346)
+
+A charger in a human-fix state (`is_charger_faulted` — OCPP
+`Faulted`/`Unavailable`, Wallbox `Error`/…, or plain
+`STATE_UNKNOWN`/`STATE_UNAVAILABLE`) alerts **once per fault episode**
+on **both** channels at once:
+
+- the attached car's person, via the charger's `on_device_state_change`
+  override (`DEVICE_STATUS_CHANGE_ERROR`), which resolves to the car's
+  `current_forecasted_person`, and is silently dropped at
+  `device.py` when no person is resolvable (`mobile_app is None`); and
+- the whole household, via `QSHome.async_notify_all_mobile_apps` (the
+  guaranteed channel, critical-alert), title
+  `"Charger error — action needed"`.
+
+The alert is gated by a **per-cycle state machine** in
+`check_load_activity_and_constraints`, not a rising edge:
+`_charger_fault_since` is set on the first faulted cycle and cleared the
+moment the fault clears; the alert fires (and latches
+`_charger_fault_notified`) only once the fault has held **continuously**
+for `CHARGER_FAULT_NOTIFY_DEBOUNCE_S` (120 s). The debounce matters
+because `_unknown_state_vals` also bundles the `unknown`/`unavailable`
+blips of an integration reload or brief connection loss — without it
+each blip would fire a critical broadcast. Both latch fields are outside
+every reset path, so a mid-episode `reset(keep_commands=True)` does not
+re-alert; an HA restart re-alerts once (in-memory). The message names
+the charger, the car (`self.car or _last_attached_car`) and the raw
+status, and asks the user to unplug/replug; with no car it falls back to
+"Please check the charger". These strings are hardcoded English (no
+`strings.json`).
 
 ## Common mistakes
 

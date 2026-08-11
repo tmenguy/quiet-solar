@@ -208,6 +208,12 @@ STATE_CMD_TIME_BETWEEN_RETRY_S = CHARGER_STATE_REFRESH_INTERVAL_S * 3
 
 CHARGER_TIME_BETWEEN_DATA_REQUEST_S = CHARGER_STATE_REFRESH_INTERVAL_S + CHARGER_STATE_REFRESH_INTERVAL_S // 2
 
+# QS-346: how long `is_charger_faulted` must hold continuously before the household is
+# alerted. `_unknown_state_vals` also bundles STATE_UNKNOWN / STATE_UNAVAILABLE, which
+# blip on every integration reload or brief connection loss; a genuine fault does not
+# flap, so the debounce costs two minutes on a real fault but suppresses noise alerts.
+CHARGER_FAULT_NOTIFY_DEBOUNCE_S = 120
+
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_ON_TO_OFF_S = 60 * 20
@@ -815,7 +821,9 @@ class QSChargerGroup(LogOnChangeMixin):
         verified_correct_state_time = None
         actionable_chargers = []
         for charger in self._chargers:
-            if charger.qs_enable_device is False:
+            # QS-346: a faulted charger drops out of the budgeting group entirely, so it
+            # is never handed an amp budget while a human has to go unplug/replug it.
+            if charger.qs_enable_device is False or charger.is_charger_faulted(time):
                 # QS-306: evict rather than leave a stale entry, so the first status
                 # line after a re-enable inside the 900 s window is not suppressed —
                 # the log needs a marker that the charger is back under management.
@@ -2278,6 +2286,18 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         self.car: QSCar | None = None
         self.car_attach_time: datetime | None = None
+        # QS-346: the car this charger last had attached, used to keep the plug-state
+        # rescue alive after a `detach_car()` (e.g. a `qs_device_clean_and_reset`) so a
+        # faulted charger does not lose the very car that proves it is plugged. Only
+        # trusted at use-time while the remembered car is not homed to another charger.
+        self._last_attached_car: QSCar | None = None
+
+        # QS-346: one alert per fault episode. `_charger_fault_since` records when the
+        # fault was first seen (None while healthy); `_charger_fault_notified` latches
+        # once the debounce elapsed and the alert was sent. Neither is part of any reset
+        # path, so a mid-episode `reset(keep_commands=True)` does not re-arm the alert.
+        self._charger_fault_since: datetime | None = None
+        self._charger_fault_notified: bool = False
 
         self.charge_state = STATE_UNKNOWN
 
@@ -3565,6 +3585,23 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             if (time - self._boot_time_adjusted).total_seconds() > CHARGER_BOOT_TIME_DATA_EXPIRATION_S:
                 self.reset_boot_data()
 
+        # QS-346: one alert per fault episode. Plain per-cycle state machine (NOT a
+        # rising-edge fire): set `_charger_fault_since` on the first faulted cycle, clear
+        # both fields the moment the fault clears, and notify exactly once the fault has
+        # held continuously for CHARGER_FAULT_NOTIFY_DEBOUNCE_S. Runs before `reset()`
+        # below so the machine observes the fault each cycle before reset mutates state.
+        if not self.is_charger_faulted(time):
+            self._charger_fault_since = None
+            self._charger_fault_notified = False
+        elif self._charger_fault_since is None:
+            self._charger_fault_since = time
+        elif (
+            not self._charger_fault_notified
+            and (time - self._charger_fault_since).total_seconds() >= CHARGER_FAULT_NOTIFY_DEBOUNCE_S
+        ):
+            await self._notify_charger_fault(time)
+            self._charger_fault_notified = True
+
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             if self.car:
                 _LOGGER.warning(
@@ -3586,6 +3623,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     USER_ORIGINATED_CAR_NAME
                 )  # physical unplug, reset the user selected car for charger
                 do_force_solve = True
+
+            # QS-346: a physical unplug kills the remembered car — after it, a replug on
+            # a still-faulted charger must NOT re-attach on the strength of stale memory.
+            # Placed after the `if self.car:` block (its `reset()` -> `detach_car()`
+            # would otherwise re-record the memory) and before the idle defaults below.
+            self._last_attached_car = None
 
             # set_charging_num_phases will check that this switch is possible
             # force single phase charge by default
@@ -4279,6 +4322,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     def detach_car(self):
         if self.car is not None:
+            # QS-346: remember the car we are detaching so the plug-state rescue can
+            # still consult its sensor. Recorded unconditionally here (never blindly
+            # from a `self.car is None` entry, which would overwrite the memory with
+            # None and re-open the trap); the cross-charger discriminator is applied at
+            # use-time in `_check_plugged_val`, not here.
+            self._last_attached_car = self.car
             self.car.clear_inferred_flags()
             self.car.charger = None
 
@@ -4425,7 +4474,17 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             else:
                 res = contiguous_status >= for_duration
 
-        if res is None and self.car:
+        # QS-346: fall back to a remembered car when none is currently attached, so a
+        # faulted charger whose own plug probe is blind can still answer via the car's
+        # own plug sensor. The memory is only trusted while the car is not homed to
+        # another charger (`charger is None` — a genuinely detached car vs one re-homed
+        # to charger B), which keeps the rescue from leaking across chargers.
+        rescue_car = self.car or (
+            self._last_attached_car
+            if self._last_attached_car is not None and self._last_attached_car.charger is None
+            else None
+        )
+        if res is None and rescue_car:
             latest_charger_valid_state = self.get_sensor_latest_possible_valid_value(
                 self._internal_fake_is_plugged_id, time=time
             )
@@ -4434,7 +4493,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 res = None
             else:
                 # only check car if we are very sure of the charger state
-                res_car = self.car.is_car_plugged(time, for_duration)
+                res_car = rescue_car.is_car_plugged(time, for_duration)
                 if res_car is not None:
                     if res_car is check_for_val and latest_charger_valid_state == ok_value:
                         res = True
@@ -4510,7 +4569,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         if self.charger_status_sensor is not None:
             state_wallbox = self.hass.states.get(self.charger_status_sensor)
-            if state_wallbox is None or state_wallbox == STATE_UNAVAILABLE:
+            if state_wallbox is None or state_wallbox.state == STATE_UNAVAILABLE:
                 return True
 
         return False
@@ -4731,6 +4790,34 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             return False
 
         return contiguous_status > 0
+
+    async def _notify_charger_fault(self, time: datetime):
+        # QS-346: alert both the attached car's person (via the charger override, which
+        # is silently dropped when no person is resolvable) AND the whole household
+        # (guaranteed channel). The raw status is always non-None here: reaching this
+        # point requires the fault to have held for the debounce, so the unfiltered
+        # probe carries the fault value.
+        status = self.get_sensor_latest_possible_valid_value(self.charger_status_sensor_unfiltered, time=time)
+        car = self.car or self._last_attached_car
+        if car is not None:
+            message = (
+                f"{self.name} is in error ({status}) and cannot charge. "
+                f"Please go unplug and replug {car.name} on {self.name}."
+            )
+        else:
+            message = f"{self.name} is in error ({status}) and cannot charge. Please check the charger."
+
+        await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_ERROR, message=message)
+        await self.home.async_notify_all_mobile_apps("Charger error — action needed", message)
+
+    def is_load_active(self, time: datetime):
+        # QS-346: a faulted charger is a human-fix problem, not a solver participant.
+        # Reporting it inactive keeps it out of `active_loads` (so the solver stops
+        # updating its constraint) while leaving the car and constraint attached, which
+        # is what keeps the pair visible and red. On recovery the base predicate resumes.
+        if self.is_charger_faulted(time):
+            return False
+        return super().is_load_active(time)
 
     def get_charge_type(self, return_charge_errors=True) -> tuple[str, None | LoadConstraint]:
 

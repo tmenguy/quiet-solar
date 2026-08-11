@@ -2483,6 +2483,9 @@ async def test_charger_group_ensure_state_and_dyn_handle() -> None:
     charger = MagicMock()
     charger.name = "Charger B"
     charger.qs_enable_device = True
+    # QS-346: the group now skips faulted chargers; a bare MagicMock would return a
+    # truthy Mock from is_charger_faulted and be wrongly dropped from the group.
+    charger.is_charger_faulted = MagicMock(return_value=False)
     charger.ensure_correct_state = AsyncMock(return_value=(True, False, datetime(2026, 1, 15, 8, 0, tzinfo=pytz.UTC)))
     charger.get_stable_dynamic_charge_status = MagicMock(
         return_value=MagicMock(

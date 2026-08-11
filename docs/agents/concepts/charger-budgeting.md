@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-07
+last_verified: 2026-08-11
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -275,6 +275,53 @@ sites stamp named constants from `const.py`:
 and is untouched. The `CONSTRAINT_ORIGINATOR_MANUAL/PERSON` stamps are
 written for coherence/forward-compat — detection keys off the `"person"`
 key and the `else`, so they are not read by `get_charge_type()` itself.
+
+### A faulted charger leaves the solver and the budgeting group (QS-346)
+
+`is_charger_faulted(time)` (membership of the unfiltered status in
+`_unknown_state_vals` = `{STATE_UNKNOWN, STATE_UNAVAILABLE}` + the
+per-type unknown values, e.g. OCPP `Faulted`/`Unavailable`) is the "a
+human has to take care of it" predicate. While it holds, a charger is
+removed from budgeting at **two** layers:
+
+- **Strategic** — `QSChargerGeneric.is_load_active(time)` returns `False`
+  (overriding the base "enabled and has constraints"), so the charger
+  drops out of `active_loads` and the solver stops *updating* its
+  constraint.
+- **Tactical** — `QSChargerGroup.ensure_correct_state` skips a faulted
+  charger in the same guard that skips a disabled one
+  (`qs_enable_device is False or is_charger_faulted(time)`), so it never
+  reaches `actionable_chargers` / `budgeting_algorithm_minimize_diffs`.
+
+The **car and its constraint stay attached** — that is the only surface
+that renders the fault red on the car card, and there is no charger
+card. `is_load_active=False` only stops the solver touching the
+constraint; nothing detaches. On recovery both layers revert and the
+retained constraint resumes toward its target (no energy moved during
+the fault, so resuming is correct — no stale-constraint handling).
+"Stop commanding" needs no extra gate: with `is_load_active=False` the
+loop issues `CMD_IDLE`, and on a faulted charger `check_charge_state`
+returns `None`, so `_ensure_correct_state` lands in the *not charging /
+don't want to charge → do nothing* branch — zero low-level commands.
+
+### The plug-state rescue no longer needs a currently-attached car (QS-346)
+
+`Faulted` ∈ `_unknown_state_vals`, so a faulted charger's own plug probe
+answers `None` and the only compensating path is the car's own plug
+sensor. Historically that path required `self.car` — but a
+`qs_device_clean_and_reset` detaches the car, and with `self.car is None`
+the rescue was disabled, trapping the charger in an absorbing "no car /
+not plugged" state. `_last_attached_car` breaks the cycle:
+`detach_car()` records the car it detaches (unconditionally, inside its
+`self.car is not None` block), and `_check_plugged_val` consults it when
+no car is attached — but **only while that car is not homed to another
+charger** (`_last_attached_car.charger is None`), so a car re-homed to
+charger B never makes charger A report itself plugged. A **physical
+unplug clears the memory** (in the `is_not_plugged` branch of
+`check_load_activity_and_constraints`, after the `if self.car:` block),
+so a replug on a still-faulted charger does not re-attach on stale
+memory — the charger correctly stops appearing available until its
+status recovers.
 
 ## Lifecycle / sequence (one update cycle)
 
