@@ -38,6 +38,7 @@ permission:
     "gh repo view *": allow
     "source venv/bin/activate*": allow
     "python scripts/qs/*": allow
+    'python -c "from scripts.qs.utils import next_review_fix_path*': allow
   webfetch: ask
 ---
 
@@ -57,10 +58,13 @@ sub-agents.
 python scripts/qs/context.py
 ```
 
-Capture `issue`, `title`, `branch`, `story_file`, `pr_number`,
-`pr_url`. If `pr_number` is null, STOP — the PR must exist before
-verification (run `implement-task` first). If `story_file` is empty,
-STOP — the diagnosis story must exist before verification (activate
+Capture `issue`, `title`, `branch`, `story_file`, `worktree`,
+`pr_number`, `pr_url`. If `pr_number` is null, STOP — there is no
+**open** PR on this branch (`context.py` resolves open PRs only): check
+`gh pr list --head {{branch}} --state all` first — a merged/closed PR
+means a stale worktree, not a missing fix; only if no PR exists at all,
+run `implement-task` first. If `story_file` is empty, STOP — the
+diagnosis story must exist before verification (activate
 `qs-diagnose-task` first); `qs-review-regression-proof` audits the
 recorded red output and fix-plan file list against it.
 
@@ -122,11 +126,13 @@ Deduplicate across reviewers (`file:line` + similar text → one entry).
 **Doc-maintenance audit.** Inspect the PR body. If it contains no
 `## Doc maintenance` heading AND
 `python scripts/qs/check_doc_drift.py --paths <PR-changed-files>`
-invoked against the PR diff would exit 1 (drift detected), add a
+invoked against the PR diff would exit non-zero (1 = stale doc, 2 = a
+doc now covers a deleted/renamed source), add a
 **must-fix** finding: "PR touches docs-tracked source without
 updating `docs/agents/` or providing a `## Doc maintenance`
 justification." Fetch the PR's changed paths via
-`gh pr view {{pr_number}} --json files --jq '.files[].path'`. See
+`gh pr diff {{pr_number}} --name-only` (uncapped — the
+`--json files` form truncates at 100 files). See
 [docs/workflow/project-rules.md](../../docs/workflow/project-rules.md)
 "Doc maintenance".
 

@@ -35,6 +35,7 @@ permission:
     "gh issue create *": allow
     "gh issue close *": allow
     "gh issue comment *": allow
+    "gh issue edit *": allow
     "source venv/bin/activate*": allow
     "python scripts/qs/*": allow
   webfetch: ask
@@ -125,7 +126,10 @@ move between four modes; DIAGNOSE is the durable default.
   the human accepts it in-session. (OpenCode note: the `edit` permission
   denies writing files outside `docs/stories/**`, so run repro
   demonstrations as **inline bash heredocs** — e.g.
-  `python - <<'PY' … PY` — never by writing a scratch script file.)
+  `python - <<'PY' … PY` — never by writing a scratch script file.
+  `python -` is deliberately NOT allowlisted (least-privilege), so each
+  heredoc repro triggers an ask prompt — expected for this interactive
+  primary agent: a speed bump, not a failure.)
 - **Convergence → write the story file.** As soon as the first
   diagnosis round converges — the story has all the bug-template
   sections (Symptom, Evidence, Root cause, Repro strategy, Fix plan,
@@ -268,7 +272,12 @@ Resolve exactly one exit, human-confirmed:
 1. Commit and push the story file (**if no story file was written — an
    early exit 2/3 before the first convergence — skip this step**: the
    issue comment / superseding issue body is the durable record, and
-   `git add` on a nonexistent path would error):
+   `git add` on a nonexistent path would error). If the story is
+   already committed with no pending edits —
+   `git status --porcelain -- docs/stories/QS-{{issue}}.story.md`
+   prints nothing (a FINALIZE re-run after a failed push/handoff) —
+   **skip the `git commit`** (it would exit 1 with "nothing to
+   commit") **but keep the `git push`**:
    ```bash
    git add docs/stories/QS-{{issue}}.story.md
    git commit -m "QS-{{issue}}: diagnose"

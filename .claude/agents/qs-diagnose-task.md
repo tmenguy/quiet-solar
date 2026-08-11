@@ -229,7 +229,12 @@ Resolve exactly one exit, human-confirmed:
 1. Commit and push the story file (**if no story file was written — an
    early exit 2/3 before the first convergence — skip this step**: the
    issue comment / superseding issue body is the durable record, and
-   `git add` on a nonexistent path would error):
+   `git add` on a nonexistent path would error). If the story is
+   already committed with no pending edits —
+   `git status --porcelain -- docs/stories/QS-{{issue}}.story.md`
+   prints nothing (a FINALIZE re-run after a failed push/handoff) —
+   **skip the `git commit`** (it would exit 1 with "nothing to
+   commit") **but keep the `git push`**:
    ```bash
    git add docs/stories/QS-{{issue}}.story.md
    git commit -m "QS-{{issue}}: diagnose"

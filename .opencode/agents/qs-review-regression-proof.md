@@ -46,7 +46,10 @@ test** whose red state was recorded.
 
 The PR number + the story file path, passed in your invocation prompt.
 Use `gh pr diff` / `gh pr view` to read the change set. You MAY run the
-new test on the **head branch** to confirm it passes. Do NOT run the
+new test on the **head branch** to confirm it passes — invoke it as
+`source venv/bin/activate && pytest <file>::<test> -v` (covered by the
+allowlist; a bare `pytest …` falls to the `"*": ask` default and stalls
+this non-interactive sub-agent on an ask prompt). Do NOT run the
 merge-base — v1 audits the *recorded* red output (user ruling).
 
 ## What to do
