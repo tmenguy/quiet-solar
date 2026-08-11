@@ -139,7 +139,7 @@ Capture `worktree_path`, `branch`, and the launcher payload
 
 The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
 `scripts/worktree-setup.sh`). Surface the launcher (preferred path — an
-interactive `claude --agent qs-create-plan` session) and the slash-command
+interactive `claude --agent qs-{{NEXT_PHASE}}` session) and the slash-command
 fallback (degraded one-shot UX; the GUI can instead run the phase agent
 directly, see [docs/workflow/harness.md](../../docs/workflow/harness.md)).
 

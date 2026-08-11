@@ -65,7 +65,10 @@ merge-base — v1 audits the *recorded* red output (user ruling).
      with the story's statement?
    - **(c) Diff-vs-plan discipline** — every changed file appears in the
      fix plan's stated file list (or carries a reasoned amendment note).
-     Unexplained excess is **must-fix**.
+     Files listed in committed
+     `docs/stories/QS-<N>.story_review_fix_*.md` plans, and those plan
+     files themselves, count as explained. Unexplained excess is
+     **must-fix**.
    - **(d) Fallback path** — if the story carries an accepted
      `Fallback accepted:` line, the PR body presents the alternative
      evidence, and it matches the accepted story line.
@@ -76,33 +79,32 @@ merge-base — v1 audits the *recorded* red output (user ruling).
 ```text
 ### Regression-proof findings
 
-#### critical
+#### must-fix
 - **Finding**: <one-line>
   **Evidence**: "<exact quote from diff / story / PR>"
   **Suggestion**: <how to fix>
 
-#### redesign
+#### should-fix
 - ...
 
-#### improve
-- ...
-
-#### clarify
+#### nice-to-have
 - ...
 ```
 
-Categories:
-- `critical` — a symptom patch that leaves the cause, missing or
-  greenwashed red output, or unexplained excess files.
-- `redesign` — the fix approach does not address the diagnosed cause.
-- `improve` — the fix is correct but the recorded evidence is thin.
-- `clarify` — the red output or file list is ambiguous.
+Categories (mirroring the verify-task consolidation buckets):
+- `must-fix` — a symptom patch that leaves the cause, a fix approach
+  that does not address the diagnosed cause, missing or greenwashed
+  red output, or unexplained excess files.
+- `should-fix` — the fix is correct but the recorded evidence is thin.
+- `nice-to-have` — the red output or file list is ambiguous.
 
 ## Hard rules
 
 - Bash is for `gh pr diff` / `gh pr view` and (optionally) running the
   new test on the **head branch** — no merge-base execution in v1.
-- A symptom patch that leaves the diagnosed cause is a `critical`
+- A symptom patch that leaves the diagnosed cause is a `must-fix`
   finding.
-- Missing or greenwashed recorded red output is a `critical` finding.
+- Missing or greenwashed recorded red output is a `must-fix` finding —
+  absent an accepted `Fallback accepted:` story line, in which case
+  audit (d) judges the alternative evidence instead.
 - NEVER edit anything; this is a read-only audit.

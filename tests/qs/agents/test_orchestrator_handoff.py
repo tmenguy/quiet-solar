@@ -44,9 +44,9 @@ _FORBIDDEN_RELEASE_INVOCATION = re.compile(
 
 # The 7 two-block orchestrators — every phase orchestrator that ships
 # the strict ``Preferred`` / ``Fallback`` pattern. ``qs-finish-task``
-# (the 8th orchestrator) is the deliberate exception that does NOT
-# ship it (release follow-up is text-only — see QS-175 OUT OF SCOPE)
-# and gets its own dedicated tests below. QS-335 added the bug ×
+# and ``qs-release`` deliberately do NOT ship it (release follow-up is
+# text-only — see QS-175 OUT OF SCOPE); ``qs-finish-task`` gets its
+# own dedicated tests below. QS-335 added the bug ×
 # product lane's ``qs-diagnose-task`` (lifted from create-plan) and
 # ``qs-verify-task`` (lifted from review-task).
 _TWO_BLOCK_ORCHESTRATORS = [

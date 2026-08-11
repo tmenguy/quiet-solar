@@ -44,6 +44,10 @@ and surface the backfill guidance: the issue still needs its axis
 labels (`gh issue edit <N> --add-label ...`). This phase is read-only
 with respect to the gate, so it may proceed on the fallback.
 
+**Lane-mismatch guard.** If `lane` is non-empty and not `bug-product`,
+STOP — this verify phase is bug × product only (a feature-lane PR needs
+the full 4-reviewer roster); run `/review-task` instead.
+
 ## Phase protocol
 
 ### 1. Fetch the PR diff

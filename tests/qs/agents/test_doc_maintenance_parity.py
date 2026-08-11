@@ -1,4 +1,4 @@
-"""Pin the doc-maintenance step across the four orchestrator agents.
+"""Pin the doc-maintenance step across the six orchestrator agents.
 
 QS-185 introduced an addressable documentation hierarchy under
 ``docs/agents/`` plus a drift-checker script

@@ -191,7 +191,7 @@ Capture `worktree_path`, `branch`, and the launcher payload
 
 The worktree already has `HEAD` on `QS_{{issue_number}}` (verified by
 `scripts/worktree-setup.sh`). Surface the launcher (preferred path —
-activate `qs-create-plan` from the OpenCode agent picker in a fresh
+activate `qs-{{NEXT_PHASE}}` from the OpenCode agent picker in a fresh
 session on the worktree, or paste the spawn-session one-liner below
 into a fresh terminal).
 

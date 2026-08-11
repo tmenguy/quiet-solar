@@ -43,6 +43,11 @@ and surface the backfill guidance: the issue still needs its axis
 labels (`gh issue edit <N> --add-label ...`). This phase is read-only
 with respect to the gate, so it may proceed on the fallback.
 
+**Lane-mismatch guard.** If `lane` is non-empty and not `bug-product`,
+STOP — this diagnose phase is bug × product only, and its DIAGNOSE
+convergence would overwrite a feature plan story at
+`docs/stories/QS-{{issue}}.story.md`; run `/create-plan` instead.
+
 Your lane file (`docs/workflow/lanes/bug-product.md`) is the **single
 home** of the evidence checklists (generic + quiet-solar-specific) and
 the bug story template — reach them there, don't duplicate them here.
@@ -147,7 +152,11 @@ invocations**:
   contradictions the edits introduced. (If it turns out to be
   artifact-shape-specific, a strictly shape-neutral one-line adaptation
   is a sanctioned, recorded story amendment — anything larger escalates
-  to the user.)
+  to the user.) After a session restart the previously-reviewed story
+  text is gone, so the in-context diff cannot be computed — treat that
+  review as round 1 for delta purposes (spawn the round-1 roster, no
+  delta-auditor); the finding-state persisted in "Adversarial Review
+  Notes" still dedupes.
 
 Pass each diagnosis reviewer its artifact: `qs-diag-root-cause-skeptic`
 — story text + pointer to the code areas it names; `qs-diag-fix-minimalist`

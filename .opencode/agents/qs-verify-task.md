@@ -35,6 +35,7 @@ permission:
     "gh pr diff *": allow
     "gh pr checks *": allow
     "gh pr comment *": allow
+    "gh pr list *": allow
     "gh repo view *": allow
     "source venv/bin/activate*": allow
     "python scripts/qs/*": allow
@@ -76,6 +77,10 @@ in-flight task — every new task is labelled at birth), fall back to
 and surface the backfill guidance: the issue still needs its axis
 labels (`gh issue edit <N> --add-label ...`). This phase is read-only
 with respect to the gate, so it may proceed on the fallback.
+
+**Lane-mismatch guard.** If `lane` is non-empty and not `bug-product`,
+STOP — this verify phase is bug × product only (a feature-lane PR needs
+the full 4-reviewer roster); activate `qs-review-task` instead.
 
 ## Phase protocol
 
