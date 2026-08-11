@@ -76,7 +76,7 @@ Categories (mirroring the verify-task consolidation buckets):
   new test on the **head branch** — no merge-base execution in v1.
 - A symptom patch that leaves the diagnosed cause is a `must-fix`
   finding.
-- Missing or greenwashed recorded red output is a `must-fix` finding —
-  absent an accepted `Fallback accepted:` story line, in which case
-  audit (d) judges the alternative evidence instead.
+- Missing or greenwashed recorded red output is a `must-fix` finding,
+  unless the story carries an accepted `Fallback accepted:` line —
+  then audit (d) judges the alternative evidence instead.
 - NEVER edit anything; this is a read-only audit.

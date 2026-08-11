@@ -256,7 +256,7 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 # next phase into ``<worktree>/.claude/settings.local.json`` and each
 # handoff must print the GUI gesture (New session → select directory →
 # name it). The set of orchestrators is exactly the two-block set — the
-# 7 worktree handoffs — and the equality is asserted below.
+# 7 GUI-block handoffs — and the equality is asserted below.
 #
 # Review-fix #01 S3: this list used to be a bare ALIAS of
 # ``_TWO_BLOCK_ORCHESTRATORS``, which made that equality assertion an
@@ -605,6 +605,14 @@ def test_shared_orchestrator_carries_both_lane_branches(
     assert "bug-product" in body, (
         f"{path}: the lane-resolved handoff must name the `bug-product` lane "
         f"that selects the alternate next phase (QS-335 D3)."
+    )
+    # Discriminating pin (review-fix #05): the fallback line alone carries
+    # both phase tokens and "bug-product", so without this assertion the
+    # resolution paragraph — the definition of ``{{NEXT_PHASE}}`` — could
+    # be deleted while the test stays green.
+    assert "Resolve the next phase from the lane" in body, (
+        f"{path}: missing the lane-resolution paragraph that defines "
+        f"{{{{NEXT_PHASE}}}} (QS-335 D3)."
     )
 
 

@@ -17,9 +17,9 @@ permission:
   bash:
     "*": ask
     "echo *": allow
-    "tail*": allow
+    "tail *": allow
     "grep *": allow
-    "sort*": allow
+    "sort *": allow
     "rg *": allow
     "ls *": allow
     "wc *": allow
@@ -30,7 +30,7 @@ permission:
     "git fetch*": allow
     "git add *": allow
     "git commit *": allow
-    "git push*": allow
+    "git push *": allow
     "gh issue view *": allow
     "gh issue create *": allow
     "gh issue close *": allow
@@ -71,7 +71,10 @@ in-flight task — every new task is labelled at birth), fall back to
 [docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
 and surface the backfill guidance: the issue still needs its axis
 labels (`gh issue edit <N> --add-label ...`). This phase is read-only
-with respect to the gate, so it may proceed on the fallback.
+with respect to the gate, so it may proceed on the fallback — with
+one guard: if the story file already exists and lacks the bug story
+template sections, it is likely a committed feature plan, so confirm
+with the user before the first DIAGNOSE convergence overwrites it.
 
 **Lane-mismatch guard.** If `lane` is non-empty and not `bug-product`,
 STOP — this diagnose phase is bug × product only, and its DIAGNOSE

@@ -116,7 +116,9 @@ finding-state triage model as create-plan.
 
 ### FINALIZE (three exits, all human-confirmed)
 
-Commit the story (skip the commit if no story file was written — early exits 2/3), then route via one of **three exits**:
+Commit the story (skip the commit if no story file was written —
+early exits 2/3 — or if the story is already committed and
+unchanged), then route via one of **three exits**:
 
 1. **fix** (normal) → `implement-task`.
 2. **close-as-superseded** (iceberg): the diagnose agent runs

@@ -22,8 +22,10 @@ The **bug × product** lane (QS-335) diverges into a diagnose-first flow:
 | ---------------- | -------------------- | ------------------------------------------- |
 | `setup-task`     | main checkout        | issue, branch `QS_<N>`, worktree            |
 | `create-plan`    | worktree             | story file at `docs/stories/QS-<N>.story.md` via an interactive discuss/review/finalize loop, committed at finalize |
+| `diagnose-task`  | worktree             | bug × product lane only — replaces `create-plan`: diagnosis story (root cause, red-test spec) via an interactive diagnose/review/finalize loop |
 | `implement-task` | worktree             | TDD code, green quality gate, PR opened     |
 | `review-task`    | worktree             | parallel adversarial review, fix-plan loop  |
+| `verify-task`    | worktree             | bug × product lane only — replaces `review-task`: fix-verification review, fix-plan loop |
 | `finish-task`    | worktree             | PR merged, worktree removed                 |
 | `release`        | main checkout        | tag, manifest bump, GitHub Release          |
 

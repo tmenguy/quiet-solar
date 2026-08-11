@@ -169,7 +169,7 @@ def test_opencode_agent_no_emoji_in_success_block(name: str) -> None:
 
 
 @pytest.mark.parametrize("filename", ["qs-review-task.md", "qs-verify-task.md"])
-def test_opencode_review_task_has_two_execute_blocks(filename: str) -> None:
+def test_opencode_handoff_orchestrators_have_two_execute_blocks(filename: str) -> None:
     """review-task / verify-task each have 2 next_step.py callsites — both
     must auto-execute.
 

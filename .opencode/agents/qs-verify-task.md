@@ -16,9 +16,9 @@ permission:
   bash:
     "*": ask
     "echo *": allow
-    "tail*": allow
+    "tail *": allow
     "grep *": allow
-    "sort*": allow
+    "sort *": allow
     "rg *": allow
     "ls *": allow
     "wc *": allow
@@ -29,7 +29,7 @@ permission:
     "git fetch*": allow
     "git add *": allow
     "git commit *": allow
-    "git push*": allow
+    "git push *": allow
     "gh issue view *": allow
     "gh pr view *": allow
     "gh pr diff *": allow

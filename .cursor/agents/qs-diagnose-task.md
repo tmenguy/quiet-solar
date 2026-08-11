@@ -42,7 +42,10 @@ in-flight task — every new task is labelled at birth), fall back to
 [docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
 and surface the backfill guidance: the issue still needs its axis
 labels (`gh issue edit <N> --add-label ...`). This phase is read-only
-with respect to the gate, so it may proceed on the fallback.
+with respect to the gate, so it may proceed on the fallback — with
+one guard: if the story file already exists and lacks the bug story
+template sections, it is likely a committed feature plan, so confirm
+with the user before the first DIAGNOSE convergence overwrites it.
 
 **Lane-mismatch guard.** If `lane` is non-empty and not `bug-product`,
 STOP — this diagnose phase is bug × product only, and its DIAGNOSE
@@ -277,11 +280,11 @@ block with the resolved value:
        --harness cursor
    ```
 
-   Parse the JSON; capture `new_context`. Then print:
-
    If step 1 was skipped (early exit 2/3 — no story file was written),
    replace the first banner line with
    `✅ Diagnosis posted to the issue (no story file — early exit).`
+
+   Parse the JSON; capture `new_context`. Then print:
 
    ```text
    ✅ Diagnosis committed and pushed to {{branch}}.

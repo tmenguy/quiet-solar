@@ -140,9 +140,16 @@ def test_lane_block_is_a_clean_mirrored_paragraph(
     assert body[start - 2 : start] == "\n\n", "one blank line before the block"
     assert body[start - 3 : start] != "\n\n\n", "no doubled blank line before"
     tail = body[start:]
+    # Review-fix #05: qs-diagnose-task's block gained the empty-lane
+    # story-overwrite guard, so its terminal sentence is now the guard's
+    # ("...convergence overwrites it."), not "on the fallback.".
     sentinel = next(
         marker
-        for marker in ("a parallel path).\n", "on the fallback.\n")
+        for marker in (
+            "a parallel path).\n",
+            "convergence overwrites it.\n",
+            "on the fallback.\n",
+        )
         if marker in tail
     )
     end = tail.index(sentinel) + len(sentinel)
