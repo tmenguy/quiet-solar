@@ -151,7 +151,10 @@ justification." Fetch the PR's changed paths via
 > reads it.
 
 If there are no must-fix or should-fix findings, build the launcher
-payload for `finish-task`:
+payload for `finish-task`. If nice-to-have findings exist, list them
+in the completion message and post them as a PR comment before the
+handoff — this fast path skips triage, so the comment is their only
+durable record:
 
 **Before running** — substitute `{{worktree}}`, `{{issue}}`, and
 `{{title}}` with the values you captured earlier; the `--next-cmd`

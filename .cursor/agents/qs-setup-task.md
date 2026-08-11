@@ -118,7 +118,8 @@ diagnose-first flow replaces it with `diagnose-task`. Set
 `NEXT_PHASE = create-plan`, or `NEXT_PHASE = diagnose-task` when the
 resolved lane (step 1b) is `bug-product`, and substitute that value in
 the `--next-cmd` flag below and in every handoff site in step 3 —
-except the fallback line, which carries both branches literally.
+except the routing parenthetical after the print block, which carries
+both branches literally.
 
 One command does it all (**substitute `{{NEXT_PHASE}}`** with the value
 you just resolved):

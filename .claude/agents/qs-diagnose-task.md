@@ -248,7 +248,11 @@ Resolve exactly one exit, human-confirmed:
 1. Commit and push the story file (**if no story file was written — an
    early exit 2/3 before the first convergence — skip this step**: the
    issue comment / superseding issue body is the durable record, and
-   `git add` on a nonexistent path would error). If the story is
+   `git add` on a nonexistent path would error). On exit 1 the skip
+   never applies: if the story file has not been written yet, **write
+   it now** before this step — a confirmed fix exit implies the
+   diagnosis converged, and the fix loop needs the story on disk
+   (verify-task hard-STOPs on an empty `story_file`). If the story is
    already committed with no pending edits —
    `git status --porcelain -- docs/stories/QS-{{issue}}.story.md`
    prints nothing (a FINALIZE re-run after a failed push/handoff) —

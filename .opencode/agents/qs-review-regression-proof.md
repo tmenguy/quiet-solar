@@ -56,10 +56,11 @@ merge-base — v1 audits the *recorded* red output (user ruling).
 
 1. Fetch the diff (`gh pr diff <N>`) and read the story.
 2. Audit:
-   - **(a) Recorded red output** — is the red-test failure output
-     present (story progress note / PR body), and does it fail *for the
-     diagnosed reason* (not an import/collection error), produced by the
-     sanctioned `::`-form invocation (`pytest <file>::<test> -v`)?
+   - **(a) Recorded red output** — is a red-test failure output
+     present (story progress note / PR body) for **each** test named
+     in the story's red-test spec, and does each fail *for the
+     diagnosed reason* (not an import/collection error), produced by
+     the sanctioned `::`-form invocation (`pytest <file>::<test> -v`)?
    - **(b) Root cause vs symptom** — does the diff remove the diagnosed
      cause, or merely mask the symptom? Is the blast radius consistent
      with the story's statement?

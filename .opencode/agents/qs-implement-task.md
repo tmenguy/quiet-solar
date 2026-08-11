@@ -238,7 +238,9 @@ diagnose-first flow replaces it with `verify-task`. Set
 `NEXT_PHASE = review-task`, or `NEXT_PHASE = verify-task` when the
 `lane` from `context.py` is `bug-product` (i.e. routes to `/verify-task`
 instead of `/review-task`), and substitute that value everywhere below
-— except the fallback line, which carries both branches literally.
+— except the routing parentheticals (the one in this sentence and the
+success-contract's agent pair below), which carry both branches
+literally.
 
 Build the launcher payload for the resolved next phase so the user has a
 copy/paste command to open a fresh session bound to `qs-{{NEXT_PHASE}}`:

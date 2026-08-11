@@ -121,7 +121,9 @@ finding-state triage model as create-plan.
 
 Commit the story (skip the commit if no story file was written —
 early exits 2/3 — or if the story is already committed and
-unchanged), then route via one of **three exits**:
+unchanged; on exit 1 an unwritten story is **written now first** — a
+confirmed fix exit implies the diagnosis converged, and the fix loop
+needs the story on disk), then route via one of **three exits**:
 
 1. **fix** (normal) → `implement-task`.
 2. **close-as-superseded** (iceberg): the diagnose agent runs
@@ -139,15 +141,16 @@ unchanged), then route via one of **three exits**:
 ## `implement-task` (agent: `qs-implement-task`)
 
 **Runs on**: worktree. Fixes the diagnosed bug under
-`custom_components/quiet_solar/`. Follows the shared implement contract
+`custom_components/quiet_solar/` and `tests/` (the regression test the
+red-test protocol writes). Follows the shared implement contract
 with the **red-test protocol** below.
 
 ### Red-test protocol
 
-1. Write the spec'd regression test **first**, run it with the
-   sanctioned `::`-form (`pytest <file>::<test> -v`), and **record the
-   failure output** (story progress note + PR body) — it must fail for
-   the diagnosed reason, not an import/collection error.
+1. Write **each** spec'd regression test **first**, run each red with
+   the sanctioned `::`-form (`pytest <file>::<test> -v`), and **record
+   the failure output** (story progress note + PR body) — each must
+   fail for the diagnosed reason, not an import/collection error.
 2. Apply the minimal fix; re-run the test green.
 3. **Scope constraint**: deliver the fix at the scope diagnosed — no
    drive-by refactors, no opportunistic cleanups. Anything bigger goes

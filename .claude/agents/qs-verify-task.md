@@ -110,7 +110,10 @@ justification." Fetch the PR's changed paths via
 ### 4. Zero-findings fast path
 
 If there are no must-fix or should-fix findings, build the launcher
-payload for `/finish-task`:
+payload for `/finish-task`. If nice-to-have findings exist, list them
+in the completion message and post them as a PR comment before the
+handoff — this fast path skips triage, so the comment is their only
+durable record:
 
 ```bash
 python scripts/qs/next_step.py \
