@@ -66,9 +66,11 @@ merge-base — v1 audits the *recorded* red output (user ruling).
    - **(c) Diff-vs-plan discipline** — every changed file appears in the
      fix plan's stated file list (or carries a reasoned amendment note).
      Files listed in committed
-     `docs/stories/QS-<N>.story_review_fix_*.md` plans, and those plan
-     files themselves, count as explained. Unexplained excess is
-     **must-fix**.
+     `docs/stories/QS-<N>.story_review_fix_*.md` plans, those plan
+     files themselves, and the diagnosis story
+     `docs/stories/QS-<N>.story.md` itself (its progress notes are
+     mandated by the red-test protocol) count as explained.
+     Unexplained excess is **must-fix**.
    - **(d) Fallback path** — if the story carries an accepted
      `Fallback accepted:` line, the PR body presents the alternative
      evidence, and it matches the accepted story line.

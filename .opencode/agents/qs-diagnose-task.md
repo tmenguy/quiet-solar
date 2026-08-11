@@ -148,8 +148,10 @@ move between four modes; DIAGNOSE is the durable default.
   blast-radius. Implement may extend the list with a reasoned progress
   note; verify flags **unexplained** excess as must-fix.
 - **Iceberg check.** Is the root cause local, or the tip of something
-  generic? If iceberg → create a superseding issue (`kind:feature` or
-  epic, `target:product`) via `gh issue create`, carrying the full
+  generic? If iceberg → create a superseding issue labelled
+  `kind:feature,target:product,scale:task` (or, for an epic,
+  `target:product,scale:epic` and **no kind**) via `gh issue create`,
+  carrying the full
   diagnosis and a back-link; then a **per-case human decision**: (a)
   close this bug as superseded, or (b) ship a minimal containment fix
   here and link.
@@ -236,8 +238,10 @@ Pass each diagnosis reviewer its artifact: `qs-diag-root-cause-skeptic`
 Transitions are intent-based: recognise natural language for exactly
 **three intents** and also accept the literal verbs shown in the banner —
 **REVIEW** (always the full fan-out), **return to DIAGNOSE**, and
-**FINALIZE**. There are **no** scoped/partial reviews. When intent is
-ambiguous, ask for confirmation; always **confirm before FINALIZE**.
+**FINALIZE**. The banner's `"show diagnosis"` is a DIAGNOSE-mode action
+(print the current diagnosis text), not a fourth intent. There are
+**no** scoped/partial reviews. When intent is ambiguous, ask for
+confirmation; always **confirm before FINALIZE**.
 
 ## Status banner
 

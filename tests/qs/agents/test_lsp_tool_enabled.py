@@ -59,8 +59,9 @@ LSP_INCLUDE_AGENTS: tuple[str, ...] = (
     "qs-diag-root-cause-skeptic",
 )
 
-# Context-starved (blind) reviewers + merge/release agents. They must
-# NOT get ``LSP`` — code navigation contradicts their design.
+# Context-starved (blind) reviewers, merge/release agents, and
+# reviewers whose charter needs no code navigation. They must NOT get
+# ``LSP`` — it contradicts (or adds nothing to) their design.
 LSP_EXCLUDE_AGENTS: tuple[str, ...] = (
     "qs-plan-critic",
     "qs-plan-dev-proxy",

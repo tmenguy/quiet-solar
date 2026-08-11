@@ -76,8 +76,10 @@ evidence before hypotheses, hypotheses before cause, cause before plan.
   extend the list with a reasoned progress note in the story; verify
   flags **unexplained** excess as must-fix.
 - **Iceberg check** — is the root cause local, or the tip of something
-  generic? If iceberg → create a new issue (`kind:feature` or epic,
-  `target:product`) via `gh issue create`, carrying the full diagnosis
+  generic? If iceberg → create a new issue labelled
+  `kind:feature,target:product,scale:task` (or, for an epic,
+  `target:product,scale:epic` and **no kind**) via `gh issue create`,
+  carrying the full diagnosis
   and a back-link; then a **per-case human decision**: (a) close this
   bug as superseded, or (b) ship a minimal containment fix here and
   link.
@@ -114,7 +116,7 @@ finding-state triage model as create-plan.
 
 ### FINALIZE (three exits, all human-confirmed)
 
-Commit the story, then route via one of **three exits**:
+Commit the story (skip the commit if no story file was written — early exits 2/3), then route via one of **three exits**:
 
 1. **fix** (normal) → `implement-task`.
 2. **close-as-superseded** (iceberg): the diagnose agent runs
