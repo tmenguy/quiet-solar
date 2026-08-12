@@ -272,13 +272,24 @@ Resolve exactly one exit, human-confirmed:
 1. **fix** (normal) → `NEXT_PHASE = implement-task`.
 2. **close-as-superseded** (iceberg): run
    `gh issue close --comment` linking the superseding issue, then
-   `NEXT_PHASE = finish-task` (Case A no-PR cleanup). The superseding
-   issue's body is the durable record of the diagnosis.
+   `NEXT_PHASE = finish-task`. The superseding issue's body is the
+   durable record of the diagnosis.
 3. **no-defect / cannot-diagnose** (works-as-intended, duplicate, or
    evidence exhausted): the human decides close (you close with the
    rationale) or leave open awaiting evidence. **Either way post the
-   diagnosis-so-far as an issue comment before cleanup** (Case A removes
-   the worktree holding the story), then `NEXT_PHASE = finish-task`.
+   diagnosis-so-far as an issue comment before cleanup** (cleanup
+   removes the worktree holding the story), then
+   `NEXT_PHASE = finish-task`.
+
+**Superseded fix PR (exits 2/3).** Before handing off on exit 2 or 3,
+re-run `python scripts/qs/context.py` and capture `pr_number` — a fix
+loop may already have opened a PR (fix ran, verify showed the fix
+misses the cause, you re-entered diagnose). When `pr_number` is
+non-null, close that PR first —
+`gh pr close {{pr_number}} --comment "superseded — see issue"` — so
+finish-task lands on its CLOSED-unmerged cleanup branch instead of
+offering to merge the superseded fix. Only when `pr_number` is null is
+the handoff the genuine Case A no-PR cleanup.
 
 ## Commit and hand off (at FINALIZE)
 

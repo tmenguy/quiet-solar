@@ -57,7 +57,7 @@ gh pr view {{pr_number}}
 gh pr diff {{pr_number}}
 ```
 
-Cache the diff for the sub-agents.
+Skim the diff for context.
 
 ### 2. Adversarial fix-verification (parallel)
 
@@ -178,7 +178,10 @@ decisions?".
 
 If every decision is "skip", there is no fix plan to write: record
 the skip decisions (post the triage summary as a PR comment) and emit
-the same finish-task handoff as step 4.
+the same finish-task handoff as step 4, replacing the first banner
+line with `✅ Fix verification complete — N findings triaged, all
+skipped (recorded on the PR).` — "No blocking findings." would be
+false here.
 
 If any decisions are "fix", the next implement phase is
 **`implement-task`** — a bug × product fix is product code and never

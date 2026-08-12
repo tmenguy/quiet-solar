@@ -128,13 +128,21 @@ needs the story on disk), then route via one of **three exits**:
 1. **fix** (normal) → `implement-task`.
 2. **close-as-superseded** (iceberg): the diagnose agent runs
    `gh issue close --comment` linking the superseding issue, then →
-   `finish-task` (Case A no-PR cleanup). The superseding issue's body
-   is the durable record of the diagnosis.
+   `finish-task`. The superseding issue's body is the durable record
+   of the diagnosis.
 3. **no-defect / cannot-diagnose** (works-as-intended, duplicate, or
    evidence exhausted): the human decides close (agent closes with the
    rationale) or leave open awaiting evidence. **Either way the
    diagnosis-so-far is posted as an issue comment before cleanup** →
-   `finish-task` Case A.
+   `finish-task`.
+
+On exits 2/3 with an open fix PR (`pr_number` non-null from
+`context.py` — a fix loop already ran and this diagnosis abandons that
+fix), the diagnose agent closes the PR first
+(`gh pr close <pr_number> --comment "superseded — see issue"`) so
+finish-task lands on its CLOSED-unmerged cleanup branch instead of
+offering to merge the superseded fix. Only when no fix PR exists is
+the handoff the Case A no-PR cleanup.
 
 ---
 
@@ -194,8 +202,10 @@ run in this lane — for a bug, acceptance *is* the red test, which
 ## `finish-task` (agent: `qs-finish-task`)
 
 Unchanged from the shared contract. Bug × product closes on merge; the
-no-PR Case A covers the diagnose-task iceberg / no-defect exits as pure
-cleanup (it does not touch the issue — the diagnose agent already did).
+diagnose-task iceberg / no-defect exits land as pure cleanup — Case A
+when no fix PR was ever opened, the CLOSED-unmerged cleanup branch when
+diagnose-task closed a superseded fix PR (either way finish-task does
+not touch the issue — the diagnose agent already did).
 
 ---
 

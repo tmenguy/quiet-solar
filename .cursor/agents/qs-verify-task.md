@@ -60,12 +60,12 @@ gh pr view {{pr_number}}
 gh pr diff {{pr_number}}
 ```
 
-Cache the diff for the sub-agents.
+Skim the diff for context.
 
 ### 2. Adversarial fix-verification (parallel)
 
 Spawn the three reviewer sub-agents in **one message with three parallel
-Agent invocations**:
+sub-agent invocations**:
 
 - `qs-review-edge-case-hunter` — pass PR number + worktree path
   (regression is the dominant risk for a bug fix).
@@ -80,7 +80,7 @@ run in this lane — for a bug, acceptance *is* the red test, which
 
 This step is the orchestrator-vs-sub-agent split in action: **I'm an
 interactive orchestrator (the user is talking to me right now), but the
-3 reviewers below are non-interactive `Agent`-tool fan-out**. See
+3 reviewers below are non-interactive parallel sub-agent fan-out**. See
 [docs/workflow/overview.md](../../docs/workflow/overview.md) section
 "Orchestrators are interactive sessions; sub-agents are parallel
 fan-out" for the rationale and
@@ -165,7 +165,10 @@ decisions?".
 
 If every decision is "skip", there is no fix plan to write: record
 the skip decisions (post the triage summary as a PR comment) and emit
-the same finish-task handoff as step 4.
+the same finish-task handoff as step 4, replacing the first banner
+line with `✅ Fix verification complete — N findings triaged, all
+skipped (recorded on the PR).` — "No blocking findings." would be
+false here.
 
 If any decisions are "fix", the next implement phase is
 **`implement-task`** — a bug × product fix is product code and never

@@ -242,6 +242,13 @@ instead of `/review-task`), and substitute that value everywhere below
 success-contract's agent pair below), which carry both branches
 literally.
 
+**Degraded-`gh` guard.** An empty `lane` can also mean a transient
+`gh` failure (`context.py` returns empty fields on any `gh` failure),
+and the default would send a bug-product task to `review-task` with no
+downstream catch. If `lane` is empty AND the story file carries the
+bug-template sections (Symptom / Root cause / Repro strategy), do not
+default — ask the user whether to route `review-task` or `verify-task`.
+
 Build the launcher payload for the resolved next phase so the user has a
 copy/paste command to open a fresh session bound to `qs-{{NEXT_PHASE}}`:
 
