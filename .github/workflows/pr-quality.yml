@@ -211,11 +211,11 @@ jobs:
           git diff --cached --exit-code -- custom_components/quiet_solar/translations/ \
             || { echo "::error::translations are stale — run 'bash scripts/generate-translations.sh' and commit the result"; exit 1; }
 
-      # Twin of the `coverage==7.14.1` pin in requirements_test.txt —
+      # Twin of the `coverage==7.15.2` pin in requirements_test.txt —
       # the shards' data must be written and read by the same version.
       # Both move together in one edit.
       - name: Install coverage
-        run: pip install coverage==7.14.1
+        run: pip install coverage==7.15.2
 
       - name: Download shard data
         uses: actions/download-artifact@v4
