@@ -226,11 +226,13 @@ The agent-facing documentation hierarchy lives under
 via `covers:` frontmatter. The drift checker
 `scripts/qs/check_doc_drift.py` validates that every `covers:` path
 exists and flags docs whose source was modified without a
-co-modification. The four orchestrator agents
+co-modification. The six orchestrator agents
 ([qs-create-plan](../../.claude/agents/qs-create-plan.md),
+[qs-diagnose-task](../../.claude/agents/qs-diagnose-task.md),
 [qs-implement-task](../../.claude/agents/qs-implement-task.md),
 [qs-implement-setup-task](../../.claude/agents/qs-implement-setup-task.md),
-[qs-review-task](../../.claude/agents/qs-review-task.md)) wire the
+[qs-review-task](../../.claude/agents/qs-review-task.md),
+[qs-verify-task](../../.claude/agents/qs-verify-task.md)) wire the
 checker into their phase protocol. Taxonomy: **concept** (one source
 file), **principle** (cross-cutting rule), **use-case** (end-to-end
 scenario), **persona** (user archetype).
@@ -268,11 +270,19 @@ which phase to use — infer from context.
 | ------------------------------------------------------------ | ---------------------------------------- | ------------------ |
 | "Setup task 3.2" / describe feature / "work on issue #42"    | `claude --agent qs-setup-task` on main   | `/setup-task`      |
 | "Create plan" (inside worktree)                              | `claude --agent qs-create-plan`          | `/create-plan`     |
+| "Diagnose task" (bug × product lane)                         | `claude --agent qs-diagnose-task`        | `/diagnose-task`   |
 | "Implement task" (inside worktree)                           | `claude --agent qs-implement-task`       | `/implement-task`  |
 | "Review PR #5" or "review task"                              | `claude --agent qs-review-task`          | `/review-task`     |
+| "Verify task" (bug × product lane)                           | `claude --agent qs-verify-task`          | `/verify-task`     |
 | "Merge PR #5" or "finish task"                               | `claude --agent qs-finish-task`          | `/finish-task`     |
 | "Create a release"                                           | `claude --agent qs-release` on main      | `/release`         |
 | Bug fix / small fix                                          | `claude --agent qs-setup-task` on main   | `/setup-task`      |
+
+The **bug × product** lane (QS-335) runs a diagnose-first flow:
+`create-plan` → `diagnose-task` and `review-task` → `verify-task` for
+that lane only. `qs-setup-task` / `qs-implement-task` resolve the next
+phase from the lane; see
+[lanes/bug-product.md](lanes/bug-product.md).
 
 See [overview.md](overview.md) section "Orchestrators are interactive
 sessions; sub-agents are parallel fan-out" for the rationale.

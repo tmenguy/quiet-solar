@@ -12,6 +12,11 @@ reviewer doesn't enumerate edge cases.
 those four **plus a fifth, diff-aware** reviewer
 (`qs-plan-delta-auditor`) — see "Round asymmetry" below.
 
+The **bug × product** lane (QS-335) runs dedicated minimal rosters
+instead — 2 diagnosis reviewers (`diagnose-task`) and 3 fix-verification
+reviewers (`verify-task`); see
+[lanes/bug-product.md](lanes/bug-product.md).
+
 ## Why parallel, not serial
 
 All the round's subagents must be spawned in **one message with parallel

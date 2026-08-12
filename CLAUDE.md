@@ -25,11 +25,18 @@ fan-out" for the rationale.
 | -------------------- | -------------------------------------------- | ------------------------ | ------------- |
 | Setup task           | `claude --agent qs-setup-task`               | `/setup-task`            | main checkout |
 | Create plan          | `claude --agent qs-create-plan`              | `/create-plan`           | worktree      |
+| Diagnose task        | `claude --agent qs-diagnose-task`            | `/diagnose-task`         | worktree      |
 | Implement (product)  | `claude --agent qs-implement-task`           | `/implement-task`        | worktree      |
 | Implement (dev-env)  | `claude --agent qs-implement-setup-task`     | `/implement-setup-task`  | worktree      |
 | Review task          | `claude --agent qs-review-task`              | `/review-task`           | worktree      |
+| Verify task          | `claude --agent qs-verify-task`              | `/verify-task`           | worktree      |
 | Finish task          | `claude --agent qs-finish-task`              | `/finish-task`           | worktree      |
 | Release              | `claude --agent qs-release`                  | `/release`               | main checkout |
+
+The **bug × product** lane diverges (QS-335): `setup → diagnose → fix
+(implement) → verify → finish` — `diagnose-task` replaces `create-plan`
+and `verify-task` replaces `review-task` for that lane only (see
+[docs/workflow/lanes/bug-product.md](docs/workflow/lanes/bug-product.md)).
 
 Static agents live in [.claude/agents/](.claude/agents/); slash commands
 in [.claude/commands/](.claude/commands/). Agents discover task context

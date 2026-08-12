@@ -68,9 +68,11 @@ OPENCODE_AGENTS_DIR = REPO_ROOT / ".opencode" / "agents"
 PHASE_AGENT_NAMES: tuple[str, ...] = (
     "qs-setup-task",
     "qs-create-plan",
+    "qs-diagnose-task",
     "qs-implement-task",
     "qs-implement-setup-task",
     "qs-review-task",
+    "qs-verify-task",
     "qs-finish-task",
     "qs-release",
 )
@@ -85,6 +87,9 @@ SUB_AGENT_NAMES: tuple[str, ...] = (
     "qs-review-edge-case-hunter",
     "qs-review-acceptance-auditor",
     "qs-review-coderabbit",
+    "qs-diag-root-cause-skeptic",
+    "qs-diag-fix-minimalist",
+    "qs-review-regression-proof",
 )
 
 ALL_STATIC_AGENT_NAMES: tuple[str, ...] = PHASE_AGENT_NAMES + SUB_AGENT_NAMES

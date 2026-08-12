@@ -1,262 +1,226 @@
-# Phase protocols
+# Phase protocols — bug × product lane
 
-Each phase has a static agent under `.claude/agents/` (mirrored in
-`.cursor/agents/` and `.opencode/agents/`). Agents discover task
-context at runtime via
-`python scripts/qs/context.py`. This document captures the contract for
-each phase — inputs, outputs, hand-off, hard rules.
+This lane **diverges** from
+[phase-protocols.md](../phase-protocols.md): fixing a bug is not
+building a feature. The flow is **diagnose-first**:
+
+`setup → diagnose → fix (implement) → verify → finish`
+
+`create-plan` and `review-task` do **not** run in this lane. They are
+replaced by `diagnose-task` (agent `qs-diagnose-task`) and `verify-task`
+(agent `qs-verify-task`). Every other phase follows the shared contract;
+only the divergent details are spelled out below. Each phase has a
+static agent under `.claude/agents/` (mirrored in `.cursor/agents/` and
+`.opencode/agents/`); agents discover task context at runtime via
+`python scripts/qs/context.py`.
 
 Each phase is invoked **as an interactive session** via
 `claude --agent qs-<phase>` (the launcher form — preferred). The
-slash-command form (`/<phase>`) is kept as a **degraded fallback** for
-Claude Desktop and any chat without a CLI launcher. See
-[overview.md](overview.md) section "Orchestrators are interactive
-sessions; sub-agents are parallel fan-out" for the full rationale —
-this document does not duplicate it.
+slash-command form (`/<phase>`) is kept as a **degraded fallback**. See
+[overview.md](../overview.md) for the rationale.
 
 ---
 
 ## `setup-task` (agent: `qs-setup-task`)
 
-**Runs on**: main checkout.
-**Inputs**: free text describing a feature, OR `--issue N` to use an
-existing GitHub issue, OR `--plan /path/to/plan.md`.
-**Side effects**: creates GitHub issue, creates branch `QS_<N>`, creates
-worktree at `<repo>-worktrees/QS_<N>/`.
-**Output**: launcher command (`scripts/qs/launchers/<harness>.py`-generated)
-the user runs to open a new session on the worktree.
-**Next phase**: `claude --agent qs-create-plan` in the worktree
-(preferred — fresh interactive session), or `/create-plan` as fallback.
+**Runs on**: main checkout. Unchanged from the shared contract except
+routing: **next phase is `diagnose-task`**, not `create-plan`.
+**Side effects**: creates GitHub issue, branch `QS_<N>`, worktree.
+**Next phase**: `claude --agent qs-diagnose-task` in the worktree
+(preferred), or `/diagnose-task` as fallback.
 
-**Hard rules**:
-- Do NOT analyze, diagnose, or interpret user input. Pass the text
-  through to the GitHub issue verbatim. Deep analysis is `/create-plan`'s
-  job.
-- Do NOT switch the main checkout's branch.
-- Do NOT commit or push manually — setup only creates the branch and
-  worktree (`scripts/worktree-setup.sh` itself publishes the branch
-  via `git push -u`; that script-driven push is expected).
+**Hard rules**: do NOT analyze or interpret user input — pass it
+through to the issue verbatim; diagnosis is `diagnose-task`'s job.
 
 ---
 
-## `create-plan` (agent: `qs-create-plan`)
+## `diagnose-task` (agent: `qs-diagnose-task`)
 
 **Runs on**: worktree.
 **Inputs**: branch `QS_<N>` (issue resolves from there).
-**Side effects**: writes story file to
-`docs/stories/QS-<N>.story.md` (written as soon as the first discussion
-round converges, **committed only at FINALIZE**).
-**Output**: story file with acceptance criteria + task breakdown +
-adversarial review notes appended.
-**Next phase**: `claude --agent qs-implement-task` or
-`claude --agent qs-implement-setup-task` in the worktree (preferred —
-fresh interactive session), or `/implement-task` /
-`/implement-setup-task` as fallback. The agent decides which based on
-the file paths in its task breakdown.
+**Side effects**: writes the diagnosis story to
+`docs/stories/QS-<N>.story.md` (written as soon as the first diagnosis
+round converges, **committed only at FINALIZE**). May create a
+superseding issue via `gh issue create` (iceberg), and at FINALIZE may
+close this issue via `gh issue close --comment`.
+**Output**: a diagnosis story — root cause + fix plan + red-test spec.
+**Next phase**: `implement-task` (normal fix) or `finish-task` (iceberg
+close-as-superseded / no-defect) — resolved at FINALIZE.
 
-**Phase protocol** — a **user-driven mode loop** (DISCUSS / REVIEW /
-TRIAGE / FINALIZE), not a linear pipeline. DISCUSS is the durable
-default; REVIEW is invoked on demand and repeatable; the story file is
-the living document:
+A **diagnose-first** mode loop (DIAGNOSE / REVIEW / TRIAGE / FINALIZE):
+evidence before hypotheses, hypotheses before cause, cause before plan.
 
-- **DISCUSS (default)**: read the issue (`gh issue view`), read
-  `project-rules.md` / `project-context.md`, glob the relevant code,
-  and discuss scope/risks/acceptance with the user — iterate
-  indefinitely. As soon as the first round **converges** (the plan has
-  all required headings, or the user says "write it"), write the story
-  file and overwrite it on every later change; announce it is readable.
-  Run the doc-maintenance sub-step (`check_doc_drift.py --paths`). Print
-  the status banner and offer REVIEW once per stable version. The story
-  stays uncommitted.
-- **REVIEW (invoked)**: spawn the plan reviewers in parallel (one
-  message). Round 1 = the **4 global reviewers**; round 2+ = the same 4
-  **plus `qs-plan-delta-auditor`** fed an in-context diff + the prior
-  round's accepted findings. See [adversarial-review.md](adversarial-review.md).
-- **TRIAGE**: dedupe via the finding-state model
-  (`open`/`resolved`/`rejected`), present deltas first, drive
-  interactive triage, fold accepted findings into the story, then return
-  to DISCUSS.
-- **FINALIZE (on confirmed intent)**: an **advisory** gate (never
-  hard-blocks) — if the plan changed since the last review, or open
-  criticals remain, the agent asks but the user decides. Determine
-  `NEXT_PHASE` (`implement-setup-task` if all touched files are in
-  `scripts/`, `.claude/`, `.cursor/`, `.opencode/`, `legacy/`,
-  `docs/`, `.github/`, or top-level config; otherwise `implement-task`),
-  commit + push, then emit the launcher payload (preferred,
-  `claude --agent qs-implement-task` / `qs-implement-setup-task`) plus
-  the slash-command fallback.
+### DIAGNOSE (default)
 
-**Hard rules**:
-- Do not write code in this phase.
-- Edit scope is the story file — written during DISCUSS/TRIAGE,
-  committed only at FINALIZE.
-- Never skip the adversarial review for a plan you intend to ship.
+- **Evidence gathering** — ask the user for production data before
+  theorising. Pick from the checklists below per bug; they are not a
+  rigid form.
+- **Root-cause analysis** — read the code, form hypotheses, confirm or
+  eliminate each against the evidence. **Hard rule: no fix plan until
+  the root cause is stated in one sentence with file/function
+  references.** Insufficient evidence → ask, don't guess; staying in
+  DIAGNOSE across sessions is normal. A fresh session that finds the
+  story file already existing and carrying the bug-template sections
+  reads it first and adopts it as the current diagnosis state
+  (resume, don't restart).
+- **Reproduction** — **demonstrate when feasible**: the agent may run
+  throwaway, uncommitted scripts/snippets via Bash to show the
+  hypothesis live (nothing is committed in this phase). Always produce
+  the **red test spec**: exact test file, fixture data derived from the
+  evidence, the assertion that fails today. **Sanctioned fallback**
+  when a unit test cannot reproduce the bug (timing, hardware,
+  cloud-API dependent): the story states *why* and names the
+  alternative proof, and carries the mandatory acceptance line —
+  `Fallback accepted: <reason>` — recorded when the human accepts it
+  in-session.
+- **Fix plan** — short, produced *by* the diagnosis. **Minimum-diff
+  rule**: the fix plan lists the files it expects to touch; a
+  blast-radius statement is mandatory. Amendment path: implement may
+  extend the list with a reasoned progress note in the story; verify
+  flags **unexplained** excess as must-fix.
+- **Iceberg check** — is the root cause local, or the tip of something
+  generic? If iceberg → create a new issue labelled
+  `kind:feature,target:product,scale:task` (or, for an epic,
+  `target:product,scale:epic` and **no kind**) via `gh issue create`,
+  carrying the full diagnosis
+  and a back-link; then a **per-case human decision**: (a) close this
+  bug as superseded, or (b) ship a minimal containment fix here and
+  link.
+
+#### Generic evidence checklist
+
+- exact HA + integration versions
+- timeline; expected vs observed; frequency / determinism
+- recent changes (upgrades, config edits, HA core bumps)
+- debug-level logs around the incident window
+
+#### Quiet-solar evidence checklist
+
+- config-entry options / device setup
+- entity histories for charger / car / solar / grid sensors
+- `custom_components.quiet_solar` debug log capture
+- solver inputs around the incident window
+
+### Bug story template
+
+The diagnosis story carries these sections:
+**Symptom** · **Evidence** · **Root cause** · **Repro strategy** ·
+**Fix plan** · **Iceberg check** · **Acceptance** (the red test(s), or
+the fallback proof + the `Fallback accepted:` acceptance line).
+
+### REVIEW / TRIAGE (invoked, on demand)
+
+Same loop mechanics as create-plan, with the **bug diagnosis roster**:
+round 1 = `qs-diag-root-cause-skeptic` + `qs-diag-fix-minimalist` in
+parallel; round 2+ adds `qs-plan-delta-auditor`. Review stays
+**on-demand** (user-invoked, offered once per stable version). Findings
+use the `critical/redesign/improve/clarify` categories and the same
+finding-state triage model as create-plan.
+
+### FINALIZE (three exits, all human-confirmed)
+
+Commit the story (skip the commit if no story file was written —
+early exits 2/3 — or if the story is already committed and
+unchanged; on exit 1 an unwritten story is **written now first** — a
+confirmed fix exit implies the diagnosis converged, and the fix loop
+needs the story on disk), then route via one of **three exits**:
+
+1. **fix** (normal) → `implement-task`.
+2. **close-as-superseded** (iceberg): the diagnose agent runs
+   `gh issue close --comment` linking the superseding issue, then →
+   `finish-task`. The superseding issue's body is the durable record
+   of the diagnosis.
+3. **no-defect / cannot-diagnose** (works-as-intended, duplicate, or
+   evidence exhausted): the human decides close (agent closes with the
+   rationale) or leave open awaiting evidence. **Either way the
+   diagnosis-so-far is posted as an issue comment before cleanup** →
+   `finish-task`.
+
+On exits 2/3 with an open fix PR (`pr_number` non-null from
+`context.py` — a fix loop already ran and this diagnosis abandons that
+fix), the diagnose agent closes the PR first
+(`gh pr close <pr_number> --comment "superseded — see issue"`) so
+finish-task lands on its CLOSED-unmerged cleanup branch instead of
+offering to merge the superseded fix. Only when no fix PR exists is
+the handoff the Case A no-PR cleanup.
 
 ---
 
-## `implement-task` / `implement-setup-task` (agents: `qs-implement-task`, `qs-implement-setup-task`)
+## `implement-task` (agent: `qs-implement-task`)
 
-**Runs on**: worktree.
-**Inputs**: story file from `create-plan`.
-**Side effects**: writes code under `custom_components/quiet_solar/` and
-`tests/` (or `scripts/`, `.claude/`, etc. for `implement-setup-task`);
-auto-commits, pushes, opens PR after green quality gate.
-**Output**: PR opened with quality checklist and risk assessment.
-**Next phase**: `claude --agent qs-review-task` in the worktree
-(preferred — fresh interactive session), or `/review-task` as fallback.
+**Runs on**: worktree. Fixes the diagnosed bug under
+`custom_components/quiet_solar/` and `tests/` (the regression test the
+red-test protocol writes). Follows the shared implement contract
+with the **red-test protocol** below.
 
-**Phase protocol**:
-1. Read story file. Confirm branch state.
-2. TDD: write failing tests → implement minimum code → refactor.
-3. Present implementation summary (files modified, design decisions,
-   risks). Ask "Ready to run the quality gate?".
-4. **ALWAYS** run the impacted inner-loop gate
-   (`python scripts/qs/quality_gate.py --impacted`) before commit/PR —
-   it proves the *changed lines* are 100% covered in seconds and
-   self-heals a drifted testmon baseline automatically (no manual file
-   deletion ever). Do **not** run, or substitute, the full gate
-   locally: the whole-repo 100% gate runs authoritatively in **CI** on
-   every PR, and detecting coverage lost in *unchanged* code is **CI's
-   exclusive job**. The only local full-gate run is an explicit user
-   request. On an `--impacted` failure, fix the **code/tests** — never
-   reach for the full gate to diagnose; escalate only after 2–3
-   attempts. For change sets touching any `tests/qs`-pinned non-Python
-   file (agent files, commands, workflow docs,
-   `.claude/settings.json`) — even when Python files changed too —
-   also run `python scripts/qs/quality_gate.py --quick tests/qs`
-   before commit (testmon cannot see non-Python files).
-5. Auto-commit, push, open PR. No confirmation prompt — authorized by
-   the workflow.
+### Red-test protocol
 
-**Edit scope**:
-- `qs-implement-task`: `custom_components/quiet_solar/**`, `tests/**`,
-  plus the story file (for progress notes).
-- `qs-implement-setup-task`: `scripts/qs/**`, `.claude/**`, `.cursor/**`,
-  `.opencode/**`, `legacy/**` (frozen — `git mv` INTO only),
-  `docs/**`, `.github/**`,
-  top-level config files, plus the story file.
+1. Write **each** spec'd regression test **first**, run each red with
+   the sanctioned `::`-form (`pytest <file>::<test> -v`), and **record
+   the failure output** (story progress note + PR body) — each must
+   fail for the diagnosed reason, not an import/collection error.
+2. Apply the minimal fix; re-run the test green.
+3. **Scope constraint**: deliver the fix at the scope diagnosed — no
+   drive-by refactors, no opportunistic cleanups. Anything bigger goes
+   through the iceberg escalation, never into the bug PR. File-list
+   amendments carry a reasoned progress note (minimum-diff rule).
+4. **Fallback path**: with an accepted `Fallback accepted:` line in the
+   story, implement per plan and document the alternative evidence in
+   the PR body.
+5. Run the impacted gate before commit; next-phase handoff routes to
+   **`verify-task`**.
 
-**Hard rules**:
-- No code without a failing test first.
-- No commit without a green quality gate.
-- Coverage below 100% is a hard block. No `# pragma: no cover` without
-  explicit user authorization.
+**Next phase**: `claude --agent qs-verify-task` (preferred), or
+`/verify-task` as fallback.
 
 ---
 
-## `review-task` (agent: `qs-review-task`)
+## `verify-task` (agent: `qs-verify-task`)
 
 **Runs on**: worktree.
 **Inputs**: PR number (resolved from branch).
 **Side effects**: writes fix-plan files under
-`docs/stories/QS-<N>.story_review_fix_#NN.md` (if fixes
-are needed).
+`docs/stories/QS-<N>.story_review_fix_#NN.md` (if fixes are needed).
 **Output**: triaged findings; either "ready for finish-task" or a fix
-plan + instructions for the user to apply fixes.
-**Next phase**: `claude --agent qs-finish-task` in the worktree
-(preferred — fresh interactive session), or `/finish-task` as fallback.
-When fixes are needed, re-run `claude --agent qs-implement-task` or
-`claude --agent qs-implement-setup-task` (chosen by file scope of the
-findings, same rule as `/create-plan`) — with `/implement-task` or
-`/implement-setup-task` as the slash-command fallback — then re-run
-`claude --agent qs-review-task` (or `/review-task`).
+plan. `qs-review-task` does **not** run in this lane.
+**Next phase**: `finish-task` (clean), or `implement-task` then re-run
+`verify-task` (fixes).
 
-**Phase protocol**:
-1. Fetch PR diff.
-2. **Spawn 4 reviewer subagents in parallel** (one message, 4
-   invocations):
-   - `qs-review-blind-hunter` — diff only, no repo context
-   - `qs-review-edge-case-hunter` — diff + repo read-only
-   - `qs-review-acceptance-auditor` — diff + story file
-   - `qs-review-coderabbit` — wraps CodeRabbit's review
-3. Consolidate into must-fix / should-fix / nice-to-have / invalid.
-4. **Zero-findings fast path**: if no must-fix or should-fix findings,
-   emit the launcher payload (preferred, `claude --agent
-   qs-finish-task`) plus the slash-command fallback (`/finish-task`).
-5. Interactive triage: present table → ask "fix all / skip all / one by
-   one?" → collect decisions → confirm.
-6. If fixes needed, write fix-plan file (auto-incremented suffix
-   `#01`, `#02`, …) and emit the launcher payload (`claude --agent
-   qs-implement-task` or `claude --agent qs-implement-setup-task`,
-   chosen by file scope of the findings — same rule as `/create-plan`)
-   plus the matching slash-command fallback (`/implement-task` or
-   `/implement-setup-task`) for the user to apply the fix plan.
-7. When fixes pushed, the user re-runs `claude --agent qs-review-task`
-   (or `/review-task` as fallback) — loop back to step 1 until clean.
+Orchestrator — spawns the **fix-verification roster** in parallel (one
+message): `qs-review-edge-case-hunter` (regression is the dominant
+risk) + `qs-review-coderabbit` + `qs-review-regression-proof`. Consolidate
+into must-fix / should-fix / nice-to-have / invalid, drive interactive
+triage, and either fast-path to `finish-task` (zero findings) or write a
+fix plan and loop through `implement-task`.
 
-**Hard rules**:
-- This agent is an orchestrator — do not review code yourself. Always
-  delegate to the 4 subagents.
-- Edit scope is the fix-plan files only.
-- Sub-agent spawning must be parallel, not serial.
+`qs-review-blind-hunter` and `qs-review-acceptance-auditor` do **not**
+run in this lane — for a bug, acceptance *is* the red test, which
+`qs-review-regression-proof` audits.
 
 ---
 
 ## `finish-task` (agent: `qs-finish-task`)
 
-**Runs on**: worktree (until cleanup, then transitions out).
-**Inputs**: PR number if one exists — `pr_number` may be null (the
-no-PR abandon/cleanup path, Case A in the agent), in which case merge
-logic is skipped entirely.
-**Side effects**: merges PR, deletes branch on origin, removes worktree.
-**Output**: confirmation; user is directed to `/release` if appropriate.
-**Next phase**: `/release` from the main checkout (independent), or
-`claude --agent qs-release` if the user prefers the interactive form.
-Note that `qs-finish-task` does **not** call
-`scripts/qs/next_step.py --next-cmd release` to build a launcher
-payload — release lives on the main checkout, which is a different
-workspace, and the user invokes it manually. The agent body still
-mentions both `/release` and `claude --agent qs-release` in plain prose
-as alternatives (see QS-175 OUT OF SCOPE).
-
-**Phase protocol**:
-1. Show PR summary.
-2. Verify CI status: `gh pr checks <PR>`. If pending, advise wait. If
-   failed, STOP.
-3. Ask user for explicit merge authorization.
-4. Merge PR: `gh pr merge --merge`.
-5. Refresh the `--impacted` baseline (QS-276): capture `MAIN_DIR` (via
-   `git worktree list --porcelain | head -1`) **before** cleanup,
-   update the main checkout (`fetch` + `checkout main` + `pull
-   --ff-only`), then refresh the testmon DB via
-   `quality_gate.py --seed-testmon` — detached/best-effort, never
-   blocking cleanup. A failure or stale baseline is safe (new worktrees
-   just run more tests). QS-286: the detached run now emits a completion
-   signal — it redirects to `.testmondata.seed.log` and writes a
-   `.testmondata.seed-status` marker when done; poll it from the main
-   checkout with `quality_gate.py --seed-testmon-status` (0 = safe to
-   close, 4 = still running, 1 = rerun, 3 = no readable status).
-6. Delete remote branch (safety check: refuse if branch is
-   `main` / `master`).
-7. Run `python scripts/qs/cleanup_worktree.py --work-dir <wd>
-   --issue <N> --force` (force because code is safely on main).
-8. Report. If merged and production code touched, tell the user to run
-   `/release` from main.
-
-**Hard rules**:
-- No merge without explicit user authorization.
-- Never auto-chain to `/release` — it's a separate decision.
+Unchanged from the shared contract. Bug × product closes on merge; the
+diagnose-task iceberg / no-defect exits land as pure cleanup — Case A
+when no fix PR was ever opened, the CLOSED-unmerged cleanup branch when
+diagnose-task closed a superseded fix PR (either way finish-task does
+not touch the issue — the diagnose agent already did).
 
 ---
 
 ## `release` (agent: `qs-release`)
 
-**Runs on**: main checkout. Independent of any task.
-**Inputs**: none (uses current date for tag derivation).
-**Side effects**: bumps `manifest.json` version, commits, tags, pushes
-tag.
-**Output**: tag `vYYYY.MM.DD.N`; GitHub Actions runs the release
-pipeline.
-**Next phase**: terminal.
+Unchanged from the shared contract. Runs on the main checkout,
+independent of any task.
 
-**Phase protocol**:
-1. Confirm clean main: `git checkout main`, `git pull`, `git status`.
-2. Dry run: `python scripts/qs/release.py --dry-run` → show proposed
-   tag → ask for confirmation.
-3. Run real: `python scripts/qs/release.py` → bumps manifest, commits,
-   pushes, tags.
-4. Report tag and version; note that GitHub Actions handles the rest.
+---
 
-**Hard rules**:
-- Always dry-run first. Get user confirmation before the real run.
-- Refuse to run if `git status` is not clean.
+## Adversarial review
+
+See [adversarial-review.md](../adversarial-review.md). This lane runs
+**dedicated minimal rosters**: 2 diagnosis reviewers
+(`qs-diag-root-cause-skeptic`, `qs-diag-fix-minimalist`; round 2+ adds
+`qs-plan-delta-auditor`) at diagnose time, and 3 fix-verification
+reviewers (`qs-review-edge-case-hunter`, `qs-review-coderabbit`,
+`qs-review-regression-proof`) at verify time.

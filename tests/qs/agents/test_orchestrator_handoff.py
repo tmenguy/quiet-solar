@@ -42,28 +42,38 @@ _FORBIDDEN_RELEASE_INVOCATION = re.compile(
 )
 
 
-# All 6 orchestrators that ship the strict two-block ``Preferred`` /
-# ``Fallback`` pattern. ``qs-finish-task`` is the deliberate exception
-# (release follow-up is text-only — see QS-175 OUT OF SCOPE) and gets
-# its own dedicated tests below.
+# The 7 two-block orchestrators — every phase orchestrator that ships
+# the strict ``Preferred`` / ``Fallback`` pattern. ``qs-finish-task``
+# deliberately does NOT ship it (its follow-up is text-only — see
+# QS-175 OUT OF SCOPE) and gets its own dedicated tests below;
+# ``qs-release`` has no follow-up phase at all. QS-335 added the bug ×
+# product lane's ``qs-diagnose-task`` (lifted from create-plan) and
+# ``qs-verify-task`` (lifted from review-task).
 _TWO_BLOCK_ORCHESTRATORS = [
     "qs-setup-task.md",
     "qs-create-plan.md",
+    "qs-diagnose-task.md",
     "qs-implement-task.md",
     "qs-implement-setup-task.md",
     "qs-review-task.md",
+    "qs-verify-task.md",
 ]
 
-# Five of those orchestrators emit a hardcoded ``/<phase>`` in the
-# fallback block. ``qs-create-plan`` is dynamic (the NEXT_PHASE depends
-# on the diff) and gets its own dedicated test asserting it uses a
-# placeholder of the right SHAPE, but explicitly NOT
-# ``{{same_context}}``.
+# Those orchestrators whose fallback block names a fixed ``/<phase>``
+# token. ``qs-create-plan`` is dynamic (the NEXT_PHASE depends on the
+# diff) and gets its own dedicated test asserting it uses a placeholder
+# of the right SHAPE, but explicitly NOT ``{{same_context}}``.
+# QS-335: ``qs-diagnose-task`` is likewise dynamic (fix / finish exits)
+# but its fallback line carries the literal ``/{{NEXT_PHASE}}`` token, so
+# the concrete-slash assertion still holds against that literal;
+# ``qs-verify-task``'s clean-path fallback is the fixed ``/finish-task``.
 _HARDCODED_FALLBACK = [
     ("qs-setup-task.md", "/create-plan"),
     ("qs-implement-task.md", "/review-task"),
     ("qs-implement-setup-task.md", "/review-task"),
     ("qs-review-task.md", "/finish-task"),
+    ("qs-diagnose-task.md", "/{{NEXT_PHASE}}"),
+    ("qs-verify-task.md", "/finish-task"),
 ]
 
 
@@ -246,7 +256,7 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 # next phase into ``<worktree>/.claude/settings.local.json`` and each
 # handoff must print the GUI gesture (New session → select directory →
 # name it). The set of orchestrators is exactly the two-block set — the
-# 5 worktree handoffs — and the equality is asserted below.
+# 7 GUI-block handoffs — and the equality is asserted below.
 #
 # Review-fix #01 S3: this list used to be a bare ALIAS of
 # ``_TWO_BLOCK_ORCHESTRATORS``, which made that equality assertion an
@@ -258,9 +268,11 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 _GUI_BLOCK_ORCHESTRATORS = [
     "qs-setup-task.md",
     "qs-create-plan.md",
+    "qs-diagnose-task.md",
     "qs-implement-task.md",
     "qs-implement-setup-task.md",
     "qs-review-task.md",
+    "qs-verify-task.md",
 ]
 
 _GUI_BLOCK_MARKER = "[Claude Code GUI]"
@@ -287,6 +299,9 @@ _GUI_BLOCK_REQUIRED_TOKENS = (
 # would leave the review-found-problems hop with no GUI instructions.
 _GUI_BLOCK_COUNTS = {name: 1 for name in _GUI_BLOCK_ORCHESTRATORS}
 _GUI_BLOCK_COUNTS["qs-review-task.md"] = 2
+# QS-335: qs-verify-task lifts review-task's two handoffs (clean →
+# finish-task, fixes → implement-task then re-run verify-task).
+_GUI_BLOCK_COUNTS["qs-verify-task.md"] = 2
 
 # The fallback line each orchestrator's handoff must still expose after
 # the GUI block was inserted. ``qs-create-plan`` is the dynamic-next-phase
@@ -436,17 +451,22 @@ def test_false_branch_carries_the_stale_pin_hazard(filename: str) -> None:
     )
 
 
-def test_review_task_carries_the_stale_pin_hazard_at_both_handoffs() -> None:
-    """``qs-review-task`` hands off twice, so it needs the sentence twice.
+@pytest.mark.parametrize("filename", ["qs-review-task.md", "qs-verify-task.md"])
+def test_handoff_orchestrators_carry_the_stale_pin_hazard_at_both_handoffs(
+    filename: str,
+) -> None:
+    """``qs-review-task`` / ``qs-verify-task`` hand off twice, so each needs
+    the sentence twice.
 
     The per-file test above is satisfied by one occurrence; this is the same
     two-handoff asymmetry ``_GUI_BLOCK_COUNTS`` exists for. Without it the
-    fix-plan loop back to the implement phase keeps the old wording.
+    fix-plan loop back to the implement phase keeps the old wording. QS-335:
+    qs-verify-task is the bug × product lane's two-handoff review-variant.
     """
-    body = " ".join((AGENTS_DIR / "qs-review-task.md").read_text().split())
+    body = " ".join((AGENTS_DIR / filename).read_text().split())
     expected = " ".join(_STALE_PIN_SENTENCE.split())
     assert body.count(expected) == 2, (
-        f"qs-review-task.md: expected the stale-pin sentence at both handoff "
+        f"{filename}: expected the stale-pin sentence at both handoff "
         f"sites, found {body.count(expected)}"
     )
 
@@ -533,6 +553,67 @@ def test_pointer_block_stays_within_the_doc_line_width() -> None:
             f"pointer-block line is {len(line)} chars, over the ~72-column "
             f"convention of the surrounding docs: {line!r}"
         )
+
+
+# --------------------------------------------------------------------------- #
+# QS-335 D3 — the two shared orchestrators carry the lane-resolved dynamic
+# handoff. ``qs-setup-task`` routes ``create-plan`` by default and
+# ``diagnose-task`` when the lane is ``bug-product``; ``qs-implement-task``
+# routes ``review-task`` by default and ``verify-task`` for ``bug-product``.
+# Both branches must appear in every one of the 3 harness copies. Pattern
+# of ``test_lane_steps_parity.py`` (HARNESS_DIRS-parametrized). The
+# fallback line keeps its literal default as the first slash token with
+# the bug-product branch appended mid-sentence (D3 pin compatibility).
+# ``qs-create-plan``, ``qs-review-task``, ``qs-implement-setup-task`` stay
+# byte-unchanged — verified at review time by ``git diff`` against main
+# (AC-4), no parity test built.
+# --------------------------------------------------------------------------- #
+
+_ROUTING_HARNESS_DIRS = (
+    REPO_ROOT / ".claude" / "agents",
+    REPO_ROOT / ".cursor" / "agents",
+    REPO_ROOT / ".opencode" / "agents",
+)
+
+# agent file -> (default-lane phase token, bug-product-lane phase token)
+_LANE_ROUTING = {
+    "qs-setup-task.md": ("/create-plan", "/diagnose-task"),
+    "qs-implement-task.md": ("/review-task", "/verify-task"),
+}
+
+
+@pytest.mark.parametrize(
+    "harness_dir", _ROUTING_HARNESS_DIRS, ids=lambda p: p.parent.name.lstrip(".")
+)
+@pytest.mark.parametrize("filename", sorted(_LANE_ROUTING))
+def test_shared_orchestrator_carries_both_lane_branches(
+    harness_dir: Path, filename: str,
+) -> None:
+    """Both the default and the bug-product routing branch appear in each copy."""
+    default_tok, bug_tok = _LANE_ROUTING[filename]
+    path = harness_dir / filename
+    assert path.is_file(), f"missing agent file: {path}"
+    body = path.read_text(encoding="utf-8")
+    assert default_tok in body, (
+        f"{path}: missing the default-lane routing token {default_tok!r} "
+        f"(QS-335 D3)."
+    )
+    assert bug_tok in body, (
+        f"{path}: missing the bug-product routing branch {bug_tok!r} — the "
+        f"handoff must resolve the next phase from the lane (QS-335 D3)."
+    )
+    assert "bug-product" in body, (
+        f"{path}: the lane-resolved handoff must name the `bug-product` lane "
+        f"that selects the alternate next phase (QS-335 D3)."
+    )
+    # Discriminating pin (review-fix #05): the fallback line alone carries
+    # both phase tokens and "bug-product", so without this assertion the
+    # resolution paragraph — the definition of ``{{NEXT_PHASE}}`` — could
+    # be deleted while the test stays green.
+    assert "Resolve the next phase from the lane" in body, (
+        f"{path}: missing the lane-resolution paragraph that defines "
+        f"{{{{NEXT_PHASE}}}} (QS-335 D3)."
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -12,11 +12,10 @@ pytest-split==0.11.0
 # QS-292: twin of the `pip install coverage==7.15.2` literal in
 # pr-quality.yml's aggregation job — the shards' data must be written and
 # read by the same version. Both move together in one edit.
-# QS-346: bumped to match pytest-homeassistant-custom-component 0.13.355's pin.
-coverage==7.15.2
+coverage==7.15.2  # matches pytest-homeassistant-custom-component's own pin
 
 # Mock and testing utilities
-pytest-homeassistant-custom-component==0.13.355
+pytest-homeassistant-custom-component==0.13.355  # HA 2026.8.1
 freezegun==1.5.5
 syrupy==5.5.3  # matches pytest-homeassistant-custom-component's own pin
 
