@@ -36,6 +36,7 @@ permission:
     "gh issue close *": allow
     "gh issue comment *": allow
     "gh issue edit *": allow
+    "gh pr close *": allow
     "source venv/bin/activate*": allow
     "python scripts/qs/*": allow
   webfetch: ask
