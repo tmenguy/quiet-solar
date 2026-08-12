@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-11
+last_verified: 2026-08-12
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -322,6 +322,17 @@ unplug clears the memory** (in the `is_not_plugged` branch of
 so a replug on a still-faulted charger does not re-attach on stale
 memory — the charger correctly stops appearing available until its
 status recovers.
+
+The **fault alert reuses that same trust discriminator** (QS-346):
+`_notify_charger_fault` names (and routes to the person of) a remembered
+car **only while `_last_attached_car.charger is None`**, so charger A's
+"unplug and replug" alert never blames a car that has since re-homed to
+charger B — it falls back to the charger-only "please check the charger"
+text instead. The two channels — the per-person charger override and the
+household broadcast — are **failure-isolated** (each in its own
+`try/except`): one raising can neither suppress the other nor block the
+caller's `_charger_fault_notified` latch, so a transient notify error
+cannot make the same episode re-alert every cycle.
 
 ## Lifecycle / sequence (one update cycle)
 

@@ -1626,6 +1626,53 @@ def test_is_load_active_false_while_faulted_reverts_ac4():
 
 
 @pytest.mark.asyncio
+async def test_faulted_full_cycle_retains_car_and_constraint_then_reverts_ac4():
+    """AC 4: a full faulted cycle keeps the car + constraint attached; both revert
+    (the charger re-enters ``active_loads``) once the fault clears.
+
+    Unlike the static sibling test, this runs a real
+    ``check_load_activity_and_constraints`` on a faulted charger whose plug probe is
+    blind (the QS-346 field scenario) and asserts the car and its constraint survive
+    the cycle.
+    """
+    hass, home, _dyn_group, _cg, time, config_entry = _create_hass_and_home()
+    charger = _create_faulted_ocpp_charger(hass, home, config_entry, "Faulty", time)
+
+    car = MagicMock()
+    car.name = "Zoe"
+    charger.car = car
+    charger.car_attach_time = time
+    constraint = MagicMock()
+    charger._constraints = [constraint]
+    charger.qs_enable_device = True
+    charger._asked_for_reboot_at_time = None
+    charger._boot_time = None
+
+    # faulted charger, blind plug probe -> the cycle must not mutate car/constraints
+    assert charger.is_charger_faulted(time) is True
+    assert charger.is_load_active(time) is False
+
+    with (
+        patch.object(charger, "is_charger_unavailable", return_value=False),
+        patch.object(charger, "probe_for_possible_needed_reboot", return_value=False),
+        patch.object(charger, "is_not_plugged", return_value=None),
+        patch.object(charger, "is_plugged", return_value=None),
+    ):
+        await charger.check_load_activity_and_constraints(time)
+
+    # the real cycle preserved both the car and its constraint ...
+    assert charger.car is car
+    assert charger._constraints == [constraint]
+
+    # ... and once the fault clears the charger re-enters active_loads, still attached
+    charger._entity_probed_state[charger.charger_status_sensor_unfiltered] = []
+    assert charger.is_charger_faulted(time) is False
+    assert charger.is_load_active(time) is True
+    assert charger.car is car
+    assert charger._constraints == [constraint]
+
+
+@pytest.mark.asyncio
 async def test_faulted_charger_absent_from_group_actionable_ac4():
     """AC 4: a faulted charger is dropped from the group's actionable_chargers list."""
     hass, home, dyn_group, cg, time, config_entry = _create_hass_and_home()

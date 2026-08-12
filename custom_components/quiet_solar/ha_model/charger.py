@@ -2934,17 +2934,22 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         message: str | None = None,
         *,
         notification_tag: str | None = None,
-    ):
+        car: QSCar | None = None,
+    ) -> None:
 
-        if self.car:
-            if self.car.current_forecasted_person:
-                load_name = self.car.name
-                mobile_app = self.car.current_forecasted_person.mobile_app
-                mobile_app_url = self.car.current_forecasted_person.mobile_app_url
+        # QS-346: `car` overrides recipient selection so a remembered (detached) car's
+        # person can still be alerted when no car is currently attached. It defaults to
+        # the attached car, keeping every existing caller byte-identical.
+        recipient_car = car if car is not None else self.car
+        if recipient_car:
+            if recipient_car.current_forecasted_person:
+                load_name = recipient_car.name
+                mobile_app = recipient_car.current_forecasted_person.mobile_app
+                mobile_app_url = recipient_car.current_forecasted_person.mobile_app_url
             else:
-                load_name = self.car.name
-                mobile_app = self.car.mobile_app
-                mobile_app_url = self.car.mobile_app_url
+                load_name = recipient_car.name
+                mobile_app = recipient_car.mobile_app
+                mobile_app_url = recipient_car.mobile_app_url
         else:
             load_name = self.name
             mobile_app = self.mobile_app
@@ -4791,14 +4796,23 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         return contiguous_status > 0
 
-    async def _notify_charger_fault(self, time: datetime):
+    async def _notify_charger_fault(self, time: datetime) -> None:
         # QS-346: alert both the attached car's person (via the charger override, which
         # is silently dropped when no person is resolvable) AND the whole household
         # (guaranteed channel). The raw status is always non-None here: reaching this
         # point requires the fault to have held for the debounce, so the unfiltered
         # probe carries the fault value.
         status = self.get_sensor_latest_possible_valid_value(self.charger_status_sensor_unfiltered, time=time)
-        car = self.car or self._last_attached_car
+        # QS-346: trust a remembered car ONLY while it is genuinely detached
+        # (`charger is None`) — the same discriminator `_check_plugged_val` applies. A
+        # car re-homed to charger B is charging elsewhere and must never be named in
+        # (or routed as the recipient of) charger A's fault alert. Computed once and
+        # reused for both the message text and recipient routing.
+        car = self.car or (
+            self._last_attached_car
+            if self._last_attached_car is not None and self._last_attached_car.charger is None
+            else None
+        )
         if car is not None:
             message = (
                 f"{self.name} is in error ({status}) and cannot charge. "
@@ -4807,10 +4821,22 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         else:
             message = f"{self.name} is in error ({status}) and cannot charge. Please check the charger."
 
-        await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_ERROR, message=message)
-        await self.home.async_notify_all_mobile_apps("Charger error — action needed", message)
+        # QS-346: isolate the two channels. If either raises, the other must still run
+        # and the method must return normally so the caller latches `_charger_fault_notified`
+        # — otherwise the exception propagates and every later cycle replays the same
+        # fault episode. Each channel logs-and-continues. The trusted `car` is passed to
+        # recipient selection so the remembered car's person is reachable when
+        # `self.car is None`.
+        try:
+            await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_ERROR, message=message, car=car)
+        except Exception:
+            _LOGGER.error("Error sending charger-fault override notification for %s", self.name, exc_info=True)
+        try:
+            await self.home.async_notify_all_mobile_apps("Charger error — action needed", message)
+        except Exception:
+            _LOGGER.error("Error broadcasting charger-fault notification for %s", self.name, exc_info=True)
 
-    def is_load_active(self, time: datetime):
+    def is_load_active(self, time: datetime) -> bool:
         # QS-346: a faulted charger is a human-fix problem, not a solver participant.
         # Reporting it inactive keeps it out of `active_loads` (so the solver stops
         # updating its constraint) while leaving the car and constraint attached, which

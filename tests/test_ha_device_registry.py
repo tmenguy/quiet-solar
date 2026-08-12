@@ -168,6 +168,7 @@ async def test_device_config_entry_association(
     # All devices should be associated with the config entry. HA 2026.8 moved
     # devices to a single config entry (`config_entries` is deprecated, removed
     # 2027.8) — assert the current `config_entry_id` accessor instead.
+    assert devices, "Expected at least one device for the config entry"
     for device in devices:
         assert device.config_entry_id == config_entry.entry_id
 
@@ -216,4 +217,8 @@ async def test_hass_storage_mocks_disk_writes(hass, hass_storage):
     await store.async_save({"probe": True})
 
     assert "qs_leak_probe" in hass_storage  # captured by the mock
-    assert not (Path(get_test_config_dir()) / ".storage" / "qs_leak_probe").exists()
+    # QS-346: keep the synchronous `Path.exists()` filesystem probe off the running
+    # event loop by delegating it to the executor.
+    assert not await hass.async_add_executor_job(
+        (Path(get_test_config_dir()) / ".storage" / "qs_leak_probe").exists
+    )
