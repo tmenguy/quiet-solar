@@ -13,13 +13,14 @@ Story 2.2: Charger Budgeting Scenario Tests (Epic 2)
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytz
 from homeassistant.const import CONF_NAME
 
 from custom_components.quiet_solar.const import (
+    CONF_CHARGER_DEVICE_OCPP,
     CONF_CHARGER_DEVICE_WALLBOX,
     CONF_CHARGER_MAX_CHARGE,
     CONF_CHARGER_MIN_CHARGE,
@@ -30,7 +31,9 @@ from custom_components.quiet_solar.const import (
     DOMAIN,
 )
 from custom_components.quiet_solar.ha_model.charger import (
+    CHARGER_STATE_REFRESH_INTERVAL_S,
     QSChargerGroup,
+    QSChargerOCPP,
     QSChargerStatus,
     QSChargerWallbox,
 )
@@ -39,6 +42,7 @@ from custom_components.quiet_solar.ha_model.home import QSHome
 from custom_components.quiet_solar.home_model.commands import (
     CMD_AUTO_FROM_CONSIGN,
     CMD_AUTO_GREEN_ONLY,
+    CMD_IDLE,
     CMD_ON,
 )
 
@@ -1546,3 +1550,181 @@ class TestDampeningAccuracy:
         assert diff is not None
         # Should use dampening graph value (500W) instead of table lookup
         assert abs(diff - 500.0) < 1.0, f"Dampening graph should override table: expected ~500W, got {diff:.1f}"
+
+
+# =============================================================================
+# QS-346: a faulted charger leaves the solver and the budgeting group, idles
+# silently, but keeps its car and constraint attached.
+# =============================================================================
+
+
+def _create_faulted_ocpp_charger(hass, home, config_entry, name: str, time: datetime):
+    """Build a QSChargerOCPP whose unfiltered status probe reads ``Faulted``."""
+    device = MagicMock()
+    device.name = name
+    device.name_by_user = None
+
+    entry = MagicMock()
+    entry.entity_id = f"sensor.{name.lower()}_status_connector"
+
+    device_reg = MagicMock()
+    device_reg.async_get.return_value = device
+    entity_reg = MagicMock()
+    entity_reg.async_entries_for_device.return_value = [entry]
+
+    with (
+        patch("custom_components.quiet_solar.ha_model.charger.device_registry.async_get", return_value=device_reg),
+        patch("custom_components.quiet_solar.ha_model.charger.entity_registry.async_get", return_value=entity_reg),
+    ):
+        charger = QSChargerOCPP(
+            **{
+                CONF_NAME: name,
+                CONF_CHARGER_MIN_CHARGE: 6,
+                CONF_CHARGER_MAX_CHARGE: 32,
+                CONF_IS_3P: True,
+                CONF_MONO_PHASE: 1,
+                CONF_CHARGER_DEVICE_OCPP: f"device.{name.lower()}",
+                "home": home,
+                "hass": hass,
+                "config_entry": config_entry,
+            }
+        )
+
+    # Seed the unfiltered status probe with a contiguous ``Faulted`` window that
+    # spans well beyond the fault-detection window (2 * refresh interval).
+    charger._entity_probed_state[charger.charger_status_sensor_unfiltered] = [
+        (time - timedelta(seconds=3 * CHARGER_STATE_REFRESH_INTERVAL_S), "Faulted", {}),
+    ]
+    return charger
+
+
+def test_is_load_active_false_while_faulted_reverts_ac4():
+    """AC 4: a faulted charger reports inactive while keeping car + constraint; reverts on clear."""
+    hass, home, _dyn_group, _cg, time, config_entry = _create_hass_and_home()
+    charger = _create_faulted_ocpp_charger(hass, home, config_entry, "Faulty", time)
+
+    car = MagicMock()
+    car.name = "Zoe"
+    charger.car = car
+    charger.car_attach_time = time
+    constraint = MagicMock()
+    charger._constraints = [constraint]
+    charger.qs_enable_device = True
+
+    assert charger.is_charger_faulted(time) is True
+    assert charger.is_load_active(time) is False
+    # the car and its constraint are NOT dropped — they keep the pair visible and red
+    assert charger.car is car
+    assert charger._constraints == [constraint]
+
+    # status clears -> both the solver membership and the base predicate revert
+    charger._entity_probed_state[charger.charger_status_sensor_unfiltered] = []
+    assert charger.is_charger_faulted(time) is False
+    assert charger.is_load_active(time) is True
+    assert charger.car is car
+    assert charger._constraints == [constraint]
+
+
+@pytest.mark.asyncio
+async def test_faulted_full_cycle_retains_car_and_constraint_then_reverts_ac4():
+    """AC 4: a full faulted cycle keeps the car + constraint attached; both revert
+    (the charger re-enters ``active_loads``) once the fault clears.
+
+    Unlike the static sibling test, this runs a real
+    ``check_load_activity_and_constraints`` on a faulted charger whose plug probe is
+    blind (the QS-346 field scenario) and asserts the car and its constraint survive
+    the cycle.
+    """
+    hass, home, _dyn_group, _cg, time, config_entry = _create_hass_and_home()
+    charger = _create_faulted_ocpp_charger(hass, home, config_entry, "Faulty", time)
+
+    car = MagicMock()
+    car.name = "Zoe"
+    charger.car = car
+    charger.car_attach_time = time
+    constraint = MagicMock()
+    charger._constraints = [constraint]
+    charger.qs_enable_device = True
+    charger._asked_for_reboot_at_time = None
+    charger._boot_time = None
+
+    # faulted charger, blind plug probe -> the cycle must not mutate car/constraints
+    assert charger.is_charger_faulted(time) is True
+    assert charger.is_load_active(time) is False
+
+    with (
+        patch.object(charger, "is_charger_unavailable", return_value=False),
+        patch.object(charger, "probe_for_possible_needed_reboot", return_value=False),
+        patch.object(charger, "is_not_plugged", return_value=None),
+        patch.object(charger, "is_plugged", return_value=None),
+    ):
+        await charger.check_load_activity_and_constraints(time)
+
+    # the real cycle preserved both the car and its constraint ...
+    assert charger.car is car
+    assert charger._constraints == [constraint]
+
+    # ... and once the fault clears the charger re-enters active_loads, still attached
+    charger._entity_probed_state[charger.charger_status_sensor_unfiltered] = []
+    assert charger.is_charger_faulted(time) is False
+    assert charger.is_load_active(time) is True
+    assert charger.car is car
+    assert charger._constraints == [constraint]
+
+
+@pytest.mark.asyncio
+async def test_faulted_charger_absent_from_group_actionable_ac4():
+    """AC 4: a faulted charger is dropped from the group's actionable_chargers list."""
+    hass, home, dyn_group, cg, time, config_entry = _create_hass_and_home()
+
+    faulted = _create_faulted_ocpp_charger(hass, home, config_entry, "Faulty", time)
+    healthy = _create_faulted_ocpp_charger(hass, home, config_entry, "Healthy", time)
+    # clear the healthy charger's fault so it stays actionable
+    healthy._entity_probed_state[healthy.charger_status_sensor_unfiltered] = []
+
+    # Both chargers would otherwise be actionable — patch the per-charger paths so
+    # the test isolates the group-level faulted skip (the change under test).
+    for charger in (faulted, healthy):
+        charger.ensure_correct_state = AsyncMock(return_value=(True, False, time))
+        cs = QSChargerStatus(charger)
+        cs.charge_score = 1.0
+        charger.get_stable_dynamic_charge_status = MagicMock(return_value=cs)
+
+    cg._chargers = [faulted, healthy]
+
+    actionable, _vcst = await cg.ensure_correct_state(time)
+
+    names = {cs.charger.name for cs in actionable}
+    assert "Healthy" in names
+    assert "Faulty" not in names
+    # the faulted charger is skipped before its per-charger state is even probed
+    faulted.ensure_correct_state.assert_not_called()
+    healthy.ensure_correct_state.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_faulted_charger_idle_issues_no_low_level_commands_ac5():
+    """AC 5 (idle half): CMD_IDLE on a faulted charger issues zero low-level commands."""
+    hass, home, _dyn_group, _cg, time, config_entry = _create_hass_and_home()
+    charger = _create_faulted_ocpp_charger(hass, home, config_entry, "Faulty", time)
+
+    car = MagicMock()
+    car.name = "Zoe"
+    car.car_charger_min_charge = 6
+    car.car_charger_max_charge = 32
+    charger.car = car
+    charger.car_attach_time = time
+
+    with (
+        patch.object(charger, "is_optimistic_plugged", return_value=True),
+        patch.object(charger, "start_charge", new=AsyncMock()) as start,
+        patch.object(charger, "stop_charge", new=AsyncMock()) as stop,
+        patch.object(charger, "set_charging_current", new=AsyncMock()) as set_amp,
+        patch.object(charger, "set_charging_num_phases", new=AsyncMock()) as set_phases,
+    ):
+        await charger.execute_command(time, CMD_IDLE)
+
+    start.assert_not_called()
+    stop.assert_not_called()
+    set_amp.assert_not_called()
+    set_phases.assert_not_called()

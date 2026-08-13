@@ -165,9 +165,12 @@ async def test_device_config_entry_association(
 
     devices = dr.async_entries_for_config_entry(device_registry, config_entry.entry_id)
 
-    # All devices should be associated with the config entry
+    # All devices should be associated with the config entry. HA 2026.8 moved
+    # devices to a single config entry (`config_entries` is deprecated, removed
+    # 2027.8) — assert the current `config_entry_id` accessor instead.
+    assert devices, "Expected at least one device for the config entry"
     for device in devices:
-        assert config_entry.entry_id in device.config_entries
+        assert device.config_entry_id == config_entry.entry_id
 
 
 async def test_multiple_devices_different_types(
@@ -195,3 +198,27 @@ async def test_multiple_devices_different_types(
         charger_devices = dr.async_entries_for_config_entry(device_registry, charger_entry.entry_id)
         if len(charger_devices) > 0:
             assert "Test Charger" in charger_devices[0].name
+
+
+async def test_hass_storage_mocks_disk_writes(hass, hass_storage):
+    """Store writes must land in the hass_storage dict, never on disk.
+
+    QS-346: guards against a re-introduction of the `hass_storage` override
+    that disabled `pytest-homeassistant-custom-component`'s Store mocking and
+    leaked real registry files into `site-packages` — a leak that made HA
+    2026.8's device-registry v3 split migration hang the whole suite.
+    """
+    from pathlib import Path
+
+    from homeassistant.helpers.storage import Store
+    from pytest_homeassistant_custom_component.common import get_test_config_dir
+
+    store = Store(hass, 1, "qs_leak_probe")
+    await store.async_save({"probe": True})
+
+    assert "qs_leak_probe" in hass_storage  # captured by the mock
+    # QS-346: keep the synchronous `Path.exists()` filesystem probe off the running
+    # event loop by delegating it to the executor.
+    assert not await hass.async_add_executor_job(
+        (Path(get_test_config_dir()) / ".storage" / "qs_leak_probe").exists
+    )

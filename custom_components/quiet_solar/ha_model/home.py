@@ -4516,7 +4516,13 @@ class QSSolarHistoryVals:
         if self.values is not None:
             last_bad_idx = now_idx
 
-            while True:
+            # QS-346: bound the backward scan to a single lap around the ring. A
+            # degenerate buffer (nonzero data row but an all-zero/stale day row, which
+            # a shared on-disk file racing between processes can produce) has NO good
+            # slot, so an unbounded `while True` here would loop forever. After a full
+            # lap with no good slot, every slot is stale -> full refresh (the
+            # `start_time` math below already handles num_slots == buffer size).
+            for _ in range(self.values.shape[1]):
                 try_prev_idx = last_bad_idx - 1
                 if try_prev_idx < 0:
                     try_prev_idx = self.values.shape[1] - 1

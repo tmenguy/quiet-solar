@@ -417,16 +417,6 @@ def create_mock_device(device_type: str, name: str = "Mock Device", **kwargs):
 # instance. They are separate from the unit test fixtures above.
 
 
-@pytest.fixture
-def hass_storage():
-    """Fixture to provide storage dictionary for Home Assistant tests.
-
-    This fixture overrides the default mock storage to prevent teardown errors
-    when the storage tries to write data.
-    """
-    return {}
-
-
 @pytest.fixture(autouse=True)
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable loading custom integrations in all tests using real HA.

@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytz
-from homeassistant.const import STATE_UNKNOWN
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 
 from custom_components.quiet_solar.const import (
     USER_ORIGINATED_CAR_NAME,
@@ -231,6 +231,28 @@ class TestQSChargerGenericChargeState(unittest.TestCase):
 
         result = self.charger.is_charger_unavailable(time)
         self.assertTrue(result)
+
+    def test_is_charger_unavailable_state_object_is_unavailable(self):
+        """AC 7: unavailable is detected on the entity's ``state`` string, not the object."""
+        time = datetime.now(pytz.UTC)
+
+        mock_state = MagicMock()
+        mock_state.state = STATE_UNAVAILABLE
+        self.hass.states.get.return_value = mock_state
+
+        result = self.charger.is_charger_unavailable(time)
+        self.assertTrue(result)
+
+    def test_is_charger_unavailable_state_object_is_available(self):
+        """A live (non-unavailable) status entity reports the charger as available."""
+        time = datetime.now(pytz.UTC)
+
+        mock_state = MagicMock()
+        mock_state.state = "Charging"
+        self.hass.states.get.return_value = mock_state
+
+        result = self.charger.is_charger_unavailable(time)
+        self.assertFalse(result)
 
     def test_is_charging_power_zero_true(self):
         """Test is_charging_power_zero when power is zero."""
