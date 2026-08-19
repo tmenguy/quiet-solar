@@ -30,7 +30,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     TimeBasedSimplePowerLoadConstraint,
 )
 from custom_components.quiet_solar.home_model.load import PilotedDevice, TestLoad
-from custom_components.quiet_solar.home_model.solver import PeriodSolver
+from custom_components.quiet_solar.home_model.solver import BatteryChargingPower, PeriodSolver
 
 # def _util_constraint_save_dump(time, cs):
 #     dc_dump = cs.to_dict()
@@ -1627,7 +1627,7 @@ def test_prepare_battery_segmentation_first_segment_empty():
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge, {})
+    ret = BatteryChargingPower(battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge, {})
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave, energy_delta = solver._prepare_battery_segmentation()
@@ -1664,7 +1664,7 @@ def test_prepare_battery_segmentation_null_current_charge():
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge, {})
+    ret = BatteryChargingPower(battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge, {})
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave, energy_delta = solver._prepare_battery_segmentation()
@@ -1927,11 +1927,11 @@ def test_output_none_battery_command_replaced():
         result = real_charging(**kwargs)
         call_count[0] += 1
         if call_count[0] >= 3:
-            battery_ext, battery_charge, battery_commands, *rest = result
+            battery_commands = result.battery_commands
             if len(battery_commands) > 2:
+                # battery_commands is a list — mutating it updates the NamedTuple
                 battery_commands[-1] = None
                 battery_commands[-2] = None
-            result = (battery_ext, battery_charge, battery_commands, *rest)
         return result
 
     with patch.object(solver, "_battery_get_charging_power", side_effect=patched_charging):
@@ -2128,10 +2128,11 @@ class TestSolverBatteryCommandOutput(TestCase):
 
         def patched_charging(**kwargs):
             result = real_charging(**kwargs)
-            battery_ext, battery_charge, battery_commands, *rest = result
+            battery_commands = result.battery_commands
             if len(battery_commands) > 1:
+                # battery_commands is a list — mutating it updates the NamedTuple
                 battery_commands[0] = None
-            return (battery_ext, battery_charge, battery_commands, *rest)
+            return result
 
         with patch.object(solver, "_battery_get_charging_power", side_effect=patched_charging):
             output_cmds, bcmd = solver.solve()

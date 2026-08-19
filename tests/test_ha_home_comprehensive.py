@@ -71,17 +71,26 @@ class _RecordingBattery:
 class _RecordingLoad:
     """Minimal load double recording launch_command; can hang on an event."""
 
-    def __init__(self, events: list, name: str = "load", hang_event: asyncio.Event | None = None):
+    def __init__(
+        self,
+        events: list,
+        name: str = "load",
+        hang_event: asyncio.Event | None = None,
+        raise_on_launch: bool = False,
+    ):
         self._events = events
         self.name = name
         self.qs_enable_device = True
         self._hang = hang_event
+        self._raise_on_launch = raise_on_launch
 
     def reset_override_state_and_set_reset_ask_time(self, time):
         pass
 
     async def launch_command(self, time, command, ctxt: str = ""):
         self._events.append(("load", self.name, command))
+        if self._raise_on_launch:
+            raise RuntimeError("load shed boom")
         if self._hang is not None:
             await self._hang.wait()
 
@@ -1941,6 +1950,30 @@ class TestOffGridAutoDetection:
         assert any(c[2].get(ATTR_ENTITY_ID) == "number.bat_maxdis" for c in set_value_calls), (
             "the off-grid restore must issue a real number.set_value on the discharge entity"
         )
+
+    @pytest.mark.asyncio
+    async def test_raising_load_shed_isolated_others_still_shed_and_gate_set(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """R2: a raising load command is isolated — remaining loads still shed, gate set."""
+        home = home_with_binary_sensor_off_grid
+        home.home_mode = QSHomeMode.HOME_MODE_ON
+        events: list = []
+        home.physical_battery = _RecordingBattery(events)
+        home._all_loads = [
+            _RecordingLoad(events, "load_1", raise_on_launch=True),
+            _RecordingLoad(events, "load_2"),
+        ]
+        home.qs_home_is_off_grid = False
+        home._switch_to_off_grid_launched = None
+
+        with patch.object(home, "force_next_solve") as mock_force_solve:
+            await home.async_set_off_grid_mode(True, for_init=False)
+
+        # both loads were attempted despite the first raising
+        assert [e[0] for e in events] == ["battery", "load", "load"]
+        assert home._switch_to_off_grid_launched is not None
+        mock_force_solve.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_hung_notify_does_not_delay_battery_restore(

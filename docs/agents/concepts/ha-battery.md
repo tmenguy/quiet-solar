@@ -4,7 +4,7 @@ slug: ha-battery
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/battery.py
-last_verified: 2026-08-17
+last_verified: 2026-08-20
 ---
 
 # QSBattery (ha_model) — HA-facing battery integration
@@ -23,8 +23,13 @@ charge-from-grid switch. For discharge-limiting commands,
 entity — `CMD_GREEN_CHARGE_ONLY` and `CMD_FORCE_CHARGE` write the floor
 instead of a hard `0` (a nonzero floor *limits* discharge, it does not
 disable it; the domain `Battery.max_discharging_power` attribute is
-unchanged). There is no discharge-enable switch and no SOC-setpoint
-number. It attaches HA state probes for SOC
+unchanged). Writes go through `_number_entity_target`, which maps the W
+value to the entity's unit/min/max/step so the write, the read-back, and
+the probe agree (kW-denominated or stepped entities otherwise never
+confirm — eternal retry); the discharge floor snaps **up** (`ceil`) so a
+safety minimum is never lowered to 0, while the charge limit snaps to the
+nearest step (review-fix #01 S2, #02 R1/R5). There is no discharge-enable
+switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.
 

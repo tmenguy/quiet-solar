@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-08-19
+last_verified: 2026-08-20
 ---
 
 # Config flow and setup
@@ -192,9 +192,11 @@ options/reconfigure paths carry it. The entry value travels via
 as floor = 0. `strings.json` carries the label plus a `data_description`
 in both the config and options battery sections (the battery step had no
 `data_description` block before). `async_step_battery` also rejects a
-floor above the maximum discharge power with a `min_discharge_above_max`
-form error (the domain clamps it anyway, but the error makes the
-mismatch visible).
+floor strictly **above** the maximum discharge power with a
+`min_discharge_above_max` form error (the domain clamps it anyway, but
+the error makes the mismatch visible); floor **==** max is deliberately
+allowed (a legitimate "never limit discharge" choice — review-fix #02
+R9).
 
 **Data handler lifecycle** (`data_handler.py`):
 

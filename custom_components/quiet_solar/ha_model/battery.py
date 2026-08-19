@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime
 from typing import Any
 
@@ -137,26 +138,35 @@ class QSBattery(HADeviceMixin, Battery):
             _LOGGER.debug("probe_if_command_set: battery probe_if_command_set ret None, max_charge_power None")
             return None
 
+        # same landed-value mapping on the charge leg (R5: kW-denominated
+        # max_charge_number would otherwise never confirm)
+        expected_max_charge = cmd_to_vals["max_charging_power"]
+        if expected_max_charge is not None:
+            _, expected_max_charge = self._charge_number_target(expected_max_charge)
+
         return (
             is_charge_from_grid == cmd_to_vals["charge_from_grid"]
             and max_discharge_power == expected_max_discharge
-            and max_charge_power == cmd_to_vals["max_charging_power"]
+            and max_charge_power == expected_max_charge
         )
 
-    def _discharge_number_target(self, power_w: float) -> tuple[float, int]:
-        """Map a W discharge-limit target to (value_to_write, expected_landed_w).
+    def _number_entity_target(self, entity_id: str | None, power_w: float, snap_up: bool) -> tuple[float, int]:
+        """Map a W power target to (value_to_write, expected_landed_w) for a number entity.
 
-        Mirrors the read path (`get_max_discharging_power` /
-        `convert_power_to_w`) so the write, the read-back, and the probe
-        comparison all agree even when `max_discharge_number` is
-        kW-denominated or carries a min/max/step that would snap the value.
+        Mirrors the read path (`convert_power_to_w`) so the write, the
+        read-back, and the probe comparison all agree even when the entity
+        is kW-denominated or carries a min/max/step that would snap the
+        value. `snap_up=True` (discharge floor) rounds the step **up** so a
+        safety minimum is never lowered — nearest-step rounding could snap a
+        floor down to 0 and then confirm the zeroed floor. `snap_up=False`
+        (charge limit, not a safety minimum) rounds to the nearest step.
         Falls back to a raw W passthrough when the entity attributes are
         unreadable.
         """
         write_value = float(power_w)
         attributes: dict = {}
-        if self.max_discharge_number is not None:
-            state = self.hass.states.get(self.max_discharge_number)
+        if entity_id is not None:
+            state = self.hass.states.get(entity_id)
             if state is not None and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
                 attributes = state.attributes or {}
 
@@ -175,13 +185,28 @@ class QSBattery(HADeviceMixin, Battery):
         step = attributes.get("step")
         if step:
             step = float(step)
-            write_value = round(write_value / step) * step
+            if snap_up:
+                # a discharge floor is a safety minimum — never snap it below the
+                # request; then re-cap to the entity max (ceil cannot undershoot min)
+                write_value = math.ceil(write_value / step) * step
+                if ent_max is not None:
+                    write_value = min(write_value, float(ent_max))
+            else:
+                write_value = round(write_value / step) * step
 
         landed_w = write_value
         if to_entity_unit:
             landed_w = PowerConverter.convert(value=write_value, from_unit=unit, to_unit=UnitOfPower.WATT)
 
         return write_value, int(round(landed_w))
+
+    def _discharge_number_target(self, power_w: float) -> tuple[float, int]:
+        """Discharge floor target — snaps UP (a safety minimum is never lowered)."""
+        return self._number_entity_target(self.max_discharge_number, power_w, snap_up=True)
+
+    def _charge_number_target(self, power_w: float) -> tuple[float, int]:
+        """Charge limit target — nearest-step (not a safety minimum)."""
+        return self._number_entity_target(self.max_charge_number, power_w, snap_up=False)
 
     async def set_charge_from_grid(self, charge_from_grid: bool | None, blocking: bool = False):
         if self.charge_from_grid_switch is None or charge_from_grid is None:
@@ -296,7 +321,7 @@ class QSBattery(HADeviceMixin, Battery):
                 try:
                     res = float(state.state)
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                    res = int(res)
+                    res = int(round(res))
                     _LOGGER.info("get_max_charging_power: battery %s  %s", res, self.max_charge_number)
                 except:
                     res = None
@@ -309,14 +334,16 @@ class QSBattery(HADeviceMixin, Battery):
             return
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_charge_number}
-        range_value = float(power)
         service = number.SERVICE_SET_VALUE
         min_value = float(self.min_charging_power)
         max_value = float(self.max_charging_power)
 
-        val = int(min(max_value, max(min_value, range_value)))
+        # domain clamp to [min_charging_power, max_charging_power] (W), then map to
+        # the entity's unit/step/range so the read-back and probe agree (R5)
+        clamped_w = min(max_value, max(min_value, float(power)))
+        val, expected_w = self._charge_number_target(clamped_w)
 
-        if val == self.get_max_charging_power():
+        if expected_w == self.get_max_charging_power():
             return
 
         data[number.ATTR_VALUE] = val

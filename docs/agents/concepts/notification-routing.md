@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/device.py
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-19
+last_verified: 2026-08-20
 ---
 
 # Notification routing

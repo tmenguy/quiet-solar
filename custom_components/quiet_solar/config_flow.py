@@ -1107,7 +1107,10 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         if user_input is not None:
             # the domain model clamps the floor anyway, but surface a clear error
-            # when the user asks for a floor above the maximum discharge power
+            # when the user asks for a floor ABOVE the maximum discharge power.
+            # floor == max is deliberately allowed: it degenerates to always
+            # discharging up to the max (CMD_GREEN_CHARGE_ONLY behaves like
+            # CMD_GREEN_CHARGE_AND_DISCHARGE), a legitimate "never limit" choice.
             floor = user_input.get(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE)
             max_discharge = user_input.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE)
             if floor is not None and max_discharge is not None and float(floor) > float(max_discharge):

@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-08-19
+last_verified: 2026-08-20
 ---
 
 # QSHome — the orchestrator

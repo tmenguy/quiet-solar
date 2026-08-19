@@ -4,7 +4,7 @@ slug: solver
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/solver.py
-last_verified: 2026-08-17
+last_verified: 2026-08-20
 ---
 
 # PeriodSolver
@@ -61,10 +61,14 @@ discharges up to F. Each discharging slot's energy splits into an
 **incompressible leak** `leak_i = min(discharge, F × duration)` — which
 flows even when the slot is flipped to green-charge-only — and a
 **compressible remainder** the price-bucket optimizer may move between
-buckets. Pass 1 accumulates `prices_leak_energy_buckets` (appended as
-the 9th element of the return tuple); the allocation pass subtracts the
-leak from the discharged buckets **once** before its revisiting loop, so
-only compressible energy is redistributed. The flip site keeps the leak
+buckets. Pass 1 returns `prices_leak_energy_buckets` as the 9th field of
+the `BatteryChargingPower` NamedTuple (review-fix #02 R8 — call sites
+unpack by name, so a future field is a definition-only change); the
+allocation pass subtracts the leak from the discharged buckets **once**
+before its revisiting loop (via the single-call helper
+`_leak_normalize_discharged_buckets` — subtracting inside the loop would
+double-count on cheap-bucket revisits), so only compressible energy is
+redistributed. The flip site keeps the leak
 (`charged_energy = max(charged_energy, −leak_i)`) and debits the budget
 **post-clamp**: a flipped slot's surviving discharge is exactly the leak
 (`charged_energy + leak_i == 0`), so it consumes no budget and the

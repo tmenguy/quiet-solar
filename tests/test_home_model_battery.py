@@ -67,6 +67,25 @@ def test_min_discharging_power_none_tolerated():
     assert battery.min_discharging_power == 0.0
 
 
+def test_min_discharging_power_string_tolerated():
+    """R6: a string floor (corrupt entry) is coerced to float, not a crash."""
+    battery = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: "300"})
+    assert battery.min_discharging_power == 300.0
+    garbage = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: "not-a-number"})
+    assert garbage.min_discharging_power == 0.0
+
+
+def test_max_discharging_power_null_tolerated():
+    """R6: a null max discharge power (corrupt entry) falls back to the default."""
+    battery = _make_battery(**{CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: None})
+    assert battery.max_discharging_power == 1500.0
+    # the floor still clamps against the fallback max
+    floored = _make_battery(
+        **{CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: None, CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 5000}
+    )
+    assert floored.min_discharging_power == 1500.0
+
+
 def test_charge_from_grid_base_property():
     """Base Battery.charge_from_grid always returns False."""
     battery = Battery(name="bat", **{

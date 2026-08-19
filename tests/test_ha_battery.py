@@ -469,6 +469,91 @@ class TestQSBatteryDischargeFloor:
         result = await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
         assert result is True
 
+    @pytest.mark.asyncio
+    async def test_kw_entity_step_one_snaps_floor_up_never_zero(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """R1: a kW entity with step 1 snaps the floor UP to 1 kW, never down to 0."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "kW", "step": 1}
+        await _async_set_state(hass, "number.max_discharge", "5", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        # 300 W -> 0.3 kW -> ceil to 1 kW (>= floor, NEVER the hazardous 0)
+        discharge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert discharge_writes
+        assert all(v == pytest.approx(1.0) for v in discharge_writes)
+        assert all(v > 0 for v in discharge_writes)
+
+        await _async_set_state(hass, "number.max_discharge", "1", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
+
+    @pytest.mark.asyncio
+    async def test_stepped_entity_snap_up_stays_in_range(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """R1: min/step entity — snap-up stays in range, no out-of-range write, probe confirms."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 100)
+        attrs = {"unit_of_measurement": "W", "min": 100, "max": 5000, "step": 250}
+        await _async_set_state(hass, "number.max_discharge", "5000", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        # floor 100 -> clamp to min 100 -> ceil(100/250)*250 = 250 (in range, >= floor)
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert writes and all(v == pytest.approx(250.0) for v in writes)
+
+        await _async_set_state(hass, "number.max_discharge", "250", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
+
+    @pytest.mark.asyncio
+    async def test_kw_charge_entity_write_converts_and_probe_confirms(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """R5: a kW-denominated max_charge_number gets the converted value and confirms."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        await _async_set_state(hass, "number.max_discharge", "0", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "number.max_charge", "1", {"unit_of_measurement": "kW"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        command = copy_command(CMD_FORCE_CHARGE, power_consign=2300)
+
+        await battery.execute_command(datetime.now(pytz.UTC), command)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        # 2300 W charge -> 2.3 kW written (not a raw 2300 landing as 2300 kW)
+        charge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_charge"]
+        assert charge_writes and all(v == pytest.approx(2.3) for v in charge_writes)
+
+        # simulate the landed states (force-charge turns the grid switch on)
+        await _async_set_state(hass, "number.max_charge", "2.3", {"unit_of_measurement": "kW"})
+        await _async_set_state(hass, "switch.charge_from_grid", "on")
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), command) is True
+
+    @pytest.mark.asyncio
+    async def test_stepped_charge_entity_snaps_to_nearest(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """R5: a charge limit is not a safety minimum — it snaps to the NEAREST step."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        await _async_set_state(hass, "number.max_discharge", "0", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "number.max_charge", "0", {"unit_of_measurement": "W", "step": 100})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        command = copy_command(CMD_FORCE_CHARGE, power_consign=2340)
+
+        await battery.execute_command(datetime.now(pytz.UTC), command)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        charge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_charge"]
+        # 2340 -> nearest 100 step -> 2300 (nearest rounding, not ceil)
+        assert charge_writes and all(v == pytest.approx(2300.0) for v in charge_writes)
+
 
 class TestQSBatteryExecuteCommand:
     """Test QSBattery execute_command method."""

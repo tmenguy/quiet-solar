@@ -1074,11 +1074,19 @@ class QSHome(QSDynamicGroup):
                     if load.qs_enable_device is False:
                         continue
 
-                    # to force an override reset
-                    load.reset_override_state_and_set_reset_ask_time(time)
+                    # Fault isolation (QS-349 R2): a raising load command must not
+                    # abort shedding of the remaining loads, nor skip the gate and
+                    # re-solve below (do_reset is already committed).
+                    try:
+                        # to force an override reset
+                        load.reset_override_state_and_set_reset_ask_time(time)
 
-                    # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
-                    await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for off grid mode")
+                        # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
+                        await load.launch_command(
+                            time=time, command=CMD_IDLE, ctxt="launch command idle for off grid mode"
+                        )
+                    except Exception:  # noqa: BLE001 — safety path, isolate per load
+                        _LOGGER.error("Off-grid load shedding failed for %s", load.name, exc_info=True)
 
                 # here we should wait for each load to be idle, nothing will happen before all the loads are idle
                 # or ... 3 minutes

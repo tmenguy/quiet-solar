@@ -10,6 +10,7 @@ optimizer may only move the *compressible* part of a slot's discharge
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -219,6 +220,30 @@ def test_flip_debit_f_zero_preserves_residual_and_lets_smaller_slots_discharge()
 
 
 # ---------------------------------------------------------------------------
+# AC 9 bullet 3 — leak normalization applied exactly once (R4)
+# ---------------------------------------------------------------------------
+
+
+def test_leak_normalize_discharged_buckets_subtracts_once():
+    """The helper subtracts the leak exactly once (single subtraction)."""
+    discharged = {0.1: 500.0, 0.3: 200.0}
+    leak = {0.1: 75.0, 0.3: 50.0}
+    result = PeriodSolver._leak_normalize_discharged_buckets(discharged, leak)
+    assert result[0.1] == pytest.approx(425.0)
+    assert result[0.3] == pytest.approx(150.0)
+    # a SECOND call would double-subtract — proving why it must run once
+    PeriodSolver._leak_normalize_discharged_buckets(result, leak)
+    assert result[0.1] == pytest.approx(350.0)
+    assert result[0.3] == pytest.approx(100.0)
+
+
+def test_leak_normalize_discharged_buckets_clamps_at_zero():
+    """A leak >= the discharged energy clamps the bucket at 0 (never negative)."""
+    result = PeriodSolver._leak_normalize_discharged_buckets({0.1: 50.0}, {0.1: 75.0})
+    assert result[0.1] == 0.0
+
+
+# ---------------------------------------------------------------------------
 # AC 9 — leak-aware price-bucket allocation over a full solve
 # ---------------------------------------------------------------------------
 
@@ -377,7 +402,14 @@ def test_full_solve_three_price_normalization_applied_once():
         pv_forecast=pv,
         unavoidable_consumption_forecast=ua,
     )
-    solver.solve(with_self_test=True)
+    # R4: the leak normalization must run exactly ONCE (never per revisit)
+    with patch.object(
+        PeriodSolver,
+        "_leak_normalize_discharged_buckets",
+        wraps=PeriodSolver._leak_normalize_discharged_buckets,
+    ) as normalize_spy:
+        solver.solve(with_self_test=True)
+    assert normalize_spy.call_count == 1
 
     per_slot = solver._final_battery_commands
     assert per_slot is not None

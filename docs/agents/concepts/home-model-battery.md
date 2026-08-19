@@ -4,7 +4,7 @@ slug: home-model-battery
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/battery.py
-last_verified: 2026-08-17
+last_verified: 2026-08-20
 ---
 
 # Battery (home_model) — pure-domain charge/discharge model
@@ -50,7 +50,8 @@ algorithm (battery optimisation to minimise grid imports).
 minimum discharge power the battery always keeps available even under a
 discharge-limiting command. It is a `Battery.__init__` kwarg populated
 from `CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE` (default `0` = today's
-behaviour; a `None` from a corrupt entry is tolerated as `0`). At init
+behaviour; a `None`/non-numeric floor or max from a corrupt entry is
+coerced via `_coerce_float` to the default — review-fix #02 R6). At init
 it is clamped once to `[0, max_discharging_power]` and
 integer-normalized (`float(round(...))`) so the write/read int-casts and
 the raw expected value used by `probe_if_command_set` agree; a

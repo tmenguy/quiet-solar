@@ -15,21 +15,32 @@ from ..home_model.load import AbstractDevice
 _LOGGER = logging.getLogger(__name__)
 
 
+def _coerce_float(value, default: float) -> float:
+    """Coerce a config value to float, falling back to `default`.
+
+    Tolerates a hand-edited / corrupt config entry that stores a power value
+    as ``null`` or a non-numeric string instead of a number, so a bad entry
+    degrades gracefully instead of crashing device setup.
+    """
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 class Battery(AbstractDevice):
     def __init__(self, **kwargs):
 
         self.capacity = kwargs.pop(CONF_BATTERY_CAPACITY, 7000)
-        self.max_discharging_power = kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500)
+        self.max_discharging_power = _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500)
         self.max_charging_power = kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500)
         self.min_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0)
         self.max_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0)
         self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
         # opt-in outage safety floor — the minimum discharge power the battery
         # always keeps available (default 0 keeps today's behaviour). Tolerate a
-        # null value from a hand-edited / corrupt config entry (treat as 0).
-        configured_min_discharging_power = kwargs.pop(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE, 0.0)
-        if configured_min_discharging_power is None:
-            configured_min_discharging_power = 0.0
+        # null / non-numeric value from a hand-edited / corrupt config entry.
+        configured_min_discharging_power = _coerce_float(kwargs.pop(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE, 0.0), 0.0)
 
         super().__init__(**kwargs)
 

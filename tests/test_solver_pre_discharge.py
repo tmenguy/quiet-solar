@@ -1756,7 +1756,7 @@ def test_constraints_delta_raises_on_nan_in_battery_sim():
         # call 5+ which catches BOTH the entry-seed AND the post-
         # placement refresh paths in _constraints_delta.
         if sim_calls[0] >= 5:
-            return (result[0], nan_trajectory, *result[2:])
+            return result._replace(battery_charge=nan_trajectory)
         return result
 
     with patch.object(s, "_battery_get_charging_power", side_effect=_nan_sim):
@@ -1831,7 +1831,7 @@ def test_constraints_delta_raises_on_nan_in_post_placement_refresh():
         )
         sim_calls[0] += 1
         if sim_calls[0] >= nan_injection_threshold:
-            return (result[0], nan_traj, *result[2:])
+            return result._replace(battery_charge=nan_traj)
         return result
 
     with patch.object(s, "_battery_get_charging_power", side_effect=_nan_late_sim):
