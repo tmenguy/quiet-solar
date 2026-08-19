@@ -54,6 +54,7 @@ from .const import (
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
     CONF_BATTERY_MIN_CHARGE_PERCENT,
+    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     CONF_CALENDAR,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
@@ -1175,6 +1176,18 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
                     description={
                         "suggested_value": self.config_entry.data.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 0)
+                    },
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        mode=selector.NumberSelectorMode.BOX,
+                        unit_of_measurement=UnitOfPower.WATT,
+                    )
+                ),
+                vol.Required(
+                    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
+                    description={
+                        "suggested_value": self.config_entry.data.get(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE, 0)
                     },
                 ): selector.NumberSelector(
                     selector.NumberSelectorConfig(

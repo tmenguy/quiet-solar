@@ -399,10 +399,15 @@ class PeriodSolver:
             battery_commands = existing_battery_commands
         prices_discharged_energy_buckets = {}
         prices_remaining_grid_energy_buckets = {}
+        prices_leak_energy_buckets = {}
         remaining_grid_energy = 0
         excess_solar_energy = 0
 
         if self._battery:
+            # outage safety floor: minimum discharge power the battery keeps
+            # available even under a discharge-limiting command (default 0)
+            floor_discharge_power = float(self._battery.min_discharging_power)
+
             init_battery_charge = self._battery.current_charge
             if init_battery_charge is None:
                 init_battery_charge = self._battery.get_value_empty()
@@ -421,8 +426,9 @@ class PeriodSolver:
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
                     available_power = 0.0 - battery_commands[i].power_consign
                 elif battery_commands[i].is_like(CMD_GREEN_CHARGE_ONLY):
-                    # discharge forbidden — only charge from excess solar
-                    available_power = min(0.0, float(available_power_list[i]))
+                    # discharge capped at the outage safety floor F (0 by default):
+                    # surplus slots keep the negative surplus, demand slots cap at F
+                    available_power = min(float(available_power_list[i]), floor_discharge_power)
                 else:
                     available_power = float(available_power_list[i])
 
@@ -440,18 +446,29 @@ class PeriodSolver:
 
                 charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
 
+                # incompressible leak: the slice of a slot's discharge that flows
+                # even under a flipped (green-charge-only) command, bounded by the
+                # floor F over the slot duration. Idempotent under the flip clamp
+                # below, so it is computed once here with the pre-flip value.
+                if charged_energy < 0.0:
+                    leak_energy = min(-charged_energy, floor_discharge_power * float(self._durations_s[i]) / 3600.0)
+                else:
+                    leak_energy = 0.0
+
                 if limited_discharge_per_price is not None:
                     limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
                     if limit_discharge is not None:
-                        if limit_discharge + min(0.0, charged_energy) <= 0.0:
-                            # we need to ... forbid discharge to keep it when we will need it for bigger prices
-                            charged_energy = max(0.0, charged_energy)
-                            charging_power = max(0.0, charging_power)
+                        # flip / debit are evaluated with the PRE-clamp charged_energy;
+                        # only the compressible part (charged_energy + leak) is movable
+                        new_limit_discharge = max(0.0, limit_discharge + min(charged_energy + leak_energy, 0.0))
+                        if limit_discharge + min(0.0, charged_energy + leak_energy) <= 0.0:
+                            # compressible budget exhausted — forbid the compressible
+                            # discharge (keep it for higher prices) but keep the leak
+                            charged_energy = max(charged_energy, -leak_energy)
+                            charging_power = max(charging_power, -floor_discharge_power)
                             battery_commands[i] = copy_command(CMD_GREEN_CHARGE_ONLY)
 
-                        limited_discharge_per_price[self._prices[i]] = max(
-                            0.0, limit_discharge + min(charged_energy, 0.0)
-                        )
+                        limited_discharge_per_price[self._prices[i]] = new_limit_discharge
 
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
                     battery_commands[i].power_consign = max(charging_power, battery_commands[i].power_consign)
@@ -461,6 +478,9 @@ class PeriodSolver:
                 if charged_energy < 0.0:
                     prices_discharged_energy_buckets[self._prices[i]] = (
                         prices_discharged_energy_buckets.get(self._prices[i], 0.0) - charged_energy
+                    )
+                    prices_leak_energy_buckets[self._prices[i]] = (
+                        prices_leak_energy_buckets.get(self._prices[i], 0.0) + leak_energy
                     )
 
                 grid_nrj = ((available_power + consumption_power) * float(self._durations_s[i])) / 3600.0
@@ -485,6 +505,7 @@ class PeriodSolver:
             excess_solar_energy,
             remaining_grid_energy,
             battery_possible_discharge,
+            prices_leak_energy_buckets,
         )
 
     def _find_next_dusk_idx(self) -> int | None:
@@ -668,6 +689,7 @@ class PeriodSolver:
             excess_solar_energy,
             remaining_grid_energy,
             _battery_possible_discharge,
+            _prices_leak_energy_buckets,
         ) = self._battery_get_charging_power()
 
         empty_segments = [[None, num_slots - 1]]
@@ -1188,6 +1210,7 @@ class PeriodSolver:
                 excess_solar_energy,
                 remaining_grid_energy,
                 _bat_possible_disch,
+                _prices_leak_energy_buckets,
             ) = self._battery_get_charging_power()
 
             if is_off_grid:
@@ -1288,6 +1311,7 @@ class PeriodSolver:
                 excess_solar_energy,
                 remaining_grid_energy,
                 bat_possible_discharge,
+                prices_leak_energy_buckets,
             ) = self._battery_get_charging_power()
 
             # recompute max_possible_production with battery info
@@ -1306,6 +1330,15 @@ class PeriodSolver:
                 # not optimal but will work pretty well in practice
                 limited_discharge_per_price = {}
                 have_an_optim = False
+                # one-time leak normalization: the discharged buckets carry the
+                # incompressible leak, which the optimizer cannot move between
+                # price buckets. Subtract it once here (before the revisiting loop)
+                # so only the compressible energy is redistributed. At F = 0 every
+                # leak is 0 and this is a no-op.
+                for leak_price, leak_energy in prices_leak_energy_buckets.items():
+                    prices_discharged_energy_buckets[leak_price] = max(
+                        0.0, prices_discharged_energy_buckets.get(leak_price, 0.0) - leak_energy
+                    )
                 for price_idx in range(
                     len(self._prices_ordered_values) - 1, 0, -1
                 ):  # no need to go to the least expensive
@@ -1360,6 +1393,7 @@ class PeriodSolver:
                         excess_solar_energy,
                         remaining_grid_energy,
                         bat_possible_discharge,
+                        _prices_leak_energy_buckets,
                     ) = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
 
                     self._max_possible_production = self._compute_max_possible_production(
@@ -1619,6 +1653,7 @@ class PeriodSolver:
                 excess_solar_energy,
                 remaining_grid_energy,
                 _final_bat_possible,
+                _prices_leak_energy_buckets,
             ) = self._battery_get_charging_power(existing_battery_commands=battery_commands)
             self._available_power = self._available_power_no_battery + battery_ext_consumption_power
 

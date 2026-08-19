@@ -29,6 +29,7 @@ from custom_components.quiet_solar.const import (
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     DATA_HANDLER,
     DOMAIN,
 )
@@ -325,6 +326,72 @@ class TestQSBatteryCommandToValues:
 
         with pytest.raises(ValueError, match="Invalid command"):
             battery._command_to_values(invalid_command)
+
+
+class TestQSBatteryDischargeFloor:
+    """Test the outage safety floor emission (min_discharging_power)."""
+
+    def _floored_battery(self, hass, battery_config_entry, battery_home, floor):
+        return QSBattery(
+            hass=hass,
+            config_entry=battery_config_entry,
+            home=battery_home,
+            **{
+                CONF_NAME: "Test Battery",
+                CONF_BATTERY_CHARGE_DISCHARGE_SENSOR: "sensor.battery_power",
+                CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER: "number.max_discharge",
+                CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.max_charge",
+                CONF_BATTERY_CHARGE_FROM_GRID_SWITCH: "switch.charge_from_grid",
+                CONF_BATTERY_CAPACITY: 10000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: floor,
+            },
+        )
+
+    def test_green_charge_only_emits_floor(self, hass, battery_config_entry, battery_home, battery_hass_data):
+        """AC 1: CMD_GREEN_CHARGE_ONLY emits the floor, never 0."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        result = battery._command_to_values(CMD_GREEN_CHARGE_ONLY)
+        assert result["max_discharging_power"] == 300
+
+    def test_force_charge_emits_floor(self, hass, battery_config_entry, battery_home, battery_hass_data):
+        """AC 2: CMD_FORCE_CHARGE emits the floor, never 0."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        command = copy_command(CMD_FORCE_CHARGE, power_consign=3000)
+        result = battery._command_to_values(command)
+        assert result["max_discharging_power"] == 300
+
+    @pytest.mark.asyncio
+    async def test_execute_green_charge_only_writes_floor(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """AC 1: executing CMD_GREEN_CHARGE_ONLY writes set_value(number, 300)."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        await _async_set_state(hass, "number.max_discharge", "5000")
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        assert any(c[2].get("value") == 300 for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge")
+
+    @pytest.mark.asyncio
+    async def test_probe_confirms_non_integer_floor(
+        self, hass, battery_config_entry, battery_home, battery_hass_data
+    ):
+        """AC 4: a non-integer floor (300.7 -> 300) confirms; no eternal-retry."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300.7)
+        # init normalizes 300.7 -> 300.0
+        assert battery.min_discharging_power == 300.0
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        await _async_set_state(hass, "number.max_discharge", "300")
+        await _async_set_state(hass, "number.max_charge", "5000")
+
+        result = await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        assert result is True
 
     def test_command_to_values_without_optional_entities(
         self,

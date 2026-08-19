@@ -30,8 +30,12 @@
                     "battery_max_discharge_power_number": "Maximum discharge power (W, kW) Number entity",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
                     "battery_min_charge_percent_value": "Minimum charge percentage (%)",
+                    "battery_min_discharge_power_value": "Outage safety floor — minimum discharge power (W)",
                     "device_dashboard_section": "Dashboard section",
                     "name": "Name"
+                },
+                "data_description": {
+                    "battery_min_discharge_power_value": "Minimum discharge power the battery always keeps available so a grid outage during a grid-charge phase cannot lock the battery at zero discharge; if the outage-time house demand exceeds this floor, the inverter's own overload protection decides the outcome. Leave at 0 to keep the default behaviour."
                 },
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
                 "title": "Edit your battery device"
@@ -794,8 +798,12 @@
                     "battery_max_discharge_power_number": "Maximum discharge power (W, kW) Number entity",
                     "battery_max_discharge_power_value": "Maximum discharge power (W)",
                     "battery_min_charge_percent_value": "Minimum charge percentage (%)",
+                    "battery_min_discharge_power_value": "Outage safety floor — minimum discharge power (W)",
                     "device_dashboard_section": "Dashboard section",
                     "name": "Name"
+                },
+                "data_description": {
+                    "battery_min_discharge_power_value": "Minimum discharge power the battery always keeps available so a grid outage during a grid-charge phase cannot lock the battery at zero discharge; if the outage-time house demand exceeds this floor, the inverter's own overload protection decides the outcome. Leave at 0 to keep the default behaviour."
                 },
                 "description": "If you don't have a charge/discharge sensor, you can set both inverter sensors in the solar plant configuration",
                 "title": "Edit your battery device"

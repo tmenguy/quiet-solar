@@ -4,7 +4,7 @@ slug: solver
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/solver.py
-last_verified: 2026-07-22
+last_verified: 2026-08-17
 ---
 
 # PeriodSolver
@@ -50,6 +50,29 @@ Allocation algorithm:
 
 Within each tier, constraints are ordered by score; ties broken by
 constraint-specific criteria (e.g., deadline proximity).
+
+### Discharge floor modelling (QS-349)
+
+`_battery_get_charging_power` models the battery's **outage safety
+floor** F (`Battery.min_discharging_power`, default 0). During a
+`CMD_GREEN_CHARGE_ONLY` slot the available power is capped at F
+(`min(available_power, F)`) rather than 0, so a demand slot still
+discharges up to F. Each discharging slot's energy splits into an
+**incompressible leak** `leak_i = min(discharge, F × duration)` — which
+flows even when the slot is flipped to green-charge-only — and a
+**compressible remainder** the price-bucket optimizer may move between
+buckets. Pass 1 accumulates `prices_leak_energy_buckets` (appended as
+the 9th element of the return tuple); the allocation pass subtracts the
+leak from the discharged buckets **once** before its revisiting loop, so
+only compressible energy is redistributed. The flip site keeps the leak
+(`charged_energy = max(charged_energy, −leak_i)`) and debits only the
+compressible part. At F = 0 every leak is 0 and the algorithm reduces to
+the pre-QS-349 behaviour. Off-grid solves are unaffected — off-grid
+tariffs are flat, a single price bucket, so the allocation short-circuits
+and no `CMD_GREEN_CHARGE_ONLY` is issued. **Documented residual**: during
+`CMD_FORCE_CHARGE`, if the battery saturates or the inverter derates
+mid-slot, hardware may discharge up to F for the slot's remainder —
+unmodelled, bounded by `F × remainder` (≤ F/4 Wh per 15-min slot).
 
 On forecast-proven big-sun days the solver runs an aggressive surplus
 pre-discharge that deliberately over-consumes to free battery headroom

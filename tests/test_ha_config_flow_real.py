@@ -24,6 +24,7 @@ from custom_components.quiet_solar.const import (
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
     CONF_BATTERY_MIN_CHARGE_PERCENT,
+    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     CONF_CHARGER_DEVICE_OCPP,
     CONF_CHARGER_DEVICE_WALLBOX,
     CONF_CHARGER_LATITUDE,
@@ -63,6 +64,7 @@ from custom_components.quiet_solar.const import (
     CONF_TYPE_NAME_QSWaterBoiler,
     CONF_WATER_BOILER_TEMPERATURE_SENSOR,
 )
+from custom_components.quiet_solar.home_model.battery import Battery
 
 pytestmark = pytest.mark.asyncio
 
@@ -263,11 +265,88 @@ async def test_config_flow_battery_creates_entry(
             CONF_BATTERY_MIN_CHARGE_PERCENT: 10,
             CONF_BATTERY_MAX_CHARGE_PERCENT: 95,
             CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
+            CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 300,
             CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 3500,
         },
     )
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_BATTERY_CAPACITY] == 12000
+    # AC 7: the floor persists to the entry and reaches Battery.min_discharging_power
+    assert result["data"][CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE] == 300
+    battery = Battery(
+        name="Battery",
+        **{
+            CONF_BATTERY_CAPACITY: result["data"][CONF_BATTERY_CAPACITY],
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: result["data"][CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE],
+            CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: result["data"][CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE],
+        },
+    )
+    assert battery.min_discharging_power == 300.0
+
+
+async def test_config_flow_battery_missing_floor_key_defaults_to_zero(
+    hass: HomeAssistant,
+) -> None:
+    """AC 7: a pre-existing entry without the floor key behaves as floor = 0."""
+    entry_data = {
+        CONF_NAME: "Legacy Battery",
+        DEVICE_TYPE: CONF_TYPE_NAME_QSBattery,
+        CONF_BATTERY_CAPACITY: 12000,
+        CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
+        CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 3500,
+    }
+    assert CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE not in entry_data
+    battery = Battery(
+        name="Legacy Battery",
+        **{
+            CONF_BATTERY_CAPACITY: entry_data[CONF_BATTERY_CAPACITY],
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: entry_data[CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE],
+        },
+    )
+    assert battery.min_discharging_power == 0.0
+
+
+async def test_options_flow_battery_persists_floor(
+    hass: HomeAssistant,
+) -> None:
+    """AC 7: the options/reconfigure path accepts and persists the floor."""
+    await _create_home_entry(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_NAME: "Battery",
+            DEVICE_TYPE: CONF_TYPE_NAME_QSBattery,
+            CONF_BATTERY_CAPACITY: 12000,
+            CONF_BATTERY_MIN_CHARGE_PERCENT: 10,
+            CONF_BATTERY_MAX_CHARGE_PERCENT: 95,
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
+            CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 0,
+            CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 3500,
+        },
+        title="battery: Battery",
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Battery",
+                CONF_BATTERY_CAPACITY: 12000,
+                CONF_BATTERY_MIN_CHARGE_PERCENT: 10,
+                CONF_BATTERY_MAX_CHARGE_PERCENT: 95,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
+                CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 500,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 3500,
+            },
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE] == 500
 
 
 async def test_config_flow_charger_ocpp_creates_entry(

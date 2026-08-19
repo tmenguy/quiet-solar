@@ -1053,6 +1053,16 @@ class QSHome(QSDynamicGroup):
             _LOGGER.warning("async_set_off_grid_mode: %s", off_grid)
 
             if self.is_off_grid():
+                # Fix B (QS-349): restore the battery FIRST — it is the one command
+                # that keeps the house alive. Shedding loads is secondary and each
+                # load command is an awaited probe + service call.
+                if self.battery is not None:
+                    await self.battery.launch_command(
+                        time=time,
+                        command=CMD_GREEN_CHARGE_AND_DISCHARGE,
+                        ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode",
+                    )
+
                 for load in self._all_loads:
                     if load.qs_enable_device is False:
                         continue
@@ -1062,13 +1072,6 @@ class QSHome(QSDynamicGroup):
 
                     # _LOGGER.info(f"---> Set load idle {load.name} {load.is_load_has_a_command_now_or_coming(time)} {load.get_current_active_constraint(time)} {load.is_load_active(time)}")
                     await load.launch_command(time=time, command=CMD_IDLE, ctxt="launch command idle for off grid mode")
-
-                if self.battery is not None:
-                    await self.battery.launch_command(
-                        time=time,
-                        command=CMD_GREEN_CHARGE_AND_DISCHARGE,
-                        ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode",
-                    )
 
                 # here we should wait for each load to be idle, nothing will happen before all the loads are idle
                 # or ... 3 minutes
@@ -1172,6 +1175,37 @@ class QSHome(QSDynamicGroup):
             except Exception:  # noqa: BLE001 — safety net for unforeseen errors
                 _LOGGER.error("Unexpected error sending off-grid alert to %s", app, exc_info=True)
 
+    def _off_grid_transition_notification(
+        self, previous_real_off_grid: bool, current_real_off_grid: bool
+    ) -> tuple[str, str] | None:
+        """Return the (title, message) for a real on/off-grid transition, or None.
+
+        Content and conditions are unchanged from the inline logic — only the
+        override variants and the recovery messages, keyed by the transition
+        direction and the current off-grid mode.
+        """
+        if current_real_off_grid and not previous_real_off_grid:
+            if self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
+                return (
+                    "\U0001f6a8 Grid outage detected (override active)",
+                    "The power grid appears to be down, but Quiet Solar is forced to on-grid mode. The system will NOT switch to off-grid. Check your installation if this is a real outage.",
+                )
+            return (
+                "⚠️ URGENT: Power grid lost!",
+                "Your home has gone off-grid. Quiet Solar is switching to off-grid mode. Non-essential loads will be shut down.",
+            )
+        if not current_real_off_grid and previous_real_off_grid:
+            if self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
+                return (
+                    "✅ Grid outage resolved (override was active)",
+                    "The power grid is back. The on-grid override is still active.",
+                )
+            return (
+                "✅ Power grid restored",
+                "Your home is back on-grid. Quiet Solar is switching back to normal mode.",
+            )
+        return None
+
     def _register_off_grid_entity_listener(self) -> None:
         """Register a state change listener for the external off-grid entity."""
         if self._off_grid_entity is None or self.hass is None:
@@ -1187,31 +1221,27 @@ class QSHome(QSDynamicGroup):
                 new_state.state, self._off_grid_entity
             )
 
-            # Notify all devices only on real on-grid <-> off-grid transitions
-            if self.qs_home_real_off_grid and not previous_real_off_grid:
-                if self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
-                    await self.async_notify_all_mobile_apps(
-                        title="\U0001f6a8 Grid outage detected (override active)",
-                        message="The power grid appears to be down, but Quiet Solar is forced to on-grid mode. The system will NOT switch to off-grid. Check your installation if this is a real outage.",
-                    )
-                else:
-                    await self.async_notify_all_mobile_apps(
-                        title="\u26a0\ufe0f URGENT: Power grid lost!",
-                        message="Your home has gone off-grid. Quiet Solar is switching to off-grid mode. Non-essential loads will be shut down.",
-                    )
-            elif not self.qs_home_real_off_grid and previous_real_off_grid:
-                if self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
-                    await self.async_notify_all_mobile_apps(
-                        title="\u2705 Grid outage resolved (override was active)",
-                        message="The power grid is back. The on-grid override is still active.",
-                    )
-                else:
-                    await self.async_notify_all_mobile_apps(
-                        title="\u2705 Power grid restored",
-                        message="Your home is back on-grid. Quiet Solar is switching back to normal mode.",
-                    )
+            # Fix A (QS-349): schedule the mobile broadcast as a fire-and-forget
+            # background task BEFORE awaiting the apply, so neither delays the
+            # other. Push notifications route through cloud services (which may
+            # hang during an outage) and must never sit in the battery-restore
+            # critical path; symmetrically a hung apply must not delay the alarm.
+            notification = self._off_grid_transition_notification(previous_real_off_grid, self.qs_home_real_off_grid)
+            if notification is not None:
+                title, message = notification
 
-            await self._compute_and_apply_off_grid_state(for_init=False)
+                async def _broadcast() -> None:
+                    try:
+                        await self.async_notify_all_mobile_apps(title=title, message=message)
+                    except Exception as err:  # noqa: BLE001 \u2014 background task, log only
+                        _LOGGER.error("Off-grid alert broadcast failed: %s", err)
+
+                self.hass.async_create_task(_broadcast())
+
+            try:
+                await self._compute_and_apply_off_grid_state(for_init=False)
+            except Exception as err:  # noqa: BLE001 \u2014 safety-path listener, log only
+                _LOGGER.error("Off-grid state apply failed after transition: %s", err)
 
         self._off_grid_unsub = async_track_state_change_event(
             self.hass,

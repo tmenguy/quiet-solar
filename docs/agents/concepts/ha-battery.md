@@ -4,7 +4,7 @@ slug: ha-battery
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/battery.py
-last_verified: 2026-07-02
+last_verified: 2026-08-17
 ---
 
 # QSBattery (ha_model) — HA-facing battery integration
@@ -17,9 +17,12 @@ last_verified: 2026-07-02
 solver's `LoadCommand`s into HA service calls: set max-charge /
 max-discharge **power** via HA number entities and toggle the single
 charge-from-grid switch. Discharge is disabled by driving the
-`max_discharging_power` domain attribute to 0 (surfaced as the
-`max_discharge_number` HA entity) — there is no discharge-enable
-switch and no SOC-setpoint number. It attaches HA state probes for SOC
+`max_discharging_power` domain attribute to the **outage safety floor**
+(`min_discharging_power`, default `0`; QS-349) — `CMD_GREEN_CHARGE_ONLY`
+and `CMD_FORCE_CHARGE` emit that floor from `_command_to_values` instead
+of a hard `0`, surfaced as the `max_discharge_number` HA entity. There
+is no discharge-enable switch and no SOC-setpoint number. It attaches
+HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.
 

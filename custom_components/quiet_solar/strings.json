@@ -87,12 +87,16 @@
           "battery_charge_percent_sensor": "Charge percentage (%)",
           "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
           "battery_max_discharge_power_value": "Maximum discharge power (W)",
+          "battery_min_discharge_power_value": "Outage safety floor — minimum discharge power (W)",
           "battery_max_discharge_power_number": "Maximum discharge power (W, kW) Number entity",
           "battery_max_charge_power_value": "Maximum charge power (W)",
           "battery_max_charge_power_number": "Maximum charge power (W, kW) Number entity",
           "battery_min_charge_percent_value": "Minimum charge percentage (%)",
           "battery_max_charge_percent_value": "Maximum charge percentage (%)",
           "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid"
+        },
+        "data_description": {
+          "battery_min_discharge_power_value": "Minimum discharge power the battery always keeps available so a grid outage during a grid-charge phase cannot lock the battery at zero discharge; if the outage-time house demand exceeds this floor, the inverter's own overload protection decides the outcome. Leave at 0 to keep the default behaviour."
         }
       },
       "solar": {
@@ -496,12 +500,16 @@
           "battery_charge_percent_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_percent_sensor%]",
           "battery_charge_discharge_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_discharge_sensor%]",
           "battery_max_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_value%]",
+          "battery_min_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_min_discharge_power_value%]",
           "battery_max_discharge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_number%]",
           "battery_max_charge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_value%]",
           "battery_max_charge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number%]",
           "battery_min_charge_percent_value": "[%key:component::quiet_solar::config::step::battery::data::battery_min_charge_percent_value%]",
           "battery_max_charge_percent_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_percent_value%]",
           "battery_charge_from_grid_switch": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_from_grid_switch%]"
+        },
+        "data_description": {
+          "battery_min_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data_description::battery_min_discharge_power_value%]"
         }
       },
       "solar": {

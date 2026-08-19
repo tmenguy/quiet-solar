@@ -68,9 +68,18 @@ class QSBattery(HADeviceMixin, Battery):
                 "max_charging_power": self.max_charging_power,
             }
         elif command.is_like(CMD_GREEN_CHARGE_ONLY):
-            ret = {"charge_from_grid": False, "max_discharging_power": 0, "max_charging_power": self.max_charging_power}
+            # emit the outage safety floor (default 0) instead of a hard 0
+            ret = {
+                "charge_from_grid": False,
+                "max_discharging_power": self.min_discharging_power,
+                "max_charging_power": self.max_charging_power,
+            }
         elif command.is_like(CMD_FORCE_CHARGE):
-            ret = {"charge_from_grid": True, "max_discharging_power": 0, "max_charging_power": command.power_consign}
+            ret = {
+                "charge_from_grid": True,
+                "max_discharging_power": self.min_discharging_power,
+                "max_charging_power": command.power_consign,
+            }
         else:
             raise ValueError("Invalid command")
 

@@ -4,7 +4,7 @@ slug: home-model-battery
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/battery.py
-last_verified: 2026-05-19
+last_verified: 2026-08-17
 ---
 
 # Battery (home_model) — pure-domain charge/discharge model
@@ -43,6 +43,19 @@ The model exposes battery state and safe-action queries:
 
 The solver calls into this model during step 3 of the allocation
 algorithm (battery optimisation to minimise grid imports).
+
+### Outage discharge floor (QS-349)
+
+`min_discharging_power` is the opt-in **outage safety floor** — the
+minimum discharge power the battery always keeps available even under a
+discharge-limiting command. It is a `Battery.__init__` kwarg populated
+from `CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE` (default `0` = today's
+behaviour). At init it is clamped once to `[0, max_discharging_power]`
+and integer-normalized (`float(int(...))`) so the write, read, and
+probe paths — all of which int-cast — agree; a non-integer floor would
+otherwise never confirm in `probe_if_command_set` (eternal retry). The
+solver reads this attribute to model the floor's discharge during
+`CMD_GREEN_CHARGE_ONLY` slots (see [solver.md](solver.md)).
 
 ## Key types / structures
 

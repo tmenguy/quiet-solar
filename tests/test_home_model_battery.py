@@ -7,9 +7,56 @@ from custom_components.quiet_solar.const import (
     CONF_BATTERY_IS_DC_COUPLED,
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     MAX_POWER_INFINITE,
 )
 from custom_components.quiet_solar.home_model.battery import Battery
+
+
+def _make_battery(**overrides):
+    """Build a Battery with sensible defaults, allowing per-test overrides."""
+    kwargs = {
+        CONF_BATTERY_CAPACITY: 10000,
+        CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+        CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+    }
+    kwargs.update(overrides)
+    return Battery(name="bat", **kwargs)
+
+
+def test_min_discharging_power_defaults_to_zero_when_unset():
+    """A battery configured without the floor key keeps floor = 0 (opt-in)."""
+    battery = _make_battery()
+    assert battery.min_discharging_power == 0.0
+
+
+def test_min_discharging_power_from_config_key():
+    """The configured floor reaches Battery.min_discharging_power."""
+    battery = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 300})
+    assert battery.min_discharging_power == 300.0
+
+
+def test_min_discharging_power_clamped_above_max():
+    """A floor above max_discharging_power is capped to the max at init."""
+    battery = _make_battery(
+        **{
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 2000,
+            CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 3000,
+        }
+    )
+    assert battery.min_discharging_power == 2000.0
+
+
+def test_min_discharging_power_negative_clamped_to_zero():
+    """A negative floor (YAML/import path) is clamped to 0."""
+    battery = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: -500})
+    assert battery.min_discharging_power == 0.0
+
+
+def test_min_discharging_power_integer_normalized():
+    """A non-integer floor is integer-normalized at init (probe consistency)."""
+    battery = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 300.7})
+    assert battery.min_discharging_power == 300.0
 
 
 def test_charge_from_grid_base_property():

@@ -11,6 +11,7 @@ This test file targets the 51% -> 80%+ coverage gap by testing:
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 from datetime import time as dt_time
 from datetime import timedelta
@@ -51,6 +52,34 @@ from custom_components.quiet_solar.ha_model.home import (
     _segments_weak_sub_on_main_overlap,
     get_time_from_state,
 )
+
+
+class _RecordingBattery:
+    """Minimal battery double recording the order of launch_command calls."""
+
+    def __init__(self, events: list):
+        self._events = events
+
+    async def launch_command(self, time, command, ctxt: str = ""):
+        self._events.append(("battery", command))
+
+
+class _RecordingLoad:
+    """Minimal load double recording launch_command; can hang on an event."""
+
+    def __init__(self, events: list, name: str = "load", hang_event: asyncio.Event | None = None):
+        self._events = events
+        self.name = name
+        self.qs_enable_device = True
+        self._hang = hang_event
+
+    def reset_override_state_and_set_reset_ask_time(self, time):
+        pass
+
+    async def launch_command(self, time, command, ctxt: str = ""):
+        self._events.append(("load", self.name, command))
+        if self._hang is not None:
+            await self._hang.wait()
 
 
 class MockLazyState:
@@ -1758,6 +1787,172 @@ class TestOffGridAutoDetection:
             recovery_call = mock_notify.call_args_list[1]
             r_title = recovery_call.kwargs["title"]
             assert "override" in r_title.lower(), f"Force-on-grid recovery title should mention 'override': {r_title}"
+
+    # -- QS-349 transition-notification helper (content unchanged) --
+
+    def test_transition_notification_off_grid_normal(self, home_with_binary_sensor_off_grid):
+        """On-grid -> off-grid in auto mode yields the URGENT alert."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        title, message = home._off_grid_transition_notification(False, True)
+        assert "URGENT" in title
+        assert "off-grid" in message.lower()
+
+    def test_transition_notification_off_grid_override(self, home_with_binary_sensor_off_grid):
+        """On-grid -> off-grid under FORCE_ON_GRID yields the override variant."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_FORCE_ON_GRID
+        title, _ = home._off_grid_transition_notification(False, True)
+        assert "override" in title.lower()
+        assert "URGENT" not in title
+
+    def test_transition_notification_restore_normal(self, home_with_binary_sensor_off_grid):
+        """Off-grid -> on-grid in auto mode yields the restored message."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        title, _ = home._off_grid_transition_notification(True, False)
+        assert "restored" in title.lower()
+
+    def test_transition_notification_restore_override(self, home_with_binary_sensor_off_grid):
+        """Off-grid -> on-grid under FORCE_ON_GRID yields the override-resolved message."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_FORCE_ON_GRID
+        title, _ = home._off_grid_transition_notification(True, False)
+        assert "override" in title.lower()
+
+    def test_transition_notification_no_transition_returns_none(self, home_with_binary_sensor_off_grid):
+        """No real transition yields no notification (helper returns None)."""
+        home = home_with_binary_sensor_off_grid
+        assert home._off_grid_transition_notification(True, True) is None
+        assert home._off_grid_transition_notification(False, False) is None
+
+    # -- QS-349 reaction-latency tests (fix A + fix B) --
+
+    async def _pump_until(self, condition, limit: int = 200) -> None:
+        """Advance the event loop until `condition()` is true (bounded)."""
+        for _ in range(limit):
+            await asyncio.sleep(0)
+            if condition():
+                return
+
+    @pytest.mark.asyncio
+    async def test_battery_restored_before_loads(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
+        """AC 12 (fix B): the battery restore is launched before any load CMD_IDLE."""
+        from custom_components.quiet_solar.home_model.commands import CMD_GREEN_CHARGE_AND_DISCHARGE, CMD_IDLE
+
+        home = home_with_binary_sensor_off_grid
+        home.home_mode = QSHomeMode.HOME_MODE_ON
+        events: list = []
+        home.physical_battery = _RecordingBattery(events)
+        home._all_loads = [_RecordingLoad(events, "load_1"), _RecordingLoad(events, "load_2")]
+        home.qs_home_is_off_grid = False
+
+        await home.async_set_off_grid_mode(True, for_init=False)
+
+        assert events[0][0] == "battery"
+        assert events[0][1].is_like(CMD_GREEN_CHARGE_AND_DISCHARGE)
+        assert [e[0] for e in events[1:]] == ["load", "load"]
+        assert all(e[2].is_like(CMD_IDLE) for e in events[1:])
+
+    @pytest.mark.asyncio
+    async def test_hung_notify_does_not_delay_battery_restore(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC 10 (fix A): a hung notify does not delay the battery restore."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        home.home_mode = QSHomeMode.HOME_MODE_ON
+        events: list = []
+        home.physical_battery = _RecordingBattery(events)
+        home._all_loads = []
+
+        notify_started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def hung_notify(title, message):
+            notify_started.set()
+            await release.wait()
+
+        with patch.object(home, "async_notify_all_mobile_apps", hung_notify):
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await self._pump_until(lambda: any(e[0] == "battery" for e in events))
+
+            assert any(e[0] == "battery" for e in events), "battery restore must proceed while notify hangs"
+            assert notify_started.is_set()
+            assert not release.is_set()
+
+            release.set()
+            await hass.async_block_till_done()
+
+    @pytest.mark.asyncio
+    async def test_hung_apply_does_not_delay_notify(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
+        """AC 10 (fix A): a hung apply does not delay the notification dispatch."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        home.home_mode = QSHomeMode.HOME_MODE_ON
+        events: list = []
+        home.physical_battery = _RecordingBattery(events)
+        hang = asyncio.Event()
+        home._all_loads = [_RecordingLoad(events, "load_1", hang_event=hang)]
+
+        notified: list = []
+
+        async def rec_notify(title, message):
+            notified.append(title)
+
+        with patch.object(home, "async_notify_all_mobile_apps", rec_notify):
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await self._pump_until(lambda: bool(notified))
+
+            assert notified, "notify must dispatch while apply is still hung"
+            assert not hang.is_set()
+            assert any(e[0] == "load" for e in events), "apply must have reached (and hung at) the load"
+
+            hang.set()
+            await hass.async_block_till_done()
+
+    @pytest.mark.asyncio
+    async def test_alarm_dispatched_when_apply_raises(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):
+        """AC 11: the alarm is still dispatched (and logged) when the apply raises."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+
+        notified: list = []
+
+        async def rec_notify(title, message):
+            notified.append(title)
+
+        with (
+            patch.object(home, "async_notify_all_mobile_apps", rec_notify),
+            patch.object(
+                home, "_compute_and_apply_off_grid_state", new_callable=AsyncMock, side_effect=RuntimeError("boom")
+            ),
+        ):
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+        assert notified, "alarm must be dispatched even when the apply raises"
+
+    @pytest.mark.asyncio
+    async def test_raising_notify_is_logged_not_propagated(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """AC 11: a raising notify handler is logged, nothing propagates, apply proceeds."""
+        home = home_with_binary_sensor_off_grid
+        home.off_grid_mode = OFF_GRID_MODE_AUTO
+        home.home_mode = QSHomeMode.HOME_MODE_ON
+        events: list = []
+        home.physical_battery = _RecordingBattery(events)
+        home._all_loads = []
+
+        async def raising_notify(title, message):
+            raise RuntimeError("notify boom")
+
+        with patch.object(home, "async_notify_all_mobile_apps", raising_notify):
+            hass.states.async_set("binary_sensor.grid_relay", "on")
+            await hass.async_block_till_done()
+
+        assert any(e[0] == "battery" for e in events), "apply must proceed despite the raising notify"
 
     # -- Cleanup tests --
 
