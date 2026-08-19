@@ -25,8 +25,11 @@ class Battery(AbstractDevice):
         self.max_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0)
         self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
         # opt-in outage safety floor — the minimum discharge power the battery
-        # always keeps available (default 0 keeps today's behaviour)
+        # always keeps available (default 0 keeps today's behaviour). Tolerate a
+        # null value from a hand-edited / corrupt config entry (treat as 0).
         configured_min_discharging_power = kwargs.pop(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE, 0.0)
+        if configured_min_discharging_power is None:
+            configured_min_discharging_power = 0.0
 
         super().__init__(**kwargs)
 
@@ -34,11 +37,12 @@ class Battery(AbstractDevice):
         self.max_soc = self.max_charge_SOC_percent / 100.0  # %percentage of battery capacity between 0 and 1
         self.min_soc = self.min_charge_SOC_percent / 100.0
         self.min_charging_power = 0.0
-        # one-time init clamp to [0, max_discharging_power], integer-normalized so
-        # the write, read, and probe paths (all int-casting) agree — a non-integer
-        # floor would never confirm in probe_if_command_set (eternal retry)
+        # one-time init clamp to [0, max_discharging_power], integer-normalized
+        # (rounded) so the write/read int-casts and the raw expected value used by
+        # probe_if_command_set agree — a non-integer floor would otherwise never
+        # confirm in probe_if_command_set (eternal retry)
         self.min_discharging_power = float(
-            int(min(max(0.0, configured_min_discharging_power), self.max_discharging_power))
+            round(min(max(0.0, configured_min_discharging_power), self.max_discharging_power))
         )
 
     @property

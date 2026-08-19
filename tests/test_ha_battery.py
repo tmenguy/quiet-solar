@@ -327,6 +327,32 @@ class TestQSBatteryCommandToValues:
         with pytest.raises(ValueError, match="Invalid command"):
             battery._command_to_values(invalid_command)
 
+    def test_command_to_values_without_optional_entities(
+        self,
+        hass,
+        battery_config_entry,
+        battery_home,
+        battery_hass_data,
+    ):
+        """Test _command_to_values when optional entities are None."""
+        battery = QSBattery(
+            hass=hass,
+            config_entry=battery_config_entry,
+            home=battery_home,
+            **{
+                CONF_NAME: "Test Battery Minimal",
+                CONF_BATTERY_CAPACITY: 10000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            },
+        )
+
+        result = battery._command_to_values(CMD_ON)
+
+        assert result["charge_from_grid"] is None
+        assert result["max_discharging_power"] is None
+        assert result["max_charging_power"] is None
+
 
 class TestQSBatteryDischargeFloor:
     """Test the outage safety floor emission (min_discharging_power)."""
@@ -381,43 +407,67 @@ class TestQSBatteryDischargeFloor:
     async def test_probe_confirms_non_integer_floor(
         self, hass, battery_config_entry, battery_home, battery_hass_data
     ):
-        """AC 4: a non-integer floor (300.7 -> 300) confirms; no eternal-retry."""
+        """AC 4: a non-integer floor (300.7 -> 301) confirms; no eternal-retry."""
         battery = self._floored_battery(hass, battery_config_entry, battery_home, 300.7)
-        # init normalizes 300.7 -> 300.0
-        assert battery.min_discharging_power == 300.0
+        # init rounds 300.7 -> 301.0
+        assert battery.min_discharging_power == 301.0
         await _async_set_state(hass, "switch.charge_from_grid", "off")
-        await _async_set_state(hass, "number.max_discharge", "300")
+        await _async_set_state(hass, "number.max_discharge", "301")
         await _async_set_state(hass, "number.max_charge", "5000")
 
         result = await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
 
         assert result is True
 
-    def test_command_to_values_without_optional_entities(
-        self,
-        hass,
-        battery_config_entry,
-        battery_home,
-        battery_hass_data,
+    @pytest.mark.asyncio
+    async def test_kw_entity_write_converts_and_probe_confirms(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
     ):
-        """Test _command_to_values when optional entities are None."""
-        battery = QSBattery(
-            hass=hass,
-            config_entry=battery_config_entry,
-            home=battery_home,
-            **{
-                CONF_NAME: "Test Battery Minimal",
-                CONF_BATTERY_CAPACITY: 10000,
-                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
-                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
-            },
+        """S2: a kW-denominated number entity gets the unit-converted floor and confirms."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        await _async_set_state(hass, "number.max_discharge", "5", {"unit_of_measurement": "kW"})
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        # 300 W written as 0.3 kW (not a raw 300 that would land as 300 kW)
+        assert any(
+            c[2].get("value") == pytest.approx(0.3)
+            for c in calls
+            if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"
         )
 
-        result = battery._command_to_values(CMD_ON)
+        # entity now reads the converted value; probe reads it back as 300 W and confirms
+        await _async_set_state(hass, "number.max_discharge", "0.3", {"unit_of_measurement": "kW"})
+        result = await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+        assert result is True
 
-        assert result["charge_from_grid"] is None
-        assert result["max_discharging_power"] is None
-        assert result["max_charging_power"] is None
+    @pytest.mark.asyncio
+    async def test_stepped_entity_snaps_floor_and_probe_confirms(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """S2: a min/max/step-constrained entity snaps the floor; write and probe agree."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "W", "min": 0, "max": 10000, "step": 40}
+        await _async_set_state(hass, "number.max_discharge", "5000", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000")
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        # 300 W snaps to the nearest multiple of the 40 W step: 320 W
+        assert any(
+            c[2].get("value") == pytest.approx(320.0)
+            for c in calls
+            if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"
+        )
+
+        await _async_set_state(hass, "number.max_discharge", "320", attrs)
+        result = await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+        assert result is True
 
 
 class TestQSBatteryExecuteCommand:

@@ -4,7 +4,7 @@ slug: off-grid-mode
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-08-17
+last_verified: 2026-08-19
 ---
 
 # Off-grid mode
@@ -169,7 +169,10 @@ Two reaction-latency fixes on the off-grid transition:
   longer sits behind every load's awaited probe + service call. The
   battery is not in `_all_loads`, so this is a pure reorder; shedding,
   the `_switch_to_off_grid_launched` gate, and `force_next_solve()` are
-  unchanged.
+  unchanged. The restore call is wrapped in a log-only `try/except` so a
+  raising battery command cannot cancel load shedding or the gate
+  (do_reset is already committed — a swallowed error would otherwise
+  leave loads running off-grid with no retry).
 - **Notify off the critical path** (`_off_grid_entity_state_changed`):
   the mobile broadcast is scheduled as a background task **before** the
   apply is awaited, so notification delivery and the battery restore are

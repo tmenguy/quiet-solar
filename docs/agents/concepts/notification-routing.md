@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/device.py
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-17
+last_verified: 2026-08-19
 ---
 
 # Notification routing
@@ -207,8 +207,9 @@ cloud services that may hang exactly during an outage, so they must
 never sit in the battery-restore critical path; scheduling the alarm
 before the apply also means a hung apply cannot delay the alarm. The
 task body and the apply are each wrapped in a log-only `except Exception`
-(background-task allowance) so a raising notify handler or a failing
-apply is logged and the listener survives. The (title, message) content
+(background-task allowance, `exc_info=True`) so a raising notify handler
+or a failing apply is logged with its traceback and the listener
+survives. The (title, message) content
 and the transition conditions (including the `FORCE_ON_GRID` override
 variants and the recovery messages) are unchanged — factored into the
 `_off_grid_transition_notification` helper.

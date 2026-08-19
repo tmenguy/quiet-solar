@@ -14,7 +14,8 @@
       "climate_capabilities_unavailable": "Climate entity advertises no HVAC modes; pick a different climate entity or check the device",
       "climate_modes_insufficient": "Climate entity exposes fewer than two HVAC modes; pick a different climate entity or configure the device to expose at least two modes",
       "hvac_modes_must_differ": "HVAC mode ON and OFF must be different",
-      "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
+      "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one",
+      "min_discharge_above_max": "The outage safety floor cannot be higher than the maximum discharge power"
     },
     "step": {
       "user": {
@@ -445,7 +446,8 @@
       "climate_capabilities_unavailable": "[%key:component::quiet_solar::config::error::climate_capabilities_unavailable%]",
       "climate_modes_insufficient": "[%key:component::quiet_solar::config::error::climate_modes_insufficient%]",
       "hvac_modes_must_differ": "[%key:component::quiet_solar::config::error::hvac_modes_must_differ%]",
-      "piloted_heat_pump_unknown": "[%key:component::quiet_solar::config::error::piloted_heat_pump_unknown%]"
+      "piloted_heat_pump_unknown": "[%key:component::quiet_solar::config::error::piloted_heat_pump_unknown%]",
+      "min_discharge_above_max": "[%key:component::quiet_solar::config::error::min_discharge_above_max%]"
     },
     "step": {
       "home": {

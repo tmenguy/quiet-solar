@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytz
 from homeassistant.const import (
+    ATTR_ENTITY_ID,
     CONF_NAME,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
@@ -57,11 +58,14 @@ from custom_components.quiet_solar.ha_model.home import (
 class _RecordingBattery:
     """Minimal battery double recording the order of launch_command calls."""
 
-    def __init__(self, events: list):
+    def __init__(self, events: list, raise_on_launch: bool = False):
         self._events = events
+        self._raise_on_launch = raise_on_launch
 
     async def launch_command(self, time, command, ctxt: str = ""):
         self._events.append(("battery", command))
+        if self._raise_on_launch:
+            raise RuntimeError("battery restore boom")
 
 
 class _RecordingLoad:
@@ -1853,6 +1857,90 @@ class TestOffGridAutoDetection:
         assert events[0][1].is_like(CMD_GREEN_CHARGE_AND_DISCHARGE)
         assert [e[0] for e in events[1:]] == ["load", "load"]
         assert all(e[2].is_like(CMD_IDLE) for e in events[1:])
+
+    @pytest.mark.asyncio
+    async def test_raising_battery_restore_still_sheds_loads_and_sets_gate(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid
+    ):
+        """S1: a raising battery restore is isolated — loads still shed, gate still set."""
+        home = home_with_binary_sensor_off_grid
+        home.home_mode = QSHomeMode.HOME_MODE_ON
+        events: list = []
+        home.physical_battery = _RecordingBattery(events, raise_on_launch=True)
+        home._all_loads = [_RecordingLoad(events, "load_1"), _RecordingLoad(events, "load_2")]
+        home.qs_home_is_off_grid = False
+        home._switch_to_off_grid_launched = None
+
+        await home.async_set_off_grid_mode(True, for_init=False)
+
+        # battery restore raised but was isolated; both loads still shed
+        assert events[0][0] == "battery"
+        assert [e[0] for e in events[1:]] == ["load", "load"]
+        # the transition gate is still armed
+        assert home._switch_to_off_grid_launched is not None
+
+    @pytest.mark.asyncio
+    async def test_off_grid_restore_records_number_set_value(
+        self, hass: HomeAssistant, home_with_binary_sensor_off_grid, home_config_entry
+    ):
+        """N6: end-to-end — the off-grid restore drives a real number.set_value service call."""
+        from custom_components.quiet_solar.const import (
+            CONF_BATTERY_CAPACITY,
+            CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
+            CONF_BATTERY_CHARGE_FROM_GRID_SWITCH,
+            CONF_BATTERY_MAX_CHARGE_POWER_NUMBER,
+            CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
+            CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+            DATA_HANDLER,
+            DOMAIN,
+        )
+        from custom_components.quiet_solar.ha_model.battery import QSBattery
+
+        home = home_with_binary_sensor_off_grid
+        home.home_mode = QSHomeMode.HOME_MODE_ON
+
+        handler = MagicMock()
+        handler.home = home
+        hass.data.setdefault(DOMAIN, {})[DATA_HANDLER] = handler
+
+        hass.states.async_set("number.bat_maxdis", "0", {"unit_of_measurement": "W"})
+        hass.states.async_set("number.bat_maxcha", "0", {"unit_of_measurement": "W"})
+        hass.states.async_set("switch.bat_grid", "on")
+
+        battery = QSBattery(
+            hass=hass,
+            config_entry=home_config_entry,
+            home=home,
+            **{
+                CONF_NAME: "Test Battery",
+                CONF_BATTERY_CHARGE_DISCHARGE_SENSOR: "sensor.bat_power",
+                CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER: "number.bat_maxdis",
+                CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.bat_maxcha",
+                CONF_BATTERY_CHARGE_FROM_GRID_SWITCH: "switch.bat_grid",
+                CONF_BATTERY_CAPACITY: 10000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+            },
+        )
+        home.physical_battery = battery
+        home._all_loads = []
+        home.qs_home_is_off_grid = False
+
+        from homeassistant.core import ServiceRegistry
+
+        recorded: list = []
+
+        async def _record(self, domain, service, service_data=None, **kwargs):
+            recorded.append((domain, service, service_data or {}))
+
+        with patch.object(ServiceRegistry, "async_call", _record):
+            await home.async_set_off_grid_mode(True, for_init=False)
+
+        set_value_calls = [c for c in recorded if c[1] == "set_value"]
+        assert any(c[2].get(ATTR_ENTITY_ID) == "number.bat_maxdis" for c in set_value_calls), (
+            "the off-grid restore must issue a real number.set_value on the discharge entity"
+        )
 
     @pytest.mark.asyncio
     async def test_hung_notify_does_not_delay_battery_restore(

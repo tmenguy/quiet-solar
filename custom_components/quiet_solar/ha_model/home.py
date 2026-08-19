@@ -1057,11 +1057,18 @@ class QSHome(QSDynamicGroup):
                 # that keeps the house alive. Shedding loads is secondary and each
                 # load command is an awaited probe + service call.
                 if self.battery is not None:
-                    await self.battery.launch_command(
-                        time=time,
-                        command=CMD_GREEN_CHARGE_AND_DISCHARGE,
-                        ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode",
-                    )
+                    # Fault isolation (QS-349 S1): a raising battery restore must not
+                    # cancel load shedding or the transition gate below. do_reset is
+                    # already committed, so a swallowed error here would otherwise leave
+                    # loads running off-grid with no retry.
+                    try:
+                        await self.battery.launch_command(
+                            time=time,
+                            command=CMD_GREEN_CHARGE_AND_DISCHARGE,
+                            ctxt="launch command CMD_GREEN_CHARGE_AND_DISCHARGE for off grid mode",
+                        )
+                    except Exception:  # noqa: BLE001 — safety path, isolate the restore
+                        _LOGGER.error("Off-grid battery restore failed", exc_info=True)
 
                 for load in self._all_loads:
                     if load.qs_enable_device is False:
@@ -1191,17 +1198,17 @@ class QSHome(QSDynamicGroup):
                     "The power grid appears to be down, but Quiet Solar is forced to on-grid mode. The system will NOT switch to off-grid. Check your installation if this is a real outage.",
                 )
             return (
-                "⚠️ URGENT: Power grid lost!",
+                "\u26a0\ufe0f URGENT: Power grid lost!",
                 "Your home has gone off-grid. Quiet Solar is switching to off-grid mode. Non-essential loads will be shut down.",
             )
         if not current_real_off_grid and previous_real_off_grid:
             if self.off_grid_mode == OFF_GRID_MODE_FORCE_ON_GRID:
                 return (
-                    "✅ Grid outage resolved (override was active)",
+                    "\u2705 Grid outage resolved (override was active)",
                     "The power grid is back. The on-grid override is still active.",
                 )
             return (
-                "✅ Power grid restored",
+                "\u2705 Power grid restored",
                 "Your home is back on-grid. Quiet Solar is switching back to normal mode.",
             )
         return None
@@ -1233,15 +1240,15 @@ class QSHome(QSDynamicGroup):
                 async def _broadcast() -> None:
                     try:
                         await self.async_notify_all_mobile_apps(title=title, message=message)
-                    except Exception as err:  # noqa: BLE001 \u2014 background task, log only
-                        _LOGGER.error("Off-grid alert broadcast failed: %s", err)
+                    except Exception:  # noqa: BLE001 \u2014 background task, log only
+                        _LOGGER.error("Off-grid alert broadcast failed", exc_info=True)
 
                 self.hass.async_create_task(_broadcast())
 
             try:
                 await self._compute_and_apply_off_grid_state(for_init=False)
-            except Exception as err:  # noqa: BLE001 \u2014 safety-path listener, log only
-                _LOGGER.error("Off-grid state apply failed after transition: %s", err)
+            except Exception:  # noqa: BLE001 \u2014 safety-path listener, log only
+                _LOGGER.error("Off-grid state apply failed after transition", exc_info=True)
 
         self._off_grid_unsub = async_track_state_change_event(
             self.hass,

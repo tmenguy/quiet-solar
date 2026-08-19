@@ -1103,11 +1103,19 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
     async def async_step_battery(self, user_input=None):
 
         TYPE = QSBattery.conf_type_name
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            # do some stuff to update
-            r = await self.async_entry_next(user_input, TYPE)
-            return r
+            # the domain model clamps the floor anyway, but surface a clear error
+            # when the user asks for a floor above the maximum discharge power
+            floor = user_input.get(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE)
+            max_discharge = user_input.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE)
+            if floor is not None and max_discharge is not None and float(floor) > float(max_discharge):
+                errors[CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE] = "min_discharge_above_max"
+            else:
+                # do some stuff to update
+                r = await self.async_entry_next(user_input, TYPE)
+                return r
 
         sc_dict, placeholders = self.get_common_schema(type=TYPE)
 
@@ -1211,7 +1219,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         schema = vol.Schema(sc_dict)
 
-        return self.async_show_form(step_id=TYPE, data_schema=schema, description_placeholders=placeholders)
+        return self.async_show_form(
+            step_id=TYPE, data_schema=schema, description_placeholders=placeholders, errors=errors
+        )
 
     async def async_step_car(self, user_input=None):
 

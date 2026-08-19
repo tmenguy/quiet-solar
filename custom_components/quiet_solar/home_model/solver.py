@@ -458,17 +458,24 @@ class PeriodSolver:
                 if limited_discharge_per_price is not None:
                     limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
                     if limit_discharge is not None:
-                        # flip / debit are evaluated with the PRE-clamp charged_energy;
-                        # only the compressible part (charged_energy + leak) is movable
-                        new_limit_discharge = max(0.0, limit_discharge + min(charged_energy + leak_energy, 0.0))
+                        # flip when the COMPRESSIBLE part (charged_energy + leak)
+                        # exhausts the budget — the leak is incompressible and flows
+                        # regardless. The flip condition uses the pre-clamp value.
                         if limit_discharge + min(0.0, charged_energy + leak_energy) <= 0.0:
-                            # compressible budget exhausted — forbid the compressible
-                            # discharge (keep it for higher prices) but keep the leak
+                            # forbid the compressible discharge (keep it for higher
+                            # prices) but keep the incompressible leak
                             charged_energy = max(charged_energy, -leak_energy)
                             charging_power = max(charging_power, -floor_discharge_power)
                             battery_commands[i] = copy_command(CMD_GREEN_CHARGE_ONLY)
 
-                        limited_discharge_per_price[self._prices[i]] = new_limit_discharge
+                        # debit only the discharge that SURVIVES the flip (post-clamp):
+                        # a flipped slot keeps only its leak (charged_energy + leak == 0),
+                        # so it consumes no budget and the residual stays available for
+                        # later same-price slots. Reduces exactly to the pre-QS-349
+                        # behaviour at F = 0 (leak = 0 => flipped slot debits nothing).
+                        limited_discharge_per_price[self._prices[i]] = max(
+                            0.0, limit_discharge + min(0.0, charged_energy + leak_energy)
+                        )
 
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
                     battery_commands[i].power_consign = max(charging_power, battery_commands[i].power_consign)
@@ -1384,6 +1391,11 @@ class PeriodSolver:
                                 break
 
                 if have_an_optim is True:
+                    # Final recompute with the per-price budgets the loop built. This
+                    # re-binds prices_discharged_energy_buckets from a fresh pass-2, but
+                    # it is the FINAL output — not re-fed into the (already-finished)
+                    # allocation loop — so the leak must NOT be re-subtracted here; the
+                    # one-time normalization above governs only the loop's movable budget.
                     (
                         battery_ext_consumption_power,
                         battery_charge,

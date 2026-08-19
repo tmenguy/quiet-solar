@@ -65,9 +65,12 @@ buckets. Pass 1 accumulates `prices_leak_energy_buckets` (appended as
 the 9th element of the return tuple); the allocation pass subtracts the
 leak from the discharged buckets **once** before its revisiting loop, so
 only compressible energy is redistributed. The flip site keeps the leak
-(`charged_energy = max(charged_energy, −leak_i)`) and debits only the
-compressible part. At F = 0 every leak is 0 and the algorithm reduces to
-the pre-QS-349 behaviour. Off-grid solves are unaffected — off-grid
+(`charged_energy = max(charged_energy, −leak_i)`) and debits the budget
+**post-clamp**: a flipped slot's surviving discharge is exactly the leak
+(`charged_energy + leak_i == 0`), so it consumes no budget and the
+residual stays available for later same-price slots. At F = 0 every leak
+is 0 and the whole flip site (condition, clamp, debit) reduces
+algebraically to the pre-QS-349 behaviour. Off-grid solves are unaffected — off-grid
 tariffs are flat, a single price bucket, so the allocation short-circuits
 and no `CMD_GREEN_CHARGE_ONLY` is issued. **Documented residual**: during
 `CMD_FORCE_CHARGE`, if the battery saturates or the inverter derates

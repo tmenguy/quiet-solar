@@ -5,12 +5,15 @@ from typing import Any
 from homeassistant.components import number
 from homeassistant.const import (
     ATTR_ENTITY_ID,
+    ATTR_UNIT_OF_MEASUREMENT,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
     Platform,
+    UnitOfPower,
 )
+from homeassistant.util.unit_conversion import PowerConverter
 
 from ..const import (
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
@@ -121,6 +124,13 @@ class QSBattery(HADeviceMixin, Battery):
             _LOGGER.debug("probe_if_command_set: battery probe_if_command_set ret None, max_discharge_power None")
             return None
 
+        # Compare against the value that actually LANDS on the number entity
+        # (unit-converted, min/max-clamped, step-snapped) so a kW-denominated or
+        # stepped entity does not make the probe never confirm (eternal retry).
+        expected_max_discharge = cmd_to_vals["max_discharging_power"]
+        if expected_max_discharge is not None:
+            _, expected_max_discharge = self._discharge_number_target(expected_max_discharge)
+
         max_charge_power = self.get_max_charging_power()
 
         if cmd_to_vals["max_charging_power"] is not None and max_charge_power is None:
@@ -129,9 +139,49 @@ class QSBattery(HADeviceMixin, Battery):
 
         return (
             is_charge_from_grid == cmd_to_vals["charge_from_grid"]
-            and max_discharge_power == cmd_to_vals["max_discharging_power"]
+            and max_discharge_power == expected_max_discharge
             and max_charge_power == cmd_to_vals["max_charging_power"]
         )
+
+    def _discharge_number_target(self, power_w: float) -> tuple[float, int]:
+        """Map a W discharge-limit target to (value_to_write, expected_landed_w).
+
+        Mirrors the read path (`get_max_discharging_power` /
+        `convert_power_to_w`) so the write, the read-back, and the probe
+        comparison all agree even when `max_discharge_number` is
+        kW-denominated or carries a min/max/step that would snap the value.
+        Falls back to a raw W passthrough when the entity attributes are
+        unreadable.
+        """
+        write_value = float(power_w)
+        attributes: dict = {}
+        if self.max_discharge_number is not None:
+            state = self.hass.states.get(self.max_discharge_number)
+            if state is not None and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
+                attributes = state.attributes or {}
+
+        unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, UnitOfPower.WATT)
+        to_entity_unit = unit in UnitOfPower and unit != UnitOfPower.WATT
+        if to_entity_unit:
+            write_value = PowerConverter.convert(value=write_value, from_unit=UnitOfPower.WATT, to_unit=unit)
+
+        ent_min = attributes.get("min")
+        if ent_min is not None:
+            write_value = max(write_value, float(ent_min))
+        ent_max = attributes.get("max")
+        if ent_max is not None:
+            write_value = min(write_value, float(ent_max))
+
+        step = attributes.get("step")
+        if step:
+            step = float(step)
+            write_value = round(write_value / step) * step
+
+        landed_w = write_value
+        if to_entity_unit:
+            landed_w = PowerConverter.convert(value=write_value, from_unit=unit, to_unit=UnitOfPower.WATT)
+
+        return write_value, int(round(landed_w))
 
     async def set_charge_from_grid(self, charge_from_grid: bool | None, blocking: bool = False):
         if self.charge_from_grid_switch is None or charge_from_grid is None:
@@ -176,14 +226,16 @@ class QSBattery(HADeviceMixin, Battery):
             return
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_discharge_number}
-        range_value = float(power)
         service = number.SERVICE_SET_VALUE
         min_value = float(self.min_discharging_power)
         max_value = float(self.max_discharging_power)
 
-        val = int(min(max_value, max(min_value, range_value)))
+        # domain clamp to [min_discharging_power, max_discharging_power] (W), then
+        # map to the entity's unit/step/range so the read-back and probe agree
+        clamped_w = min(max_value, max(min_value, float(power)))
+        val, expected_w = self._discharge_number_target(clamped_w)
 
-        if val == self.get_max_discharging_power():
+        if expected_w == self.get_max_discharging_power():
             return
 
         data[number.ATTR_VALUE] = val
@@ -212,7 +264,7 @@ class QSBattery(HADeviceMixin, Battery):
                 try:
                     res = float(state.state)
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                    res = int(res)
+                    res = int(round(res))
                     _LOGGER.info("get_max_discharging_power: battery %s %s", res, self.max_discharge_number)
                 except:
                     res = None

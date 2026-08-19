@@ -284,26 +284,82 @@ async def test_config_flow_battery_creates_entry(
     assert battery.min_discharging_power == 300.0
 
 
-async def test_config_flow_battery_missing_floor_key_defaults_to_zero(
+async def test_config_flow_battery_floor_above_max_surfaces_error(
     hass: HomeAssistant,
 ) -> None:
-    """AC 7: a pre-existing entry without the floor key behaves as floor = 0."""
-    entry_data = {
+    """N1: a floor above the max discharge power is rejected with a clear error."""
+    await _create_home_entry(hass)
+
+    battery_flow = await _start_flow_to_step(hass, CONF_TYPE_NAME_QSBattery)
+    result = await hass.config_entries.flow.async_configure(
+        battery_flow["flow_id"],
+        {
+            CONF_NAME: "Battery",
+            CONF_BATTERY_CAPACITY: 12000,
+            CONF_BATTERY_MIN_CHARGE_PERCENT: 10,
+            CONF_BATTERY_MAX_CHARGE_PERCENT: 95,
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
+            CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 4000,
+            CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 3500,
+        },
+    )
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: "min_discharge_above_max"}
+
+
+async def test_options_flow_legacy_entry_missing_floor_key_reconfigures(
+    hass: HomeAssistant,
+) -> None:
+    """AC 7 / N7: a legacy entry with NO floor key survives the options flow.
+
+    Drives a pre-existing battery entry (missing
+    `CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE`) through the reconfigure path and
+    asserts the reconfigured value reaches `Battery.min_discharging_power`
+    end-to-end.
+    """
+    await _create_home_entry(hass)
+    legacy_data = {
         CONF_NAME: "Legacy Battery",
         DEVICE_TYPE: CONF_TYPE_NAME_QSBattery,
         CONF_BATTERY_CAPACITY: 12000,
+        CONF_BATTERY_MIN_CHARGE_PERCENT: 10,
+        CONF_BATTERY_MAX_CHARGE_PERCENT: 95,
         CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
         CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 3500,
     }
-    assert CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE not in entry_data
+    assert CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE not in legacy_data
+    entry = MockConfigEntry(domain=DOMAIN, data=legacy_data, title="battery: Legacy Battery")
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.quiet_solar.config_flow.async_reload_quiet_solar",
+        new_callable=AsyncMock,
+    ):
+        result = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            {
+                CONF_NAME: "Legacy Battery",
+                CONF_BATTERY_CAPACITY: 12000,
+                CONF_BATTERY_MIN_CHARGE_PERCENT: 10,
+                CONF_BATTERY_MAX_CHARGE_PERCENT: 95,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 3000,
+                CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 250,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 3500,
+            },
+        )
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    assert entry.data[CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE] == 250
     battery = Battery(
         name="Legacy Battery",
         **{
-            CONF_BATTERY_CAPACITY: entry_data[CONF_BATTERY_CAPACITY],
-            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: entry_data[CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE],
+            CONF_BATTERY_CAPACITY: entry.data[CONF_BATTERY_CAPACITY],
+            CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: entry.data[CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE],
+            CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: entry.data[CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE],
         },
     )
-    assert battery.min_discharging_power == 0.0
+    assert battery.min_discharging_power == 250.0
 
 
 async def test_options_flow_battery_persists_floor(

@@ -53,10 +53,18 @@ def test_min_discharging_power_negative_clamped_to_zero():
     assert battery.min_discharging_power == 0.0
 
 
-def test_min_discharging_power_integer_normalized():
-    """A non-integer floor is integer-normalized at init (probe consistency)."""
+def test_min_discharging_power_integer_normalized_rounds():
+    """A non-integer floor is rounded to an integer at init (probe consistency)."""
     battery = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 300.7})
-    assert battery.min_discharging_power == 300.0
+    assert battery.min_discharging_power == 301.0
+    battery_down = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 299.4})
+    assert battery_down.min_discharging_power == 299.0
+
+
+def test_min_discharging_power_none_tolerated():
+    """A null floor (corrupt/hand-edited entry) is treated as 0, not a crash."""
+    battery = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: None})
+    assert battery.min_discharging_power == 0.0
 
 
 def test_charge_from_grid_base_property():

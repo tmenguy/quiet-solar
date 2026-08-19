@@ -14,6 +14,7 @@
             "cloud_profile_mismatch": "Cloud profile does not match configuration",
             "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator",
             "hvac_modes_must_differ": "HVAC mode ON and OFF must be different",
+            "min_discharge_above_max": "The outage safety floor cannot be higher than the maximum discharge power",
             "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
         },
         "step": {
@@ -782,6 +783,7 @@
             "cloud_profile_mismatch": "Cloud profile does not match configuration",
             "exactly_one_backing_required": "Pick exactly one of switch entity or climate entity for the radiator",
             "hvac_modes_must_differ": "HVAC mode ON and OFF must be different",
+            "min_discharge_above_max": "The outage safety floor cannot be higher than the maximum discharge power",
             "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
         },
         "step": {

@@ -50,12 +50,14 @@ algorithm (battery optimisation to minimise grid imports).
 minimum discharge power the battery always keeps available even under a
 discharge-limiting command. It is a `Battery.__init__` kwarg populated
 from `CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE` (default `0` = today's
-behaviour). At init it is clamped once to `[0, max_discharging_power]`
-and integer-normalized (`float(int(...))`) so the write, read, and
-probe paths — all of which int-cast — agree; a non-integer floor would
-otherwise never confirm in `probe_if_command_set` (eternal retry). The
-solver reads this attribute to model the floor's discharge during
-`CMD_GREEN_CHARGE_ONLY` slots (see [solver.md](solver.md)).
+behaviour; a `None` from a corrupt entry is tolerated as `0`). At init
+it is clamped once to `[0, max_discharging_power]` and
+integer-normalized (`float(round(...))`) so the write/read int-casts and
+the raw expected value used by `probe_if_command_set` agree; a
+non-integer floor would otherwise never confirm in
+`probe_if_command_set` (eternal retry). The solver reads this attribute
+to model the floor's discharge during `CMD_GREEN_CHARGE_ONLY` slots (see
+[solver.md](solver.md)).
 
 ## Key types / structures
 
