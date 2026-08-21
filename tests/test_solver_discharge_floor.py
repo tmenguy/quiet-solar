@@ -85,8 +85,8 @@ def test_green_only_slot_discharges_up_to_floor_when_demand_exceeds_floor():
     """Demand > F: modelled discharge is exactly F (the binding bound)."""
     solver, battery = _build_solver(floor=300, pv_w=1000, ua_w=3000, current_charge=8000)
     result = solver._battery_get_charging_power(existing_battery_commands=_green_only_cmds(solver))
-    battery_charge, battery_commands = result[1], result[2]
-    leak_buckets = result[8]
+    battery_charge, battery_commands = result.battery_charge, result.battery_commands
+    leak_buckets = result.prices_leak_energy_buckets
     dur_h = float(solver._durations_s[0]) / 3600.0
 
     # capped at the floor, not 0 and not the full 2000 W demand
@@ -101,8 +101,8 @@ def test_green_only_slot_discharges_only_demand_when_demand_below_floor():
     """Demand < F: modelled discharge is the demand; leak is the demand's energy."""
     solver, _ = _build_solver(floor=300, pv_w=1000, ua_w=1100, current_charge=8000)
     result = solver._battery_get_charging_power(existing_battery_commands=_green_only_cmds(solver))
-    battery_commands = result[2]
-    leak_buckets = result[8]
+    battery_commands = result.battery_commands
+    leak_buckets = result.prices_leak_energy_buckets
     dur_h = float(solver._durations_s[0]) / 3600.0
 
     assert battery_commands[0].power_consign == pytest.approx(-100.0)
@@ -114,8 +114,8 @@ def test_green_only_surplus_slot_still_charges():
     """A surplus slot keeps charging (the floor cap never blocks charging)."""
     solver, _ = _build_solver(floor=300, pv_w=3000, ua_w=1000, current_charge=8000)
     result = solver._battery_get_charging_power(existing_battery_commands=_green_only_cmds(solver))
-    battery_commands = result[2]
-    leak_buckets = result[8]
+    battery_commands = result.battery_commands
+    leak_buckets = result.prices_leak_energy_buckets
 
     assert battery_commands[0].power_consign > 0.0
     # a charging slot contributes no leak
@@ -127,7 +127,7 @@ def test_green_only_discharge_soc_limited_below_floor():
     # current_charge 50 Wh over a 900 s slot => possible discharge 200 W < F
     solver, _ = _build_solver(floor=300, pv_w=1000, ua_w=3000, current_charge=50, capacity=10000)
     result = solver._battery_get_charging_power(existing_battery_commands=_green_only_cmds(solver))
-    battery_commands = result[2]
+    battery_commands = result.battery_commands
 
     assert battery_commands[0].power_consign == pytest.approx(-200.0)
 
@@ -136,8 +136,8 @@ def test_floor_zero_green_only_forbids_discharge():
     """F = 0 reduces to today's behaviour: a demand slot never discharges."""
     solver, _ = _build_solver(floor=0, pv_w=1000, ua_w=3000, current_charge=8000)
     result = solver._battery_get_charging_power(existing_battery_commands=_green_only_cmds(solver))
-    battery_commands = result[2]
-    leak_buckets = result[8]
+    battery_commands = result.battery_commands
+    leak_buckets = result.prices_leak_energy_buckets
 
     assert battery_commands[0].power_consign == pytest.approx(0.0)
     assert leak_buckets == {}
@@ -164,7 +164,7 @@ def test_flip_keeps_leak_and_preserves_residual_budget():
     cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in solver._available_power_no_battery]
 
     result = solver._battery_get_charging_power(existing_battery_commands=cmds, limited_discharge_per_price=budget)
-    battery_commands = result[2]
+    battery_commands = result.battery_commands
 
     # first slot flipped to green-charge-only, discharging only the leak (-F)
     assert battery_commands[0].is_like(CMD_GREEN_CHARGE_ONLY)
@@ -172,7 +172,7 @@ def test_flip_keeps_leak_and_preserves_residual_budget():
     # residual budget preserved (flipped slot consumes none of it)
     assert budget[price] == pytest.approx(300.0)
     # leak energy per slot is F * duration
-    assert result[8][price] == pytest.approx(300.0 * dur_h * len(battery_commands))
+    assert result.prices_leak_energy_buckets[price] == pytest.approx(300.0 * dur_h * len(battery_commands))
 
 
 def test_no_flip_when_compressible_budget_survives():
@@ -183,7 +183,7 @@ def test_no_flip_when_compressible_budget_survives():
     cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in solver._available_power_no_battery]
 
     result = solver._battery_get_charging_power(existing_battery_commands=cmds, limited_discharge_per_price=budget)
-    battery_commands = result[2]
+    battery_commands = result.battery_commands
 
     assert not battery_commands[0].is_like(CMD_GREEN_CHARGE_ONLY)
     assert battery_commands[0].power_consign == pytest.approx(-2000.0)
@@ -207,7 +207,7 @@ def test_flip_debit_f_zero_preserves_residual_and_lets_smaller_slots_discharge()
     cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in solver._available_power_no_battery]
 
     result = solver._battery_get_charging_power(existing_battery_commands=cmds, limited_discharge_per_price=budget)
-    battery_commands = result[2]
+    battery_commands = result.battery_commands
 
     # big slot flipped (holds charge), discharges nothing at F = 0
     assert battery_commands[0].is_like(CMD_GREEN_CHARGE_ONLY)
@@ -348,8 +348,8 @@ def test_two_price_no_phantom_savings_expensive_bucket_matches_recompute():
     # plan: cap cheap-price discharge to force flips on cheap slots
     budget = {cheap: 200.0}
     r_plan = solver._battery_get_charging_power(limited_discharge_per_price=dict(budget))
-    plan_cmds = r_plan[2]
-    plan_expensive_grid = r_plan[4].get(expensive, 0.0)
+    plan_cmds = r_plan.battery_commands
+    plan_expensive_grid = r_plan.prices_remaining_grid_energy_buckets.get(expensive, 0.0)
 
     # at least one cheap slot flipped to the leak (non-vacuous)
     assert any(c.is_like(CMD_GREEN_CHARGE_ONLY) and c.power_consign == pytest.approx(-300.0) for c in plan_cmds)
@@ -357,7 +357,7 @@ def test_two_price_no_phantom_savings_expensive_bucket_matches_recompute():
     # recompute with the resulting commands, no budget
     recompute_cmds = [copy_command(c) for c in plan_cmds]
     r_re = solver._battery_get_charging_power(existing_battery_commands=recompute_cmds)
-    re_expensive_grid = r_re[4].get(expensive, 0.0)
+    re_expensive_grid = r_re.prices_remaining_grid_energy_buckets.get(expensive, 0.0)
 
     assert re_expensive_grid == pytest.approx(plan_expensive_grid)
     assert plan_expensive_grid > 0.0  # non-vacuous: the expensive bucket does import
@@ -367,9 +367,10 @@ def test_full_solve_three_price_normalization_applied_once():
     """3-price companion: solve completes and never over-subtracts the leak.
 
     The inner allocation loop revisits cheap buckets on every outer
-    iteration; the leak is normalized once before the loop so no discharged
-    bucket is double-subtracted. The battery must still discharge at least
-    its total leak across the horizon.
+    iteration; the leak is normalized exactly once before the loop (asserted
+    via the spy) so no discharged bucket is double-subtracted. Each flipped
+    slot keeps its incompressible leak (asserted below), and the flipped slots
+    together discharge a strictly positive amount (never a hard 0).
     """
     start = datetime(2024, 6, 1, 0, 0, tzinfo=pytz.UTC)
     end = start + timedelta(hours=3)
@@ -415,13 +416,17 @@ def test_full_solve_three_price_normalization_applied_once():
     assert per_slot is not None
     # no flipped slot ever discharges more than the floor (leak only)
     flipped = 0
+    flipped_discharge = 0.0
     for cmd in per_slot:
         if cmd is not None and cmd.is_like(CMD_GREEN_CHARGE_ONLY):
             flipped += 1
             assert cmd.power_consign >= -300.0 - 1e-6
             assert cmd.power_consign <= 0.0
+            flipped_discharge += -cmd.power_consign
     # S3: non-vacuous — the 3-price scenario must actually produce flips
     assert flipped > 0
+    # T13: the flipped slots keep a strictly positive leak (not a hard 0)
+    assert flipped_discharge > 0.0
 
 
 def test_full_solve_two_price_floor_zero_reduces_to_baseline():

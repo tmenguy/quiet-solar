@@ -86,6 +86,29 @@ def test_max_discharging_power_null_tolerated():
     assert floored.min_discharging_power == 1500.0
 
 
+def test_negative_max_discharge_does_not_produce_negative_floor():
+    """T6(a): a corrupt negative max discharge is clamped to 0, so the floor is not negative."""
+    battery = _make_battery(**{CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: -100})
+    assert battery.max_discharging_power == 0.0
+    assert battery.min_discharging_power == 0.0
+
+
+def test_nan_floor_rejected():
+    """T6(b): a 'nan' floor coerces but is non-finite → rejected to the default 0 (no NaN poison)."""
+    battery = _make_battery(**{CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: "nan"})
+    assert battery.min_discharging_power == 0.0
+    inf_max = _make_battery(**{CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: "inf"})
+    assert inf_max.max_discharging_power == 1500.0
+
+
+def test_corrupt_charge_max_coerced():
+    """T6(c): a null / non-numeric max charging power falls back to the default, no crash."""
+    battery = _make_battery(**{CONF_BATTERY_MAX_CHARGE_POWER_VALUE: None})
+    assert battery.max_charging_power == 1500.0
+    garbage = _make_battery(**{CONF_BATTERY_MAX_CHARGE_POWER_VALUE: "oops"})
+    assert garbage.max_charging_power == 1500.0
+
+
 def test_charge_from_grid_base_property():
     """Base Battery.charge_from_grid always returns False."""
     battery = Battery(name="bat", **{

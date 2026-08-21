@@ -50,8 +50,10 @@ algorithm (battery optimisation to minimise grid imports).
 minimum discharge power the battery always keeps available even under a
 discharge-limiting command. It is a `Battery.__init__` kwarg populated
 from `CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE` (default `0` = today's
-behaviour; a `None`/non-numeric floor or max from a corrupt entry is
-coerced via `_coerce_float` to the default — review-fix #02 R6). At init
+behaviour; a `None`/non-numeric/non-finite floor or max from a corrupt
+entry is coerced via `_coerce_float` to a finite default, and a negative
+max is clamped to 0 so it cannot drag the floor negative — review-fix #02
+R6 / #03 T6). At init
 it is clamped once to `[0, max_discharging_power]` and
 integer-normalized (`float(round(...))`) so the write/read int-casts and
 the raw expected value used by `probe_if_command_set` agree; a

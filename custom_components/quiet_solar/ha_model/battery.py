@@ -105,7 +105,9 @@ class QSBattery(HADeviceMixin, Battery):
 
         cmd_to_vals = self._command_to_values(command)
         await self.set_charge_from_grid(cmd_to_vals["charge_from_grid"])
-        await self.set_max_discharging_power(cmd_to_vals["max_discharging_power"])
+        await self.set_max_discharging_power(
+            cmd_to_vals["max_discharging_power"], snap_up=self._is_discharge_floor_command(command)
+        )
         await self.set_max_charging_power(cmd_to_vals["max_charging_power"])
 
         return False
@@ -126,11 +128,14 @@ class QSBattery(HADeviceMixin, Battery):
             return None
 
         # Compare against the value that actually LANDS on the number entity
-        # (unit-converted, min/max-clamped, step-snapped) so a kW-denominated or
-        # stepped entity does not make the probe never confirm (eternal retry).
+        # (domain-clamped, unit-converted, min/max-clamped, step-snapped) so a
+        # kW-denominated or stepped entity does not make the probe never confirm
+        # (eternal retry). Snap direction must match the write's (T3).
         expected_max_discharge = cmd_to_vals["max_discharging_power"]
         if expected_max_discharge is not None:
-            _, expected_max_discharge = self._discharge_number_target(expected_max_discharge)
+            _, expected_max_discharge = self._discharge_number_target(
+                expected_max_discharge, snap_up=self._is_discharge_floor_command(command)
+            )
 
         max_charge_power = self.get_max_charging_power()
 
@@ -150,20 +155,52 @@ class QSBattery(HADeviceMixin, Battery):
             and max_charge_power == expected_max_charge
         )
 
-    def _number_entity_target(self, entity_id: str | None, power_w: float, snap_up: bool) -> tuple[float, int]:
+    @staticmethod
+    def _safe_float(value) -> float | None:
+        """Coerce an entity attribute to a finite float, else None (treat-as-absent)."""
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        return result if math.isfinite(result) else None
+
+    @staticmethod
+    def _is_discharge_floor_command(command: LoadCommand) -> bool:
+        """True when the command emits the discharge *floor* (a safety minimum).
+
+        Only the floor may be snapped UP; the max-discharge restore must never
+        be snapped up past the user-configured hardware limit (T3).
+        """
+        return command.is_like(CMD_GREEN_CHARGE_ONLY) or command.is_like(CMD_FORCE_CHARGE)
+
+    def _number_entity_target(
+        self,
+        entity_id: str | None,
+        power_w: float,
+        snap_up: bool,
+        domain_min: float,
+        domain_max: float,
+    ) -> tuple[float, int]:
         """Map a W power target to (value_to_write, expected_landed_w) for a number entity.
 
-        Mirrors the read path (`convert_power_to_w`) so the write, the
-        read-back, and the probe comparison all agree even when the entity
-        is kW-denominated or carries a min/max/step that would snap the
-        value. `snap_up=True` (discharge floor) rounds the step **up** so a
-        safety minimum is never lowered — nearest-step rounding could snap a
-        floor down to 0 and then confirm the zeroed floor. `snap_up=False`
-        (charge limit, not a safety minimum) rounds to the nearest step.
-        Falls back to a raw W passthrough when the entity attributes are
-        unreadable.
+        The **same** helper backs both the write and the probe expectation, so
+        they can never disagree (eternal retry). Steps:
+
+        1. domain clamp to ``[domain_min, domain_max]`` (shared by write and
+           probe — T2);
+        2. convert to the entity's unit;
+        3. clamp to the entity's ``min`` / ``max``;
+        4. snap to the entity ``step`` — UP for a safety floor (``snap_up``, a
+           minimum is never lowered), DOWN otherwise (a maximum / charge limit
+           is never raised past the requested cap — T3) — then re-clamp to
+           ``[min, max]`` on both sides (T1), keeping the max cap
+           step-aligned (T5).
+
+        Non-numeric entity attributes are treated as absent (T7). A landed value
+        the entity forces far above the request is logged once (T8).
         """
-        write_value = float(power_w)
+        request_w = min(float(domain_max), max(float(domain_min), float(power_w)))
+        write_value = request_w
         attributes: dict = {}
         if entity_id is not None:
             state = self.hass.states.get(entity_id)
@@ -175,38 +212,71 @@ class QSBattery(HADeviceMixin, Battery):
         if to_entity_unit:
             write_value = PowerConverter.convert(value=write_value, from_unit=UnitOfPower.WATT, to_unit=unit)
 
-        ent_min = attributes.get("min")
-        if ent_min is not None:
-            write_value = max(write_value, float(ent_min))
-        ent_max = attributes.get("max")
-        if ent_max is not None:
-            write_value = min(write_value, float(ent_max))
+        ent_min = self._safe_float(attributes.get("min"))
+        ent_max = self._safe_float(attributes.get("max"))
+        step = self._safe_float(attributes.get("step"))
 
-        step = attributes.get("step")
-        if step:
-            step = float(step)
+        if ent_min is not None:
+            write_value = max(write_value, ent_min)
+        if ent_max is not None:
+            write_value = min(write_value, ent_max)
+
+        if step is not None and step > 0.0:
             if snap_up:
-                # a discharge floor is a safety minimum — never snap it below the
-                # request; then re-cap to the entity max (ceil cannot undershoot min)
-                write_value = math.ceil(write_value / step) * step
-                if ent_max is not None:
-                    write_value = min(write_value, float(ent_max))
+                # a safety minimum: never below the request. FP-safe so an exact
+                # step multiple does not overshoot a whole step.
+                write_value = math.ceil(write_value / step - 1e-9) * step
             else:
-                write_value = round(write_value / step) * step
+                # a maximum / charge limit: never above the request (T3).
+                write_value = math.floor(write_value / step + 1e-9) * step
+            # re-clamp to the entity range on BOTH sides (T1); the max cap is the
+            # largest step multiple <= ent_max so the write stays step-aligned (T5)
+            if ent_max is not None:
+                write_value = min(write_value, math.floor(ent_max / step + 1e-9) * step)
+            if ent_min is not None:
+                write_value = max(write_value, ent_min)
 
         landed_w = write_value
         if to_entity_unit:
             landed_w = PowerConverter.convert(value=write_value, from_unit=unit, to_unit=UnitOfPower.WATT)
+        landed_w = int(round(landed_w))
 
-        return write_value, int(round(landed_w))
+        snap_step_w = 0.0
+        if step is not None and step > 0.0:
+            snap_step_w = (
+                PowerConverter.convert(value=step, from_unit=unit, to_unit=UnitOfPower.WATT)
+                if to_entity_unit
+                else step
+            )
+        if landed_w - request_w > max(1.0, snap_step_w):
+            _LOGGER.warning(
+                "number entity %s forces %s W available, above the requested %s W",
+                entity_id,
+                landed_w,
+                int(round(request_w)),
+            )
 
-    def _discharge_number_target(self, power_w: float) -> tuple[float, int]:
-        """Discharge floor target — snaps UP (a safety minimum is never lowered)."""
-        return self._number_entity_target(self.max_discharge_number, power_w, snap_up=True)
+        return write_value, landed_w
+
+    def _discharge_number_target(self, power_w: float, snap_up: bool) -> tuple[float, int]:
+        """Discharge target. `snap_up` only for the floor (a safety minimum)."""
+        return self._number_entity_target(
+            self.max_discharge_number,
+            power_w,
+            snap_up=snap_up,
+            domain_min=self.min_discharging_power,
+            domain_max=self.max_discharging_power,
+        )
 
     def _charge_number_target(self, power_w: float) -> tuple[float, int]:
-        """Charge limit target — nearest-step (not a safety minimum)."""
-        return self._number_entity_target(self.max_charge_number, power_w, snap_up=False)
+        """Charge limit target — snaps DOWN (a limit is never raised past its cap)."""
+        return self._number_entity_target(
+            self.max_charge_number,
+            power_w,
+            snap_up=False,
+            domain_min=self.min_charging_power,
+            domain_max=self.max_charging_power,
+        )
 
     async def set_charge_from_grid(self, charge_from_grid: bool | None, blocking: bool = False):
         if self.charge_from_grid_switch is None or charge_from_grid is None:
@@ -246,19 +316,18 @@ class QSBattery(HADeviceMixin, Battery):
         self.is_charge_from_grid_current = res
         return res
 
-    async def set_max_discharging_power(self, power: float | None = None, blocking: bool = False):
+    async def set_max_discharging_power(
+        self, power: float | None = None, blocking: bool = False, *, snap_up: bool = False
+    ):
         if self.max_discharge_number is None or power is None:
             return
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_discharge_number}
         service = number.SERVICE_SET_VALUE
-        min_value = float(self.min_discharging_power)
-        max_value = float(self.max_discharging_power)
 
-        # domain clamp to [min_discharging_power, max_discharging_power] (W), then
-        # map to the entity's unit/step/range so the read-back and probe agree
-        clamped_w = min(max_value, max(min_value, float(power)))
-        val, expected_w = self._discharge_number_target(clamped_w)
+        # the helper owns the domain clamp + entity unit/step/range mapping, so
+        # the read-back and probe agree; snap_up only for the safety floor (T3)
+        val, expected_w = self._discharge_number_target(float(power), snap_up=snap_up)
 
         if expected_w == self.get_max_discharging_power():
             return
@@ -335,13 +404,10 @@ class QSBattery(HADeviceMixin, Battery):
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_charge_number}
         service = number.SERVICE_SET_VALUE
-        min_value = float(self.min_charging_power)
-        max_value = float(self.max_charging_power)
 
-        # domain clamp to [min_charging_power, max_charging_power] (W), then map to
-        # the entity's unit/step/range so the read-back and probe agree (R5)
-        clamped_w = min(max_value, max(min_value, float(power)))
-        val, expected_w = self._charge_number_target(clamped_w)
+        # the helper owns the domain clamp + entity unit/step/range mapping, so
+        # the read-back and probe agree even for a consign above max (T2)
+        val, expected_w = self._charge_number_target(float(power))
 
         if expected_w == self.get_max_charging_power():
             return

@@ -458,7 +458,8 @@ class TestQSBatteryDischargeFloor:
         await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
 
         calls = [c for c in recorded_service_calls if c[1] == "set_value"]
-        # 300 W snaps to the nearest multiple of the 40 W step: 320 W
+        # 300 W snaps UP to the next multiple of the 40 W step: 320 W (a floor
+        # is a safety minimum and must never be lowered by snapping)
         assert any(
             c[2].get("value") == pytest.approx(320.0)
             for c in calls
@@ -537,10 +538,10 @@ class TestQSBatteryDischargeFloor:
         assert await battery.probe_if_command_set(datetime.now(pytz.UTC), command) is True
 
     @pytest.mark.asyncio
-    async def test_stepped_charge_entity_snaps_to_nearest(
+    async def test_stepped_charge_entity_snaps_down(
         self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
     ):
-        """R5: a charge limit is not a safety minimum — it snaps to the NEAREST step."""
+        """R5/T3: a charge limit is a maximum — it snaps DOWN (never raised past its cap)."""
         battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
         await _async_set_state(hass, "number.max_discharge", "0", {"unit_of_measurement": "W"})
         await _async_set_state(hass, "number.max_charge", "0", {"unit_of_measurement": "W", "step": 100})
@@ -551,8 +552,149 @@ class TestQSBatteryDischargeFloor:
 
         calls = [c for c in recorded_service_calls if c[1] == "set_value"]
         charge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_charge"]
-        # 2340 -> nearest 100 step -> 2300 (nearest rounding, not ceil)
+        # 2340 -> floor to the 100 W step -> 2300 (a limit is never raised)
         assert charge_writes and all(v == pytest.approx(2300.0) for v in charge_writes)
+
+    @pytest.mark.asyncio
+    async def test_charge_consign_above_max_probe_confirms_clamped(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """T2: a consign above max_charging_power is clamped identically by write and probe."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        await _async_set_state(hass, "number.max_discharge", "0", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "number.max_charge", "0", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        command = copy_command(CMD_FORCE_CHARGE, power_consign=6000)
+
+        await battery.execute_command(datetime.now(pytz.UTC), command)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        charge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_charge"]
+        assert charge_writes and all(v == pytest.approx(5000.0) for v in charge_writes)
+
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "on")
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), command) is True
+
+    @pytest.mark.asyncio
+    async def test_charge_max_not_divisible_by_step_snaps_down_in_range(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """T1(a): charge max not a step multiple → snap DOWN, in range, probe confirms."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        attrs = {"unit_of_measurement": "W", "max": 5000, "step": 300}
+        await _async_set_state(hass, "number.max_discharge", "0", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "number.max_charge", "0", attrs)
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        command = copy_command(CMD_FORCE_CHARGE, power_consign=5000)
+
+        await battery.execute_command(datetime.now(pytz.UTC), command)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        charge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_charge"]
+        # floor(5000/300)*300 = 4800 (in range, never the out-of-range 5100)
+        assert charge_writes and all(v == pytest.approx(4800.0) for v in charge_writes)
+
+        await _async_set_state(hass, "number.max_charge", "4800", attrs)
+        await _async_set_state(hass, "switch.charge_from_grid", "on")
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), command) is True
+
+    @pytest.mark.asyncio
+    async def test_charge_min_step_force_charge_stays_in_range(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """T1(b): min/step charge entity — a tiny consign stays at the entity min, in range."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        attrs = {"unit_of_measurement": "W", "min": 100, "step": 250}
+        await _async_set_state(hass, "number.max_discharge", "0", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "number.max_charge", "5000", attrs)
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        command = copy_command(CMD_FORCE_CHARGE, power_consign=100)
+
+        await battery.execute_command(datetime.now(pytz.UTC), command)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        charge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_charge"]
+        # never a below-min 0 write (the old regression); clamps up to the entity min
+        assert charge_writes and all(v == pytest.approx(100.0) for v in charge_writes)
+
+    @pytest.mark.asyncio
+    async def test_discharge_restore_stepped_never_exceeds_configured_max(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """T3: the max-discharge restore snaps DOWN, never above the configured max."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        # entity range allows 5100, but the configured max is 5000 — must not overshoot
+        attrs = {"unit_of_measurement": "W", "max": 6000, "step": 300}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_AND_DISCHARGE)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        discharge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        # floor(5000/300)*300 = 4800 <= 5000 (never the 5100 overshoot)
+        assert discharge_writes and all(v == pytest.approx(4800.0) and v <= 5000.0 for v in discharge_writes)
+
+    @pytest.mark.asyncio
+    async def test_floor_exact_step_multiple_stays_exact(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """T5: a floor that is an exact step multiple does not overshoot by a whole step."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 400)
+        attrs = {"unit_of_measurement": "W", "step": 100}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        discharge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        # 400 is already a multiple of 100 -> stays 400 (not 500)
+        assert discharge_writes and all(v == pytest.approx(400.0) for v in discharge_writes)
+
+    @pytest.mark.asyncio
+    async def test_non_numeric_step_treated_as_absent(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """T7: a non-numeric step attribute is treated as absent — no crash, raw write."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "W", "step": "unknown"}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        discharge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert discharge_writes and all(v == pytest.approx(300.0) for v in discharge_writes)
+
+        await _async_set_state(hass, "number.max_discharge", "300", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
+
+    @pytest.mark.asyncio
+    async def test_entity_min_forcing_value_above_request_logs_warning(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
+    ):
+        """T8: when the entity min forces the landed value far above the request, warn once."""
+        import logging
+
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        attrs = {"unit_of_measurement": "W", "min": 1000}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        with caplog.at_level(logging.WARNING):
+            await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        discharge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert discharge_writes and all(v == pytest.approx(1000.0) for v in discharge_writes)
+        assert "above the requested" in caplog.text
 
 
 class TestQSBatteryExecuteCommand:

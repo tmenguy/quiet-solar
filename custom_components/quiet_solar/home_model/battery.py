@@ -1,4 +1,5 @@
 import logging
+import math
 
 from ..const import (
     CONF_BATTERY_CAPACITY,
@@ -16,24 +17,30 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _coerce_float(value, default: float) -> float:
-    """Coerce a config value to float, falling back to `default`.
+    """Coerce a config value to a finite float, falling back to `default`.
 
     Tolerates a hand-edited / corrupt config entry that stores a power value
-    as ``null`` or a non-numeric string instead of a number, so a bad entry
-    degrades gracefully instead of crashing device setup.
+    as ``null``, a non-numeric string, or a non-finite value (``"nan"`` /
+    ``"inf"``) instead of a number, so a bad entry degrades gracefully instead
+    of crashing device setup or poisoning the solver with NaN.
     """
     try:
-        return float(value)
+        result = float(value)
     except (TypeError, ValueError):
         return float(default)
+    if not math.isfinite(result):
+        return float(default)
+    return result
 
 
 class Battery(AbstractDevice):
     def __init__(self, **kwargs):
 
         self.capacity = kwargs.pop(CONF_BATTERY_CAPACITY, 7000)
-        self.max_discharging_power = _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500)
-        self.max_charging_power = kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500)
+        # clamp the max operands to >= 0 so a corrupt negative max cannot drag the
+        # floor clamp below 0 (a negative safety floor would emit out-of-range) — T6
+        self.max_discharging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500))
+        self.max_charging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500), 1500))
         self.min_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0)
         self.max_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0)
         self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)

@@ -1248,14 +1248,14 @@ class QSHome(QSDynamicGroup):
                 async def _broadcast() -> None:
                     try:
                         await self.async_notify_all_mobile_apps(title=title, message=message)
-                    except Exception:  # noqa: BLE001 \u2014 background task, log only
+                    except Exception:  # noqa: BLE001 — background task, log only
                         _LOGGER.error("Off-grid alert broadcast failed", exc_info=True)
 
                 self.hass.async_create_task(_broadcast())
 
             try:
                 await self._compute_and_apply_off_grid_state(for_init=False)
-            except Exception:  # noqa: BLE001 \u2014 safety-path listener, log only
+            except Exception:  # noqa: BLE001 — safety-path listener, log only
                 _LOGGER.error("Off-grid state apply failed after transition", exc_info=True)
 
         self._off_grid_unsub = async_track_state_change_event(

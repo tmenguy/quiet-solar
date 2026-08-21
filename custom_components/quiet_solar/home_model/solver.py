@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -44,14 +44,14 @@ class BatteryChargingPower(NamedTuple):
     legacy positional access (`[1]`, `[7]`) keeps working.
     """
 
-    battery_ext_consumption_power: Any
-    battery_charge: Any
+    battery_ext_consumption_power: npt.NDArray[np.float64]
+    battery_charge: npt.NDArray[np.float64]
     battery_commands: list
     prices_discharged_energy_buckets: dict
     prices_remaining_grid_energy_buckets: dict
     excess_solar_energy: float
     remaining_grid_energy: float
-    battery_possible_discharge: Any
+    battery_possible_discharge: npt.NDArray[np.float64]
     prices_leak_energy_buckets: dict
 
 
@@ -1436,6 +1436,9 @@ class PeriodSolver:
                     excess_solar_energy = _bcp.excess_solar_energy
                     remaining_grid_energy = _bcp.remaining_grid_energy
                     bat_possible_discharge = _bcp.battery_possible_discharge
+                    # keep the leak local consistent with the final pass (T11); it has
+                    # no further reader here but leaving it stale is a latent trap
+                    prices_leak_energy_buckets = _bcp.prices_leak_energy_buckets
 
                     self._max_possible_production = self._compute_max_possible_production(
                         battery_possible_discharge=bat_possible_discharge,

@@ -174,6 +174,8 @@ Two reaction-latency fixes on the off-grid transition:
   or a single raising load cannot cancel the remaining shedding or the
   gate (do_reset is already committed — a swallowed error would otherwise
   leave loads running off-grid with no retry; review-fix #01 S1, #02 R2).
+  (Review-fix #03 T12 touched only a code comment here — no behaviour
+  change.)
 - **Notify off the critical path** (`_off_grid_entity_state_changed`):
   the mobile broadcast is scheduled as a background task **before** the
   apply is awaited, so notification delivery and the battery restore are

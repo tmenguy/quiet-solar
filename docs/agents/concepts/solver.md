@@ -62,8 +62,10 @@ discharges up to F. Each discharging slot's energy splits into an
 flows even when the slot is flipped to green-charge-only — and a
 **compressible remainder** the price-bucket optimizer may move between
 buckets. Pass 1 returns `prices_leak_energy_buckets` as the 9th field of
-the `BatteryChargingPower` NamedTuple (review-fix #02 R8 — call sites
-unpack by name, so a future field is a definition-only change); the
+the `BatteryChargingPower` NamedTuple (review-fix #02 R8 — the production
+call sites unpack by name, so a future field does not require touching
+them; positional test constructions/asserts, being a tuple, still pin
+the arity by design); the
 allocation pass subtracts the leak from the discharged buckets **once**
 before its revisiting loop (via the single-call helper
 `_leak_normalize_discharged_buckets` — subtracting inside the loop would

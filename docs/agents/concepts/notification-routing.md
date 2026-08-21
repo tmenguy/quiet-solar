@@ -209,7 +209,8 @@ before the apply also means a hung apply cannot delay the alarm. The
 task body and the apply are each wrapped in a log-only `except Exception`
 (background-task allowance, `exc_info=True`) so a raising notify handler
 or a failing apply is logged with its traceback and the listener
-survives. The (title, message) content
+survives. (Review-fix #03 T12 corrected a comment em-dash artifact on
+these two guards — no behaviour change.) The (title, message) content
 and the transition conditions (including the `FORCE_ON_GRID` override
 variants and the recovery messages) are unchanged — factored into the
 `_off_grid_transition_notification` helper.

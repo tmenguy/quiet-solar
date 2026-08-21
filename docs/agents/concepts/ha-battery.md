@@ -26,9 +26,15 @@ disable it; the domain `Battery.max_discharging_power` attribute is
 unchanged). Writes go through `_number_entity_target`, which maps the W
 value to the entity's unit/min/max/step so the write, the read-back, and
 the probe agree (kW-denominated or stepped entities otherwise never
-confirm — eternal retry); the discharge floor snaps **up** (`ceil`) so a
-safety minimum is never lowered to 0, while the charge limit snaps to the
-nearest step (review-fix #01 S2, #02 R1/R5). There is no discharge-enable
+confirm — eternal retry). It applies the domain clamp too, so a consign
+above `max_charging_power` confirms at the clamped value (review-fix #03
+T2). Snap direction is safety-directed: the discharge **floor** snaps
+**up** (a minimum is never lowered to 0), while a **maximum** — the
+max-discharge restore and the charge limit — snaps **down** (a limit is
+never raised past its configured cap; review-fix #01 S2, #02 R1/R5, #03
+T1/T3). Non-numeric entity attributes are treated as absent (T7), and a
+landed value the entity's own `min`/`step` forces far above the request
+is logged once (T8). There is no discharge-enable
 switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.

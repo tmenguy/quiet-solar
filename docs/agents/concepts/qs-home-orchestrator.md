@@ -82,7 +82,8 @@ than the cycle completes.
   *within* `async_set_off_grid_mode` and moves the off-grid broadcast to
   a background task — the gate arithmetic and the confirmed-command
   contract above are untouched (see
-  [off-grid-mode.md](off-grid-mode.md)).
+  [off-grid-mode.md](off-grid-mode.md)). (Review-fix #03 T12 was a
+  comment-only fix here — no behaviour change.)
 
 - `_state_lock`, `_loads_lock` — `asyncio.Lock` guards.
 - Public registry accessors — `get_car_by_name(name)`,
