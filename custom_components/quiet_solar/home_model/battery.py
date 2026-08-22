@@ -43,14 +43,18 @@ def _coerce_float(value, default: float) -> float:
 class Battery(AbstractDevice):
     def __init__(self, **kwargs):
 
-        # coerce corrupt-entry values (U8: capacity / SOC percents too)
-        self.capacity = _coerce_float(kwargs.pop(CONF_BATTERY_CAPACITY, 7000), 7000)
+        # coerce corrupt-entry values (U8) and clamp them to sane ranges (V3):
+        # a finite-but-nonsense value (negative capacity, percent 150, min > max)
+        # is the same hand-edited threat model as a non-numeric one.
+        self.capacity = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_CAPACITY, 7000), 7000))
         # clamp the max operands to >= 0 so a corrupt negative max cannot drag the
         # floor clamp below 0 (a negative safety floor would emit out-of-range) — T6
         self.max_discharging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500))
         self.max_charging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500), 1500))
-        self.min_charge_SOC_percent = _coerce_float(kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0), 0.0)
-        self.max_charge_SOC_percent = _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0), 100.0)
+        self.min_charge_SOC_percent = min(100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0), 0.0)))
+        self.max_charge_SOC_percent = min(100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0), 100.0)))
+        # enforce min <= max so headroom math (get_charger_power) cannot go negative
+        self.min_charge_SOC_percent = min(self.min_charge_SOC_percent, self.max_charge_SOC_percent)
         self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
         # opt-in outage safety floor — the minimum discharge power the battery
         # always keeps available (default 0 keeps today's behaviour). Tolerate a
@@ -66,9 +70,12 @@ class Battery(AbstractDevice):
         # one-time init clamp to [0, max_discharging_power], integer-normalized
         # (rounded) so the write/read int-casts and the raw expected value used by
         # probe_if_command_set agree — a non-integer floor would otherwise never
-        # confirm in probe_if_command_set (eternal retry)
-        self.min_discharging_power = float(
-            round(min(max(0.0, configured_min_discharging_power), self.max_discharging_power))
+        # confirm in probe_if_command_set (eternal retry). Re-clamp AFTER the round
+        # (V4): rounding a floor that equals a fractional max could otherwise push
+        # min_discharging_power a sub-watt above max, breaking the floor <= max invariant.
+        self.min_discharging_power = min(
+            float(round(min(max(0.0, configured_min_discharging_power), self.max_discharging_power))),
+            self.max_discharging_power,
         )
 
     @property

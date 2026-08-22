@@ -1847,6 +1847,7 @@ class TestOffGridAutoDetection:
             await asyncio.sleep(0)
             if condition():
                 return
+        pytest.fail(f"condition not met within {limit} event-loop pumps")
 
     @pytest.mark.asyncio
     async def test_battery_restored_before_loads(self, hass: HomeAssistant, home_with_binary_sensor_off_grid):

@@ -55,12 +55,19 @@ coerced via the shared `coerce_finite_float` — used by both the domain
 model and the HA bridge, review-fix #04 U9 — to a finite default for the
 floor, both maxes, the capacity, and the SOC percents (U8), and a negative
 max is clamped to 0 so it cannot drag the floor negative — review-fix #02
-R6 / #03 T6 / #04 U8). At init
+R6 / #03 T6 / #04 U8). Coerced values are also range-clamped (review-fix
+#05 V3): `capacity >= 0`, SOC percents to `[0, 100]` with
+`min_charge_SOC_percent <= max_charge_SOC_percent` enforced — a
+finite-but-nonsense entry (negative capacity, percent 150, min > max) is
+the same hand-edited threat as a non-numeric one. At init
 it is clamped once to `[0, max_discharging_power]` and
 integer-normalized (`float(round(...))`) so the write/read int-casts and
 the raw expected value used by `probe_if_command_set` agree; a
 non-integer floor would otherwise never confirm in
-`probe_if_command_set` (eternal retry). The solver reads this attribute
+`probe_if_command_set` (eternal retry). The round is followed by a
+re-clamp to `max_discharging_power` so a floor that rounds up past a
+fractional configured max cannot break the `floor <= max` invariant
+(review-fix #05 V4). The solver reads this attribute
 to model the floor's discharge during `CMD_GREEN_CHARGE_ONLY` slots (see
 [solver.md](solver.md)).
 

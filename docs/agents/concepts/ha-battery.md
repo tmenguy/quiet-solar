@@ -45,7 +45,17 @@ forcing more, or an entity `max` forcing less than the safety floor) — is
 logged once per distinct `(entity, landed, direction)` (review-fix #03 T8
 / #04 U3/U5). While the number entity is `unknown`/`unavailable` the write
 is skipped and retried next cycle, so a momentarily-unavailable kW entity
-never gets a raw-W write (U4). There is no discharge-enable
+never gets a raw-W write (U4). Because the U1/U2 policy can write a
+non-step-aligned value at a domain bound, the **probe** accepts a
+read-back within one entity step of the expected landed value when a step
+is advertised (a step-quantizing integration echoes the aligned
+neighbour) and requires exact equality otherwise — this device-echo
+tolerance is distinct from the divergence-warning tolerance (review-fix
+#05 V1). The probe is a pure read and never emits the divergence warning
+(V6); the warning tolerance is direction-aware — a shortfall on the
+snap-up path is always surfaced because ceil cannot legitimately land
+below the request (V2) — and it re-warns after a confirmed probe clears
+the latch (V5). There is no discharge-enable
 switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.

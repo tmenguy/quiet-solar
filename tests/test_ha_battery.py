@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -680,8 +681,6 @@ class TestQSBatteryDischargeFloor:
         self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
     ):
         """T8/U5: the entity min forces the landed value above the request — warn ONCE."""
-        import logging
-
         battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
         attrs = {"unit_of_measurement": "W", "min": 1000}
         await _async_set_state(hass, "number.max_discharge", "0", attrs)
@@ -689,14 +688,81 @@ class TestQSBatteryDischargeFloor:
         await _async_set_state(hass, "switch.charge_from_grid", "off")
 
         with caplog.at_level(logging.WARNING):
-            # two probes with the same divergence must warn only once (U5 dedupe)
-            await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+            # two writes with the same divergence must warn only once (U5 dedupe)
+            await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
             await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
 
         calls = [c for c in recorded_service_calls if c[1] == "set_value"]
         discharge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
         assert discharge_writes and all(v == pytest.approx(1000.0) for v in discharge_writes)
         assert caplog.text.count("above the requested") == 1
+
+    @pytest.mark.asyncio
+    async def test_probe_does_not_emit_divergence_warning(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, caplog
+    ):
+        """V6: the probe is a pure read — it never emits the divergence warning."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        attrs = {"unit_of_measurement": "W", "min": 1000}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        with caplog.at_level(logging.WARNING):
+            await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        assert "the requested" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_device_step_echo_probe_confirms_within_one_step(
+        self, hass, battery_config_entry, battery_home, battery_hass_data
+    ):
+        """V1: a device that quantizes a non-aligned domain-bound write to its step confirms."""
+        # F=1100, configured max=1200, step 500 -> green-only writes 1200 (non-aligned);
+        # a step-quantizing device stores 1000 -> probe must still confirm (within 1 step)
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 1100, max_dis=1200)
+        attrs = {"unit_of_measurement": "W", "max": 6000, "step": 500}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        # device echoed the step-aligned neighbour of the 1200 W write
+        await _async_set_state(hass, "number.max_discharge", "1000", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
+
+        # but a read further than one step away must NOT confirm
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is False
+
+    @pytest.mark.asyncio
+    async def test_stepless_entity_requires_exact_probe_match(
+        self, hass, battery_config_entry, battery_home, battery_hass_data
+    ):
+        """V1: with no advertised step, the probe still requires an exact read-back."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        await _async_set_state(hass, "number.max_discharge", "301", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+        # 301 != expected 300 and no step tolerance -> not confirmed
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is False
+
+    @pytest.mark.asyncio
+    async def test_snap_up_underdelivery_warns_below_one_step(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
+    ):
+        """V2: on snap-up, a shortfall under one step is still a real safety-floor gap — warn."""
+        # floor 1100 W, kW entity step 0.5 (=500 W), max 0.8 kW (=800 W) -> lands 800 W;
+        # shortfall 300 W < one step (500 W) but must still warn (external cap binding)
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 1100)
+        attrs = {"unit_of_measurement": "kW", "max": 0.8, "step": 0.5}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        with caplog.at_level(logging.WARNING):
+            await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        assert "below the requested" in caplog.text
 
     @pytest.mark.asyncio
     async def test_restore_snap_down_respects_safety_floor(
@@ -770,8 +836,6 @@ class TestQSBatteryDischargeFloor:
         self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
     ):
         """U3: entity max below the requested floor forces under-delivery — landed < request, warn."""
-        import logging
-
         battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
         attrs = {"unit_of_measurement": "W", "max": 100}
         await _async_set_state(hass, "number.max_discharge", "0", attrs)

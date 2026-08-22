@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.quiet_solar.const import (
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_IS_DC_COUPLED,
@@ -129,6 +131,35 @@ def test_corrupt_soc_percents_coerced():
     assert battery.max_charge_SOC_percent == 100.0
     assert battery.min_soc == 0.0
     assert battery.max_soc == 1.0
+
+
+def test_negative_capacity_clamped_to_zero():
+    """V3: a finite-but-negative capacity is clamped to 0 (no inverted trajectories)."""
+    battery = _make_battery(**{CONF_BATTERY_CAPACITY: -7000})
+    assert battery.capacity == 0.0
+    assert battery.get_value_full() == 0.0
+    assert battery.get_value_empty() == 0.0
+
+
+def test_out_of_range_soc_percents_clamped():
+    """V3: SOC percents are clamped to [0, 100] and min <= max is enforced."""
+    over = _make_battery(**{CONF_BATTERY_MAX_CHARGE_PERCENT: 150})
+    assert over.max_charge_SOC_percent == 100.0
+    inverted = _make_battery(
+        **{CONF_BATTERY_MIN_CHARGE_PERCENT: 80, CONF_BATTERY_MAX_CHARGE_PERCENT: 40}
+    )
+    assert inverted.min_charge_SOC_percent <= inverted.max_charge_SOC_percent
+    assert inverted.min_soc <= inverted.max_soc
+
+
+def test_floor_reclamped_after_round_with_fractional_max():
+    """V4: rounding a floor==max never pushes min_discharging_power above a fractional max."""
+    battery = _make_battery(
+        **{CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 1499.5, CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 2000}
+    )
+    # floor clamped to 1499.5, round -> 1500, re-clamped back to 1499.5 (<= max)
+    assert battery.min_discharging_power <= battery.max_discharging_power
+    assert battery.min_discharging_power == pytest.approx(1499.5)
 
 
 def test_charge_from_grid_base_property():
