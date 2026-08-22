@@ -47,8 +47,9 @@ logged once per distinct `(entity, landed, direction, request)` in a
 solver consigns against a pinned entity cannot grow it forever
 (review-fix #03 T8 / #04 U3/U5 / #06 W3 / #07 X4). While the number
 entity is `unknown`/`unavailable` the write
-is skipped (logged at debug — the grid switch has already flipped, so the
-half-applied command stays diagnosable, #07 X8) and retried next cycle,
+is skipped (logged at info — the grid switch has already flipped, so the
+half-applied command stays visible on default installs, #07 X8 / #08 Y5)
+and retried next cycle,
 so a momentarily-unavailable kW entity
 never gets a raw-W write (U4). The max-power getters return `None` on
 any unparsable **or non-finite** reading (an `"inf"` state must not
@@ -64,9 +65,15 @@ means exact equality, and a zero reading never confirms a non-zero
 landed value even inside the step window (it would silently zero a
 safety floor or cap, U7). Alignment is judged in the **value domain**
 (an absolute ratio epsilon misreads large value / tiny step pairs, #07
-X6), and a corrupt step wider than the entity's configured domain max —
-including a finite step whose W conversion overflows — forces exact
-matching instead of widening the window (#07 X5). The write-skip check
+X6), and a **corrupt step is treated as absent** under one shared rule in
+`_entity_step` — denormal-tiny (< 1e-6 W, `value / step` would overflow
+and crash ceil/round), wider than the configured domain max, or a
+non-finite W conversion — across the snap, echo-match and warn paths
+(#07 X5 / #08 Y1/Y2): the probe then requires exact matching (so a
+reading above the configured hardware max never confirms, #08 Y3), the
+write passes through raw, and the divergence warning falls back to the
+~1 W tolerance instead of being silently suppressed by an inf-wide step.
+The write-skip check
 in the setters shares this
 same comparison, so a quantized echo does not re-issue the write every
 cycle (no write/re-quantize churn) — this device-echo tolerance is

@@ -62,14 +62,15 @@ range-clamped (review-fix #05 V3): `capacity >= 0`, SOC percentages to
 `min_charge_SOC_percent <= max_charge_SOC_percent` enforced — a
 finite-but-nonsense entry (negative capacity, percent 150, min > max) is
 the same hand-edited threat as a non-numeric one. At init
-it is clamped once to `[0, max_discharging_power]` and
-integer-normalized (`float(round(...))`) so the write/read int-casts and
-the raw expected value used by `probe_if_command_set` agree; a
-non-integer floor would otherwise never confirm in
-`probe_if_command_set` (eternal retry). The round is followed by a
-re-clamp to `max_discharging_power` so a floor that rounds up past a
-fractional configured max cannot break the `floor <= max` invariant
-(review-fix #05 V4). The solver reads this attribute
+it is clamped once to `[0, max_discharging_power]` and rounded
+(`float(round(...))`) — the round keeps the floor integer for an integer
+max, and is followed by a re-clamp to `max_discharging_power` so a floor
+that rounds up past a fractional configured max cannot break the
+`floor <= max` invariant (review-fix #05 V4); the floor may then be
+fractional when the max is (e.g. 1499.5 — test-pinned). Write/probe
+consistency is owned by the shared `_number_entity_target` helper in the
+HA bridge, not by integrality here (review-fix #08 Y8). The solver reads
+this attribute
 to model the floor's discharge during `CMD_GREEN_CHARGE_ONLY` slots (see
 [solver.md](solver.md)).
 

@@ -65,7 +65,9 @@ buckets. Pass 1 returns `prices_leak_energy_buckets` as the 9th field of
 the `BatteryChargingPower` NamedTuple (review-fix #02 R8 — the production
 call sites unpack by name, so a future field does not require touching
 them; positional test constructions/asserts, being a tuple, still pin
-the arity by design); the
+the arity by design; every field is precisely typed —
+`list[LoadCommand | None]` commands, `dict[float, float]` price buckets —
+so mypy catches call-site misuse, review-fix #08 Y7); the
 allocation pass subtracts the leak from the discharged buckets **once**
 before its revisiting loop (via the single-call helper
 `_leak_normalize_discharged_buckets` — subtracting inside the loop would

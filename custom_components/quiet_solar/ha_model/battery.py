@@ -217,29 +217,41 @@ class QSBattery(HADeviceMixin, Battery):
         step_u, step_w = self._entity_step(entity_id)
         if step_w <= 0.0 or write_value is None:
             return False
-        # X5: a corrupt step whose W width exceeds the configured domain max
-        # would widen the echo window arbitrarily (stale-reading false
-        # confirms) — require exact matching there. This also catches a finite
-        # raw step whose unit conversion overflows to inf.
-        if step_w > self._step_sanity_bound_w(entity_id):
-            return False
         # X6: fp-tolerant alignment check judged in the VALUE domain — an
         # absolute epsilon on the ratio misreads large value / tiny step pairs
         # as non-aligned, silently loosening the probe to the step window.
         ratio = write_value / step_u
+        # Y2: a corrupt entity bound can inflate the write far beyond the step
+        # scale, overflowing the ratio — treat the step as absent (exact match
+        # already failed above) instead of raising OverflowError in round().
+        if not math.isfinite(ratio):
+            return False
         if math.isclose(write_value, round(ratio) * step_u, rel_tol=1e-9, abs_tol=1e-6):
             # step-aligned write: a quantizing device echoes it exactly
             return False
         return abs(read_value - expected_value) < step_w
 
     def _step_sanity_bound_w(self, entity_id: str | None) -> float:
-        """Sane upper bound (W) for an entity's converted step: its configured domain max (X5)."""
+        """Sane upper bound (W) for an entity's converted step: its configured domain max (X5).
+
+        Y3: a side effect kept on purpose — with the step then treated as
+        absent, a device echo ABOVE the configured hardware max can never be
+        confirmed (exact match against a landed value <= the max always fails).
+        """
         if entity_id is not None and entity_id == self.max_charge_number:
             return self.max_charging_power
         return self.max_discharging_power
 
     def _entity_step(self, entity_id: str | None) -> tuple[float, float]:
-        """The entity's advertised step as (entity-unit, W); (0.0, 0.0) if none/unreadable."""
+        """The entity's advertised step as (entity-unit, W); (0.0, 0.0) if none/unreadable.
+
+        One corrupt-step rule shared by the snap, echo-match and warn paths
+        (Y1/Y2): a step is treated as ABSENT when its W conversion is
+        non-finite (overflowed unit conversion), denormal-tiny (< 1e-6 W —
+        ``value / step`` would overflow and crash ceil/round), or wider than
+        the entity's configured domain max (X5 — it would widen tolerance
+        windows arbitrarily, or on the warn path suppress every divergence).
+        """
         if entity_id is None:
             return 0.0, 0.0
         state = self.hass.states.get(entity_id)
@@ -251,8 +263,11 @@ class QSBattery(HADeviceMixin, Battery):
             return 0.0, 0.0
         step_w = step
         unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, UnitOfPower.WATT)
-        if unit in UnitOfPower and unit != UnitOfPower.WATT:
+        # Y6: a present-but-None (or non-str) unit attribute is corrupt — treat as W
+        if isinstance(unit, str) and unit in UnitOfPower and unit != UnitOfPower.WATT:
             step_w = PowerConverter.convert(value=step, from_unit=unit, to_unit=UnitOfPower.WATT)
+        if not math.isfinite(step_w) or step_w < 1e-6 or step_w > self._step_sanity_bound_w(entity_id):
+            return 0.0, 0.0
         return step, step_w
 
     def _clear_number_divergence_latch(self, entity_id: str | None, confirmed_w: int | None) -> None:
@@ -318,7 +333,8 @@ class QSBattery(HADeviceMixin, Battery):
                 attributes = state.attributes or {}
 
         unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, UnitOfPower.WATT)
-        to_entity_unit = unit in UnitOfPower and unit != UnitOfPower.WATT
+        # Y6: a present-but-None (or non-str) unit attribute is corrupt — treat as W
+        to_entity_unit = isinstance(unit, str) and unit in UnitOfPower and unit != UnitOfPower.WATT
 
         def _to_unit(value_w: float) -> float:
             return PowerConverter.convert(value=value_w, from_unit=UnitOfPower.WATT, to_unit=unit) if to_entity_unit else value_w
@@ -332,7 +348,9 @@ class QSBattery(HADeviceMixin, Battery):
 
         ent_min = coerce_finite_float(attributes.get("min"), None)
         ent_max = coerce_finite_float(attributes.get("max"), None)
-        step = coerce_finite_float(attributes.get("step"), None)
+        # Y1/Y2: the shared corrupt-step rule (tiny/huge/non-finite => absent)
+        # governs the snap AND the warn tolerance below — see _entity_step.
+        step_u, step_w = self._entity_step(entity_id)
         # U6: mutually inconsistent bounds are as unusable as non-numeric ones
         if ent_min is not None and ent_max is not None and ent_min > ent_max:
             ent_min = ent_max = None
@@ -342,14 +360,19 @@ class QSBattery(HADeviceMixin, Battery):
         if ent_max is not None:
             write_value = min(write_value, ent_max)
 
-        if step is not None and step > 0.0:
-            if snap_up:
-                # a safety minimum: never below the request. FP-safe so an exact
-                # step multiple does not overshoot a whole step.
-                write_value = math.ceil(write_value / step - 1e-9) * step
-            else:
-                # a maximum: never above the request.
-                write_value = math.floor(write_value / step + 1e-9) * step
+        if step_u > 0.0:
+            ratio = write_value / step_u
+            # Y2: a corrupt entity bound can inflate the value beyond the step
+            # scale, overflowing the ratio — skip the snap (step absent) instead
+            # of raising OverflowError in ceil/floor.
+            if math.isfinite(ratio):
+                if snap_up:
+                    # a safety minimum: never below the request. FP-safe so an
+                    # exact step multiple does not overshoot a whole step.
+                    write_value = math.ceil(ratio - 1e-9) * step_u
+                else:
+                    # a maximum: never above the request.
+                    write_value = math.floor(ratio + 1e-9) * step_u
 
         # snap-policy priority (U1/U2): the configured max wins down, the safety
         # floor wins up — accepting a non-step-aligned value at either bound.
@@ -370,9 +393,12 @@ class QSBattery(HADeviceMixin, Battery):
         # a divergence reaching a full step (`>= step_w`) is an external bound
         # (e.g. the entity min), not quantization: warn. The OPPOSITE direction
         # means an external cap is binding — surface even a small one there
-        # (~1 W). Distinct from the probe's device-echo tolerance (V1).
+        # (~1 W). Distinct from the probe's device-echo tolerance (V1). The
+        # step is the sanity-checked one (Y1): a corrupt oversized/non-finite
+        # step must not make `delta >= snap_step_w` eternally false and
+        # silently suppress every divergence warning.
         if warn:
-            snap_step_w = _to_w(step) if (step is not None and step > 0.0) else 0.0
+            snap_step_w = step_w
             delta_above = landed_w - request_w
             delta_below = request_w - landed_w
 
@@ -485,9 +511,9 @@ class QSBattery(HADeviceMixin, Battery):
         if self.max_discharge_number is None or power is None:
             return
         if not self._number_entity_writable(self.max_discharge_number):
-            # X8: the grid switch has already flipped by now — make the
-            # half-applied command diagnosable from the logs
-            _LOGGER.debug(
+            # X8/Y5: the grid switch has already flipped by now — surface the
+            # half-applied command at info so default installs record it
+            _LOGGER.info(
                 "set_max_discharging_power: %s unavailable, deferring write of %s W",
                 self.max_discharge_number,
                 power,
@@ -588,8 +614,8 @@ class QSBattery(HADeviceMixin, Battery):
         if self.max_charge_number is None or power is None:
             return
         if not self._number_entity_writable(self.max_charge_number):
-            # X8: see set_max_discharging_power — surface the deferred write
-            _LOGGER.debug(
+            # X8/Y5: see set_max_discharging_power — surface the deferred write at info
+            _LOGGER.info(
                 "set_max_charging_power: %s unavailable, deferring write of %s W",
                 self.max_charge_number,
                 power,

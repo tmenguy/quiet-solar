@@ -893,15 +893,15 @@ class TestQSBatteryDischargeFloor:
         self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
     ):
         """U4: no write is issued while the number entity is unavailable (stale
-        attributes) — and the deferred write is diagnosable from the logs (X8):
+        attributes) — and the deferred write is surfaced at INFO (X8/Y5):
         the switch has already flipped, so the half-applied command must not be
-        silent."""
+        silent on default installs (which do not record debug)."""
         battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
         await _async_set_state(hass, "number.max_discharge", STATE_UNAVAILABLE)
         await _async_set_state(hass, "number.max_charge", STATE_UNAVAILABLE)
         await _async_set_state(hass, "switch.charge_from_grid", "off")
 
-        with caplog.at_level(logging.DEBUG):
+        with caplog.at_level(logging.INFO):
             await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
 
         writes = [c for c in recorded_service_calls if c[1] == "set_value"]
@@ -1209,6 +1209,124 @@ class TestQSBatteryDischargeFloor:
             )
             is False
         )
+
+    @pytest.mark.asyncio
+    async def test_corrupt_oversized_step_does_not_suppress_divergence_warning(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
+    ):
+        """Y1: a corrupt oversized step must not silence the divergence warning
+        (snap_step_w would be huge/inf, making `delta >= snap_step_w` eternally
+        false) — treat the step as absent, so the entity-min divergence warns
+        and the write is not inflated by a garbage snap."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
+        # corrupt 100 kW step; the entity min forces landing 1000 W above the request 0
+        attrs = {"unit_of_measurement": "W", "min": 1000, "step": 100000}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        with caplog.at_level(logging.WARNING):
+            await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+        assert caplog.text.count("above the requested") == 1
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        # step treated as absent: the entity min lands raw (no garbage snap to the max)
+        assert writes and all(v == pytest.approx(1000.0) for v in writes)
+
+        # a finite kW step whose W conversion overflows to inf is equally corrupt
+        attrs_inf = {"unit_of_measurement": "kW", "min": 2.0, "step": 1e307}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs_inf)
+        with caplog.at_level(logging.WARNING):
+            await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+        assert caplog.text.count("above the requested") == 2
+
+    @pytest.mark.asyncio
+    async def test_denormal_tiny_step_treated_as_absent(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """Y2: a denormal-tiny corrupt step (write/step overflows to inf, then
+        ceil/round would raise OverflowError) is treated as absent — raw
+        passthrough write, exact-match probe, no raise."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "W", "step": 1e-320}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert writes and all(v == pytest.approx(300.0) for v in writes)
+
+        # exact-match probe: the tolerance window is NOT widened by the corrupt step
+        await _async_set_state(hass, "number.max_discharge", "300", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
+        assert battery._number_reading_matches("number.max_discharge", 299.5, 300, 300.0) is False
+
+    @pytest.mark.asyncio
+    async def test_corrupt_huge_entity_min_does_not_crash_snap_or_match(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
+    ):
+        """Y2: even a SANE-looking step can overflow `value / step` when a
+        corrupt entity min inflates the value — the non-finite ratio skips the
+        snap and fails the alignment match instead of raising OverflowError."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        # 1e308 / 1e-6 == inf; the entity min is HA's hard bound, so it wins
+        attrs = {"unit_of_measurement": "W", "min": 1e308, "step": 1e-6}
+        await _async_set_state(hass, "number.max_discharge", "250", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        with caplog.at_level(logging.WARNING):
+            await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+        assert "above the requested" in caplog.text
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert writes and all(v == pytest.approx(1e308) for v in writes)
+
+    @pytest.mark.asyncio
+    async def test_step_wider_than_configured_max_never_confirms_above_max(
+        self, hass, battery_config_entry, battery_home, battery_hass_data
+    ):
+        """Y3: when the configured domain max is legitimately smaller than the
+        entity's advertised step, exact match is forced — a device that
+        up-echoes 50 -> 100 never confirms a reading ABOVE the configured
+        hardware max (the safety-correct choice, pinned on purpose)."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 50, max_dis=50)
+        attrs = {"unit_of_measurement": "W", "max": 6000, "step": 100}
+        # the device quantized the 50 W write up to its 100 W step
+        await _async_set_state(hass, "number.max_discharge", "100", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is False
+
+    @pytest.mark.asyncio
+    async def test_none_unit_of_measurement_treated_as_watts(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """Y6: a present-but-None unit_of_measurement attribute is treated as
+        watts (isinstance pre-check) — the step still applies, no crash."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 250)
+        attrs = {"unit_of_measurement": None, "step": 100}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        assert battery._entity_step("number.max_discharge") == (100.0, 100.0)
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        # the 250 W floor snaps up on the 100 (W) step
+        assert writes and all(v == pytest.approx(300.0) for v in writes)
+
+        await _async_set_state(hass, "number.max_discharge", "300", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
 
 
 class TestQSBatteryExecuteCommand:

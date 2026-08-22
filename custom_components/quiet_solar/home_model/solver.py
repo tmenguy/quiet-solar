@@ -46,13 +46,13 @@ class BatteryChargingPower(NamedTuple):
 
     battery_ext_consumption_power: npt.NDArray[np.float64]
     battery_charge: npt.NDArray[np.float64]
-    battery_commands: list
-    prices_discharged_energy_buckets: dict
-    prices_remaining_grid_energy_buckets: dict
+    battery_commands: list[LoadCommand | None]
+    prices_discharged_energy_buckets: dict[float, float]
+    prices_remaining_grid_energy_buckets: dict[float, float]
     excess_solar_energy: float
     remaining_grid_energy: float
     battery_possible_discharge: npt.NDArray[np.float64]
-    prices_leak_energy_buckets: dict
+    prices_leak_energy_buckets: dict[float, float]
 
 
 class PeriodSolver:

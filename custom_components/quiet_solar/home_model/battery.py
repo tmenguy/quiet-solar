@@ -71,12 +71,12 @@ class Battery(AbstractDevice):
         self.max_soc = self.max_charge_SOC_percent / 100.0  # %percentage of battery capacity between 0 and 1
         self.min_soc = self.min_charge_SOC_percent / 100.0
         self.min_charging_power = 0.0
-        # one-time init clamp to [0, max_discharging_power], integer-normalized
-        # (rounded) so the write/read int-casts and the raw expected value used by
-        # probe_if_command_set agree — a non-integer floor would otherwise never
-        # confirm in probe_if_command_set (eternal retry). Re-clamp AFTER the round
-        # (V4): rounding a floor that equals a fractional max could otherwise push
-        # min_discharging_power a sub-watt above max, breaking the floor <= max invariant.
+        # one-time init clamp to [0, max_discharging_power]. The round keeps the
+        # floor integer for an integer max; the re-clamp AFTER the round (V4)
+        # preserves floor <= max when max itself is fractional — the floor may
+        # then be fractional too (Y8: e.g. 1499.5, test-pinned). Write/probe
+        # consistency is owned by the shared _number_entity_target helper, not
+        # by integrality here.
         self.min_discharging_power = min(
             float(round(min(max(0.0, configured_min_discharging_power), self.max_discharging_power))),
             self.max_discharging_power,
