@@ -357,7 +357,7 @@ class TestQSBatteryCommandToValues:
 class TestQSBatteryDischargeFloor:
     """Test the outage safety floor emission (min_discharging_power)."""
 
-    def _floored_battery(self, hass, battery_config_entry, battery_home, floor):
+    def _floored_battery(self, hass, battery_config_entry, battery_home, floor, max_dis=5000, max_cha=5000):
         return QSBattery(
             hass=hass,
             config_entry=battery_config_entry,
@@ -369,8 +369,8 @@ class TestQSBatteryDischargeFloor:
                 CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.max_charge",
                 CONF_BATTERY_CHARGE_FROM_GRID_SWITCH: "switch.charge_from_grid",
                 CONF_BATTERY_CAPACITY: 10000,
-                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 5000,
-                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: max_dis,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: max_cha,
                 CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: floor,
             },
         )
@@ -679,7 +679,7 @@ class TestQSBatteryDischargeFloor:
     async def test_entity_min_forcing_value_above_request_logs_warning(
         self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
     ):
-        """T8: when the entity min forces the landed value far above the request, warn once."""
+        """T8/U5: the entity min forces the landed value above the request — warn ONCE."""
         import logging
 
         battery = self._floored_battery(hass, battery_config_entry, battery_home, 0)
@@ -689,12 +689,157 @@ class TestQSBatteryDischargeFloor:
         await _async_set_state(hass, "switch.charge_from_grid", "off")
 
         with caplog.at_level(logging.WARNING):
+            # two probes with the same divergence must warn only once (U5 dedupe)
+            await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
             await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
 
         calls = [c for c in recorded_service_calls if c[1] == "set_value"]
         discharge_writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
         assert discharge_writes and all(v == pytest.approx(1000.0) for v in discharge_writes)
-        assert "above the requested" in caplog.text
+        assert caplog.text.count("above the requested") == 1
+
+    @pytest.mark.asyncio
+    async def test_restore_snap_down_respects_safety_floor(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """U1: a snapped-down restore never drops below the safety floor F."""
+        # F=1100, configured max=1200, step 500: floor(1200/500)*500 = 1000 < F
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 1100, max_dis=1200)
+        attrs = {"unit_of_measurement": "W", "max": 6000, "step": 500}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_AND_DISCHARGE)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        # snapped-down 1000 would drop below F; the floor wins upward -> 1100
+        assert writes and all(v == pytest.approx(1100.0) for v in writes)
+
+    @pytest.mark.asyncio
+    async def test_floor_equals_max_restore_and_green_only_agree(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """U1: floor == max on a stepped entity — restore and green-only land the same >= F."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 5000, max_dis=5000)
+        attrs = {"unit_of_measurement": "W", "max": 6000, "step": 300}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_AND_DISCHARGE)
+        restore = [
+            c[2].get("value")
+            for c in recorded_service_calls
+            if c[1] == "set_value" and c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"
+        ]
+        recorded_service_calls.clear()
+        # move the entity off the target so the green-only write is not short-circuited
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+        green_only = [
+            c[2].get("value")
+            for c in recorded_service_calls
+            if c[1] == "set_value" and c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"
+        ]
+        assert restore and green_only
+        assert restore[-1] == pytest.approx(5000.0)
+        assert green_only[-1] == pytest.approx(5000.0)
+
+    @pytest.mark.asyncio
+    async def test_floor_ceil_capped_at_configured_max(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """U2: the floor's ceil snap is capped at the configured max, not the looser entity max."""
+        # floor 4900, configured max 5000, step 300, entity max 6000 -> ceil 5100 must cap at 5000
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 4900, max_dis=5000)
+        attrs = {"unit_of_measurement": "W", "max": 6000, "step": 300}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert writes and all(v == pytest.approx(5000.0) and v <= 5000.0 for v in writes)
+
+    @pytest.mark.asyncio
+    async def test_entity_max_below_floor_underdelivers_and_warns(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls, caplog
+    ):
+        """U3: entity max below the requested floor forces under-delivery — landed < request, warn."""
+        import logging
+
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "W", "max": 100}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        with caplog.at_level(logging.WARNING):
+            await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert writes and all(v == pytest.approx(100.0) for v in writes)
+        assert "below the requested" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_step_larger_than_entity_max_not_zeroed(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """U7: step > entity max must not zero the floor (lands at the raw entity max)."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        # kW entity: max 0.05 kW, step 0.1 kW -> a step-aligned cap would be 0
+        attrs = {"unit_of_measurement": "kW", "max": 0.05, "step": 0.1}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        assert writes and all(v == pytest.approx(0.05) and v > 0 for v in writes)
+
+    @pytest.mark.asyncio
+    async def test_inconsistent_min_max_attributes_treated_as_absent(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """U6: min > max (corrupt attributes) are ignored, avoiding an out-of-range eternal retry."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "W", "min": 500, "max": 100}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
+        # inconsistent bounds ignored -> the floor 300 lands unclamped
+        assert writes and all(v == pytest.approx(300.0) for v in writes)
+        await _async_set_state(hass, "number.max_discharge", "300", attrs)
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
+
+    @pytest.mark.asyncio
+    async def test_unavailable_entity_skips_write(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """U4: no write is issued while the number entity is unavailable (stale attributes)."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        await _async_set_state(hass, "number.max_discharge", STATE_UNAVAILABLE)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+
+        discharge_writes = [
+            c for c in recorded_service_calls if c[1] == "set_value" and c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"
+        ]
+        assert discharge_writes == []
 
 
 class TestQSBatteryExecuteCommand:

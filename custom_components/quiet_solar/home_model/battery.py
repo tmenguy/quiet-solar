@@ -16,33 +16,41 @@ from ..home_model.load import AbstractDevice
 _LOGGER = logging.getLogger(__name__)
 
 
-def _coerce_float(value, default: float) -> float:
-    """Coerce a config value to a finite float, falling back to `default`.
+def coerce_finite_float(value, default: float | None) -> float | None:
+    """Coerce a value to a finite float, falling back to `default` (may be None).
 
-    Tolerates a hand-edited / corrupt config entry that stores a power value
-    as ``null``, a non-numeric string, or a non-finite value (``"nan"`` /
-    ``"inf"``) instead of a number, so a bad entry degrades gracefully instead
+    The single finite-float coercion for the battery layers (U9): the domain
+    model uses it with a numeric default (corrupt config → default); the HA
+    bridge uses it with ``default=None`` to treat a non-numeric entity
+    attribute as absent. Tolerates ``null``, non-numeric strings, and non-finite
+    values (``"nan"`` / ``"inf"``) so a bad entry degrades gracefully instead
     of crashing device setup or poisoning the solver with NaN.
     """
     try:
         result = float(value)
     except (TypeError, ValueError):
-        return float(default)
+        return default
     if not math.isfinite(result):
-        return float(default)
+        return default
     return result
+
+
+def _coerce_float(value, default: float) -> float:
+    """Domain-model coercion — always returns a finite float (numeric default)."""
+    return coerce_finite_float(value, default)  # type: ignore[return-value]
 
 
 class Battery(AbstractDevice):
     def __init__(self, **kwargs):
 
-        self.capacity = kwargs.pop(CONF_BATTERY_CAPACITY, 7000)
+        # coerce corrupt-entry values (U8: capacity / SOC percents too)
+        self.capacity = _coerce_float(kwargs.pop(CONF_BATTERY_CAPACITY, 7000), 7000)
         # clamp the max operands to >= 0 so a corrupt negative max cannot drag the
         # floor clamp below 0 (a negative safety floor would emit out-of-range) — T6
         self.max_discharging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500))
         self.max_charging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500), 1500))
-        self.min_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0)
-        self.max_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0)
+        self.min_charge_SOC_percent = _coerce_float(kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0), 0.0)
+        self.max_charge_SOC_percent = _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0), 100.0)
         self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
         # opt-in outage safety floor — the minimum discharge power the battery
         # always keeps available (default 0 keeps today's behaviour). Tolerate a

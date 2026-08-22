@@ -32,9 +32,20 @@ T2). Snap direction is safety-directed: the discharge **floor** snaps
 **up** (a minimum is never lowered to 0), while a **maximum** — the
 max-discharge restore and the charge limit — snaps **down** (a limit is
 never raised past its configured cap; review-fix #01 S2, #02 R1/R5, #03
-T1/T3). Non-numeric entity attributes are treated as absent (T7), and a
-landed value the entity's own `min`/`step` forces far above the request
-is logged once (T8). There is no discharge-enable
+T1/T3). **Snap-policy priority** (review-fix #04 U1/U2): the safety floor
+(`domain_min`) still wins **upward** and the configured hardware max
+(`domain_max`) wins **downward** even after the step snap — so a floor is
+never snapped below itself and a max is never snapped above the configured
+limit, accepting a non-step-aligned write at either bound (HA core
+validates min/max, not step alignment). Non-numeric **or** mutually
+inconsistent (`min > max`) entity attributes are treated as absent
+(review-fix #03 T7 / #04 U6). A landed value that diverges from the
+request by more than one step — in **either** direction (an entity `min`
+forcing more, or an entity `max` forcing less than the safety floor) — is
+logged once per distinct `(entity, landed, direction)` (review-fix #03 T8
+/ #04 U3/U5). While the number entity is `unknown`/`unavailable` the write
+is skipped and retried next cycle, so a momentarily-unavailable kW entity
+never gets a raw-W write (U4). There is no discharge-enable
 switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.

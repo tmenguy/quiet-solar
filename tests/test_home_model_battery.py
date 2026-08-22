@@ -5,8 +5,10 @@ from __future__ import annotations
 from custom_components.quiet_solar.const import (
     CONF_BATTERY_CAPACITY,
     CONF_BATTERY_IS_DC_COUPLED,
+    CONF_BATTERY_MAX_CHARGE_PERCENT,
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
+    CONF_BATTERY_MIN_CHARGE_PERCENT,
     CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     MAX_POWER_INFINITE,
 )
@@ -107,6 +109,26 @@ def test_corrupt_charge_max_coerced():
     assert battery.max_charging_power == 1500.0
     garbage = _make_battery(**{CONF_BATTERY_MAX_CHARGE_POWER_VALUE: "oops"})
     assert garbage.max_charging_power == 1500.0
+
+
+def test_corrupt_capacity_coerced():
+    """U8: a null / 'nan' capacity falls back to the default (no TypeError / NaN poison)."""
+    null_cap = _make_battery(**{CONF_BATTERY_CAPACITY: None})
+    assert null_cap.capacity == 7000.0
+    assert null_cap.get_value_full() == 7000.0  # no crash downstream
+    nan_cap = _make_battery(**{CONF_BATTERY_CAPACITY: "nan"})
+    assert nan_cap.capacity == 7000.0
+
+
+def test_corrupt_soc_percents_coerced():
+    """U8: null / non-numeric SOC percents fall back to their defaults."""
+    battery = _make_battery(
+        **{CONF_BATTERY_MIN_CHARGE_PERCENT: None, CONF_BATTERY_MAX_CHARGE_PERCENT: "bad"}
+    )
+    assert battery.min_charge_SOC_percent == 0.0
+    assert battery.max_charge_SOC_percent == 100.0
+    assert battery.min_soc == 0.0
+    assert battery.max_soc == 1.0
 
 
 def test_charge_from_grid_base_property():

@@ -25,7 +25,7 @@ from ..const import (
     CONF_TYPE_NAME_QSBattery,
 )
 from ..ha_model.device import HADeviceMixin, convert_power_to_w
-from ..home_model.battery import Battery
+from ..home_model.battery import Battery, coerce_finite_float
 from ..home_model.commands import (
     CMD_AUTO_GREEN_ONLY,
     CMD_FORCE_CHARGE,
@@ -56,6 +56,8 @@ class QSBattery(HADeviceMixin, Battery):
         self.attach_ha_state_to_probe(self.charge_percent_sensor, is_numerical=True)
 
         self.is_charge_from_grid_current = None
+        # one-shot dedupe for the number-divergence warning (U5)
+        self._number_divergence_warned: set[tuple] = set()
 
     @property
     def current_charge(self) -> float | None:
@@ -156,15 +158,6 @@ class QSBattery(HADeviceMixin, Battery):
         )
 
     @staticmethod
-    def _safe_float(value) -> float | None:
-        """Coerce an entity attribute to a finite float, else None (treat-as-absent)."""
-        try:
-            result = float(value)
-        except (TypeError, ValueError):
-            return None
-        return result if math.isfinite(result) else None
-
-    @staticmethod
     def _is_discharge_floor_command(command: LoadCommand) -> bool:
         """True when the command emits the discharge *floor* (a safety minimum).
 
@@ -188,16 +181,19 @@ class QSBattery(HADeviceMixin, Battery):
 
         1. domain clamp to ``[domain_min, domain_max]`` (shared by write and
            probe — T2);
-        2. convert to the entity's unit;
-        3. clamp to the entity's ``min`` / ``max``;
-        4. snap to the entity ``step`` — UP for a safety floor (``snap_up``, a
-           minimum is never lowered), DOWN otherwise (a maximum / charge limit
-           is never raised past the requested cap — T3) — then re-clamp to
-           ``[min, max]`` on both sides (T1), keeping the max cap
-           step-aligned (T5).
+        2. convert to the entity's unit and clamp to its ``min`` / ``max``;
+        3. snap to the entity ``step`` — UP for a safety floor (``snap_up``),
+           DOWN for a maximum;
+        4. **snap-policy priority** (review-fix #04 U1/U2): the configured
+           hardware max (``domain_max``) wins downward and the safety floor
+           (``domain_min``) wins upward — a non-step-aligned write at either
+           domain bound is accepted (HA core validates min/max, not step
+           alignment). The entity's own ``min`` / ``max`` remain the hard bounds
+           HA would reject outside of.
 
-        Non-numeric entity attributes are treated as absent (T7). A landed value
-        the entity forces far above the request is logged once (T8).
+        Inconsistent (``min > max``) or non-numeric entity attributes are treated
+        as absent (T7 / U6). A landed value that diverges from the request by more
+        than one step is logged once per ``(entity, landed_w, direction)`` (U3/U5/T8).
         """
         request_w = min(float(domain_max), max(float(domain_min), float(power_w)))
         write_value = request_w
@@ -209,12 +205,23 @@ class QSBattery(HADeviceMixin, Battery):
 
         unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, UnitOfPower.WATT)
         to_entity_unit = unit in UnitOfPower and unit != UnitOfPower.WATT
-        if to_entity_unit:
-            write_value = PowerConverter.convert(value=write_value, from_unit=UnitOfPower.WATT, to_unit=unit)
 
-        ent_min = self._safe_float(attributes.get("min"))
-        ent_max = self._safe_float(attributes.get("max"))
-        step = self._safe_float(attributes.get("step"))
+        def _to_unit(value_w: float) -> float:
+            return PowerConverter.convert(value=value_w, from_unit=UnitOfPower.WATT, to_unit=unit) if to_entity_unit else value_w
+
+        def _to_w(value_u: float) -> float:
+            return PowerConverter.convert(value=value_u, from_unit=unit, to_unit=UnitOfPower.WATT) if to_entity_unit else value_u
+
+        write_value = _to_unit(write_value)
+        dmin_u = _to_unit(float(domain_min))
+        dmax_u = _to_unit(float(domain_max))
+
+        ent_min = coerce_finite_float(attributes.get("min"), None)
+        ent_max = coerce_finite_float(attributes.get("max"), None)
+        step = coerce_finite_float(attributes.get("step"), None)
+        # U6: mutually inconsistent bounds are as unusable as non-numeric ones
+        if ent_min is not None and ent_max is not None and ent_min > ent_max:
+            ent_min = ent_max = None
 
         if ent_min is not None:
             write_value = max(write_value, ent_min)
@@ -227,36 +234,46 @@ class QSBattery(HADeviceMixin, Battery):
                 # step multiple does not overshoot a whole step.
                 write_value = math.ceil(write_value / step - 1e-9) * step
             else:
-                # a maximum / charge limit: never above the request (T3).
+                # a maximum: never above the request.
                 write_value = math.floor(write_value / step + 1e-9) * step
-            # re-clamp to the entity range on BOTH sides (T1); the max cap is the
-            # largest step multiple <= ent_max so the write stays step-aligned (T5)
-            if ent_max is not None:
-                write_value = min(write_value, math.floor(ent_max / step + 1e-9) * step)
-            if ent_min is not None:
-                write_value = max(write_value, ent_min)
 
-        landed_w = write_value
-        if to_entity_unit:
-            landed_w = PowerConverter.convert(value=write_value, from_unit=unit, to_unit=UnitOfPower.WATT)
-        landed_w = int(round(landed_w))
+        # snap-policy priority (U1/U2): the configured max wins down, the safety
+        # floor wins up — accepting a non-step-aligned value at either bound.
+        write_value = min(write_value, dmax_u)
+        write_value = max(write_value, dmin_u)
+        # the entity's own range is the hard bound HA validates (U7: a floor above
+        # the entity max lands at the raw entity max, never zeroed by step math).
+        if ent_max is not None:
+            write_value = min(write_value, ent_max)
+        if ent_min is not None:
+            write_value = max(write_value, ent_min)
 
-        snap_step_w = 0.0
-        if step is not None and step > 0.0:
-            snap_step_w = (
-                PowerConverter.convert(value=step, from_unit=unit, to_unit=UnitOfPower.WATT)
-                if to_entity_unit
-                else step
-            )
-        if landed_w - request_w > max(1.0, snap_step_w):
-            _LOGGER.warning(
-                "number entity %s forces %s W available, above the requested %s W",
-                entity_id,
-                landed_w,
-                int(round(request_w)),
-            )
+        landed_w = int(round(_to_w(write_value)))
+
+        snap_step_w = _to_w(step) if (step is not None and step > 0.0) else 0.0
+        tol = max(1.0, snap_step_w)
+        if landed_w - request_w > tol:
+            self._warn_number_divergence(entity_id, landed_w, request_w, above=True)
+        elif request_w - landed_w > tol:
+            # U3: the entity's own floor/max forces LESS than the requested safety
+            # floor — the more dangerous direction; surface it too.
+            self._warn_number_divergence(entity_id, landed_w, request_w, above=False)
 
         return write_value, landed_w
+
+    def _warn_number_divergence(self, entity_id: str | None, landed_w: int, request_w: float, above: bool) -> None:
+        """Warn once per distinct (entity, landed, direction) divergence (U5)."""
+        key = (entity_id, landed_w, above)
+        if key in self._number_divergence_warned:
+            return
+        self._number_divergence_warned.add(key)
+        _LOGGER.warning(
+            "number entity %s lands %s W, %s the requested %s W",
+            entity_id,
+            landed_w,
+            "above" if above else "below",
+            int(round(request_w)),
+        )
 
     def _discharge_number_target(self, power_w: float, snap_up: bool) -> tuple[float, int]:
         """Discharge target. `snap_up` only for the floor (a safety minimum)."""
@@ -316,10 +333,23 @@ class QSBattery(HADeviceMixin, Battery):
         self.is_charge_from_grid_current = res
         return res
 
+    def _number_entity_writable(self, entity_id: str) -> bool:
+        """False while the number entity is unknown/unavailable (U4).
+
+        Skip the write then: its unit/min/max/step attributes are missing, so we
+        would map with a raw-W fallback (a kW entity would get a 300 -> 300 kW
+        write). The next cycle retries once the entity is back with fresh
+        attributes, so this is self-healing.
+        """
+        state = self.hass.states.get(entity_id)
+        return state is not None and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE)
+
     async def set_max_discharging_power(
         self, power: float | None = None, blocking: bool = False, *, snap_up: bool = False
     ):
         if self.max_discharge_number is None or power is None:
+            return
+        if not self._number_entity_writable(self.max_discharge_number):
             return
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_discharge_number}
@@ -400,6 +430,8 @@ class QSBattery(HADeviceMixin, Battery):
 
     async def set_max_charging_power(self, power: float | None = None, blocking: bool = False):
         if self.max_charge_number is None or power is None:
+            return
+        if not self._number_entity_writable(self.max_charge_number):
             return
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_charge_number}

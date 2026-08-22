@@ -529,6 +529,15 @@ class PeriodSolver:
                         prices_leak_energy_buckets.get(self._prices[i], 0.0) + leak_energy
                     )
 
+                # U10: `available_power` is the battery-dispatch input, not physical
+                # grid demand — for a flipped CMD_GREEN_CHARGE_ONLY demand slot it is
+                # already capped at F, so the resulting `prices_remaining_grid_energy_buckets`
+                # / `remaining_grid_energy` report DISPATCH-relative, not physical, grid
+                # energy (understating a flipped slot by `net_load − F`). Harmless today
+                # (pass-1 decision inputs are flip-free; the allocation loop re-adds
+                # removed energy explicitly), but do NOT consume these buckets from a call
+                # whose battery_commands already contain CMD_GREEN_CHARGE_ONLY on demand
+                # slots without re-deriving the physical residual.
                 grid_nrj = ((available_power + consumption_power) * float(self._durations_s[i])) / 3600.0
                 if grid_nrj > 0:
                     # we will ask it from the grid:

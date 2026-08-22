@@ -82,6 +82,14 @@ and no `CMD_GREEN_CHARGE_ONLY` is issued. **Documented residual**: during
 `CMD_FORCE_CHARGE`, if the battery saturates or the inverter derates
 mid-slot, hardware may discharge up to F for the slot's remainder —
 unmodelled, bounded by `F × remainder` (≤ F/4 Wh per 15-min slot).
+**Latent-trap note (review-fix #04 U10)**: the returned
+`prices_remaining_grid_energy_buckets` / `remaining_grid_energy` report
+*dispatch-relative* grid energy (a flipped `CMD_GREEN_CHARGE_ONLY` demand
+slot uses the F-capped `available_power`, understating its physical grid
+import by `net_load − F`). Harmless today (pass-1 decision inputs are
+flip-free; the allocation loop re-adds removed energy explicitly), but a
+future reader of the final rebinds must re-derive the physical residual
+before consuming those buckets from a flipped-command call.
 
 On forecast-proven big-sun days the solver runs an aggressive surplus
 pre-discharge that deliberately over-consumes to free battery headroom
