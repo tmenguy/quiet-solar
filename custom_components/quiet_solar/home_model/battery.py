@@ -1,4 +1,5 @@
 import logging
+import math
 
 from ..const import (
     CONF_BATTERY_CAPACITY,
@@ -7,6 +8,7 @@ from ..const import (
     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
     CONF_BATTERY_MIN_CHARGE_PERCENT,
+    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     MAX_POWER_INFINITE,
 )
 from ..home_model.load import AbstractDevice
@@ -14,15 +16,60 @@ from ..home_model.load import AbstractDevice
 _LOGGER = logging.getLogger(__name__)
 
 
+def coerce_finite_float(value, default: float | None) -> float | None:
+    """Coerce a value to a finite float, falling back to `default` (may be None).
+
+    The single finite-float coercion for the battery layers (U9): the domain
+    model uses it with a numeric default (corrupt config → default); the HA
+    bridge uses it with ``default=None`` to treat a non-numeric entity
+    attribute as absent. Tolerates ``null``, non-numeric strings, and non-finite
+    values (``"nan"`` / ``"inf"``) so a bad entry degrades gracefully instead
+    of crashing device setup or poisoning the solver with NaN. Booleans are
+    rejected too (X7): ``float(True) == 1.0`` would otherwise turn a corrupt
+    ``true`` into 1 W / 1 % instead of the default.
+    """
+    if isinstance(value, bool):
+        return default
+    try:
+        result = float(value)
+    except TypeError, ValueError:
+        return default
+    if not math.isfinite(result):
+        return default
+    return result
+
+
+def _coerce_float(value, default: float) -> float:
+    """Domain-model coercion — always returns a finite float (numeric default)."""
+    return coerce_finite_float(value, default)  # type: ignore[return-value]
+
+
 class Battery(AbstractDevice):
     def __init__(self, **kwargs):
 
-        self.capacity = kwargs.pop(CONF_BATTERY_CAPACITY, 7000)
-        self.max_discharging_power = kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500)
-        self.max_charging_power = kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500)
-        self.min_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0)
-        self.max_charge_SOC_percent = kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0)
+        # coerce corrupt-entry values (U8) and clamp them to sane ranges (V3):
+        # a finite-but-nonsense value (negative capacity, percent 150, min > max)
+        # is the same hand-edited threat model as a non-numeric one.
+        self.capacity = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_CAPACITY, 7000), 7000))
+        # clamp the max operands to >= 0 so a corrupt negative max cannot drag the
+        # floor clamp below 0 (a negative safety floor would emit out-of-range) — T6
+        self.max_discharging_power = max(
+            0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500)
+        )
+        self.max_charging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500), 1500))
+        self.min_charge_SOC_percent = min(
+            100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0), 0.0))
+        )
+        self.max_charge_SOC_percent = min(
+            100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0), 100.0))
+        )
+        # enforce min <= max so headroom math (get_charger_power) cannot go negative
+        self.min_charge_SOC_percent = min(self.min_charge_SOC_percent, self.max_charge_SOC_percent)
         self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)
+        # opt-in outage safety floor — the minimum discharge power the battery
+        # always keeps available (default 0 keeps today's behaviour). Tolerate a
+        # null / non-numeric value from a hand-edited / corrupt config entry.
+        configured_min_discharging_power = _coerce_float(kwargs.pop(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE, 0.0), 0.0)
 
         super().__init__(**kwargs)
 
@@ -30,7 +77,16 @@ class Battery(AbstractDevice):
         self.max_soc = self.max_charge_SOC_percent / 100.0  # %percentage of battery capacity between 0 and 1
         self.min_soc = self.min_charge_SOC_percent / 100.0
         self.min_charging_power = 0.0
-        self.min_discharging_power = 0.0
+        # one-time init clamp to [0, max_discharging_power]. The round keeps the
+        # floor integer for an integer max; the re-clamp AFTER the round (V4)
+        # preserves floor <= max when max itself is fractional — the floor may
+        # then be fractional too (Y8: e.g. 1499.5, test-pinned). Write/probe
+        # consistency is owned by the shared _number_entity_target helper, not
+        # by integrality here.
+        self.min_discharging_power = min(
+            float(round(min(max(0.0, configured_min_discharging_power), self.max_discharging_power))),
+            self.max_discharging_power,
+        )
 
     @property
     def current_charge(self) -> float | None:

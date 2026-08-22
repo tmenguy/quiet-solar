@@ -4,7 +4,7 @@ slug: qs-home-orchestrator
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-07-31
+last_verified: 2026-08-20
 ---
 
 # QSHome — the orchestrator
@@ -75,6 +75,15 @@ than the cycle completes.
     and continues, but also sets `all_ok = False`: a load whose cycle
     raised is not confirmed-good, and reporting OK let
     `finish_off_grid_switch` complete with an unlanded command.
+
+- **Doc-OK (QS-349)**: transition gating
+  (`_switch_to_off_grid_launched`, `finish_off_grid_switch`) is
+  unchanged. QS-349 only reorders battery-restore ahead of load shedding
+  *within* `async_set_off_grid_mode` and moves the off-grid broadcast to
+  a background task — the gate arithmetic and the confirmed-command
+  contract above are untouched (see
+  [off-grid-mode.md](off-grid-mode.md)). (Review-fix #03 T12 was a
+  comment-only fix here — no behaviour change.)
 
 - `_state_lock`, `_loads_lock` — `asyncio.Lock` guards.
 - Public registry accessors — `get_car_by_name(name)`,

@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/__init__.py
   - custom_components/quiet_solar/data_handler.py
   - custom_components/quiet_solar/const.py
-last_verified: 2026-08-01
+last_verified: 2026-08-22
 ---
 
 # Config flow and setup
@@ -181,6 +181,22 @@ includes this field (`home`, `battery`, `solar`, `person`, `car`,
 `strings.json` (literal in `person.data`, `[%key:...%]` references
 in the others); without it the form renders the raw `device_dashboard_section`
 key instead of the localised "Dashboard section" label.
+
+**Battery outage floor field (QS-349)**: `async_step_battery` adds
+`CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE` (a `NumberSelector`, `min=0`,
+BOX mode, W unit, default 0) mirroring the max-discharge field, in the
+shared `QSFlowHandlerMixin.async_step_battery` so both the initial and
+options/reconfigure paths carry it. The entry value travels via
+`**config_entry.data` into `Battery.__init__`, which owns the default
+(`kwargs.pop(..., 0.0)`) — a pre-existing entry without the key behaves
+as floor = 0. `strings.json` carries the label plus a `data_description`
+in both the config and options battery sections (the battery step had no
+`data_description` block before). `async_step_battery` also rejects a
+floor strictly **above** the maximum discharge power with a
+`min_discharge_above_max` form error (the domain clamps it anyway, but
+the error makes the mismatch visible); floor **==** max is deliberately
+allowed (a legitimate "never limit discharge" choice — review-fix #02
+R9).
 
 **Data handler lifecycle** (`data_handler.py`):
 

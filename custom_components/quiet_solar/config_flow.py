@@ -54,6 +54,7 @@ from .const import (
     CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER,
     CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE,
     CONF_BATTERY_MIN_CHARGE_PERCENT,
+    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     CONF_CALENDAR,
     CONF_CAR_BATTERY_CAPACITY,
     CONF_CAR_CHARGE_PERCENT_MAX_NUMBER,
@@ -1102,11 +1103,21 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
     async def async_step_battery(self, user_input=None):
 
         TYPE = QSBattery.conf_type_name
+        errors: dict[str, str] = {}
 
         if user_input is not None:
-            # do some stuff to update
-            r = await self.async_entry_next(user_input, TYPE)
-            return r
+            # the domain model clamps the floor anyway, but surface a clear error
+            # when the user asks for a floor ABOVE the maximum discharge power.
+            # floor == max is deliberately allowed: it degenerates to always
+            # discharging up to the max (CMD_GREEN_CHARGE_ONLY behaves like
+            # CMD_GREEN_CHARGE_AND_DISCHARGE), a legitimate "never limit" choice.
+            floor = user_input.get(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE)
+            max_discharge = user_input.get(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE)
+            if floor is not None and max_discharge is not None and float(floor) > float(max_discharge):
+                errors[CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE] = "min_discharge_above_max"
+            else:
+                r = await self.async_entry_next(user_input, TYPE)
+                return r
 
         sc_dict, placeholders = self.get_common_schema(type=TYPE)
 
@@ -1184,6 +1195,18 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
                     )
                 ),
                 vol.Required(
+                    CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
+                    description={
+                        "suggested_value": self.config_entry.data.get(CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE, 0)
+                    },
+                ): selector.NumberSelector(
+                    selector.NumberSelectorConfig(
+                        min=0,
+                        mode=selector.NumberSelectorMode.BOX,
+                        unit_of_measurement=UnitOfPower.WATT,
+                    )
+                ),
+                vol.Required(
                     CONF_BATTERY_MAX_CHARGE_POWER_VALUE,
                     description={"suggested_value": self.config_entry.data.get(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 0)},
                 ): selector.NumberSelector(
@@ -1198,7 +1221,9 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
 
         schema = vol.Schema(sc_dict)
 
-        return self.async_show_form(step_id=TYPE, data_schema=schema, description_placeholders=placeholders)
+        return self.async_show_form(
+            step_id=TYPE, data_schema=schema, description_placeholders=placeholders, errors=errors
+        )
 
     async def async_step_car(self, user_input=None):
 

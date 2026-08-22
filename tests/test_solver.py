@@ -31,7 +31,7 @@ from custom_components.quiet_solar.home_model.constraints import (
     TimeBasedSimplePowerLoadConstraint,
 )
 from custom_components.quiet_solar.home_model.load import TestLoad
-from custom_components.quiet_solar.home_model.solver import PeriodSolver
+from custom_components.quiet_solar.home_model.solver import BatteryChargingPower, PeriodSolver
 from tests.factories import MinimalTestHome, MinimalTestLoad, TestDynamicGroupDouble
 
 
@@ -2194,7 +2194,7 @@ def test_prepare_battery_segmentation_single_empty_middle():
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
+    ret = BatteryChargingPower(battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge, {})
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_segment, energy_delta = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2235,7 +2235,7 @@ def test_prepare_battery_segmentation_no_empty():
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
+    ret = BatteryChargingPower(battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge, {})
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_segment, energy_delta = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2278,7 +2278,7 @@ def test_prepare_battery_segmentation_over_budget():
     battery_ext = np.zeros(num_slots, dtype=np.float64)
     battery_cmds = [copy_command(CMD_GREEN_CHARGE_AND_DISCHARGE) for _ in range(num_slots)]
     battery_possible_discharge = np.zeros(num_slots, dtype=np.float64)
-    ret = (battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge)
+    ret = BatteryChargingPower(battery_ext, battery_charge, battery_cmds, {}, {}, 0.0, 0.0, battery_possible_discharge, {})
 
     with patch.object(solver, "_battery_get_charging_power", return_value=ret):
         to_shave_02, energy_delta_02 = solver._prepare_battery_segmentation(over_budget=0.2)
@@ -2420,8 +2420,8 @@ def test_constraints_delta_segment_outside_bounds_skipped():
     assert constraints_bounds[c1][1] < 4
 
 
-def test_battery_get_charging_power_returns_eight_tuple():
-    """_battery_get_charging_power: returns 8-tuple (battery_ext, battery_charge, battery_commands, ..., battery_possible_discharge)."""
+def test_battery_get_charging_power_returns_nine_tuple():
+    """_battery_get_charging_power: returns 9-tuple (…, battery_possible_discharge, prices_leak_energy_buckets)."""
     dt = datetime(year=2024, month=6, day=1, hour=0, minute=0, second=0, microsecond=0, tzinfo=pytz.UTC)
     start_time = dt
     end_time = dt + timedelta(hours=4)
@@ -2442,18 +2442,20 @@ def test_battery_get_charging_power_returns_eight_tuple():
         unavoidable_consumption_forecast=ua_forecast,
     )
     result = solver._battery_get_charging_power()
-    assert len(result) == 8
+    assert len(result) == 9
     (
         battery_ext, battery_charge, battery_commands,
         prices_discharged, prices_remaining,
         excess_solar, remaining_grid,
         bat_possible_discharge,
+        prices_leak,
     ) = result
     assert len(battery_charge) == len(solver._available_power)
     assert len(battery_commands) == len(solver._available_power)
     assert isinstance(remaining_grid, (int, float))
     assert isinstance(excess_solar, (int, float))
     assert len(bat_possible_discharge) == len(solver._available_power)
+    assert isinstance(prices_leak, dict)
 
 
 # =============================================================================

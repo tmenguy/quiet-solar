@@ -4,7 +4,7 @@ slug: solver
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/solver.py
-last_verified: 2026-07-22
+last_verified: 2026-08-22
 ---
 
 # PeriodSolver
@@ -50,6 +50,48 @@ Allocation algorithm:
 
 Within each tier, constraints are ordered by score; ties broken by
 constraint-specific criteria (e.g., deadline proximity).
+
+### Discharge floor modelling (QS-349)
+
+`_battery_get_charging_power` models the battery's **outage safety
+floor** F (`Battery.min_discharging_power`, default 0). During a
+`CMD_GREEN_CHARGE_ONLY` slot the available power is capped at F
+(`min(available_power, F)`) rather than 0, so a demand slot still
+discharges up to F. Each discharging slot's energy splits into an
+**incompressible leak** `leak_i = min(discharge, F × duration)` — which
+flows even when the slot is flipped to green-charge-only — and a
+**compressible remainder** the price-bucket optimizer may move between
+buckets. Pass 1 returns `prices_leak_energy_buckets` as the 9th field of
+the `BatteryChargingPower` NamedTuple (review-fix #02 R8 — the production
+call sites unpack by name, so a future field does not require touching
+them; positional test constructions/asserts, being a tuple, still pin
+the arity by design; every field is precisely typed —
+`list[LoadCommand | None]` commands, `dict[float, float]` price buckets —
+so mypy catches call-site misuse, review-fix #08 Y7); the
+allocation pass subtracts the leak from the discharged buckets **once**
+before its revisiting loop (via the single-call helper
+`_leak_normalize_discharged_buckets` — subtracting inside the loop would
+double-count on cheap-bucket revisits), so only compressible energy is
+redistributed. The flip site keeps the leak
+(`charged_energy = max(charged_energy, −leak_i)`) and debits the budget
+**post-clamp**: a flipped slot's surviving discharge is exactly the leak
+(`charged_energy + leak_i == 0`), so it consumes no budget and the
+residual stays available for later same-price slots. At F = 0 every leak
+is 0 and the whole flip site (condition, clamp, debit) reduces
+algebraically to the pre-QS-349 behaviour. Off-grid solves are unaffected — off-grid
+tariffs are flat, a single price bucket, so the allocation short-circuits
+and no `CMD_GREEN_CHARGE_ONLY` is issued. **Documented residual**: during
+`CMD_FORCE_CHARGE`, if the battery saturates or the inverter derates
+mid-slot, hardware may discharge up to F for the slot's remainder —
+unmodelled, bounded by `F × remainder` (≤ F/4 Wh per 15-min slot).
+**Latent-trap note (review-fix #04 U10)**: the returned
+`prices_remaining_grid_energy_buckets` / `remaining_grid_energy` report
+*dispatch-relative* grid energy (a flipped `CMD_GREEN_CHARGE_ONLY` demand
+slot uses the F-capped `available_power`, understating its physical grid
+import by `net_load − F`). Harmless today (pass-1 decision inputs are
+flip-free; the allocation loop re-adds removed energy explicitly), but a
+future reader of the final rebinds must re-derive the physical residual
+before consuming those buckets from a flipped-command call.
 
 On forecast-proven big-sun days the solver runs an aggressive surplus
 pre-discharge that deliberately over-consumes to free battery headroom

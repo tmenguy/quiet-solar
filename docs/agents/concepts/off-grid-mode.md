@@ -4,7 +4,7 @@ slug: off-grid-mode
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/home.py
-last_verified: 2026-07-31
+last_verified: 2026-08-20
 ---
 
 # Off-grid mode
@@ -142,6 +142,50 @@ longer than necessary while on-grid — on inverters that honour that
 limit in island mode it would defeat the native reserve. QS already
 restores discharge on the off-grid transition
 (`async_set_off_grid_mode` → `CMD_GREEN_CHARGE_AND_DISCHARGE`).
+
+### Opt-in discharge-power floor (QS-349)
+
+QS-264's stance is unchanged — the SOC *reserve* stays a native inverter
+concern — but QS now offers an opt-in **discharge-power floor** as the
+software safety net for inverters that honour max-discharge in island
+mode. `CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE` (default 0) sets
+`Battery.min_discharging_power`; when > 0, the commands that used to
+write `max_discharging_power = 0` (`CMD_GREEN_CHARGE_ONLY`,
+`CMD_FORCE_CHARGE`) write the floor instead, so a grid outage during a
+grid-charge phase cannot lock the battery at zero discharge. The floor
+covers the pre-detection ride-through window; it does **not** run an
+arbitrary house — above the floor the inverter's own overload protection
+decides the outcome. The "do not pin at 0 longer than necessary"
+obligation above is then structurally guaranteed whenever the floor is
+set.
+
+### Reaction ordering (QS-349, fix A + fix B)
+
+Two reaction-latency fixes on the off-grid transition:
+
+- **Battery first** (`async_set_off_grid_mode`): the
+  `CMD_GREEN_CHARGE_AND_DISCHARGE` restore is launched **before** the
+  load-shedding loop — the one command that keeps the house alive no
+  longer sits behind every load's awaited probe + service call. The
+  battery is not in `_all_loads`, so this is a pure reorder; shedding,
+  the `_switch_to_off_grid_launched` gate, and `force_next_solve()` are
+  unchanged. The restore call **and each load-shed iteration** are
+  wrapped in their own log-only `try/except` so a raising battery command
+  or a single raising load cannot cancel the remaining shedding or the
+  gate (do_reset is already committed — a swallowed error would otherwise
+  leave loads running off-grid with no retry; review-fix #01 S1, #02 R2).
+  (Review-fix #03 T12 touched only a code comment here — no behaviour
+  change.)
+- **Notify off the critical path** (`_off_grid_entity_state_changed`):
+  the mobile broadcast is scheduled as a background task **before** the
+  apply is awaited, so notification delivery and the battery restore are
+  concurrent and neither delays the other (see
+  [notification-routing.md](notification-routing.md)).
+
+**Manual island-mode validation** (reporter hardware: Huawei
+SUN2000-12K-MAP0 + LUNA2000 + SmartGuard-63A + EMMA-A02) is a post-merge
+follow-up — its outcome (whether max-discharge = 0 is honoured in island
+mode, and floor = 300 W ride-through) will be recorded here once known.
 
 ## See also
 

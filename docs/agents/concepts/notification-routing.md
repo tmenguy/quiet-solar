@@ -7,7 +7,7 @@ covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/device.py
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-11
+last_verified: 2026-08-20
 ---
 
 # Notification routing
@@ -196,6 +196,24 @@ the charger, the car (`self.car or _last_attached_car`) and the raw
 status, and asks the user to unplug/replug; with no car it falls back to
 "Please check the charger". These strings are hardcoded English (no
 `strings.json`).
+
+### Off-grid broadcast is a background task (QS-349)
+
+On an off-grid state-change transition, `_off_grid_entity_state_changed`
+schedules the mobile broadcast as a **fire-and-forget background task**
+(`hass.async_create_task`) **before** it awaits
+`_compute_and_apply_off_grid_state`. Push notifications route through
+cloud services that may hang exactly during an outage, so they must
+never sit in the battery-restore critical path; scheduling the alarm
+before the apply also means a hung apply cannot delay the alarm. The
+task body and the apply are each wrapped in a log-only `except Exception`
+(background-task allowance, `exc_info=True`) so a raising notify handler
+or a failing apply is logged with its traceback and the listener
+survives. (Review-fix #03 T12 corrected a comment em-dash artifact on
+these two guards — no behaviour change.) The (title, message) content
+and the transition conditions (including the `FORCE_ON_GRID` override
+variants and the recovery messages) are unchanged — factored into the
+`_off_grid_transition_notification` helper.
 
 ## Common mistakes
 
