@@ -328,6 +328,19 @@ class TestQSBatteryCommandToValues:
         with pytest.raises(ValueError, match="Invalid command"):
             battery._command_to_values(invalid_command)
 
+    def test_command_to_values_emits_snap_direction(self, battery):
+        """AA1: the discharge snap semantics travel WITH the value in the dict.
+
+        Floor-emitting commands snap UP (a safety minimum); the max-discharge
+        restore snaps DOWN (a maximum). Both the write and the probe read this
+        flag, so they can never derive opposite snap directions.
+        """
+        assert battery._command_to_values(CMD_GREEN_CHARGE_ONLY)["max_discharging_power_snap_up"] is True
+        force = copy_command(CMD_FORCE_CHARGE, power_consign=3000)
+        assert battery._command_to_values(force)["max_discharging_power_snap_up"] is True
+        for cmd in (CMD_ON, CMD_IDLE, CMD_AUTO_GREEN_ONLY, CMD_GREEN_CHARGE_AND_DISCHARGE):
+            assert battery._command_to_values(cmd)["max_discharging_power_snap_up"] is False
+
     def test_command_to_values_without_optional_entities(
         self,
         hass,

@@ -1,20 +1,16 @@
 import logging
-import math
 from datetime import datetime
 from typing import Any
 
 from homeassistant.components import number
 from homeassistant.const import (
     ATTR_ENTITY_ID,
-    ATTR_UNIT_OF_MEASUREMENT,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
     Platform,
-    UnitOfPower,
 )
-from homeassistant.util.unit_conversion import PowerConverter
 
 from ..const import (
     CONF_BATTERY_CHARGE_DISCHARGE_SENSOR,
@@ -25,6 +21,7 @@ from ..const import (
     CONF_TYPE_NAME_QSBattery,
 )
 from ..ha_model.device import HADeviceMixin, convert_power_to_w
+from ..ha_model.ha_utils import NumberEntityTargeter
 from ..home_model.battery import Battery, coerce_finite_float
 from ..home_model.commands import (
     CMD_AUTO_GREEN_ONLY,
@@ -42,11 +39,9 @@ _LOGGER = logging.getLogger(__name__)
 class QSBattery(HADeviceMixin, Battery):
     conf_type_name = CONF_TYPE_NAME_QSBattery
 
-    # X4: hard cap on the divergence-warned latch. A permanently pinned entity
-    # under solver-varying consigns mints one entry per distinct request; evict
-    # the oldest at the cap instead of growing forever (an evicted divergence
-    # may warn again — bounded log noise beats unbounded set growth).
-    _NUMBER_DIVERGENCE_LATCH_MAX = 64
+    # Back-compat alias for the divergence-latch cap, now owned by the shared
+    # NumberEntityTargeter (review-fix #10 AA2).
+    _NUMBER_DIVERGENCE_LATCH_MAX = NumberEntityTargeter.LATCH_MAX
 
     def __init__(self, **kwargs) -> None:
         self.charge_discharge_sensor = kwargs.pop(CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, None)
@@ -62,14 +57,11 @@ class QSBattery(HADeviceMixin, Battery):
         self.attach_ha_state_to_probe(self.charge_percent_sensor, is_numerical=True)
 
         self.is_charge_from_grid_current = None
-        # dedupe for the number-divergence warning (U5/W3); (entity, landed_w,
-        # above, request_w) keys. A confirmed probe clears only the confirmed
-        # entity's RESOLVED entries (landed differs from the EXPECTED landed
-        # value the probe just confirmed — X3), so a recurring divergence warns
-        # again (V5) while a still-current one stays latched (no per-cycle
-        # re-warn). Insertion-ordered dict used as a bounded set: oldest entries
-        # are evicted at _NUMBER_DIVERGENCE_LATCH_MAX (X4).
-        self._number_divergence_warned: dict[tuple[str | None, int, bool, int], None] = {}
+        # The number-entity write/read/snap/divergence machinery lives in the
+        # shared NumberEntityTargeter (review-fix #10 AA2); this battery owns one
+        # instance (it holds the per-device divergence latch). The battery keeps
+        # only thin wrappers below plus its command semantics.
+        self._number_helper = NumberEntityTargeter(self.hass)
 
     @property
     def current_charge(self) -> float | None:
@@ -79,10 +71,17 @@ class QSBattery(HADeviceMixin, Battery):
         return float(percent * self.capacity) / 100.0
 
     def _command_to_values(self, command: LoadCommand) -> dict[str, Any]:
+        # AA1: `_command_to_values` is the single authority on the discharge
+        # value AND its snap semantics — "max_discharging_power_snap_up" says
+        # whether that value is the safety floor (snap UP, never lower a minimum)
+        # or a restore/max (snap DOWN, never raise past the configured limit).
+        # Both the write and the probe read this flag, so they can never derive
+        # opposite snap directions.
         if command.is_like_one_of_cmds([CMD_ON, CMD_IDLE, CMD_AUTO_GREEN_ONLY, CMD_GREEN_CHARGE_AND_DISCHARGE]):
             ret = {
                 "charge_from_grid": False,
                 "max_discharging_power": self.max_discharging_power,
+                "max_discharging_power_snap_up": False,
                 "max_charging_power": self.max_charging_power,
             }
         elif command.is_like(CMD_GREEN_CHARGE_ONLY):
@@ -90,12 +89,14 @@ class QSBattery(HADeviceMixin, Battery):
             ret = {
                 "charge_from_grid": False,
                 "max_discharging_power": self.min_discharging_power,
+                "max_discharging_power_snap_up": True,
                 "max_charging_power": self.max_charging_power,
             }
         elif command.is_like(CMD_FORCE_CHARGE):
             ret = {
                 "charge_from_grid": True,
                 "max_discharging_power": self.min_discharging_power,
+                "max_discharging_power_snap_up": True,
                 "max_charging_power": command.power_consign,
             }
         else:
@@ -120,7 +121,7 @@ class QSBattery(HADeviceMixin, Battery):
         cmd_to_vals = self._command_to_values(command)
         await self.set_charge_from_grid(cmd_to_vals["charge_from_grid"])
         await self.set_max_discharging_power(
-            cmd_to_vals["max_discharging_power"], snap_up=self._is_discharge_floor_command(command)
+            cmd_to_vals["max_discharging_power"], snap_up=cmd_to_vals["max_discharging_power_snap_up"]
         )
         await self.set_max_charging_power(cmd_to_vals["max_charging_power"])
 
@@ -150,7 +151,7 @@ class QSBattery(HADeviceMixin, Battery):
         expected_discharge_write: float | None = None
         if expected_max_discharge is not None:
             expected_discharge_write, expected_max_discharge = self._discharge_number_target(
-                expected_max_discharge, snap_up=self._is_discharge_floor_command(command), warn=False
+                expected_max_discharge, snap_up=cmd_to_vals["max_discharging_power_snap_up"], warn=False
             )
 
         max_charge_power = self.get_max_charging_power()
@@ -194,279 +195,29 @@ class QSBattery(HADeviceMixin, Battery):
 
         return is_charge_from_grid == cmd_to_vals["charge_from_grid"] and discharge_matches and charge_matches
 
+    # ---- thin delegators to the shared NumberEntityTargeter (review-fix #10 AA2) ----
+    # The battery keeps these wrappers (and its command semantics above) as its
+    # only glue; all the number-entity machinery lives in ha_utils.
+
+    @property
+    def _number_divergence_warned(self) -> dict:
+        """The shared helper's per-device divergence latch (read-only view)."""
+        return self._number_helper._divergence_warned
+
     def _number_reading_matches(
         self, entity_id: str | None, read_value, expected_value, write_value: float | None, domain_max_w: float
     ) -> bool:
-        """Step-aware comparison shared by the probe AND the write-skip checks (W1).
-
-        ``domain_max_w`` is the calling LEG's configured domain max, used as
-        the step sanity bound (X5) — passed by the caller because the same
-        entity may back both legs, so it cannot be derived from the entity
-        id (Z3).
-
-        A backing integration may quantize a non-step-aligned domain-bound write
-        (the accepted U1/U2 policy) to its advertised step and echo a
-        step-neighbour — which is always strictly LESS than one step (in W) from
-        the expected landed value, so accept strictly ``< step_w`` there. A
-        step-ALIGNED write can only be echoed exactly: any non-equal reading is
-        provably stale/foreign (a swallowed restore or floor write must NOT be
-        confirmed — it would silence the retry loop). No advertised step (or no
-        known written value) requires exact equality (V1). A ZERO reading never
-        confirms a non-zero landed value even inside the step window — that
-        would silently zero a safety floor or cap (U7). This device-echo
-        tolerance is distinct from the divergence-warning tolerance, which is
-        about request-vs-landed.
-        """
-        if read_value is None or expected_value is None:
-            return read_value == expected_value
-        if read_value == expected_value:
-            return True
-        # U7/W1: a zero reading is never a tolerable quantization echo of a
-        # NON-zero landed value — even when it is a step-neighbour (step >
-        # entity max), accepting it would silently zero a safety floor (or
-        # cap) and skip/confirm away the retry loop. Always rewrite instead.
-        if read_value == 0:
-            return False
-        step_u, step_w = self._entity_step(entity_id, domain_max_w)
-        if step_w <= 0.0 or write_value is None:
-            return False
-        # X6: fp-tolerant alignment check judged in the VALUE domain — an
-        # absolute epsilon on the ratio misreads large value / tiny step pairs
-        # as non-aligned, silently loosening the probe to the step window.
-        ratio = write_value / step_u
-        # Y2: a corrupt entity bound can inflate the write far beyond the step
-        # scale, overflowing the ratio — treat the step as absent (exact match
-        # already failed above) instead of raising OverflowError in round().
-        if not math.isfinite(ratio):
-            return False
-        if math.isclose(write_value, round(ratio) * step_u, rel_tol=1e-9, abs_tol=1e-6):
-            # step-aligned write: a quantizing device echoes it exactly
-            return False
-        return abs(read_value - expected_value) < step_w
+        return self._number_helper.reading_matches(entity_id, read_value, expected_value, write_value, domain_max_w)
 
     def _entity_step(self, entity_id: str | None, domain_max_w: float) -> tuple[float, float]:
-        """The entity's advertised step as (entity-unit, W); (0.0, 0.0) if none/unreadable.
-
-        One corrupt-step rule shared by the snap, echo-match and warn paths
-        (Y1/Y2): a step is treated as ABSENT when its W conversion is
-        non-finite (overflowed unit conversion), denormal-tiny (< 1e-6 W —
-        ``value / step`` would overflow and crash ceil/round), or wider than
-        ``domain_max_w`` — the calling LEG's configured domain max (X5 — it
-        would widen tolerance windows arbitrarily, or on the warn path
-        suppress every divergence). The bound is passed by the caller, which
-        knows the leg: the same entity may back both legs, so it cannot be
-        derived from the entity id (Z3). Y3: a side effect kept on purpose —
-        with the step then treated as absent, a device echo ABOVE the
-        configured hardware max can never be confirmed (exact match against
-        a landed value <= the max always fails).
-        """
-        if entity_id is None:
-            return 0.0, 0.0
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            return 0.0, 0.0
-        attributes = state.attributes or {}
-        step = coerce_finite_float(attributes.get("step"), None)
-        if step is None or step <= 0.0:
-            return 0.0, 0.0
-        step_w = step
-        unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, UnitOfPower.WATT)
-        # Y6: a present-but-None (or non-str) unit attribute is corrupt — treat as W
-        if isinstance(unit, str) and unit in UnitOfPower and unit != UnitOfPower.WATT:
-            step_w = PowerConverter.convert(value=step, from_unit=unit, to_unit=UnitOfPower.WATT)
-        if not math.isfinite(step_w) or step_w < 1e-6 or step_w > domain_max_w:
-            return 0.0, 0.0
-        return step, step_w
+        return self._number_helper.entity_step(entity_id, domain_max_w)
 
     def _clear_number_divergence_latch(self, entity_id: str | None, confirmed_w: int | None) -> None:
-        """Drop this entity's RESOLVED divergence latch entries (V5/W3).
-
-        ``confirmed_w`` is the EXPECTED landed value the probe just confirmed
-        (X3) — the latch keys the landed value, and an echo-confirm may read a
-        step-neighbour of it. Latched divergences that landed elsewhere are
-        resolved (drop them so a recurrence warns again), while an entry whose
-        landed value IS the confirmed one is still current — keep it latched so
-        a permanently diverging entity warns once, not once per command/probe
-        cycle. Never touch other entities' entries.
-        """
-        if confirmed_w is None:
-            # Z2: no landed value was confirmed for this entity — clearing
-            # would wipe its whole latch (no int key matches None) and re-arm
-            # warnings for still-current divergences. Unreachable from the
-            # probe today (_command_to_values always sets both values), but
-            # the `int | None` signature invites the call.
-            return
-        self._number_divergence_warned = {
-            key: None for key in self._number_divergence_warned if key[0] != entity_id or key[1] == confirmed_w
-        }
-
-    @staticmethod
-    def _is_discharge_floor_command(command: LoadCommand) -> bool:
-        """True when the command emits the discharge *floor* (a safety minimum).
-
-        Only the floor may be snapped UP; the max-discharge restore must never
-        be snapped up past the user-configured hardware limit (T3).
-        """
-        return command.is_like(CMD_GREEN_CHARGE_ONLY) or command.is_like(CMD_FORCE_CHARGE)
-
-    def _number_entity_target(
-        self,
-        entity_id: str | None,
-        power_w: float,
-        snap_up: bool,
-        domain_min: float,
-        domain_max: float,
-        warn: bool = True,
-    ) -> tuple[float, int]:
-        """Map a W power target to (value_to_write, expected_landed_w) for a number entity.
-
-        The **same** helper backs both the write and the probe expectation, so
-        they can never disagree (eternal retry). Steps:
-
-        1. domain clamp to ``[domain_min, domain_max]`` (shared by write and
-           probe — T2);
-        2. convert to the entity's unit and clamp to its ``min`` / ``max``;
-        3. snap to the entity ``step`` — UP for a safety floor (``snap_up``),
-           DOWN for a maximum;
-        4. **snap-policy priority** (review-fix #04 U1/U2): the configured
-           hardware max (``domain_max``) wins downward and the safety floor
-           (``domain_min``) wins upward — a non-step-aligned write at either
-           domain bound is accepted (HA core validates min/max, not step
-           alignment). The entity's own ``min`` / ``max`` remain the hard bounds
-           HA would reject outside of.
-
-        Inconsistent (``min > max``) or non-numeric entity attributes are treated
-        as absent (T7 / U6). A landed value that diverges from the request by more
-        than one step is logged once per ``(entity, landed_w, direction)`` (U3/U5/T8).
-        """
-        request_w = min(float(domain_max), max(float(domain_min), float(power_w)))
-        write_value = request_w
-        attributes: dict = {}
-        if entity_id is not None:
-            state = self.hass.states.get(entity_id)
-            if state is not None and state.state not in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-                attributes = state.attributes or {}
-
-        unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, UnitOfPower.WATT)
-        # Y6: a present-but-None (or non-str) unit attribute is corrupt — treat as W
-        to_entity_unit = isinstance(unit, str) and unit in UnitOfPower and unit != UnitOfPower.WATT
-
-        def _to_unit(value_w: float) -> float:
-            return (
-                PowerConverter.convert(value=value_w, from_unit=UnitOfPower.WATT, to_unit=unit)
-                if to_entity_unit
-                else value_w
-            )
-
-        def _to_w(value_u: float) -> float:
-            return (
-                PowerConverter.convert(value=value_u, from_unit=unit, to_unit=UnitOfPower.WATT)
-                if to_entity_unit
-                else value_u
-            )
-
-        write_value = _to_unit(write_value)
-        dmin_u = _to_unit(float(domain_min))
-        dmax_u = _to_unit(float(domain_max))
-
-        ent_min = coerce_finite_float(attributes.get("min"), None)
-        ent_max = coerce_finite_float(attributes.get("max"), None)
-        # Y1/Y2: the shared corrupt-step rule (tiny/huge/non-finite => absent)
-        # governs the snap AND the warn tolerance below — see _entity_step.
-        step_u, step_w = self._entity_step(entity_id, float(domain_max))
-        # U6: mutually inconsistent bounds are as unusable as non-numeric ones
-        if ent_min is not None and ent_max is not None and ent_min > ent_max:
-            ent_min = ent_max = None
-
-        if ent_min is not None:
-            write_value = max(write_value, ent_min)
-        if ent_max is not None:
-            write_value = min(write_value, ent_max)
-
-        if step_u > 0.0:
-            ratio = write_value / step_u
-            # Y2: a corrupt entity bound can inflate the value beyond the step
-            # scale, overflowing the ratio — skip the snap (step absent) instead
-            # of raising OverflowError in ceil/floor.
-            if math.isfinite(ratio):
-                if snap_up:
-                    # a safety minimum: never below the request. FP-safe so an
-                    # exact step multiple does not overshoot a whole step.
-                    write_value = math.ceil(ratio - 1e-9) * step_u
-                else:
-                    # a maximum: never above the request.
-                    write_value = math.floor(ratio + 1e-9) * step_u
-
-        # snap-policy priority (U1/U2): the configured max wins down, the safety
-        # floor wins up — accepting a non-step-aligned value at either bound.
-        write_value = min(write_value, dmax_u)
-        write_value = max(write_value, dmin_u)
-        # the entity's own range is the hard bound HA validates (U7: a floor above
-        # the entity max lands at the raw entity max, never zeroed by step math).
-        if ent_max is not None:
-            write_value = min(write_value, ent_max)
-        if ent_min is not None:
-            write_value = max(write_value, ent_min)
-
-        # Z1: a corrupt-but-finite entity bound (e.g. a 1e306 kW min) survives
-        # coerce_finite_float, wins the hard re-clamp above, and overflows the
-        # W conversion to inf — int(round(inf)) would raise OverflowError.
-        # Treat the corrupt bound as absent for the landed EXPECTATION and
-        # fall back to the domain-clamped request (the write itself keeps the
-        # entity's hard bound — HA validates min/max).
-        landed_to_w = _to_w(write_value)
-        landed_w = int(round(landed_to_w)) if math.isfinite(landed_to_w) else int(round(request_w))
-
-        # V2/W2: direction-aware warning tolerance. The step snap can only
-        # legitimately move the landed value in ONE direction (UP on ceil, DOWN on
-        # floor) and always strictly LESS than one step — so in the snap direction
-        # a divergence reaching a full step (`>= step_w`) is an external bound
-        # (e.g. the entity min), not quantization: warn. The OPPOSITE direction
-        # means an external cap is binding — surface even a small one there
-        # (~1 W). Distinct from the probe's device-echo tolerance (V1). The
-        # step is the sanity-checked one (Y1): a corrupt oversized/non-finite
-        # step must not make `delta >= snap_step_w` eternally false and
-        # silently suppress every divergence warning.
-        if warn:
-            snap_step_w = step_w
-            delta_above = landed_w - request_w
-            delta_below = request_w - landed_w
-
-            def _snap_dir_diverges(delta: float) -> bool:
-                return delta >= snap_step_w if snap_step_w > 0.0 else delta > 1.0
-
-            above_diverges = _snap_dir_diverges(delta_above) if snap_up else delta_above > 1.0
-            below_diverges = delta_below > 1.0 if snap_up else _snap_dir_diverges(delta_below)
-            if above_diverges:
-                self._warn_number_divergence(entity_id, landed_w, request_w, above=True)
-            elif below_diverges:
-                self._warn_number_divergence(entity_id, landed_w, request_w, above=False)
-
-        return write_value, landed_w
-
-    def _warn_number_divergence(self, entity_id: str | None, landed_w: int, request_w: float, above: bool) -> None:
-        """Warn once per distinct (entity, landed, direction, request) divergence (U5/W3).
-
-        The latch is bounded (X4): at the cap the oldest entry is evicted, so a
-        pinned entity under ever-varying consigns cannot grow it forever.
-        """
-        key = (entity_id, landed_w, above, int(round(request_w)))
-        if key in self._number_divergence_warned:
-            return
-        while len(self._number_divergence_warned) >= self._NUMBER_DIVERGENCE_LATCH_MAX:
-            self._number_divergence_warned.pop(next(iter(self._number_divergence_warned)))
-        self._number_divergence_warned[key] = None
-        _LOGGER.warning(
-            "number entity %s lands %s W, %s the requested %s W",
-            entity_id,
-            landed_w,
-            "above" if above else "below",
-            int(round(request_w)),
-        )
+        self._number_helper.clear_latch(entity_id, confirmed_w)
 
     def _discharge_number_target(self, power_w: float, snap_up: bool, warn: bool = True) -> tuple[float, int]:
         """Discharge target. `snap_up` only for the floor (a safety minimum)."""
-        return self._number_entity_target(
+        return self._number_helper.target(
             self.max_discharge_number,
             power_w,
             snap_up=snap_up,
@@ -477,7 +228,7 @@ class QSBattery(HADeviceMixin, Battery):
 
     def _charge_number_target(self, power_w: float, warn: bool = True) -> tuple[float, int]:
         """Charge limit target — snaps DOWN (a limit is never raised past its cap)."""
-        return self._number_entity_target(
+        return self._number_helper.target(
             self.max_charge_number,
             power_w,
             snap_up=False,

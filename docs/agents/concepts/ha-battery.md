@@ -4,6 +4,7 @@ slug: ha-battery
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/battery.py
+  - custom_components/quiet_solar/ha_model/ha_utils.py
 last_verified: 2026-08-22
 ---
 
@@ -23,9 +24,17 @@ charge-from-grid switch. For discharge-limiting commands,
 entity — `CMD_GREEN_CHARGE_ONLY` and `CMD_FORCE_CHARGE` write the floor
 instead of a hard `0` (a nonzero floor *limits* discharge, it does not
 disable it; the domain `Battery.max_discharging_power` attribute is
-unchanged). Writes go through `_number_entity_target`, which maps the W
-value to the entity's unit/min/max/step so the write, the read-back, and
-the probe agree (kW-denominated or stepped entities otherwise never
+unchanged). The number-entity machinery itself is **not**
+battery-specific: it lives in the shared
+[`ha_model/ha_utils.py`](../../../custom_components/quiet_solar/ha_model/ha_utils.py)
+`NumberEntityTargeter` (review-fix #10 AA2 — QSBattery owns one instance
+and keeps only thin wrappers `_discharge_number_target` /
+`_charge_number_target` plus its command semantics). The `_command_to_values`
+mapping additionally emits `max_discharging_power_snap_up`, so the write and
+the probe read the snap direction from the single command-authority instead of
+re-deriving it (AA1). Writes go through `NumberEntityTargeter.target`, which
+maps the W value to the entity's unit/min/max/step so the write, the read-back,
+and the probe agree (kW-denominated or stepped entities otherwise never
 confirm — eternal retry). It applies the domain clamp too, so a consign
 above `max_charging_power` confirms at the clamped value (review-fix #03
 T2). Snap direction is safety-directed: the discharge **floor** snaps
