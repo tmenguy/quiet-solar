@@ -14,7 +14,8 @@
       "climate_capabilities_unavailable": "Climate entity advertises no HVAC modes; pick a different climate entity or check the device",
       "climate_modes_insufficient": "Climate entity exposes fewer than two HVAC modes; pick a different climate entity or configure the device to expose at least two modes",
       "hvac_modes_must_differ": "HVAC mode ON and OFF must be different",
-      "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one"
+      "piloted_heat_pump_unknown": "The previously selected heat pump is no longer available; pick a different one",
+      "min_discharge_above_max": "The outage safety floor cannot be higher than the maximum discharge power"
     },
     "step": {
       "user": {
@@ -87,12 +88,16 @@
           "battery_charge_percent_sensor": "Charge percentage (%)",
           "battery_charge_discharge_sensor": "Charge/discharge (W, kW)",
           "battery_max_discharge_power_value": "Maximum discharge power (W)",
+          "battery_min_discharge_power_value": "Outage safety floor — minimum discharge power (W)",
           "battery_max_discharge_power_number": "Maximum discharge power (W, kW) Number entity",
           "battery_max_charge_power_value": "Maximum charge power (W)",
           "battery_max_charge_power_number": "Maximum charge power (W, kW) Number entity",
           "battery_min_charge_percent_value": "Minimum charge percentage (%)",
           "battery_max_charge_percent_value": "Maximum charge percentage (%)",
           "battery_charge_from_grid_switch": "Switch to allow the battery to charge from the grid"
+        },
+        "data_description": {
+          "battery_min_discharge_power_value": "Minimum discharge power the battery always keeps available so a grid outage during a grid-charge phase cannot lock the battery at zero discharge; if the outage-time house demand exceeds this floor, the inverter's own overload protection decides the outcome. Leave at 0 to keep the default behaviour."
         }
       },
       "solar": {
@@ -441,7 +446,8 @@
       "climate_capabilities_unavailable": "[%key:component::quiet_solar::config::error::climate_capabilities_unavailable%]",
       "climate_modes_insufficient": "[%key:component::quiet_solar::config::error::climate_modes_insufficient%]",
       "hvac_modes_must_differ": "[%key:component::quiet_solar::config::error::hvac_modes_must_differ%]",
-      "piloted_heat_pump_unknown": "[%key:component::quiet_solar::config::error::piloted_heat_pump_unknown%]"
+      "piloted_heat_pump_unknown": "[%key:component::quiet_solar::config::error::piloted_heat_pump_unknown%]",
+      "min_discharge_above_max": "[%key:component::quiet_solar::config::error::min_discharge_above_max%]"
     },
     "step": {
       "home": {
@@ -496,12 +502,16 @@
           "battery_charge_percent_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_percent_sensor%]",
           "battery_charge_discharge_sensor": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_discharge_sensor%]",
           "battery_max_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_value%]",
+          "battery_min_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_min_discharge_power_value%]",
           "battery_max_discharge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_discharge_power_number%]",
           "battery_max_charge_power_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_value%]",
           "battery_max_charge_power_number": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_power_number%]",
           "battery_min_charge_percent_value": "[%key:component::quiet_solar::config::step::battery::data::battery_min_charge_percent_value%]",
           "battery_max_charge_percent_value": "[%key:component::quiet_solar::config::step::battery::data::battery_max_charge_percent_value%]",
           "battery_charge_from_grid_switch": "[%key:component::quiet_solar::config::step::battery::data::battery_charge_from_grid_switch%]"
+        },
+        "data_description": {
+          "battery_min_discharge_power_value": "[%key:component::quiet_solar::config::step::battery::data_description::battery_min_discharge_power_value%]"
         }
       },
       "solar": {

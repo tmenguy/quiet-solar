@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timedelta
+from typing import NamedTuple
 
 import numpy as np
 import numpy.typing as npt
@@ -33,6 +34,25 @@ from .home_utils import add_amps, slot_value_from_time_series
 from .load import AbstractLoad
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class BatteryChargingPower(NamedTuple):
+    """Result of `PeriodSolver._battery_get_charging_power`.
+
+    A NamedTuple so call sites unpack by name and a future field is a
+    definition-only change (no positional arity sweep). Still a tuple, so
+    legacy positional access (`[1]`, `[7]`) keeps working.
+    """
+
+    battery_ext_consumption_power: npt.NDArray[np.float64]
+    battery_charge: npt.NDArray[np.float64]
+    battery_commands: list[LoadCommand | None]
+    prices_discharged_energy_buckets: dict[float, float]
+    prices_remaining_grid_energy_buckets: dict[float, float]
+    excess_solar_energy: float
+    remaining_grid_energy: float
+    battery_possible_discharge: npt.NDArray[np.float64]
+    prices_leak_energy_buckets: dict[float, float]
 
 
 class PeriodSolver:
@@ -143,7 +163,7 @@ class PeriodSolver:
         # initial max_possible_production: solar-only (no battery yet)
         bat_possible_discharge = None
         if self._battery is not None:
-            bat_possible_discharge = self._battery_get_charging_power()[7]
+            bat_possible_discharge = self._battery_get_charging_power().battery_possible_discharge
         self._max_possible_production = self._compute_max_possible_production(
             battery_possible_discharge=bat_possible_discharge,
         )
@@ -386,6 +406,25 @@ class PeriodSolver:
 
         loads[load] = existing_cmds
 
+    @staticmethod
+    def _leak_normalize_discharged_buckets(
+        prices_discharged_energy_buckets: dict, prices_leak_energy_buckets: dict
+    ) -> dict:
+        """Subtract the incompressible leak from the discharged buckets, once.
+
+        Mutates and returns `prices_discharged_energy_buckets`, leaving only the
+        **compressible** discharge the price-bucket optimizer may redistribute.
+        Must be called exactly once, BEFORE the (revisiting) allocation loop —
+        subtracting inside the loop would double-count on cheap-bucket revisits.
+        The `max(0.0, ...)` guards floating-point drift; a leak can never exceed
+        its own slot's discharge, so a well-formed bucket never underflows.
+        """
+        for leak_price, leak_energy in prices_leak_energy_buckets.items():
+            prices_discharged_energy_buckets[leak_price] = max(
+                0.0, prices_discharged_energy_buckets.get(leak_price, 0.0) - leak_energy
+            )
+        return prices_discharged_energy_buckets
+
     def _battery_get_charging_power(self, limited_discharge_per_price=None, existing_battery_commands=None):
         available_power_list = self._available_power_no_battery
         max_inverter_dc_to_ac_power = self._max_inverter_dc_to_ac_power
@@ -399,10 +438,15 @@ class PeriodSolver:
             battery_commands = existing_battery_commands
         prices_discharged_energy_buckets = {}
         prices_remaining_grid_energy_buckets = {}
+        prices_leak_energy_buckets = {}
         remaining_grid_energy = 0
         excess_solar_energy = 0
 
         if self._battery:
+            # outage safety floor: minimum discharge power the battery keeps
+            # available even under a discharge-limiting command (default 0)
+            floor_discharge_power = float(self._battery.min_discharging_power)
+
             init_battery_charge = self._battery.current_charge
             if init_battery_charge is None:
                 init_battery_charge = self._battery.get_value_empty()
@@ -421,8 +465,9 @@ class PeriodSolver:
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
                     available_power = 0.0 - battery_commands[i].power_consign
                 elif battery_commands[i].is_like(CMD_GREEN_CHARGE_ONLY):
-                    # discharge forbidden — only charge from excess solar
-                    available_power = min(0.0, float(available_power_list[i]))
+                    # discharge capped at the outage safety floor F (0 by default):
+                    # surplus slots keep the negative surplus, demand slots cap at F
+                    available_power = min(float(available_power_list[i]), floor_discharge_power)
                 else:
                     available_power = float(available_power_list[i])
 
@@ -440,17 +485,35 @@ class PeriodSolver:
 
                 charged_energy = (charging_power * float(self._durations_s[i])) / 3600.0
 
+                # incompressible leak: the slice of a slot's discharge that flows
+                # even under a flipped (green-charge-only) command, bounded by the
+                # floor F over the slot duration. Idempotent under the flip clamp
+                # below, so it is computed once here with the pre-flip value.
+                if charged_energy < 0.0:
+                    leak_energy = min(-charged_energy, floor_discharge_power * float(self._durations_s[i]) / 3600.0)
+                else:
+                    leak_energy = 0.0
+
                 if limited_discharge_per_price is not None:
                     limit_discharge = limited_discharge_per_price.get(self._prices[i], None)
                     if limit_discharge is not None:
-                        if limit_discharge + min(0.0, charged_energy) <= 0.0:
-                            # we need to ... forbid discharge to keep it when we will need it for bigger prices
-                            charged_energy = max(0.0, charged_energy)
-                            charging_power = max(0.0, charging_power)
+                        # flip when the COMPRESSIBLE part (charged_energy + leak)
+                        # exhausts the budget — the leak is incompressible and flows
+                        # regardless. The flip condition uses the pre-clamp value.
+                        if limit_discharge + min(0.0, charged_energy + leak_energy) <= 0.0:
+                            # forbid the compressible discharge (keep it for higher
+                            # prices) but keep the incompressible leak
+                            charged_energy = max(charged_energy, -leak_energy)
+                            charging_power = max(charging_power, -floor_discharge_power)
                             battery_commands[i] = copy_command(CMD_GREEN_CHARGE_ONLY)
 
+                        # debit only the discharge that SURVIVES the flip (post-clamp):
+                        # a flipped slot keeps only its leak (charged_energy + leak == 0),
+                        # so it consumes no budget and the residual stays available for
+                        # later same-price slots. Reduces exactly to the pre-QS-349
+                        # behaviour at F = 0 (leak = 0 => flipped slot debits nothing).
                         limited_discharge_per_price[self._prices[i]] = max(
-                            0.0, limit_discharge + min(charged_energy, 0.0)
+                            0.0, limit_discharge + min(0.0, charged_energy + leak_energy)
                         )
 
                 if battery_commands[i].is_like(CMD_FORCE_CHARGE):
@@ -462,7 +525,23 @@ class PeriodSolver:
                     prices_discharged_energy_buckets[self._prices[i]] = (
                         prices_discharged_energy_buckets.get(self._prices[i], 0.0) - charged_energy
                     )
+                    prices_leak_energy_buckets[self._prices[i]] = (
+                        prices_leak_energy_buckets.get(self._prices[i], 0.0) + leak_energy
+                    )
 
+                # U10: `available_power` is the battery-dispatch input, not physical
+                # grid demand — for a flipped CMD_GREEN_CHARGE_ONLY demand slot it is
+                # already capped at F, so the resulting `prices_remaining_grid_energy_buckets`
+                # / `remaining_grid_energy` report DISPATCH-relative, not physical, grid
+                # energy (understating a flipped slot by `net_load − F`). Harmless today
+                # (pass-1 decision inputs are flip-free; the allocation loop re-adds
+                # removed energy explicitly), but do NOT consume these buckets from a call
+                # whose battery_commands already contain CMD_GREEN_CHARGE_ONLY on demand
+                # slots without re-deriving the physical residual. The same asymmetry
+                # applies to a slot flipped WITHIN this pass: its `grid_nrj` uses the
+                # pre-flip (uncapped) `available_power`, so a re-simulation with the
+                # resulting commands caps that slot at F and its own price bucket
+                # differs between plan and recompute (W4).
                 grid_nrj = ((available_power + consumption_power) * float(self._durations_s[i])) / 3600.0
                 if grid_nrj > 0:
                     # we will ask it from the grid:
@@ -476,15 +555,16 @@ class PeriodSolver:
                 battery_charge[i] = prev_battery_charge + charged_energy
                 prev_battery_charge = battery_charge[i]
 
-        return (
-            battery_ext_consumption_power,
-            battery_charge,
-            battery_commands,
-            prices_discharged_energy_buckets,
-            prices_remaining_grid_energy_buckets,
-            excess_solar_energy,
-            remaining_grid_energy,
-            battery_possible_discharge,
+        return BatteryChargingPower(
+            battery_ext_consumption_power=battery_ext_consumption_power,
+            battery_charge=battery_charge,
+            battery_commands=battery_commands,
+            prices_discharged_energy_buckets=prices_discharged_energy_buckets,
+            prices_remaining_grid_energy_buckets=prices_remaining_grid_energy_buckets,
+            excess_solar_energy=excess_solar_energy,
+            remaining_grid_energy=remaining_grid_energy,
+            battery_possible_discharge=battery_possible_discharge,
+            prices_leak_energy_buckets=prices_leak_energy_buckets,
         )
 
     def _find_next_dusk_idx(self) -> int | None:
@@ -659,16 +739,14 @@ class PeriodSolver:
 
         num_slots = len(self._available_power)
         # check battery: if we give back to grid and battery is full: we should consume more from the grid to avoid giving back to grid, so we should not discharge the battery
-        (
-            battery_ext_consumption_power,
-            battery_charge,
-            battery_commands,
-            prices_discharged_energy_buckets,
-            prices_remaining_grid_energy_buckets,
-            excess_solar_energy,
-            remaining_grid_energy,
-            _battery_possible_discharge,
-        ) = self._battery_get_charging_power()
+        _bcp = self._battery_get_charging_power()
+        battery_ext_consumption_power = _bcp.battery_ext_consumption_power
+        battery_charge = _bcp.battery_charge
+        battery_commands = _bcp.battery_commands
+        prices_discharged_energy_buckets = _bcp.prices_discharged_energy_buckets
+        prices_remaining_grid_energy_buckets = _bcp.prices_remaining_grid_energy_buckets
+        excess_solar_energy = _bcp.excess_solar_energy
+        remaining_grid_energy = _bcp.remaining_grid_energy
 
         empty_segments = [[None, num_slots - 1]]
         for i in range(num_slots):
@@ -834,7 +912,9 @@ class PeriodSolver:
         # behavior across the entire system (review fix #04 must-fix #1).
         bat_charge_traj: npt.NDArray[np.float64] | None = None
         if battery_min_wh > 0 and energy_delta > 0 and self._battery is not None:
-            bat_charge_traj = self._battery_get_charging_power(existing_battery_commands=battery_commands)[1].copy()
+            bat_charge_traj = self._battery_get_charging_power(
+                existing_battery_commands=battery_commands
+            ).battery_charge.copy()
             # Load-bearing safety guard (NOT an `assert`, so it survives
             # `python -O`): NaN in the battery-charge trajectory would
             # silently disable Layer 3 (since `max(0, NaN - floor) = 0`
@@ -940,10 +1020,10 @@ class PeriodSolver:
                     bat_possible_discharge = None
                     if self._battery is not None:
                         refreshed = self._battery_get_charging_power(existing_battery_commands=battery_commands)
-                        bat_possible_discharge = refreshed[7]
+                        bat_possible_discharge = refreshed.battery_possible_discharge
                         # re-seed the trajectory for the next constraint's guard
                         if bat_charge_traj is not None:
-                            bat_charge_traj = refreshed[1].copy()
+                            bat_charge_traj = refreshed.battery_charge.copy()
                             if np.any(np.isnan(bat_charge_traj)):
                                 raise ValueError(
                                     "_battery_get_charging_power returned NaN values during "
@@ -1049,7 +1129,7 @@ class PeriodSolver:
             # recompute battery state and max_possible_production after each allocation
             bat_possible_discharge = None
             if self._battery is not None:
-                bat_possible_discharge = self._battery_get_charging_power()[7]
+                bat_possible_discharge = self._battery_get_charging_power().battery_possible_discharge
             self._max_possible_production = self._compute_max_possible_production(
                 battery_possible_discharge=bat_possible_discharge,
             )
@@ -1179,16 +1259,14 @@ class PeriodSolver:
 
         _bat_possible_disch = None
         if self._battery is not None:
-            (
-                battery_ext_consumption_power,
-                battery_charge,
-                battery_commands,
-                prices_discharged_energy_buckets,
-                prices_remaining_grid_energy_buckets,
-                excess_solar_energy,
-                remaining_grid_energy,
-                _bat_possible_disch,
-            ) = self._battery_get_charging_power()
+            _bcp = self._battery_get_charging_power()
+            battery_ext_consumption_power = _bcp.battery_ext_consumption_power
+            battery_charge = _bcp.battery_charge
+            battery_commands = _bcp.battery_commands
+            prices_discharged_energy_buckets = _bcp.prices_discharged_energy_buckets
+            prices_remaining_grid_energy_buckets = _bcp.prices_remaining_grid_energy_buckets
+            excess_solar_energy = _bcp.excess_solar_energy
+            remaining_grid_energy = _bcp.remaining_grid_energy
 
             if is_off_grid:
                 battery_min = np.min(battery_charge)
@@ -1279,16 +1357,16 @@ class PeriodSolver:
             # if not enough remove battery discharge from "lower prices", as much as we can until the total price decrease ... do that little by little (well limit the number of steps for computation)
             # if the battery "not used energy" from this pass is
 
-            (
-                battery_ext_consumption_power,
-                battery_charge,
-                battery_commands,
-                prices_discharged_energy_buckets,
-                prices_remaining_grid_energy_buckets,
-                excess_solar_energy,
-                remaining_grid_energy,
-                bat_possible_discharge,
-            ) = self._battery_get_charging_power()
+            _bcp = self._battery_get_charging_power()
+            battery_ext_consumption_power = _bcp.battery_ext_consumption_power
+            battery_charge = _bcp.battery_charge
+            battery_commands = _bcp.battery_commands
+            prices_discharged_energy_buckets = _bcp.prices_discharged_energy_buckets
+            prices_remaining_grid_energy_buckets = _bcp.prices_remaining_grid_energy_buckets
+            excess_solar_energy = _bcp.excess_solar_energy
+            remaining_grid_energy = _bcp.remaining_grid_energy
+            bat_possible_discharge = _bcp.battery_possible_discharge
+            prices_leak_energy_buckets = _bcp.prices_leak_energy_buckets
 
             # recompute max_possible_production with battery info
             self._max_possible_production = self._compute_max_possible_production(
@@ -1306,6 +1384,12 @@ class PeriodSolver:
                 # not optimal but will work pretty well in practice
                 limited_discharge_per_price = {}
                 have_an_optim = False
+                # one-time leak normalization: the discharged buckets carry the
+                # incompressible leak, which the optimizer cannot move between
+                # price buckets. Subtract it once here (before the revisiting loop)
+                # so only the compressible energy is redistributed. At F = 0 every
+                # leak is 0 and this is a no-op.
+                self._leak_normalize_discharged_buckets(prices_discharged_energy_buckets, prices_leak_energy_buckets)
                 for price_idx in range(
                     len(self._prices_ordered_values) - 1, 0, -1
                 ):  # no need to go to the least expensive
@@ -1351,16 +1435,23 @@ class PeriodSolver:
                                 break
 
                 if have_an_optim is True:
-                    (
-                        battery_ext_consumption_power,
-                        battery_charge,
-                        battery_commands,
-                        prices_discharged_energy_buckets,
-                        prices_remaining_grid_energy_buckets,
-                        excess_solar_energy,
-                        remaining_grid_energy,
-                        bat_possible_discharge,
-                    ) = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
+                    # Final recompute with the per-price budgets the loop built. This
+                    # re-binds prices_discharged_energy_buckets from a fresh pass-2, but
+                    # it is the FINAL output — not re-fed into the (already-finished)
+                    # allocation loop — so the leak must NOT be re-subtracted here; the
+                    # one-time normalization above governs only the loop's movable budget.
+                    _bcp = self._battery_get_charging_power(limited_discharge_per_price=limited_discharge_per_price)
+                    battery_ext_consumption_power = _bcp.battery_ext_consumption_power
+                    battery_charge = _bcp.battery_charge
+                    battery_commands = _bcp.battery_commands
+                    prices_discharged_energy_buckets = _bcp.prices_discharged_energy_buckets
+                    prices_remaining_grid_energy_buckets = _bcp.prices_remaining_grid_energy_buckets
+                    excess_solar_energy = _bcp.excess_solar_energy
+                    remaining_grid_energy = _bcp.remaining_grid_energy
+                    bat_possible_discharge = _bcp.battery_possible_discharge
+                    # keep the leak local consistent with the final pass (T11); it has
+                    # no further reader here but leaving it stale is a latent trap
+                    prices_leak_energy_buckets = _bcp.prices_leak_energy_buckets
 
                     self._max_possible_production = self._compute_max_possible_production(
                         battery_possible_discharge=bat_possible_discharge,
@@ -1425,7 +1516,7 @@ class PeriodSolver:
             # decrement in adapt_repartition, the surplus block reads
             # battery_charge only for waste / budget / drain-budget
             # computations and never mutates it.
-            battery_charge = self._battery_get_charging_power(existing_battery_commands=battery_commands)[1]
+            battery_charge = self._battery_get_charging_power(existing_battery_commands=battery_commands).battery_charge
             expected_waste_wh, first_surplus_idx, last_surplus_idx = self._compute_expected_solar_waste(battery_charge)
 
             if (
@@ -1610,16 +1701,14 @@ class PeriodSolver:
         # final battery
         if battery_commands is not None:
             # recompute all battery charge
-            (
-                battery_ext_consumption_power,
-                battery_charge,
-                battery_commands,
-                prices_discharged_energy_buckets,
-                prices_remaining_grid_energy_buckets,
-                excess_solar_energy,
-                remaining_grid_energy,
-                _final_bat_possible,
-            ) = self._battery_get_charging_power(existing_battery_commands=battery_commands)
+            _bcp = self._battery_get_charging_power(existing_battery_commands=battery_commands)
+            battery_ext_consumption_power = _bcp.battery_ext_consumption_power
+            battery_charge = _bcp.battery_charge
+            battery_commands = _bcp.battery_commands
+            prices_discharged_energy_buckets = _bcp.prices_discharged_energy_buckets
+            prices_remaining_grid_energy_buckets = _bcp.prices_remaining_grid_energy_buckets
+            excess_solar_energy = _bcp.excess_solar_energy
+            remaining_grid_energy = _bcp.remaining_grid_energy
             self._available_power = self._available_power_no_battery + battery_ext_consumption_power
 
         # we have now all the constraints solved, and the battery commands computed
