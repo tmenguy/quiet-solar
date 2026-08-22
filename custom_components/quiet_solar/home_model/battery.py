@@ -32,7 +32,7 @@ def coerce_finite_float(value, default: float | None) -> float | None:
         return default
     try:
         result = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return default
     if not math.isfinite(result):
         return default
@@ -53,10 +53,16 @@ class Battery(AbstractDevice):
         self.capacity = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_CAPACITY, 7000), 7000))
         # clamp the max operands to >= 0 so a corrupt negative max cannot drag the
         # floor clamp below 0 (a negative safety floor would emit out-of-range) — T6
-        self.max_discharging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500))
+        self.max_discharging_power = max(
+            0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE, 1500), 1500)
+        )
         self.max_charging_power = max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_POWER_VALUE, 1500), 1500))
-        self.min_charge_SOC_percent = min(100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0), 0.0)))
-        self.max_charge_SOC_percent = min(100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0), 100.0)))
+        self.min_charge_SOC_percent = min(
+            100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MIN_CHARGE_PERCENT, 0.0), 0.0))
+        )
+        self.max_charge_SOC_percent = min(
+            100.0, max(0.0, _coerce_float(kwargs.pop(CONF_BATTERY_MAX_CHARGE_PERCENT, 100.0), 100.0))
+        )
         # enforce min <= max so headroom math (get_charger_power) cannot go negative
         self.min_charge_SOC_percent = min(self.min_charge_SOC_percent, self.max_charge_SOC_percent)
         self.is_dc_coupled = kwargs.pop(CONF_BATTERY_IS_DC_COUPLED, False)

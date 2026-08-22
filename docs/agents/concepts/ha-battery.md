@@ -67,12 +67,19 @@ safety floor or cap, U7). Alignment is judged in the **value domain**
 (an absolute ratio epsilon misreads large value / tiny step pairs, #07
 X6), and a **corrupt step is treated as absent** under one shared rule in
 `_entity_step` — denormal-tiny (< 1e-6 W, `value / step` would overflow
-and crash ceil/round), wider than the configured domain max, or a
+and crash ceil/round), wider than the calling **leg's** configured domain
+max (passed explicitly by the caller, never derived from the entity id —
+the same entity may back both legs, #09 Z3), or a
 non-finite W conversion — across the snap, echo-match and warn paths
 (#07 X5 / #08 Y1/Y2): the probe then requires exact matching (so a
 reading above the configured hardware max never confirms, #08 Y3), the
 write passes through raw, and the divergence warning falls back to the
 ~1 W tolerance instead of being silently suppressed by an inf-wide step.
+A corrupt-but-finite entity bound whose W conversion overflows (e.g. a
+1e306 kW `min`) is treated as absent for the landed **expectation**,
+which falls back to the domain-clamped request instead of raising
+`OverflowError` (#09 Z1) — the write itself still honours the entity's
+hard bound.
 The write-skip check
 in the setters shares this
 same comparison, so a quantized echo does not re-issue the write every
@@ -88,7 +95,9 @@ than one step (W2). A confirmed probe clears only the confirmed entity's
 **expected landed value** the probe just confirmed (not from the raw
 reading: an echo-confirm reads a step-neighbour, #07 X3) — so a
 recurring divergence warns again while a still-current one
-stays latched (V5/W3). There is no discharge-enable
+stays latched (V5/W3); a clear with **no** expected landed value
+(`None`) is a no-op — it would otherwise wipe the entity's whole latch
+(#09 Z2). There is no discharge-enable
 switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.

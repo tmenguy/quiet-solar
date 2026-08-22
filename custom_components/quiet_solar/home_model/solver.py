@@ -912,7 +912,9 @@ class PeriodSolver:
         # behavior across the entire system (review fix #04 must-fix #1).
         bat_charge_traj: npt.NDArray[np.float64] | None = None
         if battery_min_wh > 0 and energy_delta > 0 and self._battery is not None:
-            bat_charge_traj = self._battery_get_charging_power(existing_battery_commands=battery_commands).battery_charge.copy()
+            bat_charge_traj = self._battery_get_charging_power(
+                existing_battery_commands=battery_commands
+            ).battery_charge.copy()
             # Load-bearing safety guard (NOT an `assert`, so it survives
             # `python -O`): NaN in the battery-charge trajectory would
             # silently disable Layer 3 (since `max(0, NaN - floor) = 0`
@@ -1387,9 +1389,7 @@ class PeriodSolver:
                 # price buckets. Subtract it once here (before the revisiting loop)
                 # so only the compressible energy is redistributed. At F = 0 every
                 # leak is 0 and this is a no-op.
-                self._leak_normalize_discharged_buckets(
-                    prices_discharged_energy_buckets, prices_leak_energy_buckets
-                )
+                self._leak_normalize_discharged_buckets(prices_discharged_energy_buckets, prices_leak_energy_buckets)
                 for price_idx in range(
                     len(self._prices_ordered_values) - 1, 0, -1
                 ):  # no need to go to the least expensive

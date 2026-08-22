@@ -167,10 +167,18 @@ class QSBattery(HADeviceMixin, Battery):
             expected_charge_write, expected_max_charge = self._charge_number_target(expected_max_charge, warn=False)
 
         discharge_matches = self._number_reading_matches(
-            self.max_discharge_number, max_discharge_power, expected_max_discharge, expected_discharge_write
+            self.max_discharge_number,
+            max_discharge_power,
+            expected_max_discharge,
+            expected_discharge_write,
+            self.max_discharging_power,
         )
         charge_matches = self._number_reading_matches(
-            self.max_charge_number, max_charge_power, expected_max_charge, expected_charge_write
+            self.max_charge_number,
+            max_charge_power,
+            expected_max_charge,
+            expected_charge_write,
+            self.max_charging_power,
         )
         # V5/W3: each confirmed entity clears ONLY its own resolved latch entries
         # (never the whole set), so a divergence that later recurs warns again
@@ -187,9 +195,14 @@ class QSBattery(HADeviceMixin, Battery):
         return is_charge_from_grid == cmd_to_vals["charge_from_grid"] and discharge_matches and charge_matches
 
     def _number_reading_matches(
-        self, entity_id: str | None, read_value, expected_value, write_value: float | None
+        self, entity_id: str | None, read_value, expected_value, write_value: float | None, domain_max_w: float
     ) -> bool:
         """Step-aware comparison shared by the probe AND the write-skip checks (W1).
+
+        ``domain_max_w`` is the calling LEG's configured domain max, used as
+        the step sanity bound (X5) — passed by the caller because the same
+        entity may back both legs, so it cannot be derived from the entity
+        id (Z3).
 
         A backing integration may quantize a non-step-aligned domain-bound write
         (the accepted U1/U2 policy) to its advertised step and echo a
@@ -214,7 +227,7 @@ class QSBattery(HADeviceMixin, Battery):
         # cap) and skip/confirm away the retry loop. Always rewrite instead.
         if read_value == 0:
             return False
-        step_u, step_w = self._entity_step(entity_id)
+        step_u, step_w = self._entity_step(entity_id, domain_max_w)
         if step_w <= 0.0 or write_value is None:
             return False
         # X6: fp-tolerant alignment check judged in the VALUE domain — an
@@ -231,26 +244,21 @@ class QSBattery(HADeviceMixin, Battery):
             return False
         return abs(read_value - expected_value) < step_w
 
-    def _step_sanity_bound_w(self, entity_id: str | None) -> float:
-        """Sane upper bound (W) for an entity's converted step: its configured domain max (X5).
-
-        Y3: a side effect kept on purpose — with the step then treated as
-        absent, a device echo ABOVE the configured hardware max can never be
-        confirmed (exact match against a landed value <= the max always fails).
-        """
-        if entity_id is not None and entity_id == self.max_charge_number:
-            return self.max_charging_power
-        return self.max_discharging_power
-
-    def _entity_step(self, entity_id: str | None) -> tuple[float, float]:
+    def _entity_step(self, entity_id: str | None, domain_max_w: float) -> tuple[float, float]:
         """The entity's advertised step as (entity-unit, W); (0.0, 0.0) if none/unreadable.
 
         One corrupt-step rule shared by the snap, echo-match and warn paths
         (Y1/Y2): a step is treated as ABSENT when its W conversion is
         non-finite (overflowed unit conversion), denormal-tiny (< 1e-6 W —
         ``value / step`` would overflow and crash ceil/round), or wider than
-        the entity's configured domain max (X5 — it would widen tolerance
-        windows arbitrarily, or on the warn path suppress every divergence).
+        ``domain_max_w`` — the calling LEG's configured domain max (X5 — it
+        would widen tolerance windows arbitrarily, or on the warn path
+        suppress every divergence). The bound is passed by the caller, which
+        knows the leg: the same entity may back both legs, so it cannot be
+        derived from the entity id (Z3). Y3: a side effect kept on purpose —
+        with the step then treated as absent, a device echo ABOVE the
+        configured hardware max can never be confirmed (exact match against
+        a landed value <= the max always fails).
         """
         if entity_id is None:
             return 0.0, 0.0
@@ -266,7 +274,7 @@ class QSBattery(HADeviceMixin, Battery):
         # Y6: a present-but-None (or non-str) unit attribute is corrupt — treat as W
         if isinstance(unit, str) and unit in UnitOfPower and unit != UnitOfPower.WATT:
             step_w = PowerConverter.convert(value=step, from_unit=unit, to_unit=UnitOfPower.WATT)
-        if not math.isfinite(step_w) or step_w < 1e-6 or step_w > self._step_sanity_bound_w(entity_id):
+        if not math.isfinite(step_w) or step_w < 1e-6 or step_w > domain_max_w:
             return 0.0, 0.0
         return step, step_w
 
@@ -281,6 +289,13 @@ class QSBattery(HADeviceMixin, Battery):
         a permanently diverging entity warns once, not once per command/probe
         cycle. Never touch other entities' entries.
         """
+        if confirmed_w is None:
+            # Z2: no landed value was confirmed for this entity — clearing
+            # would wipe its whole latch (no int key matches None) and re-arm
+            # warnings for still-current divergences. Unreachable from the
+            # probe today (_command_to_values always sets both values), but
+            # the `int | None` signature invites the call.
+            return
         self._number_divergence_warned = {
             key: None for key in self._number_divergence_warned if key[0] != entity_id or key[1] == confirmed_w
         }
@@ -337,10 +352,18 @@ class QSBattery(HADeviceMixin, Battery):
         to_entity_unit = isinstance(unit, str) and unit in UnitOfPower and unit != UnitOfPower.WATT
 
         def _to_unit(value_w: float) -> float:
-            return PowerConverter.convert(value=value_w, from_unit=UnitOfPower.WATT, to_unit=unit) if to_entity_unit else value_w
+            return (
+                PowerConverter.convert(value=value_w, from_unit=UnitOfPower.WATT, to_unit=unit)
+                if to_entity_unit
+                else value_w
+            )
 
         def _to_w(value_u: float) -> float:
-            return PowerConverter.convert(value=value_u, from_unit=unit, to_unit=UnitOfPower.WATT) if to_entity_unit else value_u
+            return (
+                PowerConverter.convert(value=value_u, from_unit=unit, to_unit=UnitOfPower.WATT)
+                if to_entity_unit
+                else value_u
+            )
 
         write_value = _to_unit(write_value)
         dmin_u = _to_unit(float(domain_min))
@@ -350,7 +373,7 @@ class QSBattery(HADeviceMixin, Battery):
         ent_max = coerce_finite_float(attributes.get("max"), None)
         # Y1/Y2: the shared corrupt-step rule (tiny/huge/non-finite => absent)
         # governs the snap AND the warn tolerance below — see _entity_step.
-        step_u, step_w = self._entity_step(entity_id)
+        step_u, step_w = self._entity_step(entity_id, float(domain_max))
         # U6: mutually inconsistent bounds are as unusable as non-numeric ones
         if ent_min is not None and ent_max is not None and ent_min > ent_max:
             ent_min = ent_max = None
@@ -385,7 +408,14 @@ class QSBattery(HADeviceMixin, Battery):
         if ent_min is not None:
             write_value = max(write_value, ent_min)
 
-        landed_w = int(round(_to_w(write_value)))
+        # Z1: a corrupt-but-finite entity bound (e.g. a 1e306 kW min) survives
+        # coerce_finite_float, wins the hard re-clamp above, and overflows the
+        # W conversion to inf — int(round(inf)) would raise OverflowError.
+        # Treat the corrupt bound as absent for the landed EXPECTATION and
+        # fall back to the domain-clamped request (the write itself keeps the
+        # entity's hard bound — HA validates min/max).
+        landed_to_w = _to_w(write_value)
+        landed_w = int(round(landed_to_w)) if math.isfinite(landed_to_w) else int(round(request_w))
 
         # V2/W2: direction-aware warning tolerance. The step snap can only
         # legitimately move the landed value in ONE direction (UP on ceil, DOWN on
@@ -530,7 +560,9 @@ class QSBattery(HADeviceMixin, Battery):
         # W1(c): same step-aware comparison as the probe — a quantized device
         # echo is already the landed value (skip, no write/re-quantize churn),
         # while a genuinely wrong reading re-issues the write.
-        if self._number_reading_matches(self.max_discharge_number, self.get_max_discharging_power(), expected_w, val):
+        if self._number_reading_matches(
+            self.max_discharge_number, self.get_max_discharging_power(), expected_w, val, self.max_discharging_power
+        ):
             return
 
         data[number.ATTR_VALUE] = val
@@ -559,7 +591,7 @@ class QSBattery(HADeviceMixin, Battery):
                 try:
                     res = float(state.state)
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     res = None
                 else:
                     # X2: int(round(inf)) raises OverflowError — a non-finite
@@ -597,7 +629,7 @@ class QSBattery(HADeviceMixin, Battery):
                 try:
                     res = float(state.state)
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     res = None
                 else:
                     # X2: see get_max_discharging_power — non-finite is unparsable
@@ -630,7 +662,9 @@ class QSBattery(HADeviceMixin, Battery):
         val, expected_w = self._charge_number_target(float(power))
 
         # W1(c): same step-aware comparison as the probe (see set_max_discharging_power)
-        if self._number_reading_matches(self.max_charge_number, self.get_max_charging_power(), expected_w, val):
+        if self._number_reading_matches(
+            self.max_charge_number, self.get_max_charging_power(), expected_w, val, self.max_charging_power
+        ):
             return
 
         data[number.ATTR_VALUE] = val

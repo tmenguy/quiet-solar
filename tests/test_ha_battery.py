@@ -1085,12 +1085,18 @@ class TestQSBatteryDischargeFloor:
         equality, and a missing/unavailable entity advertises no step."""
         battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
         # absent reading vs absent expectation match; absent vs present do not
-        assert battery._number_reading_matches("number.max_discharge", None, None, None) is True
-        assert battery._number_reading_matches("number.max_discharge", None, 300, 0.3) is False
+        assert (
+            battery._number_reading_matches("number.max_discharge", None, None, None, battery.max_discharging_power)
+            is True
+        )
+        assert (
+            battery._number_reading_matches("number.max_discharge", None, 300, 0.3, battery.max_discharging_power)
+            is False
+        )
         # no entity at all, or an unavailable one, advertises no step
-        assert battery._entity_step(None) == (0.0, 0.0)
+        assert battery._entity_step(None, battery.max_discharging_power) == (0.0, 0.0)
         await _async_set_state(hass, "number.max_discharge", STATE_UNAVAILABLE, {"unit_of_measurement": "W"})
-        assert battery._entity_step("number.max_discharge") == (0.0, 0.0)
+        assert battery._entity_step("number.max_discharge", battery.max_discharging_power) == (0.0, 0.0)
 
     @pytest.mark.asyncio
     async def test_probe_zero_reading_never_confirms_nonzero_floor(
@@ -1188,7 +1194,10 @@ class TestQSBatteryDischargeFloor:
         # a finite kW step whose W conversion overflows to inf is equally oversized
         attrs_inf = {"unit_of_measurement": "kW", "max": 6000, "step": 1e307}
         await _async_set_state(hass, "number.max_discharge", "1000", attrs_inf)
-        assert battery._number_reading_matches("number.max_discharge", 1000, 1200, 1200.0) is False
+        assert (
+            battery._number_reading_matches("number.max_discharge", 1000, 1200, 1200.0, battery.max_discharging_power)
+            is False
+        )
 
     @pytest.mark.asyncio
     async def test_large_value_small_step_aligned_write_needs_exact_echo(
@@ -1205,7 +1214,7 @@ class TestQSBatteryDischargeFloor:
         # near-miss reading confirm — it must require an exact echo instead
         assert (
             battery._number_reading_matches(
-                "number.max_discharge", 1234567890.115, 1234567890.12, 1234567890.12
+                "number.max_discharge", 1234567890.115, 1234567890.12, 1234567890.12, battery.max_discharging_power
             )
             is False
         )
@@ -1263,7 +1272,10 @@ class TestQSBatteryDischargeFloor:
         # exact-match probe: the tolerance window is NOT widened by the corrupt step
         await _async_set_state(hass, "number.max_discharge", "300", attrs)
         assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
-        assert battery._number_reading_matches("number.max_discharge", 299.5, 300, 300.0) is False
+        assert (
+            battery._number_reading_matches("number.max_discharge", 299.5, 300, 300.0, battery.max_discharging_power)
+            is False
+        )
 
     @pytest.mark.asyncio
     async def test_corrupt_huge_entity_min_does_not_crash_snap_or_match(
@@ -1286,6 +1298,96 @@ class TestQSBatteryDischargeFloor:
         calls = [c for c in recorded_service_calls if c[1] == "set_value"]
         writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_discharge"]
         assert writes and all(v == pytest.approx(1e308) for v in writes)
+
+    @pytest.mark.asyncio
+    async def test_corrupt_huge_kw_entity_min_does_not_crash_landed_conversion(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """Z1: a corrupt-but-finite kW entity min (1e306 kW) survives
+        coerce_finite_float and wins the hard min re-clamp, then the W
+        conversion of the write overflows to inf — the landed EXPECTATION
+        must fall back to the domain-clamped request instead of raising
+        OverflowError in int(round(inf))."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "kW", "min": 1e306}
+        await _async_set_state(hass, "number.max_discharge", "0.3", attrs)
+        await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
+        await _async_set_state(hass, "switch.charge_from_grid", "off")
+
+        # neither the write nor the probe may raise
+        await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
+        # the 0.3 kW reading (300 W) matches the fallen-back landed expectation
+        assert await battery.probe_if_command_set(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY) is True
+
+        # the write keeps the entity's hard min (HA validates min/max) while
+        # the landed expectation falls back to the domain-clamped request
+        write_value, landed_w = battery._discharge_number_target(300.0, snap_up=True, warn=False)
+        assert write_value == pytest.approx(1e306)
+        assert landed_w == 300
+
+    @pytest.mark.asyncio
+    async def test_latch_clear_with_none_expected_is_a_no_op(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """Z2: clearing with expected=None (no landed value confirmed) must
+        not wipe the entity's latch — that would re-arm warnings for
+        still-current divergences."""
+        battery = self._floored_battery(hass, battery_config_entry, battery_home, 300)
+        attrs = {"unit_of_measurement": "W", "min": 1000}
+        await _async_set_state(hass, "number.max_discharge", "0", attrs)
+
+        # the entity min forces landing 1000 W above the 300 W request: latched
+        await battery.set_max_discharging_power(300.0, snap_up=True)
+        assert len(battery._number_divergence_warned) == 1
+
+        battery._clear_number_divergence_latch("number.max_discharge", None)
+        assert len(battery._number_divergence_warned) == 1
+
+    @pytest.mark.asyncio
+    async def test_shared_entity_discharge_leg_uses_discharge_domain_max_for_step_sanity(
+        self, hass, battery_config_entry, battery_home, battery_hass_data, recorded_service_calls
+    ):
+        """Z3: with the SAME number entity backing both legs, the discharge
+        leg's step sanity bound is the DISCHARGE domain max — an entity step
+        between the two maxima must not widen the discharge echo window."""
+        battery = QSBattery(
+            hass=hass,
+            config_entry=battery_config_entry,
+            home=battery_home,
+            **{
+                CONF_NAME: "Test Battery",
+                CONF_BATTERY_CHARGE_DISCHARGE_SENSOR: "sensor.battery_power",
+                CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER: "number.max_power",
+                CONF_BATTERY_MAX_CHARGE_POWER_NUMBER: "number.max_power",
+                CONF_BATTERY_CHARGE_FROM_GRID_SWITCH: "switch.charge_from_grid",
+                CONF_BATTERY_CAPACITY: 10000,
+                CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: 100,
+                CONF_BATTERY_MAX_CHARGE_POWER_VALUE: 5000,
+                CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE: 50,
+            },
+        )
+        # a 2000 W step: sane for the 5000 W charge leg, oversized for the
+        # 100 W discharge leg — the sanity bound is per-LEG, not per-entity
+        attrs = {"unit_of_measurement": "W", "max": 6000, "step": 2000}
+        await _async_set_state(hass, "number.max_power", "1500", attrs)
+
+        assert battery._entity_step("number.max_power", battery.max_charging_power) == (2000.0, 2000.0)
+        assert battery._entity_step("number.max_power", battery.max_discharging_power) == (0.0, 0.0)
+
+        # 1500 is inside the 2000 W step window around the expected 100 W —
+        # the discharge leg must still reject it (step absent under ITS max)
+        assert (
+            battery._number_reading_matches("number.max_power", 1500, 100, 100.0, battery.max_discharging_power)
+            is False
+        )
+
+        # the write-skip check shares the comparison: the stale 1500 W reading
+        # must NOT be confirmed away — the floor write is re-issued, un-snapped
+        # by the (per-leg corrupt) step
+        await battery.set_max_discharging_power(50.0, snap_up=True)
+        calls = [c for c in recorded_service_calls if c[1] == "set_value"]
+        writes = [c[2].get("value") for c in calls if c[2].get(ATTR_ENTITY_ID) == "number.max_power"]
+        assert writes and all(v == pytest.approx(50.0) for v in writes)
 
     @pytest.mark.asyncio
     async def test_step_wider_than_configured_max_never_confirms_above_max(
@@ -1316,7 +1418,7 @@ class TestQSBatteryDischargeFloor:
         await _async_set_state(hass, "number.max_charge", "5000", {"unit_of_measurement": "W"})
         await _async_set_state(hass, "switch.charge_from_grid", "off")
 
-        assert battery._entity_step("number.max_discharge") == (100.0, 100.0)
+        assert battery._entity_step("number.max_discharge", battery.max_discharging_power) == (100.0, 100.0)
 
         await battery.execute_command(datetime.now(pytz.UTC), CMD_GREEN_CHARGE_ONLY)
 
