@@ -14,7 +14,7 @@ from custom_components.quiet_solar.const import (
     CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE,
     MAX_POWER_INFINITE,
 )
-from custom_components.quiet_solar.home_model.battery import Battery
+from custom_components.quiet_solar.home_model.battery import Battery, coerce_finite_float
 
 
 def _make_battery(**overrides):
@@ -111,6 +111,15 @@ def test_corrupt_charge_max_coerced():
     assert battery.max_charging_power == 1500.0
     garbage = _make_battery(**{CONF_BATTERY_MAX_CHARGE_POWER_VALUE: "oops"})
     assert garbage.max_charging_power == 1500.0
+
+
+def test_boolean_entry_rejected():
+    """X7: a boolean is float()-able (True == 1.0) but is corrupt config — it
+    must fall back to the default, not silently become 1 W / 1 %."""
+    assert coerce_finite_float(True, 5.0) == 5.0
+    assert coerce_finite_float(False, None) is None
+    battery = _make_battery(**{CONF_BATTERY_MAX_DISCHARGE_POWER_VALUE: True})
+    assert battery.max_discharging_power == 1500.0
 
 
 def test_corrupt_capacity_coerced():

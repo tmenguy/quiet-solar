@@ -53,10 +53,12 @@ from `CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE` (default `0` = today's
 behaviour; a `None`/non-numeric/non-finite value from a corrupt entry is
 coerced via the shared `coerce_finite_float` — used by both the domain
 model and the HA bridge, review-fix #04 U9 — to a finite default for the
-floor, both maxes, the capacity, and the SOC percents (U8), and a negative
-max is clamped to 0 so it cannot drag the floor negative — review-fix #02
-R6 / #03 T6 / #04 U8). Coerced values are also range-clamped (review-fix
-#05 V3): `capacity >= 0`, SOC percents to `[0, 100]` with
+floor, both maxes, the capacity, and the SOC percentages (U8); booleans
+are rejected as corrupt too (review-fix #07 X7), and a negative max is
+clamped to 0 so it cannot drag the floor negative — review-fix #02 R6,
+review-fix #03 T6, review-fix #04 U8). Coerced values are also
+range-clamped (review-fix #05 V3): `capacity >= 0`, SOC percentages to
+`[0, 100]` with
 `min_charge_SOC_percent <= max_charge_SOC_percent` enforced — a
 finite-but-nonsense entry (negative capacity, percent 150, min > max) is
 the same hand-edited threat as a non-numeric one. At init

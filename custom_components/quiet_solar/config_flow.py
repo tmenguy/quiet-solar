@@ -1116,7 +1116,6 @@ class QSFlowHandlerMixin(config_entries.ConfigEntryBaseFlow if TYPE_CHECKING els
             if floor is not None and max_discharge is not None and float(floor) > float(max_discharge):
                 errors[CONF_BATTERY_MIN_DISCHARGE_POWER_VALUE] = "min_discharge_above_max"
             else:
-                # do some stuff to update
                 r = await self.async_entry_next(user_input, TYPE)
                 return r
 

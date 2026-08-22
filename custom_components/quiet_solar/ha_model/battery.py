@@ -42,6 +42,12 @@ _LOGGER = logging.getLogger(__name__)
 class QSBattery(HADeviceMixin, Battery):
     conf_type_name = CONF_TYPE_NAME_QSBattery
 
+    # X4: hard cap on the divergence-warned latch. A permanently pinned entity
+    # under solver-varying consigns mints one entry per distinct request; evict
+    # the oldest at the cap instead of growing forever (an evicted divergence
+    # may warn again — bounded log noise beats unbounded set growth).
+    _NUMBER_DIVERGENCE_LATCH_MAX = 64
+
     def __init__(self, **kwargs) -> None:
         self.charge_discharge_sensor = kwargs.pop(CONF_BATTERY_CHARGE_DISCHARGE_SENSOR, None)
         self.max_discharge_number = kwargs.pop(CONF_BATTERY_MAX_DISCHARGE_POWER_NUMBER, None)
@@ -58,10 +64,12 @@ class QSBattery(HADeviceMixin, Battery):
         self.is_charge_from_grid_current = None
         # dedupe for the number-divergence warning (U5/W3); (entity, landed_w,
         # above, request_w) keys. A confirmed probe clears only the confirmed
-        # entity's RESOLVED entries (landed differs from the confirmed reading),
-        # so a recurring divergence warns again (V5) while a still-current one
-        # stays latched (no per-cycle re-warn).
-        self._number_divergence_warned: set[tuple[str | None, int, bool, int]] = set()
+        # entity's RESOLVED entries (landed differs from the EXPECTED landed
+        # value the probe just confirmed — X3), so a recurring divergence warns
+        # again (V5) while a still-current one stays latched (no per-cycle
+        # re-warn). Insertion-ordered dict used as a bounded set: oldest entries
+        # are evicted at _NUMBER_DIVERGENCE_LATCH_MAX (X4).
+        self._number_divergence_warned: dict[tuple[str | None, int, bool, int], None] = {}
 
     @property
     def current_charge(self) -> float | None:
@@ -167,10 +175,14 @@ class QSBattery(HADeviceMixin, Battery):
         # V5/W3: each confirmed entity clears ONLY its own resolved latch entries
         # (never the whole set), so a divergence that later recurs warns again
         # while a still-current divergence stays latched (no per-cycle re-warn).
+        # X3: clear against the EXPECTED landed value, not the reading — an
+        # echo-confirm reads a step-neighbour of the landed value, and the latch
+        # keys the landed value; clearing with the reading would drop the
+        # still-current entry and re-warn every execute/probe cycle.
         if discharge_matches:
-            self._clear_number_divergence_latch(self.max_discharge_number, max_discharge_power)
+            self._clear_number_divergence_latch(self.max_discharge_number, expected_max_discharge)
         if charge_matches:
-            self._clear_number_divergence_latch(self.max_charge_number, max_charge_power)
+            self._clear_number_divergence_latch(self.max_charge_number, expected_max_charge)
 
         return is_charge_from_grid == cmd_to_vals["charge_from_grid"] and discharge_matches and charge_matches
 
@@ -205,12 +217,26 @@ class QSBattery(HADeviceMixin, Battery):
         step_u, step_w = self._entity_step(entity_id)
         if step_w <= 0.0 or write_value is None:
             return False
-        # fp-tolerant alignment check on the entity-unit write value
+        # X5: a corrupt step whose W width exceeds the configured domain max
+        # would widen the echo window arbitrarily (stale-reading false
+        # confirms) — require exact matching there. This also catches a finite
+        # raw step whose unit conversion overflows to inf.
+        if step_w > self._step_sanity_bound_w(entity_id):
+            return False
+        # X6: fp-tolerant alignment check judged in the VALUE domain — an
+        # absolute epsilon on the ratio misreads large value / tiny step pairs
+        # as non-aligned, silently loosening the probe to the step window.
         ratio = write_value / step_u
-        if abs(ratio - round(ratio)) <= 1e-6:
+        if math.isclose(write_value, round(ratio) * step_u, rel_tol=1e-9, abs_tol=1e-6):
             # step-aligned write: a quantizing device echoes it exactly
             return False
         return abs(read_value - expected_value) < step_w
+
+    def _step_sanity_bound_w(self, entity_id: str | None) -> float:
+        """Sane upper bound (W) for an entity's converted step: its configured domain max (X5)."""
+        if entity_id is not None and entity_id == self.max_charge_number:
+            return self.max_charging_power
+        return self.max_discharging_power
 
     def _entity_step(self, entity_id: str | None) -> tuple[float, float]:
         """The entity's advertised step as (entity-unit, W); (0.0, 0.0) if none/unreadable."""
@@ -232,15 +258,16 @@ class QSBattery(HADeviceMixin, Battery):
     def _clear_number_divergence_latch(self, entity_id: str | None, confirmed_w: int | None) -> None:
         """Drop this entity's RESOLVED divergence latch entries (V5/W3).
 
-        A confirmed probe proves the entity currently reads ``confirmed_w``:
-        latched divergences that landed elsewhere are resolved (drop them so a
-        recurrence warns again), while an entry whose landed value IS the
-        confirmed reading is still current — keep it latched so a permanently
-        diverging entity warns once, not once per command/probe cycle. Never
-        touch other entities' entries.
+        ``confirmed_w`` is the EXPECTED landed value the probe just confirmed
+        (X3) — the latch keys the landed value, and an echo-confirm may read a
+        step-neighbour of it. Latched divergences that landed elsewhere are
+        resolved (drop them so a recurrence warns again), while an entry whose
+        landed value IS the confirmed one is still current — keep it latched so
+        a permanently diverging entity warns once, not once per command/probe
+        cycle. Never touch other entities' entries.
         """
         self._number_divergence_warned = {
-            key for key in self._number_divergence_warned if key[0] != entity_id or key[1] == confirmed_w
+            key: None for key in self._number_divergence_warned if key[0] != entity_id or key[1] == confirmed_w
         }
 
     @staticmethod
@@ -362,11 +389,17 @@ class QSBattery(HADeviceMixin, Battery):
         return write_value, landed_w
 
     def _warn_number_divergence(self, entity_id: str | None, landed_w: int, request_w: float, above: bool) -> None:
-        """Warn once per distinct (entity, landed, direction, request) divergence (U5/W3)."""
+        """Warn once per distinct (entity, landed, direction, request) divergence (U5/W3).
+
+        The latch is bounded (X4): at the cap the oldest entry is evicted, so a
+        pinned entity under ever-varying consigns cannot grow it forever.
+        """
         key = (entity_id, landed_w, above, int(round(request_w)))
         if key in self._number_divergence_warned:
             return
-        self._number_divergence_warned.add(key)
+        while len(self._number_divergence_warned) >= self._NUMBER_DIVERGENCE_LATCH_MAX:
+            self._number_divergence_warned.pop(next(iter(self._number_divergence_warned)))
+        self._number_divergence_warned[key] = None
         _LOGGER.warning(
             "number entity %s lands %s W, %s the requested %s W",
             entity_id,
@@ -452,6 +485,13 @@ class QSBattery(HADeviceMixin, Battery):
         if self.max_discharge_number is None or power is None:
             return
         if not self._number_entity_writable(self.max_discharge_number):
+            # X8: the grid switch has already flipped by now — make the
+            # half-applied command diagnosable from the logs
+            _LOGGER.debug(
+                "set_max_discharging_power: %s unavailable, deferring write of %s W",
+                self.max_discharge_number,
+                power,
+            )
             return
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_discharge_number}
@@ -493,11 +533,17 @@ class QSBattery(HADeviceMixin, Battery):
                 try:
                     res = float(state.state)
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                    res = int(round(res))
-                    _LOGGER.info("get_max_discharging_power: battery %s %s", res, self.max_discharge_number)
                 except (TypeError, ValueError):
                     res = None
+                else:
+                    # X2: int(round(inf)) raises OverflowError — a non-finite
+                    # reading is unparsable, honour the None contract instead
+                    res = coerce_finite_float(res, None)
+                if res is None:
                     _LOGGER.warning("get_max_discharging_power: battery NONE %s", self.max_discharge_number)
+                else:
+                    res = int(round(res))
+                    _LOGGER.info("get_max_discharging_power: battery %s %s", res, self.max_discharge_number)
 
         return res
 
@@ -525,11 +571,16 @@ class QSBattery(HADeviceMixin, Battery):
                 try:
                     res = float(state.state)
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
-                    res = int(round(res))
-                    _LOGGER.info("get_max_charging_power: battery %s  %s", res, self.max_charge_number)
                 except (TypeError, ValueError):
                     res = None
+                else:
+                    # X2: see get_max_discharging_power — non-finite is unparsable
+                    res = coerce_finite_float(res, None)
+                if res is None:
                     _LOGGER.warning("get_max_charging_power: battery NONE  %s", self.max_charge_number)
+                else:
+                    res = int(round(res))
+                    _LOGGER.info("get_max_charging_power: battery %s  %s", res, self.max_charge_number)
 
         return res
 
@@ -537,6 +588,12 @@ class QSBattery(HADeviceMixin, Battery):
         if self.max_charge_number is None or power is None:
             return
         if not self._number_entity_writable(self.max_charge_number):
+            # X8: see set_max_discharging_power — surface the deferred write
+            _LOGGER.debug(
+                "set_max_charging_power: %s unavailable, deferring write of %s W",
+                self.max_charge_number,
+                power,
+            )
             return
 
         data: dict[str, Any] = {ATTR_ENTITY_ID: self.max_charge_number}

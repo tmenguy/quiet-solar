@@ -24,8 +24,12 @@ def coerce_finite_float(value, default: float | None) -> float | None:
     bridge uses it with ``default=None`` to treat a non-numeric entity
     attribute as absent. Tolerates ``null``, non-numeric strings, and non-finite
     values (``"nan"`` / ``"inf"``) so a bad entry degrades gracefully instead
-    of crashing device setup or poisoning the solver with NaN.
+    of crashing device setup or poisoning the solver with NaN. Booleans are
+    rejected too (X7): ``float(True) == 1.0`` would otherwise turn a corrupt
+    ``true`` into 1 W / 1 % instead of the default.
     """
+    if isinstance(value, bool):
+        return default
     try:
         result = float(value)
     except (TypeError, ValueError):

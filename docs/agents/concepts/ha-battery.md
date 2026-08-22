@@ -42,11 +42,17 @@ inconsistent (`min > max`) entity attributes are treated as absent
 (review-fix #03 T7 / #04 U6). A landed value that diverges from the
 request — in **either** direction (an entity `min` forcing more, or an
 entity `max` forcing less than the safety floor) — is
-logged once per distinct `(entity, landed, direction, request)`
-(review-fix #03 T8 / #04 U3/U5 / #06 W3). While the number entity is
-`unknown`/`unavailable` the write
-is skipped and retried next cycle, so a momentarily-unavailable kW entity
-never gets a raw-W write (U4). Because the U1/U2 policy can write a
+logged once per distinct `(entity, landed, direction, request)` in a
+**bounded** latch — the oldest entry is evicted at the cap, so varying
+solver consigns against a pinned entity cannot grow it forever
+(review-fix #03 T8 / #04 U3/U5 / #06 W3 / #07 X4). While the number
+entity is `unknown`/`unavailable` the write
+is skipped (logged at debug — the grid switch has already flipped, so the
+half-applied command stays diagnosable, #07 X8) and retried next cycle,
+so a momentarily-unavailable kW entity
+never gets a raw-W write (U4). The max-power getters return `None` on
+any unparsable **or non-finite** reading (an `"inf"` state must not
+escape as `OverflowError`, #07 X2). Because the U1/U2 policy can write a
 non-step-aligned value at a domain bound, the **probe** uses a step-aware
 comparison: a step-**aligned** write can only be echoed exactly (any
 non-equal reading is stale/foreign — e.g. a swallowed restore write must
@@ -56,7 +62,12 @@ when a step is advertised (a step-quantizing integration echoes a
 step-neighbour, which is always < one step away); no advertised step
 means exact equality, and a zero reading never confirms a non-zero
 landed value even inside the step window (it would silently zero a
-safety floor or cap, U7). The write-skip check in the setters shares this
+safety floor or cap, U7). Alignment is judged in the **value domain**
+(an absolute ratio epsilon misreads large value / tiny step pairs, #07
+X6), and a corrupt step wider than the entity's configured domain max —
+including a finite step whose W conversion overflows — forces exact
+matching instead of widening the window (#07 X5). The write-skip check
+in the setters shares this
 same comparison, so a quantized echo does not re-issue the write every
 cycle (no write/re-quantize churn) — this device-echo tolerance is
 distinct from the divergence-warning tolerance (review-fix #05 V1 / #06
@@ -66,8 +77,10 @@ snap-up path is always surfaced because ceil cannot legitimately land
 below the request (V2), and in the snap direction a divergence reaching a
 **full** step warns too, since a real snap always moves strictly less
 than one step (W2). A confirmed probe clears only the confirmed entity's
-*resolved* latch entries (landed value differs from the confirmed
-reading), so a recurring divergence warns again while a still-current one
+*resolved* latch entries — those whose landed value differs from the
+**expected landed value** the probe just confirmed (not from the raw
+reading: an echo-confirm reads a step-neighbour, #07 X3) — so a
+recurring divergence warns again while a still-current one
 stays latched (V5/W3). There is no discharge-enable
 switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
