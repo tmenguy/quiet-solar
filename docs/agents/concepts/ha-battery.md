@@ -4,7 +4,7 @@ slug: ha-battery
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/battery.py
-last_verified: 2026-08-20
+last_verified: 2026-08-22
 ---
 
 # QSBattery (ha_model) — HA-facing battery integration
@@ -40,22 +40,35 @@ limit, accepting a non-step-aligned write at either bound (HA core
 validates min/max, not step alignment). Non-numeric **or** mutually
 inconsistent (`min > max`) entity attributes are treated as absent
 (review-fix #03 T7 / #04 U6). A landed value that diverges from the
-request by more than one step — in **either** direction (an entity `min`
-forcing more, or an entity `max` forcing less than the safety floor) — is
-logged once per distinct `(entity, landed, direction)` (review-fix #03 T8
-/ #04 U3/U5). While the number entity is `unknown`/`unavailable` the write
+request — in **either** direction (an entity `min` forcing more, or an
+entity `max` forcing less than the safety floor) — is
+logged once per distinct `(entity, landed, direction, request)`
+(review-fix #03 T8 / #04 U3/U5 / #06 W3). While the number entity is
+`unknown`/`unavailable` the write
 is skipped and retried next cycle, so a momentarily-unavailable kW entity
 never gets a raw-W write (U4). Because the U1/U2 policy can write a
-non-step-aligned value at a domain bound, the **probe** accepts a
-read-back within one entity step of the expected landed value when a step
-is advertised (a step-quantizing integration echoes the aligned
-neighbour) and requires exact equality otherwise — this device-echo
-tolerance is distinct from the divergence-warning tolerance (review-fix
-#05 V1). The probe is a pure read and never emits the divergence warning
+non-step-aligned value at a domain bound, the **probe** uses a step-aware
+comparison: a step-**aligned** write can only be echoed exactly (any
+non-equal reading is stale/foreign — e.g. a swallowed restore write must
+not be falsely confirmed), while a non-aligned write accepts a read-back
+strictly **less than** one entity step from the expected landed value
+when a step is advertised (a step-quantizing integration echoes a
+step-neighbour, which is always < one step away); no advertised step
+means exact equality, and a zero reading never confirms a non-zero
+landed value even inside the step window (it would silently zero a
+safety floor or cap, U7). The write-skip check in the setters shares this
+same comparison, so a quantized echo does not re-issue the write every
+cycle (no write/re-quantize churn) — this device-echo tolerance is
+distinct from the divergence-warning tolerance (review-fix #05 V1 / #06
+W1). The probe is a pure read and never emits the divergence warning
 (V6); the warning tolerance is direction-aware — a shortfall on the
 snap-up path is always surfaced because ceil cannot legitimately land
-below the request (V2) — and it re-warns after a confirmed probe clears
-the latch (V5). There is no discharge-enable
+below the request (V2), and in the snap direction a divergence reaching a
+**full** step warns too, since a real snap always moves strictly less
+than one step (W2). A confirmed probe clears only the confirmed entity's
+*resolved* latch entries (landed value differs from the confirmed
+reading), so a recurring divergence warns again while a still-current one
+stays latched (V5/W3). There is no discharge-enable
 switch and no SOC-setpoint number. It attaches HA state probes for SOC
 (`charge_percent_sensor`) and the combined charge/discharge power
 sensor so the solver always sees fresh state.

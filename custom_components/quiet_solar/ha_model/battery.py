@@ -56,10 +56,12 @@ class QSBattery(HADeviceMixin, Battery):
         self.attach_ha_state_to_probe(self.charge_percent_sensor, is_numerical=True)
 
         self.is_charge_from_grid_current = None
-        # dedupe for the number-divergence warning (U5); (entity, landed_w,
-        # above) keys, cleared on a confirmed probe so a recurring divergence
-        # warns again (V5)
-        self._number_divergence_warned: set[tuple[str | None, int, bool]] = set()
+        # dedupe for the number-divergence warning (U5/W3); (entity, landed_w,
+        # above, request_w) keys. A confirmed probe clears only the confirmed
+        # entity's RESOLVED entries (landed differs from the confirmed reading),
+        # so a recurring divergence warns again (V5) while a still-current one
+        # stays latched (no per-cycle re-warn).
+        self._number_divergence_warned: set[tuple[str | None, int, bool, int]] = set()
 
     @property
     def current_charge(self) -> float | None:
@@ -137,8 +139,9 @@ class QSBattery(HADeviceMixin, Battery):
         # (eternal retry). Snap direction must match the write's (T3). The probe
         # is a pure read — never emit the divergence warning from here (V6).
         expected_max_discharge = cmd_to_vals["max_discharging_power"]
+        expected_discharge_write: float | None = None
         if expected_max_discharge is not None:
-            _, expected_max_discharge = self._discharge_number_target(
+            expected_discharge_write, expected_max_discharge = self._discharge_number_target(
                 expected_max_discharge, snap_up=self._is_discharge_floor_command(command), warn=False
             )
 
@@ -151,52 +154,94 @@ class QSBattery(HADeviceMixin, Battery):
         # same landed-value mapping on the charge leg (R5: kW-denominated
         # max_charge_number would otherwise never confirm)
         expected_max_charge = cmd_to_vals["max_charging_power"]
+        expected_charge_write: float | None = None
         if expected_max_charge is not None:
-            _, expected_max_charge = self._charge_number_target(expected_max_charge, warn=False)
+            expected_charge_write, expected_max_charge = self._charge_number_target(expected_max_charge, warn=False)
 
-        result = (
-            is_charge_from_grid == cmd_to_vals["charge_from_grid"]
-            and self._number_reading_matches(self.max_discharge_number, max_discharge_power, expected_max_discharge)
-            and self._number_reading_matches(self.max_charge_number, max_charge_power, expected_max_charge)
+        discharge_matches = self._number_reading_matches(
+            self.max_discharge_number, max_discharge_power, expected_max_discharge, expected_discharge_write
         )
-        if result:
-            # V5: a confirmed command clears the divergence latch so a divergence
-            # that later recurs warns again (rather than staying silent forever).
-            self._number_divergence_warned.clear()
-        return result
+        charge_matches = self._number_reading_matches(
+            self.max_charge_number, max_charge_power, expected_max_charge, expected_charge_write
+        )
+        # V5/W3: each confirmed entity clears ONLY its own resolved latch entries
+        # (never the whole set), so a divergence that later recurs warns again
+        # while a still-current divergence stays latched (no per-cycle re-warn).
+        if discharge_matches:
+            self._clear_number_divergence_latch(self.max_discharge_number, max_discharge_power)
+        if charge_matches:
+            self._clear_number_divergence_latch(self.max_charge_number, max_charge_power)
 
-    def _number_reading_matches(self, entity_id: str | None, read_value, expected_value) -> bool:
-        """Compare a read-back to the expected landed value, tolerating step echo.
+        return is_charge_from_grid == cmd_to_vals["charge_from_grid"] and discharge_matches and charge_matches
+
+    def _number_reading_matches(
+        self, entity_id: str | None, read_value, expected_value, write_value: float | None
+    ) -> bool:
+        """Step-aware comparison shared by the probe AND the write-skip checks (W1).
 
         A backing integration may quantize a non-step-aligned domain-bound write
-        (the accepted U1/U2 policy) to its advertised step and echo the
-        step-neighbour. So when the entity advertises a step, accept a read-back
-        within one step (in W) of the expected value; otherwise require exact
-        equality (V1). This tolerance is about the *device echo* — distinct from
-        the divergence-warning tolerance, which is about request-vs-landed.
+        (the accepted U1/U2 policy) to its advertised step and echo a
+        step-neighbour — which is always strictly LESS than one step (in W) from
+        the expected landed value, so accept strictly ``< step_w`` there. A
+        step-ALIGNED write can only be echoed exactly: any non-equal reading is
+        provably stale/foreign (a swallowed restore or floor write must NOT be
+        confirmed — it would silence the retry loop). No advertised step (or no
+        known written value) requires exact equality (V1). A ZERO reading never
+        confirms a non-zero landed value even inside the step window — that
+        would silently zero a safety floor or cap (U7). This device-echo
+        tolerance is distinct from the divergence-warning tolerance, which is
+        about request-vs-landed.
         """
         if read_value is None or expected_value is None:
             return read_value == expected_value
-        step_w = self._entity_step_w(entity_id)
-        if step_w > 0.0:
-            return abs(read_value - expected_value) <= step_w
-        return read_value == expected_value
+        if read_value == expected_value:
+            return True
+        # U7/W1: a zero reading is never a tolerable quantization echo of a
+        # NON-zero landed value — even when it is a step-neighbour (step >
+        # entity max), accepting it would silently zero a safety floor (or
+        # cap) and skip/confirm away the retry loop. Always rewrite instead.
+        if read_value == 0:
+            return False
+        step_u, step_w = self._entity_step(entity_id)
+        if step_w <= 0.0 or write_value is None:
+            return False
+        # fp-tolerant alignment check on the entity-unit write value
+        ratio = write_value / step_u
+        if abs(ratio - round(ratio)) <= 1e-6:
+            # step-aligned write: a quantizing device echoes it exactly
+            return False
+        return abs(read_value - expected_value) < step_w
 
-    def _entity_step_w(self, entity_id: str | None) -> float:
-        """The number entity's advertised step in W (0.0 if none / unreadable)."""
+    def _entity_step(self, entity_id: str | None) -> tuple[float, float]:
+        """The entity's advertised step as (entity-unit, W); (0.0, 0.0) if none/unreadable."""
         if entity_id is None:
-            return 0.0
+            return 0.0, 0.0
         state = self.hass.states.get(entity_id)
         if state is None or state.state in (STATE_UNKNOWN, STATE_UNAVAILABLE):
-            return 0.0
+            return 0.0, 0.0
         attributes = state.attributes or {}
         step = coerce_finite_float(attributes.get("step"), None)
         if step is None or step <= 0.0:
-            return 0.0
+            return 0.0, 0.0
+        step_w = step
         unit = attributes.get(ATTR_UNIT_OF_MEASUREMENT, UnitOfPower.WATT)
         if unit in UnitOfPower and unit != UnitOfPower.WATT:
-            step = PowerConverter.convert(value=step, from_unit=unit, to_unit=UnitOfPower.WATT)
-        return step
+            step_w = PowerConverter.convert(value=step, from_unit=unit, to_unit=UnitOfPower.WATT)
+        return step, step_w
+
+    def _clear_number_divergence_latch(self, entity_id: str | None, confirmed_w: int | None) -> None:
+        """Drop this entity's RESOLVED divergence latch entries (V5/W3).
+
+        A confirmed probe proves the entity currently reads ``confirmed_w``:
+        latched divergences that landed elsewhere are resolved (drop them so a
+        recurrence warns again), while an entry whose landed value IS the
+        confirmed reading is still current — keep it latched so a permanently
+        diverging entity warns once, not once per command/probe cycle. Never
+        touch other entities' entries.
+        """
+        self._number_divergence_warned = {
+            key for key in self._number_divergence_warned if key[0] != entity_id or key[1] == confirmed_w
+        }
 
     @staticmethod
     def _is_discharge_floor_command(command: LoadCommand) -> bool:
@@ -292,25 +337,33 @@ class QSBattery(HADeviceMixin, Battery):
 
         landed_w = int(round(_to_w(write_value)))
 
-        # V2: direction-aware warning tolerance. The step snap can only legitimately
-        # move the landed value in ONE direction (UP on ceil, DOWN on floor); a
-        # divergence in that direction up to one step is just quantization, but the
-        # OPPOSITE direction means an external cap is binding — surface even a small
-        # one there (~1 W). Distinct from the probe's device-echo tolerance (V1).
+        # V2/W2: direction-aware warning tolerance. The step snap can only
+        # legitimately move the landed value in ONE direction (UP on ceil, DOWN on
+        # floor) and always strictly LESS than one step — so in the snap direction
+        # a divergence reaching a full step (`>= step_w`) is an external bound
+        # (e.g. the entity min), not quantization: warn. The OPPOSITE direction
+        # means an external cap is binding — surface even a small one there
+        # (~1 W). Distinct from the probe's device-echo tolerance (V1).
         if warn:
             snap_step_w = _to_w(step) if (step is not None and step > 0.0) else 0.0
-            above_tol = max(1.0, snap_step_w) if snap_up else 1.0
-            below_tol = 1.0 if snap_up else max(1.0, snap_step_w)
-            if landed_w - request_w > above_tol:
+            delta_above = landed_w - request_w
+            delta_below = request_w - landed_w
+
+            def _snap_dir_diverges(delta: float) -> bool:
+                return delta >= snap_step_w if snap_step_w > 0.0 else delta > 1.0
+
+            above_diverges = _snap_dir_diverges(delta_above) if snap_up else delta_above > 1.0
+            below_diverges = delta_below > 1.0 if snap_up else _snap_dir_diverges(delta_below)
+            if above_diverges:
                 self._warn_number_divergence(entity_id, landed_w, request_w, above=True)
-            elif request_w - landed_w > below_tol:
+            elif below_diverges:
                 self._warn_number_divergence(entity_id, landed_w, request_w, above=False)
 
         return write_value, landed_w
 
     def _warn_number_divergence(self, entity_id: str | None, landed_w: int, request_w: float, above: bool) -> None:
-        """Warn once per distinct (entity, landed, direction) divergence (U5)."""
-        key = (entity_id, landed_w, above)
+        """Warn once per distinct (entity, landed, direction, request) divergence (U5/W3)."""
+        key = (entity_id, landed_w, above, int(round(request_w)))
         if key in self._number_divergence_warned:
             return
         self._number_divergence_warned.add(key)
@@ -408,7 +461,10 @@ class QSBattery(HADeviceMixin, Battery):
         # the read-back and probe agree; snap_up only for the safety floor (T3)
         val, expected_w = self._discharge_number_target(float(power), snap_up=snap_up)
 
-        if expected_w == self.get_max_discharging_power():
+        # W1(c): same step-aware comparison as the probe — a quantized device
+        # echo is already the landed value (skip, no write/re-quantize churn),
+        # while a genuinely wrong reading re-issues the write.
+        if self._number_reading_matches(self.max_discharge_number, self.get_max_discharging_power(), expected_w, val):
             return
 
         data[number.ATTR_VALUE] = val
@@ -439,7 +495,7 @@ class QSBattery(HADeviceMixin, Battery):
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
                     res = int(round(res))
                     _LOGGER.info("get_max_discharging_power: battery %s %s", res, self.max_discharge_number)
-                except:
+                except (TypeError, ValueError):
                     res = None
                     _LOGGER.warning("get_max_discharging_power: battery NONE %s", self.max_discharge_number)
 
@@ -471,7 +527,7 @@ class QSBattery(HADeviceMixin, Battery):
                     res, _ = convert_power_to_w(value=res, attributes=state.attributes)
                     res = int(round(res))
                     _LOGGER.info("get_max_charging_power: battery %s  %s", res, self.max_charge_number)
-                except:
+                except (TypeError, ValueError):
                     res = None
                     _LOGGER.warning("get_max_charging_power: battery NONE  %s", self.max_charge_number)
 
@@ -490,7 +546,8 @@ class QSBattery(HADeviceMixin, Battery):
         # the read-back and probe agree even for a consign above max (T2)
         val, expected_w = self._charge_number_target(float(power))
 
-        if expected_w == self.get_max_charging_power():
+        # W1(c): same step-aware comparison as the probe (see set_max_discharging_power)
+        if self._number_reading_matches(self.max_charge_number, self.get_max_charging_power(), expected_w, val):
             return
 
         data[number.ATTR_VALUE] = val

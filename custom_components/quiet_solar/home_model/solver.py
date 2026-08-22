@@ -537,7 +537,11 @@ class PeriodSolver:
                 # (pass-1 decision inputs are flip-free; the allocation loop re-adds
                 # removed energy explicitly), but do NOT consume these buckets from a call
                 # whose battery_commands already contain CMD_GREEN_CHARGE_ONLY on demand
-                # slots without re-deriving the physical residual.
+                # slots without re-deriving the physical residual. The same asymmetry
+                # applies to a slot flipped WITHIN this pass: its `grid_nrj` uses the
+                # pre-flip (uncapped) `available_power`, so a re-simulation with the
+                # resulting commands caps that slot at F and its own price bucket
+                # differs between plan and recompute (W4).
                 grid_nrj = ((available_power + consumption_power) * float(self._durations_s[i])) / 3600.0
                 if grid_nrj > 0:
                     # we will ask it from the grid:
