@@ -3572,6 +3572,68 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             for ct in self._constraints
         )
 
+    def _clear_leaked_person_target_if_needed(self) -> None:
+        """Reset a person-derived leaked next-charge target before the car detaches.
+
+        QS-352: every car-detach exit (physical unplug, "no car" selected,
+        car-switch) wipes the person constraint and the user markers but never the
+        car-level ``_next_charge_target``, so the person value would linger on the
+        select / autonomy sensor for the whole detached period. Clears it to the
+        lazy default whenever a person constraint is live for the car (the marker
+        that the value is person-derived); a no-op otherwise, so a user/default
+        value is never touched. Must be called BEFORE the constraints are wiped.
+        """
+        if self._has_live_person_constraint():
+            _LOGGER.info(
+                "check_load_activity_and_constraints: car %s clearing leaked person charge"
+                " target %s%% to default on detach",
+                self.car.name,
+                self.car.get_car_target_SOC(),
+            )
+            self.car.clear_next_charge_target()
+
+    def _person_constraint_ends_this_cycle(
+        self,
+        person,
+        next_usage_time,
+        person_min_target_charge,
+        is_person_covered,
+        car_current_charge_value,
+        car_charge_agenda,
+        is_target_percent: bool,
+        time: datetime,
+    ) -> bool:
+        """Side-effect-free decision: does the person's minimum-charge constraint end
+        this cycle? Single source of truth for ``do_remove_all_person_constraints`` and
+        for the force/timed early restore (QS-352). Mirrors the removal block: a person
+        need survives only when the person is assigned, range-uncovered, its
+        preconditions are present, the charge-time is not the CLEARED sentinel, the
+        agenda (if any) is far enough out, and the car is not already charged enough."""
+        if (
+            person is None
+            or next_usage_time is None
+            or person_min_target_charge is None
+            or is_person_covered is None
+            or is_person_covered is not False
+        ):
+            return True
+        if self.car.get_user_originated("charge_time") == CHARGE_TIME_CONSTRAINTS_CLEARED:
+            return True
+        agenda_in_person_window = not (
+            car_charge_agenda is None
+            or (car_charge_agenda.end_of_constraint - next_usage_time) > timedelta(hours=25)
+        )
+        if agenda_in_person_window:
+            return True
+        is_charged, _ = self.is_car_charged(
+            time,
+            current_charge=car_current_charge_value,
+            target_charge=person_min_target_charge,
+            is_target_percent=is_target_percent,
+            accept_bigger_tolerance=True,
+        )
+        return is_charged is True
+
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
@@ -3634,25 +3696,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     self.name,
                     self.car.get_user_originated("person_name"),
                 )
-                # QS-352: a live person constraint leaked its target into
-                # `_next_charge_target` (the person push site); the unplug reset below wipes
-                # constraints and user overrides but never touches that field, so the select /
-                # autonomy sensor would show the person value for the whole away period.
-                # Reset it to the lazy default whenever a person constraint is live for this
-                # car. `clear_all_user_originated()` on the next line wipes any user target
-                # marker anyway, so there is no user choice to preserve here (review #02,
-                # finding #1 dropped the earlier `not has_user_originated` guard, which both
-                # enshrined the person leak and mis-handled a present-but-`None` marker).
-                # Uses `clear_next_charge_target` (no native-limit write) because the car is
-                # still attached at unplug.
-                if self._has_live_person_constraint():
-                    _LOGGER.info(
-                        "check_load_activity_and_constraints: unplugged car %s clearing leaked person"
-                        " charge target %s%% to default",
-                        self.car.name,
-                        self.car.get_car_target_SOC(),
-                    )
-                    self.car.clear_next_charge_target()
+                # QS-352: clear a person-derived leaked next-charge target before the
+                # reset below wipes the constraints and user markers (see
+                # `_clear_leaked_person_target_if_needed`). `clear_all_user_originated()`
+                # wipes any user target marker anyway, so there is no user choice to
+                # preserve at unplug.
+                self._clear_leaked_person_target_if_needed()
                 self.car.clear_all_user_originated()
                 # Edge-triggered (plugged→unplugged): clear the estimated-SOC
                 # state. The genuine plug-in path also clears it (the
@@ -3714,6 +3763,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     time,
                     "check_load_activity_and_constraints: plugged car with CHARGER_NO_CAR_CONNECTED selected option",
                 )
+                # QS-352: clear the person leak before reset() wipes the constraints.
+                self._clear_leaked_person_target_if_needed()
                 self.reset(keep_commands=True)
                 return True
 
@@ -3732,6 +3783,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         best_car.name,
                         self.car.name,
                     )
+                    # QS-352: clear the outgoing car's person leak before detach wipes it.
+                    self._clear_leaked_person_target_if_needed()
                     self.detach_car()  # it will reset constraints and do what is needed, has self.car will be None
                 else:
                     # check constraints
@@ -3857,27 +3910,31 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
             degraded_type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN if bump_solar else CONSTRAINT_TYPE_FILLER
 
-            # QS-352 (review #02, finding #4): the leaked-target restore lives in the person
-            # block below, which is nested under `user_timed_constraint is None and
-            # force_constraint is None` — so a "charge now" (force) or user-timed session
-            # would otherwise build its constraint from the leaked person target and keep it
-            # for the whole session (hours). Realign the leaked target here too, BEFORE the
-            # force/timed constraint consumes `target_charge`. Gated on a live person
-            # constraint for this car (the marker that the value is provably person-derived,
-            # so a legitimate user/default target is never touched) AND the person no longer
-            # needing the car; the force reset immediately below then removes that person
-            # constraint. Realigns to the user's target when set, otherwise the default.
-            person_no_longer_needs_car = not (
-                person is not None
-                and next_usage_time is not None
-                and person_min_target_charge is not None
-                and is_person_covered is False
-            )
+            # QS-352: the leaked-target restore lives in the person block below, which is
+            # nested under `user_timed_constraint is None and force_constraint is None` — so a
+            # "charge now" (force) or user-timed session would otherwise build its constraint
+            # from the leaked person target and keep it for the whole session (hours). Realign
+            # the leaked target here too, BEFORE the force/timed constraint consumes
+            # `target_charge`. Gated on a live person constraint for this car (the marker that
+            # the value is provably person-derived, so a legitimate user/default target is
+            # never touched) AND the same "does the person constraint end this cycle?" decision
+            # the removal branch uses (covered / absent / CLEARED / agenda-out / already
+            # charged); the force reset below then removes that person constraint. Realigns to
+            # the user's target when set, otherwise the default.
             if (
                 is_target_percent
                 and (force_charge is True or has_charge_time)
-                and person_no_longer_needs_car
                 and self._has_live_person_constraint()
+                and self._person_constraint_ends_this_cycle(
+                    person,
+                    next_usage_time,
+                    person_min_target_charge,
+                    is_person_covered,
+                    car_current_charge_value,
+                    car_charge_agenda,
+                    is_target_percent,
+                    time,
+                )
             ):
                 bypass_restore = user_target if user_target is not None else self.car.car_default_charge
                 if int(self.car.get_car_target_SOC()) != int(bypass_restore):
@@ -4151,92 +4208,96 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         if self.car.get_user_originated("charge_time") == CHARGE_TIME_CONSTRAINTS_CLEARED:
                             person = None
 
-                    do_remove_all_person_constraints = True
+                    # QS-352: single source of truth for "does the person constraint end
+                    # this cycle?" — shared with the force/timed early restore above.
+                    do_remove_all_person_constraints = self._person_constraint_ends_this_cycle(
+                        person,
+                        next_usage_time,
+                        person_min_target_charge,
+                        is_person_covered,
+                        car_current_charge_value,
+                        car_charge_agenda,
+                        is_target_percent,
+                        time,
+                    )
 
-                    if (
+                    person_need_applies = (
                         person is not None
                         and person_min_target_charge is not None
                         and (
                             car_charge_agenda is None
                             or (car_charge_agenda.end_of_constraint - next_usage_time) > timedelta(hours=25)
                         )
-                    ):
-                        is_car_charged, _ = self.is_car_charged(
-                            time,
-                            current_charge=car_current_charge_value,
-                            target_charge=person_min_target_charge,
-                            is_target_percent=is_target_percent,
-                            accept_bigger_tolerance=True,
-                        )
+                    )
 
-                        if is_car_charged is True:
+                    if do_remove_all_person_constraints:
+                        # inside the applicable window the only "ends" reason is "already charged"
+                        if person_need_applies:
                             _LOGGER.info(
                                 f"check_load_activity_and_constraints: plugged car {self.car.name} is already charged enough for the next person {person.name} usage at {next_usage_time} need min target charge {person_min_target_charge}"
                             )
-                        else:
-                            do_remove_all_person_constraints = False
+                    else:
+                        target_charge = person_min_target_charge
 
+                        # we should check if there is not an existing person constraint and replace it by this one?
+                        for ct in self._constraints:
+                            if ct.is_constraint_active_for_time_period(time):
+                                if (
+                                    ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
+                                    and ct.load_param == self.car.name
+                                    and ct.load_info is not None
+                                    and ct.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) == person.name
+                                ):
+                                    # ok found one ...
+                                    car_charge_person = ct
+                                    need_ct_update = False
+                                    if car_charge_person.end_of_constraint != next_usage_time:
+                                        car_charge_person.end_of_constraint = next_usage_time
+                                        need_ct_update = True
+                                    if car_charge_person.target_value != target_charge:
+                                        car_charge_person.target_value = target_charge
+                                        need_ct_update = True
+                                    if need_ct_update:
+                                        do_force_solve = True
+                                        # update the constraints to follow the new  target
+                                        self.set_live_constraints(time, self._constraints)
+                                    break
+
+                        if car_charge_person is None:
                             target_charge = person_min_target_charge
 
-                            # we should check if there is not an existing person constraint and replace it by this one?
-                            for ct in self._constraints:
-                                if ct.is_constraint_active_for_time_period(time):
-                                    if (
-                                        ct.type == CONSTRAINT_TYPE_MANDATORY_END_TIME
-                                        and ct.load_param == self.car.name
-                                        and ct.load_info is not None
-                                        and ct.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) == person.name
-                                    ):
-                                        # ok found one ...
-                                        car_charge_person = ct
-                                        need_ct_update = False
-                                        if car_charge_person.end_of_constraint != next_usage_time:
-                                            car_charge_person.end_of_constraint = next_usage_time
-                                            need_ct_update = True
-                                        if car_charge_person.target_value != target_charge:
-                                            car_charge_person.target_value = target_charge
-                                            need_ct_update = True
-                                        if need_ct_update:
-                                            do_force_solve = True
-                                            # update the constraints to follow the new  target
-                                            self.set_live_constraints(time, self._constraints)
-                                        break
+                            # ok we do know we want to add a constraint to have at least this charge at this time
+                            await self.car.set_next_charge_target_percent(target_charge)
 
-                            if car_charge_person is None:
-                                target_charge = person_min_target_charge
+                            car_charge_person = ConstraintClass(
+                                total_capacity_wh=self.car.car_battery_capacity,
+                                type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
+                                degraded_type=degraded_type,
+                                time=time,
+                                load=self,
+                                load_param=self.car.name,
+                                load_info={
+                                    CONSTRAINT_FORECASTED_PERSON_KEY: person.name,
+                                    CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_PERSON,
+                                },
+                                from_user=False,
+                                initial_value=car_initial_value,
+                                target_value=target_charge,
+                                end_of_constraint=next_usage_time,
+                                power_steps=self._power_steps,
+                                support_auto=True,
+                            )
 
-                                # ok we do know we want to add a constraint to have at least this charge at this time
-                                await self.car.set_next_charge_target_percent(target_charge)
-
-                                car_charge_person = ConstraintClass(
-                                    total_capacity_wh=self.car.car_battery_capacity,
-                                    type=CONSTRAINT_TYPE_MANDATORY_END_TIME,
-                                    degraded_type=degraded_type,
-                                    time=time,
-                                    load=self,
-                                    load_param=self.car.name,
-                                    load_info={
-                                        CONSTRAINT_FORECASTED_PERSON_KEY: person.name,
-                                        CONSTRAINT_ORIGINATOR_KEY: CONSTRAINT_ORIGINATOR_PERSON,
-                                    },
-                                    from_user=False,
-                                    initial_value=car_initial_value,
-                                    target_value=target_charge,
-                                    end_of_constraint=next_usage_time,
-                                    power_steps=self._power_steps,
-                                    support_auto=True,
+                            pushed, needs_ack = self.push_live_constraint(time, car_charge_person)
+                            if needs_ack:
+                                await self.ack_completed_constraint(time, car_charge_person)
+                            if pushed:
+                                _LOGGER.info(
+                                    f"check_load_activity_and_constraints: plugged car {self.car.name} pushed usage minimum charge constraint {car_charge_person.name}"
                                 )
+                                do_force_solve = True
 
-                                pushed, needs_ack = self.push_live_constraint(time, car_charge_person)
-                                if needs_ack:
-                                    await self.ack_completed_constraint(time, car_charge_person)
-                                if pushed:
-                                    _LOGGER.info(
-                                        f"check_load_activity_and_constraints: plugged car {self.car.name} pushed usage minimum charge constraint {car_charge_person.name}"
-                                    )
-                                    do_force_solve = True
-
-                            realized_charge_target = target_charge
+                        realized_charge_target = target_charge
 
                     if do_remove_all_person_constraints:
                         # we should remove ALL previous person based constraints from this car
@@ -4267,9 +4328,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         # churn" guard holds even for a fractional default. This whole percent
                         # target block sits under `if is_target_percent:` — if the SOC sensor
                         # becomes unavailable the percent target is inert anyway, so the leak
-                        # simply cannot drive anything until percent capability returns
-                        # (review #02, finding #8). Closes the no-snapshot path only; the
-                        # user-override snapshot path is #353.
+                        # cannot drive anything until percent capability returns. Closes the
+                        # no-snapshot path only; the user-override snapshot path is #353.
                         restored_target = None
                         restore_reason = None
                         if user_target is None:
@@ -4284,50 +4344,46 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             restore_reason = "user"
 
                         if restored_target is not None:
+                            pre_restore_target = self.car.get_car_target_SOC()
                             _LOGGER.info(
                                 "check_load_activity_and_constraints: plugged car %s restoring %s charge"
                                 " target %s%% (was %s%%) after person constraint removal",
                                 self.car.name,
                                 restore_reason,
                                 restored_target,
-                                self.car.get_car_target_SOC(),
+                                pre_restore_target,
                             )
                             await self.car.set_next_charge_target_percent(restored_target)
                             target_charge = self.car.get_car_target_SOC()
                             # Keep the filler chain consistent: the filler block below builds
                             # from `realized_charge_target`; leaving it at the leaked value
-                            # would create a mandatory/filler mismatch (review #02, finding #7).
+                            # would create a mandatory/filler mismatch.
                             if realized_charge_target is not None:
                                 realized_charge_target = target_charge
 
-                            # The agenda constraint built earlier this cycle used the leaked
-                            # `target_charge`; realign the LIVE one so it does not carry the
-                            # person value for one ~3 min window (it would otherwise self-heal
-                            # only next cycle). `car_charge_agenda` may be an orphan that
-                            # `push_agenda_constraints` discarded when an eq_no_current-equal
-                            # constraint was already live, so resolve the stored object by
-                            # identity (originator + end) and update `requested_target_value`
-                            # too — `to_dict` serializes that field, so a restart inside the
-                            # window would otherwise restore the leaked target (review #02,
-                            # finding #2).
-                            if car_charge_agenda is not None:
-                                live_agenda = next(
-                                    (
-                                        c
-                                        for c in self._constraints
-                                        if c is not None
-                                        and c.load_param == self.car.name
-                                        and c.load_info is not None
-                                        and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_AGENDA
-                                        and c.end_of_constraint == car_charge_agenda.end_of_constraint
-                                    ),
-                                    None,
-                                )
-                                if live_agenda is not None and live_agenda.target_value != target_charge:
-                                    live_agenda.target_value = target_charge
-                                    live_agenda.requested_target_value = target_charge
-                                    self.set_live_constraints(time, self._constraints)
-                                    do_force_solve = True
+                            # A live agenda constraint built while the target was leaked still
+                            # carries the person value; realign every live agenda for this car
+                            # still holding the pre-restore value (regardless of whether this
+                            # cycle rebuilt one — a completed person ct suppresses the rebuild,
+                            # leaving `car_charge_agenda` None). Update `requested_target_value`
+                            # too: `to_dict` serializes it, so a restart inside the window would
+                            # otherwise restore the leaked target.
+                            agenda_realigned = False
+                            for c in self._constraints:
+                                if (
+                                    c is not None
+                                    and c.load_param == self.car.name
+                                    and c.load_info is not None
+                                    and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_AGENDA
+                                    and int(c.target_value) == int(pre_restore_target)
+                                    and c.target_value != target_charge
+                                ):
+                                    c.target_value = target_charge
+                                    c.requested_target_value = target_charge
+                                    agenda_realigned = True
+                            if agenda_realigned:
+                                self.set_live_constraints(time, self._constraints)
+                                do_force_solve = True
 
             if realized_charge_target is None or (
                 is_target_percent and realized_charge_target < self.car.car_default_charge
