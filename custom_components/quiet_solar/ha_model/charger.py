@@ -4181,6 +4181,30 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         ):
                             do_force_solve = True
 
+                        # QS-352: the person branch above persisted the person's target
+                        # into the car (set_next_charge_target_percent at the push site,
+                        # ~4137). No person constraint is live anymore -> put the car back
+                        # on its default unless the user explicitly chose a target.
+                        # `user_target` is the value resolved at 3752-3760 (None when the
+                        # key is absent OR present-but-None); it is written only there and
+                        # read once at 3874, never reassigned before this point. Compare as
+                        # int: set_next_charge_target_percent int-casts (car.py:2679) while
+                        # car_default_charge is a config float, so the "no churn" guard
+                        # holds even for a fractional default. This closes the no-snapshot
+                        # path only; the user-override snapshot path is #353.
+                        if user_target is None and int(self.car.get_car_target_SOC()) != int(
+                            self.car.car_default_charge
+                        ):
+                            _LOGGER.info(
+                                "check_load_activity_and_constraints: plugged car %s restoring default charge"
+                                " target %s%% (was %s%%) after person constraint removal",
+                                self.car.name,
+                                self.car.car_default_charge,
+                                self.car.get_car_target_SOC(),
+                            )
+                            await self.car.set_next_charge_target_percent(self.car.car_default_charge)
+                            target_charge = self.car.get_car_target_SOC()
+
             if realized_charge_target is None or (
                 is_target_percent and realized_charge_target < self.car.car_default_charge
             ):
