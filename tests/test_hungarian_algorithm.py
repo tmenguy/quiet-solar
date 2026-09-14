@@ -725,7 +725,7 @@ class TestTwoPassAllocation:
 
     def test_preferred_wins_when_difference_small(self):
         """Preferred costs 10500 Wh vs energy-optimal 10000 Wh (diff 500 < 1000)."""
-        energies = [[5000.0, 5300.0], [5200.0, 5000.0]]
+        energies = [[5250.0, 5000.0], [5000.0, 5250.0]]
         authorized = [[True, True], [True, True]]
         preferences = [0, 1]
 
@@ -737,16 +737,13 @@ class TestTwoPassAllocation:
 
     def test_exact_threshold_boundary(self):
         """Energy difference equals exactly the threshold -- preferred should win (<= check)."""
-        energies = [[5000.0, 5500.0], [5500.0, 5000.0]]
+        energies = [[5500.0, 5000.0], [5000.0, 5500.0]]
         authorized = [[True, True], [True, True]]
         preferences = [0, 1]
 
         assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
 
-        assert (
-            e_pref - e_opt == pytest.approx(PREFERRED_CAR_ENERGY_THRESHOLD_WH, abs=1e-9)
-            or e_pref - e_opt < PREFERRED_CAR_ENERGY_THRESHOLD_WH
-        )
+        assert e_pref - e_opt == pytest.approx(PREFERRED_CAR_ENERGY_THRESHOLD_WH)
         assert choice == "preferred"
 
     def test_all_cars_already_covered(self):

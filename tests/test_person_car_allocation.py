@@ -13,6 +13,8 @@ import pytz
 
 from custom_components.quiet_solar.const import (
     FORCE_CAR_NO_PERSON_ATTACHED,
+    PASS1_PREFERRED_CAR_PENALTY_WH,
+    PLUGGED_COVERED_CAR_PENALTY_WH,
 )
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.home import QSHome
@@ -820,3 +822,46 @@ class TestPass1TieBreak:
         for i in range(n):
             assert _person_name(cars[2 * i]) is None, f"Pref{i} must be unused, got {_person_name(cars[2 * i])}"
             assert _person_name(cars[2 * i + 1]) == f"P{i}"
+
+    def test_pass1_penalty_constants_are_ordering_tie_breaks(self):
+        """QS-351 review-fix #02 (NTH-B): pin the constant relations directly so a
+        future bump cannot silently re-introduce the energy-bias / tie classes.
+
+        - PLUGGED < PASS1 keeps pass 1 deterministic at the covered tie (SF-A);
+        - PASS1 + PLUGGED < 1.0 keeps both epsilons below the E_max+1 sentinel /
+          pass-2 offset floor at E_max == 0;
+        - PASS1 stays a sub-need epsilon, so n·(PASS1+PLUGGED) << THRESHOLD.
+        """
+        assert PLUGGED_COVERED_CAR_PENALTY_WH < PASS1_PREFERRED_CAR_PENALTY_WH
+        assert PASS1_PREFERRED_CAR_PENALTY_WH + PLUGGED_COVERED_CAR_PENALTY_WH < 1.0
+        assert PASS1_PREFERRED_CAR_PENALTY_WH <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_covered_plugged_preferred_car_is_order_independent_with_energy_pass_adopted(self):
+        """QS-351 review-fix #02 (SF-A): a preferred, covered, plugged car must not
+        tie a non-preferred, covered, unplugged car in pass 1 — otherwise the pick
+        depends on the Hungarian zero-scan order (car list order).
+
+        Run with the energy pass adopted (person Q saves ~13.5 kWh > 1 kWh, flipping
+        the gate) so pass 1's choice for P is what actually ships, and assert P
+        stays on their preferred plugged car X for BOTH car orders.
+        """
+        leave = datetime.now(UTC) + timedelta(hours=2)
+
+        def _build(car_order):
+            catalogue = {
+                "X": _FakeCar("X", remaining_km=300, has_charger=True),  # P's preferred, plugged, covers
+                "Y": _FakeCar("Y", remaining_km=300, has_charger=False),  # non-preferred, unplugged, covers
+                "Wpref": _FakeCar("Wpref", remaining_km=10, has_charger=True),  # Q's preferred, needs ~13.5 kWh
+                "Zcov": _FakeCar("Zcov", remaining_km=300, has_charger=False),  # covers Q, unplugged
+            }
+            cars = [catalogue[name] for name in car_order]
+            p = _FakePerson("P", "X", ["X", "Y"], leave, 100.0)
+            q = _FakePerson("Q", "Wpref", ["Wpref", "Zcov"], leave, 100.0)
+            return _FakeHome(cars, [p, q]), catalogue["X"], catalogue["Y"]
+
+        for order in (["X", "Y", "Wpref", "Zcov"], ["Y", "X", "Wpref", "Zcov"]):
+            home, x, y = _build(order)
+            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            assert _person_name(x) == "P", f"order {order}: P must stay on the preferred plugged car"
+            assert _person_name(y) is None, f"order {order}: the non-preferred unplugged car must be free"

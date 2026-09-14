@@ -473,30 +473,37 @@ PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"
 #
 # The cost matrix is a strictly ordered set of offsets; every value below is an
 # *absolute* tie-break (never E_max-relative), so that neither the pass-1 nor
-# the pass-2 reshuffle can corrupt the real-energy total the gate compares.
-# Relations that must hold for all E_max >= 0, with n = number of persons:
-#   (i)   PLUGGED_COVERED_CAR_PENALTY_WH (0.5) < E_max + 1.0 <= n*E_max + 1.0
-#         and PASS1_PREFERRED_CAR_PENALTY_WH (0.5) added to a covered/plugged
-#         cell stays <= E_max + 1.0 — i.e. every plugged-covered or pass-1
-#         nudged cell orders below the -1/-2 sentinels and the pass-2 offset
-#         (tightest at E_max == 0, the dominant "everyone covered" state, where
-#         the covered-plugged + PASS1 cell (1.0) ties the sentinel (1.0) and
-#         pass 2 — not the nudge — decides; QS-351 review-fix #01 finding 2);
-#   (ii)  n * PASS1_PREFERRED_CAR_PENALTY_WH < PREFERRED_CAR_ENERGY_THRESHOLD_WH
-#         for any realistic n (0.5·n < 1000 up to n = 2000): the pass-1 bias is
-#         a pure ordering tie-break and can never move a per-person real need
-#         from below to above the gate threshold, so total_energy_optimal is the
-#         true optimum (QS-351 review-fix #01 finding 1). It is NOT an energy
-#         bias; keep it a sub-need epsilon, do not raise it toward the threshold.
-#   (iii) 0.5 is below any real charging need that can *act*: a real
-#         diff_energy < 0.5 Wh means a needed-vs-current SOC gap < 50/capacity %,
-#         which is_car_charged(accept_bigger_tolerance=True)
-#         (charger.py:5403) absorbs before any charge constraint is created — so
-#         the boundary inversion "tiny real need ordered below a covered plugged
-#         car" is downstream-harmless (QS-351 review-fix #01 finding 3).
+# the pass-2 reshuffle can corrupt the real-energy total the gate compares. The
+# two epsilons are kept strictly distinct (PLUGGED < PASS1) so a preferred
+# covered-plugged cell never *ties* a non-preferred covered-unplugged cell in
+# pass 1 (a tie would make the pick depend on car-list order — QS-351 review-fix
+# #02 SF-A). Relations that must hold for all E_max >= 0, with n = persons:
+#   (i)   PLUGGED_COVERED_CAR_PENALTY_WH (0.25) < PASS1_PREFERRED_CAR_PENALTY_WH
+#         (0.5), and their sum on a non-preferred covered/plugged cell
+#         (0.25 + 0.5 = 0.75) < E_max + 1.0 <= n*E_max + 1.0 — i.e. every
+#         plugged-covered or pass-1 nudged cell orders strictly below the -1/-2
+#         sentinels and the pass-2 offset (tightest at E_max == 0, the dominant
+#         "everyone covered" state, where 0.75 < 1.0 strictly and pass 2 — not
+#         the nudge — decides; QS-351 review-fix #01 finding 2);
+#   (ii)  n * (PASS1_PREFERRED_CAR_PENALTY_WH + PLUGGED_COVERED_CAR_PENALTY_WH)
+#         < PREFERRED_CAR_ENERGY_THRESHOLD_WH for any realistic n (0.75·n < 1000
+#         holds up to n <= 1333): both epsilons apply to a non-preferred
+#         covered-plugged cell, so their *sum* is the per-person corruption
+#         bound on total_energy_optimal. The pass-1 bias is a pure ordering
+#         tie-break and can never move a per-person real need from below to above
+#         the gate threshold (QS-351 review-fix #01 finding 1, #02 NTH-A). It is
+#         NOT an energy bias; keep it a sub-need epsilon, never raise it toward
+#         the threshold.
+#   (iii) the summed epsilon (0.75 Wh) is below any real charging need that can
+#         *act*: a real diff_energy < 0.75 Wh means a needed-vs-current SOC gap
+#         < 75/capacity %, which QSChargerGeneric.is_car_charged (the
+#         accept_bigger_tolerance=True branch) absorbs before any charge
+#         constraint is created — so the boundary inversion "tiny real need
+#         ordered below a covered plugged car" is downstream-harmless
+#         (QS-351 review-fix #01 finding 3, #02 NTH-D).
 PREFERRED_CAR_ENERGY_THRESHOLD_WH = 1000.0
 PASS1_PREFERRED_CAR_PENALTY_WH = 0.5
-PLUGGED_COVERED_CAR_PENALTY_WH = 0.5
+PLUGGED_COVERED_CAR_PENALTY_WH = 0.25
 FAR_FUTURE_FORECAST_THRESHOLD_S = 24 * 3600
 
 CHANGE_ON_OFF_STATE_HYSTERESIS_S = max(10 * 60, SOLVER_STEP_S // 2)
