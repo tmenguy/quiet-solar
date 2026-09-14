@@ -15,6 +15,7 @@ from custom_components.quiet_solar.const import (
     FORCE_CAR_NO_PERSON_ATTACHED,
     PASS1_PREFERRED_CAR_PENALTY_WH,
     PLUGGED_COVERED_CAR_PENALTY_WH,
+    PREFERRED_CAR_ENERGY_THRESHOLD_WH,
 )
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.home import QSHome
@@ -41,11 +42,24 @@ class _FakeCharger:
 class _FakeCar:
     """Minimal car with autonomy-based coverage computation."""
 
-    def __init__(self, name, remaining_km, has_charger, is_invited=False, is_plugged=False, default_charge=100.0):
+    def __init__(
+        self,
+        name,
+        remaining_km,
+        has_charger,
+        is_invited=False,
+        is_plugged=False,
+        default_charge=100.0,
+        data_error=False,
+    ):
         self.name = name
         self._remaining_km = remaining_km
         self.charger = _FakeCharger() if has_charger else None
         self.car_is_invited = is_invited
+        # data_error=True → unreadable SOC / efficiency: coverage is None (the -2
+        # "car data error" sentinel in _build_raw_energy_matrix), independent of
+        # whether the person has a forecast.
+        self._data_error = data_error
         self._user_originated: dict = {}
         self.current_forecasted_person = None
         self.home = None
@@ -72,6 +86,8 @@ class _FakeCar:
 
     def get_adapt_target_percent_soc_to_reach_range_km(self, mileage, time):
         """Return (is_covered, current_soc, needed_soc, diff_energy)."""
+        if self._data_error:
+            return (None, None, None, None)
         if mileage is None:
             return (None, None, None, None)
         if self._remaining_km >= mileage:
@@ -830,14 +846,18 @@ class TestPass1TieBreak:
         - PLUGGED < PASS1 keeps pass 1 deterministic at the covered tie (SF-A);
         - PASS1 + PLUGGED < 1.0 keeps both epsilons below the E_max+1 sentinel /
           pass-2 offset floor at E_max == 0;
-        - PASS1 stays a sub-need epsilon, so n·(PASS1+PLUGGED) << THRESHOLD.
+        - n·(PASS1+PLUGGED) < THRESHOLD (relation (ii)): both epsilons apply to a
+          non-preferred covered-plugged cell, so their *sum* is the per-person
+          corruption bound; the documented max n is 1333 (N-5).
         """
+        summed_epsilon = PASS1_PREFERRED_CAR_PENALTY_WH + PLUGGED_COVERED_CAR_PENALTY_WH
         assert PLUGGED_COVERED_CAR_PENALTY_WH < PASS1_PREFERRED_CAR_PENALTY_WH
-        assert PASS1_PREFERRED_CAR_PENALTY_WH + PLUGGED_COVERED_CAR_PENALTY_WH < 1.0
-        assert PASS1_PREFERRED_CAR_PENALTY_WH <= 1.0
+        assert summed_epsilon < 1.0
+        # relation (ii): the documented max n where n·(PASS1+PLUGGED) < THRESHOLD.
+        assert 1333 * summed_epsilon < PREFERRED_CAR_ENERGY_THRESHOLD_WH <= 1334 * summed_epsilon
 
     @pytest.mark.asyncio
-    async def test_covered_plugged_preferred_car_is_order_independent_with_energy_pass_adopted(self):
+    async def test_covered_plugged_preferred_car_is_order_independent_with_energy_pass_adopted(self, caplog):
         """QS-351 review-fix #02 (SF-A): a preferred, covered, plugged car must not
         tie a non-preferred, covered, unplugged car in pass 1 — otherwise the pick
         depends on the Hungarian zero-scan order (car list order).
@@ -862,6 +882,108 @@ class TestPass1TieBreak:
 
         for order in (["X", "Y", "Wpref", "Zcov"], ["Y", "X", "Wpref", "Zcov"]):
             home, x, y = _build(order)
-            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            with caplog.at_level(logging.INFO):
+                caplog.clear()
+                await home.compute_and_set_best_persons_cars_allocations(force_update=True)
             assert _person_name(x) == "P", f"order {order}: P must stay on the preferred plugged car"
             assert _person_name(y) is None, f"order {order}: the non-preferred unplugged car must be free"
+            # N-1: pin that pass 1 (energy) really is the adopted pass — otherwise
+            # X->P would silently degrade into a pass-2 assertion.
+            assert "using energy-optimal assignment" in caplog.text, f"order {order}: energy pass must be adopted"
+
+
+class TestSentinelAndPass2Ordering:
+    """QS-351 review-fix #03 (SF-1, N-4): the pass-2 offset must strictly dominate
+    the largest base spread for all n >= 1 and E_max >= 0, and the plugged-covered
+    nudge must apply to the no-need sentinel branches (-1/-2) too — so no allocation
+    that ships depends on ``self._cars`` order.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pass2_no_tie_between_preferred_sentinel_and_covered_when_e_max_zero(self, caplog):
+        """SF-1 repro 1 — E_max == 0, multi-person. P1's preferred car A is a -2
+        data-error sentinel; a covered non-preferred car B ties it in pass 2
+        (both E_max+1 == n*E_max+1 at E_max == 0). The pass-2 offset must break the
+        tie toward the preferred car for every car order."""
+        leave = datetime.now(UTC) + timedelta(hours=2)
+
+        def _build(car_order):
+            catalogue = {
+                "A": _FakeCar("A", remaining_km=300, has_charger=False, data_error=True),  # P1 preferred, -2
+                "B": _FakeCar("B", remaining_km=300, has_charger=False),  # covered, unplugged, non-preferred
+                "C": _FakeCar("C", remaining_km=300, has_charger=False),  # covers P2
+            }
+            cars = [catalogue[name] for name in car_order]
+            p1 = _FakePerson("P1", "A", ["A", "B"], leave, 100.0)
+            p2 = _FakePerson("P2", "C", ["C"], leave, 100.0)
+            return _FakeHome(cars, [p1, p2]), catalogue["A"]
+
+        for order in (["A", "B", "C"], ["B", "A", "C"], ["C", "B", "A"]):
+            home, a = _build(order)
+            with caplog.at_level(logging.INFO):
+                caplog.clear()
+                await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            assert _person_name(a) == "P1", f"order {order}: P1 must stay on the preferred car"
+            assert "using preferred-car assignment" in caplog.text, f"order {order}: pass 2 must be adopted"
+
+    @pytest.mark.asyncio
+    async def test_pass2_no_tie_single_person_data_error_preferred_car_e_max_positive(self, caplog):
+        """SF-1 repro 2 — E_max > 0, single person. P's preferred car X is a -2
+        data-error sentinel (E_max+1); a covered non-preferred car Y ties it in
+        pass 2 when n == 1 (E_max+1 == 1*E_max+1). A third car Z carries a real
+        need so E_max > 0. The pass-2 offset must break the tie toward X."""
+        leave = datetime.now(UTC) + timedelta(hours=2)
+
+        def _build(car_order):
+            catalogue = {
+                "X": _FakeCar("X", remaining_km=300, has_charger=False, data_error=True),  # preferred, -2
+                "Y": _FakeCar("Y", remaining_km=300, has_charger=False),  # covered, unplugged, non-preferred
+                "Z": _FakeCar("Z", remaining_km=10, has_charger=True),  # real need -> E_max > 0
+            }
+            cars = [catalogue[name] for name in car_order]
+            p = _FakePerson("P", "X", ["X", "Y", "Z"], leave, 100.0)
+            return _FakeHome(cars, [p]), catalogue["X"]
+
+        for order in (["X", "Y", "Z"], ["Y", "X", "Z"], ["Z", "Y", "X"]):
+            home, x = _build(order)
+            with caplog.at_level(logging.INFO):
+                caplog.clear()
+                await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            assert _person_name(x) == "P", f"order {order}: P must stay on the preferred data-error car"
+            assert "using preferred-car assignment" in caplog.text, f"order {order}: pass 2 must be adopted"
+
+    @pytest.mark.asyncio
+    async def test_far_future_forecast_person_prefers_unplugged_car_regardless_of_order(self):
+        """N-4 — a far-future-forecast person (-1 on every authorised car) must not
+        be handed a plugged car while an unplugged one sits free. With the plugged
+        nudge applied to the -1 branch the person lands on an unplugged car for
+        every ``self._cars`` order.
+
+        The forecast carries a mileage (so the person enters the optimisation) but
+        a leave time beyond FAR_FUTURE_FORECAST_THRESHOLD_S, which is exactly the
+        -1 "no/far-future forecast" sentinel branch.
+        """
+        leave_far = datetime.now(UTC) + timedelta(hours=48)
+
+        def _build(car_order):
+            catalogue = {
+                "Pa": _FakeCar("Pa", remaining_km=300, has_charger=True),  # plugged
+                "Ua": _FakeCar("Ua", remaining_km=300, has_charger=False),  # unplugged
+                "Ub": _FakeCar("Ub", remaining_km=300, has_charger=False),  # unplugged
+                "Pb": _FakeCar("Pb", remaining_km=300, has_charger=True),  # plugged
+            }
+            cars = [catalogue[name] for name in car_order]
+            # no preferred car, far-future forecast -> every authorised car is a -1 sentinel
+            p = _FakePerson("P", None, ["Pa", "Ua", "Ub", "Pb"], leave_far, 100.0)
+            return _FakeHome(cars, [p])
+
+        for order in (
+            ["Pa", "Ua", "Ub", "Pb"],
+            ["Pb", "Ua", "Ub", "Pa"],
+            ["Ua", "Pa", "Pb", "Ub"],
+        ):
+            home = _build(order)
+            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            assigned = [c for c in home._cars if _person_name(c) == "P"]
+            assert len(assigned) == 1, f"order {order}: P must be assigned exactly one car"
+            assert assigned[0].charger is None, f"order {order}: P must land on an unplugged car, got {assigned[0].name}"

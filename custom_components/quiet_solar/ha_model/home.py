@@ -55,6 +55,7 @@ from ..const import (
     OFF_GRID_MODE_FORCE_ON_GRID,
     OVERRIDE_STATE_NO_OVERRIDE,
     PASS1_PREFERRED_CAR_PENALTY_WH,
+    PASS2_PREFERRED_CAR_OFFSET_EPS_WH,
     PERSON_HISTORY_BACKFILL_DAYS,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
     PLUGGED_COVERED_CAR_PENALTY_WH,
@@ -2520,10 +2521,12 @@ class QSHome(QSDynamicGroup):
     ) -> np.ndarray:
         """Convert raw sentinel-based energy matrix into a cost matrix for the Hungarian algorithm.
 
-        Sentinel mapping:
+        Sentinel mapping (all no-need branches nudge a plugged car by
+        PLUGGED_COVERED_CAR_PENALTY_WH so a person needing no charge prefers an
+        unplugged car — QS-351 review-fix #03 N-4):
           0.0 (unauthorized)  -> maxi_val (effectively forbidden)
-         -1.0 (no forecast)   -> E_max + 1.0
-         -2.0 (car data err)  -> E_max + 1.0
+         -1.0 (no forecast)   -> E_max + 1.0 (+ plugged nudge if plugged)
+         -2.0 (car data err)  -> E_max + 1.0 (+ plugged nudge if plugged)
          -3.0 (covered)       -> 0.0 if car is unplugged,
                                  PLUGGED_COVERED_CAR_PENALTY_WH if plugged
 
@@ -2533,7 +2536,7 @@ class QSHome(QSDynamicGroup):
         below the ``E_max + 1.0`` sentinels, below the pass-2 offset and below
         any real charging need — never E_max-relative, or it would price a
         covered plugged car above every real need and so manufacture charging
-        demand.
+        demand. See const.py for the full ordering relations (i)-(iii).
         """
         costs = raw_energy.copy()
         maxi_val = max(1e12, (E_max + 1.0) * (1.0 + max(len(c_s), len(p_s))))
@@ -2541,15 +2544,19 @@ class QSHome(QSDynamicGroup):
 
         for person_index in range(len(p_s)):
             for car_index in range(len(c_s)):
+                is_plugged = c_s[car_index].charger is not None
                 if costs[person_index, car_index] == 0.0:
                     costs[person_index, car_index] = maxi_val
                 else:
-                    if costs[person_index, car_index] == -1.0:
-                        costs[person_index, car_index] = E_max + 1.0
-                    elif costs[person_index, car_index] == -2.0:
-                        costs[person_index, car_index] = E_max + 1.0
+                    if costs[person_index, car_index] in (-1.0, -2.0):
+                        # No-need sentinel: prefer an unplugged car for a person
+                        # who needs no charging (nudge the plugged option).
+                        sentinel_cost = E_max + 1.0
+                        if is_plugged:
+                            sentinel_cost += plugged_covered_penalty
+                        costs[person_index, car_index] = sentinel_cost
                     elif costs[person_index, car_index] == -3.0:
-                        if c_s[car_index].charger is not None:
+                        if is_plugged:
                             costs[person_index, car_index] = plugged_covered_penalty
                         else:
                             costs[person_index, car_index] = 0.0
@@ -2690,7 +2697,12 @@ class QSHome(QSDynamicGroup):
                 assignment_energy = hungarian_algorithm(costs_energy)
                 total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
 
-                penalty = (len(p_s) * E_max) + 1.0
+                # Pass-2 preferred-car offset. The absolute epsilon makes it
+                # strictly dominate the largest base spread for all n and E_max
+                # (the E_max-relative n*E_max + 1.0 alone ties a preferred
+                # sentinel vs a covered non-preferred cell at E_max == 0 or
+                # n == 1 — QS-351 review-fix #03 SF-1).
+                penalty = (len(p_s) * E_max) + 1.0 + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
                 costs_preferred = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=penalty)
                 assignment_preferred = hungarian_algorithm(costs_preferred)
                 total_energy_preferred = self._compute_assignment_energy(assignment_preferred, raw_energy)

@@ -3,7 +3,11 @@
 import numpy as np
 import pytest
 
-from custom_components.quiet_solar.const import PREFERRED_CAR_ENERGY_THRESHOLD_WH
+from custom_components.quiet_solar.const import (
+    PASS1_PREFERRED_CAR_PENALTY_WH,
+    PASS2_PREFERRED_CAR_OFFSET_EPS_WH,
+    PREFERRED_CAR_ENERGY_THRESHOLD_WH,
+)
 from custom_components.quiet_solar.home_model.home_utils import (
     _greedy_assignment,
     hungarian_algorithm,
@@ -686,15 +690,24 @@ class TestTwoPassAllocation:
         """Run the full two-pass logic and return (chosen_assignment, choice).
 
         choice is 'preferred' or 'energy'.
+
+        The pass penalties mirror production (QS-351 review-fix #03 N-2): pass 1
+        uses PASS1_PREFERRED_CAR_PENALTY_WH (a sub-need ordering tie-break) and
+        pass 2 uses n*E_max + 1.0 + PASS2_PREFERRED_CAR_OFFSET_EPS_WH, so the
+        exact 1000 Wh boundary in test_exact_threshold_boundary is exercised
+        against the same gate as compute_and_set_best_persons_cars_allocations.
+        (These all-real-need fixtures carry no covered/plugged cells, so the
+        plugged-covered nudge — which this replica omits — is a no-op here; the
+        plugged path is pinned end-to-end in test_person_car_allocation.py.)
         """
         raw, E_max = self._build_raw(energies, authorized_mask)
         n_p, n_c = raw.shape
 
-        costs_energy = self._finalize(raw, E_max, n_p, n_c, preferences, penalty=0.0)
+        costs_energy = self._finalize(raw, E_max, n_p, n_c, preferences, penalty=PASS1_PREFERRED_CAR_PENALTY_WH)
         assignment_energy = hungarian_algorithm(costs_energy)
         total_energy_optimal = self._total_energy(assignment_energy, raw)
 
-        penalty = (n_p * E_max) + 1.0
+        penalty = (n_p * E_max) + 1.0 + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
         costs_preferred = self._finalize(raw, E_max, n_p, n_c, preferences, penalty=penalty)
         assignment_preferred = hungarian_algorithm(costs_preferred)
         total_energy_preferred = self._total_energy(assignment_preferred, raw)
@@ -782,24 +795,25 @@ class TestTwoPassAllocation:
         assert assignment[1] == 1
 
     def test_3x3_mixed_scenario(self):
-        """3 persons, 3 cars with mixed preferences.
-
-        Energy-optimal may differ from preferred, but the global difference
-        determines the choice.
-        """
+        """3 persons, 3 cars: the preferred (diagonal) assignment is expensive
+        (18700 Wh) while a unique energy-optimal matching is cheap (1000 Wh), so
+        the >1000 Wh gap must flip the choice to energy and produce that exact
+        matching (N-3: a real, discriminating gap — not a tautology)."""
         energies = [
-            [2000.0, 8000.0, 3000.0],
-            [7000.0, 1000.0, 6000.0],
-            [5000.0, 4000.0, 2000.0],
+            [9000.0, 100.0, 200.0],
+            [300.0, 9000.0, 400.0],
+            [500.0, 600.0, 700.0],
         ]
         authorized = [[True, True, True], [True, True, True], [True, True, True]]
         preferences = [0, 1, 2]
 
         assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
 
-        assert e_opt == pytest.approx(5000.0)
-        assert assignment[0] == 0 or assignment[1] == 1 or assignment[2] == 2
-        assert e_pref - e_opt <= PREFERRED_CAR_ENERGY_THRESHOLD_WH or choice == "energy"
+        # unique energy-optimal matching P0->C1, P1->C2, P2->C0 = 100+400+500 = 1000
+        assert choice == "energy"
+        assert assignment == {0: 1, 1: 2, 2: 0}
+        assert e_opt == pytest.approx(1000.0)
+        assert e_pref == pytest.approx(18700.0)
 
     def test_rectangular_more_cars_than_persons(self):
         """2 persons, 4 cars. Algorithm should handle padding correctly."""
