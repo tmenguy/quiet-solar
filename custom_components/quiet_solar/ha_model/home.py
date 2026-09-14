@@ -2697,12 +2697,20 @@ class QSHome(QSDynamicGroup):
                 assignment_energy = hungarian_algorithm(costs_energy)
                 total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
 
-                # Pass-2 preferred-car offset. The absolute epsilon makes it
-                # strictly dominate the largest base spread for all n and E_max
-                # (the E_max-relative n*E_max + 1.0 alone ties a preferred
-                # sentinel vs a covered non-preferred cell at E_max == 0 or
-                # n == 1 — QS-351 review-fix #03 SF-1).
-                penalty = (len(p_s) * E_max) + 1.0 + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
+                # Pass-2 preferred-car offset. It must dominate the *aggregate*
+                # base spread, not one cell's — Hungarian minimises total cost, so
+                # two assignments whose preferred-count differs by one can differ
+                # in base cost by up to (n-1)·(E_max + 1.0 + PLUGGED). Using the
+                # summed spread n·(E_max + 1.0 + PLUGGED) + eps guarantees pass 2
+                # maximises preferred-car count for all n and E_max (the per-cell
+                # form n·E_max + 1.0 + eps left preferred matches on the table at
+                # small E_max — QS-351 review-fix #05 SF-1, path A). len(p_s) is
+                # the right multiplier (one decision per person; extra cars are
+                # unused columns), and maxi_val (>= 1e12) still dwarfs the largest
+                # legitimate pass-2 cell by ~6 orders of magnitude.
+                penalty = (
+                    len(p_s) * (E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
+                )
                 costs_preferred = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=penalty)
                 assignment_preferred = hungarian_algorithm(costs_preferred)
                 total_energy_preferred = self._compute_assignment_energy(assignment_preferred, raw_energy)

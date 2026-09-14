@@ -488,17 +488,24 @@ PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"
 #   -1/-2 sentinel, unplugged : E_max + 1.0
 #   -1/-2 sentinel, plugged   : E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH
 # Pass 1 adds PASS1 to non-preferred cells; pass 2 adds
-#   PASS2_offset = n*E_max + 1.0 + PASS2_PREFERRED_CAR_OFFSET_EPS_WH.
+#   PASS2_offset = n*(E_max + 1.0 + PLUGGED) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH.
 # Relations that must hold for ALL E_max >= 0 and ALL n >= 1:
-#   (i)   PLUGGED (0.25) < PASS1 (0.5), and the largest no-need base nudge
-#         (a plugged sentinel, E_max + 1.25) plus PASS1 still orders strictly
-#         below PASS2_offset — i.e. pass 2 always prefers the preferred
-#         assignment. The old pass-2 offset n*E_max + 1.0 tied a preferred
-#         sentinel against a covered-unplugged non-preferred cell whenever
-#         (n-1)*E_max == 0 (E_max == 0 OR n == 1); the absolute
-#         PASS2_PREFERRED_CAR_OFFSET_EPS_WH makes PASS2_offset > (max_base -
-#         min_base) = E_max + 1.25 strictly for all n, E_max (worst case n == 1,
-#         E_max == 0: 2.0 > 1.25) — QS-351 review-fix #03 SF-1.
+#   (i)   PLUGGED (0.25) < PASS1 (0.5); and PASS2_offset dominates the
+#         *aggregate* base spread so pass 2 maximises preferred-car count.
+#         Hungarian minimises TOTAL cost, so two assignments whose preferred
+#         count differs by one can differ in base cost by up to the sum of the
+#         differing cells' spreads, at most (n-1)*(max_base - min_base) =
+#         (n-1)*(E_max + 1.0 + PLUGGED) (a plugged sentinel vs a covered
+#         unplugged cell). PASS2_offset = n*(E_max + 1.0 + PLUGGED) + eps
+#         exceeds that strictly for all n, E_max (worst case n == 1, E_max == 0:
+#         2.25 > 1.25), so swapping in one more preferred match always beats any
+#         base saving — pass 2 provably returns a maximum-preferred assignment.
+#         (The earlier per-cell form n*E_max + 1.0 + eps only dominated ONE
+#         cell's spread and left preferred matches on the table at small E_max —
+#         QS-351 review-fix #03 SF-1 corrected by #05 SF-1, path A.) maxi_val
+#         (>= 1e12) still dwarfs the largest legitimate pass-2 cell
+#         ((E_max + 1.0 + PLUGGED) + PASS2_offset) by ~6 orders of magnitude, so
+#         unauthorised pairs stay forbidden.
 #   (ii)  n * (PASS1 + PLUGGED) < PREFERRED_CAR_ENERGY_THRESHOLD_WH for any
 #         realistic n (0.75·n < 1000 holds up to n <= 1333): both epsilons apply
 #         to a non-preferred covered-plugged cell, so their *sum* is the
@@ -516,9 +523,9 @@ PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"
 PREFERRED_CAR_ENERGY_THRESHOLD_WH = 1000.0
 PASS1_PREFERRED_CAR_PENALTY_WH = 0.5
 PLUGGED_COVERED_CAR_PENALTY_WH = 0.25
-# Absolute epsilon added on top of the E_max-relative pass-2 offset so it
-# strictly dominates the largest base spread for all n >= 1 and E_max >= 0
-# (must exceed PLUGGED_COVERED_CAR_PENALTY_WH; see relation (i)).
+# Absolute epsilon added on top of the aggregate-spread pass-2 offset
+# n*(E_max + 1.0 + PLUGGED) so it *strictly* dominates for all n >= 1 and
+# E_max >= 0 (see relation (i)).
 PASS2_PREFERRED_CAR_OFFSET_EPS_WH = 1.0
 FAR_FUTURE_FORECAST_THRESHOLD_S = 24 * 3600
 

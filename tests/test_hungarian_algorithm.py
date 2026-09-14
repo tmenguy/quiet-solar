@@ -6,6 +6,7 @@ import pytest
 from custom_components.quiet_solar.const import (
     PASS1_PREFERRED_CAR_PENALTY_WH,
     PASS2_PREFERRED_CAR_OFFSET_EPS_WH,
+    PLUGGED_COVERED_CAR_PENALTY_WH,
     PREFERRED_CAR_ENERGY_THRESHOLD_WH,
 )
 from custom_components.quiet_solar.home_model.home_utils import (
@@ -691,14 +692,15 @@ class TestTwoPassAllocation:
 
         choice is 'preferred' or 'energy'.
 
-        The pass penalties mirror production (QS-351 review-fix #03 N-2): pass 1
-        uses PASS1_PREFERRED_CAR_PENALTY_WH (a sub-need ordering tie-break) and
-        pass 2 uses n*E_max + 1.0 + PASS2_PREFERRED_CAR_OFFSET_EPS_WH, so the
-        exact 1000 Wh boundary in test_exact_threshold_boundary is exercised
-        against the same gate as compute_and_set_best_persons_cars_allocations.
-        (These all-real-need fixtures carry no covered/plugged cells, so the
-        plugged-covered nudge — which this replica omits — is a no-op here; the
-        plugged path is pinned end-to-end in test_person_car_allocation.py.)
+        The pass penalties mirror production (QS-351 review-fix #03 N-2, #05 SF-1):
+        pass 1 uses PASS1_PREFERRED_CAR_PENALTY_WH (a sub-need ordering tie-break)
+        and pass 2 uses n*(E_max + 1.0 + PLUGGED) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
+        (the aggregate-spread-dominating offset), so the exact 1000 Wh boundary in
+        test_exact_threshold_boundary is exercised against the same gate as
+        compute_and_set_best_persons_cars_allocations. (These all-real-need
+        fixtures carry no covered/plugged cells, so the plugged-covered nudge —
+        which this replica omits — is a no-op here; the plugged path is pinned
+        end-to-end in test_person_car_allocation.py.)
         """
         raw, E_max = self._build_raw(energies, authorized_mask)
         n_p, n_c = raw.shape
@@ -707,7 +709,7 @@ class TestTwoPassAllocation:
         assignment_energy = hungarian_algorithm(costs_energy)
         total_energy_optimal = self._total_energy(assignment_energy, raw)
 
-        penalty = (n_p * E_max) + 1.0 + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
+        penalty = n_p * (E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
         costs_preferred = self._finalize(raw, E_max, n_p, n_c, preferences, penalty=penalty)
         assignment_preferred = hungarian_algorithm(costs_preferred)
         total_energy_preferred = self._total_energy(assignment_preferred, raw)

@@ -987,3 +987,44 @@ class TestSentinelAndPass2Ordering:
             assigned = [c for c in home._cars if _person_name(c) == "P"]
             assert len(assigned) == 1, f"order {order}: P must be assigned exactly one car"
             assert assigned[0].charger is None, f"order {order}: P must land on an unplugged car, got {assigned[0].name}"
+
+    @pytest.mark.asyncio
+    async def test_pass2_offset_dominates_aggregate_spread(self, caplog):
+        """QS-351 review-fix #05 (SF-1): the pass-2 offset must dominate the
+        *aggregate* base spread, not just one cell's spread — Hungarian minimises
+        total cost, so two assignments whose preferred-count differs by one can
+        differ in base cost by up to (n-1)·(E_max+1.25). The per-cell offset
+        (n·E_max + 1.0 + eps) leaves preferred matches on the table; the path-A
+        offset (n·(E_max+1.0+PLUGGED) + eps) maximises preferred-car count.
+
+        Realisable E_max == 0 counterexample (found by sweep): with the shipped
+        per-cell offset the pipeline returns only 1 preferred match where 2 are
+        achievable.
+        """
+        near = datetime.now(UTC) + timedelta(hours=2)
+        far = datetime.now(UTC) + timedelta(hours=48)
+
+        # c0/c3 unreadable-SOC (-2) plugged; c1 covered unplugged; c2 covered plugged.
+        c0 = _FakeCar("c0", remaining_km=1000, has_charger=True, data_error=True)
+        c1 = _FakeCar("c1", remaining_km=1000, has_charger=False)
+        c2 = _FakeCar("c2", remaining_km=1000, has_charger=True)
+        c3 = _FakeCar("c3", remaining_km=1000, has_charger=True, data_error=True)
+        # p0 far-future (its whole row is -1 sentinels); p1/p2 normal (covered).
+        p0 = _FakePerson("p0", "c2", ["c2", "c3"], far, 100.0)
+        p1 = _FakePerson("p1", "c2", ["c0", "c2"], near, 100.0)
+        p2 = _FakePerson("p2", "c3", ["c1", "c3"], near, 100.0)
+
+        cars = [c0, c1, c2, c3]
+        home = _FakeHome(cars, [p0, p1, p2])
+        with caplog.at_level(logging.INFO):
+            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        preferred_matches = sum(
+            1
+            for c in cars
+            if c.current_forecasted_person is not None and c.current_forecasted_person.preferred_car == c.name
+        )
+        # p1->c2 and p2->c3 are both achievable (max preferred-car count == 2).
+        assert preferred_matches == 2, f"pass 2 must maximise preferred-car count, got {preferred_matches}"
+        # E_max == 0 -> gate diff 0 -> the preferred pass ships.
+        assert "using preferred-car assignment" in caplog.text
