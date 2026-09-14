@@ -2686,6 +2686,15 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return True
         return False
 
+    def clear_next_charge_target(self) -> None:
+        """Reset the next-charge target to its lazy default without any charger I/O.
+
+        Unlike ``set_next_charge_target_percent`` this writes no native charge-limit
+        (safe to call while the car is still attached, e.g. on unplug). The next
+        ``get_car_target_SOC`` lazily re-materialises ``car_default_charge``.
+        """
+        self._next_charge_target = None
+
     def get_car_target_charge_option_percent(self):
         return self.get_car_option_charge_from_value_percent(self.get_car_target_SOC())
 

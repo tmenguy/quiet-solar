@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-07-22
+last_verified: 2026-09-14
 ---
 
 # Person, Car, and trip prediction
@@ -165,6 +165,12 @@ push_live_constraint(target_SOC, load_info={originator: "prediction"})
   ↓
 Solver allocates → charger executes → SOC reaches target → constraint
   completes
+  ↓
+Person re-allocated away / covered / need met → person constraint removed
+  → car's next-charge target restored to the user's choice, else the car
+  default (QS-352). Also cleared on unplug while a person constraint is
+  live; realigned before a force/timed session and on the same-cycle
+  agenda constraint.
 ```
 
 ## Common mistakes

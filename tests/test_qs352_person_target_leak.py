@@ -22,9 +22,11 @@ import pytz
 
 from custom_components.quiet_solar.const import (
     CONSTRAINT_FORECASTED_PERSON_KEY,
+    CONSTRAINT_ORIGINATOR_AGENDA,
     CONSTRAINT_ORIGINATOR_KEY,
     CONSTRAINT_ORIGINATOR_PERSON,
     CONSTRAINT_TYPE_FILLER,
+    CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
 )
 from custom_components.quiet_solar.home_model.constraints import (
@@ -391,7 +393,9 @@ async def test_unplug_with_live_person_constraint_clears_leaked_target(caplog):
 
 
 @pytest.mark.asyncio
-async def test_unplug_with_user_target_keeps_next_charge_target():
+async def test_unplug_with_live_person_constraint_clears_target():
+    """Review #02 finding #1: the clear must fire even with a user target marker present
+    (unplug wipes all user-originated state anyway), so the person leak must not linger."""
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
@@ -400,6 +404,27 @@ async def test_unplug_with_user_target_keeps_next_charge_target():
     car.set_user_originated("charge_target_percent", 60)
 
     await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41  # the person push clobbered the user's 60
+
+    charger.is_not_plugged = MagicMock(return_value=True)
+    charger.is_plugged = MagicMock(return_value=False)
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    # The field must not carry the person leak (nor the wiped user marker's value).
+    assert car._next_charge_target is None
+    assert car.get_car_target_SOC() == car.car_default_charge
+
+
+@pytest.mark.asyncio
+async def test_unplug_present_but_none_user_target_clears_leaked_target():
+    """Review #02 finding #12(d): a present-but-None user marker is moot under the
+    finding-#1 design — the clear fires whenever a person constraint is live."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    car._user_originated["charge_target_percent"] = None
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
 
     charger.is_not_plugged = MagicMock(return_value=True)
@@ -407,8 +432,65 @@ async def test_unplug_with_user_target_keeps_next_charge_target():
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    # A user target was present -> the unplug branch must not zero the field.
+    assert car._next_charge_target is None
+
+
+@pytest.mark.asyncio
+async def test_unplug_no_person_constraint_preserves_target():
+    """Review #02 finding #12(e): unplug with NO live person constraint must not touch
+    `_next_charge_target` — the clear is scoped to person-derived leaks only."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    # A non-person target with no person constraint live.
+    await car.set_next_charge_target_percent(55)
+    assert car._next_charge_target == 55
+
+    charger.is_not_plugged = MagicMock(return_value=True)
+    charger.is_plugged = MagicMock(return_value=False)
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    assert car._next_charge_target == 55
+
+
+@pytest.mark.asyncio
+async def test_has_live_person_constraint_no_car():
+    """The person-constraint marker helper is safe when no car is attached."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+    charger.car = None
+    assert charger._has_live_person_constraint() is False
+
+
+# --------------------------------------------------------------------------- #
+# Review #02 finding #4 — force/timed session must not inherit the leaked target
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_force_charge_after_person_removed_uses_default(caplog):
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+
+    # Person re-allocated away, and the user presses "charge now" on the same cycle.
+    car.do_force_next_charge = True
+    car.get_best_person_next_need = AsyncMock(return_value=(True, now + timedelta(hours=7), 30.0, thomas))
+    car.current_forecasted_person = thomas
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    spy.assert_awaited_once_with(car.car_default_charge)
+    assert car._next_charge_target == car.car_default_charge
+    asap_cts = [
+        c
+        for c in _car_cts(charger)
+        if c.type == CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE
+    ]
+    assert len(asap_cts) == 1
+    assert asap_cts[0].target_value == car.car_default_charge
 
 
 # --------------------------------------------------------------------------- #
@@ -440,6 +522,58 @@ async def test_agenda_constraint_target_refreshed_after_person_removed(caplog):
     ]
     assert len(agenda_cts) == 1
     assert agenda_cts[0].target_value == car.car_default_charge
+    # Review #02 finding #2: the serialized field must be realigned too.
+    assert agenda_cts[0].requested_target_value == car.car_default_charge
+
+
+@pytest.mark.asyncio
+async def test_agenda_live_constraint_realigned_after_person_removed(caplog):
+    """Review #02 finding #2: when an eq_no_current-equal agenda constraint is already
+    live, `push_agenda_constraints` discards the freshly built object; the realign must
+    reach the LIVE constraint by identity, not mutate the discarded orphan."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    # Agenda end must be > 25 h beyond the person's next usage, else the person
+    # constraint is not pushed and the leak would already clear in cycle 1.
+    start_time = now + timedelta(hours=40)
+    car.get_next_scheduled_event = AsyncMock(return_value=(start_time, None))
+    car._next_charge_target = 41  # leaked state from a prior person push
+    charger._last_completed_constraint = None
+
+    # Cycle 1: Magali present & not covered -> a live agenda carrying the leaked 41,
+    # plus a live person constraint.
+    car.get_best_person_next_need = AsyncMock(return_value=(False, now + timedelta(hours=5), PERSON_TARGET, magali))
+    car.current_forecasted_person = magali
+    await charger.check_load_activity_and_constraints(now)
+
+    agendas = [
+        c
+        for c in _non_person_cts(charger)
+        if c.load_info is not None and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_AGENDA
+    ]
+    assert len(agendas) == 1
+    assert agendas[0].target_value == 41
+    live_agenda = agendas[0]  # the object we expect to be realigned in place
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+
+    # Cycle 2: person gone -> removal + restore. The fresh agenda build is an orphan
+    # (eq_no_current-equal to `live_agenda`), so only the identity lookup can fix it.
+    car.get_best_person_next_need = AsyncMock(return_value=(True, now + timedelta(hours=5), 30.0, thomas))
+    car.current_forecasted_person = thomas
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    spy.assert_awaited_once_with(car.car_default_charge)
+    assert live_agenda.target_value == car.car_default_charge
+    assert live_agenda.requested_target_value == car.car_default_charge
+    # still exactly one agenda constraint (no duplicate pushed)
+    agendas2 = [
+        c
+        for c in _non_person_cts(charger)
+        if c.load_info is not None and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_AGENDA
+    ]
+    assert len(agendas2) == 1
 
 
 # --------------------------------------------------------------------------- #

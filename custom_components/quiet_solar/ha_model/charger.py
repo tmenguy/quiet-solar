@@ -3554,6 +3554,24 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             self.car.do_force_next_charge = False
             self.car.do_next_charge_time = None
 
+    def _has_live_person_constraint(self) -> bool:
+        """True when a person-tagged constraint is live for the attached car.
+
+        QS-352: the marker that the current `_next_charge_target` value is
+        person-derived (the person push site tags its constraint with
+        `CONSTRAINT_FORECASTED_PERSON_KEY`). Used to gate the leaked-target
+        restore / clear so a legitimate user or default value is never touched.
+        """
+        if self.car is None:
+            return False
+        return any(
+            ct is not None
+            and ct.load_param == self.car.name
+            and ct.load_info is not None
+            and ct.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) is not None
+            for ct in self._constraints
+        )
+
     async def check_load_activity_and_constraints(self, time: datetime) -> bool:
         # check that we have a connected car, and which one, or that it is completely disconnected
         #  if there is no more car ... just reset
@@ -3616,28 +3634,25 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     self.name,
                     self.car.get_user_originated("person_name"),
                 )
-                # QS-352 (review #01, finding #3): a live person constraint leaked its
-                # target into `_next_charge_target` (the person push site); the unplug reset
-                # below wipes constraints and user overrides but never touches that field, so
-                # the select / autonomy sensor would show the person value for the whole away
-                # period. Reset it to the lazy default when no user target is set (that is
-                # the user's own choice, not a leak). Do NOT call
-                # `set_next_charge_target_percent` here: the car is still attached and it
-                # would write the car's native charge limit on unplug.
-                if not self.car.has_user_originated("charge_target_percent") and any(
-                    ct is not None
-                    and ct.load_param == self.car.name
-                    and ct.load_info is not None
-                    and ct.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) is not None
-                    for ct in self._constraints
-                ):
+                # QS-352: a live person constraint leaked its target into
+                # `_next_charge_target` (the person push site); the unplug reset below wipes
+                # constraints and user overrides but never touches that field, so the select /
+                # autonomy sensor would show the person value for the whole away period.
+                # Reset it to the lazy default whenever a person constraint is live for this
+                # car. `clear_all_user_originated()` on the next line wipes any user target
+                # marker anyway, so there is no user choice to preserve here (review #02,
+                # finding #1 dropped the earlier `not has_user_originated` guard, which both
+                # enshrined the person leak and mis-handled a present-but-`None` marker).
+                # Uses `clear_next_charge_target` (no native-limit write) because the car is
+                # still attached at unplug.
+                if self._has_live_person_constraint():
                     _LOGGER.info(
                         "check_load_activity_and_constraints: unplugged car %s clearing leaked person"
                         " charge target %s%% to default",
                         self.car.name,
                         self.car.get_car_target_SOC(),
                     )
-                    self.car._next_charge_target = None
+                    self.car.clear_next_charge_target()
                 self.car.clear_all_user_originated()
                 # Edge-triggered (plugged→unplugged): clear the estimated-SOC
                 # state. The genuine plug-in path also clears it (the
@@ -3841,6 +3856,41 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 bump_solar = self.qs_bump_solar_charge_priority
 
             degraded_type = CONSTRAINT_TYPE_BEFORE_BATTERY_GREEN if bump_solar else CONSTRAINT_TYPE_FILLER
+
+            # QS-352 (review #02, finding #4): the leaked-target restore lives in the person
+            # block below, which is nested under `user_timed_constraint is None and
+            # force_constraint is None` — so a "charge now" (force) or user-timed session
+            # would otherwise build its constraint from the leaked person target and keep it
+            # for the whole session (hours). Realign the leaked target here too, BEFORE the
+            # force/timed constraint consumes `target_charge`. Gated on a live person
+            # constraint for this car (the marker that the value is provably person-derived,
+            # so a legitimate user/default target is never touched) AND the person no longer
+            # needing the car; the force reset immediately below then removes that person
+            # constraint. Realigns to the user's target when set, otherwise the default.
+            person_no_longer_needs_car = not (
+                person is not None
+                and next_usage_time is not None
+                and person_min_target_charge is not None
+                and is_person_covered is False
+            )
+            if (
+                is_target_percent
+                and (force_charge is True or has_charge_time)
+                and person_no_longer_needs_car
+                and self._has_live_person_constraint()
+            ):
+                bypass_restore = user_target if user_target is not None else self.car.car_default_charge
+                if int(self.car.get_car_target_SOC()) != int(bypass_restore):
+                    _LOGGER.info(
+                        "check_load_activity_and_constraints: plugged car %s restoring %s charge target"
+                        " %s%% (was %s%%) before forced/timed session after person left",
+                        self.car.name,
+                        "user" if user_target is not None else "default",
+                        bypass_restore,
+                        self.car.get_car_target_SOC(),
+                    )
+                    await self.car.set_next_charge_target_percent(bypass_restore)
+                    target_charge = self.car.get_car_target_SOC()
 
             # in case a user pressed the button ....clean everything and force the charge
             if force_charge is True:
@@ -4214,10 +4264,12 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         # is absent OR present-but-None); it is never reassigned before this
                         # point. Compare as int because `QSCar.set_next_charge_target_percent`
                         # int-casts its value while the config default is a float, so the "no
-                        # churn" guard holds even for a fractional default. This closes the
-                        # no-snapshot path only; the user-override snapshot path is #353.
-                        # (Review #01: finding #2 adds the user-target branch, finding #4 the
-                        # name-based anchors, finding #6 the agenda realignment below.)
+                        # churn" guard holds even for a fractional default. This whole percent
+                        # target block sits under `if is_target_percent:` — if the SOC sensor
+                        # becomes unavailable the percent target is inert anyway, so the leak
+                        # simply cannot drive anything until percent capability returns
+                        # (review #02, finding #8). Closes the no-snapshot path only; the
+                        # user-override snapshot path is #353.
                         restored_target = None
                         restore_reason = None
                         if user_target is None:
@@ -4242,15 +4294,40 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                             )
                             await self.car.set_next_charge_target_percent(restored_target)
                             target_charge = self.car.get_car_target_SOC()
+                            # Keep the filler chain consistent: the filler block below builds
+                            # from `realized_charge_target`; leaving it at the leaked value
+                            # would create a mandatory/filler mismatch (review #02, finding #7).
+                            if realized_charge_target is not None:
+                                realized_charge_target = target_charge
 
-                            # Review #01, finding #6: the agenda constraint built earlier
-                            # this cycle used the leaked `target_charge`; realign it so it
-                            # does not carry the person value for one ~3 min window (it would
-                            # otherwise self-heal only on the next cycle).
-                            if car_charge_agenda is not None and car_charge_agenda.target_value != target_charge:
-                                car_charge_agenda.target_value = target_charge
-                                self.set_live_constraints(time, self._constraints)
-                                do_force_solve = True
+                            # The agenda constraint built earlier this cycle used the leaked
+                            # `target_charge`; realign the LIVE one so it does not carry the
+                            # person value for one ~3 min window (it would otherwise self-heal
+                            # only next cycle). `car_charge_agenda` may be an orphan that
+                            # `push_agenda_constraints` discarded when an eq_no_current-equal
+                            # constraint was already live, so resolve the stored object by
+                            # identity (originator + end) and update `requested_target_value`
+                            # too — `to_dict` serializes that field, so a restart inside the
+                            # window would otherwise restore the leaked target (review #02,
+                            # finding #2).
+                            if car_charge_agenda is not None:
+                                live_agenda = next(
+                                    (
+                                        c
+                                        for c in self._constraints
+                                        if c is not None
+                                        and c.load_param == self.car.name
+                                        and c.load_info is not None
+                                        and c.load_info.get(CONSTRAINT_ORIGINATOR_KEY) == CONSTRAINT_ORIGINATOR_AGENDA
+                                        and c.end_of_constraint == car_charge_agenda.end_of_constraint
+                                    ),
+                                    None,
+                                )
+                                if live_agenda is not None and live_agenda.target_value != target_charge:
+                                    live_agenda.target_value = target_charge
+                                    live_agenda.requested_target_value = target_charge
+                                    self.set_live_constraints(time, self._constraints)
+                                    do_force_solve = True
 
             if realized_charge_target is None or (
                 is_target_percent and realized_charge_target < self.car.car_default_charge
