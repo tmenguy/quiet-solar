@@ -778,3 +778,45 @@ class TestAllocationUnits:
         # gap 6000 - (450 + 4500) = 1050 Wh > 1000 Wh -> energy-optimal
         assert _person_name(c1) == "P2"
         assert _person_name(c2) == "P1"
+
+
+class TestPass1TieBreak:
+    """QS-351 review-fix #01 (should-fix): the pass-1 preferred-car bias must be
+    a genuine ordering tie-break, not an energy-scale bias.
+
+    If the bias (PASS1_PREFERRED_CAR_PENALTY_WH) exceeds a per-person real need,
+    pass 1 keeps everyone on their preferred car, corrupting
+    total_energy_optimal; the gate then under-measures the real aggregate saving
+    and adopts the preferred assignment, spreading charging the true optimum
+    would avoid. The bias must stay well below any real need (n·PASS1 <<
+    THRESHOLD for any realistic n).
+    """
+
+    @pytest.mark.asyncio
+    async def test_pass1_bias_does_not_corrupt_energy_optimum_for_small_per_person_needs(self):
+        """12 persons, each preferring a plugged car needing 90 Wh with a covered
+        non-preferred alternative. The true optimum charges 0 Wh (everyone on
+        their covered car); a per-person bias above 90 Wh would instead keep
+        everyone on their preferred car and charge 12×90 = 1080 Wh.
+        """
+        leave = datetime.now(UTC) + timedelta(hours=2)
+
+        n = 12
+        cars = []
+        persons = []
+        for i in range(n):
+            # Pref{i}: plugged, needs (100 - 99.4)*150 = 90 Wh (below a 100 Wh bias)
+            pref = _FakeCar(f"Pref{i}", remaining_km=99.4, has_charger=True)
+            # Cov{i}: unplugged, covers the 100 km trip, non-preferred, free
+            cov = _FakeCar(f"Cov{i}", remaining_km=500, has_charger=False)
+            cars += [pref, cov]
+            persons.append(_FakePerson(f"P{i}", f"Pref{i}", [f"Pref{i}", f"Cov{i}"], leave, 100.0))
+
+        home = _FakeHome(cars, persons)
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        # True energy optimum (0 Wh total): everyone lands on their covered car,
+        # every plugged preferred car is left unused.
+        for i in range(n):
+            assert _person_name(cars[2 * i]) is None, f"Pref{i} must be unused, got {_person_name(cars[2 * i])}"
+            assert _person_name(cars[2 * i + 1]) == f"P{i}"

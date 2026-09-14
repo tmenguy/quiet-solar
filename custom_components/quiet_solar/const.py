@@ -470,18 +470,32 @@ PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"
 
 # Person↔car allocation cost-matrix tunables (all in Wh — car_battery_capacity
 # is configured in Wh and diff_energy is computed in Wh in car.py).
+#
+# The cost matrix is a strictly ordered set of offsets; every value below is an
+# *absolute* tie-break (never E_max-relative), so that neither the pass-1 nor
+# the pass-2 reshuffle can corrupt the real-energy total the gate compares.
+# Relations that must hold for all E_max >= 0, with n = number of persons:
+#   (i)   PLUGGED_COVERED_CAR_PENALTY_WH (0.5) < E_max + 1.0 <= n*E_max + 1.0
+#         and PASS1_PREFERRED_CAR_PENALTY_WH (0.5) added to a covered/plugged
+#         cell stays <= E_max + 1.0 — i.e. every plugged-covered or pass-1
+#         nudged cell orders below the -1/-2 sentinels and the pass-2 offset
+#         (tightest at E_max == 0, the dominant "everyone covered" state, where
+#         the covered-plugged + PASS1 cell (1.0) ties the sentinel (1.0) and
+#         pass 2 — not the nudge — decides; QS-351 review-fix #01 finding 2);
+#   (ii)  n * PASS1_PREFERRED_CAR_PENALTY_WH < PREFERRED_CAR_ENERGY_THRESHOLD_WH
+#         for any realistic n (0.5·n < 1000 up to n = 2000): the pass-1 bias is
+#         a pure ordering tie-break and can never move a per-person real need
+#         from below to above the gate threshold, so total_energy_optimal is the
+#         true optimum (QS-351 review-fix #01 finding 1). It is NOT an energy
+#         bias; keep it a sub-need epsilon, do not raise it toward the threshold.
+#   (iii) 0.5 is below any real charging need that can *act*: a real
+#         diff_energy < 0.5 Wh means a needed-vs-current SOC gap < 50/capacity %,
+#         which is_car_charged(accept_bigger_tolerance=True)
+#         (charger.py:5403) absorbs before any charge constraint is created — so
+#         the boundary inversion "tiny real need ordered below a covered plugged
+#         car" is downstream-harmless (QS-351 review-fix #01 finding 3).
 PREFERRED_CAR_ENERGY_THRESHOLD_WH = 1000.0
-PASS1_PREFERRED_CAR_PENALTY_WH = 100.0
-# Absolute tie-break for a covered pair on a plugged car (QS-351): "save a
-# plugged car for someone who actually needs it charged", but as a pure
-# ordering nudge — never E_max-relative. Relations that must hold for the
-# whole family, with n = number of persons:
-#   (i)  PLUGGED_COVERED_CAR_PENALTY_WH (0.5) < E_max + 1.0 <= n*E_max + 1.0
-#        — strictly below every sentinel and below the pass-2 offset (tightest
-#          at E_max == 0, the dominant "everyone covered" state);
-#   (ii) 0.5 < PASS1_PREFERRED_CAR_PENALTY_WH (100) < PREFERRED_CAR_ENERGY_THRESHOLD_WH (1000);
-#   (iii) 0.5 is below any real charging need that can create a constraint.
-# NB: (i)/(iii) are about THIS constant only; PASS1 is not "below the sentinels".
+PASS1_PREFERRED_CAR_PENALTY_WH = 0.5
 PLUGGED_COVERED_CAR_PENALTY_WH = 0.5
 FAR_FUTURE_FORECAST_THRESHOLD_S = 24 * 3600
 

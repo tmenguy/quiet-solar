@@ -2695,6 +2695,11 @@ class QSHome(QSDynamicGroup):
                 assignment_preferred = hungarian_algorithm(costs_preferred)
                 total_energy_preferred = self._compute_assignment_energy(assignment_preferred, raw_energy)
 
+                # Wh subtraction vs a Wh threshold; the `<=` side means an exact
+                # boundary tie (or an FP-epsilon wobble around it) resolves to
+                # the preferred-car assignment by design — the threshold is far
+                # coarser than real-need granularity, so no rounding guard is
+                # needed (QS-351 review-fix #01 finding 4).
                 if total_energy_preferred - total_energy_optimal <= PREFERRED_CAR_ENERGY_THRESHOLD_WH:
                     assignment = assignment_preferred
                     _LOGGER.info(
