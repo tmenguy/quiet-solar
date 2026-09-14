@@ -1,8 +1,8 @@
 """End-to-end tests for the person-car allocation algorithm.
 
 These tests exercise the real allocation pipeline (Hungarian algorithm,
-pre-allocation of unplugged cars, manual overrides via user_set_person_for_car)
-with lightweight fakes instead of full HA integration.
+manual overrides via user_set_person_for_car) with lightweight fakes
+instead of full HA integration.
 """
 
 import logging
@@ -23,7 +23,10 @@ _LOGGER = logging.getLogger(__name__)
 # Lightweight fakes – just enough state for the real allocation methods
 # ---------------------------------------------------------------------------
 
-KWH_PER_KM = 0.15
+# Production energy units are Wh (car_battery_capacity is configured in Wh and
+# car.py:1996 computes diff_energy in Wh); the fakes mirror that so the real
+# cost-matrix thresholds (Wh) are exercised as in production.
+WH_PER_KM = 150.0
 
 
 class _FakeCharger:
@@ -70,9 +73,9 @@ class _FakeCar:
         if mileage is None:
             return (None, None, None, None)
         if self._remaining_km >= mileage:
-            surplus = (self._remaining_km - mileage) * KWH_PER_KM
+            surplus = (self._remaining_km - mileage) * WH_PER_KM
             return (True, 80.0, 60.0, -surplus)
-        deficit = (mileage - self._remaining_km) * KWH_PER_KM
+        deficit = (mileage - self._remaining_km) * WH_PER_KM
         return (False, 40.0, 80.0, deficit)
 
     def is_car_plugged(self, time=None, for_duration=None):
@@ -151,7 +154,7 @@ def _build_scenario():
 
     Cars:
       Tesla   – no charger, 200 km remaining
-      Twingo  – charger,     70 km remaining
+      Twingo  – charger,     95 km remaining
       Zoe     – charger,    150 km remaining
       IDBuzz  – charger,     10 km remaining
 
@@ -162,7 +165,9 @@ def _build_scenario():
       Brice   – drives Twingo & Zoe, no forecast
     """
     tesla = _FakeCar("Tesla", remaining_km=200, has_charger=False)
-    twingo = _FakeCar("Twingo", remaining_km=70, has_charger=True)
+    # 95 km: Arthur's 100 km trip needs 750 Wh here — within the preferred
+    # threshold, so his preferred Twingo wins for the right reason (QS-351).
+    twingo = _FakeCar("Twingo", remaining_km=95, has_charger=True)
     zoe = _FakeCar("Zoe", remaining_km=150, has_charger=True)
     idbuzz = _FakeCar("IDBuzz", remaining_km=10, has_charger=True)
 
@@ -426,7 +431,7 @@ class TestPersonCarAllocationScenario:
         """First automatic allocation should produce:
 
         Thomas → Tesla  (preferred, no charger, covered)
-        Arthur → Twingo (preferred, plugged, needs charging but preferred wins)
+        Arthur → Twingo (preferred, plugged, needs 750 Wh — within the preferred threshold)
         Magali → Zoe    (preferred, plugged, covered)
         IDBuzz → nobody (10 km, nobody left needs it)
         """
@@ -645,3 +650,131 @@ class TestDefaultChargeNoPersonAssigned:
         assert _person_name(car) == "Alice"
         # The target must NOT be cleared because charge_target_energy is user-originated
         assert car._next_charge_target == 100.0
+
+
+class TestPluggedCoveredPenalty:
+    """QS-351 (event 2): a covered pair on a plugged car must be priced as an
+    absolute tie-break (PLUGGED_COVERED_CAR_PENALTY_WH), never E_max-relative.
+
+    Otherwise a person whose preferred plugged car already covers their trip is
+    swapped onto a car that *needs* charging, manufacturing a grid charge (the
+    incident of 2026-09-13 → 14, Tesla M3 at 11 kW).
+    """
+
+    @pytest.mark.asyncio
+    async def test_covered_plugged_preferred_car_not_abandoned_for_car_needing_charge(self):
+        """Red test A — derived from the 07:05:04 incident.
+
+        With the old E_max-relative plugged penalty the energy-optimal pass
+        swaps Magali off her covered, plugged IDBuzz onto the 37 % Tesla that
+        needs charging. With the fix she stays on the IDBuzz.
+        """
+        zoe = _FakeCar("Zoe", remaining_km=175, has_charger=False)  # just unplugged; covers Arthur (99) and Brice (24)
+        tesla = _FakeCar("Tesla", remaining_km=80, has_charger=True)  # plugged; covers Thomas (13), NOT Magali (113)
+        idbuzz = _FakeCar("IDBuzz", remaining_km=200, has_charger=True)  # plugged; covers Magali and Thomas
+        twingo = _FakeCar("Twingo", remaining_km=20, has_charger=False)  # Arthur's preferred; needs charging
+
+        leave = datetime.now(UTC) + timedelta(hours=2)
+        arthur = _FakePerson("Arthur", "Twingo", ["Zoe", "Twingo"], leave, 99.0)
+        magali = _FakePerson("Magali", "IDBuzz", ["IDBuzz", "Tesla"], leave, 113.0)
+        thomas = _FakePerson("Thomas", "Tesla", ["Tesla", "IDBuzz"], leave, 13.0)
+        brice = _FakePerson("Brice", "Zoe", ["Zoe", "Twingo"], leave, 24.0)
+
+        home = _FakeHome([zoe, tesla, idbuzz, twingo], [arthur, magali, thomas, brice])
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        # The first two assertions make the test discriminating: without them
+        # the last two are exactly the *preferred* pass's output.
+        assert _person_name(zoe) == "Arthur"  # energy-optimal pass WON …
+        assert _person_name(twingo) == "Brice"
+        assert _person_name(idbuzz) == "Magali"  # … and kept Magali on her plugged, already-covered car
+        assert _person_name(tesla) == "Thomas"  # the car that needs charging is not handed to Magali
+
+    @pytest.mark.asyncio
+    async def test_preferred_plugged_car_needing_over_threshold_is_left_for_covered_car(self):
+        """Red test A2 — the intended behaviour change made explicit.
+
+        A preferred plugged car needing more than the threshold is left for a
+        covered car: Arthur's Twingo needs 4.5 kWh (> 1 kWh), so the
+        energy-optimal pass moves him onto the covered Zoe and Magali onto the
+        covered Twingo. Masked before the fix by the inverted penalty.
+        """
+        home, tesla, twingo, zoe, idbuzz, *_ = _build_scenario()
+        twingo._remaining_km = 70  # pre-fix premise: Arthur needs 4500 Wh on his preferred Twingo
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        assert _person_name(zoe) == "Arthur"  # 4.5 kWh > 1 kWh: energy-optimal wins, Zoe covers him
+        assert _person_name(twingo) == "Magali"  # Twingo covers her 20 km
+        assert _person_name(tesla) == "Thomas"
+        assert _person_name(idbuzz) is None
+
+    @pytest.mark.asyncio
+    async def test_all_covered_preferred_plugged_car_kept_when_e_max_is_zero(self):
+        """Invariant pin (not a red test): when everyone is covered (E_max == 0)
+        a person is not moved off their preferred plugged car.
+
+        Fixture order matters — the unplugged car is listed first so the
+        E_max == 0 tie at penalty 1.0 breaks against the plugged car and the pin
+        is strict (pins PLUGGED_COVERED_CAR_PENALTY_WH < 1.0). The binding
+        constraint is pass 2's ``n·E_max + 1.0`` offset.
+        """
+        leave = datetime.now(UTC) + timedelta(hours=2)
+
+        y = _FakeCar("Y", remaining_km=200, has_charger=False)  # non-preferred, unplugged, covers, free
+        x = _FakeCar("X", remaining_km=200, has_charger=True)  # P's preferred car, plugged, covers
+        home = _FakeHome([y, x], [_FakePerson("P", "X", ["X", "Y"], leave, 50.0)])
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        assert _person_name(x) == "P"  # E_max == 0: not moved off the preferred plugged car (pins penalty < 1.0)
+
+        # lower bound: with NO preference the unplugged covered car must win (pins penalty > 0)
+        home2 = _FakeHome(
+            [_FakeCar("X", 200, True), _FakeCar("Y", 200, False)],
+            [_FakePerson("P", None, ["X", "Y"], leave, 50.0)],
+        )
+        await home2.compute_and_set_best_persons_cars_allocations(force_update=True)
+        assert _person_name(home2._cars[1]) == "P"
+
+
+class TestAllocationUnits:
+    """QS-351 (defect B): the two-pass gate and tie-break are in Wh, not kWh.
+
+    diff_energy is Wh, so the threshold must be 1000 Wh — a disagreement of a
+    few hundred Wh between the passes must keep the preferred assignment.
+    """
+
+    @pytest.mark.asyncio
+    async def test_preferred_car_kept_when_energy_gap_below_threshold_wh(self, caplog):
+        """Red test B — gap 750 Wh <= 1000 Wh must keep the preferred pass."""
+        leave = datetime.now(UTC) + timedelta(hours=2)
+
+        c1 = _FakeCar("C1", remaining_km=60, has_charger=True)  # P1 needs 6000 Wh, P2 needs 4500 Wh
+        c2 = _FakeCar("C2", remaining_km=95, has_charger=True)  # P1 needs 750 Wh, P2 covered
+        p1 = _FakePerson("P1", "C1", ["C1", "C2"], leave, 100.0)
+        p2 = _FakePerson("P2", "C2", ["C1", "C2"], leave, 90.0)
+        home = _FakeHome([c1, c2], [p1, p2])
+
+        with caplog.at_level(logging.INFO):
+            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        # preferred pass = 6000 Wh, energy-optimal = 5250 Wh: gap 750 Wh <= 1000 Wh -> preferred must win
+        assert _person_name(c1) == "P1"
+        assert _person_name(c2) == "P2"
+        assert "energy diff 750.00 Wh <= threshold 1000.00 Wh" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_energy_optimal_wins_when_gap_above_threshold_wh(self):
+        """Companion — brackets the constant from above: gap 1050 Wh > 1000 Wh
+        must flip to the energy-optimal pass (green before and after the fix)."""
+        leave = datetime.now(UTC) + timedelta(hours=2)
+
+        c1 = _FakeCar("C1", remaining_km=60, has_charger=True)  # P1 needs 6000 Wh, P2 needs 4500 Wh
+        c2 = _FakeCar("C2", remaining_km=97, has_charger=True)  # P1 needs 450 Wh, P2 covered
+        p1 = _FakePerson("P1", "C1", ["C1", "C2"], leave, 100.0)
+        p2 = _FakePerson("P2", "C2", ["C1", "C2"], leave, 90.0)
+        home = _FakeHome([c1, c2], [p1, p2])
+
+        await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+
+        # gap 6000 - (450 + 4500) = 1050 Wh > 1000 Wh -> energy-optimal
+        assert _person_name(c1) == "P2"
+        assert _person_name(c2) == "P1"

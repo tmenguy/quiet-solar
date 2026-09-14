@@ -54,10 +54,11 @@ from ..const import (
     OFF_GRID_MODE_FORCE_OFF_GRID,
     OFF_GRID_MODE_FORCE_ON_GRID,
     OVERRIDE_STATE_NO_OVERRIDE,
-    PASS1_PREFERRED_CAR_PENALTY_KWH,
+    PASS1_PREFERRED_CAR_PENALTY_WH,
     PERSON_HISTORY_BACKFILL_DAYS,
     PERSON_NOTIFY_REASON_CHANGED_CAR,
-    PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
+    PLUGGED_COVERED_CAR_PENALTY_WH,
+    PREFERRED_CAR_ENERGY_THRESHOLD_WH,
     SENSOR_CAR_CHARGE_ORIGIN,
     SENSOR_CAR_PERSON_FORECAST,
     CONF_TYPE_NAME_QSHome,
@@ -2475,7 +2476,7 @@ class QSHome(QSDynamicGroup):
          -1.0  = no departure forecast (or forecast too far in the future)
          -2.0  = car data error
          -3.0  = already covered (no charging needed)
-         >0    = diff_energy in kWh
+         >0    = diff_energy in Wh
         """
         costs = np.zeros((len(p_s), len(c_s)), dtype=np.float64)
         E_max = 0.0
@@ -2523,15 +2524,20 @@ class QSHome(QSDynamicGroup):
           0.0 (unauthorized)  -> maxi_val (effectively forbidden)
          -1.0 (no forecast)   -> E_max + 1.0
          -2.0 (car data err)  -> E_max + 1.0
-         -3.0 (covered)       -> 0.0 if car is unplugged, E_max + 0.5 if plugged
+         -3.0 (covered)       -> 0.0 if car is unplugged,
+                                 PLUGGED_COVERED_CAR_PENALTY_WH if plugged
 
-        The plugged-car penalty for covered pairs discourages "wasting" a
-        plugged-in car on a trip that needs no charging, saving it for
-        someone who actually needs the car charged.
+        The plugged-covered penalty discourages "wasting" a plugged-in car on a
+        trip that needs no charging, saving it for someone who actually needs
+        the car charged. It is an *absolute* tie-break (QS-351): it must stay
+        below the ``E_max + 1.0`` sentinels, below the pass-2 offset and below
+        any real charging need — never E_max-relative, or it would price a
+        covered plugged car above every real need and so manufacture charging
+        demand.
         """
         costs = raw_energy.copy()
         maxi_val = max(1e12, (E_max + 1.0) * (1.0 + max(len(c_s), len(p_s))))
-        plugged_covered_penalty = E_max + 0.5
+        plugged_covered_penalty = PLUGGED_COVERED_CAR_PENALTY_WH
 
         for person_index in range(len(p_s)):
             for car_index in range(len(c_s)):
@@ -2679,7 +2685,7 @@ class QSHome(QSDynamicGroup):
                     )
 
                 costs_energy = self._finalize_cost_matrix(
-                    raw_energy, E_max, p_s, c_s, preferred_car_penalty=PASS1_PREFERRED_CAR_PENALTY_KWH
+                    raw_energy, E_max, p_s, c_s, preferred_car_penalty=PASS1_PREFERRED_CAR_PENALTY_WH
                 )
                 assignment_energy = hungarian_algorithm(costs_energy)
                 total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
@@ -2689,21 +2695,21 @@ class QSHome(QSDynamicGroup):
                 assignment_preferred = hungarian_algorithm(costs_preferred)
                 total_energy_preferred = self._compute_assignment_energy(assignment_preferred, raw_energy)
 
-                if total_energy_preferred - total_energy_optimal <= PREFERRED_CAR_ENERGY_THRESHOLD_KWH:
+                if total_energy_preferred - total_energy_optimal <= PREFERRED_CAR_ENERGY_THRESHOLD_WH:
                     assignment = assignment_preferred
                     _LOGGER.info(
                         "get_best_persons_cars_allocations: using preferred-car assignment "
-                        "(energy diff %.2f kWh <= threshold %.2f kWh)",
+                        "(energy diff %.2f Wh <= threshold %.2f Wh)",
                         total_energy_preferred - total_energy_optimal,
-                        PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
+                        PREFERRED_CAR_ENERGY_THRESHOLD_WH,
                     )
                 else:
                     assignment = assignment_energy
                     _LOGGER.info(
                         "get_best_persons_cars_allocations: using energy-optimal assignment "
-                        "(energy diff %.2f kWh > threshold %.2f kWh)",
+                        "(energy diff %.2f Wh > threshold %.2f Wh)",
                         total_energy_preferred - total_energy_optimal,
-                        PREFERRED_CAR_ENERGY_THRESHOLD_KWH,
+                        PREFERRED_CAR_ENERGY_THRESHOLD_WH,
                     )
 
                 result_energy = {}

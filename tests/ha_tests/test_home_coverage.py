@@ -2976,7 +2976,7 @@ async def test_allocation_energy_optimal_over_preferred(
     home_config_entry: ConfigEntry,
 ) -> None:
     """Cover lines 2323-2324: energy-optimal assignment used when preferred is too costly."""
-    from custom_components.quiet_solar.ha_model.home import PREFERRED_CAR_ENERGY_THRESHOLD_KWH
+    from custom_components.quiet_solar.ha_model.home import PREFERRED_CAR_ENERGY_THRESHOLD_WH
 
     from .const import MOCK_CAR_CONFIG, MOCK_PERSON_CONFIG
 
@@ -3057,7 +3057,7 @@ async def test_allocation_energy_optimal_over_preferred(
         person.update_person_forecast = MagicMock(return_value=(time + timedelta(hours=8), 100.0))
         person.notify_of_forecast_if_needed = AsyncMock()
 
-    huge_diff = PREFERRED_CAR_ENERGY_THRESHOLD_KWH + 100.0
+    huge_diff = PREFERRED_CAR_ENERGY_THRESHOLD_WH + 100.0
 
     def mock_build(p_s, c_s, c_name_to_index, t):
         raw = np.zeros((len(p_s), len(c_s)), dtype=np.float64)

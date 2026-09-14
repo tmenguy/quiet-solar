@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from custom_components.quiet_solar.const import PREFERRED_CAR_ENERGY_THRESHOLD_KWH
+from custom_components.quiet_solar.const import PREFERRED_CAR_ENERGY_THRESHOLD_WH
 from custom_components.quiet_solar.home_model.home_utils import (
     _greedy_assignment,
     hungarian_algorithm,
@@ -682,7 +682,7 @@ class TestTwoPassAllocation:
                 total += val
         return total
 
-    def _run_two_pass(self, energies, authorized_mask, preferences, threshold=PREFERRED_CAR_ENERGY_THRESHOLD_KWH):
+    def _run_two_pass(self, energies, authorized_mask, preferences, threshold=PREFERRED_CAR_ENERGY_THRESHOLD_WH):
         """Run the full two-pass logic and return (chosen_assignment, choice).
 
         choice is 'preferred' or 'energy'.
@@ -705,27 +705,27 @@ class TestTwoPassAllocation:
             return assignment_energy, "energy", total_energy_preferred, total_energy_optimal
 
     def test_energy_wins_when_difference_large(self):
-        """Preferred assignment costs 40 kWh vs energy-optimal 2 kWh.
+        """Preferred assignment costs 40000 Wh vs energy-optimal 2000 Wh.
 
         Person A prefers Car1, Person B prefers Car2.
-        A->Car1 needs 20 kWh, A->Car2 needs 1 kWh
-        B->Car1 needs 1 kWh, B->Car2 needs 20 kWh
+        A->Car1 needs 20000 Wh, A->Car2 needs 1000 Wh
+        B->Car1 needs 1000 Wh, B->Car2 needs 20000 Wh
         """
-        energies = [[20.0, 1.0], [1.0, 20.0]]
+        energies = [[20000.0, 1000.0], [1000.0, 20000.0]]
         authorized = [[True, True], [True, True]]
         preferences = [0, 1]
 
         assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
 
         assert choice == "energy"
-        assert e_opt == pytest.approx(2.0)
-        assert e_pref == pytest.approx(40.0)
+        assert e_opt == pytest.approx(2000.0)
+        assert e_pref == pytest.approx(40000.0)
         total = self._total_energy(assignment, self._build_raw(energies, authorized)[0])
-        assert total == pytest.approx(2.0)
+        assert total == pytest.approx(2000.0)
 
     def test_preferred_wins_when_difference_small(self):
-        """Preferred costs 10.5 kWh vs energy-optimal 10.0 kWh (diff 0.5 < 1.0)."""
-        energies = [[5.0, 5.3], [5.2, 5.0]]
+        """Preferred costs 10500 Wh vs energy-optimal 10000 Wh (diff 500 < 1000)."""
+        energies = [[5000.0, 5300.0], [5200.0, 5000.0]]
         authorized = [[True, True], [True, True]]
         preferences = [0, 1]
 
@@ -737,13 +737,16 @@ class TestTwoPassAllocation:
 
     def test_exact_threshold_boundary(self):
         """Energy difference equals exactly the threshold -- preferred should win (<= check)."""
-        energies = [[5.0, 5.5], [5.5, 5.0]]
+        energies = [[5000.0, 5500.0], [5500.0, 5000.0]]
         authorized = [[True, True], [True, True]]
         preferences = [0, 1]
 
         assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
 
-        assert e_pref - e_opt == pytest.approx(1.0, abs=1e-9) or e_pref - e_opt < 1.0
+        assert (
+            e_pref - e_opt == pytest.approx(PREFERRED_CAR_ENERGY_THRESHOLD_WH, abs=1e-9)
+            or e_pref - e_opt < PREFERRED_CAR_ENERGY_THRESHOLD_WH
+        )
         assert choice == "preferred"
 
     def test_all_cars_already_covered(self):
@@ -762,7 +765,7 @@ class TestTwoPassAllocation:
 
     def test_single_person_single_car(self):
         """Trivial 1x1 case."""
-        energies = [[7.5]]
+        energies = [[7500.0]]
         authorized = [[True]]
         preferences = [0]
 
@@ -772,7 +775,7 @@ class TestTwoPassAllocation:
 
     def test_unauthorized_pairs_never_selected(self):
         """Person 0 can only drive Car0, Person 1 can only drive Car1."""
-        energies = [[5.0, 1.0], [1.0, 5.0]]
+        energies = [[5000.0, 1000.0], [1000.0, 5000.0]]
         authorized = [[True, False], [False, True]]
         preferences = [0, 1]
 
@@ -788,22 +791,22 @@ class TestTwoPassAllocation:
         determines the choice.
         """
         energies = [
-            [2.0, 8.0, 3.0],
-            [7.0, 1.0, 6.0],
-            [5.0, 4.0, 2.0],
+            [2000.0, 8000.0, 3000.0],
+            [7000.0, 1000.0, 6000.0],
+            [5000.0, 4000.0, 2000.0],
         ]
         authorized = [[True, True, True], [True, True, True], [True, True, True]]
         preferences = [0, 1, 2]
 
         assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
 
-        assert e_opt == pytest.approx(5.0)
+        assert e_opt == pytest.approx(5000.0)
         assert assignment[0] == 0 or assignment[1] == 1 or assignment[2] == 2
-        assert e_pref - e_opt <= 1.0 or choice == "energy"
+        assert e_pref - e_opt <= PREFERRED_CAR_ENERGY_THRESHOLD_WH or choice == "energy"
 
     def test_rectangular_more_cars_than_persons(self):
         """2 persons, 4 cars. Algorithm should handle padding correctly."""
-        energies = [[10.0, 2.0, 8.0, 1.0], [3.0, 9.0, 1.0, 7.0]]
+        energies = [[10000.0, 2000.0, 8000.0, 1000.0], [3000.0, 9000.0, 1000.0, 7000.0]]
         authorized = [[True, True, True, True], [True, True, True, True]]
         preferences = [0, 1]
 
@@ -811,12 +814,12 @@ class TestTwoPassAllocation:
 
         assert len(assignment) == 2
         assert len(set(assignment.values())) == 2
-        assert e_opt == pytest.approx(2.0)
+        assert e_opt == pytest.approx(2000.0)
         assert choice == "energy"
 
     def test_rectangular_more_persons_than_cars(self):
         """3 persons, 2 cars. Not all persons get a car."""
-        energies = [[5.0, 1.0], [1.0, 5.0], [3.0, 3.0]]
+        energies = [[5000.0, 1000.0], [1000.0, 5000.0], [3000.0, 3000.0]]
         authorized = [[True, True], [True, True], [True, True]]
         preferences = [0, 1, 0]
 
@@ -827,35 +830,35 @@ class TestTwoPassAllocation:
 
     def test_preferred_matches_energy_optimal(self):
         """When preferred cars happen to also be energy-optimal, both passes agree."""
-        energies = [[1.0, 10.0], [10.0, 1.0]]
+        energies = [[1000.0, 10000.0], [10000.0, 1000.0]]
         authorized = [[True, True], [True, True]]
         preferences = [0, 1]
 
         assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
 
         assert choice == "preferred"
-        assert e_opt == pytest.approx(2.0)
-        assert e_pref == pytest.approx(2.0)
+        assert e_opt == pytest.approx(2000.0)
+        assert e_pref == pytest.approx(2000.0)
         assert assignment[0] == 0
         assert assignment[1] == 1
 
     def test_large_energy_gap_one_pair(self):
         """One pair has a huge energy difference, rest are equal.
 
-        Person 0: Car0=50kWh, Car1=0.5kWh (prefers Car0)
-        Person 1: Car0=0.5kWh, Car1=0.5kWh (prefers Car1)
-        Preferred: 0->Car0(50) + 1->Car1(0.5) = 50.5
-        Energy:    0->Car1(0.5) + 1->Car0(0.5) = 1.0
-        Diff = 49.5 >> threshold => energy wins.
+        Person 0: Car0=50000Wh, Car1=500Wh (prefers Car0)
+        Person 1: Car0=500Wh, Car1=500Wh (prefers Car1)
+        Preferred: 0->Car0(50000) + 1->Car1(500) = 50500
+        Energy:    0->Car1(500) + 1->Car0(500) = 1000
+        Diff = 49500 >> threshold => energy wins.
         """
-        energies = [[50.0, 0.5], [0.5, 0.5]]
+        energies = [[50000.0, 500.0], [500.0, 500.0]]
         authorized = [[True, True], [True, True]]
         preferences = [0, 1]
 
         assignment, choice, e_pref, e_opt = self._run_two_pass(energies, authorized, preferences)
 
         assert choice == "energy"
-        assert e_opt == pytest.approx(1.0)
+        assert e_opt == pytest.approx(1000.0)
 
     def test_real_scenario_twingo_zoe_arthur_magali(self):
         """Reproduce real-world bug: preferred car forces unnecessary charging.
@@ -864,19 +867,19 @@ class TestTwoPassAllocation:
         remaining pool is:
 
         Cars (columns):  IDBuzz(0)  Twingo(1)  Zoe(2)
-        Arthur (row 0):  unauth     5.0 kWh    0.0 (covered)
+        Arthur (row 0):  unauth     5000 Wh    0.0 (covered)
         Magali (row 1):  0.0        0.0        0.0 (all covered)
 
         Arthur prefers Twingo (col 1), Magali prefers Zoe (col 2).
 
-        Old algorithm: Arthur->Twingo (5 kWh, preferred), Magali->Zoe (0 kWh)
-                       = 5 kWh total. Preferred penalty dominated.
+        Old algorithm: Arthur->Twingo (5000 Wh, preferred), Magali->Zoe (0 Wh)
+                       = 5000 Wh total. Preferred penalty dominated.
 
-        Correct:       Arthur->Zoe (0 kWh), Magali->Twingo or IDBuzz (0 kWh)
-                       = 0 kWh total. Energy-optimal.
+        Correct:       Arthur->Zoe (0 Wh), Magali->Twingo or IDBuzz (0 Wh)
+                       = 0 Wh total. Energy-optimal.
         """
         energies = [
-            [99.0, 5.0, 0.0],  # Arthur: IDBuzz=unauth, Twingo=5kWh, Zoe=covered
+            [99.0, 5000.0, 0.0],  # Arthur: IDBuzz=unauth (masked placeholder), Twingo=5000 Wh, Zoe=covered
             [0.0, 0.0, 0.0],  # Magali: all covered
         ]
         authorized = [
@@ -889,7 +892,7 @@ class TestTwoPassAllocation:
 
         assert choice == "energy"
         assert e_opt == pytest.approx(0.0)
-        assert e_pref == pytest.approx(5.0)
+        assert e_pref == pytest.approx(5000.0)
         assert assignment[0] == 2  # Arthur -> Zoe
         assert assignment[1] in (0, 1)  # Magali -> IDBuzz or Twingo
 

@@ -468,8 +468,21 @@ PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS = "charger_constraints"
 PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER = "daily_reminder_no_charger_car"
 PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"
 
-PREFERRED_CAR_ENERGY_THRESHOLD_KWH = 1.0
-PASS1_PREFERRED_CAR_PENALTY_KWH = 0.1
+# Person↔car allocation cost-matrix tunables (all in Wh — car_battery_capacity
+# is configured in Wh and diff_energy is computed in Wh in car.py).
+PREFERRED_CAR_ENERGY_THRESHOLD_WH = 1000.0
+PASS1_PREFERRED_CAR_PENALTY_WH = 100.0
+# Absolute tie-break for a covered pair on a plugged car (QS-351): "save a
+# plugged car for someone who actually needs it charged", but as a pure
+# ordering nudge — never E_max-relative. Relations that must hold for the
+# whole family, with n = number of persons:
+#   (i)  PLUGGED_COVERED_CAR_PENALTY_WH (0.5) < E_max + 1.0 <= n*E_max + 1.0
+#        — strictly below every sentinel and below the pass-2 offset (tightest
+#          at E_max == 0, the dominant "everyone covered" state);
+#   (ii) 0.5 < PASS1_PREFERRED_CAR_PENALTY_WH (100) < PREFERRED_CAR_ENERGY_THRESHOLD_WH (1000);
+#   (iii) 0.5 is below any real charging need that can create a constraint.
+# NB: (i)/(iii) are about THIS constant only; PASS1 is not "below the sentinels".
+PLUGGED_COVERED_CAR_PENALTY_WH = 0.5
 FAR_FUTURE_FORECAST_THRESHOLD_S = 24 * 3600
 
 CHANGE_ON_OFF_STATE_HYSTERESIS_S = max(10 * 60, SOLVER_STEP_S // 2)
