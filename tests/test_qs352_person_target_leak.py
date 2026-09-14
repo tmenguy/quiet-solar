@@ -70,12 +70,12 @@ def _non_person_cts(charger):
     ]
 
 
-def _base_fixture():
+def _base_fixture(default_charge=80.0):
     """Real Tesla-M3 car plugged into a real charger, mocked HA I/O only."""
     hass = make_hass()
     home = make_home()
     charger = create_charger(hass, home)
-    car = make_real_car(hass, home, name="Tesla M3", default_charge=80.0, minimum_ok_charge=20.0)
+    car = make_real_car(hass, home, name="Tesla M3", default_charge=default_charge, minimum_ok_charge=20.0)
     now = datetime.now(pytz.UTC)
 
     init_charger_states(charger)
@@ -106,8 +106,8 @@ def _base_fixture():
     return hass, home, charger, car, now, magali, thomas
 
 
-def _preseed_filler(charger, car, now):
-    """Push the pre-existing 37 -> 80 filler the incident had live (the `replacing` line)."""
+def _preseed_filler(charger, car, now, target=80.0):
+    """Push the pre-existing 37 -> `target` filler the incident had live (the `replacing` line)."""
     filler = MultiStepsPowerLoadConstraintChargePercent(
         total_capacity_wh=car.car_battery_capacity,
         type=CONSTRAINT_TYPE_FILLER,
@@ -116,14 +116,14 @@ def _preseed_filler(charger, car, now):
         load_param=car.name,
         from_user=False,
         initial_value=37.0,
-        target_value=80.0,
+        target_value=target,
         power_steps=charger._power_steps,
         support_auto=True,
     )
     charger.push_live_constraint(now - timedelta(hours=1), filler)
 
 
-async def _run_step1(charger, car, now, magali):
+async def _run_step1(charger, car, now, magali, default=80.0):
     """Cycle N: Magali present and the car not charged enough -> person constraint
     created and the person's target int-cast into ``_next_charge_target``."""
     car.get_best_person_next_need = AsyncMock(return_value=(False, now + timedelta(hours=7), PERSON_TARGET, magali))
@@ -138,7 +138,7 @@ async def _run_step1(charger, car, now, magali):
     non_person = _non_person_cts(charger)
     assert len(non_person) == 1
     assert non_person[0].initial_value == 37.0
-    assert non_person[0].target_value == 80.0
+    assert non_person[0].target_value == default
 
 
 def _install_spy(car):
@@ -303,3 +303,218 @@ async def test_no_restore_when_target_already_default(caplog):
     spy.assert_not_awaited()
     assert car._next_charge_target == car.car_default_charge
     assert "restoring default charge target" not in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# Finding #2 — a user target present must also be re-applied to _next_charge_target
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_user_target_set_before_person_restores_user_value(caplog):
+    """user-set 60 -> person leak (41) -> person removed -> _next_charge_target back to 60."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+
+    await car.set_next_charge_target_percent(60)
+    car.set_user_originated("charge_target_percent", 60)
+
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41  # the push site overwrote the user's 60
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+
+    car.get_best_person_next_need = AsyncMock(return_value=(True, now + timedelta(hours=7), 30.0, thomas))
+    car.current_forecasted_person = thomas
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    spy.assert_awaited_once_with(60)
+    assert car._next_charge_target == 60
+    assert car.get_car_target_SOC() == 60
+    assert car.get_user_originated("charge_target_percent") == 60
+    assert _person_cts(charger, "Magali Menguy") == []
+    non_person = _non_person_cts(charger)
+    assert len(non_person) == 1
+    assert non_person[0].initial_value == 37.0
+    assert non_person[0].target_value == 60
+    assert "restoring user charge target" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_post_reboot_user_default_restores_after_person_removed(caplog):
+    """Post-reboot select-restore writes user_target=80 (int); the person leak (41) must
+    not linger in the select — the user-target branch restores 80."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+
+    # The select restore writes an int via user_set_next_charge_target.
+    await car.set_next_charge_target_percent(80)
+    car.set_user_originated("charge_target_percent", 80)
+
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+
+    car.get_best_person_next_need = AsyncMock(return_value=(True, now + timedelta(hours=7), 30.0, thomas))
+    car.current_forecasted_person = thomas
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    spy.assert_awaited_once_with(80)
+    assert car._next_charge_target == 80
+    assert "restoring user charge target" in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# Finding #3 — an unplug before re-allocation must not leave the leaked target
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_unplug_with_live_person_constraint_clears_leaked_target(caplog):
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+    charger.is_not_plugged = MagicMock(return_value=True)
+    charger.is_plugged = MagicMock(return_value=False)
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    assert car._next_charge_target is None
+    assert car.get_car_target_SOC() == car.car_default_charge
+
+
+@pytest.mark.asyncio
+async def test_unplug_with_user_target_keeps_next_charge_target():
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+
+    await car.set_next_charge_target_percent(60)
+    car.set_user_originated("charge_target_percent", 60)
+
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    charger.is_not_plugged = MagicMock(return_value=True)
+    charger.is_plugged = MagicMock(return_value=False)
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    # A user target was present -> the unplug branch must not zero the field.
+    assert car._next_charge_target == 41
+
+
+# --------------------------------------------------------------------------- #
+# Finding #6 — the same-cycle agenda constraint must follow the restored target
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_agenda_constraint_target_refreshed_after_person_removed(caplog):
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+    charger._last_completed_constraint = None
+
+    start_time = now + timedelta(hours=20)
+    car.get_next_scheduled_event = AsyncMock(return_value=(start_time, None))
+    car.get_best_person_next_need = AsyncMock(return_value=(True, now + timedelta(hours=7), 30.0, thomas))
+    car.current_forecasted_person = thomas
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    spy.assert_awaited_once_with(car.car_default_charge)
+    agenda_cts = [
+        c
+        for c in _non_person_cts(charger)
+        if c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME and c.end_of_constraint == start_time
+    ]
+    assert len(agenda_cts) == 1
+    assert agenda_cts[0].target_value == car.car_default_charge
+
+
+# --------------------------------------------------------------------------- #
+# Finding #7 — churn / user_target == 0 / fractional-default boundaries
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_restore_does_not_churn_across_cycles(caplog):
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+
+    car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
+    car.current_forecasted_person = None
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+    spy.assert_awaited_once_with(car.car_default_charge)
+
+    # No churn on the next cycle: target already at default.
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=6))
+    spy.assert_awaited_once()
+
+    # home.py:2773 clears it to None between cycles -> lazy default, still no churn.
+    car._next_charge_target = None
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=9))
+    spy.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_zero_user_target_blocks_default_restore(caplog):
+    """user_target == 0 is an explicit override: the default-restore branch is skipped;
+    with finding #2 in place the user-target branch re-applies 0."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+
+    await car.set_next_charge_target_percent(0)
+    car.set_user_originated("charge_target_percent", 0)
+    assert car.get_user_originated("charge_target_percent") == 0
+
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+
+    car.get_best_person_next_need = AsyncMock(return_value=(True, now + timedelta(hours=7), 30.0, thomas))
+    car.current_forecasted_person = thomas
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    spy.assert_awaited_once_with(0)
+    assert car._next_charge_target == 0
+    assert "restoring default charge target" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_fractional_default_no_churn(caplog):
+    hass, home, charger, car, now, magali, thomas = _base_fixture(default_charge=80.5)
+
+    _preseed_filler(charger, car, now, target=80.5)
+    await _run_step1(charger, car, now, magali, default=80.5)
+
+    spy = _install_spy(car)
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
+
+    car.get_best_person_next_need = AsyncMock(return_value=(None, None, None, None))
+    car.current_forecasted_person = None
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+    spy.assert_awaited_once_with(80.5)
+
+    # int() on both sides: int(get_car_target_SOC()==80) == int(80.5) -> no second restore.
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=6))
+    spy.assert_awaited_once()

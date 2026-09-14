@@ -3616,6 +3616,28 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     self.name,
                     self.car.get_user_originated("person_name"),
                 )
+                # QS-352 (review #01, finding #3): a live person constraint leaked its
+                # target into `_next_charge_target` (the person push site); the unplug reset
+                # below wipes constraints and user overrides but never touches that field, so
+                # the select / autonomy sensor would show the person value for the whole away
+                # period. Reset it to the lazy default when no user target is set (that is
+                # the user's own choice, not a leak). Do NOT call
+                # `set_next_charge_target_percent` here: the car is still attached and it
+                # would write the car's native charge limit on unplug.
+                if not self.car.has_user_originated("charge_target_percent") and any(
+                    ct is not None
+                    and ct.load_param == self.car.name
+                    and ct.load_info is not None
+                    and ct.load_info.get(CONSTRAINT_FORECASTED_PERSON_KEY) is not None
+                    for ct in self._constraints
+                ):
+                    _LOGGER.info(
+                        "check_load_activity_and_constraints: unplugged car %s clearing leaked person"
+                        " charge target %s%% to default",
+                        self.car.name,
+                        self.car.get_car_target_SOC(),
+                    )
+                    self.car._next_charge_target = None
                 self.car.clear_all_user_originated()
                 # Edge-triggered (plugged→unplugged): clear the estimated-SOC
                 # state. The genuine plug-in path also clears it (the
@@ -4181,29 +4203,54 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         ):
                             do_force_solve = True
 
-                        # QS-352: the person branch above persisted the person's target
-                        # into the car (set_next_charge_target_percent at the push site,
-                        # ~4137). No person constraint is live anymore -> put the car back
-                        # on its default unless the user explicitly chose a target.
-                        # `user_target` is the value resolved at 3752-3760 (None when the
-                        # key is absent OR present-but-None); it is written only there and
-                        # read once at 3874, never reassigned before this point. Compare as
-                        # int: set_next_charge_target_percent int-casts (car.py:2679) while
-                        # car_default_charge is a config float, so the "no churn" guard
-                        # holds even for a fractional default. This closes the no-snapshot
-                        # path only; the user-override snapshot path is #353.
-                        if user_target is None and int(self.car.get_car_target_SOC()) != int(
-                            self.car.car_default_charge
-                        ):
+                        # QS-352: the person push site above (the `car_charge_person is
+                        # None` branch -> `set_next_charge_target_percent`) persisted the
+                        # person's target into the car's `_next_charge_target`, overwriting
+                        # any user/default value regardless of `user_target`. No person
+                        # constraint is live anymore -> realign `_next_charge_target` with the
+                        # value the rest of the cycle already resolved: the user's choice if
+                        # one exists, otherwise the car default. `user_target` was resolved by
+                        # the `has_user_originated(target_key)` block above (None when the key
+                        # is absent OR present-but-None); it is never reassigned before this
+                        # point. Compare as int because `QSCar.set_next_charge_target_percent`
+                        # int-casts its value while the config default is a float, so the "no
+                        # churn" guard holds even for a fractional default. This closes the
+                        # no-snapshot path only; the user-override snapshot path is #353.
+                        # (Review #01: finding #2 adds the user-target branch, finding #4 the
+                        # name-based anchors, finding #6 the agenda realignment below.)
+                        restored_target = None
+                        restore_reason = None
+                        if user_target is None:
+                            if int(self.car.get_car_target_SOC()) != int(self.car.car_default_charge):
+                                restored_target = self.car.car_default_charge
+                                restore_reason = "default"
+                        elif int(self.car.get_car_target_SOC()) != int(user_target):
+                            # A user target is set but the person push clobbered
+                            # `_next_charge_target`; the constraints already follow
+                            # `user_target` (resolved above), so realign the field too.
+                            restored_target = user_target
+                            restore_reason = "user"
+
+                        if restored_target is not None:
                             _LOGGER.info(
-                                "check_load_activity_and_constraints: plugged car %s restoring default charge"
+                                "check_load_activity_and_constraints: plugged car %s restoring %s charge"
                                 " target %s%% (was %s%%) after person constraint removal",
                                 self.car.name,
-                                self.car.car_default_charge,
+                                restore_reason,
+                                restored_target,
                                 self.car.get_car_target_SOC(),
                             )
-                            await self.car.set_next_charge_target_percent(self.car.car_default_charge)
+                            await self.car.set_next_charge_target_percent(restored_target)
                             target_charge = self.car.get_car_target_SOC()
+
+                            # Review #01, finding #6: the agenda constraint built earlier
+                            # this cycle used the leaked `target_charge`; realign it so it
+                            # does not carry the person value for one ~3 min window (it would
+                            # otherwise self-heal only on the next cycle).
+                            if car_charge_agenda is not None and car_charge_agenda.target_value != target_charge:
+                                car_charge_agenda.target_value = target_charge
+                                self.set_live_constraints(time, self._constraints)
+                                do_force_solve = True
 
             if realized_charge_target is None or (
                 is_target_percent and realized_charge_target < self.car.car_default_charge
