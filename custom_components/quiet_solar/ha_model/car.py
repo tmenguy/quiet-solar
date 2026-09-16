@@ -2680,6 +2680,13 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         self._next_charge_target = value
 
+        # QS-352: `do_update_charger=False` realigns only Quiet Solar's own target and
+        # skips `setup_car_charge_target_if_needed` (which can write the car's native
+        # max-charge entity via `adapt_max_charge_limit`). Used by the leaked-target
+        # restore sites, which must not touch the native limit.
+        if do_update_charger is False:
+            return True
+
         new_target = await self.setup_car_charge_target_if_needed()
 
         if self.charger and new_target:

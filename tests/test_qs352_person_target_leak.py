@@ -22,6 +22,7 @@ import pytz
 
 from custom_components.quiet_solar.const import (
     CHARGE_TIME_CONSTRAINTS_CLEARED,
+    CHARGER_NO_CAR_CONNECTED,
     CONSTRAINT_FORECASTED_PERSON_KEY,
     CONSTRAINT_ORIGINATOR_AGENDA,
     CONSTRAINT_ORIGINATOR_KEY,
@@ -29,6 +30,9 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_FILLER,
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
+    USER_ORIGINATED_CHARGE_TARGET_PERCENT,
+    USER_ORIGINATED_CHARGE_TIME,
+    USER_ORIGINATED_FORCE_CHARGE,
 )
 from custom_components.quiet_solar.home_model.constraints import (
     MultiStepsPowerLoadConstraintChargePercent,
@@ -184,14 +188,14 @@ async def test_person_target_restored_to_default_after_person_constraint_removed
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
     # Fails today:
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert car._next_charge_target == car.car_default_charge
     assert all(c.target_value == car.car_default_charge for c in _car_cts(charger))
     assert "restoring default charge target" in caplog.text
 
     # Passes today (scope guards):
     assert _person_cts(charger, "Magali Menguy") == []
-    assert not car.has_user_originated("charge_target_percent")
+    assert not car.has_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT)
 
 
 # --------------------------------------------------------------------------- #
@@ -207,11 +211,11 @@ async def test_user_originated_target_survives_person_constraint_removal(caplog)
     # Seed a user target via the two primitives (order matters), NOT
     # user_set_next_charge_target (which would create a user-timed constraint).
     await car.set_next_charge_target_percent(60)
-    car.set_user_originated("charge_target_percent", 60)
+    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
 
     # Lock the snapshot side effects the branch relies on being inert.
-    assert car.get_user_originated("charge_time") is None
-    assert car.get_user_originated("force_charge") is False
+    assert car.get_user_originated(USER_ORIGINATED_CHARGE_TIME) is None
+    assert car.get_user_originated(USER_ORIGINATED_FORCE_CHARGE) is False
     assert car.get_user_originated("bump_solar") is False
     assert car._next_charge_target == 60
     assert not car.has_user_originated("person_name")
@@ -225,7 +229,7 @@ async def test_user_originated_target_survives_person_constraint_removal(caplog)
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
     spy.assert_not_awaited()
-    assert car.get_user_originated("charge_target_percent") == 60
+    assert car.get_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT) == 60
     assert car.get_car_target_SOC() == 60
     assert _person_cts(charger, "Magali Menguy") == []
     assert not any(c.from_user is True for c in _car_cts(charger))
@@ -244,7 +248,7 @@ async def test_none_user_target_does_not_block_restore(caplog):
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     # State left by a snapshot after home.py:2773 cleared the field.
-    car._user_originated["charge_target_percent"] = None
+    car._user_originated[USER_ORIGINATED_CHARGE_TARGET_PERCENT] = None
 
     _preseed_filler(charger, car, now)
     await _run_step1(charger, car, now, magali)
@@ -257,7 +261,7 @@ async def test_none_user_target_does_not_block_restore(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert car._next_charge_target == car.car_default_charge
     assert all(c.target_value == car.car_default_charge for c in _car_cts(charger))
     assert "restoring default charge target" in caplog.text
@@ -319,7 +323,7 @@ async def test_user_target_set_before_person_restores_user_value(caplog):
     _preseed_filler(charger, car, now)
 
     await car.set_next_charge_target_percent(60)
-    car.set_user_originated("charge_target_percent", 60)
+    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
 
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41  # the push site overwrote the user's 60
@@ -332,10 +336,10 @@ async def test_user_target_set_before_person_restores_user_value(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(60)
+    spy.assert_awaited_once_with(60, do_update_charger=False)
     assert car._next_charge_target == 60
     assert car.get_car_target_SOC() == 60
-    assert car.get_user_originated("charge_target_percent") == 60
+    assert car.get_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT) == 60
     assert _person_cts(charger, "Magali Menguy") == []
     non_person = _non_person_cts(charger)
     assert len(non_person) == 1
@@ -354,7 +358,7 @@ async def test_post_reboot_user_default_restores_after_person_removed(caplog):
 
     # The select restore writes an int via user_set_next_charge_target.
     await car.set_next_charge_target_percent(80)
-    car.set_user_originated("charge_target_percent", 80)
+    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 80)
 
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
@@ -367,7 +371,7 @@ async def test_post_reboot_user_default_restores_after_person_removed(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(80)
+    spy.assert_awaited_once_with(80, do_update_charger=False)
     assert car._next_charge_target == 80
     assert "restoring user charge target" in caplog.text
 
@@ -402,7 +406,7 @@ async def test_unplug_with_live_person_constraint_clears_target():
     _preseed_filler(charger, car, now)
 
     await car.set_next_charge_target_percent(60)
-    car.set_user_originated("charge_target_percent", 60)
+    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
 
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41  # the person push clobbered the user's 60
@@ -423,7 +427,7 @@ async def test_unplug_present_but_none_user_target_clears_leaked_target():
     finding-#1 design — the clear fires whenever a person constraint is live."""
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
-    car._user_originated["charge_target_percent"] = None
+    car._user_originated[USER_ORIGINATED_CHARGE_TARGET_PERCENT] = None
     _preseed_filler(charger, car, now)
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
@@ -467,6 +471,45 @@ async def test_has_live_person_constraint_no_car():
 
 
 # --------------------------------------------------------------------------- #
+# Review #04 finding #4 — direct branch coverage of _person_constraint_ends_this_cycle
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "person, usage_h, pmin, covered, cur, agenda_h, cleared, expected",
+    [
+        pytest.param(False, 5, 41.0, False, 37.0, None, False, True, id="person_absent"),
+        pytest.param(True, None, 41.0, False, 37.0, None, False, True, id="usage_none"),
+        pytest.param(True, 5, None, False, 37.0, None, False, True, id="pmin_none"),
+        pytest.param(True, 5, 41.0, None, 37.0, None, False, True, id="covered_none"),
+        pytest.param(True, 5, 41.0, True, 37.0, None, False, True, id="covered_true"),
+        pytest.param(True, 5, 90.0, False, 37.0, None, True, True, id="charge_time_cleared"),
+        pytest.param(True, 5, 90.0, False, 37.0, 20, False, True, id="agenda_within_25h"),
+        pytest.param(True, 5, 90.0, False, 37.0, 40, False, False, id="agenda_beyond_25h_not_charged"),
+        pytest.param(True, 5, 90.0, False, 37.0, 30, False, True, id="agenda_exactly_25h_in_window"),
+        pytest.param(True, 5, 90.0, False, None, None, False, False, id="current_none_not_charged"),
+        pytest.param(True, 5, 40.0, False, 41.0, None, False, True, id="already_charged_bigger_tolerance"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_person_constraint_ends_this_cycle_predicate(
+    person, usage_h, pmin, covered, cur, agenda_h, cleared, expected
+):
+    from types import SimpleNamespace
+
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+    if cleared:
+        car._user_originated[USER_ORIGINATED_CHARGE_TIME] = CHARGE_TIME_CONSTRAINTS_CLEARED
+
+    person_obj = magali if person else None
+    usage = now + timedelta(hours=usage_h) if usage_h is not None else None
+    agenda = SimpleNamespace(end_of_constraint=now + timedelta(hours=agenda_h)) if agenda_h is not None else None
+
+    result = charger._person_constraint_ends_this_cycle(
+        person_obj, usage, pmin, covered, cur, agenda, True, now + timedelta(minutes=1)
+    )
+    assert result is expected
+
+
+# --------------------------------------------------------------------------- #
 # Review #02 #4 / #03 #4/#8 — force/timed session must not inherit the leaked target
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize(
@@ -501,7 +544,7 @@ async def test_force_charge_after_person_removed_uses_default(step2_return, fore
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert car._next_charge_target == car.car_default_charge
     asap_cts = [c for c in _car_cts(charger) if c.type == CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE]
     assert len(asap_cts) == 1
@@ -526,7 +569,7 @@ async def test_timed_charge_after_person_removed_uses_default(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert car._next_charge_target == car.car_default_charge
     timed_cts = [c for c in _car_cts(charger) if c.from_user is True and c.type == CONSTRAINT_TYPE_MANDATORY_END_TIME]
     assert len(timed_cts) == 1
@@ -540,7 +583,7 @@ async def test_force_charge_after_person_removed_uses_user_target(caplog):
 
     _preseed_filler(charger, car, now)
     await car.set_next_charge_target_percent(60)
-    car.set_user_originated("charge_target_percent", 60)
+    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 60)
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
 
@@ -550,14 +593,14 @@ async def test_force_charge_after_person_removed_uses_user_target(caplog):
     # Setting the user target snapshotted a force_charge=False marker; clear it so the
     # do_force_next_charge press is honoured (else the person block, not the early
     # restore, would run).
-    car.clear_user_originated("force_charge")
+    car.clear_user_originated(USER_ORIGINATED_FORCE_CHARGE)
     car.do_force_next_charge = True
     car.get_best_person_next_need = AsyncMock(return_value=(True, now + timedelta(hours=7), 30.0, thomas))
     car.current_forecasted_person = thomas
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(60)
+    spy.assert_awaited_once_with(60, do_update_charger=False)
     assert car._next_charge_target == 60
     asap_cts = [c for c in _car_cts(charger) if c.type == CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE]
     assert len(asap_cts) == 1
@@ -575,7 +618,7 @@ async def test_force_charge_cleared_charge_time_restores_default(caplog):
     assert car._next_charge_target == 41
 
     # Sentinel set directly (bypasses the user-originated snapshot side effects).
-    car._user_originated["charge_time"] = CHARGE_TIME_CONSTRAINTS_CLEARED
+    car._user_originated[USER_ORIGINATED_CHARGE_TIME] = CHARGE_TIME_CONSTRAINTS_CLEARED
 
     spy = _install_spy(car)
     caplog.set_level(logging.INFO, logger=QS_LOGGER)
@@ -587,7 +630,7 @@ async def test_force_charge_cleared_charge_time_restores_default(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert car._next_charge_target == car.car_default_charge
 
 
@@ -614,10 +657,12 @@ async def test_force_charge_person_still_needs_car_no_early_restore(caplog):
 
 
 # --------------------------------------------------------------------------- #
-# Review #03 finding #2 — car-switch / "no car" exits must also clear the leak
+# Review #03 #2 / #04 #1 — car-switch / "no car" exits must also clear the leak
 # --------------------------------------------------------------------------- #
 @pytest.mark.asyncio
 async def test_car_switch_with_live_person_constraint_clears_target():
+    # Covers the allocation-driven switch (get_best_car resolves to another car);
+    # the user-select handler path is covered by test_select_other_car_… below.
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
@@ -635,6 +680,8 @@ async def test_car_switch_with_live_person_constraint_clears_target():
 
 @pytest.mark.asyncio
 async def test_no_car_selected_with_live_person_constraint_clears_target():
+    # Covers the allocation-driven "no car" exit; the user-select handler path is
+    # covered by test_select_no_car_… below.
     hass, home, charger, car, now, magali, thomas = _base_fixture()
 
     _preseed_filler(charger, car, now)
@@ -648,6 +695,38 @@ async def test_no_car_selected_with_live_person_constraint_clears_target():
     assert car._next_charge_target is None
 
 
+@pytest.mark.asyncio
+async def test_select_no_car_with_live_person_constraint_clears_target():
+    """Review #04 #1: the user car-select handler detaches synchronously via
+    detach_car() — the clear must fire there, not only on the next planning cycle."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    charger.update_charger_for_user_change = AsyncMock()
+    await charger.user_set_selected_car_by_name(CHARGER_NO_CAR_CONNECTED)
+
+    assert car._next_charge_target is None
+
+
+@pytest.mark.asyncio
+async def test_select_other_car_with_live_person_constraint_clears_target():
+    """Review #04 #1: selecting a different car detaches the outgoing car via
+    detach_car(); its person leak must be cleared before the reference is dropped."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    charger.update_charger_for_user_change = AsyncMock()
+    await charger.user_set_selected_car_by_name("ID.buzz")
+
+    assert car._next_charge_target is None
+
+
 # --------------------------------------------------------------------------- #
 # Review #03 finding #3 — marker-less non-default target reverts on replug (intended)
 # --------------------------------------------------------------------------- #
@@ -657,13 +736,13 @@ async def test_replug_without_marker_reverts_to_default(caplog):
 
     # User picks 55 (both primitives); no person constraint involved.
     await car.set_next_charge_target_percent(55)
-    car.set_user_originated("charge_target_percent", 55)
+    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 55)
 
     # Unplug wipes the user marker but leaves _next_charge_target = 55.
     charger.is_not_plugged = MagicMock(return_value=True)
     charger.is_plugged = MagicMock(return_value=False)
     await charger.check_load_activity_and_constraints(now)
-    assert not car.has_user_originated("charge_target_percent")
+    assert not car.has_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT)
     assert car._next_charge_target == 55
 
     # Replug: the first plugged cycle reverts the marker-less non-default value.
@@ -677,7 +756,7 @@ async def test_replug_without_marker_reverts_to_default(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert car._next_charge_target == car.car_default_charge
 
 
@@ -702,7 +781,7 @@ async def test_agenda_constraint_target_refreshed_after_person_removed(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     agenda_cts = [
         c
         for c in _non_person_cts(charger)
@@ -752,7 +831,7 @@ async def test_agenda_live_constraint_realigned_after_person_removed(caplog):
     car.current_forecasted_person = thomas
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert live_agenda.target_value == car.car_default_charge
     assert live_agenda.requested_target_value == car.car_default_charge
     # still exactly one agenda constraint (no duplicate pushed)
@@ -821,7 +900,7 @@ async def test_agenda_realigned_when_not_rebuilt_this_cycle(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     assert live_agenda.target_value == car.car_default_charge
     assert live_agenda.requested_target_value == car.car_default_charge
 
@@ -845,7 +924,7 @@ async def test_realized_refresh_avoids_extra_filler(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
     # realized refreshed to 80 -> `80 < 80` is False -> no filler pushed alongside the agenda.
     assert [c for c in _car_cts(charger) if c.type == CONSTRAINT_TYPE_FILLER] == []
     agendas = [
@@ -874,7 +953,7 @@ async def test_restore_does_not_churn_across_cycles(caplog):
     car.current_forecasted_person = None
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
-    spy.assert_awaited_once_with(car.car_default_charge)
+    spy.assert_awaited_once_with(car.car_default_charge, do_update_charger=False)
 
     # No churn on the next cycle: target already at default.
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=6))
@@ -895,8 +974,8 @@ async def test_zero_user_target_blocks_default_restore(caplog):
     _preseed_filler(charger, car, now)
 
     await car.set_next_charge_target_percent(0)
-    car.set_user_originated("charge_target_percent", 0)
-    assert car.get_user_originated("charge_target_percent") == 0
+    car.set_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT, 0)
+    assert car.get_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT) == 0
 
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
@@ -909,7 +988,7 @@ async def test_zero_user_target_blocks_default_restore(caplog):
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
-    spy.assert_awaited_once_with(0)
+    spy.assert_awaited_once_with(0, do_update_charger=False)
     assert car._next_charge_target == 0
     assert "restoring default charge target" not in caplog.text
 
@@ -928,7 +1007,7 @@ async def test_fractional_default_no_churn(caplog):
     car.current_forecasted_person = None
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
-    spy.assert_awaited_once_with(80.5)
+    spy.assert_awaited_once_with(80.5, do_update_charger=False)
 
     # int() on both sides: int(get_car_target_SOC()==80) == int(80.5) -> no second restore.
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=6))

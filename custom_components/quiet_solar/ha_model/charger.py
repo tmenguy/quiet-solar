@@ -147,6 +147,7 @@ from ..const import (
     PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS,
     SENSOR_CONSTRAINT_SENSOR_CHARGE,
     USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGE_TIME,
     USER_ORIGINATED_CHARGER_NAME,
     CONF_TYPE_NAME_QSChargerGeneric,
     CONF_TYPE_NAME_QSChargerOCPP,
@@ -3578,10 +3579,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         QS-352: every car-detach exit (physical unplug, "no car" selected,
         car-switch) wipes the person constraint and the user markers but never the
         car-level ``_next_charge_target``, so the person value would linger on the
-        select / autonomy sensor for the whole detached period. Clears it to the
-        lazy default whenever a person constraint is live for the car (the marker
-        that the value is person-derived); a no-op otherwise, so a user/default
-        value is never touched. Must be called BEFORE the constraints are wiped.
+        select / autonomy sensor for the whole detached period. Clears the field to
+        the lazy default whenever a person constraint is live for the car (the
+        marker that the value is person-derived); a no-op otherwise. Any surviving
+        user ``charge_target_percent`` marker (car-switch / "no car" exits, where
+        ``clear_all_user_originated`` has not run) is honoured again on the next
+        attach via the restore-to-user branch. Must be called BEFORE the
+        constraints are wiped.
         """
         if self._has_live_person_constraint():
             _LOGGER.info(
@@ -3603,8 +3607,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         is_target_percent: bool,
         time: datetime,
     ) -> bool:
-        """Side-effect-free decision: does the person's minimum-charge constraint end
-        this cycle? Single source of truth for ``do_remove_all_person_constraints`` and
+        """Decision (no state mutation; ``is_car_charged`` may emit one INFO line when
+        the SOC is unknown): does the person's minimum-charge constraint end this
+        cycle? Single source of truth for ``do_remove_all_person_constraints`` and
         for the force/timed early restore (QS-352). Mirrors the removal block: a person
         need survives only when the person is assigned, range-uncovered, its
         preconditions are present, the charge-time is not the CLEARED sentinel, the
@@ -3617,7 +3622,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             or is_person_covered is not False
         ):
             return True
-        if self.car.get_user_originated("charge_time") == CHARGE_TIME_CONSTRAINTS_CLEARED:
+        if self.car.get_user_originated(USER_ORIGINATED_CHARGE_TIME) == CHARGE_TIME_CONSTRAINTS_CLEARED:
             return True
         agenda_in_person_window = not (
             car_charge_agenda is None
@@ -3783,8 +3788,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         best_car.name,
                         self.car.name,
                     )
-                    # QS-352: clear the outgoing car's person leak before detach wipes it.
-                    self._clear_leaked_person_target_if_needed()
+                    # QS-352: the leaked-target clear now lives at the top of detach_car().
                     self.detach_car()  # it will reset constraints and do what is needed, has self.car will be None
                 else:
                     # check constraints
@@ -3946,7 +3950,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                         bypass_restore,
                         self.car.get_car_target_SOC(),
                     )
-                    await self.car.set_next_charge_target_percent(bypass_restore)
+                    await self.car.set_next_charge_target_percent(bypass_restore, do_update_charger=False)
                     target_charge = self.car.get_car_target_SOC()
 
             # in case a user pressed the button ....clean everything and force the charge
@@ -4293,7 +4297,9 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                 await self.ack_completed_constraint(time, car_charge_person)
                             if pushed:
                                 _LOGGER.info(
-                                    f"check_load_activity_and_constraints: plugged car {self.car.name} pushed usage minimum charge constraint {car_charge_person.name}"
+                                    "check_load_activity_and_constraints: plugged car %s pushed usage minimum charge constraint %s",
+                                    self.car.name,
+                                    car_charge_person.name,
                                 )
                                 do_force_solve = True
 
@@ -4353,7 +4359,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                                 restored_target,
                                 pre_restore_target,
                             )
-                            await self.car.set_next_charge_target_percent(restored_target)
+                            await self.car.set_next_charge_target_percent(restored_target, do_update_charger=False)
                             target_charge = self.car.get_car_target_SOC()
                             # Keep the filler chain consistent: the filler block below builds
                             # from `realized_charge_target`; leaving it at the leaked value
@@ -4531,6 +4537,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
     def detach_car(self):
         if self.car is not None:
+            # QS-352: every "car leaves the charger" exit funnels through detach_car
+            # (incl. the user car-select handler `user_set_selected_car_by_name`, which
+            # detaches synchronously while the constraints are still live). Clear a
+            # person-derived leaked next-charge target here, before the car reference is
+            # dropped. A guaranteed no-op on the unplug / "no car" cycle exits (their
+            # `reset()` wipes `_constraints` before reaching here), which keep their own
+            # explicit pre-reset clears.
+            self._clear_leaked_person_target_if_needed()
             # QS-346: remember the car we are detaching so the plug-state rescue can
             # still consult its sensor. Recorded unconditionally here (never blindly
             # from a `self.car is None` entry, which would overwrite the memory with
