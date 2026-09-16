@@ -926,7 +926,7 @@ class TestCarDouble:
         self._user_originated: dict[str, Any] = {}
         # QS-353 — system person hold (not user-originated).
         self._system_person_hold_name: str | None = None
-        self._system_person_hold_until = None
+        self._system_person_hold_until: datetime | None = None
         # QS-243 — observable so plug-in / full-reset tests can prove the
         # SOC-estimate reset actually fired.
         self.reset_soc_estimate_call_count = 0
@@ -957,7 +957,13 @@ class TestCarDouble:
         self._system_person_hold_until = None
 
     def get_pinned_person_name(self, time):
-        """Mirror QSCar.get_pinned_person_name (QS-353): user pin, else hold."""
+        """Mirror QSCar.get_pinned_person_name (QS-353): user pin, else hold.
+
+        Normalises a naive ``time`` to aware UTC exactly like production so the
+        double cannot diverge on a naive-time comparison.
+        """
+        if time.tzinfo is None:
+            time = time.replace(tzinfo=pytz.UTC)
         user = self.get_user_originated("person_name")
         if user is not None:
             return user
