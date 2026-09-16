@@ -2901,6 +2901,14 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         # DEBUG: this runs every cycle in some states. `Constraint Reset device` is
         # the INFO marker for a reset that actually destroyed something.
         _LOGGER.debug("Charger reset %s", self.name)
+        # QS-352: clear a person-derived leaked next-charge target BEFORE
+        # `super().reset()` wipes `_constraints` (the person marker `detach_car`
+        # relies on). Covers the reset-button and disable-toggle exits, which reach
+        # `reset()` without going through the unplug / "no car" pre-reset clears and
+        # whose constraints are gone by the time `detach_car()` below runs. Both this
+        # site and the `detach_car()` clear are needed: reset() wipes constraints
+        # first, detach-only callers keep them intact.
+        self._clear_leaked_person_target_if_needed()
         super().reset(keep_commands=keep_commands)
         self.detach_car()
         self._reset_state_machine()

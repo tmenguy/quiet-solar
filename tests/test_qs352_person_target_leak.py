@@ -725,6 +725,61 @@ async def test_select_other_car_with_live_person_constraint_clears_target():
     await charger.user_set_selected_car_by_name("ID.buzz")
 
     assert car._next_charge_target is None
+    # Review #05 #9: prove the detach actually happened.
+    assert charger.car is None
+    charger.update_charger_for_user_change.assert_awaited_once()
+
+
+# --------------------------------------------------------------------------- #
+# Review #05 finding #2 — reset-button / disable-toggle exits must clear the leak
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_reset_button_with_live_person_constraint_clears_target():
+    """The charger reset button (user_clean_and_reset -> reset()) wipes constraints
+    before detach_car() sees them; the clear must run first in reset()."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    charger.update_charger_for_user_change = AsyncMock()
+    await charger.user_clean_and_reset()
+
+    assert car._next_charge_target is None
+
+
+@pytest.mark.asyncio
+async def test_disable_with_live_person_constraint_clears_target():
+    """The disable toggle (qs_enable_device = False -> reset()) likewise clears."""
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+    assert car._next_charge_target == 41
+
+    charger.qs_enable_device = False
+
+    assert car._next_charge_target is None
+
+
+# --------------------------------------------------------------------------- #
+# Review #05 finding #3 — do_update_charger=False must skip the native-limit write
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_set_next_charge_target_no_update_charger_skips_setup():
+    hass, home, charger, car, now, magali, thomas = _base_fixture()
+    car.setup_car_charge_target_if_needed = AsyncMock()
+
+    assert await car.set_next_charge_target_percent(60, do_update_charger=False) is True
+    car.setup_car_charge_target_if_needed.assert_not_awaited()
+    assert car._next_charge_target == 60
+
+    # Default path still runs the charger update.
+    car.setup_car_charge_target_if_needed.reset_mock()
+    await car.set_next_charge_target_percent(70)
+    car.setup_car_charge_target_if_needed.assert_awaited_once()
+    assert car._next_charge_target == 70
 
 
 # --------------------------------------------------------------------------- #
