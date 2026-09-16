@@ -3637,8 +3637,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         if self.car.get_user_originated(USER_ORIGINATED_CHARGE_TIME) == CHARGE_TIME_CONSTRAINTS_CLEARED:
             return True
         agenda_in_person_window = not (
-            car_charge_agenda is None
-            or (car_charge_agenda.end_of_constraint - next_usage_time) > timedelta(hours=25)
+            car_charge_agenda is None or (car_charge_agenda.end_of_constraint - next_usage_time) > timedelta(hours=25)
         )
         if agenda_in_person_window:
             return True
