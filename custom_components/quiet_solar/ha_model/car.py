@@ -393,10 +393,8 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if until_s is not None:
             try:
                 until = datetime.fromisoformat(until_s)
-            except (TypeError, ValueError):
-                _LOGGER.warning(
-                    "Car:%s ignoring persisted system person hold, invalid until %r", self.name, until_s
-                )
+            except TypeError, ValueError:
+                _LOGGER.warning("Car:%s ignoring persisted system person hold, invalid until %r", self.name, until_s)
         if name is not None and until is not None:
             self._system_person_hold_name = name
             self._system_person_hold_until = self._as_utc(until)
