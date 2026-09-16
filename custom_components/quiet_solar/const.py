@@ -190,6 +190,10 @@ CHARGE_TIME_CONSTRAINTS_CLEARED = "constraints_cleared"
 # values must remain exactly "charger_name" / "car_name"
 USER_ORIGINATED_CHARGER_NAME = "charger_name"
 USER_ORIGINATED_CAR_NAME = "car_name"
+# user-originated override keys (values must match the strings QSCar already uses)
+USER_ORIGINATED_CHARGE_TARGET_PERCENT = "charge_target_percent"
+USER_ORIGINATED_FORCE_CHARGE = "force_charge"
+USER_ORIGINATED_CHARGE_TIME = "charge_time"
 
 CONF_CAR_TRACKER = "car_tracker"
 CONF_CAR_PLUGGED = "car_plugged"
