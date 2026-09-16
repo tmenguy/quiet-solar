@@ -2611,7 +2611,11 @@ class QSHome(QSDynamicGroup):
             for car in self._cars:
                 car.current_forecasted_person = None
 
-                _person_name = car.get_user_originated("person_name")
+                # QS-353 A′: resolve the effective pin — a genuine user pin, else
+                # an unexpired system hold; an expired hold is cleared and yields
+                # None. Expiry is evaluated here, so a held car becomes free at most
+                # HOME_PERSON_CAR_ALLOCATION_CACHE_S after `until` (or on force_update).
+                _person_name = car.get_pinned_person_name(time)
 
                 if _person_name is None:
                     continue
@@ -2629,7 +2633,12 @@ class QSHome(QSDynamicGroup):
                             car.name,
                             p_per.name,
                         )
-                        car.clear_all_user_originated()
+                        # QS-353 A-1/C-17: source-aware — clear the user store only
+                        # for a genuine user pin; always drop the hold (a no-op for
+                        # a pin-only car, D5), so a hold-only car keeps its store.
+                        if car.get_user_originated("person_name") is not None:
+                            car.clear_all_user_originated()
+                        car.clear_system_person_hold()
                         continue
                     self._last_persons_car_allocation[car.name] = p_per
                     covered_persons.add(p_per.name)

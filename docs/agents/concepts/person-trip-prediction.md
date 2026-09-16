@@ -5,7 +5,7 @@ kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/person.py
   - custom_components/quiet_solar/ha_model/car.py
-last_verified: 2026-09-14
+last_verified: 2026-09-16
 ---
 
 # Person, Car, and trip prediction
@@ -111,7 +111,14 @@ tomorrow's predicted trips with margin.
   wins) — see the manual-trust ceiling note in
   [car-soc-estimation.md](car-soc-estimation.md).
 - Person allocation: which person owns this car (drives prediction
-  targeting).
+  targeting). The daily notification for an *uncovered* car sets a
+  **time-boxed system person hold** (`QSCar.hold_forecasted_person_until`) —
+  not a user pin — that allocation honours (`get_pinned_person_name`) until
+  the announced `predicted_leave_time`, then it expires. The hold is cleared
+  on expiry, on conversion to a user pin (a genuine user tap), on a user
+  person change, on unplug / reset, and when the held person is unauthorized
+  (QS-353). Because it is *not* user-originated, the car freeze never promotes
+  a system/person-derived target to user intent.
 - Custom power → amperage table per car: different cars accept
   different voltage / phase combinations differently.
 
@@ -158,6 +165,9 @@ prediction_kWh + margin` is pushed for the car's charger.
 GPS reading → presence state → trip detection
   ↓
 Trip ended → distance recorded → mileage ring updated
+  ↓
+Daily notification (uncovered car) → system person hold set until the
+  announced leave time (honoured by allocation, not user intent, QS-353)
   ↓
 Next cycle: predict_next_trip() → distance_to_kWh()
   ↓

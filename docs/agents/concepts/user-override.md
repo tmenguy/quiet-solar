@@ -4,7 +4,7 @@ slug: user-override
 kind: concept
 covers:
   - custom_components/quiet_solar/home_model/load.py
-last_verified: 2026-08-02
+last_verified: 2026-09-16
 ---
 
 # User override
@@ -175,6 +175,22 @@ command state.
 - Confusing override with external control. If the user pressed
   the override button in the mobile app, it's override; if they
   walked over to the charger and unplugged it, it's external.
+- Forgetting the **car freeze** (`QSCar._on_user_originated_changed`):
+  any user action on a car validates the *whole* visible car state
+  (charge target included, whoever wrote it) into `_user_originated`.
+  This is by design (QS-353 D1) — but only a *user* action may trigger
+  it. A **system** action (the daily person notification) must set a
+  time-boxed system hold instead, never write user-originated state.
+- Storing `None` under a target key (`charge_target_percent` /
+  `charge_target_energy`). The freeze stamps only the key matching the
+  car's percent capability and never a `None` value (QS-353 B); a
+  present-but-`None` key silently disables the home.py default-clear
+  guard (#352 finding C4).
+- Assuming a user person change keeps the old person's validated state.
+  It resets the car's person-bound state (person, both target keys, the
+  system hold, the target fields) before freezing the new choice, but
+  it does **not** clear the manual charger selection or the charge-time
+  CLEARED sentinel — neither is person-bound (QS-353 C/D4).
 
 ## See also
 

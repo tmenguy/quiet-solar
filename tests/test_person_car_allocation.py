@@ -68,6 +68,10 @@ class _FakeCar:
         self._is_plugged = is_plugged
         self.car_default_charge = default_charge
         self._next_charge_target = None
+        self._next_charge_target_energy = None
+        # QS-353 A′: system person hold seeded directly by hold-honouring tests.
+        self._system_person_hold_name = None
+        self._system_person_hold_until = None
 
     # Mirror AbstractDevice user_originated API
     def set_user_originated(self, key, value):
@@ -104,7 +108,12 @@ class _FakeCar:
     # Bind real methods from QSCar so we exercise the actual logic.
     user_set_person_for_car = QSCar.user_set_person_for_car
     _is_person_authorized_for_car = QSCar._is_person_authorized_for_car
-    _fix_user_selected_person_from_forecast = QSCar._fix_user_selected_person_from_forecast
+    # QS-353 A′: the system-hold surface the real allocation / person-change code calls.
+    hold_forecasted_person_until = QSCar.hold_forecasted_person_until
+    clear_system_person_hold = QSCar.clear_system_person_hold
+    get_pinned_person_name = QSCar.get_pinned_person_name
+    _reset_charge_targets = QSCar._reset_charge_targets
+    _as_utc = QSCar._as_utc
 
 
 class _FakePerson:
@@ -420,6 +429,56 @@ class TestNoPersonMultipleCars:
         assert _person_name(zoe) == "Arthur"
         # Magali, displaced from Zoe, landed on IDBuzz.
         assert _person_name(idbuzz) == "Magali"
+
+
+class TestSystemPersonHoldAllocation:
+    """QS-353 AC 4: a system person hold is honoured by allocation until `until`,
+    then expires and the min-cost winner takes over."""
+
+    def _hold_scenario(self):
+        # Single car; P2 has the strictly smaller deficit (wins without the hold).
+        car = _FakeCar("HeldCar", remaining_km=50, has_charger=True)
+        leave = datetime.now(UTC) + timedelta(hours=8)
+        p1 = _FakePerson(
+            "P1", preferred_car=None, authorized_car_names=["HeldCar"],
+            forecast_leave_time=leave, forecast_mileage=100.0,
+        )
+        p2 = _FakePerson(
+            "P2", preferred_car=None, authorized_car_names=["HeldCar"],
+            forecast_leave_time=leave, forecast_mileage=90.0,
+        )
+        # (P1 - P2) * WH_PER_KM = 1500 Wh > PREFERRED_CAR_ENERGY_THRESHOLD_WH.
+        assert (100.0 - 90.0) * WH_PER_KM > PREFERRED_CAR_ENERGY_THRESHOLD_WH
+        home = _FakeHome([car], [p1, p2])
+        return home, car
+
+    @pytest.mark.asyncio
+    async def test_hold_honoured_until_expiry_then_min_cost_wins(self):
+        home, car = self._hold_scenario()
+        until = datetime.now(UTC) + timedelta(hours=2)
+        car._system_person_hold_name = "P1"
+        car._system_person_hold_until = until
+
+        # Before `until`: the hold pins P1, overriding the min-cost winner P2.
+        await home.compute_and_set_best_persons_cars_allocations(
+            time=until - timedelta(seconds=1), force_update=True
+        )
+        assert _person_name(car) == "P1"
+        assert car._system_person_hold_name == "P1"
+
+        # At `until`: the hold has expired → cleared, and P2 (smaller deficit) wins.
+        await home.compute_and_set_best_persons_cars_allocations(time=until, force_update=True)
+        assert _person_name(car) == "P2"
+        assert car._system_person_hold_name is None
+
+    @pytest.mark.asyncio
+    async def test_without_hold_min_cost_winner_is_p2(self):
+        """Control: with no hold, the smaller-deficit person (P2) wins outright."""
+        home, car = self._hold_scenario()
+        await home.compute_and_set_best_persons_cars_allocations(
+            time=datetime.now(UTC), force_update=True
+        )
+        assert _person_name(car) == "P2"
 
 
 class TestCacheHitReApply:

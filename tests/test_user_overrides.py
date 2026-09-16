@@ -7,7 +7,7 @@ Tests cover:
 - QSCar get/set/clear_user_originated for person_name and charger_name
 - _on_user_originated_changed auto-captures all values AFTER state changes
 - charge_time "constraints_cleared" sentinel logic
-- _fix_user_selected_person_from_forecast guarded by user_originated
+- hold_forecasted_person_until (QS-353 system hold) guarded by user_originated
 - get_best_person_next_need prefers user selection
 - user_clean_constraints sets charge_time sentinel + triggers snapshot
 - Car unplug clears charge_time sentinel
@@ -27,11 +27,11 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.quiet_solar.const import (
-    USER_ORIGINATED_CHARGER_NAME,
     CHARGE_TIME_CONSTRAINTS_CLEARED,
     DATA_HANDLER,
     DOMAIN,
     FORCE_CAR_NO_PERSON_ATTACHED,
+    USER_ORIGINATED_CHARGER_NAME,
 )
 from tests.factories import MinimalTestLoad, create_minimal_home_model
 
@@ -227,7 +227,9 @@ class TestOnUserOriginatedChanged:
         car._on_user_originated_changed("test", None)
 
         assert car.get_user_originated("charge_target_percent") == 80
-        assert car.get_user_originated("charge_target_energy") == 48000
+        # QS-353 B: a percent-capable car stamps only the percent key — the energy
+        # key is never grown (a present-but-stale None there disabled #352's guard).
+        assert car.has_user_originated("charge_target_energy") is False
         assert car.get_user_originated("bump_solar") is True
         assert car.get_user_originated("force_charge") is True
         assert car.get_user_originated("charge_time") == "2026-03-20T07:00:00+00:00"
@@ -283,43 +285,89 @@ class TestOnUserOriginatedChanged:
 
 
 # =============================================================================
-# _fix_user_selected_person_from_forecast guarded by override
+# QS-353 A′: hold_forecasted_person_until guards (AC 2 — ported from the old
+# _fix_user_selected_person_from_forecast guard suite). Every guard is a silent
+# no-op that leaves the hold fields untouched and never touches the store.
 # =============================================================================
 
 
-class TestFixPersonGuard:
-    """Test that _fix_user_selected_person_from_forecast is guarded by person_name override."""
+class TestSystemHoldGuard:
+    """hold_forecasted_person_until sets a system hold, guarded, never a user pin."""
+
+    def _until(self):
+        return datetime.datetime.now(pytz.UTC) + datetime.timedelta(hours=2)
 
     def test_noop_when_no_forecasted_person(self, create_car):
-        """Early return when current_forecasted_person is None and no override."""
+        """No forecasted person → no hold, fields untouched, no store write."""
         car = create_car()
         car.current_forecasted_person = None
-        car._fix_user_selected_person_from_forecast()
+        car._system_person_hold_name = "Stale"
+        car._system_person_hold_until = self._until()
+        car.hold_forecasted_person_until(self._until())
+        # pre-seeded stale hold untouched (guard is a no-op)
+        assert car._system_person_hold_name == "Stale"
         assert car.get_user_originated("person_name") is None
 
-    def test_guard_blocks_when_override_exists(self, create_car):
+    def test_guard_blocks_when_user_pin_exists(self, create_car):
         car = create_car()
         car.set_user_originated("person_name", "Explicit")
         person = MagicMock()
         person.name = "Forecast"
         car.current_forecasted_person = person
-        car._fix_user_selected_person_from_forecast()
-        # Should NOT have been overwritten
+        car.hold_forecasted_person_until(self._until())
+        # user pin wins; no hold created
         assert car.get_user_originated("person_name") == "Explicit"
+        assert car._system_person_hold_name is None
 
-    def test_guard_allows_when_no_override(self, create_car):
+    def test_guard_blocks_when_unauthorized(self, create_car, caplog):
         car = create_car()
         person = MagicMock()
         person.name = "Forecast"
         car.current_forecasted_person = person
-        # Make person authorized
+        person_obj = MagicMock()
+        person_obj.authorized_cars = []  # not authorized for this car
+        car.home.get_person_by_name = MagicMock(return_value=person_obj)
+        car.home._persons = [person_obj]
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            car.hold_forecasted_person_until(self._until())
+        assert car._system_person_hold_name is None
+        assert "not authorized" in caplog.text
+
+    def test_guard_blocks_when_until_already_passed(self, create_car):
+        car = create_car()
+        person = MagicMock()
+        person.name = "Forecast"
+        car.current_forecasted_person = person
         person_obj = MagicMock()
         person_obj.authorized_cars = [car.name]
         car.home.get_person_by_name = MagicMock(return_value=person_obj)
         car.home._persons = [person_obj]
 
-        car._fix_user_selected_person_from_forecast()
-        assert car.get_user_originated("person_name") == "Forecast"
+        past = datetime.datetime.now(pytz.UTC) - datetime.timedelta(hours=1)
+        car.hold_forecasted_person_until(past)
+        assert car._system_person_hold_name is None
+        assert car._system_person_hold_until is None
+
+    def test_hold_set_when_no_pin(self, create_car):
+        car = create_car()
+        person = MagicMock()
+        person.name = "Forecast"
+        car.current_forecasted_person = person
+        person_obj = MagicMock()
+        person_obj.authorized_cars = [car.name]
+        car.home.get_person_by_name = MagicMock(return_value=person_obj)
+        car.home._persons = [person_obj]
+
+        until = self._until()
+        car.hold_forecasted_person_until(until)
+        assert car._system_person_hold_name == "Forecast"
+        assert car._system_person_hold_until == until
+        # the freeze did NOT run — no user intent created
+        assert not car.has_user_originated("person_name")
+        assert not car.has_user_originated("charge_target_percent")
 
 
 # =============================================================================

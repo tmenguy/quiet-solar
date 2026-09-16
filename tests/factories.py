@@ -924,6 +924,9 @@ class TestCarDouble:
         self.charger = None
         self._current_charge_percent = kwargs.get("current_soc", 50.0)
         self._user_originated: dict[str, Any] = {}
+        # QS-353 — system person hold (not user-originated).
+        self._system_person_hold_name: str | None = None
+        self._system_person_hold_until = None
         # QS-243 — observable so plug-in / full-reset tests can prove the
         # SOC-estimate reset actually fired.
         self.reset_soc_estimate_call_count = 0
@@ -947,6 +950,24 @@ class TestCarDouble:
 
     def clear_all_user_originated(self) -> None:
         self._user_originated.clear()
+
+    def clear_system_person_hold(self) -> None:
+        """Mirror QSCar.clear_system_person_hold (QS-353): drop the system hold."""
+        self._system_person_hold_name = None
+        self._system_person_hold_until = None
+
+    def get_pinned_person_name(self, time):
+        """Mirror QSCar.get_pinned_person_name (QS-353): user pin, else hold."""
+        user = self.get_user_originated("person_name")
+        if user is not None:
+            return user
+        hold_name = getattr(self, "_system_person_hold_name", None)
+        hold_until = getattr(self, "_system_person_hold_until", None)
+        if hold_name is not None and hold_until is not None and time < hold_until:
+            return hold_name
+        if hold_name is not None:
+            self.clear_system_person_hold()
+        return None
 
     def reset_soc_estimate(self) -> None:
         """Mirror QSCar.reset_soc_estimate (QS-243); records that it fired."""
