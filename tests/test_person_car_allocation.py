@@ -989,7 +989,9 @@ class TestSentinelAndPass2Ordering:
             await home.compute_and_set_best_persons_cars_allocations(force_update=True)
             assigned = [c for c in home._cars if _person_name(c) == "P"]
             assert len(assigned) == 1, f"order {order}: P must be assigned exactly one car"
-            assert assigned[0].charger is None, f"order {order}: P must land on an unplugged car, got {assigned[0].name}"
+            assert assigned[0].charger is None, (
+                f"order {order}: P must land on an unplugged car, got {assigned[0].name}"
+            )
 
     @pytest.mark.asyncio
     async def test_pass2_offset_dominates_aggregate_spread(self, caplog):
@@ -1034,7 +1036,9 @@ class TestSentinelAndPass2Ordering:
                 if c.current_forecasted_person is not None and c.current_forecasted_person.preferred_car == c.name
             )
             # p1->c2 and p2->c3 are both achievable (max preferred-car count == 2).
-            assert preferred_matches == 2, f"order {order}: pass 2 must maximise preferred count, got {preferred_matches}"
+            assert preferred_matches == 2, (
+                f"order {order}: pass 2 must maximise preferred count, got {preferred_matches}"
+            )
             # E_max == 0 -> gate diff 0 -> the preferred pass ships.
             assert "using preferred-car assignment" in caplog.text, f"order {order}: preferred pass must be adopted"
 

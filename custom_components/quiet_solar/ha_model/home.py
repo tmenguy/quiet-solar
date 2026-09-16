@@ -2709,9 +2709,7 @@ class QSHome(QSDynamicGroup):
                 # off-by-one "(n-1)"). len(p_s) is the right multiplier (one
                 # decision per person; extra cars are unused columns), and
                 # maxi_val (>= 1e12) still dwarfs any legitimate assignment.
-                penalty = (
-                    len(p_s) * (E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
-                )
+                penalty = len(p_s) * (E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
                 costs_preferred = self._finalize_cost_matrix(raw_energy, E_max, p_s, c_s, preferred_car_penalty=penalty)
                 assignment_preferred = hungarian_algorithm(costs_preferred)
                 total_energy_preferred = self._compute_assignment_energy(assignment_preferred, raw_energy)
