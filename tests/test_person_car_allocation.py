@@ -113,7 +113,7 @@ class _FakeCar:
     clear_system_person_hold = QSCar.clear_system_person_hold
     get_pinned_person_name = QSCar.get_pinned_person_name
     _reset_charge_targets = QSCar._reset_charge_targets
-    _as_utc = QSCar._as_utc
+    _as_utc = staticmethod(QSCar._as_utc)
 
 
 class _FakePerson:

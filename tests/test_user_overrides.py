@@ -314,10 +314,15 @@ class TestSystemHoldGuard:
         person = MagicMock()
         person.name = "Forecast"
         car.current_forecasted_person = person
+        # a pre-existing stale hold must be left UNTOUCHED by the guard (AC 2)
+        stale_until = self._until()
+        car._system_person_hold_name = "Stale"
+        car._system_person_hold_until = stale_until
         car.hold_forecasted_person_until(self._until())
-        # user pin wins; no hold created
+        # user pin wins; the guard did not create nor mutate the hold
         assert car.get_user_originated("person_name") == "Explicit"
-        assert car._system_person_hold_name is None
+        assert car._system_person_hold_name == "Stale"
+        assert car._system_person_hold_until == stale_until
 
     def test_guard_blocks_when_unauthorized(self, create_car, caplog):
         car = create_car()
@@ -328,12 +333,17 @@ class TestSystemHoldGuard:
         person_obj.authorized_cars = []  # not authorized for this car
         car.home.get_person_by_name = MagicMock(return_value=person_obj)
         car.home._persons = [person_obj]
+        # a pre-existing stale hold must be left UNTOUCHED by the guard (AC 2)
+        stale_until = self._until()
+        car._system_person_hold_name = "Stale"
+        car._system_person_hold_until = stale_until
 
         import logging
 
         with caplog.at_level(logging.WARNING):
             car.hold_forecasted_person_until(self._until())
-        assert car._system_person_hold_name is None
+        assert car._system_person_hold_name == "Stale"
+        assert car._system_person_hold_until == stale_until
         assert "not authorized" in caplog.text
 
     def test_guard_blocks_when_until_already_passed(self, create_car):

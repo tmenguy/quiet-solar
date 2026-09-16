@@ -527,8 +527,11 @@ class QSCar(HADeviceMixin, AbstractDevice):
 
         A genuine user pin wins over any hold. Otherwise an unexpired system hold
         is honoured; an expired hold is cleared (once) and resolves to ``None``.
-        ``time`` is the aware-UTC home clock and is NOT normalised here.
+        ``time`` is the aware-UTC home clock; it is normalised defensively so a
+        naive caller degrades to a correct comparison instead of aborting the
+        whole allocation pass (review: blind/edge-case hunters).
         """
+        time = self._as_utc(time)
         user = self.get_user_originated("person_name")
         if user is not None:
             return user

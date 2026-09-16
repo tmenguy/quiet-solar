@@ -129,6 +129,18 @@ def test_ac3_hold_returned_before_until_then_expires():
     assert car.get_pinned_person_name(until) is None
 
 
+def test_ac3_resolver_normalises_naive_time():
+    """The resolver defensively normalises a naive `time` (assumed UTC) instead
+    of raising when compared with the aware `until` (review: blind/edge hunters)."""
+    hass, home, car, person = _held_car()
+    until = _future()
+    car.hold_forecasted_person_until(until)
+    naive_before = (until - timedelta(seconds=1)).replace(tzinfo=None)
+    assert car.get_pinned_person_name(naive_before) == "Forecast"
+    naive_after = until.replace(tzinfo=None)
+    assert car.get_pinned_person_name(naive_after) is None
+
+
 # =========================================================================== #
 # AC 6 — persistence round-trip
 # =========================================================================== #
@@ -243,6 +255,30 @@ async def test_ac7bprime_other_car_user_pinned_person_whole_store_cleared():
     assert car2.get_user_originated("person_name") is None
     assert car2.get_user_originated("bump_solar") is None
     assert car2._system_person_hold_name is None
+
+
+@pytest.mark.asyncio
+async def test_ac7c_physical_unplug_clears_hold():
+    """AC 7(c): a physical unplug clears the hold (charger.py, next to
+    clear_all_user_originated). Fixture shape of the QS-352 unplug test."""
+    from unittest.mock import MagicMock as _MM
+
+    from tests.test_qs352_person_target_leak import _base_fixture, _preseed_filler, _run_step1
+
+    hass, home, charger, car, now, magali, _thomas = _base_fixture()
+    _preseed_filler(charger, car, now)
+    await _run_step1(charger, car, now, magali)
+
+    # seed a live system hold, then unplug
+    car._system_person_hold_name = "Magali Menguy"
+    car._system_person_hold_until = now + timedelta(hours=7)
+    charger.is_not_plugged = _MM(return_value=True)
+    charger.is_plugged = _MM(return_value=False)
+
+    await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
+
+    assert car._system_person_hold_name is None
+    assert car._system_person_hold_until is None
 
 
 @pytest.mark.asyncio
@@ -364,7 +400,7 @@ def test_ac10_freeze_energy_car_stamps_only_energy():
 # =========================================================================== #
 # AC 11 / 12 / 13 — C: a user person change resets the person-bound state
 # =========================================================================== #
-def _c_scenario(seed_via_field: bool):
+async def _c_scenario(seed_via_field: bool):
     hass = make_hass()
     home = make_home()
     car = make_real_car(hass, home, name="Car")
@@ -377,16 +413,21 @@ def _c_scenario(seed_via_field: bool):
     other._user_originated["person_name"] = FORCE_CAR_NO_PERSON_ATTACHED
 
     car._qs_bump_solar_priority = True  # direct field — the property setter fires the freeze
-    car._next_charge_target = 41
     car._user_originated.update(
         {
-            USER_ORIGINATED_CHARGE_TARGET_PERCENT: 41,
-            "bump_solar": True,
             "person_name": "Magali",
             USER_ORIGINATED_CHARGER_NAME: "wallbox",
             USER_ORIGINATED_CHARGE_TIME: CHARGE_TIME_CONSTRAINTS_CLEARED,
         }
     )
+    if seed_via_field:
+        # snapshot provenance: the 41 was frozen from the field into the store
+        car._next_charge_target = 41
+        car._user_originated.update({USER_ORIGINATED_CHARGE_TARGET_PERCENT: 41, "bump_solar": True})
+    else:
+        # user-typed provenance (D4 / Blast radius): the 41 came from the select entity
+        await car.user_set_next_charge_target(41)
+        assert car.get_user_originated(USER_ORIGINATED_CHARGE_TARGET_PERCENT) == 41
     car._system_person_hold_name = "Magali"
     car._system_person_hold_until = _future()
     return hass, home, car, other
@@ -395,7 +436,7 @@ def _c_scenario(seed_via_field: bool):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("seed_via_field", [True, False])
 async def test_ac11_person_change_resets_person_bound_state(seed_via_field):
-    hass, home, car, other = _c_scenario(seed_via_field)
+    hass, home, car, other = await _c_scenario(seed_via_field)
 
     await car.user_set_person_for_car("Thomas")
 
@@ -417,7 +458,7 @@ async def test_ac11_person_change_resets_person_bound_state(seed_via_field):
 
 @pytest.mark.asyncio
 async def test_ac12_person_change_to_force_no_person():
-    hass, home, car, other = _c_scenario(seed_via_field=True)
+    hass, home, car, other = await _c_scenario(seed_via_field=True)
 
     await car.user_set_person_for_car(FORCE_CAR_NO_PERSON_ATTACHED)
 
@@ -434,7 +475,7 @@ async def test_ac12_person_change_to_force_no_person():
 
 @pytest.mark.asyncio
 async def test_ac13_person_change_noop_when_already_pinned():
-    hass, home, car, other = _c_scenario(seed_via_field=True)
+    hass, home, car, other = await _c_scenario(seed_via_field=True)
     before = dict(car._user_originated)
 
     await car.user_set_person_for_car("Magali")  # already pinned to Magali
