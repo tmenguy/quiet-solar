@@ -1,5 +1,7 @@
 """Tests for Hungarian algorithm implementation in home_utils.py"""
 
+import random
+
 import numpy as np
 import pytest
 
@@ -975,6 +977,62 @@ class TestHungarianAlgorithmBreakWhenAllCovered:
         result = hungarian_algorithm(cost)
         assert len(result) == 3
         assert len(set(result.values())) == 3
+
+
+class TestPass2MaximisesPreferredCount:
+    """QS-351 review-fix #06 (N-5): a randomized property check that the shipped
+    pass-2 offset n·(E_max + 1.0 + PLUGGED) + eps makes the REAL
+    _finalize_cost_matrix + hungarian_algorithm return a *maximum-preferred-car*
+    assignment across shapes and E_max values — the general property the two
+    concrete pins in test_person_car_allocation.py sample. This is the matrix-
+    level oracle check the SF-1 aggregate-spread claim rests on; it fails if the
+    multiplier is weakened (measured: the (n-1) form breaks ~2-3% of cases)."""
+
+    class _Car:
+        def __init__(self, name, plugged):
+            self.name = name
+            self.charger = object() if plugged else None
+
+    class _Person:
+        def __init__(self, name, preferred_car):
+            self.name = name
+            self.preferred_car = preferred_car
+
+    def test_pass2_offset_maximises_preferred_count_random(self):
+        from custom_components.quiet_solar.ha_model.home import QSHome
+
+        rng = random.Random(20260916)
+        for _ in range(3000):
+            n = rng.randint(1, 6)
+            m = rng.randint(n, n + 2)  # m >= n and every cell authorised ->
+            #                            the max preferred count is len(set(prefs)).
+            cars = [self._Car(f"c{j}", rng.random() < 0.5) for j in range(m)]
+            raw = np.zeros((n, m), dtype=np.float64)
+            E_max = 0.0
+            p_s = []
+            for i in range(n):
+                for j in range(m):
+                    kind = rng.choice(["-1", "-2", "-3", "need"])
+                    if kind == "need":
+                        e = round(rng.random() * rng.choice([0.0, 1.0, 1000.0]), 3)
+                        if e <= 0.0:
+                            raw[i, j] = -3.0
+                        else:
+                            raw[i, j] = e
+                            E_max = max(E_max, e)
+                    else:
+                        raw[i, j] = {"-1": -1.0, "-2": -2.0, "-3": -3.0}[kind]
+                p_s.append((self._Person(f"p{i}", cars[rng.randrange(m)].name), None, None))
+
+            penalty = n * (E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
+            costs = QSHome._finalize_cost_matrix(raw, E_max, p_s, cars, preferred_car_penalty=penalty)
+            assignment = hungarian_algorithm(costs)
+            assignment = {k: v for k, v in assignment.items() if raw[k, v] != 0.0}
+            got = sum(1 for k, v in assignment.items() if p_s[k][0].preferred_car == cars[v].name)
+            # All cells authorised and m >= n, so the achievable maximum is the
+            # number of distinct preferred cars (each satisfies exactly one person).
+            oracle = len({ps[0].preferred_car for ps in p_s})
+            assert got == oracle, f"n={n} m={m} E_max={E_max}: preferred {got} != max {oracle}"
 
 
 if __name__ == "__main__":

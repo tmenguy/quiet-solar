@@ -5,6 +5,7 @@ manual overrides via user_set_person_for_car) with lightweight fakes
 instead of full HA integration.
 """
 
+import itertools
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -734,7 +735,8 @@ class TestPluggedCoveredPenalty:
         Fixture order matters — the unplugged car is listed first so the
         E_max == 0 tie at penalty 1.0 breaks against the plugged car and the pin
         is strict (pins PLUGGED_COVERED_CAR_PENALTY_WH < 1.0). The binding
-        constraint is pass 2's ``n·E_max + 1.0`` offset.
+        constraint is pass 2's ``n·(E_max + 1.0 + PLUGGED) + eps`` offset (at
+        E_max == 0, n == 1 that is 1.25 + 1.0 = 2.25).
         """
         leave = datetime.now(UTC) + timedelta(hours=2)
 
@@ -893,10 +895,11 @@ class TestPass1TieBreak:
 
 
 class TestSentinelAndPass2Ordering:
-    """QS-351 review-fix #03 (SF-1, N-4): the pass-2 offset must strictly dominate
-    the largest base spread for all n >= 1 and E_max >= 0, and the plugged-covered
-    nudge must apply to the no-need sentinel branches (-1/-2) too — so no allocation
-    that ships depends on ``self._cars`` order.
+    """QS-351 review-fix #03/#05 (SF-1, N-4): the pass-2 offset
+    ``n·(E_max + 1.0 + PLUGGED) + eps`` must dominate the *aggregate* base spread
+    for all n >= 1 and E_max >= 0 (so pass 2 maximises preferred-car count), and
+    the plugged-covered nudge must apply to the no-need sentinel branches (-1/-2)
+    too — so no allocation that ships depends on ``self._cars`` order.
     """
 
     @pytest.mark.asyncio
@@ -992,39 +995,77 @@ class TestSentinelAndPass2Ordering:
     async def test_pass2_offset_dominates_aggregate_spread(self, caplog):
         """QS-351 review-fix #05 (SF-1): the pass-2 offset must dominate the
         *aggregate* base spread, not just one cell's spread — Hungarian minimises
-        total cost, so two assignments whose preferred-count differs by one can
-        differ in base cost by up to (n-1)·(E_max+1.25). The per-cell offset
-        (n·E_max + 1.0 + eps) leaves preferred matches on the table; the path-A
-        offset (n·(E_max+1.0+PLUGGED) + eps) maximises preferred-car count.
+        total cost. Two perfect matchings can differ in all n cells, so one
+        assignment's base cost exceeds another's by up to n·(E_max + 1.0 + PLUGGED)
+        = n·M (#06 SF-1: the multiplier is n, not n-1). The per-cell offset
+        (n·E_max + 1.0 + eps) left preferred matches on the table; the path-A
+        offset (n·M + eps) maximises preferred-car count.
 
         Realisable E_max == 0 counterexample (found by sweep): with the shipped
-        per-cell offset the pipeline returns only 1 preferred match where 2 are
-        achievable.
+        per-cell offset the pipeline returned only 1 preferred match where 2 are
+        achievable. N-4: assert it for every ``self._cars`` order.
         """
         near = datetime.now(UTC) + timedelta(hours=2)
         far = datetime.now(UTC) + timedelta(hours=48)
 
-        # c0/c3 unreadable-SOC (-2) plugged; c1 covered unplugged; c2 covered plugged.
-        c0 = _FakeCar("c0", remaining_km=1000, has_charger=True, data_error=True)
-        c1 = _FakeCar("c1", remaining_km=1000, has_charger=False)
-        c2 = _FakeCar("c2", remaining_km=1000, has_charger=True)
-        c3 = _FakeCar("c3", remaining_km=1000, has_charger=True, data_error=True)
-        # p0 far-future (its whole row is -1 sentinels); p1/p2 normal (covered).
-        p0 = _FakePerson("p0", "c2", ["c2", "c3"], far, 100.0)
-        p1 = _FakePerson("p1", "c2", ["c0", "c2"], near, 100.0)
-        p2 = _FakePerson("p2", "c3", ["c1", "c3"], near, 100.0)
+        def _build(order):
+            catalogue = {
+                # c0/c3 unreadable-SOC (-2) plugged; c1 covered unplugged; c2 covered plugged.
+                "c0": _FakeCar("c0", remaining_km=1000, has_charger=True, data_error=True),
+                "c1": _FakeCar("c1", remaining_km=1000, has_charger=False),
+                "c2": _FakeCar("c2", remaining_km=1000, has_charger=True),
+                "c3": _FakeCar("c3", remaining_km=1000, has_charger=True, data_error=True),
+            }
+            cars = [catalogue[name] for name in order]
+            # p0 far-future (its whole row is -1 sentinels); p1/p2 normal (covered).
+            p0 = _FakePerson("p0", "c2", ["c2", "c3"], far, 100.0)
+            p1 = _FakePerson("p1", "c2", ["c0", "c2"], near, 100.0)
+            p2 = _FakePerson("p2", "c3", ["c1", "c3"], near, 100.0)
+            return _FakeHome(cars, [p0, p1, p2]), cars
 
-        cars = [c0, c1, c2, c3]
-        home = _FakeHome(cars, [p0, p1, p2])
-        with caplog.at_level(logging.INFO):
-            await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+        for order in itertools.permutations(["c0", "c1", "c2", "c3"]):
+            home, cars = _build(order)
+            with caplog.at_level(logging.INFO):
+                caplog.clear()
+                await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            preferred_matches = sum(
+                1
+                for c in cars
+                if c.current_forecasted_person is not None and c.current_forecasted_person.preferred_car == c.name
+            )
+            # p1->c2 and p2->c3 are both achievable (max preferred-car count == 2).
+            assert preferred_matches == 2, f"order {order}: pass 2 must maximise preferred count, got {preferred_matches}"
+            # E_max == 0 -> gate diff 0 -> the preferred pass ships.
+            assert "using preferred-car assignment" in caplog.text, f"order {order}: preferred pass must be adopted"
 
-        preferred_matches = sum(
-            1
-            for c in cars
-            if c.current_forecasted_person is not None and c.current_forecasted_person.preferred_car == c.name
-        )
-        # p1->c2 and p2->c3 are both achievable (max preferred-car count == 2).
-        assert preferred_matches == 2, f"pass 2 must maximise preferred-car count, got {preferred_matches}"
-        # E_max == 0 -> gate diff 0 -> the preferred pass ships.
-        assert "using preferred-car assignment" in caplog.text
+    @pytest.mark.asyncio
+    async def test_pass2_offset_multiplier_is_n_not_n_minus_1(self, caplog):
+        """QS-351 review-fix #06 (SF-1b): pin that the pass-2 offset multiplier is
+        ``len(p_s)`` (n), not (n-1). Single-person witness: the person's preferred
+        car c_pref is a plugged data-error sentinel (base E_max + 1.0 + PLUGGED),
+        a non-preferred car needs the whole E_max (base E_max). Only an offset
+        with the n multiplier (n == 1 -> 1·M + eps) keeps the person on the
+        preferred car; forcing the multiplier to (n-1) -> eps = 1.0 would move
+        them onto the needy car (recorded red under that mutation in the progress
+        note). Order-independent (N-4).
+        """
+        near = datetime.now(UTC) + timedelta(hours=2)
+
+        def _build(order):
+            catalogue = {
+                # needy: 0 km left for a 100 km trip -> needs 15000 Wh (E_max).
+                "needy": _FakeCar("needy", remaining_km=0, has_charger=False),
+                # preferred: plugged, unreadable SOC (-2 sentinel).
+                "pref": _FakeCar("pref", remaining_km=1000, has_charger=True, data_error=True),
+            }
+            cars = [catalogue[name] for name in order]
+            p = _FakePerson("solo", "pref", ["needy", "pref"], near, 100.0)
+            return _FakeHome(cars, [p]), catalogue["pref"]
+
+        for order in (["needy", "pref"], ["pref", "needy"]):
+            home, pref = _build(order)
+            with caplog.at_level(logging.INFO):
+                caplog.clear()
+                await home.compute_and_set_best_persons_cars_allocations(force_update=True)
+            assert _person_name(pref) == "solo", f"order {order}: single person must keep the preferred car"
+            assert "using preferred-car assignment" in caplog.text, f"order {order}: preferred pass must be adopted"

@@ -2698,16 +2698,17 @@ class QSHome(QSDynamicGroup):
                 total_energy_optimal = self._compute_assignment_energy(assignment_energy, raw_energy)
 
                 # Pass-2 preferred-car offset. It must dominate the *aggregate*
-                # base spread, not one cell's — Hungarian minimises total cost, so
-                # two assignments whose preferred-count differs by one can differ
-                # in base cost by up to (n-1)·(E_max + 1.0 + PLUGGED). Using the
-                # summed spread n·(E_max + 1.0 + PLUGGED) + eps guarantees pass 2
-                # maximises preferred-car count for all n and E_max (the per-cell
-                # form n·E_max + 1.0 + eps left preferred matches on the table at
-                # small E_max — QS-351 review-fix #05 SF-1, path A). len(p_s) is
-                # the right multiplier (one decision per person; extra cars are
-                # unused columns), and maxi_val (>= 1e12) still dwarfs the largest
-                # legitimate pass-2 cell by ~6 orders of magnitude.
+                # base spread, not one cell's — Hungarian minimises total cost.
+                # Two perfect matchings can differ in all n assigned cells, so
+                # one assignment's base cost exceeds another's by at most
+                # n·(E_max + 1.0 + PLUGGED) = n·M. Using n·M + eps guarantees pass 2
+                # maximises preferred-car count for all n and E_max, with margin
+                # exactly eps = 1.0 Wh (the per-cell form n·E_max + 1.0 + eps left
+                # preferred matches on the table at small E_max — QS-351
+                # review-fix #05 SF-1, path A; #06 SF-1 corrected the derivation's
+                # off-by-one "(n-1)"). len(p_s) is the right multiplier (one
+                # decision per person; extra cars are unused columns), and
+                # maxi_val (>= 1e12) still dwarfs any legitimate assignment.
                 penalty = (
                     len(p_s) * (E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH
                 )
