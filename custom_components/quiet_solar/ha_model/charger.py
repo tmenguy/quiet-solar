@@ -3594,11 +3594,15 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         ``clear_all_user_originated`` has not run) is honoured again on the next
         attach via the restore-to-user branch. Must be called BEFORE the
         constraints are wiped.
+
+        Idempotent on the field: the unplug / "no car" exits call this explicitly
+        and then again from ``reset()`` (constraints still live), so the
+        ``_next_charge_target is not None`` guard stops a false second INFO line
+        reporting the lazily-materialised default as a leak.
         """
-        if self._has_live_person_constraint():
+        if self._has_live_person_constraint() and self.car._next_charge_target is not None:
             _LOGGER.info(
-                "check_load_activity_and_constraints: car %s clearing leaked person charge"
-                " target %s%% to default on detach",
+                "car %s clearing leaked person charge target %s%% to default on detach",
                 self.car.name,
                 self.car.get_car_target_SOC(),
             )

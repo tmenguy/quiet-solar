@@ -395,6 +395,9 @@ async def test_unplug_with_live_person_constraint_clears_leaked_target(caplog):
 
     assert car._next_charge_target is None
     assert car.get_car_target_SOC() == car.car_default_charge
+    # Review #06 #1: exactly one clear log (the explicit pre-reset clear + the
+    # reset() clear must not double-fire a false second line reporting the default).
+    assert sum("clearing leaked person charge target" in r.message for r in caplog.records) == 1
 
 
 @pytest.mark.asyncio
@@ -679,7 +682,7 @@ async def test_car_switch_with_live_person_constraint_clears_target():
 
 
 @pytest.mark.asyncio
-async def test_no_car_selected_with_live_person_constraint_clears_target():
+async def test_no_car_selected_with_live_person_constraint_clears_target(caplog):
     # Covers the allocation-driven "no car" exit; the user-select handler path is
     # covered by test_select_no_car_… below.
     hass, home, charger, car, now, magali, thomas = _base_fixture()
@@ -688,11 +691,14 @@ async def test_no_car_selected_with_live_person_constraint_clears_target():
     await _run_step1(charger, car, now, magali)
     assert car._next_charge_target == 41
 
+    caplog.set_level(logging.INFO, logger=QS_LOGGER)
     charger.get_best_car = MagicMock(return_value=None)
 
     await charger.check_load_activity_and_constraints(now + timedelta(minutes=3))
 
     assert car._next_charge_target is None
+    # Review #06 #1: exactly one clear log (no false second line on the "no car" exit).
+    assert sum("clearing leaked person charge target" in r.message for r in caplog.records) == 1
 
 
 @pytest.mark.asyncio
