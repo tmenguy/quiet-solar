@@ -468,8 +468,71 @@ PERSON_NOTIFY_REASON_DAILY_CHARGER_CONSTRAINTS = "charger_constraints"
 PERSON_NOTIFY_REASON_DAILY_REMINDER_FOR_CAR_NO_CHARGER = "daily_reminder_no_charger_car"
 PERSON_NOTIFY_REASON_CHANGED_CAR = "changed_car"
 
-PREFERRED_CAR_ENERGY_THRESHOLD_KWH = 1.0
-PASS1_PREFERRED_CAR_PENALTY_KWH = 0.1
+# Person↔car allocation cost-matrix tunables (all in Wh — car_battery_capacity
+# is configured in Wh and diff_energy is computed in Wh in car.py).
+#
+# The cost matrix is a strictly ordered set of offsets; every value below is an
+# *absolute* tie-break (never E_max-relative), so that neither the pass-1 nor
+# the pass-2 reshuffle can corrupt the real-energy total the gate compares. The
+# two base epsilons are kept strictly distinct (PLUGGED < PASS1) so a preferred
+# covered-plugged cell never *ties* a non-preferred covered-unplugged cell in
+# pass 1 (a tie would make the pick depend on car-list order — QS-351 review-fix
+# #02 SF-A). The plugged nudge applies to EVERY no-need branch (covered -3 AND
+# the no/far-future-forecast -1 and data-error -2 sentinels), so a person who
+# needs no charging always prefers an unplugged car (QS-351 review-fix #03 N-4).
+#
+# Cost of a cell (base, before the per-pass preferred penalty), with n = persons:
+#   covered, unplugged        : 0.0
+#   covered, plugged          : PLUGGED_COVERED_CAR_PENALTY_WH        (0.25)
+#   real need                 : diff_energy in (0, E_max]
+#   -1/-2 sentinel, unplugged : E_max + 1.0
+#   -1/-2 sentinel, plugged   : E_max + 1.0 + PLUGGED_COVERED_CAR_PENALTY_WH
+# Pass 1 adds PASS1 to non-preferred cells; pass 2 adds
+#   PASS2_offset = n*(E_max + 1.0 + PLUGGED) + PASS2_PREFERRED_CAR_OFFSET_EPS_WH.
+# Relations that must hold for ALL E_max >= 0 and ALL n >= 1:
+#   (i)   PLUGGED (0.25) < PASS1 (0.5); and PASS2_offset dominates the
+#         *aggregate* base spread so pass 2 maximises preferred-car count.
+#         Hungarian minimises TOTAL cost. Two perfect matchings can differ in
+#         all n assigned cells, so the base cost of one assignment exceeds
+#         another's by at most n*(max_base - min_base) = n*(E_max + 1.0 + PLUGGED)
+#         = n*M (max_base = a plugged sentinel E_max + 1.0 + PLUGGED, min_base =
+#         a covered unplugged cell 0). PASS2_offset = n*M + eps therefore exceeds
+#         the whole base spread by exactly the margin eps = 1.0 Wh for every
+#         n >= 1, E_max >= 0 (e.g. n == 2, E_max == 0: offset 3.5 > n*M = 2.5),
+#         so swapping in one more preferred match (which saves one PASS2_offset)
+#         always beats any base saving — pass 2 provably returns a
+#         maximum-preferred assignment. (The earlier per-cell form
+#         n*E_max + 1.0 + eps only dominated ONE cell's spread and left preferred
+#         matches on the table at small E_max — QS-351 review-fix #03 SF-1
+#         corrected by #05 SF-1, path A; the "(n-1)" multiplier once written here
+#         was itself an off-by-one, #06 SF-1.)
+#         Forbidden pairs: an assignment using a 0.0 (unauthorised) cell costs
+#         >= maxi_val (>= 1e12), while any fully legitimate assignment costs at
+#         most n*((E_max + 1.0 + PLUGGED) + PASS2_offset) = n*((n+1)*M + eps)
+#         << 1e12 for realistic n, E_max, so the 1e12 floor (not the
+#         (E_max + 1.0)*(1 + max(m, n)) branch, which is smaller) is what keeps
+#         unauthorised pairs out; the break-even is E_max per car ~ 5e11 Wh.
+#   (ii)  n * (PASS1 + PLUGGED) < PREFERRED_CAR_ENERGY_THRESHOLD_WH for any
+#         realistic n (0.75·n < 1000 holds up to n <= 1333): both epsilons apply
+#         to a non-preferred covered-plugged cell, so their *sum* is the
+#         per-person corruption bound on total_energy_optimal. The pass-1 bias is
+#         a pure ordering tie-break and can never move a per-person real need from
+#         below to above the gate threshold (QS-351 review-fix #01 finding 1,
+#         #02 NTH-A). It is NOT an energy bias; keep it a sub-need epsilon.
+#   (iii) the summed epsilon (0.75 Wh) is below any real charging need that can
+#         *act*: a real diff_energy < 0.75 Wh means a needed-vs-current SOC gap
+#         < 75/capacity %, which QSChargerGeneric.is_car_charged (the
+#         accept_bigger_tolerance=True branch) absorbs before any charge
+#         constraint is created — so the boundary inversion "tiny real need
+#         ordered below a covered plugged car" is downstream-harmless
+#         (QS-351 review-fix #01 finding 3, #02 NTH-D).
+PREFERRED_CAR_ENERGY_THRESHOLD_WH = 1000.0
+PASS1_PREFERRED_CAR_PENALTY_WH = 0.5
+PLUGGED_COVERED_CAR_PENALTY_WH = 0.25
+# Absolute epsilon added on top of the aggregate-spread pass-2 offset
+# n*(E_max + 1.0 + PLUGGED) so it *strictly* dominates for all n >= 1 and
+# E_max >= 0 (see relation (i)).
+PASS2_PREFERRED_CAR_OFFSET_EPS_WH = 1.0
 FAR_FUTURE_FORECAST_THRESHOLD_S = 24 * 3600
 
 CHANGE_ON_OFF_STATE_HYSTERESIS_S = max(10 * 60, SOLVER_STEP_S // 2)
