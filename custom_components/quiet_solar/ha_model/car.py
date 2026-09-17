@@ -234,6 +234,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self.current_forecasted_person: QSPerson | None = None
         self._current_forecasted_person_name_from_boot: str | None = None
 
+        # QS-353 A′: a time-boxed *system* person hold. Set by the daily
+        # notification for an uncovered car (see `hold_forecasted_person_until`),
+        # honoured by allocation until the announced leave time, and NOT part of
+        # the `_user_originated` store (so the freeze never promotes it to user
+        # intent). Both aware-UTC / str|None; persisted in extra device info.
+        self._system_person_hold_name: str | None = None
+        self._system_person_hold_until: datetime | None = None
+
         self.reset()
 
         # Car API staleness detection (Story 3.9)
@@ -303,11 +311,32 @@ class QSCar(HADeviceMixin, AbstractDevice):
     def _car_person_option(self, person_name: str):
         return person_name
 
+    @staticmethod
+    def _as_utc(dt: datetime) -> datetime:
+        """Return ``dt`` as aware UTC (a naive value is assumed to already be UTC)."""
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=pytz.UTC)
+        return dt.astimezone(pytz.UTC)
+
+    def _stamp_user_target(self, key: str, value: int | float | None) -> None:
+        """Store a target as user-originated; a ``None`` value stores nothing.
+
+        QS-353 B: a system/person-derived ``None`` target must never enter the
+        user-originated store, where a present ``None`` key silently disables the
+        home.py default-clear guard (#352 finding C4).
+        """
+        if value is not None:
+            self.set_user_originated(key, value)
+
     def _on_user_originated_changed(self, key: str, value: Any) -> None:
         """Auto-capture all current car state when any user-originated value changes."""
         super()._on_user_originated_changed(key, value)
-        self.set_user_originated("charge_target_percent", self._next_charge_target)
-        self.set_user_originated("charge_target_energy", self._next_charge_target_energy)
+        # QS-353 B: stamp only the target key matching the car's percent capability,
+        # and never a `None` value (a percent car never grows a stale energy key).
+        if self.can_use_charge_percent_constraints():
+            self._stamp_user_target("charge_target_percent", self._next_charge_target)
+        else:
+            self._stamp_user_target("charge_target_energy", self._next_charge_target_energy)
         self.set_user_originated("bump_solar", self._qs_bump_solar_priority)
         self.set_user_originated("force_charge", self.do_force_next_charge)
         # charge_time: real time supersedes sentinel; None preserves sentinel
@@ -320,6 +349,10 @@ class QSCar(HADeviceMixin, AbstractDevice):
             if self.current_forecasted_person is not None:
                 if self._is_person_authorized_for_car(self.current_forecasted_person.name):
                     self.set_user_originated("person_name", self.current_forecasted_person.name)
+                    # QS-353 D5: a user pin and a system hold never coexist — the
+                    # freeze has just converted the (held) forecasted person into a
+                    # user pin, so drop the hold in the same step.
+                    self.clear_system_person_hold()
 
     def update_to_be_saved_extra_device_info(self, data_to_update: dict):
         super().update_to_be_saved_extra_device_info(data_to_update)
@@ -328,6 +361,14 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.current_forecasted_person is not None:
             forecasted_name = self.current_forecasted_person.name
         data_to_update["current_forecasted_person_name_from_boot"] = forecasted_name
+
+        # QS-353 A′: persist the time-boxed system person hold (parity with the
+        # user pin it replaces — the daily notification does not re-fire after a
+        # restart, its call timestamp being in-memory only).
+        data_to_update["system_person_hold_name"] = self._system_person_hold_name
+        data_to_update["system_person_hold_until"] = (
+            self._system_person_hold_until.isoformat() if self._system_person_hold_until is not None else None
+        )
 
         # Estimated-SOC model (Story QS-243). The integration cursor is
         # deliberately NOT persisted (re-anchored on reboot).
@@ -342,6 +383,24 @@ class QSCar(HADeviceMixin, AbstractDevice):
         self._current_forecasted_person_name_from_boot = stored_load_info.get(
             "current_forecasted_person_name_from_boot", None
         )
+
+        # QS-353 A′: restore the system person hold. Older stores (keys absent),
+        # a half-written pair, or a malformed `until` → no hold. Only a malformed
+        # (present-but-unparseable) `until` warns; an absent key is silent.
+        name = stored_load_info.get("system_person_hold_name", None)
+        until_s = stored_load_info.get("system_person_hold_until", None)
+        until = None
+        if until_s is not None:
+            try:
+                until = datetime.fromisoformat(until_s)
+            except TypeError, ValueError:
+                _LOGGER.warning("Car:%s ignoring persisted system person hold, invalid until %r", self.name, until_s)
+        if name is not None and until is not None:
+            self._system_person_hold_name = name
+            self._system_person_hold_until = self._as_utc(until)
+        else:
+            self._system_person_hold_name = None
+            self._system_person_hold_until = None
 
         # Estimated-SOC model (Story QS-243). Pre-QS-243 saved blobs lack
         # these keys and default to None (all-None defaults, no exception).
@@ -413,20 +472,80 @@ class QSCar(HADeviceMixin, AbstractDevice):
             return True  # person not registered in home, can't validate
         return self.name in person.authorized_cars
 
-    def _fix_user_selected_person_from_forecast(self):
-        """Set person_name from current_forecasted_person, with authorization check."""
-        if self.has_user_originated("person_name"):
+    def hold_forecasted_person_until(self, until: datetime) -> None:
+        """Place a time-boxed *system* hold on the forecasted person (QS-353 A′).
+
+        Called by the daily notification for an uncovered car: it announces a
+        decision to the user, so allocation must not second-guess the forecasted
+        person until the announced ``until`` (the person's leave time). Unlike the
+        old fixation, this creates NO ``_user_originated`` state, so the freeze
+        never promotes a system-derived person/target to user intent.
+
+        Every guard is a silent no-op that leaves the existing hold fields
+        untouched (except the not-authorized guard, which warns).
+        """
+        until = self._as_utc(until)  # a naive `until` is assumed to be UTC
+        # A genuine user pin owns the person — never overwrite it with a hold.
+        if self.get_user_originated("person_name") is not None:
             return
         if self.current_forecasted_person is None:
             return
-        if self._is_person_authorized_for_car(self.current_forecasted_person.name):
-            self.set_user_originated("person_name", self.current_forecasted_person.name)
-        else:
+        if not self._is_person_authorized_for_car(self.current_forecasted_person.name):
             _LOGGER.warning(
-                "Car:%s skipping auto-assignment of Person:%s (not authorized)",
+                "Car:%s skipping system hold on Person:%s (not authorized)",
                 self.name,
                 self.current_forecasted_person.name,
             )
+            return
+        now = datetime.now(tz=pytz.UTC)
+        if until <= now:
+            _LOGGER.debug(
+                "Car:%s not holding Person:%s, until %s already passed",
+                self.name,
+                self.current_forecasted_person.name,
+                until,
+            )
+            return
+        self._system_person_hold_name = self.current_forecasted_person.name
+        self._system_person_hold_until = until
+        _LOGGER.info(
+            "Car:%s holding Person:%s until %s (announced)",
+            self.name,
+            self._system_person_hold_name,
+            self._system_person_hold_until,
+        )
+
+    def clear_system_person_hold(self) -> None:
+        """Drop the system person hold (both fields → None); silent."""
+        self._system_person_hold_name = None
+        self._system_person_hold_until = None
+
+    def get_pinned_person_name(self, time: datetime) -> str | None:
+        """Resolve the effective person pin for allocation (QS-353 A′).
+
+        A genuine user pin wins over any hold. Otherwise an unexpired system hold
+        is honoured; an expired hold is cleared (once) and resolves to ``None``.
+        ``time`` is the aware-UTC home clock; it is normalised defensively so a
+        naive caller degrades to a correct comparison instead of aborting the
+        whole allocation pass (review: blind/edge-case hunters).
+        """
+        time = self._as_utc(time)
+        user = self.get_user_originated("person_name")
+        if user is not None:
+            return user
+        hold_name = self._system_person_hold_name
+        hold_until = self._system_person_hold_until
+        if hold_name is not None and hold_until is not None and time < hold_until:
+            return hold_name
+        if hold_name is not None:
+            _LOGGER.info(
+                "Car:%s system hold on Person:%s expired at %s",
+                self.name,
+                hold_name,
+                hold_until,
+            )
+            self.clear_system_person_hold()
+        return None
 
     def get_car_person_readable_forecast_mileage(self, for_small_standalone: bool = True):
         """Person-forecast line ``"<name>: <forecast>"`` for the car card.
@@ -498,7 +617,18 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if new_value == self.get_user_originated("person_name"):
             return
 
-        self.set_user_originated("person_name", new_value)
+        # QS-353 C/D4: a user person change rejects the announced/validated
+        # situation and makes a new choice — reset the car's person-bound state
+        # (target fields, hold, and the person + target store keys) BEFORE freezing
+        # the new person. Manual charger selection (USER_ORIGINATED_CHARGER_NAME)
+        # and a CLEARED charge-time sentinel are not person-bound, so use targeted
+        # clears rather than clear_all_user_originated().
+        self._reset_charge_targets()
+        self.clear_system_person_hold()
+        self.clear_user_originated("person_name")
+        self.clear_user_originated("charge_target_percent")
+        self.clear_user_originated("charge_target_energy")
+        self.set_user_originated("person_name", new_value)  # fires the freeze
 
         # Check if the manual selection matches what is already forecasted;
         # if so, no reallocation is needed.
@@ -510,11 +640,18 @@ class QSCar(HADeviceMixin, AbstractDevice):
         if self.home:
             if new_value != FORCE_CAR_NO_PERSON_ATTACHED:
                 for car in self.home._cars:
-                    if car.name != self.name and car.get_user_originated("person_name") == new_value:
+                    if car.name == self.name:
+                        continue
+                    # QS-353 A′/D5: two independent clears (both may fire) — a car
+                    # user-pinned to this person loses its whole snapshot; a car
+                    # merely *holding* this person loses only the hold.
+                    if car.get_user_originated("person_name") == new_value:
                         # the person is being reassigned to self; the other car's
                         # entire snapshot (charge targets, times, etc.) was tied
                         # to that person, so clear everything.
                         car.clear_all_user_originated()
+                    if car._system_person_hold_name == new_value:
+                        car.clear_system_person_hold()
 
             await self.home.compute_and_set_best_persons_cars_allocations(force_update=True, do_notify=True)
 
@@ -2847,6 +2984,7 @@ class QSCar(HADeviceMixin, AbstractDevice):
         charger = self.charger
         await super().user_clean_and_reset()
 
+        self.clear_system_person_hold()  # QS-353 A′: manual reset drops the hold
         self.current_forecasted_person = None
         self.reset_soc_estimate()
         self.reset_car_api_stale_detection()

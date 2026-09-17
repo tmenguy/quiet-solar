@@ -562,9 +562,15 @@ class QSPerson(HADeviceMixin, AbstractDevice):
                             ):
                                 ct_target_soc = usable_ct.target_value
 
-                            # fixate the person on the car once notified, so the allocation doesn't flip
-                            if person_ct is not None or force_ct is not None or user_ct is not None:
-                                predicted_car._fix_user_selected_person_from_forecast()
+                            # QS-353 A′: announce a system decision by placing a
+                            # time-boxed *system* hold on the car until the leave
+                            # time — not a user pin, so the freeze never promotes
+                            # the person minimum to user intent.
+                            leave_time = self.predicted_leave_time  # non-None here by construction (D3)
+                            if leave_time is not None and (
+                                person_ct is not None or force_ct is not None or user_ct is not None
+                            ):
+                                predicted_car.hold_forecasted_person_until(leave_time)
 
                             car_curr_str = ""
                             if current_soc is not None:

@@ -3719,6 +3719,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 # preserve at unplug.
                 self._clear_leaked_person_target_if_needed()
                 self.car.clear_all_user_originated()
+                self.car.clear_system_person_hold()  # QS-353 A′: physical unplug drops the hold
                 # Edge-triggered (plugged→unplugged): clear the estimated-SOC
                 # state. The genuine plug-in path also clears it (the
                 # do_full_reset branch below), so the estimate is reset on every

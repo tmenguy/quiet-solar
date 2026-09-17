@@ -1003,7 +1003,7 @@ async def test_get_max_charge_limit_float_state(
 
 
 # ===========================================================================
-# Authorization check coverage: _is_person_authorized_for_car, _fix_user_selected_person_from_forecast,
+# Authorization check coverage: _is_person_authorized_for_car, hold_forecasted_person_until,
 # device_post_home_init unauthorized branch, user_set_person_for_car unauthorized branch
 # ===========================================================================
 
@@ -1022,7 +1022,11 @@ async def test_fix_user_selected_person_from_forecast_unauthorized(
     hass: HomeAssistant,
     home_config_entry: ConfigEntry,
 ) -> None:
-    """_fix_user_selected_person_from_forecast skips assignment for unauthorized person (line 288)."""
+    """QS-353 A′: hold_forecasted_person_until skips an unauthorized person (no hold)."""
+    from datetime import datetime, timedelta
+
+    import pytz
+
     car, _ = await _create_car(hass, home_config_entry, entry_id_suffix="fix_unauth")
     data_handler = hass.data[DOMAIN][DATA_HANDLER]
 
@@ -1034,7 +1038,8 @@ async def test_fix_user_selected_person_from_forecast_unauthorized(
     car.current_forecasted_person = mock_person
     car.clear_user_originated("person_name")
 
-    car._fix_user_selected_person_from_forecast()
+    car.hold_forecasted_person_until(datetime.now(pytz.UTC) + timedelta(hours=2))
+    assert car._system_person_hold_name is None
     assert car.get_user_originated("person_name") is None
 
 

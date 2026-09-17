@@ -1118,6 +1118,10 @@ async def test_home_best_persons_cars_allocations_basic(
     car_a.set_user_originated = lambda key, value: car_a._user_originated.__setitem__(key, value)
     car_a.has_user_originated = lambda key: key in car_a._user_originated
     car_a.clear_user_originated = lambda key: car_a._user_originated.pop(key, None)
+    car_a._system_person_hold_name = None
+    car_a._system_person_hold_until = None
+    car_a.get_pinned_person_name = lambda time, _c=car_a: _c.get_user_originated("person_name")
+    car_a.clear_system_person_hold = lambda _c=car_a: None
     car_b = SimpleNamespace(
         name="Car B",
         current_forecasted_person=None,
@@ -1131,6 +1135,10 @@ async def test_home_best_persons_cars_allocations_basic(
     car_b.set_user_originated = lambda key, value: car_b._user_originated.__setitem__(key, value)
     car_b.has_user_originated = lambda key: key in car_b._user_originated
     car_b.clear_user_originated = lambda key: car_b._user_originated.pop(key, None)
+    car_b._system_person_hold_name = None
+    car_b._system_person_hold_until = None
+    car_b.get_pinned_person_name = lambda time, _c=car_b: _c.get_user_originated("person_name")
+    car_b.clear_system_person_hold = lambda _c=car_b: None
 
     person_a = _HashableNS(
         name="Person A",
@@ -1197,6 +1205,10 @@ async def test_home_allocation_nudges_both_forecast_and_origin_sensors(
     car_a.set_user_originated = lambda key, value: car_a._user_originated.__setitem__(key, value)
     car_a.has_user_originated = lambda key: key in car_a._user_originated
     car_a.clear_user_originated = lambda key: car_a._user_originated.pop(key, None)
+    car_a._system_person_hold_name = None
+    car_a._system_person_hold_until = None
+    car_a.get_pinned_person_name = lambda time, _c=car_a: _c.get_user_originated("person_name")
+    car_a.clear_system_person_hold = lambda _c=car_a: None
 
     person_a = _HashableNS(
         name="Person A",
@@ -1249,6 +1261,10 @@ async def test_home_allocation_rejects_unauthorized_cross_assignment(
     car_a.set_user_originated = lambda key, value: car_a._user_originated.__setitem__(key, value)
     car_a.has_user_originated = lambda key: key in car_a._user_originated
     car_a.clear_user_originated = lambda key: car_a._user_originated.pop(key, None)
+    car_a._system_person_hold_name = None
+    car_a._system_person_hold_until = None
+    car_a.get_pinned_person_name = lambda time, _c=car_a: _c.get_user_originated("person_name")
+    car_a.clear_system_person_hold = lambda _c=car_a: None
     car_b = SimpleNamespace(
         name="Car B",
         current_forecasted_person=None,
@@ -1262,6 +1278,10 @@ async def test_home_allocation_rejects_unauthorized_cross_assignment(
     car_b.set_user_originated = lambda key, value: car_b._user_originated.__setitem__(key, value)
     car_b.has_user_originated = lambda key: key in car_b._user_originated
     car_b.clear_user_originated = lambda key: car_b._user_originated.pop(key, None)
+    car_b._system_person_hold_name = None
+    car_b._system_person_hold_until = None
+    car_b.get_pinned_person_name = lambda time, _c=car_b: _c.get_user_originated("person_name")
+    car_b.clear_system_person_hold = lambda _c=car_b: None
 
     # Person A authorized for car_a only, Person B for car_b only
     person_a = _HashableNS(
@@ -2464,6 +2484,10 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     car_selected.set_user_originated = lambda key, value: car_selected._user_originated.__setitem__(key, value)
     car_selected.has_user_originated = lambda key: key in car_selected._user_originated
     car_selected.clear_user_originated = lambda key: car_selected._user_originated.pop(key, None)
+    car_selected._system_person_hold_name = None
+    car_selected._system_person_hold_until = None
+    car_selected.get_pinned_person_name = lambda time, _c=car_selected: _c.get_user_originated("person_name")
+    car_selected.clear_system_person_hold = lambda _c=car_selected: None
     car_force_none = SimpleNamespace(
         name="Car Force None",
         current_forecasted_person=person_preferred,
@@ -2476,6 +2500,10 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     car_force_none.set_user_originated = lambda key, value: car_force_none._user_originated.__setitem__(key, value)
     car_force_none.has_user_originated = lambda key: key in car_force_none._user_originated
     car_force_none.clear_user_originated = lambda key: car_force_none._user_originated.pop(key, None)
+    car_force_none._system_person_hold_name = None
+    car_force_none._system_person_hold_until = None
+    car_force_none.get_pinned_person_name = lambda time, _c=car_force_none: _c.get_user_originated("person_name")
+    car_force_none.clear_system_person_hold = lambda _c=car_force_none: None
     car_preferred = SimpleNamespace(
         name="Car Preferred",
         current_forecasted_person=person_selected,
@@ -2488,6 +2516,10 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     car_preferred.set_user_originated = lambda key, value: car_preferred._user_originated.__setitem__(key, value)
     car_preferred.has_user_originated = lambda key: key in car_preferred._user_originated
     car_preferred.clear_user_originated = lambda key: car_preferred._user_originated.pop(key, None)
+    car_preferred._system_person_hold_name = None
+    car_preferred._system_person_hold_until = None
+    car_preferred.get_pinned_person_name = lambda time, _c=car_preferred: _c.get_user_originated("person_name")
+    car_preferred.clear_system_person_hold = lambda _c=car_preferred: None
     car_authorized = SimpleNamespace(
         name="Car Authorized",
         current_forecasted_person=None,
@@ -2500,6 +2532,10 @@ async def test_home_best_persons_cars_allocations_fallbacks_and_notify(
     car_authorized.set_user_originated = lambda key, value: car_authorized._user_originated.__setitem__(key, value)
     car_authorized.has_user_originated = lambda key: key in car_authorized._user_originated
     car_authorized.clear_user_originated = lambda key: car_authorized._user_originated.pop(key, None)
+    car_authorized._system_person_hold_name = None
+    car_authorized._system_person_hold_until = None
+    car_authorized.get_pinned_person_name = lambda time, _c=car_authorized: _c.get_user_originated("person_name")
+    car_authorized.clear_system_person_hold = lambda _c=car_authorized: None
 
     home._cars = [car_selected, car_force_none, car_preferred, car_authorized]
     home._persons = [person_selected, person_preferred, person_authorized]
@@ -2699,6 +2735,10 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
     car_main.set_user_originated = lambda key, value: car_main._user_originated.__setitem__(key, value)
     car_main.has_user_originated = lambda key: key in car_main._user_originated
     car_main.clear_user_originated = lambda key: car_main._user_originated.pop(key, None)
+    car_main._system_person_hold_name = None
+    car_main._system_person_hold_until = None
+    car_main.get_pinned_person_name = lambda time, _c=car_main: _c.get_user_originated("person_name")
+    car_main.clear_system_person_hold = lambda _c=car_main: None
     car_unused = SimpleNamespace(
         name="Car Unused",
         current_forecasted_person=None,
@@ -2712,6 +2752,10 @@ async def test_home_best_persons_cars_allocations_cost_matrix_branches(
     car_unused.set_user_originated = lambda key, value: car_unused._user_originated.__setitem__(key, value)
     car_unused.has_user_originated = lambda key: key in car_unused._user_originated
     car_unused.clear_user_originated = lambda key: car_unused._user_originated.pop(key, None)
+    car_unused._system_person_hold_name = None
+    car_unused._system_person_hold_until = None
+    car_unused.get_pinned_person_name = lambda time, _c=car_unused: _c.get_user_originated("person_name")
+    car_unused.clear_system_person_hold = lambda _c=car_unused: None
 
     person = _HashableNS(
         name="Person A",
@@ -2827,6 +2871,10 @@ async def test_home_best_persons_cars_allocations_skip_cases(
     invited_car.set_user_originated = lambda key, value: invited_car._user_originated.__setitem__(key, value)
     invited_car.has_user_originated = lambda key: key in invited_car._user_originated
     invited_car.clear_user_originated = lambda key: invited_car._user_originated.pop(key, None)
+    invited_car._system_person_hold_name = None
+    invited_car._system_person_hold_until = None
+    invited_car.get_pinned_person_name = lambda time, _c=invited_car: _c.get_user_originated("person_name")
+    invited_car.clear_system_person_hold = lambda _c=invited_car: None
     preset_car = SimpleNamespace(
         name="Preset",
         current_forecasted_person=SimpleNamespace(name="PresetPerson"),
@@ -2839,6 +2887,10 @@ async def test_home_best_persons_cars_allocations_skip_cases(
     preset_car.set_user_originated = lambda key, value: preset_car._user_originated.__setitem__(key, value)
     preset_car.has_user_originated = lambda key: key in preset_car._user_originated
     preset_car.clear_user_originated = lambda key: preset_car._user_originated.pop(key, None)
+    preset_car._system_person_hold_name = None
+    preset_car._system_person_hold_until = None
+    preset_car.get_pinned_person_name = lambda time, _c=preset_car: _c.get_user_originated("person_name")
+    preset_car.clear_system_person_hold = lambda _c=preset_car: None
     home._cars = [invited_car, preset_car]
     home._persons = []
 
@@ -3093,6 +3145,10 @@ async def test_home_allocation_clears_stale_unauthorized_manual_assignment(
     car_stale.set_user_originated = lambda key, value: car_stale._user_originated.__setitem__(key, value)
     car_stale.has_user_originated = lambda key: key in car_stale._user_originated
     car_stale.clear_user_originated = lambda key: car_stale._user_originated.pop(key, None)
+    car_stale._system_person_hold_name = None
+    car_stale._system_person_hold_until = None
+    car_stale.get_pinned_person_name = lambda time, _c=car_stale: _c.get_user_originated("person_name")
+    car_stale.clear_system_person_hold = lambda _c=car_stale: None
     car_stale.clear_all_user_originated = lambda: car_stale._user_originated.clear()
 
     home._cars = [car_stale]
@@ -3143,6 +3199,10 @@ async def test_home_allocation_rejects_unauthorized_hungarian_assignment(
     car.set_user_originated = lambda key, value: car._user_originated.__setitem__(key, value)
     car.has_user_originated = lambda key: key in car._user_originated
     car.clear_user_originated = lambda key: car._user_originated.pop(key, None)
+    car._system_person_hold_name = None
+    car._system_person_hold_until = None
+    car.get_pinned_person_name = lambda time, _c=car: _c.get_user_originated("person_name")
+    car.clear_system_person_hold = lambda _c=car: None
 
     home._cars = [car]
     home._persons = [person]
