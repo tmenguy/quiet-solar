@@ -11,6 +11,7 @@ Reuses the real-object test infrastructure from `tests.test_charger_coverage_dee
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -520,6 +521,49 @@ async def test_nh4_bad_current_returns_false_without_propagating(caplog):
         assert await ch._ocpp_set_charge_rate_fallback(None, _T0) is False
     assert calls == []  # clamp raised before the service call
     assert any("bad current" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_sf1_fallback_blocking_non_hae_error_returns_false(caplog):
+    """SF-1 (fix #05): a latched charger reached with blocking=True whose blocking
+    `async_call` raises a NON-HomeAssistantError (here `asyncio.TimeoutError`) returns
+    False, does NOT propagate, and leaves the fallback ack (`_ocpp_last_fallback_amps`)
+    untouched — matching the base number path's `except Exception` surface."""
+    hass = _make_hass()
+    home = _make_home()
+    ch = _create_ocpp_charger(hass, home)
+    _init_charger_states(ch)
+    ch._ocpp_station_profile_rejected = True
+
+    # Seed a prior successful ack so we can assert it is untouched by the failure.
+    calls: list = []
+    _record_calls(hass, calls)
+    assert await ch._ocpp_set_charge_rate_fallback(16, _T0, blocking=True) is True
+    assert ch._ocpp_last_fallback_amps == 16
+
+    async def raise_timeout(domain, service, data=None, **kwargs):
+        raise asyncio.TimeoutError("no response from charge point")
+
+    hass.services.async_call = AsyncMock(side_effect=raise_timeout)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        # Must not raise; must return False.
+        assert await ch._ocpp_set_charge_rate_fallback(20, _T0, blocking=True) is False
+    # Ack untouched by the failed blocking call.
+    assert ch._ocpp_last_fallback_amps == 16
+    # Reused the warn-once fallback-failure logging (not the "bad current" path).
+    assert sum("_ocpp_set_charge_rate_fallback: Error" in r.getMessage() for r in caplog.records) == 1
+    assert ch._ocpp_fallback_failure_logged is True
+
+    # Second failure of the same kind is suppressed to DEBUG (warn-once-then-debug).
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        assert await ch._ocpp_set_charge_rate_fallback(20, _T0, blocking=True) is False
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(
+        "_ocpp_set_charge_rate_fallback: Error" in r.getMessage() and r.levelno == logging.DEBUG
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio

@@ -6534,34 +6534,39 @@ class QSChargerOCPP(QSChargerGeneric):
             _LOGGER.debug("_ocpp_set_charge_rate_fallback: no devid, cannot set charge rate")
             return False
 
+        # Clamp before the service call (like the generic number path): a bad `current`
+        # returns False without counting as a service failure and without propagating out
+        # of the load-management cycle.
         try:
-            # Clamp inside the guarded path (like the generic number path): a bad `current`
-            # returns False instead of propagating out of the load-management cycle. When a
-            # blocking caller asks, forward `blocking` so it receives the real outcome
-            # (the service handler raises on refusal) instead of the optimistic ack.
             clamped = int(min(float(self.charger_max_charge), max(float(self.charger_min_charge), float(current))))
+        except (ValueError, TypeError) as e:
+            _LOGGER.warning("_ocpp_set_charge_rate_fallback: bad current %s (%s)", current, e)
+            return False
+
+        # SF-1 (fix #05): the fallback IS reachable with `blocking=True` — the sole
+        # `blocking=True` amp caller routes here (not to the number path) once the station
+        # profile is latched, because `low_level_set_max_charging_current` evaluates the
+        # `self._ocpp_station_profile_rejected` fallback branch BEFORE the `if blocking:`
+        # branch and forwards `blocking`. A blocking `async_call` propagates the service
+        # handler's exceptions, so the fallback's service-call exception surface must match
+        # the base number path (`except Exception`): a non-HAE runtime error
+        # (`asyncio.TimeoutError`, `ConnectionError`, `RuntimeError`) must return False —
+        # not escape and abort the cycle — leaving `_ocpp_last_fallback_amps` untouched.
+        try:
+            # When a blocking caller asks, forward `blocking` so it receives the real
+            # outcome (the service handler raises on refusal) instead of the optimistic ack.
             await self.hass.services.async_call(
                 "ocpp",
                 "set_charge_rate",
                 {"devid": self.devid, "limit_amps": clamped, "conn_id": OCPP_FALLBACK_CONN_ID},
                 blocking=blocking,
             )
-        # NH-2: the exception surface here is intentionally narrower than the base number
-        # path (which catches `Exception`). It is safe today because the fallback is only
-        # ever reached with `blocking=False` (the sole `blocking=True` amp caller routes to
-        # the number path), and a `blocking=False` `async_call` raises only HAE-family
-        # validation/registration errors. Revisit (widen the catch) if a `blocking=True`
-        # caller is ever routed through this fallback, where a non-HAE runtime error
-        # (e.g. `asyncio.TimeoutError`, `ConnectionError`) could then propagate.
-        except HomeAssistantError as e:
+        except Exception as e:
             if not self._ocpp_fallback_failure_logged:
                 _LOGGER.warning("_ocpp_set_charge_rate_fallback: Error %s", e, exc_info=True, stack_info=True)
                 self._ocpp_fallback_failure_logged = True
             else:
                 _LOGGER.debug("_ocpp_set_charge_rate_fallback: Error %s", e)
-            return False
-        except (ValueError, TypeError) as e:
-            _LOGGER.warning("_ocpp_set_charge_rate_fallback: bad current %s (%s)", current, e)
             return False
 
         # Ack assigned only AFTER a call that returned without raising, so a failed
