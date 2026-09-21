@@ -498,7 +498,6 @@ def test_render_warns_on_unbound_facts(
     """QS-357 review-fix #01 S1: warn when the handoff render is task-agnostic
     (branch does not resolve to a QS_<N> issue) despite a known --issue."""
     import next_step
-
     import render_agents
 
     ctx = {"facts_state": "unbound", "lane_protocol_state": "no_lane"}
@@ -520,7 +519,6 @@ def test_render_degradation_warnings_are_independent(
     """QS-357 review-fix #01 N1: each render-degradation reason surfaces
     independently — an ``elif`` chain would suppress the second."""
     import next_step
-
     import render_agents
 
     ctx = {"facts_state": "lookup_failed", "lane_protocol_state": "file_missing"}
@@ -543,7 +541,6 @@ def test_handoff_survives_load_time_template_error(
     error at handoff is funneled through RenderError → stderr warning +
     payload still emitted with exit 0 (handoff-survives-render-failure)."""
     import next_step
-
     import render_agents
 
     tdir = tmp_path / "tpl"
@@ -569,7 +566,6 @@ def test_handoff_survives_non_utf8_template(
     """QS-357 review-fix #03 M1 (handoff side): a non-UTF-8 template at
     handoff funnels through RenderError → stderr warning + payload, exit 0."""
     import next_step
-
     import render_agents
 
     tdir = tmp_path / "tpl"
