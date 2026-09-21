@@ -251,9 +251,9 @@ The drift checker `scripts/qs/check_doc_drift.py` enforces
 in the modified set, it verifies that the corresponding file in the
 other harness directory was also modified. Violation exits 1.
 
-**When editing agent files:** always edit all three copies. The
-canonical workflow is to make the functional change in all three
-harnesses, adapting harness-specific sections (handoff, session
+**When editing agent files:** always edit both copies (`.claude/`,
+`.opencode/`). The canonical workflow is to make the functional change
+in both harnesses, adapting harness-specific sections (handoff, session
 spawn) as needed for each.
 
 ## Workflow routing

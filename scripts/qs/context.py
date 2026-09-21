@@ -60,12 +60,17 @@ def _empty_issue_fields() -> dict:
     return {"title": "", "labels": [], "body": ""}
 
 
-def _issue_fields(issue: int) -> dict:
+def fetch_issue_fields(issue: int) -> dict:
     """Fetch ``title``, ``labels`` (names) and ``body`` in ONE ``gh`` call.
 
     Returns :func:`_empty_issue_fields` on any failure (non-zero exit,
     unparseable JSON) — degraded fields, never an exception, matching the
     old ``_issue_title`` contract.
+
+    Public (QS-357): :mod:`render_agents` imports it to resolve a bound
+    task's facts at render time. Ruff's ``PLC2701`` forbids importing an
+    underscore-prefixed name across modules, so the rename to a public
+    name is the mechanism, not cosmetics.
     """
     result = run_gh(
         ["issue", "view", str(issue), "--json", "title,labels,body"],
@@ -160,7 +165,7 @@ def build_context(issue_override: int | None = None) -> dict:
     # start that raises, so an "inline fallback" cannot un-queue it and
     # double-executes the call (review fix #02 M1). Do not add one.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        title_future = pool.submit(_issue_fields, issue) if has_issue else None
+        title_future = pool.submit(fetch_issue_fields, issue) if has_issue else None
         pr_future: Future | None = None
         try:
             # Inside the ``try`` so the drain below covers it: if this

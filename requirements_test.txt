@@ -21,6 +21,11 @@ syrupy==5.5.3  # matches pytest-homeassistant-custom-component's own pin
 
 scipy==1.17.1
 
+# QS-357: Jinja2 renders the per-worktree harness agent files from the
+# templates under scripts/qs/agent_templates/. Already present transitively
+# via Home Assistant; pinned here so render_agents.py has a declared dep.
+jinja2==3.1.6
+
 # Code quality
 ruff==0.15.6
 mypy==1.20.0

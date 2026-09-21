@@ -1,0 +1,13 @@
+[%- macro lane_paragraph(tail) -%]
+[%- if lane_protocol -%]
+**Lane (QS-332).** This task's lane is `[[ lane ]]`; its phase protocol is rendered below under "Lane protocol" — do not re-read the lane file.
+[%- else -%]
+**Lane (QS-332).** Also capture `lane` from the context JSON, then read
+`docs/workflow/lanes/<lane>.md` — that file is this task's phase
+protocol. If `lane` is empty (a pre-existing worktree / legacy
+in-flight task — every new task is labelled at birth), fall back to
+[docs/workflow/phase-protocols.md](../../docs/workflow/phase-protocols.md)
+and surface the backfill guidance: the issue still needs its axis
+labels (`gh issue edit <N> --add-label ...`). [[ "This phase is read-only\nwith respect to the gate, so it may proceed on the fallback." if tail == "readonly" else "In this implement\nphase the labels must be resolved **before the first commit** — the\nfirst `--impacted` run fails otherwise (the gate is the backstop, not\na parallel path)." ]]
+[%- endif -%]
+[%- endmacro -%]
