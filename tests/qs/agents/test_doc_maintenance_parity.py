@@ -18,7 +18,7 @@ useful, six agent bodies must invoke it at the right phase:
 - ``qs-verify-task``      — the bug × product lane's review-variant,
   same PR-diff audit as qs-review-task.
 
-Body content is mirrored across three harnesses (Claude / Cursor /
+Body content is mirrored across both harnesses (Claude /
 OpenCode) — the frontmatter format is harness-specific and stays
 untouched. This test pins the invocation token in every harness so
 a future edit that only touches one harness fails CI.
@@ -32,6 +32,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+
+from tests.qs.agents._rendered import agents_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -48,11 +50,10 @@ DOC_MAINTENANCE_AGENT_NAMES: tuple[str, ...] = (
     "qs-verify-task",
 )
 
-# Three harnesses to mirror across.
+# Both harnesses to mirror across.
 HARNESS_DIRS: tuple[Path, ...] = (
-    REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".cursor" / "agents",
-    REPO_ROOT / ".opencode" / "agents",
+    agents_dir("claude"),
+    agents_dir("opencode"),
 )
 
 # The exact token that every agent body must contain. The trailing
@@ -96,7 +97,7 @@ def test_agent_body_invokes_drift_checker(harness_dir: Path, agent_name: str) ->
         f"{path}: agent body does not invoke '{DRIFT_CHECKER_TOKEN}'. "
         f"QS-185 AC-9 / AC-10 require every orchestrator agent to wire "
         f"the doc-maintenance step into its phase protocol; this test "
-        f"pins the contract across .claude/, .cursor/, and .opencode/."
+        f"pins the contract across .claude/ and .opencode/."
     )
 
 

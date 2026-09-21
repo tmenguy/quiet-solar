@@ -4,7 +4,6 @@
 Harnesses supported:
 
 - ``claude-code`` — Claude Code CLI or Desktop
-- ``cursor`` — Cursor IDE (2.4+ subagent support)
 - ``opencode`` — OpenCode CLI / sandbox
 - ``codex`` — OpenAI Codex (stub)
 
@@ -13,9 +12,8 @@ Resolution order:
 1. ``QS_HARNESS`` env var (explicit override; the most reliable signal).
 2. ``CLAUDECODE=1`` set by the Claude Code launcher.
 3. ``OPENCODE_SERVER_PORT`` set by OpenCode sandbox.
-4. ``CURSOR_TRACE_ID`` set by Cursor terminals.
-5. Any ``CODEX_AGENT_*`` env var set by Codex.
-6. Default: ``claude-code``.
+4. Any ``CODEX_AGENT_*`` env var set by Codex.
+5. Default: ``claude-code``.
 
 Run directly to print the detected harness:
 
@@ -31,9 +29,9 @@ import os
 import sys
 from typing import Literal
 
-Harness = Literal["claude-code", "cursor", "opencode", "codex"]
+Harness = Literal["claude-code", "opencode", "codex"]
 
-VALID_HARNESSES: tuple[Harness, ...] = ("claude-code", "cursor", "opencode", "codex")
+VALID_HARNESSES: tuple[Harness, ...] = ("claude-code", "opencode", "codex")
 
 # Legacy-alias map. ``detect`` (QS_HARNESS env var) and ``canonicalize``
 # (--harness argparse flag, review fix #01 N8) share this table so the
@@ -88,8 +86,6 @@ def detect() -> Harness:
         return "claude-code"
     if os.environ.get("OPENCODE_SERVER_PORT"):
         return "opencode"
-    if os.environ.get("CURSOR_TRACE_ID"):
-        return "cursor"
     if any(k.startswith("CODEX_AGENT_") for k in os.environ):
         return "codex"
 

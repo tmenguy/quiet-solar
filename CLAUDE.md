@@ -38,16 +38,21 @@ The **bug × product** lane diverges (QS-335): `setup → diagnose → fix
 and `verify-task` replaces `review-task` for that lane only (see
 [docs/workflow/lanes/bug-product.md](docs/workflow/lanes/bug-product.md)).
 
-Static agents live in [.claude/agents/](.claude/agents/); slash commands
-in [.claude/commands/](.claude/commands/). Agents discover task context
-at runtime via `python scripts/qs/context.py` (no per-task rendering).
+Agents are rendered per worktree from one Jinja template each under
+[scripts/qs/agent_templates/](scripts/qs/agent_templates/) into the
+gitignored `.claude/agents/` and `.opencode/agents/` (QS-357 — edit the
+template, never a rendered output); slash commands stay tracked in
+[.claude/commands/](.claude/commands/). Rendering runs automatically at
+worktree birth, at every handoff, and post-merge on `main`; on a fresh
+clone run `python scripts/qs/render_agents.py` once. Agents still resolve
+volatile task context at runtime via `python scripts/qs/context.py`.
 
 ## Pipeline architecture
 
 - [docs/workflow/overview.md](docs/workflow/overview.md) — the static-agent pipeline
 - [docs/workflow/phase-protocols.md](docs/workflow/phase-protocols.md) — each phase's contract
 - [docs/workflow/adversarial-review.md](docs/workflow/adversarial-review.md) — the 4-reviewer pattern
-- [docs/workflow/harness.md](docs/workflow/harness.md) — multi-harness abstraction (Claude / Cursor / OpenCode / Codex)
+- [docs/workflow/harness.md](docs/workflow/harness.md) — multi-harness abstraction (Claude / OpenCode / Codex)
 
 ## Quality gate
 

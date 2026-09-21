@@ -19,13 +19,11 @@ import subprocess
 import sys
 
 import targets  # type: ignore[import-not-found]
-
 from harness import canonicalize as canonicalize_harness  # type: ignore[import-not-found]
 from harness import detect as detect_harness
 from harness import harness_choices
 from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
-from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 
 from utils import (  # type: ignore[import-not-found]
@@ -123,10 +121,28 @@ def refuse_if_epic(issue: int, labels: list[str]) -> None:
 # next-phase dispatcher.
 LAUNCHERS = {
     "claude-code": claude_launcher,
-    "cursor": cursor_launcher,
     "opencode": opencode_launcher,
     "codex": codex_launcher,
 }
+
+
+def _fail_render(exc: Exception, work_dir: str, issue: int, title: str) -> None:
+    """Emit the JSON render-failure error and exit 1 (QS-357).
+
+    The branch/worktree already exist, so the remedy is to render by hand
+    and then rebuild the launcher payload from the existing worktree — the
+    ``detail`` names both commands verbatim.
+    """
+    output_json({
+        "error": "agent render failed",
+        "detail": (
+            f"{exc}. Remedy: python scripts/qs/render_agents.py --work-dir "
+            f"{work_dir}, then python scripts/qs/next_step.py --next-cmd "
+            f"create-plan --work-dir {work_dir} --issue {issue} --title "
+            f"{title!r} for the launcher"
+        ),
+    })
+    sys.exit(1)
 
 
 def main() -> None:
@@ -193,6 +209,25 @@ def main() -> None:
         work_dir = str(get_worktree_dir(issue))
 
     title = args.title or f"Issue #{issue}"
+
+    # QS-357: render the per-worktree harness agent files before building the
+    # launcher payload, for BOTH the worktree and the --no-worktree branch.
+    # The branch/worktree already exist here, so a render failure is fatal —
+    # a session would otherwise open with no (or stale) agent definitions.
+    # ``fetch=False``: title + labels are already in hand (no second `gh`
+    # call). The import is function-local so a missing ``jinja2`` surfaces as
+    # ``ImportError`` inside this guard rather than at module import.
+    try:
+        import render_agents  # noqa: PLC0415 — local so a missing jinja2 is caught here
+
+        render_context = render_agents.build_render_context(
+            work_dir, issue=issue, title=title, labels=labels, fetch=False,
+        )
+        render_agents.render_all(work_dir, context=render_context)
+    except ImportError as exc:
+        _fail_render(exc, work_dir, issue, title)
+    except render_agents.RenderError as exc:
+        _fail_render(exc, work_dir, issue, title)
 
     # Apply the legacy-alias mapping (review fix #01 N8): argparse
     # accepted aliases via ``choices=harness_choices()``; canonicalize

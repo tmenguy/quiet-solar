@@ -4,7 +4,7 @@ OpenCode mid-pipeline agents (create-plan, implement-task,
 implement-setup-task, review-task) must instruct the agent to RUN
 ``new_context`` via the Bash tool and verify the binary
 ``status == "session_created"`` AND the resolved agent name contract.
-The OpenCode setup-task agent + every Claude / Cursor agent preserve
+The OpenCode setup-task agent + every Claude agent preserve
 the existing print-for-user pattern (no auto-execute prose).
 
 Review fix #01 hardens the prose:
@@ -35,10 +35,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-OPENCODE_DIR = REPO_ROOT / ".opencode" / "agents"
-CLAUDE_DIR = REPO_ROOT / ".claude" / "agents"
-CURSOR_DIR = REPO_ROOT / ".cursor" / "agents"
+OPENCODE_DIR = agents_dir("opencode")
+CLAUDE_DIR = agents_dir("claude")
 
 # Distinctive substring from the canonical auto-execute block (QS-190
 # Task 3.2-3.5). Choosing a phrase that is unique to the auto-execute
@@ -227,12 +228,3 @@ def test_claude_agents_preserve_print_for_user(agent_file: Path) -> None:
         f"auto-execute marker — that's OpenCode-only (QS-190 AC-6)."
     )
 
-
-@pytest.mark.parametrize("agent_file", sorted(CURSOR_DIR.glob("qs-*.md")))
-def test_cursor_agents_preserve_print_for_user(agent_file: Path) -> None:
-    """Every Cursor phase orchestrator stays print-for-user (AC-6)."""
-    body = agent_file.read_text(encoding="utf-8")
-    assert EXECUTE_MARKER not in body, (
-        f"{agent_file.relative_to(REPO_ROOT)}: Cursor agents must "
-        f"preserve the existing print-for-user pattern (QS-190 AC-6)."
-    )

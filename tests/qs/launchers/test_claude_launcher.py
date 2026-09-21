@@ -195,8 +195,8 @@ def test_build_payload_shlex_quotes_agent_name(monkeypatch: pytest.MonkeyPatch) 
 
 # --------------------------------------------------------------------------- #
 # Review fix plan #01 — should-fix #17: existing_session_prompt key.
-# Parallel pin in test_cursor_launcher / test_codex_launcher /
-# test_opencode_launcher. The shared helper lives in
+# Parallel pin in test_codex_launcher / test_opencode_launcher.
+# The shared helper lives in
 # launchers/phases.py::build_existing_session_prompt; each launcher
 # threads the kwargs through ``build_payload``.
 # --------------------------------------------------------------------------- #

@@ -1,4 +1,4 @@
-"""Pin the QS-266 interactive plan-mode loop across all three harnesses.
+"""Pin the QS-266 interactive plan-mode loop across both harnesses.
 
 QS-266 reshapes ``qs-create-plan`` from a linear pipeline into a
 user-driven **mode loop** (DISCUSS / REVIEW / TRIAGE / FINALIZE) and
@@ -9,7 +9,7 @@ sibling ``test_doc_maintenance_parity.py``), not by executing the
 personas. Each QS-266 acceptance criterion (AC1–AC6) is therefore a
 literal marker that must appear in every harness copy of
 ``qs-create-plan`` — and AC7 is the existence of the new sub-agent in
-all three harness directories.
+both harness directories.
 
 Pattern follows ``test_doc_maintenance_parity.py``.
 """
@@ -20,13 +20,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Three harnesses to mirror across.
+# Both harnesses to mirror across.
 HARNESS_DIRS: tuple[Path, ...] = (
-    REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".cursor" / "agents",
-    REPO_ROOT / ".opencode" / "agents",
+    agents_dir("claude"),
+    agents_dir("opencode"),
 )
 
 # Markers that pin AC1–AC6 in the body of every ``qs-create-plan`` copy.
@@ -69,7 +70,7 @@ CREATE_PLAN_FORBIDDEN_MARKERS: tuple[str, ...] = (
     "quick check",
 )
 
-# AC7 — the new diff-aware reviewer exists in all three harnesses.
+# AC7 — the new diff-aware reviewer exists in both harnesses.
 DELTA_AUDITOR_NAME = "qs-plan-delta-auditor"
 
 
@@ -122,7 +123,7 @@ def test_create_plan_body_contains_mode_loop_marker(
         f"{path}: missing QS-266 mode-loop marker {marker!r}. AC1–AC6 are "
         f"pinned as literal substrings in every harness copy of "
         f"qs-create-plan; the mode-loop rewrite must keep this marker aligned "
-        f"across .claude/, .cursor/, and .opencode/."
+        f"across .claude/ and .opencode/."
     )
 
 
@@ -173,11 +174,11 @@ def test_workflow_docs_describe_fifth_reviewer(
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
 def test_delta_auditor_exists_in_every_harness(harness_dir: Path) -> None:
-    """AC7 — ``qs-plan-delta-auditor`` ships in all three harness dirs."""
+    """AC7 — ``qs-plan-delta-auditor`` ships in both harness dirs."""
     path = harness_dir / f"{DELTA_AUDITOR_NAME}.md"
     assert path.is_file(), (
         f"Missing new sub-agent file: {path}. AC7 requires "
-        f"qs-plan-delta-auditor in .claude/, .cursor/, and .opencode/ "
+        f"qs-plan-delta-auditor in .claude/ and .opencode/ "
         f"(parity enforced by this pinning test, not the drift checker — a "
         f"brand-new single-harness agent is exempt from co-modification)."
     )

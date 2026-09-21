@@ -145,7 +145,7 @@ def _make_fake_run(
         if head == GH_ISSUE:
             if "issue" in raise_on:
                 raise raise_cls(GH_ISSUE_BOOM)
-            # QS-332: `_issue_fields` fetches `--json title,labels,body`
+            # QS-332: `fetch_issue_fields` fetches `--json title,labels,body`
             # in one call; the fake answers with that JSON shape.
             issue_json = json.dumps(
                 {

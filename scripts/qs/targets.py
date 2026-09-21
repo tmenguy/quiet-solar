@@ -38,7 +38,6 @@ _FACTORY_PREFIXES = (
     "scripts/",
     "tests/qs/",
     ".claude/",
-    ".cursor/",
     ".opencode/",
     ".github/",
     "legacy/",
@@ -54,7 +53,6 @@ _FACTORY_BASENAMES = frozenset(
     {
         "CLAUDE.md",
         "AGENTS.md",
-        ".cursorrules",
         ".gitignore",
         "pyproject.toml",
         "setup.cfg",

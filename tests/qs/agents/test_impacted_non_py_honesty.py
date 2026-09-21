@@ -32,7 +32,7 @@ The contract pinned here:
 6. its automatic `git add` must stage the dev-tooling tests, or a guard
    like this one can be written and then left uncommitted.
 
-Mirrored across all three harnesses (Claude / Cursor / OpenCode) so an
+Mirrored across both harnesses (Claude / OpenCode) so an
 edit to one harness alone fails, matching the harness-sync rule in
 `docs/workflow/project-rules.md`.
 
@@ -46,12 +46,13 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 HARNESS_DIRS: tuple[Path, ...] = (
-    REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".cursor" / "agents",
-    REPO_ROOT / ".opencode" / "agents",
+    agents_dir("claude"),
+    agents_dir("opencode"),
 )
 
 AGENT_NAME = "qs-implement-setup-task"

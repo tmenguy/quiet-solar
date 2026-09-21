@@ -96,7 +96,7 @@ docs covering it before you write the change.
 - [glossary.md](glossary.md) — ~40 domain terms.
 - [lsp-evaluation.md](lsp-evaluation.md) — should agents pair with a
   Python LSP server? (Decision: adopt native pyright in the Claude
-  harness; OpenCode diagnostics-only, Cursor TBD.)
+  harness; OpenCode diagnostics-only.)
 - [../workflow/project-rules.md](../workflow/project-rules.md) —
   the quality-gate rules and the "Doc maintenance" subsection.
 - [../workflow/project-context.md](../workflow/project-context.md)
@@ -117,9 +117,10 @@ This tree stays in sync with the code via three layered defences:
   implement-setup-task, and review-task agents each invoke
   `check_doc_drift.py` at the right phase. See
   [../workflow/project-rules.md](../workflow/project-rules.md) ("Doc
-  maintenance" subsection) for the contract; the agent bodies under
-  `.claude/agents/`, `.cursor/agents/`, `.opencode/agents/` are the
-  implementation. Parity across the three harnesses is pinned by
+  maintenance" subsection) for the contract; the agent templates under
+  `scripts/qs/agent_templates/` are the implementation (the
+  `.claude/agents/`, `.opencode/agents/` bodies are rendered from them,
+  QS-357). Parity across both harnesses is pinned by
   `tests/qs/agents/test_doc_maintenance_parity.py`.
 - **`last_verified` frontmatter** — every doc records the date the
   content was last cross-checked. A reviewer can say "still

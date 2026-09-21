@@ -1,11 +1,11 @@
 """Pin the AC-1 contract: every next_step.py / setup_task.py callsite
-inside .opencode/agents/, .claude/agents/, .cursor/agents/ passes
+inside .opencode/agents/ and .claude/agents/ passes
 the explicit ``--harness <name>`` flag matching its directory.
 
 Without this guard, env-var-based harness auto-detection
 (scripts/qs/harness.py) silently degrades to the ``claude-code``
 default whenever the tool execution environment doesn't carry
-``OPENCODE_SERVER_PORT`` / ``CURSOR_TRACE_ID`` — which is precisely
+``OPENCODE_SERVER_PORT`` — which is precisely
 the failure mode QS-190 closes.
 
 Review fix #01 — S2 + S3 + S10 + N11:
@@ -37,12 +37,15 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# QS-357: the agent dirs are gitignored rendered outputs — read the
+# rendered (unbound) copies, keyed by the rendered dir Path.
 HARNESS_BY_DIR = {
-    ".opencode/agents": "opencode",
-    ".claude/agents": "claude-code",
-    ".cursor/agents": "cursor",
+    agents_dir("opencode"): "opencode",
+    agents_dir("claude"): "claude-code",
 }
 
 # Matches a ``` ```bash ... ``` ``` fenced block whose opening and
@@ -79,8 +82,8 @@ def _callsite_fences(body: str) -> list[str]:
 def _all_agent_files() -> list[tuple[Path, str]]:
     """Yield (file, expected_harness) for every callsite-bearing .md file."""
     out: list[tuple[Path, str]] = []
-    for rel, harness in HARNESS_BY_DIR.items():
-        for f in sorted((REPO_ROOT / rel).glob("*.md")):
+    for dir_path, harness in HARNESS_BY_DIR.items():
+        for f in sorted(dir_path.glob("*.md")):
             body = f.read_text(encoding="utf-8")
             if _callsite_fences(body):
                 out.append((f, harness))
@@ -131,8 +134,10 @@ def test_every_callsite_fence_carries_explicit_harness_flag(
 def test_aggregate_callsites_at_least_thirteen() -> None:
     """Sanity-pin (S3): the AC-1 enumeration table lists 13 callsites.
 
-    Today there are exactly 13 (6 OpenCode + 6 Claude + 1 Cursor); a
-    future legitimate addition should not break this test as long as
+    The QS-190 table enumerated 13 of them (its single Cursor row
+    went away with the Cursor harness in QS-357, and the Claude /
+    OpenCode trees have grown past that count since); a future
+    legitimate addition should not break this test as long as
     the new callsite ALSO carries its ``--harness`` flag — that
     invariant is enforced per-file by
     ``test_every_callsite_fence_carries_explicit_harness_flag``.
@@ -142,14 +147,14 @@ def test_aggregate_callsites_at_least_thirteen() -> None:
     "Given any of the 13 next_step.py / setup_task.py callsites").
     """
     total = 0
-    for rel in HARNESS_BY_DIR:
-        for f in (REPO_ROOT / rel).glob("*.md"):
+    for dir_path in HARNESS_BY_DIR:
+        for f in dir_path.glob("*.md"):
             body = f.read_text(encoding="utf-8")
             for fence in _callsite_fences(body):
                 total += len(_CALLSITE_RE.findall(fence))
     assert total >= 13, (
         f"Expected at least 13 scripts/qs/next_step.py / setup_task.py "
-        f"callsites across the three harness dirs; found {total}. The "
+        f"callsites across the harness dirs; found {total}. The "
         f"AC-1 enumeration table in docs/stories/QS-190.story.md lists "
         f"the canonical 13."
     )

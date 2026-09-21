@@ -39,6 +39,7 @@ def _make_fake_run(labels: list[str] | None, *, gh_rc: int = 0):
 
 def test_complete_task_declaration_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     import setup_task
+
     import utils
 
     fake_run, _seen = _make_fake_run(["kind:feature", "target:factory", "scale:task"])
@@ -54,6 +55,7 @@ def test_epic_declaration_validates_as_itself(monkeypatch: pytest.MonkeyPatch) -
     is a branch/worktree (see the epic-refusal tests below).
     """
     import setup_task
+
     import utils
 
     fake_run, _seen = _make_fake_run(["scale:epic", "target:product", "pinned"])
@@ -83,6 +85,7 @@ def test_epic_issue_is_refused_before_any_git_work(
     proves nothing git-side ran.
     """
     import setup_task
+
     import utils
 
     fake_run, seen = _make_fake_run(["scale:epic", "target:factory"])
@@ -104,6 +107,7 @@ def test_epic_issue_is_refused_before_any_git_work(
 def test_task_issue_is_not_refused_as_an_epic(monkeypatch: pytest.MonkeyPatch) -> None:
     """The guard is scale-specific — a task passes it untouched."""
     import setup_task
+
     import utils
 
     fake_run, _seen = _make_fake_run(["kind:bug", "target:product", "scale:task"])
@@ -116,6 +120,7 @@ def test_check_declaration_returns_the_labels(monkeypatch: pytest.MonkeyPatch) -
     """The epic guard reuses `check_declaration`'s already-fetched labels
     — no second `gh` call on the setup path."""
     import setup_task
+
     import utils
 
     fake_run, seen = _make_fake_run(["kind:feature", "target:factory", "scale:task"])
@@ -129,6 +134,7 @@ def test_undeclared_issue_refuses_with_backfill_command(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     import setup_task
+
     import utils
 
     fake_run, _seen = _make_fake_run(["bug"])
@@ -148,6 +154,7 @@ def test_conflicting_declaration_refuses(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     import setup_task
+
     import utils
 
     fake_run, _seen = _make_fake_run(
@@ -169,6 +176,7 @@ def test_null_labels_reports_the_declaration_error_not_invalid_json(
     ordinary missing-declaration refusal, with its actionable backfill
     command."""
     import setup_task
+
     import utils
 
     def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -194,6 +202,7 @@ def test_non_dict_json_refuses_with_the_structured_error(
     """Review-fix #04: a non-dict top-level value raised `AttributeError`
     out of the except tuple as a raw traceback."""
     import setup_task
+
     import utils
 
     def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -210,6 +219,7 @@ def test_gh_failure_refuses(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     import setup_task
+
     import utils
 
     fake_run, _seen = _make_fake_run(None, gh_rc=1)
@@ -228,6 +238,7 @@ def test_main_refuses_before_any_git_work(
     git (the fake raises on any non-``gh issue view`` command).
     """
     import setup_task
+
     import utils
 
     fake_run, seen = _make_fake_run([])
@@ -238,3 +249,68 @@ def test_main_refuses_before_any_git_work(
     assert exc.value.code == 1
     assert all(cmd[0] == "gh" for cmd in seen)
     assert "gh issue edit 42 --add-label" in json.loads(capsys.readouterr().out)["detail"]
+
+
+# ---------------------------------------------------------------------------
+# QS-357: the render hook fails loudly at worktree birth
+# ---------------------------------------------------------------------------
+
+
+def _fake_run_success(labels: list[str]):
+    """A fake ``run`` that answers the gh label lookup and every git call OK."""
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[:3] == ["gh", "issue", "view"]:
+            return subprocess.CompletedProcess(cmd, 0, _gh_labels_response(labels), "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    return fake_run
+
+
+def test_render_import_error_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """A missing ``jinja2`` (function-local ImportError) → JSON error + exit 1."""
+    import sys
+
+    import setup_task
+
+    import utils
+
+    monkeypatch.setattr(utils, "run", _fake_run_success(["kind:feature", "target:factory", "scale:task"]))
+    monkeypatch.setattr(setup_task, "get_main_worktree", lambda: tmp_path)
+    monkeypatch.setitem(sys.modules, "render_agents", None)  # import → ImportError
+    monkeypatch.setattr("sys.argv", ["setup_task.py", "42", "--no-worktree", "--title", "T"])
+
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"] == "agent render failed"
+    assert "render_agents.py --work-dir" in out["detail"]
+    assert "next_step.py --next-cmd create-plan" in out["detail"]
+
+
+def test_render_render_error_fails_loudly(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """A ``RenderError`` from ``render_all`` → JSON error + exit 1."""
+    import render_agents
+    import setup_task
+
+    import utils
+
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise render_agents.RenderError("boom")
+
+    monkeypatch.setattr(utils, "run", _fake_run_success(["kind:feature", "target:factory", "scale:task"]))
+    monkeypatch.setattr(setup_task, "get_main_worktree", lambda: tmp_path)
+    monkeypatch.setattr(render_agents, "render_all", _boom)
+    monkeypatch.setattr("sys.argv", ["setup_task.py", "42", "--no-worktree", "--title", "T"])
+
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"] == "agent render failed"
+    assert "boom" in out["detail"]

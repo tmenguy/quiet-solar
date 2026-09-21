@@ -25,8 +25,37 @@ SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts" / "qs"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import quality_gate
+import render_agents as _render_agents
 
 QG_FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures" / "quality_gate"
+
+# QS-357: the harness agent files (`.claude/agents/`, `.opencode/agents/`)
+# are gitignored rendered outputs. This file cannot see the ``tests/qs/``
+# ``rendered_agents`` fixture (it lives outside that subtree), so it renders
+# the templates into its own session-scoped temp dir with the standard
+# unbound recipe and reads the agent bodies from there — green on a fresh
+# clone with no working-tree render (AC11).
+_QG_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _render_agents_unbound() -> Path:
+    import atexit
+    import shutil as _shutil
+    import tempfile
+
+    tmp = Path(tempfile.mkdtemp(prefix="qs_qg_rendered_"))
+    atexit.register(_shutil.rmtree, tmp, ignore_errors=True)
+    ctx = _render_agents.build_render_context(
+        tmp, bound=False, fetch=False, lanes_dir=_QG_REPO_ROOT / "docs" / "workflow" / "lanes",
+    )
+    _render_agents.render_all(
+        tmp, context=ctx, out_root=tmp,
+        templates_dir=_QG_REPO_ROOT / "scripts" / "qs" / "agent_templates",
+    )
+    return tmp
+
+
+_AGENTS_ROOT = _render_agents_unbound()
 
 
 # --- Helpers ---
@@ -6950,17 +6979,16 @@ class TestProjectRulesDocGuards:
 
 
 class TestFinishTaskFollowerAgents:
-    """QS-299 AC#9: all three qs-finish-task.md agents launch the tokened
+    """QS-299 AC#9: both qs-finish-task.md agents launch the tokened
     detached seed + stream the follower inline, in lockstep."""
 
     _AGENTS = (
         ".claude/agents/qs-finish-task.md",
-        ".cursor/agents/qs-finish-task.md",
         ".opencode/agents/qs-finish-task.md",
     )
 
     def _text(self, rel: str) -> str:
-        return (Path(__file__).resolve().parent.parent / rel).read_text()
+        return (_AGENTS_ROOT / rel).read_text()
 
     @pytest.mark.parametrize("rel", _AGENTS)
     def test_launches_tokened_detached_seed(self, rel: str) -> None:
@@ -7072,22 +7100,22 @@ class TestWorktreeSetupSeedsCaches:
 
 
 class TestFinishTaskRefreshesBaseline:
-    """AC#9: all three finish-task harness copies refresh via --seed-testmon."""
+    """AC#9: both finish-task harness copies refresh via --seed-testmon."""
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     def test_seed_testmon_refresh_present(self, harness: str) -> None:
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / "qs-finish-task.md").read_text()
         assert "--seed-testmon" in body
         assert "git worktree list --porcelain" in body  # MAIN_DIR captured before cleanup
         assert "nohup" in body  # detached / best-effort
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     def test_completion_signal_present(self, harness: str) -> None:
         """QS-299 (supersedes QS-286): the detached refresh logs to
         `.testmondata.seed.log`, streams the follower inline, and culminates in
         a "safe to close this terminal" verdict — WITHOUT the old rm -f marker
         or the manual --seed-testmon-status primary path."""
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / "qs-finish-task.md").read_text()
         assert '>"$MAIN_DIR/.testmondata.seed.log" 2>&1' in body  # log redirect
         assert "--seed-testmon-follow --seed-token" in body  # inline streaming
         assert "safe to close this terminal" in body
@@ -7098,11 +7126,11 @@ class TestFinishTaskRefreshesBaseline:
 
     def test_seed_launch_block_byte_identical_across_harnesses(self) -> None:
         """Harness-sync: the QS-299 tokened-detached seed LAUNCH block (bash) is
-        byte-identical in all three finish-task copies (the per-harness
+        byte-identical in both finish-task copies (the per-harness
         background+monitor prose is allowed to differ)."""
         blocks = []
-        for harness in (".claude", ".cursor", ".opencode"):
-            body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        for harness in (".claude", ".opencode"):
+            body = (_AGENTS_ROOT / harness / "agents" / "qs-finish-task.md").read_text()
             # Anchor on the token generation and the exact detached-launch
             # redirect line — both code-adjacent, so per-harness follower prose
             # after the fence can't truncate the slice inconsistently.
@@ -7110,12 +7138,12 @@ class TestFinishTaskRefreshesBaseline:
             redirect = '</dev/null >"$MAIN_DIR/.testmondata.seed.log" 2>&1 & )'
             end = body.index(redirect, start) + len(redirect)
             blocks.append(body[start:end])
-        assert blocks[0] == blocks[1] == blocks[2]
+        assert blocks[0] == blocks[1]
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     def test_interpreter_is_probed_not_hardcoded(self, harness: str) -> None:
         """review-fix S3: probe for a usable interpreter; warn instead of a false success if none."""
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-finish-task.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / "qs-finish-task.md").read_text()
         assert "command -v python3" in body or "command -v python" in body
         assert "no usable Python interpreter" in body
 
@@ -7123,28 +7151,28 @@ class TestFinishTaskRefreshesBaseline:
 class TestImplementAgentsDefaultImpacted:
     """AC#10: implement agents default to --impacted; review-task untouched."""
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     @pytest.mark.parametrize("agent", ["qs-implement-task", "qs-implement-setup-task"])
     def test_implement_agents_use_impacted(self, harness: str, agent: str) -> None:
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / f"{agent}.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / f"{agent}.md").read_text()
         assert "quality_gate.py --impacted" in body
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     @pytest.mark.parametrize("agent", ["qs-implement-task", "qs-implement-setup-task"])
     def test_b1_all_six_agents_mandate_impacted(self, harness: str, agent: str) -> None:
-        """QS-283 B1 (AC#6): all six implement agents mandate `--impacted`
+        """QS-283 B1 (AC#6): every implement agent copy mandates `--impacted`
         before commit/PR and forbid substituting the full gate locally."""
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / f"{agent}.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / f"{agent}.md").read_text()
         flat = " ".join(body.split())  # normalize markdown line-wrapping
         assert "**ALWAYS** run the impacted" in flat
         assert "Do **not** run, or substitute, the full gate locally" in flat
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     def test_b2_b3_implement_task_closes_loophole(self, harness: str) -> None:
-        """QS-283 B2/B3 (AC#6): the three `qs-implement-task.md` copies delete
+        """QS-283 B2/B3 (AC#6): both `qs-implement-task.md` copies delete
         the unchanged-code escape clause (B2) and forbid the full-gate
         diagnostic escape (B3)."""
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-implement-task.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / "qs-implement-task.md").read_text()
         flat = " ".join(body.split())
         # B2: the "coverage lost in unchanged code" license must be gone.
         assert "suspect coverage lost" not in flat
@@ -7153,12 +7181,12 @@ class TestImplementAgentsDefaultImpacted:
         assert "fix autonomously and re-run" not in flat
         assert "never switch to the full gate to diagnose" in flat
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     def test_implement_task_intro_names_impacted_not_full_gate(self, harness: str) -> None:
         """Review fix #03: the intro summary line and frontmatter description
         must NOT instruct running the full gate locally (the QS-283 regression
         class) — they name the impacted gate as the inner-loop command."""
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-implement-task.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / "qs-implement-task.md").read_text()
         flat = " ".join(body.split())
         # The self-contradictory stale phrasing must never reappear.
         assert "run the full quality gate, and open a PR" not in flat
@@ -7166,9 +7194,9 @@ class TestImplementAgentsDefaultImpacted:
         # The intro/description names the impacted gate instead.
         assert "impacted quality gate" in flat
 
-    @pytest.mark.parametrize("harness", [".claude", ".cursor", ".opencode"])
+    @pytest.mark.parametrize("harness", [".claude", ".opencode"])
     def test_review_task_untouched_by_impacted(self, harness: str) -> None:
-        body = (Path(__file__).resolve().parent.parent / harness / "agents" / "qs-review-task.md").read_text()
+        body = (_AGENTS_ROOT / harness / "agents" / "qs-review-task.md").read_text()
         assert "--impacted" not in body
 
 

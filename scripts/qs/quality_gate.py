@@ -38,7 +38,7 @@ Options:
 
 Smart scope detection:
     When only dev-infrastructure files are modified (tests/, legacy/, docs/,
-    scripts/, *.md, .claude/, .cursor/, .opencode/), the quality gate skips the
+    scripts/, *.md, .claude/, .opencode/), the quality gate skips the
     full suite (ruff, mypy, translations, full pytest+coverage) and only runs
     the modified test files. Use --full to override.
 
@@ -116,7 +116,6 @@ _DEV_ONLY_PATTERNS = (
     "scripts/",
     "docs/",
     ".claude/",
-    ".cursor/",
     ".opencode/",
     ".github/",
 )
@@ -426,7 +425,6 @@ def _is_dev_only(filepath: str) -> bool:
     if basename in (
         "CLAUDE.md",
         "AGENTS.md",
-        ".cursorrules",
         ".gitignore",
         "pyproject.toml",
         "setup.cfg",

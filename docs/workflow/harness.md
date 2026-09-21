@@ -1,13 +1,19 @@
 # Harness abstraction
 
-The pipeline runs across four harnesses with different mechanics:
+The pipeline runs across two harnesses (plus a Codex placeholder)
+with different mechanics:
 
 | Harness         | Agent dir          | Slash commands     | Session spawn                 | Tool allowlist        |
 | --------------- | ------------------ | ------------------ | ----------------------------- | --------------------- |
 | Claude Code     | `.claude/agents/`  | `.claude/commands/`| `claude` CLI on worktree      | `tools:` frontmatter  |
-| Cursor 2.4+     | `.cursor/agents/`  | `/<name>`          | New Cursor workspace          | `readonly:` boolean   |
 | OpenCode        | `.opencode/agents/`| UI agent picker    | HTTP API: POST /session + POST /session/<id>/prompt_async (no reload) | `permission:` block   |
 | Codex (future)  | `.codex/agents/`   | TBD                | TBD                           | TBD                   |
+
+**Why no Cursor row?** Cursor was dropped in QS-357. It natively reads
+`.claude/agents/` — a project `.cursor/agents/` copy only takes
+precedence on a name clash — so the mirrored third copy bought nothing
+while costing a third hand-maintained tree and a third leg on every
+parity pin. Cursor users get the Claude agents for free.
 
 Each agent's **core protocol** (phase steps, quality-gate rules, hard
 rules) MUST stay aligned across harnesses. The **frontmatter** and the
@@ -36,8 +42,7 @@ gracefully to grep when the binary is absent.
 
 This is **Claude-only** for now. Per the multi-harness contract, the
 other harnesses provide their own code intelligence rather than a shared
-layer: Cursor (2.4+) has ambient editor-native LSP (no agent tool to
-enable), and OpenCode bundles pyright but surfaces it as diagnostics-only
+layer: OpenCode bundles pyright but surfaces it as diagnostics-only
 (no navigation), so it is intentionally not enabled there. Full rationale,
 the per-harness capability matrix, and the rebuttal of the old
 jedi-via-MCP plan live in
@@ -45,16 +50,14 @@ jedi-via-MCP plan live in
 
 ## Detection — `scripts/qs/harness.py`
 
-`harness.detect()` returns one of `claude-code` / `cursor` / `opencode` /
-`codex` (there is no `unknown` — detection falls back to `claude-code`).
+`harness.detect()` returns one of `claude-code` / `opencode` / `codex` (there is no `unknown` — detection falls back to `claude-code`).
 Order of resolution:
 
 1. `QS_HARNESS` env var (explicit override).
 2. `CLAUDECODE=1` → `claude-code`.
 3. `OPENCODE_SERVER_PORT` set → `opencode`.
-4. `CURSOR_TRACE_ID` set → `cursor`.
-5. `CODEX_AGENT_*` env vars set → `codex`.
-6. Default: `claude-code`.
+4. `CODEX_AGENT_*` env vars set → `codex`.
+5. Default: `claude-code`.
 
 ## Launcher dispatch — `scripts/qs/launchers/`
 
@@ -75,14 +78,6 @@ no filesystem scan, so this works from any CWD.
   worktree. The `--agent` flag is what makes the new session
   interactive — Claude Code loads the agent body as the system prompt
   and the user can converse with the phase persona mid-flight (QS-175).
-- **`launchers/cursor.py`** — emits a `cursor-agent --workspace <wd>
-  --agent qs-<phase>` invocation (the `cli_context`) when
-  `cursor-agent` is on PATH. When the binary is missing, falls back to
-  the legacy prompt-positional form (the user opens Cursor manually
-  and types `/<phase>` in chat). The IDE launcher (`new_context`)
-  invokes `cursor <wd>` directly — Cursor doesn't expose a `--agent`
-  flag for the IDE path, so the user types the slash command in chat
-  once the IDE opens.
 - **`launchers/opencode.py`** — under `caller='next_step'`
   (intermediate phases), POSTs to the OpenCode HTTP API via
   `scripts/qs/spawn_session.py` to create a new session in the same
@@ -110,8 +105,8 @@ All launchers return a dict with at minimum:
 - `same_context` (string, slash-form fallback command)
 - `new_context` (string, shell command to spawn a fresh session)
 
-The **Claude**, **Cursor**, and **OpenCode** launchers additionally
-emit `agent` (the resolved `qs-<phase>` name — all three resolve
+The **Claude** and **OpenCode** launchers additionally
+emit `agent` (the resolved `qs-<phase>` name — both resolve
 `--next-cmd` strictly via `PHASE_TO_AGENT`). Only **Codex** payloads
 carry no `agent` key: the codex launcher accepts free-form `--next-cmd`
 values that may not map to a static phase — see
@@ -123,8 +118,8 @@ opencode as free-form too; the static-agent pipeline made it strict.)
 `--next-cmd` as a free-form string, so trailing or leading whitespace
 inside an otherwise-non-empty value is preserved verbatim
 (`--next-cmd "create-plan "` → `same_context: "create-plan "`). This is
-intentional — explicit free-form is a feature, not a bug. Claude,
-cursor, and opencode resolve strictly and reject unknown values. The
+intentional — explicit free-form is a feature, not a bug. Claude and
+opencode resolve strictly and reject unknown values. The
 empty / whitespace-only case is rejected for all harnesses by
 `next_step.main()` after `parse_args()` returns.
 
@@ -332,34 +327,27 @@ you are already on the CLI. Caveats:
 Verified 2026-07-31 against `claude` 2.1.220 and `Claude.app`
 (`com.anthropic.claudefordesktop`) 1.24012.9.
 
-## Why not synchronize agent files via a script?
+## Agent files are rendered, not hand-synchronized
 
-Two approaches were considered:
+Harness sync is a **rendering concern** (QS-357): one Jinja template per
+agent under `scripts/qs/agent_templates/` is the tracked source of truth,
+and `scripts/qs/render_agents.py` renders it into the gitignored
+`.claude/agents/` and `.opencode/agents/`. Harness-specific passages live
+in `[% if harness == "claude" %] … [% else %] … [% endif %]` branches, so
+the two harness bodies are a single faithful merge that can never silently
+drift. Edit the template, never a rendered output. See the "Agent
+templates" rule in [project-rules.md](project-rules.md).
 
-- **Generate `.cursor/agents/` from `.claude/agents/` at build time**
-  — saves duplicate writes but adds a sync step and breaks if anyone
-  edits cursor agents directly.
-- **Hand-maintain all harness directories** — duplicates content but
-  keeps each harness's agents directly editable.
-
-We chose hand-maintained. Agent bodies are stable; the marginal cost of
-three copies is low; the cost of a missed sync is high.
-`check_doc_drift.py` enforces co-modification only; a content-level
-sync checker (`scripts/qs/lint_agents.py` — not yet built; folded into
-follow-up [#289](https://github.com/tmenguy/quiet-solar/issues/289))
-could verify the aligned sections stay aligned.
-
-**Byte-identical blocks must be edited in lockstep.** Some agent
-passages are intentionally mirrored byte-for-byte across all three
-harness files and guarded by a test. The clearest example is the QS-299
-post-merge **seed/follow launch block** in `qs-finish-task.md` (the
-`--seed-testmon --detached --seed-token …` launch plus the empty-token
-guard), pinned by
-`tests/test_quality_gate.py::TestFinishTaskRefreshesBaseline::test_seed_launch_block_byte_identical_across_harnesses`.
-Any edit to such a block must be applied identically to `.claude`,
-`.cursor`, and `.opencode` in the same change, or that test fails. The
-surrounding per-harness prose (e.g. the background+monitor mechanism)
-deliberately differs and is not part of the pinned slice.
+Rendering runs automatically at worktree birth (`setup_task.py`, fatal on
+failure), at every phase handoff (`next_step.py`, warn-and-continue), and
+post-merge on `main` (`qs-finish-task`, best-effort — the one automatic
+render before any agent session on `main`). A **fresh clone** (or an
+in-flight worktree rebased onto the untracking) has no agent files until
+`python scripts/qs/render_agents.py` runs once. **OpenCode discovers
+agents at server start — restart OpenCode to pick up re-rendered agents.**
+Claude Code re-reads `.claude/agents/` within seconds for directories
+present at session start (always true — every session is opened by a
+handoff that rendered first).
 
 ## Adding a new harness
 
@@ -367,8 +355,9 @@ deliberately differs and is not part of the pinned slice.
 2. Add `scripts/qs/launchers/<harness>.py` with at least a
    `build_payload(work_dir, issue, title, next_cmd, ...) -> dict`
    function returning `{tool, same_context, new_context, ...}`.
-3. Create the harness's agent directory (e.g., `.codex/agents/`) and
-   copy the bodies from `.claude/agents/`, adjusting frontmatter to the
-   harness's format.
+3. Teach `scripts/qs/render_agents.py` to render the harness's agent
+   directory (e.g., `.codex/agents/`) — add its frontmatter block to each
+   template and a branch in `render_all`'s harness loop. Do not hand-copy
+   the bodies; they are rendered from the templates.
 4. Add the harness's slash-command equivalents if it has them.
 5. Update this table.

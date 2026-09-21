@@ -22,9 +22,6 @@ the previous "defer + build a jedi-via-MCP server" recommendation
 - **OpenCode** — **not enabled.** OpenCode defaults to pyright
   (`"lsp": true` in `opencode.json`) but exposes LSP to the agent only
   as diagnostics — no navigation. Not worth wiring now.
-- **Cursor** — **TBD / deferred.** Cursor (2.4+) has editor-native LSP
-  that surfaces ambiently in-session; there is no separate agent tool to
-  enable, and no decision is forced.
 
 ## Problem statement
 
@@ -48,7 +45,6 @@ beats the prior build-it-ourselves plan, and how the wiring works.
 |---|---|---|---|---|
 | **Claude Code** | pyright (`pyright-lsp` plugin) | ✅ surfaced in-turn, before the quality gate | ✅ via the `LSP` tool | **Adopted** |
 | **OpenCode** | pyright (`opencode.json` `"lsp": true`) | ✅ diagnostics-only | ❌ not surfaced to the agent | Not enabled |
-| **Cursor** | editor-native (2.4+) | ✅ ambient in editor | ✅ ambient in editor | TBD / deferred |
 
 The two Claude wins are distinct: **post-edit diagnostics** (type errors
 and missing imports surfaced in the same turn as the edit, catching
@@ -157,10 +153,9 @@ multi-harness** integration. Both are now outweighed:
   developer's machine and explicitly kept out of the venv and
   `requirements*.txt`. It does not touch the product runtime or CI.
 - **The "multi-harness MCP" argument is moot for the win we want.**
-  Cursor already has editor-native LSP; OpenCode already bundles
-  pyright. We are not blocked on a portable MCP layer to get value —
-  each harness provides its own. A custom MCP server would *duplicate*
-  capabilities the harnesses already ship.
+  OpenCode already bundles pyright. We are not blocked on a portable
+  MCP layer to get value — each harness provides its own. A custom MCP
+  server would *duplicate* capabilities the harnesses already ship.
 - **pyright's type inference is stronger than jedi's**, which matters
   most for the diagnostics win (catching real type errors before the
   gate) — the capability jedi was weakest at.
@@ -210,5 +205,5 @@ practice.
 
 - [index.md](index.md) — the doc hierarchy LSP augments, not replaces.
 - [../workflow/harness.md](../workflow/harness.md) — multi-harness
-  abstraction (Claude / Cursor / OpenCode / Codex) and the "Code
+  abstraction (Claude / OpenCode / Codex) and the "Code
   intelligence (LSP)" subsection.

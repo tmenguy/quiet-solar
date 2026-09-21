@@ -242,7 +242,6 @@ _DEFAULT_STAGE_PATHS = [
     "docs/stories/",
     "docs/",
     ".claude/",
-    ".cursor/",
 ]
 
 

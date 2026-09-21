@@ -86,25 +86,6 @@ def test_unknown_phase_emits_error_json_and_exits_nonzero(tmp_path: Path) -> Non
     assert "release" in payload["known"]
 
 
-def test_cursor_harness_branch(tmp_path: Path) -> None:
-    """``--harness cursor --next-cmd create-plan`` routes through cursor.py."""
-    result = _run(
-        [
-            "--next-cmd", "create-plan",
-            "--work-dir", "/tmp/work",
-            "--issue", "42",
-            "--title", "Fix bug",
-            "--harness", "cursor",
-        ],
-        cwd=str(tmp_path),
-    )
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["tool"] == "cursor"
-    assert payload["harness"] == "cursor"
-    assert payload["agent"] == "qs-create-plan"
-
-
 @pytest.mark.parametrize("phase", [
     "setup-task",
     "create-plan",
@@ -133,12 +114,12 @@ def test_every_known_phase_resolves(phase: str, tmp_path: Path) -> None:
 
 # --------------------------------------------------------------------------- #
 # Free-form harness (codex) must NOT be regressed by the strict
-# claude/cursor validation. The codex launcher carries no agent mapping
+# claude/opencode validation. The codex launcher carries no agent mapping
 # today, so next_step.py must let it pass any --next-cmd value through
 # unchanged. Regression catch for review-fix #1 + #5.
 #
 # OpenCode used to be in this list, but with the new static-agent
-# pipeline (QS-177) opencode now resolves agents like claude/cursor —
+# pipeline (QS-177) opencode now resolves agents like claude —
 # unknown phases raise UnknownPhaseError and emit the
 # `{"error": "unknown phase", ...}` JSON contract. See
 # `test_opencode_rejects_unknown_phase` and `test_opencode_happy_path`
@@ -165,14 +146,14 @@ def test_codex_accepts_free_form_next_cmd(tmp_path: Path) -> None:
 
 
 def test_opencode_rejects_unknown_phase(tmp_path: Path) -> None:
-    """OpenCode now resolves agents like claude/cursor — unknown phase → JSON error, exit 1.
+    """OpenCode now resolves agents like claude — unknown phase → JSON error, exit 1.
 
     Contract change from the legacy pipeline (QS-177 Task 7.3). The
     OpenCode launcher is no longer a free-form passthrough; it enforces
-    the same phase mapping as claude/cursor.
+    the same phase mapping as claude.
 
     AC #4 mandates exit code **1 specifically** (parity with
-    claude/cursor) AND a ``known: [...]`` key in the JSON error
+    claude) AND a ``known: [...]`` key in the JSON error
     payload — both pinned here (review fix #01 must-fix #3).
     """
     result = _run(
@@ -185,7 +166,7 @@ def test_opencode_rejects_unknown_phase(tmp_path: Path) -> None:
         ],
         cwd=str(tmp_path),
     )
-    # AC #4 — exit 1 (not just non-zero) to match the claude/cursor
+    # AC #4 — exit 1 (not just non-zero) to match the claude
     # contract; ``2`` is reserved for argparse user errors.
     assert result.returncode == 1, result.stderr
     payload = json.loads(result.stdout)
@@ -398,7 +379,7 @@ def test_next_step_rejects_empty_work_dir(
     assert result.returncode == 2, result.stderr
 
 
-@pytest.mark.parametrize("harness", ["claude-code", "cursor", "codex", "opencode"])
+@pytest.mark.parametrize("harness", ["claude-code", "codex", "opencode"])
 def test_existing_session_prompt_emitted_for_all_harnesses(
     harness: str, tmp_path: Path,
 ) -> None:
@@ -424,7 +405,7 @@ def test_existing_session_prompt_emitted_for_all_harnesses(
 
 
 @pytest.mark.parametrize(
-    "harness", ["claude-code", "cursor", "codex", "opencode"],
+    "harness", ["claude-code", "codex", "opencode"],
 )
 @pytest.mark.parametrize("bad_next_cmd", ["", "   ", "\t"])
 def test_empty_or_whitespace_next_cmd_rejected_for_all_harnesses(
@@ -449,3 +430,156 @@ def test_empty_or_whitespace_next_cmd_rejected_for_all_harnesses(
     payload = json.loads(result.stdout)
     assert payload["error"] == "empty next-cmd"
     assert payload["value"] == bad_next_cmd
+
+
+# ---------------------------------------------------------------------------
+# QS-357: the render hook warns and continues (never breaks a handoff)
+# ---------------------------------------------------------------------------
+
+
+def test_render_import_error_warns_and_still_emits_payload(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A missing ``jinja2`` (ImportError) → stderr warning + normal payload."""
+    import next_step
+
+    monkeypatch.setitem(sys.modules, "render_agents", None)  # import → ImportError
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "next_step.py", "--next-cmd", "create-plan", "--work-dir", str(tmp_path),
+            "--issue", "42", "--title", "T", "--harness", "claude-code",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def test_render_render_error_warns_and_still_emits_payload(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A ``RenderError`` → stderr warning + normal payload."""
+    import next_step
+    import render_agents
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise render_agents.RenderError("boom")
+
+    monkeypatch.setattr(render_agents, "render_all", _boom)
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "next_step.py", "--next-cmd", "create-plan", "--work-dir", str(tmp_path),
+            "--issue", "42", "--title", "T", "--harness", "claude-code",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def _handoff_argv(work_dir: str) -> list[str]:
+    return [
+        "next_step.py", "--next-cmd", "create-plan", "--work-dir", work_dir,
+        "--issue", "42", "--title", "T", "--harness", "claude-code",
+    ]
+
+
+def test_render_warns_on_unbound_facts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #01 S1: warn when the handoff render is task-agnostic
+    (branch does not resolve to a QS_<N> issue) despite a known --issue."""
+    import next_step
+    import render_agents
+
+    ctx = {"facts_state": "unbound", "lane_protocol_state": "no_lane"}
+    monkeypatch.setattr(render_agents, "build_render_context", lambda *a, **k: ctx)
+    monkeypatch.setattr(render_agents, "render_all", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "task-agnostic" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def test_render_degradation_warnings_are_independent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #01 N1: each render-degradation reason surfaces
+    independently — an ``elif`` chain would suppress the second."""
+    import next_step
+    import render_agents
+
+    ctx = {"facts_state": "lookup_failed", "lane_protocol_state": "file_missing"}
+    monkeypatch.setattr(render_agents, "build_render_context", lambda *a, **k: ctx)
+    monkeypatch.setattr(render_agents, "render_all", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    err = capsys.readouterr().err
+    assert "lookup_failed task facts" in err
+    assert "lane protocol" in err
+
+
+def test_handoff_survives_load_time_template_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #02 S3 (real path, folds N8): a load-time template
+    error at handoff is funneled through RenderError → stderr warning +
+    payload still emitted with exit 0 (handoff-survives-render-failure)."""
+    import next_step
+    import render_agents
+
+    tdir = tmp_path / "tpl"
+    tdir.mkdir()
+    (tdir / "_base.md.j2").write_text("[% block body %][% endblock %]\n")
+    (tdir / "qs-bad.md.j2").write_text(
+        '[% extends "_base.md.j2" %][% block body %][[ 1 + [% endblock %]'
+    )
+    monkeypatch.setattr(render_agents, "_default_templates_dir", lambda wd: tdir)
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def test_handoff_survives_non_utf8_template(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #03 M1 (handoff side): a non-UTF-8 template at
+    handoff funnels through RenderError → stderr warning + payload, exit 0."""
+    import next_step
+    import render_agents
+
+    tdir = tmp_path / "tpl"
+    tdir.mkdir()
+    (tdir / "_base.md.j2").write_text("[% block body %][% endblock %]\n")
+    (tdir / "qs-bad.md.j2").write_bytes(
+        b'[% extends "_base.md.j2" %][% block body %]\xff\xfe[% endblock %]'
+    )
+    monkeypatch.setattr(render_agents, "_default_templates_dir", lambda wd: tdir)
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
