@@ -483,3 +483,54 @@ def test_render_render_error_warns_and_still_emits_payload(
     cap = capsys.readouterr()
     assert "agent render failed" in cap.err
     assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def _handoff_argv(work_dir: str) -> list[str]:
+    return [
+        "next_step.py", "--next-cmd", "create-plan", "--work-dir", work_dir,
+        "--issue", "42", "--title", "T", "--harness", "claude-code",
+    ]
+
+
+def test_render_warns_on_unbound_facts(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #01 S1: warn when the handoff render is task-agnostic
+    (branch does not resolve to a QS_<N> issue) despite a known --issue."""
+    import next_step
+
+    import render_agents
+
+    ctx = {"facts_state": "unbound", "lane_protocol_state": "no_lane"}
+    monkeypatch.setattr(render_agents, "build_render_context", lambda *a, **k: ctx)
+    monkeypatch.setattr(render_agents, "render_all", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "task-agnostic" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def test_render_degradation_warnings_are_independent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #01 N1: each render-degradation reason surfaces
+    independently — an ``elif`` chain would suppress the second."""
+    import next_step
+
+    import render_agents
+
+    ctx = {"facts_state": "lookup_failed", "lane_protocol_state": "file_missing"}
+    monkeypatch.setattr(render_agents, "build_render_context", lambda *a, **k: ctx)
+    monkeypatch.setattr(render_agents, "render_all", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    err = capsys.readouterr().err
+    assert "lookup_failed task facts" in err
+    assert "lane protocol" in err

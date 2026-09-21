@@ -214,13 +214,22 @@ def main() -> None:
 
         render_context = render_agents.build_render_context(args.work_dir)
         render_agents.render_all(args.work_dir, context=render_context)
+        # Independent ``if``s (not ``elif``): each render-degradation reason
+        # must surface on its own — a chain would suppress the second when
+        # two hold (review-fix #01 N1).
+        if render_context["facts_state"] == "unbound":
+            print(
+                "warning: agent render is task-agnostic (branch does not "
+                "resolve to a QS_<N> issue); run python scripts/qs/context.py",
+                file=sys.stderr,
+            )
         if render_context["facts_state"] == "lookup_failed":
             print(
                 "warning: agent render proceeded with lookup_failed task facts; "
                 "run python scripts/qs/context.py",
                 file=sys.stderr,
             )
-        elif render_context["lane_protocol_state"] == "file_missing":
+        if render_context["lane_protocol_state"] == "file_missing":
             print(
                 "warning: agent render could not inline the lane protocol "
                 "(lane file missing)",
