@@ -20,12 +20,14 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # Both harnesses to mirror across.
 HARNESS_DIRS: tuple[Path, ...] = (
-    REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".opencode" / "agents",
+    agents_dir("claude"),
+    agents_dir("opencode"),
 )
 
 # Markers that pin AC1–AC6 in the body of every ``qs-create-plan`` copy.

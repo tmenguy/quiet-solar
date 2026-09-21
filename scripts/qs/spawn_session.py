@@ -566,8 +566,8 @@ def _preflight(directory: str, agent: str) -> tuple[str, Path, str]:
             (
                 f"ERROR: OpenCode agent file not found at {expected}; "
                 f"the HTTP API would silently fall back to the default "
-                f"agent. Mirror .claude/agents/{agent}.md into "
-                f".opencode/agents/ or create the file before retrying."
+                f"agent. Run `python scripts/qs/render_agents.py "
+                f"--work-dir {directory}` to render it before retrying."
             ),
         )
 
@@ -591,9 +591,9 @@ def _preflight(directory: str, agent: str) -> tuple[str, Path, str]:
             (
                 f"ERROR: OpenCode agent file at {expected} is empty "
                 f"(0 bytes). The OpenCode server would silently fall "
-                f"back to the default agent. Restore the file's "
-                f"contents from .claude/agents/{agent}.md before "
-                f"retrying."
+                f"back to the default agent. Run "
+                f"`python scripts/qs/render_agents.py --work-dir "
+                f"{directory}` to re-render it before retrying."
             ),
         )
 

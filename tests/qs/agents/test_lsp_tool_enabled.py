@@ -39,8 +39,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CLAUDE_AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
+CLAUDE_AGENTS_DIR = agents_dir("claude")
 CLAUDE_SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 
 # Agents whose toolset already reads code AND whose role navigates the

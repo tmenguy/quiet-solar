@@ -1,7 +1,8 @@
 # Phase protocols
 
-Each phase has a static agent under `.claude/agents/` (mirrored in
-`.opencode/agents/`). Agents discover task
+Each phase's agent is rendered per worktree from a Jinja template
+under `scripts/qs/agent_templates/` into `.claude/agents/` and
+`.opencode/agents/` (QS-357). Agents discover volatile task
 context at runtime via
 `python scripts/qs/context.py`. This document captures the contract for
 each phase — inputs, outputs, hand-off, hard rules.

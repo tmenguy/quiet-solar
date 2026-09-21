@@ -227,34 +227,43 @@ via `covers:` frontmatter. The drift checker
 `scripts/qs/check_doc_drift.py` validates that every `covers:` path
 exists and flags docs whose source was modified without a
 co-modification. The six orchestrator agents
-([qs-create-plan](../../.claude/agents/qs-create-plan.md),
-[qs-diagnose-task](../../.claude/agents/qs-diagnose-task.md),
-[qs-implement-task](../../.claude/agents/qs-implement-task.md),
-[qs-implement-setup-task](../../.claude/agents/qs-implement-setup-task.md),
-[qs-review-task](../../.claude/agents/qs-review-task.md),
-[qs-verify-task](../../.claude/agents/qs-verify-task.md)) wire the
+([qs-create-plan](../../scripts/qs/agent_templates/qs-create-plan.md.j2),
+[qs-diagnose-task](../../scripts/qs/agent_templates/qs-diagnose-task.md.j2),
+[qs-implement-task](../../scripts/qs/agent_templates/qs-implement-task.md.j2),
+[qs-implement-setup-task](../../scripts/qs/agent_templates/qs-implement-setup-task.md.j2),
+[qs-review-task](../../scripts/qs/agent_templates/qs-review-task.md.j2),
+[qs-verify-task](../../scripts/qs/agent_templates/qs-verify-task.md.j2)) wire the
 checker into their phase protocol. Taxonomy: **concept** (one source
 file), **principle** (cross-cutting rule), **use-case** (end-to-end
 scenario), **persona** (user archetype).
 
-### Harness sync
+### Agent templates
 
-Agent files live in two harness directories: `.claude/agents/`,
-`.opencode/agents/`. Each agent's core protocol (TDD steps, quality
-gate, hard rules) must stay aligned across both directories. The
-YAML frontmatter (between the `---` delimiters) and harness-specific
-sections (session-spawn logic, handoff commands) legitimately differ
-— Claude uses `claude --agent`, OpenCode uses `spawn_session.py`.
+Agent files are **rendered per worktree** from one Jinja template per
+agent under `scripts/qs/agent_templates/` (`qs-<name>.md.j2`), into the
+gitignored harness directories `.claude/agents/` and `.opencode/agents/`
+(QS-357). The template is the single tracked source of truth — harness
+sync is now a rendering concern, not a human discipline, so there is no
+`check_doc_drift.py` co-modification rule any more.
 
-The drift checker `scripts/qs/check_doc_drift.py` enforces
-**co-modification**: when any `.<harness>/agents/*.md` file appears
-in the modified set, it verifies that the corresponding file in the
-other harness directory was also modified. Violation exits 1.
+**When editing an agent, edit the template, never a rendered output.**
+Each template `[% extends "_base.md.j2" %]` and fills `frontmatter_claude`,
+`frontmatter_opencode` and `body`; harness-specific passages inside `body`
+are wrapped in `[% if harness == "claude" %] … [% else %] … [% endif %]`.
+Re-render with `python scripts/qs/render_agents.py` (it also runs
+automatically at worktree birth, at every handoff, and post-merge on
+`main`).
 
-**When editing agent files:** always edit both copies (`.claude/`,
-`.opencode/`). The canonical workflow is to make the functional change
-in both harnesses, adapting harness-specific sections (handoff, session
-spawn) as needed for each.
+**Template hygiene:** the renderer uses custom Jinja delimiters — `[[ ]]`
+for variables and `[% %]` for blocks. Never write a literal `[[` or `[%`
+inside a template (a Markdown reference link such as `[[x]](…)` must be
+avoided); a violation raises `TemplateSyntaxError` → `RenderError` in the
+template tests.
+
+Because testmon cannot see non-Python files, a change set touching
+`scripts/qs/agent_templates/**` (or any `tests/qs`-pinned non-Python file)
+must run `python scripts/qs/quality_gate.py --quick tests/qs` as a
+pre-commit supplement to `--impacted`.
 
 ## Workflow routing
 

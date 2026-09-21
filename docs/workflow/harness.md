@@ -327,34 +327,27 @@ you are already on the CLI. Caveats:
 Verified 2026-07-31 against `claude` 2.1.220 and `Claude.app`
 (`com.anthropic.claudefordesktop`) 1.24012.9.
 
-## Why not synchronize agent files via a script?
+## Agent files are rendered, not hand-synchronized
 
-Two approaches were considered:
+Harness sync is a **rendering concern** (QS-357): one Jinja template per
+agent under `scripts/qs/agent_templates/` is the tracked source of truth,
+and `scripts/qs/render_agents.py` renders it into the gitignored
+`.claude/agents/` and `.opencode/agents/`. Harness-specific passages live
+in `[% if harness == "claude" %] … [% else %] … [% endif %]` branches, so
+the two harness bodies are a single faithful merge that can never silently
+drift. Edit the template, never a rendered output. See the "Agent
+templates" rule in [project-rules.md](project-rules.md).
 
-- **Generate the other harness directories from `.claude/agents/` at
-  build time** — saves duplicate writes but adds a sync step and breaks
-  if anyone edits the generated agents directly.
-- **Hand-maintain all harness directories** — duplicates content but
-  keeps each harness's agents directly editable.
-
-We chose hand-maintained. Agent bodies are stable; the marginal cost of
-two copies is low; the cost of a missed sync is high.
-`check_doc_drift.py` enforces co-modification only; a content-level
-sync checker (`scripts/qs/lint_agents.py` — not yet built; folded into
-follow-up [#289](https://github.com/tmenguy/quiet-solar/issues/289))
-could verify the aligned sections stay aligned.
-
-**Byte-identical blocks must be edited in lockstep.** Some agent
-passages are intentionally mirrored byte-for-byte across both
-harness files and guarded by a test. The clearest example is the QS-299
-post-merge **seed/follow launch block** in `qs-finish-task.md` (the
-`--seed-testmon --detached --seed-token …` launch plus the empty-token
-guard), pinned by
-`tests/test_quality_gate.py::TestFinishTaskRefreshesBaseline::test_seed_launch_block_byte_identical_across_harnesses`.
-Any edit to such a block must be applied identically to `.claude` and
-`.opencode` in the same change, or that test fails. The
-surrounding per-harness prose (e.g. the background+monitor mechanism)
-deliberately differs and is not part of the pinned slice.
+Rendering runs automatically at worktree birth (`setup_task.py`, fatal on
+failure), at every phase handoff (`next_step.py`, warn-and-continue), and
+post-merge on `main` (`qs-finish-task`, best-effort — the one automatic
+render before any agent session on `main`). A **fresh clone** (or an
+in-flight worktree rebased onto the untracking) has no agent files until
+`python scripts/qs/render_agents.py` runs once. **OpenCode discovers
+agents at server start — restart OpenCode to pick up re-rendered agents.**
+Claude Code re-reads `.claude/agents/` within seconds for directories
+present at session start (always true — every session is opened by a
+handoff that rendered first).
 
 ## Adding a new harness
 
@@ -362,8 +355,9 @@ deliberately differs and is not part of the pinned slice.
 2. Add `scripts/qs/launchers/<harness>.py` with at least a
    `build_payload(work_dir, issue, title, next_cmd, ...) -> dict`
    function returning `{tool, same_context, new_context, ...}`.
-3. Create the harness's agent directory (e.g., `.codex/agents/`) and
-   copy the bodies from `.claude/agents/`, adjusting frontmatter to the
-   harness's format.
+3. Teach `scripts/qs/render_agents.py` to render the harness's agent
+   directory (e.g., `.codex/agents/`) — add its frontmatter block to each
+   template and a branch in `render_all`'s harness loop. Do not hand-copy
+   the bodies; they are rendered from the templates.
 4. Add the harness's slash-command equivalents if it has them.
 5. Update this table.

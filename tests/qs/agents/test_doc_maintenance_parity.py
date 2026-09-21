@@ -33,6 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The six orchestrator agents that carry the doc-maintenance step:
@@ -50,8 +52,8 @@ DOC_MAINTENANCE_AGENT_NAMES: tuple[str, ...] = (
 
 # Both harnesses to mirror across.
 HARNESS_DIRS: tuple[Path, ...] = (
-    REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".opencode" / "agents",
+    agents_dir("claude"),
+    agents_dir("opencode"),
 )
 
 # The exact token that every agent body must contain. The trailing

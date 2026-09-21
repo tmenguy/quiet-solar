@@ -197,6 +197,40 @@ def main() -> None:
     # ``harness_choices()``.
     harness = canonicalize_harness(args.harness) if args.harness else detect_harness()
     launcher = LAUNCHERS[harness]
+
+    # QS-357: render the per-worktree harness agent files before the handoff
+    # payload so the next session opens with fresh definitions. Warn and
+    # continue — a render failure must NEVER break a handoff (the payload's
+    # `phase_agent_pinned: false` is the second signal). ``fetch=True`` lets
+    # the context resolve the bound task's facts (one `gh` call). The import
+    # is function-local so a missing ``jinja2`` is caught here as
+    # ``ImportError``.
+    _render_warn = (
+        f"warning: agent render failed; run python scripts/qs/render_agents.py "
+        f"--work-dir {args.work_dir}"
+    )
+    try:
+        import render_agents  # noqa: PLC0415 — local so a missing jinja2 is caught here
+
+        render_context = render_agents.build_render_context(args.work_dir)
+        render_agents.render_all(args.work_dir, context=render_context)
+        if render_context["facts_state"] == "lookup_failed":
+            print(
+                "warning: agent render proceeded with lookup_failed task facts; "
+                "run python scripts/qs/context.py",
+                file=sys.stderr,
+            )
+        elif render_context["lane_protocol_state"] == "file_missing":
+            print(
+                "warning: agent render could not inline the lane protocol "
+                "(lane file missing)",
+                file=sys.stderr,
+            )
+    except ImportError as exc:
+        print(f"{_render_warn} ({exc})", file=sys.stderr)
+    except render_agents.RenderError as exc:
+        print(f"{_render_warn} ({exc})", file=sys.stderr)
+
     # Delegate validation to the launcher: claude/opencode enforce the
     # phase mapping inside ``build_payload``; codex accepts any
     # ``next_cmd`` string. We catch only ``UnknownPhaseError`` here —

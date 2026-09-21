@@ -37,7 +37,6 @@ from pathlib import Path
 from typing import Any
 
 import targets  # type: ignore[import-not-found]
-
 from harness import detect as detect_harness  # type: ignore[import-not-found]
 
 from utils import (  # type: ignore[import-not-found]

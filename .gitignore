@@ -196,8 +196,13 @@ custom_components/renault
 custom_components/solcast_solar
 custom_components/volkswagencarnet
 
-# Per-task OpenCode agent files (rendered dynamically, not tracked)
-.opencode/agents/qs-*-QS-*.md
+# QS-357: the harness agent files are rendered per worktree from the
+# Jinja templates under scripts/qs/agent_templates/ (see render_agents.py).
+# The rendered outputs are never committed — the templates are the tracked
+# source of truth. `.claude/commands/` and `.claude/settings.json` stay
+# tracked (only `agents/*.md` is ignored).
+.claude/agents/*.md
+.opencode/agents/*.md
 
 # QS-311: per-worktree GUI phase pin (local, never committed). The trailing
 # `*` also covers the writer's atomic-write temp (`.json.<pid>.tmp`), which

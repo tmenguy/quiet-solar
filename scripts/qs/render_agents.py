@@ -31,13 +31,10 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 
-import jinja2
-
 import context as context_mod  # type: ignore[import-not-found]
-
-from launchers.phases import PHASE_TO_AGENT  # type: ignore[import-not-found]
-
+import jinja2
 import targets  # type: ignore[import-not-found]
+from launchers.phases import PHASE_TO_AGENT  # type: ignore[import-not-found]
 
 from utils import get_issue_from_branch, run_git  # type: ignore[import-not-found]
 

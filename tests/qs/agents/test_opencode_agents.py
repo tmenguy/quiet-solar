@@ -50,6 +50,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.qs.agents._rendered import agents_dir
 from tests.qs.agents.const import (
     DEV_ONLY_PATTERN_FORBIDDEN,
     DEV_ONLY_PATTERN_LEGACY,
@@ -58,7 +59,7 @@ from tests.qs.agents.const import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-OPENCODE_AGENTS_DIR = REPO_ROOT / ".opencode" / "agents"
+OPENCODE_AGENTS_DIR = agents_dir("opencode")
 
 # Hardcoded at module level so ``@pytest.mark.parametrize`` works during
 # collection even if ``launchers.phases`` is temporarily broken

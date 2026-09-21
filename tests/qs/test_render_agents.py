@@ -483,7 +483,7 @@ def test_main_subprocess(tmp_path: Path) -> None:
 
 def test_registry_invariants() -> None:
     assert r.LANE_AWARE <= r.ORCHESTRATORS
-    assert r.ORCHESTRATORS & r.SUBAGENTS == set()
+    assert set() == r.ORCHESTRATORS & r.SUBAGENTS
     union = r.ORCHESTRATORS | r.SUBAGENTS
     assert len(union) == 21
     glob = {p.name.removesuffix(".md.j2") for p in TEMPLATES_DIR.glob("*.md.j2") if not p.name.startswith("_")}

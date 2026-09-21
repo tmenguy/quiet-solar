@@ -178,9 +178,11 @@ to grep the entire tree to figure out what an `ack` is.
   changed → skip lint/coverage, run `tests/test_dashboard_rendering.py`
   plus any changed tests). Required before every commit; `--full`
   forces the full suite.
-- **Static agents** — agents whose body is committed to the repo
-  (`.claude/agents/`, `.opencode/agents/`),
-  versus per-task rendering (legacy approach in `legacy/`).
+- **Templated agents** — agents defined by one Jinja template per agent
+  under `scripts/qs/agent_templates/` and rendered per worktree into the
+  gitignored `.claude/agents/`, `.opencode/agents/` by
+  `scripts/qs/render_agents.py` (QS-357). Replaces both the hand-copied
+  harness directories and the legacy per-task rendering in `legacy/`.
 - **Worktree** — a separate working directory tied to the same git
   repo. Each task runs in its own worktree (`QS_<N>` branch).
 - **`covers:` frontmatter** — list of source files a doc claims to

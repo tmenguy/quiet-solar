@@ -430,3 +430,56 @@ def test_empty_or_whitespace_next_cmd_rejected_for_all_harnesses(
     payload = json.loads(result.stdout)
     assert payload["error"] == "empty next-cmd"
     assert payload["value"] == bad_next_cmd
+
+
+# ---------------------------------------------------------------------------
+# QS-357: the render hook warns and continues (never breaks a handoff)
+# ---------------------------------------------------------------------------
+
+
+def test_render_import_error_warns_and_still_emits_payload(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A missing ``jinja2`` (ImportError) → stderr warning + normal payload."""
+    import next_step
+
+    monkeypatch.setitem(sys.modules, "render_agents", None)  # import → ImportError
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "next_step.py", "--next-cmd", "create-plan", "--work-dir", str(tmp_path),
+            "--issue", "42", "--title", "T", "--harness", "claude-code",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def test_render_render_error_warns_and_still_emits_payload(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """A ``RenderError`` → stderr warning + normal payload."""
+    import next_step
+    import render_agents
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise render_agents.RenderError("boom")
+
+    monkeypatch.setattr(render_agents, "render_all", _boom)
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "next_step.py", "--next-cmd", "create-plan", "--work-dir", str(tmp_path),
+            "--issue", "42", "--title", "T", "--harness", "claude-code",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"

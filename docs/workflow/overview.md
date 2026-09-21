@@ -32,18 +32,26 @@ The **bug × product** lane (QS-335) diverges into a diagnose-first flow:
 Two phases (`setup-task`, `release`) are entered from the main checkout;
 the rest run in the worktree.
 
-## Static agents — no rendering
+## Templated agents — rendered per worktree
 
-There is exactly **one agent file per phase**, checked in to `.claude/agents/`
-(mirrored in `.opencode/agents/`). Agents discover
-task context at runtime via
-`python scripts/qs/context.py`, which reads `git branch --show-current`
-(`QS_<N>`) and resolves the issue, title, story file, and PR number from
-there.
+There is exactly **one Jinja template per agent**, checked in to
+`scripts/qs/agent_templates/` (`qs-<name>.md.j2`). `scripts/qs/render_agents.py`
+renders them into the two harness directories `.claude/agents/` and
+`.opencode/agents/` — **gitignored outputs**, one faithful merge per agent
+(QS-357). The template is the tracked source of truth; never edit a rendered
+file. Custom delimiters (`[[ ]]` for variables, `[% %]` for blocks) keep the
+prose's literal `{{...}}` placeholders inert.
 
-This replaces the older per-task rendering model (`qs-implement-task-QS-42.md`
-generated from `.tmpl` files). The previous OpenCode pipeline now lives
-under `legacy/`; this is the only supported model going forward.
+The lane-aware orchestrators are rendered with their **task facts and lane
+protocol inlined** into the system prompt, so a session starts oriented;
+only volatile facts (PR number, story existence, latest review fix) stay a
+runtime `python scripts/qs/context.py` lookup. Rendering happens
+automatically at worktree birth (`setup_task.py`), at every phase handoff
+(`next_step.py`), and post-merge on `main` (`qs-finish-task`); a fresh clone
+runs `python scripts/qs/render_agents.py` once.
+
+This restores the per-task rendering the retired OpenCode pipeline (now under
+`legacy/`) used, without its suffixed per-task filenames or hand cleanup.
 
 ## Adversarial review (parallel sub-agents)
 

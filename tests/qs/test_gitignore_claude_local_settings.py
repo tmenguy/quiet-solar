@@ -3,8 +3,11 @@
 The launcher writes the per-worktree GUI phase pin into
 `<worktree>/.claude/settings.local.json` (see
 `scripts/qs/launchers/claude.py::_write_phase_agent`). That file is
-per-developer and must never be committed — while the rest of `.claude/`
-(agents, commands, `settings.json`) is *tracked* and must stay tracked.
+per-developer and must never be committed. QS-357: the agent files
+(`.claude/agents/*.md`, `.opencode/agents/*.md`) are rendered per
+worktree and gitignored too — the templates under
+`scripts/qs/agent_templates/` are the tracked source of truth. What
+stays tracked is `.claude/commands/` and `.claude/settings.json`.
 
 It is deliberately **not** described as machine-written: Claude Code
 persists the user's own `permissions` decisions there, which is exactly why
@@ -119,12 +122,26 @@ def test_gitignore_has_no_double_trailing_blank_line() -> None:
 
 
 def test_gitignore_does_not_ignore_the_whole_claude_directory() -> None:
-    """No broad `.claude` pattern hides the tracked agent/command files."""
+    """No broad `.claude` pattern hides the tracked command/settings files."""
     patterns = _patterns()
     for forbidden in FORBIDDEN_PATTERNS:
         assert forbidden not in patterns, (
             f".gitignore contains the over-broad pattern {forbidden!r}. "
-            f"`.claude/agents/`, `.claude/commands/` and "
-            f"`.claude/settings.json` are tracked; only "
-            f"{REQUIRED_PATTERN!r} may be ignored (QS-311 AC1)."
+            f"`.claude/commands/` and `.claude/settings.json` are tracked; "
+            f"only `.claude/settings.local.json*` and the rendered "
+            f"`.claude/agents/*.md` may be ignored (QS-311 AC1 / QS-357)."
         )
+
+
+# QS-357: the harness agent files are rendered per worktree and gitignored.
+RENDERED_AGENT_GLOBS = (".claude/agents/*.md", ".opencode/agents/*.md")
+
+
+@pytest.mark.parametrize("glob", RENDERED_AGENT_GLOBS)
+def test_gitignore_ignores_rendered_agent_files(glob: str) -> None:
+    """Both rendered-agent globs appear verbatim in `.gitignore` (AC2)."""
+    patterns = _patterns()
+    assert glob in patterns, (
+        f"{glob!r} missing from .gitignore — the rendered agent files "
+        f"(QS-357) would be offered for commit. Patterns: {patterns}"
+    )

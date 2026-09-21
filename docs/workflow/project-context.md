@@ -27,9 +27,11 @@ agent can run directly instead — see
     **`qs-diagnose-task`** and **`qs-review-task`** by **`qs-verify-task`**
     (see [lanes/bug-product.md](lanes/bug-product.md))
 
-Agents are defined in `.claude/agents/` (and mirrored to
-`.opencode/agents/` — bodies must stay in sync per the harness-sync
-rule in [project-rules.md](project-rules.md)).
+Agents are defined by one Jinja template per agent under
+`scripts/qs/agent_templates/` and rendered per worktree into
+`.claude/agents/` and `.opencode/agents/` (gitignored) by
+`scripts/qs/render_agents.py` — see the "Agent templates" rule in
+[project-rules.md](project-rules.md).
 They delegate creative work to themselves and mechanical work to Python
 scripts in `scripts/qs/`. Stories live under
 `docs/stories/QS-<N>.story.md` — shared by the new pipeline and the

@@ -27,8 +27,10 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-AGENTS_DIR = REPO_ROOT / ".claude" / "agents"
+AGENTS_DIR = agents_dir("claude")
 
 # Pattern for an ACTIVE ``next_step.py --next-cmd release`` invocation.
 # Uses ``.`` with ``re.DOTALL`` so backslash-continued multi-line shell

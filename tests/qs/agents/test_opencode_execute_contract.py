@@ -35,9 +35,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.qs.agents._rendered import agents_dir
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
-OPENCODE_DIR = REPO_ROOT / ".opencode" / "agents"
-CLAUDE_DIR = REPO_ROOT / ".claude" / "agents"
+OPENCODE_DIR = agents_dir("opencode")
+CLAUDE_DIR = agents_dir("claude")
 
 # Distinctive substring from the canonical auto-execute block (QS-190
 # Task 3.2-3.5). Choosing a phrase that is unique to the auto-execute
