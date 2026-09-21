@@ -80,6 +80,17 @@ _LOGGER = logging.getLogger(__name__)
 # =============================================================================
 
 
+def _consume_coro(coro):
+    """Close a coroutine handed to a mocked `hass.async_create_task`.
+
+    Prevents `RuntimeWarning: coroutine '...' was never awaited` when the test does not
+    actually schedule the task. Returns a `MagicMock()` so the call site sees a Task-like
+    return value. Same helper as `tests/test_coverage_device.py`.
+    """
+    coro.close()
+    return MagicMock()
+
+
 def _make_hass() -> MagicMock:
     """Minimal hass mock: only for HA-level I/O (states, services, bus)."""
     hass = MagicMock()
@@ -92,6 +103,10 @@ def _make_hass() -> MagicMock:
     hass.bus = MagicMock()
     hass.bus.async_listen = MagicMock(return_value=lambda: None)
     hass.async_add_executor_job = AsyncMock(side_effect=lambda f, *a: f(*a))
+    # QS-359: OCPP amp writes now go through `hass.async_create_task`. Close the coroutine
+    # by default so every existing OCPP test that reaches the task-wrapped path stays
+    # warning-free; tests that need the outcome install a capturing side effect.
+    hass.async_create_task = MagicMock(side_effect=_consume_coro)
     return hass
 
 
@@ -2045,8 +2060,12 @@ def _make_entity_entry(entity_id):
     return e
 
 
-def _create_ocpp_charger(hass, home, name="OcppCharger", min_charge=6, max_charge=32):
-    """Create a REAL QSChargerOCPP by mocking just the device/entity registry lookups."""
+def _create_ocpp_charger(hass, home, name="OcppCharger", min_charge=6, max_charge=32, extra_entity_ids=()):
+    """Create a REAL QSChargerOCPP by mocking just the device/entity registry lookups.
+
+    `extra_entity_ids` — full entity ids appended to the discovered registry entries (e.g.
+    `sensor.<devname>_current_offered` to bind the QS-359 clip-detector probe).
+    """
     from custom_components.quiet_solar.ha_model.charger import QSChargerOCPP
 
     config_entry = MagicMock()
@@ -2063,6 +2082,7 @@ def _create_ocpp_charger(hass, home, name="OcppCharger", min_charge=6, max_charg
         _make_entity_entry(f"sensor.{devname}_status_connector"),
         _make_entity_entry(f"sensor.{devname}_power_active_import"),
     ]
+    entries.extend(_make_entity_entry(eid) for eid in extra_entity_ids)
 
     fake_device = MagicMock()
     fake_device.id = device_id
@@ -2264,14 +2284,31 @@ class TestQSChargerOCPP:
 
     @pytest.mark.asyncio
     async def test_low_level_set_max_charging_current_no_custom_profile(self):
-        """Without custom profile, delegates to parent (number entity)."""
+        """Without custom profile, delegates to parent (number entity) one task hop later."""
+        from homeassistant.components import number
+        from homeassistant.const import ATTR_ENTITY_ID
+
         hass, _, ch = self._setup()
         assert ch.use_ocpp_custom_charging_profile is False
         hass.services.async_call = AsyncMock()
+
+        # QS-359: the non-blocking OCPP amp write now runs inside a task. Capture the
+        # coroutine and await it, then assert the number entity was written with
+        # blocking=True.
+        captured = []
+        hass.async_create_task = MagicMock(side_effect=lambda coro: captured.append(coro) or MagicMock())
+
         result = await ch.low_level_set_max_charging_current(12, datetime.now(pytz.UTC))
         assert result is True
-        # Should have called number.set_value
-        assert hass.services.async_call.called
+        assert len(captured) == 1
+        await captured[0]
+
+        hass.services.async_call.assert_called_once()
+        call = hass.services.async_call.call_args
+        assert call[0][0] == number.DOMAIN
+        assert call[0][1] == number.SERVICE_SET_VALUE
+        assert call[0][2] == {ATTR_ENTITY_ID: ch.charger_max_charging_current_number, number.ATTR_VALUE: 12}
+        assert call[1]["blocking"] is True
 
     @pytest.mark.asyncio
     async def test_low_level_set_max_charging_current_with_custom_profile(self):

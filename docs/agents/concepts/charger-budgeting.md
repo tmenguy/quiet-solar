@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-12
+last_verified: 2026-09-21
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -79,7 +79,16 @@ Then `apply_budget_strategy()`:
 
 - `QSChargerGeneric` — base class. Power ramping, phase switching,
   budgeting state machine.
-- `QSChargerOCPP` — OCPP variant. Adds transaction handling.
+- `QSChargerOCPP` — OCPP variant. Binds four OCPP entities
+  (`_charge_control` switch, `_maximum_current` number, `_status_connector`
+  and `_power_active_import` sensors) and controls amps through the
+  station-wide `maximum_current` number (the transaction path is dead
+  code). QS-359: if the charger rejects `ChargePointMaxProfile` twice in a
+  row (lbbrhzn/ocpp v0.12.0 #2131), QS falls back to the
+  `ocpp.set_charge_rate` action until the integration is reloaded. When
+  `sensor.<cpid>_current_offered` exists, a notify-only stack-level clip
+  detector (#2148) alerts the household once per plug session and never
+  writes `ocpp.clear_profile`.
 - `QSChargerWallbox` — Wallbox variant. Maps vendor status enums.
 - `QSChargerGroup` — aggregates chargers on the same circuit.
 - `QSChargerStatus` — per-charger state (amps, phases, real power,
