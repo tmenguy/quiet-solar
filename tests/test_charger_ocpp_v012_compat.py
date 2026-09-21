@@ -18,7 +18,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytz
-
 from homeassistant.components import number
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.exceptions import HomeAssistantError
@@ -34,8 +33,8 @@ from tests.test_charger_coverage_deep import (
     _create_charger,
     _create_ocpp_charger,
     _init_charger_states,
-    _make_home,
     _make_hass,
+    _make_home,
 )
 
 _T0 = pytz.UTC.localize(datetime(2026, 9, 21, 12, 0, 0))
@@ -76,7 +75,15 @@ def _record_calls(hass, calls) -> None:
     hass.services.async_call = AsyncMock(side_effect=fn)
 
 
-def _seed(ch, *, status="Charging", offered="14.0", number_state="16", charge_enabled=True, plugged=True) -> None:
+def _seed(
+    ch,
+    *,
+    status=QSOCPPv16v201ChargePointStatus.charging,
+    offered="14.0",
+    number_state="16",
+    charge_enabled=True,
+    plugged=True,
+) -> None:
     """Seed the clip detector's gates. The gates read the probe cache, not `hass.states`,
     except the number ack which reads `hass.states.get`."""
     ch.is_charge_enabled = MagicMock(return_value=charge_enabled)
@@ -173,14 +180,18 @@ async def test_ac2_rejection_streak(caplog, word):
     calls: list = []
     _raise_for_number(hass, marker, calls)
 
-    # First marker rejection -> streak 1, mode off, no generic/station warning.
+    # First marker rejection -> streak 1, mode off, no WARNING, one DEBUG note.
     caplog.clear()
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         res = await ch.low_level_set_max_charging_current(16, _T0, blocking=True)
     assert res is False
     assert ch._ocpp_station_profile_rejection_streak == 1
     assert ch._ocpp_station_profile_rejected is False
     assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert any(
+        "station profile rejected once by" in r.getMessage() and r.levelno == logging.DEBUG
+        for r in caplog.records
+    )
 
     # Accepted write in between resets the streak to 0.
     _record_calls(hass, calls)
@@ -244,6 +255,32 @@ async def test_ac3_fallback_calls_set_charge_rate_and_clamps():
     await ch.low_level_set_max_charging_current(1, _T0)
     ocpp_calls = [c for c in calls if c[0] == "ocpp"]
     assert ocpp_calls[0][2]["limit_amps"] == 6
+
+
+@pytest.mark.asyncio
+async def test_ac3_fallback_blocking_caller_gets_real_outcome():
+    """SF-1: a blocking caller on the fallback path forwards blocking=True and sees the
+    real outcome — True on a non-raising call, False when the service raises."""
+    hass = _make_hass()
+    home = _make_home()
+    ch = _create_ocpp_charger(hass, home)
+    _init_charger_states(ch)
+    ch._ocpp_station_profile_rejected = True
+
+    seen_blocking = []
+
+    async def record_blocking(domain, service, data=None, **kwargs):
+        seen_blocking.append(kwargs.get("blocking"))
+
+    hass.services.async_call = AsyncMock(side_effect=record_blocking)
+    assert await ch.low_level_set_max_charging_current(16, _T0, blocking=True) is True
+    assert seen_blocking == [True]
+
+    async def raise_ocpp(domain, service, data=None, **kwargs):
+        raise HomeAssistantError("rejected")
+
+    hass.services.async_call = AsyncMock(side_effect=raise_ocpp)
+    assert await ch.low_level_set_max_charging_current(16, _T0, blocking=True) is False
 
 
 # =============================================================================
@@ -314,10 +351,14 @@ async def test_ac5_fallback_ack_and_failure(caplog):
     assert sum("_ocpp_set_charge_rate_fallback: Error" in r.getMessage() for r in caplog.records) == 1
 
     caplog.clear()
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG):
         assert await ch._ocpp_set_charge_rate_fallback(20, _T0) is False
-    # second time: warning suppressed (debug only)
+    # second time: warning suppressed, logged at DEBUG only
     assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(
+        "_ocpp_set_charge_rate_fallback: Error" in r.getMessage() and r.levelno == logging.DEBUG
+        for r in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -332,6 +373,22 @@ async def test_ac5_deviceless_fallback_returns_false_without_calling():
     _record_calls(hass, calls)
     assert await ch._ocpp_set_charge_rate_fallback(16, _T0) is False
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_nh4_bad_current_returns_false_without_propagating(caplog):
+    """NH-4: a non-numeric `current` in the fallback path returns False, not a raise."""
+    hass = _make_hass()
+    home = _make_home()
+    ch = _create_ocpp_charger(hass, home)
+    _init_charger_states(ch)
+    ch._ocpp_station_profile_rejected = True
+    calls: list = []
+    _record_calls(hass, calls)
+    with caplog.at_level(logging.WARNING):
+        assert await ch._ocpp_set_charge_rate_fallback(None, _T0) is False
+    assert calls == []  # clamp raised before the service call
+    assert any("bad current" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -420,16 +477,24 @@ def test_ac6_deviceless_construction_has_none_devid_and_offered():
 async def test_ac7_clip_detector_positive_both_channels():
     hass, home, ch = _detector_charger()
     ch._expected_amperage.set(16, _T0)
-    _seed(ch, status="Charging", offered="14.0", number_state="16", charge_enabled=True, plugged=True)
+    _seed(
+        ch,
+        status=QSOCPPv16v201ChargePointStatus.charging,
+        offered="14.0",
+        number_state="16",
+        charge_enabled=True,
+        plugged=True,
+    )
     ch.on_device_state_change = AsyncMock()
 
-    for dt in (0, 60, 179, 180):
+    # One tick below the window, then exactly at it -> notify on the last tick only.
+    for dt in (0, 60, OCPP_CLIP_DETECT_WINDOW_S - 1, OCPP_CLIP_DETECT_WINDOW_S):
         await ch.check_amps_delivery(_T0 + timedelta(seconds=dt))
 
     assert ch.on_device_state_change.await_count == 1
     assert home.async_notify_all_mobile_apps.await_count == 1
     args = ch.on_device_state_change.await_args
-    assert args[0][0] == _T0 + timedelta(seconds=180)
+    assert args[0][0] == _T0 + timedelta(seconds=OCPP_CLIP_DETECT_WINDOW_S)
     assert args[0][1] == DEVICE_STATUS_CHANGE_ERROR
     message = args[1]["message"]
     assert ch.name in message
@@ -471,6 +536,29 @@ async def test_ac7b_channel_isolation_mobile_apps_raises():
 
     assert ch.on_device_state_change.await_count == 1
     assert ch._ocpp_clip_notified is True
+
+
+@pytest.mark.asyncio
+async def test_nh1_message_floors_offered_never_reads_equal():
+    """NH-1: a 15.6 A offer must not round up to 16 A and read as offered == requested."""
+    hass, home, ch = _detector_charger()
+    ch.on_device_state_change = AsyncMock()
+    await ch._notify_ocpp_clip(_T0, expected=16, offered=15.6)
+    message = ch.on_device_state_change.await_args[1]["message"]
+    assert "offers 15 A while 16 A were requested" in message
+
+
+@pytest.mark.asyncio
+async def test_nh5_message_omits_clear_profile_when_no_devid():
+    """NH-5: a device-less charger must not tell the household to run the action for `None`."""
+    hass, home, ch = _detector_charger()
+    ch.devid = None
+    ch.on_device_state_change = AsyncMock()
+    await ch._notify_ocpp_clip(_T0, expected=16, offered=14.0)
+    message = ch.on_device_state_change.await_args[1]["message"]
+    assert "clear_profile" not in message
+    assert "None" not in message
+    assert home.async_notify_all_mobile_apps.await_count == 1
 
 
 # =============================================================================
@@ -557,6 +645,19 @@ async def test_ac8_offered_unavailable():
     _seed(ch, offered="unavailable")
     ch.on_device_state_change = AsyncMock()
     for dt in (0, 180):
+        await ch.check_amps_delivery(_T0 + timedelta(seconds=dt))
+    assert ch.on_device_state_change.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_ac8_nan_offered_is_not_a_clip():
+    """SF-2: a `NaN` reading held across the window must not trigger a notification."""
+    hass, home, ch = _detector_charger()
+    ch._expected_amperage.set(16, _T0)
+    _seed(ch, offered="nan")
+    ch.on_device_state_change = AsyncMock()
+    assert ch._ocpp_read_current_offered(_T0) is None
+    for dt in (0, 60, OCPP_CLIP_DETECT_WINDOW_S, OCPP_CLIP_DETECT_WINDOW_S + 60):
         await ch.check_amps_delivery(_T0 + timedelta(seconds=dt))
     assert ch.on_device_state_change.await_count == 0
 
@@ -664,6 +765,26 @@ async def test_ac11_check_load_activity_awaits_check_amps_delivery_once():
 
     await ch.check_load_activity_and_constraints(_T0)
     ch.check_amps_delivery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_sf3_check_amps_delivery_raise_does_not_abort_cycle(caplog):
+    """SF-3: a raise in the detector override must be swallowed so load management continues."""
+    hass, home, ch = _detector_charger()
+    ch.check_amps_delivery = AsyncMock(side_effect=RuntimeError("sensor blew up"))
+    ch._asked_for_reboot_at_time = None
+    ch._boot_time = None
+    ch.is_charger_unavailable = MagicMock(return_value=False)
+    ch.probe_for_possible_needed_reboot = MagicMock(return_value=False)
+    ch.is_charger_faulted = MagicMock(return_value=False)
+    ch.is_not_plugged = MagicMock(return_value=False)
+    ch.is_plugged = MagicMock(return_value=False)
+
+    with caplog.at_level(logging.ERROR):
+        # Must not raise.
+        result = await ch.check_load_activity_and_constraints(_T0)
+    assert result is False
+    assert any("check_amps_delivery raised" in r.getMessage() for r in caplog.records)
 
 
 # =============================================================================

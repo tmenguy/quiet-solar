@@ -3728,8 +3728,13 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
 
         # QS-359: stack-level clip detector (#2148). Runs every cycle right after the
         # QS-346 fault machine and before any plug-state branch, so its per-plug-session
-        # reset observes the unplug. No-op on non-OCPP chargers.
-        await self.check_amps_delivery(time)
+        # reset observes the unplug. No-op on non-OCPP chargers. Wrapped defensively: this
+        # is a diagnostic side-channel and must never abort the load-management cycle if a
+        # sensor read in the override raises unexpectedly.
+        try:
+            await self.check_amps_delivery(time)
+        except Exception:
+            _LOGGER.error("check_amps_delivery raised for %s", self.name, exc_info=True)
 
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             if self.car:
@@ -6424,7 +6429,7 @@ class QSChargerOCPP(QSChargerGeneric):
             return await self.low_level_set_charging_current(current, time, blocking)
 
         if self._ocpp_station_profile_rejected:
-            return await self._ocpp_set_charge_rate_fallback(current, time)
+            return await self._ocpp_set_charge_rate_fallback(current, time, blocking)
 
         if blocking:
             # An explicit blocking caller wants a real outcome, so run it inline.
@@ -6477,7 +6482,7 @@ class QSChargerOCPP(QSChargerGeneric):
         # fallback branch, and the ensure-state loop already retries on observation.
         return True
 
-    async def _ocpp_set_charge_rate_fallback(self, current, time: datetime) -> bool:
+    async def _ocpp_set_charge_rate_fallback(self, current, time: datetime, blocking: bool = False) -> bool:
         # QS-359: amp control for chargers that reject `ChargePointMaxProfile` (the
         # population v0.12.0 #2131 breaks). `ocpp.set_charge_rate` keeps the pre-v0.12.0
         # chain (`ChargePointMaxProfile` on connector 0 -> `TxProfile` on the running
@@ -6497,13 +6502,17 @@ class QSChargerOCPP(QSChargerGeneric):
             _LOGGER.debug("_ocpp_set_charge_rate_fallback: no devid, cannot set charge rate")
             return False
 
-        clamped = int(min(float(self.charger_max_charge), max(float(self.charger_min_charge), float(current))))
         try:
+            # Clamp inside the guarded path (like the generic number path): a bad `current`
+            # returns False instead of propagating out of the load-management cycle. When a
+            # blocking caller asks, forward `blocking` so it receives the real outcome
+            # (the service handler raises on refusal) instead of the optimistic ack.
+            clamped = int(min(float(self.charger_max_charge), max(float(self.charger_min_charge), float(current))))
             await self.hass.services.async_call(
                 "ocpp",
                 "set_charge_rate",
                 {"devid": self.devid, "limit_amps": clamped, "conn_id": OCPP_FALLBACK_CONN_ID},
-                blocking=False,
+                blocking=blocking,
             )
         except HomeAssistantError as e:
             if not self._ocpp_fallback_failure_logged:
@@ -6512,6 +6521,9 @@ class QSChargerOCPP(QSChargerGeneric):
             else:
                 _LOGGER.debug("_ocpp_set_charge_rate_fallback: Error %s", e)
             return False
+        except (ValueError, TypeError) as e:
+            _LOGGER.warning("_ocpp_set_charge_rate_fallback: bad current %s (%s)", current, e)
+            return False
 
         # Ack assigned only AFTER a call that returned without raising, so a failed
         # service leaves the previous ack and the ensure-state loop keeps retrying.
@@ -6519,7 +6531,7 @@ class QSChargerOCPP(QSChargerGeneric):
         self._ocpp_fallback_failure_logged = False
         return True
 
-    def get_max_charging_amp_per_phase(self):
+    def get_max_charging_amp_per_phase(self) -> float | None:
         # QS-359: in fallback mode the number entity reverts to its last confirmed value
         # (v0.12.0 #2131), so read the optimistic fallback ack instead. `None` means "not
         # yet acked", exactly like an `unknown` number state today. `current_offered` is
@@ -6537,9 +6549,14 @@ class QSChargerOCPP(QSChargerGeneric):
         # primitive as the status gate. Missing/unknown/unavailable/non-numeric -> None.
         raw = self.get_sensor_latest_possible_valid_value(self.charger_ocpp_current_offered, time=time)
         try:
-            return float(raw)
+            value = float(raw)
         except (ValueError, TypeError):
             return None
+        # `float("nan")` succeeds but `nan >= expected - tolerance` is always False, which
+        # would read as a permanent clip. Treat a non-finite reading as "no reading".
+        if not math.isfinite(value):
+            return None
+        return value
 
     async def check_amps_delivery(self, time: datetime) -> None:
         # QS-359: stack-level clip detector (#2148). Plain per-cycle state machine mirroring
@@ -6603,14 +6620,21 @@ class QSChargerOCPP(QSChargerGeneric):
             if self._last_attached_car is not None and self._last_attached_car.charger is None
             else None
         )
+        # Floor the offered value (do NOT round): rounding 15.6 up to 16 would print
+        # "offers 16 A while 16 A were requested", contradicting the clip premise.
         message = (
-            f"Your charger `{self.name}` offers {offered:.0f} A while {expected:.0f} A were requested. "
+            f"Your charger `{self.name}` offers {math.floor(offered)} A while {expected:.0f} A were requested. "
             f"Unless your charger's own power-sharing or installation limit is active, a stale OCPP "
-            f"charging profile is probably capping it. When the car is unplugged, run the "
-            f"`ocpp.clear_profile` action for `{self.devid}`. Never run it during a charge, and expect "
-            f"the first seconds of the next session at the charger's installation maximum until Quiet "
-            f"Solar applies its limit."
+            f"charging profile is probably capping it. "
         )
+        if self.devid is not None:
+            # Skip the manual-workaround sentence when we have no device id to name — an
+            # instruction to run the action "for `None`" is unusable.
+            message += (
+                f"When the car is unplugged, run the `ocpp.clear_profile` action for `{self.devid}`. "
+                f"Never run it during a charge, and expect the first seconds of the next session at the "
+                f"charger's installation maximum until Quiet Solar applies its limit."
+            )
         title = "Charger current limited — check needed"
 
         # Two channels, each isolated: a notification-service failure on one neither blocks
@@ -6662,7 +6686,7 @@ class QSChargerOCPP(QSChargerGeneric):
         #
 
         if self.use_ocpp_custom_charging_profile is False:
-            return await super().low_level_set_charging_current(current, time)
+            return await super().low_level_set_charging_current(current, time, blocking)
 
         # _LOGGER.warning(f"low_level_set_charging_current OCPP: {current}A")
         #

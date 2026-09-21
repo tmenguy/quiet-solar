@@ -88,7 +88,10 @@ Then `apply_budget_strategy()`:
   `ocpp.set_charge_rate` action until the integration is reloaded. When
   `sensor.<cpid>_current_offered` exists, a notify-only stack-level clip
   detector (#2148) alerts the household once per plug session and never
-  writes `ocpp.clear_profile`.
+  writes `ocpp.clear_profile` (non-finite offered readings are ignored, and
+  the manual instruction is omitted when the device id is unknown). The
+  detector call site is wrapped so a sensor-read raise can never abort the
+  load-management cycle.
 - `QSChargerWallbox` — Wallbox variant. Maps vendor status enums.
 - `QSChargerGroup` — aggregates chargers on the same circuit.
 - `QSChargerStatus` — per-charger state (amps, phases, real power,
