@@ -336,18 +336,34 @@ def render_all(
     _guard_tracked(out_path)
 
     env = _make_env(templates_path)
-    stems = _discover_stems(templates_path)
+    # Wrap discovery too: the glob touches the filesystem, so an unreadable
+    # templates dir raises OSError on some platforms (macOS silently yields
+    # an empty list) — surface both as a RenderError degradation, never a
+    # silent no-op or an uncaught error that escapes the handoff (review-fix
+    # #03 N9).
+    try:
+        stems = _discover_stems(templates_path)
+    except OSError as exc:
+        raise RenderError(f"could not read templates dir {templates_path}: {exc}") from exc
+    if not stems:
+        raise RenderError(f"no agent templates found in {templates_path}")
     model_spec = context.get("model", "inherit")
+
+    # ``jinja2``'s loader raises NON-jinja2 exceptions on several load
+    # failure modes — ``UnicodeDecodeError`` (⊂ ``ValueError``) on a
+    # non-UTF-8 byte, ``PermissionError`` / ``FileNotFoundError`` (⊂
+    # ``OSError``) on an unreadable or vanished file — at both
+    # ``get_template`` (load) and ``render`` (which re-enters the loader to
+    # resolve ``extends`` / ``include`` parents). All must funnel through
+    # ``RenderError`` so the two hooks' ``(ImportError, RenderError)`` catch
+    # genuinely covers every render failure mode (review-fix #03 M1/S4/S5).
+    _load_errors = (jinja2.TemplateError, OSError, ValueError)
 
     written: list[Path] = []
     for stem in stems:
-        # ``get_template`` compiles the template, so a TemplateSyntaxError /
-        # TemplateNotFound can fire at *load* time — wrap it as RenderError
-        # too, so every render failure funnels through the one type both
-        # hooks handle (review-fix #02 S3; the handoff-survives invariant).
         try:
             template = env.get_template(f"{stem}.md.j2")
-        except jinja2.TemplateError as exc:
+        except _load_errors as exc:
             raise RenderError(f"failed to load template {stem}: {exc}") from exc
         for harness in _HARNESSES:
             render_ctx = {
@@ -361,7 +377,7 @@ def render_all(
             }
             try:
                 text = template.render(**render_ctx)
-            except jinja2.TemplateError as exc:
+            except _load_errors as exc:
                 raise RenderError(f"failed to render {stem} ({harness}): {exc}") from exc
             text = text.rstrip("\n") + "\n"
             out = out_path / _HARNESS_DIR[harness] / "agents" / f"{stem}.md"

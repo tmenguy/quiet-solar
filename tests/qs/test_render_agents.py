@@ -701,3 +701,66 @@ def test_render_load_time_template_error_wrapped(tmp_path: Path) -> None:
             tmp_path, context=_synthetic_context(tmp_path),
             out_root=tmp_path / "o", templates_dir=tdir,
         )
+
+
+def test_render_non_utf8_template_wrapped(tmp_path: Path) -> None:
+    """QS-357 review-fix #03 M1: a non-UTF-8 byte in a template raises
+    UnicodeDecodeError (a ValueError) at load — wrap it as RenderError."""
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    _write(tdir / "_base.md.j2", "[% block body %][% endblock %]\n")
+    (tdir / "qs-bad.md.j2").write_bytes(b'[% extends "_base.md.j2" %][% block body %]\xff\xfe[% endblock %]')
+    with pytest.raises(r.RenderError):
+        r.render_all(
+            tmp_path, context=_synthetic_context(tmp_path),
+            out_root=tmp_path / "o", templates_dir=tdir,
+        )
+
+
+@pytest.mark.skipif(hasattr(__import__("os"), "geteuid") and __import__("os").geteuid() == 0,
+                    reason="root bypasses file permissions")
+def test_render_unreadable_template_wrapped(tmp_path: Path) -> None:
+    """QS-357 review-fix #03 M1: an unreadable template file (mode 000)
+    raises PermissionError (an OSError) at load — wrap it as RenderError."""
+    import os
+
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    _write(tdir / "_base.md.j2", "[% block body %][% endblock %]\n")
+    bad = tdir / "qs-bad.md.j2"
+    bad.write_text('[% extends "_base.md.j2" %][% block body %]x[% endblock %]')
+    bad.chmod(0o000)
+    try:
+        with pytest.raises(r.RenderError):
+            r.render_all(
+                tmp_path, context=_synthetic_context(tmp_path),
+                out_root=tmp_path / "o", templates_dir=tdir,
+            )
+    finally:
+        bad.chmod(0o644)
+
+
+def test_render_unreadable_templates_dir_wrapped(tmp_path: Path) -> None:
+    """QS-357 review-fix #03 N9: an unreadable / empty templates dir is a
+    RenderError degradation, not a silent no-op or uncaught PermissionError."""
+    empty = tmp_path / "empty_templates"
+    empty.mkdir()
+    with pytest.raises(r.RenderError):
+        r.render_all(
+            tmp_path, context=_synthetic_context(tmp_path),
+            out_root=tmp_path / "o", templates_dir=empty,
+        )
+
+
+def test_render_discover_oserror_wrapped(tmp_path: Path, monkeypatch) -> None:
+    """QS-357 review-fix #03 N9: an OSError from template discovery (e.g. an
+    unreadable dir on a platform whose glob raises) is wrapped as RenderError."""
+    def _boom(_dir):
+        raise PermissionError("dir unreadable")
+
+    monkeypatch.setattr(r, "_discover_stems", _boom)
+    with pytest.raises(r.RenderError, match="templates dir"):
+        r.render_all(
+            tmp_path, context=_synthetic_context(tmp_path),
+            out_root=tmp_path / "o", templates_dir=tmp_path,
+        )

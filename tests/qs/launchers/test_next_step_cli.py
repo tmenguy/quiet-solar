@@ -561,3 +561,29 @@ def test_handoff_survives_load_time_template_error(
     cap = capsys.readouterr()
     assert "agent render failed" in cap.err
     assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+def test_handoff_survives_non_utf8_template(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #03 M1 (handoff side): a non-UTF-8 template at
+    handoff funnels through RenderError → stderr warning + payload, exit 0."""
+    import next_step
+
+    import render_agents
+
+    tdir = tmp_path / "tpl"
+    tdir.mkdir()
+    (tdir / "_base.md.j2").write_text("[% block body %][% endblock %]\n")
+    (tdir / "qs-bad.md.j2").write_bytes(
+        b'[% extends "_base.md.j2" %][% block body %]\xff\xfe[% endblock %]'
+    )
+    monkeypatch.setattr(render_agents, "_default_templates_dir", lambda wd: tdir)
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
