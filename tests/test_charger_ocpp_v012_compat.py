@@ -26,6 +26,7 @@ from custom_components.quiet_solar.const import DEVICE_STATUS_CHANGE_ERROR
 from custom_components.quiet_solar.ha_model.charger import (
     OCPP_CLIP_DETECT_WINDOW_S,
     OCPP_FALLBACK_CONN_ID,
+    OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S,
     OCPP_STATION_PROFILE_REJECTION_MARKER,
     QSOCPPv16v201ChargePointStatus,
 )
@@ -202,28 +203,120 @@ async def test_ac2_rejection_streak(caplog, word):
     assert res is True
     assert ch._ocpp_station_profile_rejection_streak == 0
 
-    # Two consecutive marker rejections -> latch with exactly one warning.
+    # Two marker rejections in distinct episodes (separated by more than the debounce
+    # window) -> latch with exactly one warning. SF-1 (fix #04): same-time rejections
+    # would collapse into one episode, so the second is issued past the debounce window.
+    _t_ep1 = _T0
+    _t_ep2 = _T0 + timedelta(seconds=OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S + 1)
+    _t_ep3 = _T0 + timedelta(seconds=2 * (OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S + 1))
     _raise_for_number(hass, marker, calls)
-    await ch.low_level_set_max_charging_current(16, _T0, blocking=True)
+    await ch.low_level_set_max_charging_current(16, _t_ep1, blocking=True)
     assert ch._ocpp_station_profile_rejected is False
     caplog.clear()
     with caplog.at_level(logging.WARNING):
-        await ch.low_level_set_max_charging_current(16, _T0, blocking=True)
+        await ch.low_level_set_max_charging_current(16, _t_ep2, blocking=True)
     assert ch._ocpp_station_profile_rejected is True
     assert ch._ocpp_station_profile_rejection_streak == 2
     station_warnings = [r for r in caplog.records if "station profile rejected" in r.getMessage()]
     assert len(station_warnings) == 1
 
     # A third rejection whose task was created before the flip (hook called directly while
-    # already latched) logs nothing and makes no service call itself (no replay).
+    # already latched) logs nothing and makes no service call itself (no replay). It is a
+    # distinct episode so the streak still advances.
     caplog.clear()
     calls.clear()
     with caplog.at_level(logging.DEBUG):
-        handled = await ch._on_amp_command_error(marker, 16, _T0)
+        handled = await ch._on_amp_command_error(marker, 16, _t_ep3)
     assert handled is True
     assert ch._ocpp_station_profile_rejection_streak == 3
     assert caplog.records == []
     assert calls == []
+
+
+# =============================================================================
+# SF-1 (fix #04) — the streak counts distinct rejection EPISODES, not
+# concurrent in-flight task failures, so a single episode never latches
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_sf1_concurrent_same_episode_rejections_do_not_latch(caplog):
+    """Two marker rejections within the debounce window (two setpoints in flight in one
+    charger command round-trip) collapse to a single episode: streak increments by 1,
+    the sticky fallback does NOT latch, and no WARNING is emitted."""
+    hass = _make_hass()
+    home = _make_home()
+    ch = _create_ocpp_charger(hass, home)
+    _init_charger_states(ch)
+    marker = HomeAssistantError(f"Failed to set variable: {OCPP_STATION_PROFILE_REJECTION_MARKER}: Rejected")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        h1 = await ch._on_amp_command_error(marker, 16, _T0)
+        # Second in-flight task fails 2 s later — still inside the round-trip window.
+        h2 = await ch._on_amp_command_error(
+            marker, 16, _T0 + timedelta(seconds=OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S - 1)
+        )
+    assert h1 is True
+    assert h2 is True
+    assert ch._ocpp_station_profile_rejection_streak == 1
+    assert ch._ocpp_station_profile_rejected is False
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+@pytest.mark.asyncio
+async def test_sf1_distinct_episode_rejections_latch_once(caplog):
+    """Two marker rejections in distinct episodes (separated by more than the debounce
+    window, no accepted write between) reach streak 2 and latch with exactly one WARNING."""
+    hass = _make_hass()
+    home = _make_home()
+    ch = _create_ocpp_charger(hass, home)
+    _init_charger_states(ch)
+    marker = HomeAssistantError(f"Failed to set variable: {OCPP_STATION_PROFILE_REJECTION_MARKER}: Rejected")
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        h1 = await ch._on_amp_command_error(marker, 16, _T0)
+        h2 = await ch._on_amp_command_error(
+            marker, 16, _T0 + timedelta(seconds=OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S + 1)
+        )
+    assert h1 is True
+    assert h2 is True
+    assert ch._ocpp_station_profile_rejection_streak == 2
+    assert ch._ocpp_station_profile_rejected is True
+    station_warnings = [r for r in caplog.records if "station profile rejected" in r.getMessage() and r.levelno == logging.WARNING]
+    assert len(station_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_sf1_accepted_write_between_rejections_resets_streak():
+    """AC2 regression guard: an accepted write between two rejections resets the streak
+    (and the last-counted episode clock), so a later same-time rejection still counts."""
+    hass = _make_hass()
+    home = _make_home()
+    ch = _create_ocpp_charger(hass, home)
+    _init_charger_states(ch)
+    marker = HomeAssistantError(f"Failed to set variable: {OCPP_STATION_PROFILE_REJECTION_MARKER}: Rejected")
+
+    # First rejection episode -> streak 1.
+    await ch._on_amp_command_error(marker, 16, _T0)
+    assert ch._ocpp_station_profile_rejection_streak == 1
+
+    # Accepted number write in between -> streak resets to 0.
+    calls: list = []
+    _record_calls(hass, calls)
+    hass.states.get.side_effect = lambda eid=None: {
+        ch.charger_max_charging_current_number: SimpleNamespace(state="16", attributes={})
+    }.get(eid)
+    res = await ch.low_level_set_max_charging_current(16, _T0, blocking=True)
+    assert res is True
+    assert ch._ocpp_station_profile_rejection_streak == 0
+
+    # A rejection at the SAME wall-clock time as the first still counts (the accepted
+    # write cleared the episode clock), proving the reset also clears the debounce anchor.
+    await ch._on_amp_command_error(marker, 16, _T0)
+    assert ch._ocpp_station_profile_rejection_streak == 1
+    assert ch._ocpp_station_profile_rejected is False
 
 
 # =============================================================================

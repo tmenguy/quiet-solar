@@ -224,6 +224,11 @@ OCPP_CLIP_TOLERANCE_A = 1.0  # amps below requested before a reading counts as c
 # Substring of the v0.12.0 `set_station_charge_rate` HomeAssistantError on a refused profile.
 OCPP_STATION_PROFILE_REJECTION_MARKER = "ChargePointMaxProfile"
 OCPP_STATION_PROFILE_REJECTIONS_TO_FALLBACK = 2  # consecutive marker rejections before latching fallback
+# SF-1 (fix #04): two amp setpoints can be in flight within a single charger command
+# round-trip (1-5 s), so both can fail with the marker and each reach the rejection hook.
+# The streak counts distinct rejection EPISODES, not concurrent in-flight failures: marker
+# rejections closer together than this window collapse into one episode (counted once).
+OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S = 10
 OCPP_FALLBACK_CONN_ID = 1  # single-connector chargers only (multi-connector out of scope)
 
 
@@ -6197,6 +6202,9 @@ class QSChargerOCPP(QSChargerGeneric):
         # integration is reloaded or HA restarts.
         self._ocpp_station_profile_rejected: bool = False
         self._ocpp_station_profile_rejection_streak: int = 0
+        # SF-1 (fix #04): wall-clock of the last marker rejection that COUNTED toward the
+        # streak; concurrent same-episode rejections inside the debounce window are ignored.
+        self._ocpp_last_rejection_counted_time: datetime | None = None
         self._ocpp_last_fallback_amps: int | None = None
         self._ocpp_fallback_failure_logged: bool = False
 
@@ -6442,6 +6450,9 @@ class QSChargerOCPP(QSChargerGeneric):
         ok = await super().low_level_set_max_charging_current(current, time, blocking=True)
         if ok:
             self._ocpp_station_profile_rejection_streak = 0
+            # SF-1 (fix #04): clear the episode clock too, so a rejection after an accepted
+            # write is always a fresh episode (never debounced against the pre-reset one).
+            self._ocpp_last_rejection_counted_time = None
         return ok
 
     async def _on_amp_command_error(self, error: Exception, current: float, time: datetime) -> bool:
@@ -6453,6 +6464,11 @@ class QSChargerOCPP(QSChargerGeneric):
         # string that happens to contain "ChargePointMaxProfile". Reject any non-HAE error
         # before the marker check so such invalid input logs the generic warning and never
         # touches the streak.
+        # NH-1: detection intentionally trusts the v0.12.0 contract that a station-profile
+        # rejection always surfaces as a HomeAssistantError (story's documented assumption).
+        # A future HA/ocpp version raising a bare exception that still carries the marker
+        # text would be silently dropped here and fallback would never latch; revisit this
+        # guard if that contract changes.
         if not isinstance(error, HomeAssistantError):
             return False
         if self.use_ocpp_custom_charging_profile:
@@ -6461,6 +6477,20 @@ class QSChargerOCPP(QSChargerGeneric):
             # Transient timeouts and other errors never count toward the streak; the
             # generic warning is logged by the caller.
             return False
+
+        # SF-1 (fix #04): only count this rejection when it opens a NEW episode — i.e. it is
+        # separated from the last counted rejection by at least the charger command
+        # round-trip window. Concurrent in-flight setpoints that both fail with the marker
+        # inside that window collapse to a single episode, so one transient hiccup can never
+        # walk the streak to the fallback threshold on its own.
+        last_counted = self._ocpp_last_rejection_counted_time
+        if (
+            last_counted is not None
+            and (time - last_counted).total_seconds() < OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S
+        ):
+            # Same episode as an already-counted rejection: count once, no streak change.
+            return True
+        self._ocpp_last_rejection_counted_time = time
 
         self._ocpp_station_profile_rejection_streak += 1
         if (
@@ -6516,6 +6546,13 @@ class QSChargerOCPP(QSChargerGeneric):
                 {"devid": self.devid, "limit_amps": clamped, "conn_id": OCPP_FALLBACK_CONN_ID},
                 blocking=blocking,
             )
+        # NH-2: the exception surface here is intentionally narrower than the base number
+        # path (which catches `Exception`). It is safe today because the fallback is only
+        # ever reached with `blocking=False` (the sole `blocking=True` amp caller routes to
+        # the number path), and a `blocking=False` `async_call` raises only HAE-family
+        # validation/registration errors. Revisit (widen the catch) if a `blocking=True`
+        # caller is ever routed through this fallback, where a non-HAE runtime error
+        # (e.g. `asyncio.TimeoutError`, `ConnectionError`) could then propagate.
         except HomeAssistantError as e:
             if not self._ocpp_fallback_failure_logged:
                 _LOGGER.warning("_ocpp_set_charge_rate_fallback: Error %s", e, exc_info=True, stack_info=True)
