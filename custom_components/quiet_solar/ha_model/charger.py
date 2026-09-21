@@ -6447,6 +6447,14 @@ class QSChargerOCPP(QSChargerGeneric):
     async def _on_amp_command_error(self, error: Exception, current: float, time: datetime) -> bool:
         # QS-359: own the diagnosis for lbbrhzn/ocpp v0.12.0 station-profile rejections.
         # Must not raise (runs inside an `except` branch).
+        # SF-1 (fix #03): the marker only ever appears in the v0.12.0
+        # `set_station_charge_rate` HomeAssistantError. The caller forwards EVERY exception
+        # from its `try` — including a `ValueError` from `float(current)` when `current` is a
+        # string that happens to contain "ChargePointMaxProfile". Reject any non-HAE error
+        # before the marker check so such invalid input logs the generic warning and never
+        # touches the streak.
+        if not isinstance(error, HomeAssistantError):
+            return False
         if self.use_ocpp_custom_charging_profile:
             return False
         if OCPP_STATION_PROFILE_REJECTION_MARKER not in str(error):

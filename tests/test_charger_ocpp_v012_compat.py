@@ -306,6 +306,44 @@ async def test_ac4_non_marker_error_logs_generic_and_does_not_count(caplog):
 
 
 @pytest.mark.asyncio
+async def test_sf1_non_hae_marker_error_does_not_latch(caplog):
+    """Fix #03 SF-1: a non-HomeAssistantError whose text contains the marker must never
+    count toward the streak. `float(current)` on a string current holding
+    "ChargePointMaxProfile" raises a `ValueError` carrying the marker text; forwarded
+    twice it must NOT latch the fallback and must return False (generic-warning path)."""
+    hass = _make_hass()
+    home = _make_home()
+    ch = _create_ocpp_charger(hass, home)
+    _init_charger_states(ch)
+    calls: list = []
+    _record_calls(hass, calls)
+
+    # A raw string current containing the marker makes `float(current)` raise a
+    # ValueError whose message embeds "ChargePointMaxProfile".
+    bad_current = f"{OCPP_STATION_PROFILE_REJECTION_MARKER}-not-a-number"
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        res1 = await ch.low_level_set_max_charging_current(bad_current, _T0, blocking=True)
+        res2 = await ch.low_level_set_max_charging_current(bad_current, _T0, blocking=True)
+    assert res1 is False
+    assert res2 is False
+    assert ch._ocpp_station_profile_rejection_streak == 0
+    assert ch._ocpp_station_profile_rejected is False
+    assert not [c for c in calls if c[0] == "ocpp"]
+    assert any("low_level_set_max_charging_current: Error" in r.getMessage() for r in caplog.records)
+
+    # The hook itself returns False directly for a non-HAE marker-bearing error.
+    handled = await ch._on_amp_command_error(
+        ValueError(f"could not convert string to float: '{OCPP_STATION_PROFILE_REJECTION_MARKER}'"),
+        16,
+        _T0,
+    )
+    assert handled is False
+    assert ch._ocpp_station_profile_rejection_streak == 0
+
+
+@pytest.mark.asyncio
 async def test_ac4_custom_profile_never_counts_even_with_marker():
     hass = _make_hass()
     home = _make_home()
