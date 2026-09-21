@@ -25,6 +25,7 @@ decision. Comments keep Jinja's default ``{# #}``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import os
 import sys
 import tempfile
@@ -295,18 +296,30 @@ def _guard_tracked(out_root: Path) -> None:
 
 
 def _atomic_write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-    tmp = Path(tmp_name)
+    # Every output-side failure funnels through ``RenderError`` too (the
+    # write mirror of the loader-input side): ``mkdir`` / ``mkstemp`` /
+    # ``os.replace`` raise ``OSError`` (unwritable or non-dir parent), and
+    # the UTF-8 encode in ``handle.write`` raises ``UnicodeEncodeError``
+    # (⊂ ``ValueError``) on a lone surrogate. All are wrapped so the two
+    # hooks' ``(ImportError, RenderError)`` catch holds (review-fix #04
+    # M2/S6). ``mkdir`` / ``mkstemp`` are INSIDE the ``try`` on purpose.
+    tmp: Path | None = None
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        tmp = Path(tmp_name)
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
         os.replace(tmp, path)
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         raise RenderError(f"could not write {path}: {exc}") from exc
     finally:
-        if tmp.exists():
-            tmp.unlink()
+        # The cleanup must never mask the in-flight error (review-fix #04
+        # N12): ``missing_ok`` handles a vanished temp, ``suppress`` a dir
+        # whose perms changed mid-call.
+        if tmp is not None:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
 
 
 def render_all(

@@ -722,8 +722,6 @@ def test_render_non_utf8_template_wrapped(tmp_path: Path) -> None:
 def test_render_unreadable_template_wrapped(tmp_path: Path) -> None:
     """QS-357 review-fix #03 M1: an unreadable template file (mode 000)
     raises PermissionError (an OSError) at load — wrap it as RenderError."""
-    import os
-
     tdir = tmp_path / "t"
     tdir.mkdir()
     _write(tdir / "_base.md.j2", "[% block body %][% endblock %]\n")
@@ -763,4 +761,35 @@ def test_render_discover_oserror_wrapped(tmp_path: Path, monkeypatch) -> None:
         r.render_all(
             tmp_path, context=_synthetic_context(tmp_path),
             out_root=tmp_path / "o", templates_dir=tmp_path,
+        )
+
+
+def test_atomic_write_parent_is_file_wrapped(tmp_path: Path) -> None:
+    """QS-357 review-fix #04 M2: mkdir/mkstemp OSError (parent occupied by a
+    file) is wrapped as RenderError, not left to escape."""
+    blocker = tmp_path / "blk"
+    blocker.write_text("x")
+    with pytest.raises(r.RenderError, match="could not write"):
+        r._atomic_write(blocker / "sub" / "out.md", "text")
+
+
+def test_atomic_write_surrogate_wrapped(tmp_path: Path) -> None:
+    """QS-357 review-fix #04 S6: a lone surrogate raises UnicodeEncodeError
+    (a ValueError) on write — wrap it as RenderError."""
+    with pytest.raises(r.RenderError, match="could not write"):
+        r._atomic_write(tmp_path / "out.md", "lone \ud800 surrogate")
+
+
+def test_render_parent_load_error_wrapped(tmp_path: Path) -> None:
+    """QS-357 review-fix #04 N15: a non-UTF-8 byte in the extends *parent*
+    (_base.md.j2, resolved lazily during render) is wrapped as RenderError —
+    exercising the render-time boundary independently of the child."""
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    (tdir / "_base.md.j2").write_bytes(b"[% block body %][% endblock %]\xff\xfe")
+    _write(tdir / "qs-x.md.j2", '[% extends "_base.md.j2" %][% block body %]ok[% endblock %]')
+    with pytest.raises(r.RenderError):
+        r.render_all(
+            tmp_path, context=_synthetic_context(tmp_path),
+            out_root=tmp_path / "o", templates_dir=tdir,
         )
