@@ -15,7 +15,7 @@ remains a single-line, reviewable change.
 Public names (``PHASE_TO_AGENT``, ``resolve_agent_for_next_cmd``,
 ``UnknownPhaseError``, ``build_existing_session_prompt``) are
 intentional — they are imported across modules (``claude.py``,
-``cursor.py``, ``next_step.py``, tests). Ruff's ``PLC2701`` would
+``next_step.py``, tests). Ruff's ``PLC2701`` would
 flag underscore-prefixed names as private-import violations.
 """
 

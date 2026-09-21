@@ -16,7 +16,7 @@ Usage::
         [--harness HARNESS_OVERRIDE]
 
 ``--next-cmd`` accepts both ``/create-plan`` (back-compat) and
-``create-plan`` (bare phase name) for the claude/cursor launchers.
+``create-plan`` (bare phase name) for the claude launcher.
 Validation is delegated to the launcher's ``build_payload`` so the
 codex and opencode launchers — which have no agent mapping today —
 accept any non-empty ``--next-cmd`` string unchanged. On a known
@@ -35,7 +35,7 @@ keeps the contract uniform.
 
 Trailing/leading whitespace inside an otherwise-non-empty
 ``--next-cmd`` IS preserved verbatim under codex (the only remaining
-free-form harness). Claude, cursor, and opencode resolve
+free-form harness). Claude and opencode resolve
 ``--next-cmd`` strictly via ``PHASE_TO_AGENT`` and reject unknown
 values (including those with stray whitespace) with exit code 1
 (review fix #02 should-fix #13 — the pre-QS-177 docstring claimed
@@ -80,7 +80,6 @@ from harness import detect as detect_harness
 from harness import harness_choices
 from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
-from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
 
@@ -92,7 +91,6 @@ from utils import output_json  # type: ignore[import-not-found]
 # that monkeypatches the dispatcher.
 LAUNCHERS = {
     "claude-code": claude_launcher,
-    "cursor": cursor_launcher,
     "opencode": opencode_launcher,
     "codex": codex_launcher,
 }
@@ -106,7 +104,7 @@ def main() -> None:
         help=(
             "Phase name for the next step. Accepts either the bare form "
             "('create-plan') or the slash form ('/create-plan') for "
-            "back-compat under the claude/cursor launchers. Free-form "
+            "back-compat under the claude launcher. Free-form "
             "strings are passed through unchanged under codex/opencode "
             "(no agent mapping there). See --next-prompt for an initial "
             "prompt that loads into the new session."
@@ -199,8 +197,8 @@ def main() -> None:
     # ``harness_choices()``.
     harness = canonicalize_harness(args.harness) if args.harness else detect_harness()
     launcher = LAUNCHERS[harness]
-    # Delegate validation to the launcher: claude/cursor enforce the
-    # phase mapping inside ``build_payload``; codex/opencode accept any
+    # Delegate validation to the launcher: claude/opencode enforce the
+    # phase mapping inside ``build_payload``; codex accepts any
     # ``next_cmd`` string. We catch only ``UnknownPhaseError`` here —
     # other ``ValueError`` subclasses must propagate so a future failure
     # mode isn't misreported as "unknown phase" (review-fix #02 SF1).

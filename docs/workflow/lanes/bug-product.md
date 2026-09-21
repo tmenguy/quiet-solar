@@ -10,7 +10,7 @@ building a feature. The flow is **diagnose-first**:
 replaced by `diagnose-task` (agent `qs-diagnose-task`) and `verify-task`
 (agent `qs-verify-task`). Every other phase follows the shared contract;
 only the divergent details are spelled out below. Each phase has a
-static agent under `.claude/agents/` (mirrored in `.cursor/agents/` and
+static agent under `.claude/agents/` (mirrored in
 `.opencode/agents/`); agents discover task context at runtime via
 `python scripts/qs/context.py`.
 

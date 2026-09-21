@@ -179,7 +179,7 @@ to grep the entire tree to figure out what an `ack` is.
   plus any changed tests). Required before every commit; `--full`
   forces the full suite.
 - **Static agents** — agents whose body is committed to the repo
-  (`.claude/agents/`, `.cursor/agents/`, `.opencode/agents/`),
+  (`.claude/agents/`, `.opencode/agents/`),
   versus per-task rendering (legacy approach in `legacy/`).
 - **Worktree** — a separate working directory tied to the same git
   repo. Each task runs in its own worktree (`QS_<N>` branch).

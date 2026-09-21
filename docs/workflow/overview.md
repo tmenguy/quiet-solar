@@ -1,7 +1,7 @@
 # Workflow overview — static-agent pipeline
 
 This document describes the development pipeline for Quiet Solar. It works
-identically across Claude Code, Cursor, OpenCode, and Codex;
+identically across Claude Code, OpenCode, and Codex;
 harness-specific machinery (session spawning, launcher emission) is
 isolated in `scripts/qs/launchers/`.
 
@@ -35,7 +35,7 @@ the rest run in the worktree.
 ## Static agents — no rendering
 
 There is exactly **one agent file per phase**, checked in to `.claude/agents/`
-(mirrored in `.cursor/agents/` and `.opencode/agents/`). Agents discover
+(mirrored in `.opencode/agents/`). Agents discover
 task context at runtime via
 `python scripts/qs/context.py`, which reads `git branch --show-current`
 (`QS_<N>`) and resolves the issue, title, story file, and PR number from
@@ -150,7 +150,7 @@ an attempt to automate the GUI with brittle clipboard tricks.
 files it expects to touch:
 
 - **`implement-setup-task`** — all touched files are in dev-environment
-  paths (`scripts/`, `.claude/`, `.cursor/`, `.opencode/`,
+  paths (`scripts/`, `.claude/`, `.opencode/`,
   `legacy/`, `docs/`, `.github/`, top-level config). Narrower
   edit scope; the quality gate runs the dev-only fast path.
 - **`implement-task`** — production code under
@@ -176,7 +176,7 @@ is the classifier, so a crossing never fails the gate.
 Everything harness-specific lives in `scripts/qs/launchers/*.py` and is
 selected by `scripts/qs/harness.py::detect()`. The agent bodies share
 an aligned core protocol across harnesses; the frontmatter (`tools:`
-for Claude Code, `readonly:` for Cursor, `permission:` for OpenCode)
+for Claude Code, `permission:` for OpenCode)
 and the declared harness-specific sections differ — see
 [harness.md](harness.md).
 

@@ -1,7 +1,7 @@
 # Phase protocols
 
 Each phase has a static agent under `.claude/agents/` (mirrored in
-`.cursor/agents/` and `.opencode/agents/`). Agents discover task
+`.opencode/agents/`). Agents discover task
 context at runtime via
 `python scripts/qs/context.py`. This document captures the contract for
 each phase — inputs, outputs, hand-off, hard rules.
@@ -80,7 +80,7 @@ the living document:
   hard-blocks) — if the plan changed since the last review, or open
   criticals remain, the agent asks but the user decides. Determine
   `NEXT_PHASE` (`implement-setup-task` if all touched files are in
-  `scripts/`, `.claude/`, `.cursor/`, `.opencode/`, `legacy/`,
+  `scripts/`, `.claude/`, `.opencode/`, `legacy/`,
   `docs/`, `.github/`, or top-level config; otherwise `implement-task`),
   commit + push, then emit the launcher payload (preferred,
   `claude --agent qs-implement-task` / `qs-implement-setup-task`) plus
@@ -131,7 +131,7 @@ auto-commits, pushes, opens PR after green quality gate.
 **Edit scope**:
 - `qs-implement-task`: `custom_components/quiet_solar/**`, `tests/**`,
   plus the story file (for progress notes).
-- `qs-implement-setup-task`: `scripts/qs/**`, `.claude/**`, `.cursor/**`,
+- `qs-implement-setup-task`: `scripts/qs/**`, `.claude/**`,
   `.opencode/**`, `legacy/**` (frozen — `git mv` INTO only),
   `docs/**`, `.github/**`,
   top-level config files, plus the story file.

@@ -35,7 +35,6 @@ def targets_fixture():
         ("tests/qs/test_context.py", "factory"),
         ("tests/qs/agents/test_lane_steps_parity.py", "factory"),
         (".claude/agents/qs-setup-task.md", "factory"),
-        (".cursor/agents/qs-setup-task.md", "factory"),
         (".opencode/agents/qs-setup-task.md", "factory"),
         (".github/workflows/pr-quality.yml", "factory"),
         ("legacy/old_pipeline.py", "factory"),
@@ -46,7 +45,6 @@ def targets_fixture():
         # --- factory basenames (top-level only) ---
         ("CLAUDE.md", "factory"),
         ("AGENTS.md", "factory"),
-        (".cursorrules", "factory"),
         (".gitignore", "factory"),
         ("pyproject.toml", "factory"),
         ("setup.cfg", "factory"),

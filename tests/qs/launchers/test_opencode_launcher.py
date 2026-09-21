@@ -7,8 +7,8 @@ invocation (HTTP API path), while ``caller="setup_task"`` emits a
 invokes ``opencode <worktree> --agent <name> --prompt <kickoff>`` (CLI
 path, because the new worktree is a cross-workspace launch).
 
-Both paths share the same phase-name resolution as the Claude / Cursor
-launchers — unknown phases raise ``UnknownPhaseError`` (caught by
+Both paths share the same phase-name resolution as the Claude
+launcher — unknown phases raise ``UnknownPhaseError`` (caught by
 ``next_step.py``).
 """
 

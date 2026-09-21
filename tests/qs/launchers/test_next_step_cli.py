@@ -86,25 +86,6 @@ def test_unknown_phase_emits_error_json_and_exits_nonzero(tmp_path: Path) -> Non
     assert "release" in payload["known"]
 
 
-def test_cursor_harness_branch(tmp_path: Path) -> None:
-    """``--harness cursor --next-cmd create-plan`` routes through cursor.py."""
-    result = _run(
-        [
-            "--next-cmd", "create-plan",
-            "--work-dir", "/tmp/work",
-            "--issue", "42",
-            "--title", "Fix bug",
-            "--harness", "cursor",
-        ],
-        cwd=str(tmp_path),
-    )
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["tool"] == "cursor"
-    assert payload["harness"] == "cursor"
-    assert payload["agent"] == "qs-create-plan"
-
-
 @pytest.mark.parametrize("phase", [
     "setup-task",
     "create-plan",
@@ -133,12 +114,12 @@ def test_every_known_phase_resolves(phase: str, tmp_path: Path) -> None:
 
 # --------------------------------------------------------------------------- #
 # Free-form harness (codex) must NOT be regressed by the strict
-# claude/cursor validation. The codex launcher carries no agent mapping
+# claude/opencode validation. The codex launcher carries no agent mapping
 # today, so next_step.py must let it pass any --next-cmd value through
 # unchanged. Regression catch for review-fix #1 + #5.
 #
 # OpenCode used to be in this list, but with the new static-agent
-# pipeline (QS-177) opencode now resolves agents like claude/cursor —
+# pipeline (QS-177) opencode now resolves agents like claude —
 # unknown phases raise UnknownPhaseError and emit the
 # `{"error": "unknown phase", ...}` JSON contract. See
 # `test_opencode_rejects_unknown_phase` and `test_opencode_happy_path`
@@ -165,14 +146,14 @@ def test_codex_accepts_free_form_next_cmd(tmp_path: Path) -> None:
 
 
 def test_opencode_rejects_unknown_phase(tmp_path: Path) -> None:
-    """OpenCode now resolves agents like claude/cursor — unknown phase → JSON error, exit 1.
+    """OpenCode now resolves agents like claude — unknown phase → JSON error, exit 1.
 
     Contract change from the legacy pipeline (QS-177 Task 7.3). The
     OpenCode launcher is no longer a free-form passthrough; it enforces
-    the same phase mapping as claude/cursor.
+    the same phase mapping as claude.
 
     AC #4 mandates exit code **1 specifically** (parity with
-    claude/cursor) AND a ``known: [...]`` key in the JSON error
+    claude) AND a ``known: [...]`` key in the JSON error
     payload — both pinned here (review fix #01 must-fix #3).
     """
     result = _run(
@@ -185,7 +166,7 @@ def test_opencode_rejects_unknown_phase(tmp_path: Path) -> None:
         ],
         cwd=str(tmp_path),
     )
-    # AC #4 — exit 1 (not just non-zero) to match the claude/cursor
+    # AC #4 — exit 1 (not just non-zero) to match the claude
     # contract; ``2`` is reserved for argparse user errors.
     assert result.returncode == 1, result.stderr
     payload = json.loads(result.stdout)
@@ -398,7 +379,7 @@ def test_next_step_rejects_empty_work_dir(
     assert result.returncode == 2, result.stderr
 
 
-@pytest.mark.parametrize("harness", ["claude-code", "cursor", "codex", "opencode"])
+@pytest.mark.parametrize("harness", ["claude-code", "codex", "opencode"])
 def test_existing_session_prompt_emitted_for_all_harnesses(
     harness: str, tmp_path: Path,
 ) -> None:
@@ -424,7 +405,7 @@ def test_existing_session_prompt_emitted_for_all_harnesses(
 
 
 @pytest.mark.parametrize(
-    "harness", ["claude-code", "cursor", "codex", "opencode"],
+    "harness", ["claude-code", "codex", "opencode"],
 )
 @pytest.mark.parametrize("bad_next_cmd", ["", "   ", "\t"])
 def test_empty_or_whitespace_next_cmd_rejected_for_all_harnesses(

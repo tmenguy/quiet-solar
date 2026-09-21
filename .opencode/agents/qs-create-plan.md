@@ -216,7 +216,7 @@ next: keep discussing · "review" · "show plan" · "finalize"
 ## Determine NEXT_PHASE (at FINALIZE)
 
 Inspect the file paths your task breakdown will touch:
-- If **all** are in `scripts/`, `.claude/`, `.cursor/`, `.opencode/`,
+- If **all** are in `scripts/`, `.claude/`, `.opencode/`,
   `legacy/`, `docs/`, `.github/`, or top-level config →
   `NEXT_PHASE = implement-setup-task`.
 - Otherwise → `NEXT_PHASE = implement-task`.

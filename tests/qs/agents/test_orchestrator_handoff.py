@@ -499,22 +499,22 @@ def test_gui_block_does_not_shadow_fallback_line(filename: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# QS-311 AC6 — the Cursor / OpenCode counterparts carry a byte-identical
+# QS-311 AC6 — the OpenCode counterparts carry a byte-identical
 # pointer line to ``harness.md``. Harness sync is a path-level
 # co-modification check (no content parity), so a cross-reference is the
 # minimal honest edit: the GUI is a Claude-only launch surface, and those
 # trees have no Desktop prose to extend.
 # --------------------------------------------------------------------------- #
 
-_COUNTERPART_DIRS = (".cursor", ".opencode")
+_COUNTERPART_DIRS = (".opencode",)
 
-# The block all 10 counterparts carry verbatim. Review-fix #01 M3 added the
+# The block every counterpart carries verbatim. Review-fix #01 M3 added the
 # second sentence (the pin is conditional, and nothing in *their* harness
 # reads the flag); review-fix #03 C7 wrapped the whole thing to the ~72
 # columns the surrounding docs use — it was ~150 chars/line, and since the
-# tests pin it verbatim, every future wrap would have cost 10 files plus this
-# constant. Wrapped once, here, while those 10 files were being touched
-# anyway. Review-fix #03 B1 dropped `settings_rebuilt` from it again, since
+# tests pin it verbatim, every future wrap would have cost every counterpart
+# file plus this constant. Wrapped once, here, while those files were being
+# touched anyway. Review-fix #03 B1 dropped `settings_rebuilt` from it again, since
 # Option B removed that key.
 _POINTER_BLOCK = "\n".join([
     "> Launch surfaces for the Claude harness (including the GUI) are",
@@ -531,7 +531,7 @@ _POINTER_BLOCK = "\n".join([
 def test_counterpart_agents_point_at_harness_doc(
     harness_dir: str, filename: str,
 ) -> None:
-    """All 10 counterparts carry the identical pointer block."""
+    """Every counterpart carries the identical pointer block."""
     path = REPO_ROOT / harness_dir / "agents" / filename
     assert path.is_file(), f"missing counterpart agent file: {path}"
     body = path.read_text()
@@ -544,9 +544,10 @@ def test_counterpart_agents_point_at_harness_doc(
 def test_pointer_block_stays_within_the_doc_line_width() -> None:
     """Review-fix #03 C7: the pinned block must not drift back to ~150 chars.
 
-    It is duplicated across 10 files and pinned verbatim by the test above,
-    so a re-widening is 11 files to undo. Guarding the width here makes that
-    a test failure instead of a future finding.
+    It is duplicated across every counterpart file and pinned verbatim by
+    the test above, so a re-widening is all of them plus this constant to
+    undo. Guarding the width here makes that a test failure instead of a
+    future finding.
     """
     for line in _POINTER_BLOCK.split("\n"):
         assert len(line) <= 78, (
@@ -560,7 +561,7 @@ def test_pointer_block_stays_within_the_doc_line_width() -> None:
 # handoff. ``qs-setup-task`` routes ``create-plan`` by default and
 # ``diagnose-task`` when the lane is ``bug-product``; ``qs-implement-task``
 # routes ``review-task`` by default and ``verify-task`` for ``bug-product``.
-# Both branches must appear in every one of the 3 harness copies. Pattern
+# Both branches must appear in every one of the 2 harness copies. Pattern
 # of ``test_lane_steps_parity.py`` (HARNESS_DIRS-parametrized). The
 # fallback line keeps its literal default as the first slash token with
 # the bug-product branch appended mid-sentence (D3 pin compatibility).
@@ -571,7 +572,6 @@ def test_pointer_block_stays_within_the_doc_line_width() -> None:
 
 _ROUTING_HARNESS_DIRS = (
     REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".cursor" / "agents",
     REPO_ROOT / ".opencode" / "agents",
 )
 

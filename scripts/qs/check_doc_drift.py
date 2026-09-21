@@ -349,7 +349,7 @@ def _git_staged_paths(repo_root: Path) -> list[str]:
 # ---------------------------------------------------------------------------
 # Cross-harness agent sync
 
-HARNESS_DIRS = (".claude", ".cursor", ".opencode")
+HARNESS_DIRS = (".claude", ".opencode")
 
 
 def _check_harness_sync(
@@ -360,7 +360,7 @@ def _check_harness_sync(
 
     Agent bodies legitimately differ across harnesses — each has its
     own session-spawn/handoff logic (Claude uses ``claude --agent``,
-    OpenCode uses ``spawn_session.py``, Cursor uses the agent picker).
+    OpenCode uses ``spawn_session.py``).
     A byte-identical body check would reject valid harness-specific
     adaptations.
 
@@ -368,7 +368,7 @@ def _check_harness_sync(
     in one harness is modified, the counterpart files in the other
     harness directories should also appear in the modified set. This
     catches the common case ("edited .claude/agents/foo.md but forgot
-    .cursor/ and .opencode/") without rejecting legitimate differences.
+    .opencode/") without rejecting legitimate differences.
 
     Only flags drift when the counterpart file actually exists on disk.
     Harness-specific agents (present in only one harness) are exempt.

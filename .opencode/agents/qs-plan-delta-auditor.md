@@ -52,6 +52,6 @@ resolved | partial | not-addressed.
 - The `grep`/`rg`/`ls`/`wc` bash grant in the frontmatter is an intentional
   OpenCode harness accommodation (mirroring `qs-plan-critic`'s OpenCode copy —
   OpenCode grants read-only shell verbs) — treat it as a safety net, NOT as an
-  input to your review. The Claude/Cursor twins carry `Read`/`readonly` only.
+  input to your review. The Claude twin carries `Read` only.
 - If the diff is empty, return "No delta to review."
 - Stay on the delta; the global reviewers own whole-plan coverage.

@@ -27,8 +27,8 @@ agent can run directly instead — see
     **`qs-diagnose-task`** and **`qs-review-task`** by **`qs-verify-task`**
     (see [lanes/bug-product.md](lanes/bug-product.md))
 
-Agents are defined in `.claude/agents/` (and mirrored to `.cursor/agents/`
-and `.opencode/agents/` — bodies must stay in sync per the harness-sync
+Agents are defined in `.claude/agents/` (and mirrored to
+`.opencode/agents/` — bodies must stay in sync per the harness-sync
 rule in [project-rules.md](project-rules.md)).
 They delegate creative work to themselves and mechanical work to Python
 scripts in `scripts/qs/`. Stories live under

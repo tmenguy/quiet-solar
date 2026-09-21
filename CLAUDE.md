@@ -47,7 +47,7 @@ at runtime via `python scripts/qs/context.py` (no per-task rendering).
 - [docs/workflow/overview.md](docs/workflow/overview.md) — the static-agent pipeline
 - [docs/workflow/phase-protocols.md](docs/workflow/phase-protocols.md) — each phase's contract
 - [docs/workflow/adversarial-review.md](docs/workflow/adversarial-review.md) — the 4-reviewer pattern
-- [docs/workflow/harness.md](docs/workflow/harness.md) — multi-harness abstraction (Claude / Cursor / OpenCode / Codex)
+- [docs/workflow/harness.md](docs/workflow/harness.md) — multi-harness abstraction (Claude / OpenCode / Codex)
 
 ## Quality gate
 

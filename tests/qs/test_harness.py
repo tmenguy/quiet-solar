@@ -34,7 +34,6 @@ import pytest
     ("claudecode", "claude-code"),
     ("claude-code", "claude-code"),  # canonical → canonical (idempotent)
     ("opencode", "opencode"),
-    ("cursor", "cursor"),
     ("codex", "codex"),
 ])
 def test_canonicalize_legacy_alias(alias: str, expected: str) -> None:
@@ -85,8 +84,7 @@ def test_setup_task_choices_match_next_step_choices() -> None:
 
     # The two LAUNCHERS dispatch tables are independently defined but
     # logically the same set of harnesses (both map ``claude-code`` /
-    # ``cursor`` / ``opencode`` / ``codex`` to the corresponding
-    # launcher module).
+    # ``opencode`` / ``codex`` to the corresponding launcher module).
     assert set(next_step.LAUNCHERS) == set(setup_task.LAUNCHERS), (
         "next_step.LAUNCHERS and setup_task.LAUNCHERS must enumerate "
         "the same set of harness names (review fix #01 N7)."
@@ -122,7 +120,6 @@ def test_detect_defaults_to_claude_code(monkeypatch: pytest.MonkeyPatch) -> None
         "QS_HARNESS",
         "CLAUDECODE",
         "OPENCODE_SERVER_PORT",
-        "CURSOR_TRACE_ID",
     ):
         monkeypatch.delenv(var, raising=False)
     # Remove any CODEX_AGENT_* env var

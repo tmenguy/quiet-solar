@@ -97,8 +97,8 @@ from utils import output_json  # type: ignore[import-not-found]
 # can be overridden via the ``OPENCODE_SERVER_PORT`` env var.
 DEFAULT_PORT = 4096
 
-# Default kickoff prompt — matches the convention in the Claude /
-# Cursor launchers (``next_prompt or "Begin your phase protocol."``).
+# Default kickoff prompt — matches the convention in the Claude
+# launcher (``next_prompt or "Begin your phase protocol."``).
 DEFAULT_KICKOFF = "Begin your phase protocol."
 
 # Default HTTP timeout for every OpenCode API call (seconds). Matches

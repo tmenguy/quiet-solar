@@ -1,15 +1,15 @@
-"""QS-332: pin the three lane step kinds across the three harnesses.
+"""QS-332: pin the three lane step kinds across both harnesses.
 
 Canonical list (review I-2/R2-08 — kept consistent with story task 11
 and AC-5):
 
 (a) the **declaration step** — including the amended speed-rule wording —
-    in ``qs-setup-task`` ×3;
+    in ``qs-setup-task`` ×2;
 (b) the **lane-read step** in the 4 orchestrators
     (qs-create-plan, qs-implement-task, qs-implement-setup-task,
-    qs-review-task) ×3;
+    qs-review-task) ×2;
 (c) the **ask-and-backfill-on-declaration-FAIL step** in the implement
-    variants ×2 ×3.
+    variants ×2 ×2.
 
 There is deliberately NO Lane-note relay step — surfacing the crossing
 in the PR body is machine-owned by ``create_pr.py`` (review N-4), pinned
@@ -30,7 +30,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 HARNESS_DIRS: tuple[Path, ...] = (
     REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".cursor" / "agents",
     REPO_ROOT / ".opencode" / "agents",
 )
 

@@ -25,7 +25,6 @@ from harness import detect as detect_harness
 from harness import harness_choices
 from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
-from launchers import cursor as cursor_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 
 from utils import (  # type: ignore[import-not-found]
@@ -123,7 +122,6 @@ def refuse_if_epic(issue: int, labels: list[str]) -> None:
 # next-phase dispatcher.
 LAUNCHERS = {
     "claude-code": claude_launcher,
-    "cursor": cursor_launcher,
     "opencode": opencode_launcher,
     "codex": codex_launcher,
 }

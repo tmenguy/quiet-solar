@@ -3,7 +3,7 @@
 ## Process authority
 
 All workflow rules, phase protocols, and code-style rules live under
-`docs/workflow/`. Harness-specific config (`.claude/`, `.cursor/`,
+`docs/workflow/`. Harness-specific config (`.claude/`,
 `.opencode/`) references these docs; it never duplicates them.
 
 ## Project overview
@@ -239,19 +239,17 @@ scenario), **persona** (user archetype).
 
 ### Harness sync
 
-Agent files live in three harness directories: `.claude/agents/`,
-`.cursor/agents/`, `.opencode/agents/`. Each agent's core protocol
-(TDD steps, quality gate, hard rules) must stay aligned across all
-three directories. The YAML frontmatter (between the `---`
-delimiters) and harness-specific sections (session-spawn logic,
-handoff commands) legitimately differ — Claude uses
-`claude --agent`, OpenCode uses `spawn_session.py`, Cursor uses the
-in-session agent picker.
+Agent files live in two harness directories: `.claude/agents/`,
+`.opencode/agents/`. Each agent's core protocol (TDD steps, quality
+gate, hard rules) must stay aligned across both directories. The
+YAML frontmatter (between the `---` delimiters) and harness-specific
+sections (session-spawn logic, handoff commands) legitimately differ
+— Claude uses `claude --agent`, OpenCode uses `spawn_session.py`.
 
 The drift checker `scripts/qs/check_doc_drift.py` enforces
 **co-modification**: when any `.<harness>/agents/*.md` file appears
-in the modified set, it verifies that the corresponding files in the
-other two harness directories were also modified. Violation exits 1.
+in the modified set, it verifies that the corresponding file in the
+other harness directory was also modified. Violation exits 1.
 
 **When editing agent files:** always edit all three copies. The
 canonical workflow is to make the functional change in all three
@@ -288,7 +286,7 @@ See [overview.md](overview.md) section "Orchestrators are interactive
 sessions; sub-agents are parallel fan-out" for the rationale.
 
 Each command delegates to a static agent under `.claude/agents/` (or
-`.cursor/agents/`). Agents discover task context at runtime from
+`.opencode/agents/`). Agents discover task context at runtime from
 `git branch --show-current` — there is no per-task agent rendering.
 
 ### Lanes & axes (QS-332)

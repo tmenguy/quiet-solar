@@ -1,7 +1,7 @@
 ---
 description: >-
   Phase 3 variant for dev-environment changes only (scripts/, .claude/,
-  .cursor/, .opencode/, legacy/, docs/, .github/, top-level config).
+  .opencode/, legacy/, docs/, .github/, top-level config).
   Same TDD flow as qs-implement-task but narrower edit scope; the
   pre-commit gate is --impacted (coverage-vacuous on dev-only trees, and
   a no-op entirely when the change set contains no .py file).
@@ -16,14 +16,12 @@ permission:
     "*": deny
     "scripts/**": allow
     ".claude/**": allow
-    ".cursor/**": allow
     ".opencode/**": allow
     "docs/**": allow
     ".github/**": allow
     "tests/**": allow
     "CLAUDE.md": allow
     "AGENTS.md": allow
-    ".cursorrules": allow
     ".gitignore": allow
     "pyproject.toml": allow
     "requirements*.txt": allow
@@ -127,14 +125,14 @@ read it, and begin implementing its findings.
 Red → green → refactor, scoped to dev-environment paths:
 
 - `scripts/qs/**`, top-level `scripts/*.sh`
-- `.claude/**`, `.cursor/**`, `.opencode/**`
+- `.claude/**`, `.opencode/**`
 - `legacy/**` — frozen historical code (`git mv` operations INTO this
   directory are permitted when the story requires it; in-place edits
   are forbidden)
 - `docs/**`
 - `.github/**`
 - Top-level config: `pyproject.toml`, `requirements*.txt`, `CLAUDE.md`,
-  `AGENTS.md`, `.cursorrules`, `.gitignore`, `setup.cfg`, `opencode.json`
+  `AGENTS.md`, `.gitignore`, `setup.cfg`, `opencode.json`
 
 If you need to edit `custom_components/quiet_solar/` or `tests/` (other
 than dev tooling tests), STOP — this should have been routed to
@@ -231,7 +229,7 @@ explaining why the docs are unaffected. See
 ### 5. Commit, push, open PR (automatic)
 
 ```bash
-git add scripts/ tests/qs/ tests/test_quality_gate.py .claude/ .cursor/ .opencode/ legacy/ docs/ .github/ CLAUDE.md AGENTS.md .cursorrules opencode.json
+git add scripts/ tests/qs/ tests/test_quality_gate.py .claude/ .opencode/ legacy/ docs/ .github/ CLAUDE.md AGENTS.md opencode.json
 git commit -m "QS-{{issue}}: {{short summary}}"
 git push origin {{branch}}
 

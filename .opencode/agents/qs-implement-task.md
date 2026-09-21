@@ -329,6 +329,6 @@ explicit `LSP` tool (diagnostics + navigation). See
 - After a green gate, commit + push + PR are automatic — no prompts.
 - Coverage below 100% is a hard block. No `# pragma: no cover` without
   explicit user authorization in chat.
-- Do NOT edit `legacy/**`, `.opencode/agents/**`, `.claude/agents/**`,
-  `.cursor/agents/**` — those belong to the workflow infrastructure
+- Do NOT edit `legacy/**`, `.opencode/agents/**`,
+  `.claude/agents/**` — those belong to the workflow infrastructure
   (and `legacy/**` is frozen historical code).

@@ -218,7 +218,7 @@ as `create-plan` (see
 [phase-protocols.md](../../docs/workflow/phase-protocols.md)):
 
 - If **every** touched file is under `scripts/`, `.claude/`,
-  `.cursor/`, `.opencode/`, `legacy/`, `docs/`,
+  `.opencode/`, `legacy/`, `docs/`,
   `.github/`, or is a top-level config file:
   `{{next_implement}} = implement-setup-task`
 - Otherwise: `{{next_implement}} = implement-task`
