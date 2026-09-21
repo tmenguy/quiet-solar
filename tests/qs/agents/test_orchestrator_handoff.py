@@ -534,7 +534,7 @@ def test_counterpart_agents_point_at_harness_doc(
     harness_dir: str, filename: str,
 ) -> None:
     """Every counterpart carries the identical pointer block."""
-    path = REPO_ROOT / harness_dir / "agents" / filename
+    path = agents_dir(harness_dir.lstrip(".")) / filename
     assert path.is_file(), f"missing counterpart agent file: {path}"
     body = path.read_text()
     assert _POINTER_BLOCK in body, (
@@ -573,8 +573,8 @@ def test_pointer_block_stays_within_the_doc_line_width() -> None:
 # --------------------------------------------------------------------------- #
 
 _ROUTING_HARNESS_DIRS = (
-    REPO_ROOT / ".claude" / "agents",
-    REPO_ROOT / ".opencode" / "agents",
+    agents_dir("claude"),
+    agents_dir("opencode"),
 )
 
 # agent file -> (default-lane phase token, bug-product-lane phase token)
