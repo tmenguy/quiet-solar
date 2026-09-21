@@ -683,3 +683,21 @@ def test_ac9_finish_task_render_line(tmp_path: Path) -> None:
     for hdir in (".claude", ".opencode"):
         text = (out / hdir / "agents" / "qs-finish-task.md").read_text()
         assert 'render_agents.py --work-dir "$MAIN_DIR"' in text
+
+
+def test_render_load_time_template_error_wrapped(tmp_path: Path) -> None:
+    """QS-357 review-fix #02 S3: a Jinja error at template *load* time is
+    wrapped as RenderError, not left to escape as a raw TemplateError."""
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    _write(tdir / "_base.md.j2", "[% block body %][% endblock %]\n")
+    # Unterminated variable → TemplateSyntaxError at get_template (load) time.
+    _write(
+        tdir / "qs-bad.md.j2",
+        '[% extends "_base.md.j2" %][% block body %][[ 1 + [% endblock %]',
+    )
+    with pytest.raises(r.RenderError):
+        r.render_all(
+            tmp_path, context=_synthetic_context(tmp_path),
+            out_root=tmp_path / "o", templates_dir=tdir,
+        )

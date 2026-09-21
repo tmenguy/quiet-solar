@@ -341,7 +341,14 @@ def render_all(
 
     written: list[Path] = []
     for stem in stems:
-        template = env.get_template(f"{stem}.md.j2")
+        # ``get_template`` compiles the template, so a TemplateSyntaxError /
+        # TemplateNotFound can fire at *load* time — wrap it as RenderError
+        # too, so every render failure funnels through the one type both
+        # hooks handle (review-fix #02 S3; the handoff-survives invariant).
+        try:
+            template = env.get_template(f"{stem}.md.j2")
+        except jinja2.TemplateError as exc:
+            raise RenderError(f"failed to load template {stem}: {exc}") from exc
         for harness in _HARNESSES:
             render_ctx = {
                 **context,

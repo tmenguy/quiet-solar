@@ -534,3 +534,30 @@ def test_render_degradation_warnings_are_independent(
     err = capsys.readouterr().err
     assert "lookup_failed task facts" in err
     assert "lane protocol" in err
+
+
+def test_handoff_survives_load_time_template_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    """QS-357 review-fix #02 S3 (real path, folds N8): a load-time template
+    error at handoff is funneled through RenderError → stderr warning +
+    payload still emitted with exit 0 (handoff-survives-render-failure)."""
+    import next_step
+
+    import render_agents
+
+    tdir = tmp_path / "tpl"
+    tdir.mkdir()
+    (tdir / "_base.md.j2").write_text("[% block body %][% endblock %]\n")
+    (tdir / "qs-bad.md.j2").write_text(
+        '[% extends "_base.md.j2" %][% block body %][[ 1 + [% endblock %]'
+    )
+    monkeypatch.setattr(render_agents, "_default_templates_dir", lambda wd: tdir)
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    cap = capsys.readouterr()
+    assert "agent render failed" in cap.err
+    assert json.loads(cap.out)["agent"] == "qs-create-plan"
