@@ -90,6 +90,7 @@ Then `apply_budget_strategy()`:
   detector (#2148) alerts the household once per plug session and never
   writes `ocpp.clear_profile` (non-finite offered readings are ignored, and
   the manual instruction is omitted when the device id is unknown). The
+  once-per-session latch holds even if a notification channel raises, and the
   detector call site is wrapped so a sensor-read raise can never abort the
   load-management cycle.
 - `QSChargerWallbox` — Wallbox variant. Maps vendor status enums.

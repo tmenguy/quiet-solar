@@ -539,6 +539,26 @@ async def test_ac7b_channel_isolation_mobile_apps_raises():
 
 
 @pytest.mark.asyncio
+async def test_sf1_r2_non_hae_channel_raise_still_latches():
+    """Fix #02 SF-1: a non-HomeAssistantError channel raise (here `self.home is None`)
+    must not escape — the latch holds and the notification does not re-fire next cycle."""
+    hass, home, ch = _detector_charger()
+    ch._expected_amperage.set(16, _T0)
+    _seed(ch, offered="14.0")
+    ch.on_device_state_change = AsyncMock()
+    ch.home = None  # channel 2 will raise AttributeError inside its guarded block
+
+    await ch.check_amps_delivery(_T0)
+    await ch.check_amps_delivery(_T0 + timedelta(seconds=OCPP_CLIP_DETECT_WINDOW_S))
+    assert ch.on_device_state_change.await_count == 1
+    assert ch._ocpp_clip_notified is True
+
+    # Continuing clip in the same session: no re-fire despite the channel-2 raise.
+    await ch.check_amps_delivery(_T0 + timedelta(seconds=OCPP_CLIP_DETECT_WINDOW_S + 60))
+    assert ch.on_device_state_change.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_nh1_message_floors_offered_never_reads_equal():
     """NH-1: a 15.6 A offer must not round up to 16 A and read as offered == requested."""
     hass, home, ch = _detector_charger()

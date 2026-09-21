@@ -217,26 +217,14 @@ CHARGER_TIME_BETWEEN_DATA_REQUEST_S = CHARGER_STATE_REFRESH_INTERVAL_S + CHARGER
 CHARGER_FAULT_NOTIFY_DEBOUNCE_S = 120
 
 
-# QS-359: OCPP integration v0.11.4 -> v0.12.0 compatibility hardening. These are charger
-# runtime tunables and live here next to the QS-346 fault-notify tunable, following the
-# established `charger.py` precedent for such values (project-context.md reserves
-# `const.py` for operator configuration keys, not module-private runtime tunables).
-# How long a stack-level clip must hold continuously before the household is alerted.
-# Absorbs the 60 s MeterValueSampleInterval lag after an amp increase.
-OCPP_CLIP_DETECT_WINDOW_S = 180
-# Tolerance (amperes) below the requested value before a reading counts as clipped.
-OCPP_CLIP_TOLERANCE_A = 1.0
-# Substring of the HomeAssistantError text raised by lbbrhzn/ocpp v0.12.0
-# `ocppv16.py::set_station_charge_rate` when the station profile is refused
-# (`Failed to set variable: ChargePointMaxProfile: Rejected|NotSupported`). v0.11.4 never
-# raises for this because it falls back to a transaction profile itself.
+# QS-359: OCPP v0.11.4 -> v0.12.0 compatibility tunables (rationale in the story). Kept
+# here next to the QS-346 tunable per the charger.py precedent for runtime tunables.
+OCPP_CLIP_DETECT_WINDOW_S = 180  # clip must hold this long before alerting (absorbs the 60 s sample lag)
+OCPP_CLIP_TOLERANCE_A = 1.0  # amps below requested before a reading counts as clipped
+# Substring of the v0.12.0 `set_station_charge_rate` HomeAssistantError on a refused profile.
 OCPP_STATION_PROFILE_REJECTION_MARKER = "ChargePointMaxProfile"
-# Consecutive marker rejections (no accepted number write in between) before the fallback
-# mode latches; one rejection can be transient (a profile write racing a transaction start).
-OCPP_STATION_PROFILE_REJECTIONS_TO_FALLBACK = 2
-# Fallback `ocpp.set_charge_rate` target connector — single-connector chargers only
-# (multi-connector is out of scope).
-OCPP_FALLBACK_CONN_ID = 1
+OCPP_STATION_PROFILE_REJECTIONS_TO_FALLBACK = 2  # consecutive marker rejections before latching fallback
+OCPP_FALLBACK_CONN_ID = 1  # single-connector chargers only (multi-connector out of scope)
 
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10
@@ -6438,8 +6426,14 @@ class QSChargerOCPP(QSChargerGeneric):
         # QS-359: run the number write one task hop later so a HomeAssistantError raised by
         # lbbrhzn/ocpp v0.12.0 (station-profile rejection) reaches `_on_amp_command_error`
         # via `blocking=True` inside the task WITHOUT stalling the load-management cycle.
-        # The return value was already True on this path.
+        # NH-4: two setpoints issued within the charger command round-trip (1-5 s) leave two
+        # number writes in flight that may complete out of order, so the last-applied amp and
+        # the streak reset can momentarily reflect a stale setpoint; the observation-driven
+        # ensure-state loop self-corrects it on the next cycle. Accepted.
         self.hass.async_create_task(self._ocpp_run_number_command(current, time))
+        # NH-1: this True is an OPTIMISTIC ack by design (story Goal 1a) — the value was
+        # already True on this path before the task hop. A rejection is not lost: it surfaces
+        # asynchronously inside the task via `_on_amp_command_error`.
         return True
 
     async def _ocpp_run_number_command(self, current, time: datetime) -> bool:
@@ -6568,6 +6562,10 @@ class QSChargerOCPP(QSChargerGeneric):
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             # Per plug-session reset. Not persisted: an HA restart during a clipped session
             # may re-notify once (accepted).
+            # NH-5: the reset relies on the shared `for_duration` primitive, so an
+            # unplug+replug faster than CHARGER_CHECK_STATE_WINDOW_S never trips it and the
+            # latch carries into the new session (a genuine new-session clip is not
+            # re-notified). Accepted — inherent to the shared primitive, not re-architected.
             self._ocpp_clip_since = None
             self._ocpp_clip_notified = False
             return
@@ -6595,6 +6593,10 @@ class QSChargerOCPP(QSChargerGeneric):
             # The number has not acknowledged the current setpoint (a routine amp change is
             # in flight). Skip this tick but HOLD the window — resetting here would let
             # solar modulation restart the window on every setpoint change and hide a clip.
+            # NH-2: an unknown number state (`get_max_charging_amp_per_phase() is None`)
+            # takes this branch too (`None != expected`), so it intentionally holds — never
+            # notifies — while the ack is unknown. Acceptable under the `Charging` gate,
+            # which already implies the charger is online and reporting.
             return
 
         if offered >= expected - OCPP_CLIP_TOLERANCE_A:
@@ -6637,15 +6639,19 @@ class QSChargerOCPP(QSChargerGeneric):
             )
         title = "Charger current limited — check needed"
 
-        # Two channels, each isolated: a notification-service failure on one neither blocks
-        # the other nor prevents the latch; a QS-internal bug still surfaces.
+        # Two channels, each isolated with `except Exception` (the QS-346
+        # `_notify_charger_fault` precedent): a failure on one — including a non-HA raise
+        # such as `self.home is None` — must neither block the other nor let the exception
+        # escape, because the caller latches `_ocpp_clip_notified` only after this returns
+        # normally. If it escaped, the next cycle would re-fire the channel that already
+        # succeeded, defeating the "at most one notification per plug session" contract.
         try:
             await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_ERROR, message=message, car=car)
-        except HomeAssistantError:
+        except Exception:
             _LOGGER.error("Error sending charger-clip override notification for %s", self.name, exc_info=True)
         try:
             await self.home.async_notify_all_mobile_apps(title, message)
-        except HomeAssistantError:
+        except Exception:
             _LOGGER.error("Error broadcasting charger-clip notification for %s", self.name, exc_info=True)
 
     async def low_level_set_charging_current(self, current, time: datetime, blocking=False) -> bool:
