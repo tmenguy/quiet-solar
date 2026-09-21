@@ -223,7 +223,7 @@ OCPP_CLIP_DETECT_WINDOW_S = 180  # clip must hold this long before alerting (abs
 OCPP_CLIP_TOLERANCE_A = 1.0  # amps below requested before a reading counts as clipped
 # Substring of the v0.12.0 `set_station_charge_rate` HomeAssistantError on a refused profile.
 OCPP_STATION_PROFILE_REJECTION_MARKER = "ChargePointMaxProfile"
-OCPP_STATION_PROFILE_REJECTIONS_TO_FALLBACK = 2  # consecutive marker rejections before latching fallback
+OCPP_STATION_PROFILE_REJECTIONS_TO_FALLBACK = 2  # distinct-episode marker rejections before latching fallback
 # SF-1 (fix #04): two amp setpoints can be in flight within a single charger command
 # round-trip (1-5 s), so both can fail with the marker and each reach the rejection hook.
 # The streak counts distinct rejection EPISODES, not concurrent in-flight failures: marker

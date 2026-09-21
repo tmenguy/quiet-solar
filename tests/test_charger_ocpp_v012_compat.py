@@ -11,7 +11,6 @@ Reuses the real-object test infrastructure from `tests.test_charger_coverage_dee
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -526,7 +525,7 @@ async def test_nh4_bad_current_returns_false_without_propagating(caplog):
 @pytest.mark.asyncio
 async def test_sf1_fallback_blocking_non_hae_error_returns_false(caplog):
     """SF-1 (fix #05): a latched charger reached with blocking=True whose blocking
-    `async_call` raises a NON-HomeAssistantError (here `asyncio.TimeoutError`) returns
+    `async_call` raises a NON-HomeAssistantError (here `TimeoutError`) returns
     False, does NOT propagate, and leaves the fallback ack (`_ocpp_last_fallback_amps`)
     untouched — matching the base number path's `except Exception` surface."""
     hass = _make_hass()
@@ -542,7 +541,7 @@ async def test_sf1_fallback_blocking_non_hae_error_returns_false(caplog):
     assert ch._ocpp_last_fallback_amps == 16
 
     async def raise_timeout(domain, service, data=None, **kwargs):
-        raise asyncio.TimeoutError("no response from charge point")
+        raise TimeoutError("no response from charge point")
 
     hass.services.async_call = AsyncMock(side_effect=raise_timeout)
     caplog.clear()

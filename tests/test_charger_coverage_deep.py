@@ -16,8 +16,6 @@ import pytest
 import pytz
 
 from custom_components.quiet_solar.const import (
-    USER_ORIGINATED_CAR_NAME,
-    USER_ORIGINATED_CHARGER_NAME,
     CAR_CHARGE_TYPE_NOT_PLUGGED,
     CHARGER_NO_CAR_CONNECTED,
     CONF_CAR_BATTERY_CAPACITY,
@@ -44,13 +42,14 @@ from custom_components.quiet_solar.const import (
     CONSTRAINT_TYPE_MANDATORY_AS_FAST_AS_POSSIBLE,
     CONSTRAINT_TYPE_MANDATORY_END_TIME,
     FORCE_CAR_NO_CHARGER_CONNECTED,
+    USER_ORIGINATED_CAR_NAME,
+    USER_ORIGINATED_CHARGER_NAME,
 )
 from custom_components.quiet_solar.ha_model.car import QSCar
 from custom_components.quiet_solar.ha_model.charger import (
     CHARGER_ADAPTATION_WINDOW_S,
     CHARGER_BOOT_TIME_DATA_EXPIRATION_S,
     CHARGER_CHECK_STATE_WINDOW_S,
-    CHARGER_STOP_CAR_ASKING_FOR_CURRENT_TO_STOP_S,
     QSChargerGeneric,
     QSChargerGroup,
     QSChargerStates,
