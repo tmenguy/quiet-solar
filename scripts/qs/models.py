@@ -30,7 +30,7 @@ import targets  # type: ignore[import-not-found]
 # ("inherit" is a renderer/template concern and never appears here.)
 CLASSES: frozenset[str] = frozenset({"deep", "frontier", "light", "fast"})
 
-# Six lanes, derived from targets.py (tuples → stable order).
+# Every lane, derived from targets.py (tuples → stable order).
 LANES: tuple[str, ...] = tuple(f"{k}-{t}" for k in targets.KINDS for t in targets.TARGETS) + tuple(
     f"epic-{t}" for t in targets.TARGETS
 )
@@ -99,7 +99,15 @@ STEMS: frozenset[str] = frozenset(_FLAT) | _PLANNING
 
 
 class ModelPolicyError(ValueError):
-    """Raised by :func:`resolve` for a stem with no policy row."""
+    """Raised by :func:`resolve` for a stem with no policy row.
+
+    ``stem`` carries the offending agent so callers can report it
+    structurally (``next_step``'s JSON error payload).
+    """
+
+    def __init__(self, stem: str) -> None:
+        super().__init__(f"no model policy row for agent {stem!r}")
+        self.stem = stem
 
 
 def effort_for(cls: str) -> str | None:
@@ -131,7 +139,7 @@ def resolve(lane: str | None, stem: str) -> str:
     try:
         return _FLAT[stem]
     except KeyError:
-        raise ModelPolicyError(f"no model policy row for agent {stem!r}") from None
+        raise ModelPolicyError(stem) from None
 
 
 def model_for(harness: str, cls: str) -> str:

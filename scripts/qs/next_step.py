@@ -82,6 +82,7 @@ from launchers import claude as claude_launcher  # type: ignore[import-not-found
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
+from models import ModelPolicyError  # type: ignore[import-not-found]
 
 from utils import output_json  # type: ignore[import-not-found]
 
@@ -274,6 +275,17 @@ def main() -> None:
             "error": "unknown phase",
             "value": exc.value,
             "known": exc.known,
+        })
+        sys.exit(1)
+    # Separate branch, NOT a broadened ``UnknownPhaseError`` one (SF1 rule):
+    # a phase agent with no ``models.py`` row is a structured error, not a
+    # raw traceback (review-fix #01 N5; unreachable while
+    # ``test_phase_agents_have_policy_rows`` holds — defense in depth).
+    except ModelPolicyError as exc:
+        output_json({
+            "error": "no model policy row",
+            "value": exc.stem,
+            "detail": str(exc),
         })
         sys.exit(1)
     payload["harness"] = harness

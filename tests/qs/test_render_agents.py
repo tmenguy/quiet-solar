@@ -385,7 +385,7 @@ def test_policy_error_precedes_any_write(tmp_path: Path) -> None:
         '[% extends "_base.md.j2" %][% block body %]finish[% endblock %]\n',
     )
     out = tmp_path / "o"
-    with pytest.raises(r.RenderError, match="qs-synthetic"):
+    with pytest.raises(r.RenderError, match=r"qs-synthetic.*models\.py"):
         r.render_all(
             tmp_path, context=_synthetic_context(tmp_path, model=None),
             out_root=out, templates_dir=tdir,
@@ -416,6 +416,27 @@ def test_render_policy_path_translates_per_harness(tmp_path: Path) -> None:
     assert (agents_o / "qs-create-plan.md").read_text() == (
         "model=github-copilot/gpt-6-astra effort=high\n"
     )
+
+
+def test_render_context_missing_model_key_applies_policy(tmp_path: Path) -> None:
+    # A hand-built context that omits "model" must take the policy path
+    # exactly like build_render_context's model=None default — never a
+    # silent ``model: inherit`` with no effort (review-fix #01 S1).
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    _write(tdir / "_base.md.j2", "model=[[ model ]] effort=[[ effort ]]\n")
+    _write(tdir / "qs-finish-task.md.j2", '[% extends "_base.md.j2" %]')
+    _write(tdir / "qs-implement-task.md.j2", '[% extends "_base.md.j2" %]')
+    ctx = _synthetic_context(tmp_path)
+    del ctx["model"]
+    out = tmp_path / "o"
+    r.render_all(tmp_path, context=ctx, out_root=out, templates_dir=tdir)
+    agents_c = out / ".claude" / "agents"
+    assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-4-5 effort=None\n"
+    assert (agents_c / "qs-implement-task.md").read_text() == "model=claude-opus-4-8 effort=high\n"
+    for hdir in (".claude", ".opencode"):
+        for f in (out / hdir / "agents").glob("*.md"):
+            assert "model=inherit" not in f.read_text()
 
 
 def test_render_model_scalar_and_mapping(tmp_path: Path) -> None:
@@ -625,6 +646,7 @@ def test_claude_frontmatter_contract(tmp_path: Path) -> None:
     [
         (["kind:feature", "target:factory", "scale:task"], "qs-create-plan", "claude-fable-5-1"),
         (["kind:bug", "target:product", "scale:task"], "qs-diagnose-task", "claude-opus-4-8"),
+        (["target:factory", "scale:epic"], "qs-create-plan", "claude-fable-5-1"),
     ],
 )
 def test_claude_frontmatter_model_by_lane(

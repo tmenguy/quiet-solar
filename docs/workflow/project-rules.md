@@ -255,10 +255,11 @@ automatically at worktree birth, at every handoff, and post-merge on
 `main`).
 
 **The model is a policy concern, never hand-set in a template.** Each
-agent's model and thinking effort come from `scripts/qs/models.py`
-(QS-358: four classes, one exact-version row per harness) and are
-rendered into both harness frontmatters; a new template without a policy
-row fails the render loudly. See [harness.md](harness.md) → "Model
+agent's model comes from `scripts/qs/models.py` (QS-358: four classes,
+one exact-version row per harness) and is rendered into both harness
+frontmatters; its thinking effort is rendered into the Claude
+frontmatter only. A new template without a policy row fails the render
+loudly. See [harness.md](harness.md) → "Model
 policy".
 
 **Template hygiene:** the renderer uses custom Jinja delimiters — `[[ ]]`

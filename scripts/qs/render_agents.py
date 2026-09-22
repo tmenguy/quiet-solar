@@ -371,7 +371,9 @@ def render_all(
         raise RenderError(f"could not read templates dir {templates_path}: {exc}") from exc
     if not stems:
         raise RenderError(f"no agent templates found in {templates_path}")
-    model_spec = context.get("model", "inherit")
+    # A missing key is the policy path, exactly like build_render_context's
+    # model=None default — never a silent "inherit" (review-fix #01 S1).
+    model_spec = context.get("model")
 
     # Pre-pass (QS-358 D8): every stem gets its model spec — a class or a
     # verbatim value — before anything is written, so a template with no

@@ -84,6 +84,35 @@ def test_next_step_catches_unknown_phase_error(monkeypatch: pytest.MonkeyPatch, 
     assert payload["known"] == ["a", "b"]
 
 
+def test_next_step_catches_model_policy_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: object
+) -> None:
+    """``ModelPolicyError`` is JSON-formatted as exit 1, not a traceback (review-fix #01 N5)."""
+    import json
+
+    import next_step  # type: ignore[import-not-found]
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    def _no_row(_lane: object, stem: str) -> str:
+        raise claude_launcher.models.ModelPolicyError(stem)
+
+    monkeypatch.setattr(claude_launcher.models, "resolve", _no_row)
+    _set_argv(monkeypatch, harness="claude-code")
+    # Keep the render prelude's side effects inside tmp_path.
+    argv = list(sys.argv)
+    argv[argv.index("--work-dir") + 1] = str(tmp_path)
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as excinfo:
+        next_step.main()
+    assert excinfo.value.code == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "no model policy row"
+    assert payload["value"] == "qs-create-plan"
+    assert "qs-create-plan" in payload["detail"]
+
+
 def test_next_step_exits_zero_on_happy_path(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Sanity: happy path still exits 0 after SF1 refactor."""
     import json

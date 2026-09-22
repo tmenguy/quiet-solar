@@ -48,8 +48,9 @@ clone run `python scripts/qs/render_agents.py` once. Agents still resolve
 volatile task context at runtime via `python scripts/qs/context.py`.
 The model and thinking effort per agent come from
 [scripts/qs/models.py](scripts/qs/models.py) (QS-358 — four classes, one
-exact-model row per harness) and are rendered into each agent's
-frontmatter; `opencode.json` follows the `deep` row.
+exact-model row per harness): the model is rendered into each agent's
+frontmatter on both harnesses, the thinking effort into Claude's only;
+`opencode.json` follows the `deep` row.
 
 ## Pipeline architecture
 
