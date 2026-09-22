@@ -35,6 +35,7 @@ LANES_DIR = REPO_ROOT / "docs" / "workflow" / "lanes"
 # fixture, which sees it already present and leaves it).
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "qs"))
 
+import models  # type: ignore[import-not-found]  # noqa: E402
 import render_agents as r  # type: ignore[import-not-found]  # noqa: E402
 
 from tests.qs.agents.const import REQUIRED_FRONTMATTER_KEYS  # noqa: E402
@@ -105,6 +106,15 @@ def test_context_bound_from_kwargs(tmp_path: Path) -> None:
         "facts_state",
     ):
         assert key in ctx
+
+
+def test_context_default_model_is_policy(tmp_path: Path) -> None:
+    ctx = r.build_render_context(tmp_path, bound=False, fetch=False, lanes_dir=LANES_DIR)
+    assert ctx["model"] is None
+    ctx = r.build_render_context(
+        tmp_path, bound=False, fetch=False, lanes_dir=LANES_DIR, model="inherit"
+    )
+    assert ctx["model"] == "inherit"
 
 
 def test_context_bound_false_forces_unbound(tmp_path: Path, monkeypatch) -> None:
@@ -358,10 +368,75 @@ def test_render_atomic_write_failure_leaves_no_temp(tmp_path: Path, monkeypatch)
 
 
 def test_render_context_none_defaults(tmp_path: Path, monkeypatch) -> None:
+    # context=None → policy path (model=None); a stem with no policy row
+    # is a RenderError naming the stem and models.py (D8).
     tdir = _synthetic_templates(tmp_path)
     monkeypatch.setattr(r, "_current_branch", lambda wd: None)
-    written = r.render_all(tmp_path, out_root=tmp_path / "o", templates_dir=tdir)
-    assert len(written) == 2
+    with pytest.raises(r.RenderError, match=r"qs-synthetic.*models\.py"):
+        r.render_all(tmp_path, out_root=tmp_path / "o", templates_dir=tdir)
+
+
+def test_policy_error_precedes_any_write(tmp_path: Path) -> None:
+    # Two stems: qs-finish-task (has a row) sorts before qs-synthetic (none).
+    # The pre-pass must raise before ANY agent file is written (AC4).
+    tdir = _synthetic_templates(tmp_path)
+    _write(
+        tdir / "qs-finish-task.md.j2",
+        '[% extends "_base.md.j2" %][% block body %]finish[% endblock %]\n',
+    )
+    out = tmp_path / "o"
+    with pytest.raises(r.RenderError, match=r"qs-synthetic.*models\.py"):
+        r.render_all(
+            tmp_path, context=_synthetic_context(tmp_path, model=None),
+            out_root=out, templates_dir=tdir,
+        )
+    for hdir in (".claude", ".opencode"):
+        agents = out / hdir / "agents"
+        assert not agents.exists() or not list(agents.glob("*.md"))
+
+
+def test_render_policy_path_translates_per_harness(tmp_path: Path) -> None:
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    _write(tdir / "_base.md.j2", "model=[[ model ]] effort=[[ effort ]]\n")
+    _write(tdir / "qs-finish-task.md.j2", '[% extends "_base.md.j2" %]')
+    _write(tdir / "qs-create-plan.md.j2", '[% extends "_base.md.j2" %]')
+    out = tmp_path / "o"
+    r.render_all(
+        tmp_path, context=_synthetic_context(tmp_path, model=None, lane="feature-factory"),
+        out_root=out, templates_dir=tdir,
+    )
+    agents_c = out / ".claude" / "agents"
+    agents_o = out / ".opencode" / "agents"
+    assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-4-5 effort=None\n"
+    assert (agents_o / "qs-finish-task.md").read_text() == (
+        "model=github-copilot/claude-haiku-4.5 effort=None\n"
+    )
+    assert (agents_c / "qs-create-plan.md").read_text() == "model=claude-fable-5-1 effort=high\n"
+    assert (agents_o / "qs-create-plan.md").read_text() == (
+        "model=github-copilot/gpt-6-astra effort=high\n"
+    )
+
+
+def test_render_context_missing_model_key_applies_policy(tmp_path: Path) -> None:
+    # A hand-built context that omits "model" must take the policy path
+    # exactly like build_render_context's model=None default — never a
+    # silent ``model: inherit`` with no effort (review-fix #01 S1).
+    tdir = tmp_path / "t"
+    tdir.mkdir()
+    _write(tdir / "_base.md.j2", "model=[[ model ]] effort=[[ effort ]]\n")
+    _write(tdir / "qs-finish-task.md.j2", '[% extends "_base.md.j2" %]')
+    _write(tdir / "qs-implement-task.md.j2", '[% extends "_base.md.j2" %]')
+    ctx = _synthetic_context(tmp_path)
+    del ctx["model"]
+    out = tmp_path / "o"
+    r.render_all(tmp_path, context=ctx, out_root=out, templates_dir=tdir)
+    agents_c = out / ".claude" / "agents"
+    assert (agents_c / "qs-finish-task.md").read_text() == "model=claude-haiku-4-5 effort=None\n"
+    assert (agents_c / "qs-implement-task.md").read_text() == "model=claude-opus-4-8 effort=high\n"
+    for hdir in (".claude", ".opencode"):
+        for f in (out / hdir / "agents").glob("*.md"):
+            assert "model=inherit" not in f.read_text()
 
 
 def test_render_model_scalar_and_mapping(tmp_path: Path) -> None:
@@ -372,13 +447,35 @@ def test_render_model_scalar_and_mapping(tmp_path: Path) -> None:
         context=_synthetic_context(tmp_path, model={"qs-synthetic": "github-copilot/x"}),
         out_root=out, templates_dir=tdir,
     )
-    assert "model=github-copilot/x" in (out / ".claude" / "agents" / "qs-synthetic.md").read_text()
+    for hdir in (".claude", ".opencode"):
+        assert "model=github-copilot/x" in (out / hdir / "agents" / "qs-synthetic.md").read_text()
     out2 = tmp_path / "o2"
     r.render_all(
         tmp_path, context=_synthetic_context(tmp_path, model="inherit"),
         out_root=out2, templates_dir=tdir,
     )
     assert "model=inherit" in (out2 / ".claude" / "agents" / "qs-synthetic.md").read_text()
+    # An explicit *class* is translated per harness.
+    out3 = tmp_path / "o3"
+    r.render_all(
+        tmp_path, context=_synthetic_context(tmp_path, model="deep"),
+        out_root=out3, templates_dir=tdir,
+    )
+    assert "model=claude-opus-4-8" in (out3 / ".claude" / "agents" / "qs-synthetic.md").read_text()
+    assert "model=github-copilot/claude-opus-4.8" in (
+        out3 / ".opencode" / "agents" / "qs-synthetic.md"
+    ).read_text()
+    # A bare alias or a full ID is emitted verbatim on both harnesses (the
+    # override contract: pass a class, or own the literal's validity).
+    for value in ("opus", "claude-opus-4-8"):
+        out4 = tmp_path / f"o4-{value}"
+        r.render_all(
+            tmp_path, context=_synthetic_context(tmp_path, model=value),
+            out_root=out4, templates_dir=tdir,
+        )
+        for hdir in (".claude", ".opencode"):
+            text = (out4 / hdir / "agents" / "qs-synthetic.md").read_text()
+            assert f"model={value}\n" in text
 
 
 def test_resolve_model_mapping_default() -> None:
@@ -497,12 +594,15 @@ def test_registry_invariants() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _render_real(tmp_path: Path, *, bound: bool) -> Path:
-    out = tmp_path / ("bound" if bound else "unbound")
+def _render_real(tmp_path: Path, *, bound: bool, labels: list[str] | None = None) -> Path:
+    if bound and labels is not None:
+        out = tmp_path / ("bound-" + "-".join(lbl.replace(":", "_") for lbl in labels))
+    else:
+        out = tmp_path / ("bound" if bound else "unbound")
     if bound:
         ctx = r.build_render_context(
             tmp_path, bound=True, issue=42, title="A title",
-            labels=["kind:feature", "target:factory", "scale:task"],
+            labels=labels if labels is not None else ["kind:feature", "target:factory", "scale:task"],
             fetch=False, lanes_dir=LANES_DIR,
         )
     else:
@@ -532,7 +632,29 @@ def test_claude_frontmatter_contract(tmp_path: Path) -> None:
         assert data["name"] == stem
         assert data["description"]
         assert data["tools"]
-        assert data["model"] == "inherit"
+        cls = models.resolve(None, stem)
+        assert data["model"] == models.model_for("claude", cls)
+        # D19: effort present for deep/frontier/light, absent for fast.
+        assert data.get("effort") == models.effort_for(cls)
+    for stem in ("qs-finish-task", "qs-review-coderabbit", "qs-release"):
+        data = yaml.safe_load(_frontmatter((out / ".claude" / "agents" / f"{stem}.md").read_text()))
+        assert "effort" not in data
+
+
+@pytest.mark.parametrize(
+    ("labels", "stem", "expected"),
+    [
+        (["kind:feature", "target:factory", "scale:task"], "qs-create-plan", "claude-fable-5-1"),
+        (["kind:bug", "target:product", "scale:task"], "qs-diagnose-task", "claude-opus-4-8"),
+        (["target:factory", "scale:epic"], "qs-create-plan", "claude-fable-5-1"),
+    ],
+)
+def test_claude_frontmatter_model_by_lane(
+    tmp_path: Path, labels: list[str], stem: str, expected: str
+) -> None:
+    out = _render_real(tmp_path, bound=True, labels=labels)
+    data = yaml.safe_load(_frontmatter((out / ".claude" / "agents" / f"{stem}.md").read_text()))
+    assert data["model"] == expected
 
 
 def test_opencode_frontmatter_contract(tmp_path: Path) -> None:
@@ -544,7 +666,12 @@ def test_opencode_frontmatter_contract(tmp_path: Path) -> None:
         for key in REQUIRED_FRONTMATTER_KEYS:
             assert key in data
         assert "name" not in data
-        assert MODEL_COMMENT in text
+        assert MODEL_COMMENT not in text
+        stem = f.name.removesuffix(".md")
+        assert data["model"] == models.model_for("opencode", models.resolve(None, stem))
+        # D19: effort is Claude-only.
+        assert "effort" not in data
+        assert "options" not in data
 
 
 def _frontmatter(text: str) -> str:

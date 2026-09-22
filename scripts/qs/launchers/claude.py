@@ -36,6 +36,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
+import models  # type: ignore[import-not-found]
 from launchers.phases import (  # type: ignore[import-not-found]
     build_existing_session_prompt,
     resolve_agent_for_next_cmd,
@@ -44,7 +45,8 @@ from launchers.phases import (  # type: ignore[import-not-found]
 # Separate import block on purpose: ``utils`` is a sibling top-level module
 # under ``scripts/qs/``, not part of the ``launchers`` package. Not an isort
 # ``I001`` violation — verify with ``ruff check --select I001`` before
-# "fixing" it.
+# "fixing" it. (``models`` is a sibling too, but isort sorts it into the
+# block above.)
 from utils import is_worktree  # type: ignore[import-not-found]
 
 # ``caller`` literal — reserved for harness-specific bifurcation
@@ -54,9 +56,12 @@ from utils import is_worktree  # type: ignore[import-not-found]
 # ``setup_task.py`` and ``next_step.py``.
 Caller = Literal["setup_task", "next_step"]
 
-# Extra flags appended to ``claude`` invocations. Kept narrow on purpose
-# — users can override via env or by editing this constant.
-CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions --model opus"
+# Extra flags appended to ``claude`` invocations. Kept narrow on purpose.
+# No ``--model`` (QS-358 D9): the model comes from the policy in
+# ``scripts/qs/models.py``, rendered as a full model ID into each agent's
+# frontmatter (D20); the GUI pin carries the phase's ``effortLevel`` (D19).
+# A one-off ``claude --model <id>`` still overrides the frontmatter.
+CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions"
 
 # Mode for a freshly created pin file. Owner-only because this file can
 # carry an ``env`` block with a token, and because a fresh worktree has no
@@ -263,12 +268,24 @@ def _read_settings(target: Path) -> dict | None:
     return parsed
 
 
-def _render(settings: dict, agent: str) -> str:
-    """Return the on-disk form of ``settings`` with ``agent`` pinned."""
-    return json.dumps({**settings, "agent": agent}, indent=2) + "\n"
+def _render(settings: dict, agent: str, effort: str | None) -> str:
+    """Return the on-disk form of ``settings`` with ``agent`` (and effort) pinned.
+
+    The writer owns exactly two keys (QS-358): ``agent``, and
+    ``effortLevel`` — set to ``effort``, or removed when ``effort`` is
+    ``None`` so a ``fast`` phase never inherits the previous phase's level.
+    It never writes ``model``; a ``model`` already in the file is the
+    user's and is kept.
+    """
+    merged = {**settings, "agent": agent}
+    if effort is None:
+        merged.pop("effortLevel", None)
+    else:
+        merged["effortLevel"] = effort
+    return json.dumps(merged, indent=2) + "\n"
 
 
-def _late_render(target: Path, agent: str) -> str | None:
+def _late_render(target: Path, agent: str, effort: str | None) -> str | None:
     """Re-render from ``target``'s current bytes, or ``None`` to keep the first.
 
     Shrinks — it does not close — the read-modify-write race against the
@@ -289,11 +306,17 @@ def _late_render(target: Path, agent: str) -> str | None:
         # two reads. Keep the first render rather than merging onto
         # something a shallow merge would raise on.
         return None
-    return _render(parsed, agent)
+    return _render(parsed, agent, effort)
 
 
-def _write_phase_agent(work_dir: str, agent: str) -> bool:
+def _write_phase_agent(work_dir: str, agent: str, effort: str | None) -> bool:
     """Pin ``agent`` into ``<work_dir>/.claude/settings.local.json`` (QS-311).
+
+    QS-358: the pin also carries the phase's ``effortLevel`` (``effort``;
+    removed when ``None``). Frontmatter ``effort:`` reaches sub-agents but
+    not the main session, so this key is the main session's only path. The
+    model is *not* pinned: the agent's frontmatter already decides it on
+    every surface and beats a settings ``model``.
 
     The Claude Code **GUI** has no ``--agent`` flag, so the only way to
     boot a GUI session as a phase orchestrator is the ``agent`` settings
@@ -318,7 +341,8 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
        ``--no-worktree`` and the main-checkout phases, which the caller
        reports via ``phase_agent_pinned``.
 
-    ``agent`` is always replaced; every other top-level key is preserved
+    ``agent`` is always replaced (``effortLevel`` set or removed); every
+    other top-level key is preserved
     (shallow merge). This file is **not** machine-written — Claude Code
     persists the user's per-project ``permissions`` decisions (and
     ``model``, ``env``, …) in it. Two consequences, both deliberate:
@@ -383,7 +407,7 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
     if settings is None:
         return False
 
-    content = _render(settings, agent)
+    content = _render(settings, agent, effort)
     try:
         # Ordinary high-level file operations only: ``write_text`` writes
         # fully or raises, and ``copymode`` is one call for "keep whatever
@@ -392,7 +416,7 @@ def _write_phase_agent(work_dir: str, agent: str) -> bool:
         # partial-write result, and a temp that followed a symlink), so it
         # is deliberately not used.
         tmp.write_text(content, encoding="utf-8")
-        late = _late_render(target, agent)
+        late = _late_render(target, agent, effort)
         if late is not None and late != content:
             tmp.write_text(late, encoding="utf-8")
         # Non-fatal on purpose: the content is already written and
@@ -444,6 +468,7 @@ def build_payload(
     caller: Caller = "next_step",
     fix_plan_path: str | None = None,
     pr_number: int | None = None,
+    lane: str | None = None,
 ) -> dict:
     """Build the launcher payload for Claude Code.
 
@@ -455,7 +480,10 @@ def build_payload(
     rather than in the two callers (``setup_task.py`` / ``next_step.py``)
     to avoid duplicating the call at every handoff site. The write is
     guarded to real worktrees that already contain the agent file, and is
-    inert for CLI sessions because ``--agent`` takes precedence.
+    inert for CLI sessions because ``--agent`` takes precedence. The pin
+    also carries the phase's effort level (QS-358), resolved from
+    ``scripts/qs/models.py`` for ``lane``; the model is not pinned because
+    the agent's frontmatter already decides it on every surface.
 
     Args:
         work_dir: Worktree directory the new session should open in.
@@ -477,6 +505,9 @@ def build_payload(
             implement-task common loop). See
             ``launchers/phases.py::build_existing_session_prompt``.
         pr_number: Optional PR number for the existing-session prompt.
+        lane: The task's lane (e.g. ``"feature-factory"``) or ``None``;
+            selects the planning orchestrators' class, hence the pinned
+            ``effortLevel`` (QS-358).
 
     Returns:
         A dict with ``tool``, ``agent``, ``phase_agent_pinned``,
@@ -495,13 +526,16 @@ def build_payload(
     """
     del caller  # reserved for harness-specific bifurcation; not used here
     agent = resolve_agent_for_next_cmd(next_cmd)
+    # ``agent`` is a PHASE_TO_AGENT value here (an unknown phase raised
+    # above), and every one has a policy row (tests/qs/test_models.py).
+    effort = models.effort_for(models.resolve(lane, agent))
     # Side effect (QS-311): pin the phase agent into the worktree's local
     # settings so a GUI session there boots as this orchestrator. Guarded
     # and best-effort — see ``_write_phase_agent``. The result is surfaced
     # as ``phase_agent_pinned``: the GUI handoff blocks must not assert a
     # pin that is deterministically absent on ``--no-worktree`` and
     # silently absent on any write failure.
-    pinned = _write_phase_agent(work_dir, agent)
+    pinned = _write_phase_agent(work_dir, agent, effort)
     new_context = _claude_command(
         work_dir, issue, title, agent=agent, next_prompt=next_prompt,
     )

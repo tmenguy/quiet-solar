@@ -160,8 +160,9 @@ the named agent. This is documented upstream
 (<https://code.claude.com/docs/en/settings.md> — "Run the main thread as
 a named subagent…", scopes User / Project / Local).
 
-`launchers/claude.py::_write_phase_agent` writes that key at **every**
-handoff, so the worktree is always pinned to the phase the pipeline just
+`launchers/claude.py::_write_phase_agent` writes the `agent` and
+`effortLevel` keys at **every** handoff (see "Model policy" below for
+`effortLevel`), so the worktree is always pinned to the phase the pipeline just
 handed off to, and reports the outcome as the payload's
 `phase_agent_pinned` — the handoff blocks say "should now be pinned"
 because two guards, a race, and any `OSError` can each skip the write.
@@ -187,8 +188,17 @@ It is **not** purely machine-written: Claude Code persists the user's own
 deliberately timid — it will decline to pin rather than touch bytes it does
 not fully understand:
 
-- **A file it can parse as a JSON object** is shallow-merged: `agent` is
-  replaced, every other top-level key is kept.
+- **A file it can parse as a JSON object** is shallow-merged. The writer
+  owns exactly **two** keys (QS-358): `agent` is replaced, and
+  `effortLevel` is set to the phase's class effort — or **removed** for a
+  `fast` phase, so it never inherits the previous phase's level. Every
+  other top-level key is kept. It does **not** pin `model`: the agent's
+  frontmatter decides the model on every surface and beats a user-level
+  settings `model` (QS-358 spike Run 2), so a `/model` choice — which
+  Claude Code persists at user level — is effectively session-scoped for
+  a pipeline agent. A `model` already in this file is the user's and is
+  left alone. Frontmatter `effort:` reaches sub-agents but **not** the
+  main session, which is why the pin carries `effortLevel`.
 - **Anything else is left exactly as it is, and the pin is skipped** — an
   unreadable file, one that does not parse, or one that parses to something
   other than an object (`null`, `[1, 2]`, `"x"`, empty, NUL-filled). Always
@@ -348,6 +358,68 @@ agents at server start — restart OpenCode to pick up re-rendered agents.**
 Claude Code re-reads `.claude/agents/` within seconds for directories
 present at session start (always true — every session is opened by a
 handoff that rendered first).
+
+### Model policy
+
+Which model — and how much thinking effort — each agent runs on is
+decided by **one policy**, `scripts/qs/models.py` (QS-358), and rendered
+into every agent's frontmatter on both harnesses. Nothing in a template
+hand-sets a model.
+
+- **Four classes, harness-agnostic:** `deep` (the best code-grounded
+  model — implement, concrete-planner, the hunters, root-cause),
+  `frontier` (the best general reasoner — planning conversation,
+  review consolidation, judgment reviewers), `light` (checklists —
+  delta-auditor, setup-task), `fast` (mechanical — finish, the
+  CodeRabbit wrapper, release). `_FLAT` maps each agent to a class;
+  only the two planning orchestrators depend on the lane (`bug-*` →
+  `deep`, other lanes → `frontier`, no lane → `deep`). Reviewers are
+  deliberately spread across classes so one fan-out does not share one
+  set of blind spots.
+- **One complete row per harness** in `HARNESS_MODELS`, in that
+  harness's own vocabulary, **both in exact versions**:
+
+  | class | Claude (frontmatter, full ID) | OpenCode (`github-copilot/…`) | effort |
+  |---|---|---|---|
+  | `deep` | `claude-opus-4-8` | `claude-opus-4.8` | `high` |
+  | `frontier` | `claude-fable-5-1` | `gpt-6-astra` | `high` |
+  | `light` | `claude-sonnet-5` | `claude-sonnet-5` | `medium` |
+  | `fast` | `claude-haiku-4-5` | `claude-haiku-4.5` | — |
+
+  To add a harness, add a row (a test refuses a harness the renderer
+  knows but the policy does not).
+- **Declared asymmetries.** On OpenCode the `frontier` class runs GPT-6
+  Astra because the `github-copilot` provider offers no Claude Fable —
+  one `HARNESS_MODELS` cell to revert when it does. **Effort is
+  Claude-only** (OpenCode documents no per-agent effort): Claude
+  sub-agents get frontmatter `effort:`, the Claude main session gets
+  the pin's `effortLevel`; `fast` (Haiku 4.5) sets none.
+- **Why full IDs, and no repo-wide alias pin.** The documented settings
+  `env` pins (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) are **not applied** to
+  the process on Claude Code 2.1.278, so aliases float to the provider
+  default, while full IDs in frontmatter work for sub-agents, `--agent`
+  sessions and settings-pinned (GUI) sessions. Consequence: a hand-typed
+  `/model opus` or `--model opus` means the provider default (Opus 5
+  today); the pipeline's agents are pinned by their frontmatter, not by
+  the repo. A test keeps the dead `env` keys out of
+  `.claude/settings.json`. (An `ANTHROPIC_MODEL` exported in your shell
+  would beat every settings `model` — not set by the pipeline.)
+- **Overrides, per surface.** Claude CLI: `claude --model <id>` beats
+  the frontmatter (the launcher passes no `--model`). Claude GUI:
+  `/model <x>` mid-session. OpenCode: edit the agent's `model:` or
+  `opencode.json`. `render_all`'s explicit `model=` override takes a
+  **class** (translated per harness) or a harness-valid literal (emitted
+  verbatim on both harnesses — never pass a bare alias).
+- **Changing things.** Retier an agent: edit its `_FLAT` row. Bump a
+  version: edit the `HARNESS_MODELS` cell(s); if `deep` moved on
+  OpenCode, also bump `opencode.json`'s `model` (the project default for
+  agent-less sessions) — the lockstep test names it. Retune effort: edit
+  `CLASS_EFFORT`. See the resolved table with
+  `grep -h '^model:' .claude/agents/*.md .opencode/agents/*.md`.
+- **OpenCode limit.** `opencode run --agent` and the raw OpenCode API
+  ignore the agent's `model` (they use `opencode.json`'s); the policy
+  holds in the TUI and for task-tool sub-agents. The pipeline does not
+  use `opencode run`.
 
 ## Adding a new harness
 

@@ -82,6 +82,7 @@ from launchers import claude as claude_launcher  # type: ignore[import-not-found
 from launchers import codex as codex_launcher  # type: ignore[import-not-found]
 from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
 from launchers.phases import UnknownPhaseError  # type: ignore[import-not-found]
+from models import ModelPolicyError  # type: ignore[import-not-found]
 
 from utils import output_json  # type: ignore[import-not-found]
 
@@ -209,10 +210,16 @@ def main() -> None:
         f"warning: agent render failed; run python scripts/qs/render_agents.py "
         f"--work-dir {args.work_dir}"
     )
+    # QS-358: the lane feeds the Claude pin's effortLevel. Bound before the
+    # ``try`` — ``render_context`` is unbound when the render raises, and the
+    # handoff then pins the no-lane effort (identical today; the warning
+    # below already tells the user to re-render).
+    lane: str | None = None
     try:
         import render_agents  # noqa: PLC0415 — local so a missing jinja2 is caught here
 
         render_context = render_agents.build_render_context(args.work_dir)
+        lane = render_context.get("lane")
         render_agents.render_all(args.work_dir, context=render_context)
         # Independent ``if``s (not ``elif``): each render-degradation reason
         # must surface on its own — a chain would suppress the second when
@@ -261,12 +268,24 @@ def main() -> None:
             caller="next_step",
             fix_plan_path=args.fix_plan_path,
             pr_number=args.pr_number,
+            lane=lane,
         )
     except UnknownPhaseError as exc:
         output_json({
             "error": "unknown phase",
             "value": exc.value,
             "known": exc.known,
+        })
+        sys.exit(1)
+    # Separate branch, NOT a broadened ``UnknownPhaseError`` one (SF1 rule):
+    # a phase agent with no ``models.py`` row is a structured error, not a
+    # raw traceback (review-fix #01 N5; unreachable while
+    # ``test_phase_agents_have_policy_rows`` holds — defense in depth).
+    except ModelPolicyError as exc:
+        output_json({
+            "error": "no model policy row",
+            "value": exc.stem,
+            "detail": str(exc),
         })
         sys.exit(1)
     payload["harness"] = harness

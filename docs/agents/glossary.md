@@ -183,6 +183,11 @@ to grep the entire tree to figure out what an `ack` is.
   gitignored `.claude/agents/`, `.opencode/agents/` by
   `scripts/qs/render_agents.py` (QS-357). Replaces both the hand-copied
   harness directories and the legacy per-task rendering in `legacy/`.
+- **Model policy** — `scripts/qs/models.py` (QS-358). Maps every agent
+  to a model **class** (`deep` / `frontier` / `light` / `fast`), and each
+  class to an exact model per harness (`HARNESS_MODELS`) plus a thinking
+  effort (`CLASS_EFFORT`, Claude-only). The renderer writes the result
+  into each agent's frontmatter; `opencode.json` follows the `deep` row.
 - **Worktree** — a separate working directory tied to the same git
   repo. Each task runs in its own worktree (`QS_<N>` branch).
 - **`covers:` frontmatter** — list of source files a doc claims to

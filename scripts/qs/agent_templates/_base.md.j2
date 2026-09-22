@@ -1,5 +1,8 @@
 [% if harness == "claude" %]---
 [% block frontmatter_claude %][% endblock %]
+[% if effort %]
+effort: [[ effort ]]
+[% endif %]
 ---
 [% else %]---
 [% block frontmatter_opencode %][% endblock %]

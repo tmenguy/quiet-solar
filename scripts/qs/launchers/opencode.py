@@ -281,6 +281,7 @@ def build_payload(
     caller: Caller = "next_step",
     fix_plan_path: str | None = None,
     pr_number: int | None = None,
+    lane: str | None = None,
 ) -> dict:
     """Return the OpenCode launcher payload for ``next_cmd``.
 
@@ -301,6 +302,8 @@ def build_payload(
             field — the paste-into-existing-session prompt for the
             review-task → implement-task common loop.
         pr_number: Optional PR number for the existing-session prompt.
+        lane: Reserved, used by the Claude launcher's GUI pin (QS-358);
+            accepted and ignored here.
 
     Returns:
         Dict with ``tool``, ``agent``, ``same_context``,
@@ -311,6 +314,7 @@ def build_payload(
             caller (typically ``next_step.py``) catches this and emits
             a JSON error payload.
     """
+    del lane  # reserved, used by the Claude launcher's GUI pin (QS-358)
     agent = resolve_agent_for_next_cmd(next_cmd)
     kickoff = next_prompt if next_prompt is not None else DEFAULT_KICKOFF
 

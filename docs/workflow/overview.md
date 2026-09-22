@@ -136,8 +136,9 @@ Both qualifiers are load-bearing:
 
 **What does not follow is that GUI users are stuck with the
 slash-command fallback.** A fourth mechanism exists, and it is the one
-the pipeline uses: the `agent` key in `.claude/settings.local.json`. The
-launcher writes it into the worktree at every handoff, so a GUI session
+the pipeline uses: the `agent` and `effortLevel` keys in
+`.claude/settings.local.json`. The launcher writes them into the worktree
+at every handoff, so a GUI session
 the user opens there boots as the phase orchestrator with no `--agent`
 flag involved. The gesture (**New session** → select directory → name
 it), the traps, and the `/desktop` hybrid are documented in

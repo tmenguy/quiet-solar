@@ -583,3 +583,58 @@ def test_handoff_survives_non_utf8_template(
     cap = capsys.readouterr()
     assert "agent render failed" in cap.err
     assert json.loads(cap.out)["agent"] == "qs-create-plan"
+
+
+# --------------------------------------------------------------------------- #
+# QS-358 — the handoff forwards the render context's lane to the launcher
+# --------------------------------------------------------------------------- #
+
+
+def _capturing_launcher(seen: dict):
+    class CapturingLauncher:
+        @staticmethod
+        def build_payload(*_args: object, **kwargs: object) -> dict:
+            seen.update(kwargs)
+            return {"tool": "fake", "same_context": "x", "new_context": "y"}
+
+    return CapturingLauncher
+
+
+def test_handoff_passes_render_context_lane(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import next_step
+    import render_agents
+
+    ctx = {"facts_state": "bound", "lane_protocol_state": "inlined", "lane": "bug-factory"}
+    monkeypatch.setattr(render_agents, "build_render_context", lambda *a, **k: ctx)
+    monkeypatch.setattr(render_agents, "render_all", lambda *a, **k: [])
+    seen: dict = {}
+    monkeypatch.setitem(next_step.LAUNCHERS, "claude-code", _capturing_launcher(seen))
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    assert seen["lane"] == "bug-factory"
+
+
+def test_handoff_passes_no_lane_after_render_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import next_step
+    import render_agents
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise render_agents.RenderError("boom")
+
+    monkeypatch.setattr(render_agents, "build_render_context", _boom)
+    seen: dict = {}
+    monkeypatch.setitem(next_step.LAUNCHERS, "claude-code", _capturing_launcher(seen))
+    monkeypatch.setattr(sys, "argv", _handoff_argv(str(tmp_path)))
+
+    with pytest.raises(SystemExit) as exc:
+        next_step.main()
+    assert exc.value.code == 0
+    assert "lane" in seen
+    assert seen["lane"] is None

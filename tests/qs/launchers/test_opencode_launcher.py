@@ -713,3 +713,19 @@ def test_opencode_cli_command_cleans_temp_file_on_chmod_failure(
     assert not Path(created_paths[0]).exists(), (
         f"temp file should have been cleaned up: {created_paths[0]}"
     )
+
+
+@pytest.mark.parametrize("caller", ["next_step", "setup_task"])
+def test_lane_kwarg_is_accepted_and_ignored(caller: str) -> None:
+    """QS-358: ``lane=`` is reserved for the Claude pin; OpenCode ignores it."""
+    from launchers import opencode as opencode_launcher  # type: ignore[import-not-found]
+
+    kw = {"next_cmd": "create-plan", "caller": caller}
+    without = opencode_launcher.build_payload("/tmp/work", 42, "T", **kw)
+    with_lane = opencode_launcher.build_payload("/tmp/work", 42, "T", **kw, lane="feature-factory")
+    if caller == "setup_task":
+        # The CLI form writes a fresh temp script per call (random name);
+        # compare the scripts' contents instead of their paths.
+        for payload in (without, with_lane):
+            payload["new_context"] = Path(payload["new_context"].removeprefix("sh ")).read_text()
+    assert without == with_lane

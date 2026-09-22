@@ -314,3 +314,40 @@ def test_render_render_error_fails_loudly(
     out = json.loads(capsys.readouterr().out)
     assert out["error"] == "agent render failed"
     assert "boom" in out["detail"]
+
+
+# ---------------------------------------------------------------------------
+# QS-358: setup_task forwards the labels' lane to the launcher
+# ---------------------------------------------------------------------------
+
+
+def test_setup_task_passes_labels_lane(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    import render_agents
+    import setup_task
+    import targets
+
+    import utils
+
+    labels = ["kind:bug", "target:product", "scale:task"]
+    seen: dict = {}
+
+    class CapturingLauncher:
+        @staticmethod
+        def build_payload(*_args: Any, **kwargs: Any) -> dict:
+            seen.update(kwargs)
+            return {"tool": "fake"}
+
+    monkeypatch.setattr(utils, "run", _fake_run_success(labels))
+    monkeypatch.setattr(setup_task, "get_main_worktree", lambda: tmp_path)
+    monkeypatch.setattr(render_agents, "render_all", lambda *a, **k: [])
+    monkeypatch.setitem(setup_task.LAUNCHERS, "claude-code", CapturingLauncher)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["setup_task.py", "42", "--no-worktree", "--title", "T", "--harness", "claude-code"],
+    )
+
+    setup_task.main()
+    assert seen["lane"] == targets.parse_axes(labels)["lane"] == "bug-product"
+    assert json.loads(capsys.readouterr().out)["tool"] == "fake"

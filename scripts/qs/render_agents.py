@@ -34,6 +34,7 @@ from pathlib import Path
 
 import context as context_mod  # type: ignore[import-not-found]
 import jinja2
+import models  # type: ignore[import-not-found]
 import targets  # type: ignore[import-not-found]
 from launchers.phases import PHASE_TO_AGENT  # type: ignore[import-not-found]
 
@@ -162,7 +163,7 @@ def build_render_context(
     title: str | None = None,
     labels: list[str] | None = None,
     fetch: bool = True,
-    model: str | Mapping[str, str] = "inherit",
+    model: str | Mapping[str, str] | None = None,
     lanes_dir: str | os.PathLike[str] | None = None,
 ) -> dict:
     """Resolve every render variable for ``work_dir``.
@@ -172,6 +173,14 @@ def build_render_context(
     task-agnostic render (needed by the fidelity check and by the test
     fixture while on branch ``QS_357``); ``bound=True`` forces the
     task-bound render.
+
+    ``model=None`` (the default) means "the policy": :func:`render_all`
+    resolves each agent's model from ``scripts/qs/models.py``. An explicit
+    ``str`` / ``Mapping`` (stem → value) is an override: a value that is a
+    model **class** (``deep`` / ``frontier`` / ``light`` / ``fast``) is
+    translated per harness; any other value (a full Claude ID, a
+    ``provider/model`` literal, ``"inherit"``, a bare alias) is emitted
+    verbatim on both harnesses — the caller owns its harness validity.
 
     Raises:
         RenderError: if a resolvable lane file cannot be read.
@@ -332,11 +341,13 @@ def render_all(
     """Render every template for both harnesses; return the files written.
 
     ``context=None`` means ``build_render_context(work_dir)`` with
-    defaults. Writes nothing to stdout.
+    defaults — which now resolves the model per agent from ``models.py``.
+    Writes nothing to stdout.
 
     Raises:
-        RenderError: on any Jinja error, output failure, or when the
-            tracked-target guard trips.
+        RenderError: on any Jinja error, output failure, when the
+            tracked-target guard trips, or when a template has no model
+            policy row (raised before any file is written).
     """
     work_dir = str(work_dir)
     if context is None:
@@ -360,7 +371,24 @@ def render_all(
         raise RenderError(f"could not read templates dir {templates_path}: {exc}") from exc
     if not stems:
         raise RenderError(f"no agent templates found in {templates_path}")
-    model_spec = context.get("model", "inherit")
+    # A missing key is the policy path, exactly like build_render_context's
+    # model=None default — never a silent "inherit" (review-fix #01 S1).
+    model_spec = context.get("model")
+
+    # Pre-pass (QS-358 D8): every stem gets its model spec — a class or a
+    # verbatim value — before anything is written, so a template with no
+    # policy row never leaves a half-rendered agent set behind.
+    spec_for: dict[str, str] = {}
+    for stem in stems:
+        if model_spec is None:
+            try:
+                spec_for[stem] = models.resolve(context.get("lane"), stem)
+            except models.ModelPolicyError as exc:
+                raise RenderError(
+                    f"no model policy row for agent {stem!r}; add it to scripts/qs/models.py"
+                ) from exc
+        else:
+            spec_for[stem] = _resolve_model(model_spec, stem)
 
     # ``jinja2``'s loader raises NON-jinja2 exceptions on several load
     # failure modes — ``UnicodeDecodeError`` (⊂ ``ValueError``) on a
@@ -378,6 +406,9 @@ def render_all(
             template = env.get_template(f"{stem}.md.j2")
         except _load_errors as exc:
             raise RenderError(f"failed to load template {stem}: {exc}") from exc
+        value = spec_for[stem]
+        cls = models.class_of(value)
+        effort = models.effort_for(cls) if cls else None
         for harness in _HARNESSES:
             render_ctx = {
                 **context,
@@ -386,7 +417,8 @@ def render_all(
                 "template": f"{stem}.md.j2",
                 "orchestrator": stem in ORCHESTRATORS,
                 "lane_aware": stem in LANE_AWARE,
-                "model": _resolve_model(model_spec, stem),
+                "model": models.model_for(harness, cls) if cls else value,
+                "effort": effort,
             }
             try:
                 text = template.render(**render_ctx)

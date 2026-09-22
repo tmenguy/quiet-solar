@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Per-phase model policy by lane (QS-358).
+
+The single source of truth for which model — and how much thinking
+effort — each pipeline agent runs on. The renderer
+(``render_agents.py``) resolves every agent's frontmatter from here;
+the Claude launcher's GUI pin writes the phase's ``effortLevel`` from
+here. This module imports nothing from the renderer (one-way
+dependency).
+
+Vocabulary (D18): the policy speaks four harness-agnostic **classes**;
+each harness owns one complete ``class → model`` row in
+``HARNESS_MODELS``, in its own vocabulary. Both rows name exact
+versions — no alias floats anywhere in the policy (D14/D20).
+
+The rendered frontmatter is the visible resolved table (D11)::
+
+    grep -h '^model:' .claude/agents/*.md .opencode/agents/*.md
+"""
+
+from __future__ import annotations
+
+import targets  # type: ignore[import-not-found]
+
+# --- classes (D18): the policy's own, harness-agnostic vocabulary ----------
+# deep     — the best code-grounded model: implement, concrete-planner, hunters, root-cause
+# frontier — the best general reasoner: planning conversation, consolidation, judgment
+# light    — checklists: delta-auditor, setup-task
+# fast     — mechanical: finish, CodeRabbit wrapper, release
+# ("inherit" is a renderer/template concern and never appears here.)
+CLASSES: frozenset[str] = frozenset({"deep", "frontier", "light", "fast"})
+
+# Every lane, derived from targets.py (tuples → stable order).
+LANES: tuple[str, ...] = tuple(f"{k}-{t}" for k in targets.KINDS for t in targets.TARGETS) + tuple(
+    f"epic-{t}" for t in targets.TARGETS
+)
+
+# --- one complete class → model row per harness (D4/D17/D18/D20) ------------
+# Keys mirror render_agents._HARNESSES (test-enforced). Claude Code takes
+# full model IDs in frontmatter (proven on 2.1.278 for sub-agents, --agent
+# sessions and settings-pinned sessions — spike Run 2; aliases would float
+# to the provider default because the settings ``env`` pin is not applied).
+# OpenCode takes provider/model literals from ``opencode models``.
+# Bumping ``deep``? Also bump ``opencode.json`` (the lockstep test names it).
+HARNESS_MODELS: dict[str, dict[str, str]] = {
+    "claude": {  # Claude Code 2.1.278, first-party API
+        "deep": "claude-opus-4-8",  # D3: Opus 5 over-reaches against our prompts
+        "frontier": "claude-fable-5-1",
+        "light": "claude-sonnet-5",
+        "fast": "claude-haiku-4-5",
+    },
+    "opencode": {  # OpenCode v2.0.14, github-copilot
+        "deep": "github-copilot/claude-opus-4.8",
+        "frontier": "github-copilot/gpt-6-astra",  # no Claude Fable on this provider (D17)
+        "light": "github-copilot/claude-sonnet-5",
+        "fast": "github-copilot/claude-haiku-4.5",
+    },
+}
+
+# --- thinking effort per class (D19) ---------------------------------------
+# Claude Code frontmatter ``effort`` / settings ``effortLevel`` vocabulary
+# (low | medium | high | xhigh | max). None = do not set (Haiku 4.5 does
+# not take the parameter). Claude-only: OpenCode documents no per-agent effort.
+CLASS_EFFORT: dict[str, str | None] = {
+    "deep": "high",
+    "frontier": "high",
+    "light": "medium",
+    "fast": None,
+}
+
+# --- the table -------------------------------------------------------------
+# The planning orchestrators are the only lane-dependent rows (D1).
+_PLANNING: frozenset[str] = frozenset({"qs-create-plan", "qs-diagnose-task"})
+
+# Lane-invariant rows (D2: reviewers deliberately mixed across classes).
+_FLAT: dict[str, str] = {
+    "qs-plan-critic": "deep",
+    "qs-plan-concrete-planner": "deep",
+    "qs-plan-dev-proxy": "frontier",
+    "qs-plan-scope-guardian": "frontier",
+    "qs-plan-delta-auditor": "light",
+    "qs-diag-root-cause-skeptic": "deep",
+    "qs-diag-fix-minimalist": "frontier",
+    "qs-implement-task": "deep",
+    "qs-implement-setup-task": "deep",
+    "qs-review-task": "frontier",
+    "qs-verify-task": "frontier",
+    "qs-review-blind-hunter": "deep",
+    "qs-review-edge-case-hunter": "deep",
+    "qs-review-acceptance-auditor": "frontier",
+    "qs-review-regression-proof": "frontier",
+    "qs-review-coderabbit": "fast",
+    "qs-finish-task": "fast",
+    "qs-setup-task": "light",
+    "qs-release": "fast",
+}
+
+STEMS: frozenset[str] = frozenset(_FLAT) | _PLANNING
+
+
+class ModelPolicyError(ValueError):
+    """Raised by :func:`resolve` for a stem with no policy row.
+
+    ``stem`` carries the offending agent so callers can report it
+    structurally (``next_step``'s JSON error payload).
+    """
+
+    def __init__(self, stem: str) -> None:
+        super().__init__(f"no model policy row for agent {stem!r}")
+        self.stem = stem
+
+
+def effort_for(cls: str) -> str | None:
+    """``CLASS_EFFORT[cls]`` — ``KeyError`` on an unknown class (programmer error)."""
+    return CLASS_EFFORT[cls]
+
+
+def _planning_class(lane: str | None) -> str:
+    """Class of a planning orchestrator under ``lane``.
+
+    Exact membership in :data:`LANES`: a ``bug-*`` lane → ``deep`` (causal
+    chain); any other lane → ``frontier`` (conversation); anything else
+    (``None``, ``""``, an unknown label) → ``deep``. A lane label is data
+    and never raises (same stance as ``targets.parse_axes``).
+    """
+    if lane is None or lane not in LANES:
+        return "deep"
+    return "deep" if lane.startswith("bug-") else "frontier"
+
+
+def resolve(lane: str | None, stem: str) -> str:
+    """Class for ``stem`` under ``lane`` — always a member of :data:`CLASSES`.
+
+    Raises:
+        ModelPolicyError: for an unknown ``stem`` (a stem is code, not data).
+    """
+    if stem in _PLANNING:
+        return _planning_class(lane)
+    try:
+        return _FLAT[stem]
+    except KeyError:
+        raise ModelPolicyError(stem) from None
+
+
+def model_for(harness: str, cls: str) -> str:
+    """``HARNESS_MODELS[harness][cls]`` — ``KeyError`` on an unknown harness or class."""
+    return HARNESS_MODELS[harness][cls]
+
+
+def class_of(value: str) -> str | None:
+    """``value`` if it is a class, else ``None``.
+
+    A literal, ``"inherit"`` or a bare alias is not a class; the renderer
+    emits those verbatim.
+    """
+    return value if value in CLASSES else None
