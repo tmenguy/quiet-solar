@@ -50,6 +50,7 @@ from homeassistant.const import (
     Platform,
 )
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry, entity_registry
 from homeassistant.util import slugify
 
@@ -214,6 +215,21 @@ CHARGER_TIME_BETWEEN_DATA_REQUEST_S = CHARGER_STATE_REFRESH_INTERVAL_S + CHARGER
 # blip on every integration reload or brief connection loss; a genuine fault does not
 # flap, so the debounce costs two minutes on a real fault but suppresses noise alerts.
 CHARGER_FAULT_NOTIFY_DEBOUNCE_S = 120
+
+
+# QS-359: OCPP v0.11.4 -> v0.12.0 compatibility tunables (rationale in the story). Kept
+# here next to the QS-346 tunable per the charger.py precedent for runtime tunables.
+OCPP_CLIP_DETECT_WINDOW_S = 180  # clip must hold this long before alerting (absorbs the 60 s sample lag)
+OCPP_CLIP_TOLERANCE_A = 1.0  # amps below requested before a reading counts as clipped
+# Substring of the v0.12.0 `set_station_charge_rate` HomeAssistantError on a refused profile.
+OCPP_STATION_PROFILE_REJECTION_MARKER = "ChargePointMaxProfile"
+OCPP_STATION_PROFILE_REJECTIONS_TO_FALLBACK = 2  # distinct-episode marker rejections before latching fallback
+# SF-1 (fix #04): two amp setpoints can be in flight within a single charger command
+# round-trip (1-5 s), so both can fail with the marker and each reach the rejection hook.
+# The streak counts distinct rejection EPISODES, not concurrent in-flight failures: marker
+# rejections closer together than this window collapse into one episode (counted once).
+OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S = 10
+OCPP_FALLBACK_CONN_ID = 1  # single-connector chargers only (multi-connector out of scope)
 
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S = 60 * 10
@@ -3703,6 +3719,16 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             await self._notify_charger_fault(time)
             self._charger_fault_notified = True
 
+        # QS-359: stack-level clip detector (#2148). Runs every cycle right after the
+        # QS-346 fault machine and before any plug-state branch, so its per-plug-session
+        # reset observes the unplug. No-op on non-OCPP chargers. Wrapped defensively: this
+        # is a diagnostic side-channel and must never abort the load-management cycle if a
+        # sensor read in the override raises unexpectedly.
+        try:
+            await self.check_amps_delivery(time)
+        except Exception:
+            _LOGGER.error("check_amps_delivery raised for %s", self.name, exc_info=True)
+
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             if self.car:
                 _LOGGER.warning(
@@ -5854,7 +5880,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                 except Exception as e:
                     _LOGGER.error("_do_update_charger_state: Error %s", e, exc_info=True, stack_info=True)
 
-    def _find_charger_entity_id(self, device, entries, prefix, suffix):
+    def _find_charger_entity_id(self, device, entries, prefix, suffix, optional: bool = False):
 
         found = []
         for entry in entries:
@@ -5876,6 +5902,20 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
         if device is not None:
             device_name = device.name_by_user or device.name
             computed = prefix + slugify(device_name) + suffix
+
+            # QS-359: for an OPTIONAL entity (e.g. `sensor.<cpid>_current_offered`) that
+            # is genuinely absent on some chargers, fabricating the computed id would
+            # bind a non-existent entity. Log at debug and return None instead, leaving
+            # the dependent feature (the clip detector) dormant. Required entities keep
+            # the computed fallback below.
+            if found is None and optional:
+                _LOGGER.debug(
+                    "_find_charger_entity_id: optional entity for %s not found with prefix %s and suffix %s",
+                    device_name,
+                    prefix,
+                    suffix,
+                )
+                return None
 
             if found is not None and found != computed:
                 _LOGGER.warning(
@@ -6054,9 +6094,31 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             await self.hass.services.async_call(domain, service, data, blocking=blocking)
             done = True
         except Exception as e:
-            _LOGGER.warning("low_level_set_max_charging_current: Error %s", e, exc_info=True, stack_info=True)
+            # QS-359: give a subclass a chance to own the diagnosis (e.g. the OCPP
+            # station-profile rejection). The hook receives the RAW `current` (the clamped
+            # value is computed inside the try and may not exist) and must not raise.
+            handled = await self._on_amp_command_error(e, current, time)
+            if not handled:
+                _LOGGER.warning("low_level_set_max_charging_current: Error %s", e, exc_info=True, stack_info=True)
             done = False
         return done
+
+    async def _on_amp_command_error(self, error: Exception, current: float, time: datetime) -> bool:
+        """Hook for a subclass to handle a failed amp command. Returns True when handled.
+
+        Base implementation does nothing and reports the error as unhandled, so the
+        generic warning is logged as before. Runs inside an `except` branch: it must
+        never raise.
+        """
+        return False
+
+    async def check_amps_delivery(self, time: datetime) -> None:
+        """Hook run every load-management cycle to compare delivered vs commanded amps.
+
+        Base implementation is a no-op; `QSChargerOCPP` overrides it to detect a
+        stack-level clip (#2148) and notify the household.
+        """
+        return None
 
     async def low_level_set_charging_current(self, current, time: datetime, blocking=False) -> bool:
         if self.charger_max_charging_current_number is not None:
@@ -6129,6 +6191,27 @@ class QSChargerOCPP(QSChargerGeneric):
         self.charger_ocpp_current_import = None
         self.charger_ocpp_power_active_import = None
 
+        # QS-359: type these before the device guard below. Four test files (and a
+        # device-less runtime construction) build QSChargerOCPP without a device, and
+        # `get_probable_entities` reads `charger_ocpp_transaction_id` unguarded.
+        self.devid: str | None = None
+        self.charger_ocpp_transaction_id: str | None = None
+        self.charger_ocpp_current_offered: str | None = None
+
+        # QS-359: station-profile fallback mode (v0.12.0 #2131). Sticky until the
+        # integration is reloaded or HA restarts.
+        self._ocpp_station_profile_rejected: bool = False
+        self._ocpp_station_profile_rejection_streak: int = 0
+        # SF-1 (fix #04): wall-clock of the last marker rejection that COUNTED toward the
+        # streak; concurrent same-episode rejections inside the debounce window are ignored.
+        self._ocpp_last_rejection_counted_time: datetime | None = None
+        self._ocpp_last_fallback_amps: int | None = None
+        self._ocpp_fallback_failure_logged: bool = False
+
+        # QS-359: stack-level clip detector (#2148) per plug-session state.
+        self._ocpp_clip_since: datetime | None = None
+        self._ocpp_clip_notified: bool = False
+
         self.use_ocpp_custom_charging_profile = False
 
         hass: HomeAssistant | None = kwargs.get("hass", None)
@@ -6162,6 +6245,12 @@ class QSChargerOCPP(QSChargerGeneric):
                 self.charger_ocpp_transaction_id = None
                 kwargs[CONF_CHARGER_MAX_CHARGING_CURRENT_NUMBER] = self._find_charger_entity_id(
                     device, entries, "number.", "_maximum_current"
+                )
+                # QS-359: optional clip-detector probe (#2148). Absent -> the detector
+                # stays dormant. The custom-profile branch already binds `_current_offered`
+                # as the charging-current sensor, so only the number path needs it here.
+                self.charger_ocpp_current_offered = self._find_charger_entity_id(
+                    device, entries, "sensor.", "_current_offered", optional=True
                 )
 
             kwargs[CONF_CHARGER_STATUS_SENSOR] = self._find_charger_entity_id(
@@ -6288,6 +6377,8 @@ class QSChargerOCPP(QSChargerGeneric):
             entities.append(self.charger_ocpp_current_import)
         if self.charger_ocpp_transaction_id is not None:
             entities.append(self.charger_ocpp_transaction_id)
+        if self.charger_ocpp_current_offered is not None:
+            entities.append(self.charger_ocpp_current_offered)
         return entities
 
     # to be sent to have data refreshed for current, etc
@@ -6330,10 +6421,287 @@ class QSChargerOCPP(QSChargerGeneric):
 
     async def low_level_set_max_charging_current(self, current, time: datetime, blocking=False) -> bool:
 
-        if self.use_ocpp_custom_charging_profile is False:
-            return await super().low_level_set_max_charging_current(current, time)
+        if self.use_ocpp_custom_charging_profile:
+            return await self.low_level_set_charging_current(current, time, blocking)
 
-        return await self.low_level_set_charging_current(current, time, blocking)
+        if self._ocpp_station_profile_rejected:
+            return await self._ocpp_set_charge_rate_fallback(current, time, blocking)
+
+        if blocking:
+            # An explicit blocking caller wants a real outcome, so run it inline.
+            return await self._ocpp_run_number_command(current, time)
+
+        # QS-359: run the number write one task hop later so a HomeAssistantError raised by
+        # lbbrhzn/ocpp v0.12.0 (station-profile rejection) reaches `_on_amp_command_error`
+        # via `blocking=True` inside the task WITHOUT stalling the load-management cycle.
+        # NH-4: two setpoints issued within the charger command round-trip (1-5 s) leave two
+        # number writes in flight that may complete out of order, so the last-applied amp and
+        # the streak reset can momentarily reflect a stale setpoint; the observation-driven
+        # ensure-state loop self-corrects it on the next cycle. Accepted.
+        self.hass.async_create_task(self._ocpp_run_number_command(current, time))
+        # NH-1: this True is an OPTIMISTIC ack by design (story Goal 1a) — the value was
+        # already True on this path before the task hop. A rejection is not lost: it surfaces
+        # asynchronously inside the task via `_on_amp_command_error`.
+        return True
+
+    async def _ocpp_run_number_command(self, current, time: datetime) -> bool:
+        # QS-359: `blocking=True` surfaces the number entity's HomeAssistantError to
+        # `_on_amp_command_error`. An accepted write resets the rejection streak.
+        ok = await super().low_level_set_max_charging_current(current, time, blocking=True)
+        if ok:
+            self._ocpp_station_profile_rejection_streak = 0
+            # SF-1 (fix #04): clear the episode clock too, so a rejection after an accepted
+            # write is always a fresh episode (never debounced against the pre-reset one).
+            self._ocpp_last_rejection_counted_time = None
+        return ok
+
+    async def _on_amp_command_error(self, error: Exception, current: float, time: datetime) -> bool:
+        # QS-359: own the diagnosis for lbbrhzn/ocpp v0.12.0 station-profile rejections.
+        # Must not raise (runs inside an `except` branch).
+        # SF-1 (fix #03): the marker only ever appears in the v0.12.0
+        # `set_station_charge_rate` HomeAssistantError. The caller forwards EVERY exception
+        # from its `try` — including a `ValueError` from `float(current)` when `current` is a
+        # string that happens to contain "ChargePointMaxProfile". Reject any non-HAE error
+        # before the marker check so such invalid input logs the generic warning and never
+        # touches the streak.
+        # NH-1: detection intentionally trusts the v0.12.0 contract that a station-profile
+        # rejection always surfaces as a HomeAssistantError (story's documented assumption).
+        # A future HA/ocpp version raising a bare exception that still carries the marker
+        # text would be silently dropped here and fallback would never latch; revisit this
+        # guard if that contract changes.
+        if not isinstance(error, HomeAssistantError):
+            return False
+        if self.use_ocpp_custom_charging_profile:
+            return False
+        if OCPP_STATION_PROFILE_REJECTION_MARKER not in str(error):
+            # Transient timeouts and other errors never count toward the streak; the
+            # generic warning is logged by the caller.
+            return False
+
+        # SF-1 (fix #04): only count this rejection when it opens a NEW episode — i.e. it is
+        # separated from the last counted rejection by at least the charger command
+        # round-trip window. Concurrent in-flight setpoints that both fail with the marker
+        # inside that window collapse to a single episode, so one transient hiccup can never
+        # walk the streak to the fallback threshold on its own.
+        last_counted = self._ocpp_last_rejection_counted_time
+        if (
+            last_counted is not None
+            and (time - last_counted).total_seconds() < OCPP_STATION_PROFILE_REJECTION_DEBOUNCE_S
+        ):
+            # Same episode as an already-counted rejection: count once, no streak change.
+            return True
+        self._ocpp_last_rejection_counted_time = time
+
+        self._ocpp_station_profile_rejection_streak += 1
+        if (
+            not self._ocpp_station_profile_rejected
+            and self._ocpp_station_profile_rejection_streak >= OCPP_STATION_PROFILE_REJECTIONS_TO_FALLBACK
+        ):
+            self._ocpp_station_profile_rejected = True
+            _LOGGER.warning(
+                "station profile rejected %s times by %s; switching amp control to "
+                "`ocpp.set_charge_rate` until the integration is reloaded or HA restarts",
+                self._ocpp_station_profile_rejection_streak,
+                self.name,
+            )
+        elif not self._ocpp_station_profile_rejected:
+            # A first rejection can be transient; log at debug and wait for the next cycle.
+            _LOGGER.debug(
+                "station profile rejected once by %s; waiting for a second rejection before fallback",
+                self.name,
+            )
+        # No replay: the next load-management cycle re-issues the setpoint through the
+        # fallback branch, and the ensure-state loop already retries on observation.
+        return True
+
+    async def _ocpp_set_charge_rate_fallback(self, current, time: datetime, blocking: bool = False) -> bool:
+        # QS-359: amp control for chargers that reject `ChargePointMaxProfile` (the
+        # population v0.12.0 #2131 breaks). `ocpp.set_charge_rate` keeps the pre-v0.12.0
+        # chain (`ChargePointMaxProfile` on connector 0 -> `TxProfile` on the running
+        # transaction -> `TxDefaultProfile` on `conn_id`) on both integration versions;
+        # `conn_id` only selects the Tx target connector, the station profile is always
+        # tried first (and is expected to be rejected here). The `TxDefaultProfile` it
+        # writes persists on the charger at the last fallback amps beyond the mode — the
+        # same as the v0.11.4 slider did for these chargers. The cleaner alternative on
+        # v0.12.0+ is `number.<cpid>_session_current_limit` (a `TxProfile` bound to the
+        # displayed transaction, session-scoped, no persistent `TxDefaultProfile`), not
+        # used here because it is v0.12.0-only, needs a displayed transaction id, and its
+        # value goes `unknown` at every transaction end, which fights the ack loop.
+        # The action's handler swallows the chain's boolean ("reports success either
+        # way"), so a charger that also rejects `TxProfile`/`TxDefaultProfile` is
+        # invisible on this path — exactly what the v0.11.4 slider did for that population.
+        if self.devid is None:
+            _LOGGER.debug("_ocpp_set_charge_rate_fallback: no devid, cannot set charge rate")
+            return False
+
+        # Clamp before the service call (like the generic number path): a bad `current`
+        # returns False without counting as a service failure and without propagating out
+        # of the load-management cycle.
+        try:
+            clamped = int(min(float(self.charger_max_charge), max(float(self.charger_min_charge), float(current))))
+        except (ValueError, TypeError) as e:
+            _LOGGER.warning("_ocpp_set_charge_rate_fallback: bad current %s (%s)", current, e)
+            return False
+
+        # SF-1 (fix #05): the fallback IS reachable with `blocking=True` — the sole
+        # `blocking=True` amp caller routes here (not to the number path) once the station
+        # profile is latched, because `low_level_set_max_charging_current` evaluates the
+        # `self._ocpp_station_profile_rejected` fallback branch BEFORE the `if blocking:`
+        # branch and forwards `blocking`. A blocking `async_call` propagates the service
+        # handler's exceptions, so the fallback's service-call exception surface must match
+        # the base number path (`except Exception`): a non-HAE runtime error
+        # (`asyncio.TimeoutError`, `ConnectionError`, `RuntimeError`) must return False —
+        # not escape and abort the cycle — leaving `_ocpp_last_fallback_amps` untouched.
+        try:
+            # When a blocking caller asks, forward `blocking` so it receives the real
+            # outcome (the service handler raises on refusal) instead of the optimistic ack.
+            await self.hass.services.async_call(
+                "ocpp",
+                "set_charge_rate",
+                {"devid": self.devid, "limit_amps": clamped, "conn_id": OCPP_FALLBACK_CONN_ID},
+                blocking=blocking,
+            )
+        except Exception as e:
+            if not self._ocpp_fallback_failure_logged:
+                _LOGGER.warning("_ocpp_set_charge_rate_fallback: Error %s", e, exc_info=True, stack_info=True)
+                self._ocpp_fallback_failure_logged = True
+            else:
+                _LOGGER.debug("_ocpp_set_charge_rate_fallback: Error %s", e)
+            return False
+
+        # Ack assigned only AFTER a call that returned without raising, so a failed
+        # service leaves the previous ack and the ensure-state loop keeps retrying.
+        self._ocpp_last_fallback_amps = clamped
+        self._ocpp_fallback_failure_logged = False
+        return True
+
+    def get_max_charging_amp_per_phase(self) -> float | None:
+        # QS-359: in fallback mode the number entity reverts to its last confirmed value
+        # (v0.12.0 #2131), so read the optimistic fallback ack instead. `None` means "not
+        # yet acked", exactly like an `unknown` number state today. `current_offered` is
+        # deliberately NOT used as an ack: it lags a MeterValues interval, is a
+        # non-integer measurement compared by `==` in the ensure-state loop, and is
+        # exactly the quantity that may legitimately sit below the command.
+        if self._ocpp_station_profile_rejected:
+            if self._ocpp_last_fallback_amps is None:
+                return None
+            return float(self._ocpp_last_fallback_amps)
+        return super().get_max_charging_amp_per_phase()
+
+    def _ocpp_read_current_offered(self, time: datetime) -> float | None:
+        # QS-359: read `sensor.<cpid>_current_offered` through the same probe-cache
+        # primitive as the status gate. Missing/unknown/unavailable/non-numeric -> None.
+        raw = self.get_sensor_latest_possible_valid_value(self.charger_ocpp_current_offered, time=time)
+        try:
+            value = float(raw)
+        except ValueError, TypeError:
+            return None
+        # `float("nan")` succeeds but `nan >= expected - tolerance` is always False, which
+        # would read as a permanent clip. Treat a non-finite reading as "no reading".
+        if not math.isfinite(value):
+            return None
+        return value
+
+    async def check_amps_delivery(self, time: datetime) -> None:
+        # QS-359: stack-level clip detector (#2148). Plain per-cycle state machine mirroring
+        # the QS-346 fault machine (not a rising-edge fire). Number-path only: in fallback
+        # mode the number reverts and the ack is optimistic, so the comparison is meaningless.
+        if self.charger_ocpp_current_offered is None or self._ocpp_station_profile_rejected:
+            return
+
+        if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
+            # Per plug-session reset. Not persisted: an HA restart during a clipped session
+            # may re-notify once (accepted).
+            # NH-5: the reset relies on the shared `for_duration` primitive, so an
+            # unplug+replug faster than CHARGER_CHECK_STATE_WINDOW_S never trips it and the
+            # latch carries into the new session (a genuine new-session clip is not
+            # re-notified). Accepted — inherent to the shared primitive, not re-architected.
+            self._ocpp_clip_since = None
+            self._ocpp_clip_notified = False
+            return
+
+        # SuspendedEV/SuspendedEVSE are excluded on purpose: a paused car may read
+        # `Current.Offered = 0` on some chargers even though upstream `_zero_flow_measurands`
+        # does not zero it. `QSOCPPv16v201ChargePointStatus` is a StrEnum, so the raw
+        # "Charging" string compares equal.
+        charging = (
+            self.is_charge_enabled(time) is True
+            and self.get_sensor_latest_possible_valid_value(self.charger_status_sensor_unfiltered, time=time)
+            == QSOCPPv16v201ChargePointStatus.charging
+        )
+        expected = self._expected_amperage.value
+        # Strict `>`: at the minimum a clip is indistinguishable from the charger's own
+        # floor, and QS drives to the minimum before every stop.
+        expected_valid = expected is not None and expected > self.charger_min_charge
+        offered = self._ocpp_read_current_offered(time)
+
+        if not charging or not expected_valid or offered is None:
+            self._ocpp_clip_since = None
+            return
+
+        if self.get_max_charging_amp_per_phase() != expected:
+            # The number has not acknowledged the current setpoint (a routine amp change is
+            # in flight). Skip this tick but HOLD the window — resetting here would let
+            # solar modulation restart the window on every setpoint change and hide a clip.
+            # NH-2: an unknown number state (`get_max_charging_amp_per_phase() is None`)
+            # takes this branch too (`None != expected`), so it intentionally holds — never
+            # notifies — while the ack is unknown. Acceptable under the `Charging` gate,
+            # which already implies the charger is online and reporting.
+            return
+
+        if offered >= expected - OCPP_CLIP_TOLERANCE_A:
+            self._ocpp_clip_since = None
+            return
+
+        # Clipped.
+        if self._ocpp_clip_since is None:
+            self._ocpp_clip_since = time
+        elif (
+            not self._ocpp_clip_notified and (time - self._ocpp_clip_since).total_seconds() >= OCPP_CLIP_DETECT_WINDOW_S
+        ):
+            await self._notify_ocpp_clip(time, expected, offered)
+            self._ocpp_clip_notified = True
+
+    async def _notify_ocpp_clip(self, time: datetime, expected: float, offered: float) -> None:
+        # QS-359: notify-only. Never write `ocpp.clear_profile` from QS (see the story's
+        # rejected alternatives). Trust a remembered car only while it is genuinely
+        # detached — the same expression `_notify_charger_fault` uses.
+        car = self.car or (
+            self._last_attached_car
+            if self._last_attached_car is not None and self._last_attached_car.charger is None
+            else None
+        )
+        # Floor the offered value (do NOT round): rounding 15.6 up to 16 would print
+        # "offers 16 A while 16 A were requested", contradicting the clip premise.
+        message = (
+            f"Your charger `{self.name}` offers {math.floor(offered)} A while {expected:.0f} A were requested. "
+            f"Unless your charger's own power-sharing or installation limit is active, a stale OCPP "
+            f"charging profile is probably capping it. "
+        )
+        if self.devid is not None:
+            # Skip the manual-workaround sentence when we have no device id to name — an
+            # instruction to run the action "for `None`" is unusable.
+            message += (
+                f"When the car is unplugged, run the `ocpp.clear_profile` action for `{self.devid}`. "
+                f"Never run it during a charge, and expect the first seconds of the next session at the "
+                f"charger's installation maximum until Quiet Solar applies its limit."
+            )
+        title = "Charger current limited — check needed"
+
+        # Two channels, each isolated with `except Exception` (the QS-346
+        # `_notify_charger_fault` precedent): a failure on one — including a non-HA raise
+        # such as `self.home is None` — must neither block the other nor let the exception
+        # escape, because the caller latches `_ocpp_clip_notified` only after this returns
+        # normally. If it escaped, the next cycle would re-fire the channel that already
+        # succeeded, defeating the "at most one notification per plug session" contract.
+        try:
+            await self.on_device_state_change(time, DEVICE_STATUS_CHANGE_ERROR, message=message, car=car)
+        except Exception:
+            _LOGGER.error("Error sending charger-clip override notification for %s", self.name, exc_info=True)
+        try:
+            await self.home.async_notify_all_mobile_apps(title, message)
+        except Exception:
+            _LOGGER.error("Error broadcasting charger-clip notification for %s", self.name, exc_info=True)
 
     async def low_level_set_charging_current(self, current, time: datetime, blocking=False) -> bool:
 
@@ -6373,7 +6741,7 @@ class QSChargerOCPP(QSChargerGeneric):
         #
 
         if self.use_ocpp_custom_charging_profile is False:
-            return await super().low_level_set_charging_current(current, time)
+            return await super().low_level_set_charging_current(current, time, blocking)
 
         # _LOGGER.warning(f"low_level_set_charging_current OCPP: {current}A")
         #
