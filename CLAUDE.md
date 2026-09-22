@@ -46,6 +46,10 @@ template, never a rendered output); slash commands stay tracked in
 worktree birth, at every handoff, and post-merge on `main`; on a fresh
 clone run `python scripts/qs/render_agents.py` once. Agents still resolve
 volatile task context at runtime via `python scripts/qs/context.py`.
+The model and thinking effort per agent come from
+[scripts/qs/models.py](scripts/qs/models.py) (QS-358 — four classes, one
+exact-model row per harness) and are rendered into each agent's
+frontmatter; `opencode.json` follows the `deep` row.
 
 ## Pipeline architecture
 
