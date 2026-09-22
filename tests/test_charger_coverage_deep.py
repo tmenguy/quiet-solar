@@ -2045,8 +2045,12 @@ def _make_entity_entry(entity_id):
     return e
 
 
-def _create_ocpp_charger(hass, home, name="OcppCharger", min_charge=6, max_charge=32):
-    """Create a REAL QSChargerOCPP by mocking just the device/entity registry lookups."""
+def _create_ocpp_charger(hass, home, name="OcppCharger", min_charge=6, max_charge=32, extra_entity_ids=()):
+    """Create a REAL QSChargerOCPP by mocking just the device/entity registry lookups.
+
+    `extra_entity_ids` — full entity ids appended to the discovered registry entries (e.g.
+    `sensor.<devname>_current_offered`, registered by lbbrhzn/ocpp v0.12.0; see QS-362).
+    """
     from custom_components.quiet_solar.ha_model.charger import QSChargerOCPP
 
     config_entry = MagicMock()
@@ -2063,6 +2067,7 @@ def _create_ocpp_charger(hass, home, name="OcppCharger", min_charge=6, max_charg
         _make_entity_entry(f"sensor.{devname}_status_connector"),
         _make_entity_entry(f"sensor.{devname}_power_active_import"),
     ]
+    entries.extend(_make_entity_entry(eid) for eid in extra_entity_ids)
 
     fake_device = MagicMock()
     fake_device.id = device_id
