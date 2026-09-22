@@ -248,6 +248,8 @@ def main() -> None:
         next_cmd=args.next_cmd,
         next_prompt=args.next_prompt,
         caller="setup_task",
+        # QS-358: the labels' lane feeds the Claude pin's effortLevel.
+        lane=targets.parse_axes(labels)["lane"] or None,
     )
 
     output_json({

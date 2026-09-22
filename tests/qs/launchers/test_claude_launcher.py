@@ -107,7 +107,7 @@ def test_build_payload_script_is_under_tempdir_and_executable() -> None:
 
 
 def test_build_payload_preserves_launch_opts_and_workdir() -> None:
-    """The legacy ``CLAUDE_LAUNCH_OPTS`` flags survive the rewrite."""
+    """``CLAUDE_LAUNCH_OPTS`` keeps its permissions flag and carries no ``--model`` (QS-358 D9)."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     payload = claude_launcher.build_payload(
@@ -118,10 +118,11 @@ def test_build_payload_preserves_launch_opts_and_workdir() -> None:
     )
     script = _read_script(payload["new_context"])
     assert "/tmp/work" in script
-    # CLAUDE_LAUNCH_OPTS keeps these defaults — change here is intentional and
-    # caught by this assertion.
+    # CLAUDE_LAUNCH_OPTS keeps this default — change here is intentional and
+    # caught by this assertion. No ``--model``: the model comes from each
+    # agent's frontmatter, rendered from scripts/qs/models.py (QS-358 D9).
     assert "--dangerously-skip-permissions" in script
-    assert "--model opus" in script
+    assert "--model" not in script
     # Stable layout invariant: ``--agent`` appears after CLAUDE_LAUNCH_OPTS
     # in the rendered command line. (CLI flag ORDER is independent in
     # argparse-style parsers — this is a layout/cosmetic check, not a
@@ -172,6 +173,9 @@ def test_build_payload_shlex_quotes_agent_name(monkeypatch: pytest.MonkeyPatch) 
         "resolve_agent_for_next_cmd",
         lambda _next_cmd: "qs-test agent's-name",
     )
+    # The synthetic agent has no model-policy row (QS-358); stub the class
+    # lookup so this test stays about quoting.
+    monkeypatch.setattr(claude_launcher.models, "resolve", lambda _lane, _stem: "deep")
     payload = claude_launcher.build_payload(
         "/tmp/work", 99, "Title", next_cmd="create-plan",
     )
@@ -312,7 +316,7 @@ def test_writes_agent_key_into_new_settings_file(tmp_path: Path) -> None:
     )
 
     assert payload["agent"] == "qs-create-plan"
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert _settings(work_dir) == {"agent": "qs-create-plan", "effortLevel": "high"}
     # The atomic-write temp sibling must not survive the call. The name
     # carries the writer's PID (review-fix #01 N5), so glob for it.
     assert _tmp_siblings(work_dir) == []
@@ -336,6 +340,7 @@ def test_merges_and_preserves_existing_keys(tmp_path: Path) -> None:
         "permissions": {"allow": ["Bash(git status)"]},
         "model": "opus",
         "agent": "qs-create-plan",
+        "effortLevel": "high",
     }
 
 
@@ -352,7 +357,7 @@ def test_replaces_pre_existing_agent_value(tmp_path: Path) -> None:
         str(work_dir), 311, "Title", next_cmd="create-plan",
     )
 
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert _settings(work_dir) == {"agent": "qs-create-plan", "effortLevel": "high"}
 
 
 def test_skips_when_destination_is_main_checkout(
@@ -495,7 +500,9 @@ def test_bom_prefixed_settings_are_parsed_and_merged(
     )
 
     assert payload["phase_agent_pinned"] is True
-    assert _settings(work_dir) == {"model": "opus", "agent": "qs-create-plan"}
+    assert _settings(work_dir) == {
+        "model": "opus", "agent": "qs-create-plan", "effortLevel": "high",
+    }
     assert "warning:" not in capsys.readouterr().err
 
 
@@ -616,7 +623,7 @@ def test_second_write_is_byte_identical(tmp_path: Path) -> None:
     assert first == second
     # Pin the on-disk format: 2-space indent + trailing newline.
     assert first.decode("utf-8") == (
-        json.dumps({"agent": "qs-create-plan"}, indent=2) + "\n"
+        json.dumps({"agent": "qs-create-plan", "effortLevel": "high"}, indent=2) + "\n"
     )
 
 
@@ -795,7 +802,7 @@ def test_unlink_failure_does_not_break_handoff(
     )
 
     assert payload["phase_agent_pinned"] is True
-    assert _settings(work_dir) == {"agent": "qs-create-plan"}
+    assert _settings(work_dir) == {"agent": "qs-create-plan", "effortLevel": "high"}
 
 
 def test_write_failure_reports_unpinned_and_survives(
@@ -878,6 +885,7 @@ def test_reread_before_replace_preserves_late_key(
         "model": "opus",
         "permissions": {"allow": ["Bash(ls)"]},
         "agent": "qs-create-plan",
+        "effortLevel": "high",
     }
 
 
@@ -1211,6 +1219,7 @@ def test_published_pin_carries_the_target_mode(tmp_path: Path) -> None:
     assert _settings(work_dir) == {
         "env": {"TOKEN": "s3cr"},
         "agent": "qs-create-plan",
+        "effortLevel": "high",
     }
 
 
@@ -1245,7 +1254,9 @@ def test_mode_failure_still_publishes_the_pin(
     )
 
     assert payload["phase_agent_pinned"] is True
-    assert _settings(work_dir) == {"model": "opus", "agent": "qs-create-plan"}
+    assert _settings(work_dir) == {
+        "model": "opus", "agent": "qs-create-plan", "effortLevel": "high",
+    }
     # Review-fix #06 F2: the degrade must be OBSERVABLE. Silence here is
     # sticky — one failure publishes at ``0o666 & ~umask``, Claude Code may
     # then persist an ``env`` token into that same file, and every later
@@ -1295,7 +1306,9 @@ def test_late_non_object_keeps_the_first_render(
     assert fired, "the late window never opened — the simulation is vacuous"
     assert payload["phase_agent_pinned"] is True
     # The first render stands: the list is discarded, not merged onto.
-    assert _settings(work_dir) == {"model": "opus", "agent": "qs-create-plan"}
+    assert _settings(work_dir) == {
+        "model": "opus", "agent": "qs-create-plan", "effortLevel": "high",
+    }
 
 
 def test_fresh_settings_file_is_created_private(tmp_path: Path) -> None:
@@ -1342,3 +1355,58 @@ def test_guard_two_rejects_when_agent_file_present_but_no_git(
 
     assert payload["phase_agent_pinned"] is False
     assert not (work_dir / SETTINGS_REL).exists()
+
+
+# --------------------------------------------------------------------------- #
+# QS-358 — the pin carries the phase's effortLevel (D19), never ``model`` (D20)
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("lane", [None, "feature-factory", "bug-product", "not-a-lane"])
+def test_pin_carries_effort_level_for_create_plan(tmp_path: Path, lane: str | None) -> None:
+    """``create-plan`` → ``deep`` or ``frontier``, both ``high`` today; no ``model`` key."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    claude_launcher.build_payload(
+        str(work_dir), 358, "Title", next_cmd="create-plan", lane=lane,
+    )
+    assert _settings(work_dir) == {"agent": "qs-create-plan", "effortLevel": "high"}
+
+
+@pytest.mark.parametrize("lane", [None, "feature-factory", "bug-product"])
+def test_fast_phase_drops_stale_effort_level(tmp_path: Path, lane: str | None) -> None:
+    """``finish-task`` (``fast``) pins no ``effortLevel`` and removes a stale one,
+    while foreign keys — including the user's own ``model`` — survive."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path, agent="qs-finish-task")
+    (work_dir / SETTINGS_REL).write_text(
+        json.dumps(
+            {
+                "permissions": {"allow": ["Bash(ls)"]},
+                "model": "fable",
+                "agent": "qs-review-task",
+                "effortLevel": "medium",
+            },
+        ),
+        encoding="utf-8",
+    )
+    payload = claude_launcher.build_payload(
+        str(work_dir), 358, "Title", next_cmd="finish-task", lane=lane,
+    )
+    assert payload["phase_agent_pinned"] is True
+    assert _settings(work_dir) == {
+        "permissions": {"allow": ["Bash(ls)"]},
+        "model": "fable",
+        "agent": "qs-finish-task",
+    }
+
+
+def test_fast_phase_without_prior_effort_level(tmp_path: Path) -> None:
+    """Removing an absent ``effortLevel`` is a no-op, not an error."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path, agent="qs-finish-task")
+    claude_launcher.build_payload(str(work_dir), 358, "Title", next_cmd="finish-task")
+    assert _settings(work_dir) == {"agent": "qs-finish-task"}

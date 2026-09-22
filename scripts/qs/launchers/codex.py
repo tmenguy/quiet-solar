@@ -31,6 +31,7 @@ def build_payload(
     caller: Caller = "next_step",
     fix_plan_path: str | None = None,
     pr_number: int | None = None,
+    lane: str | None = None,
 ) -> dict:
     """Return a placeholder launcher payload for Codex.
 
@@ -46,6 +47,7 @@ def build_payload(
     """
     del title  # unused
     del caller  # reserved for harness-specific bifurcation
+    del lane  # reserved, used by the Claude launcher's GUI pin (QS-358)
     payload: dict = {
         "tool": "codex",
         "same_context": next_cmd,
