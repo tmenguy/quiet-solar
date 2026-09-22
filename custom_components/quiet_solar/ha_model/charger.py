@@ -6594,7 +6594,7 @@ class QSChargerOCPP(QSChargerGeneric):
         raw = self.get_sensor_latest_possible_valid_value(self.charger_ocpp_current_offered, time=time)
         try:
             value = float(raw)
-        except (ValueError, TypeError):
+        except ValueError, TypeError:
             return None
         # `float("nan")` succeeds but `nan >= expected - tolerance` is always False, which
         # would read as a permanent clip. Treat a non-finite reading as "no reading".
@@ -6657,8 +6657,7 @@ class QSChargerOCPP(QSChargerGeneric):
         if self._ocpp_clip_since is None:
             self._ocpp_clip_since = time
         elif (
-            not self._ocpp_clip_notified
-            and (time - self._ocpp_clip_since).total_seconds() >= OCPP_CLIP_DETECT_WINDOW_S
+            not self._ocpp_clip_notified and (time - self._ocpp_clip_since).total_seconds() >= OCPP_CLIP_DETECT_WINDOW_S
         ):
             await self._notify_ocpp_clip(time, expected, offered)
             self._ocpp_clip_notified = True
