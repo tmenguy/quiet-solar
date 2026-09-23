@@ -298,6 +298,11 @@ _GUI_BLOCK_REQUIRED_TOKENS = (
     # the user which model to pick. ``{{phase_model}}`` is the runtime
     # placeholder the launcher payload fills.
     "{{phase_model}}",
+    # QS-367 S2: AC7 requires both the placeholder AND the gesture that
+    # sets it. ``model picker`` was asserted ABSENT on OpenCode
+    # (``test_opencode_agents_omit_gui_model_prose``) but never asserted
+    # PRESENT on Claude until now.
+    "model picker",
 )
 
 # ``qs-review-task`` hands off twice — the zero-findings → finish-task
@@ -381,6 +386,32 @@ def test_gui_block_names_required_tokens(filename: str, token: str) -> None:
         f"{filename}: GUI block(s) {missing} do not mention {token!r} "
         f"(QS-311 AC5). Each block must stand alone — a reader of one "
         f"handoff never sees the others."
+    )
+
+
+# QS-367 S3: a raw model ID may not appear in the desktop picker (which
+# shows display names and may not list every model). Every GUI block's
+# ``Pick model`` bullet must therefore carry a fallback to the Preferred
+# ``--agent`` line, whose frontmatter pins the model. Whitespace-normalised
+# because the clause line-wraps differently in the indented
+# (``qs-create-plan``/``qs-diagnose-task``) and unindented sites.
+_PICKER_FALLBACK_CLAUSE = (
+    "if the picker does not offer it, use the Preferred `--agent` line above "
+    "(its frontmatter pins the model)"
+)
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_gui_block_carries_picker_fallback_clause(filename: str) -> None:
+    """Every GUI block tells the user what to do when the picker lacks the model."""
+    blocks = _gui_blocks((AGENTS_DIR / filename).read_text())
+    assert blocks, f"{filename}: no '[Claude Code GUI]' block at all"
+    expected = " ".join(_PICKER_FALLBACK_CLAUSE.split())
+    missing = [i for i, block in enumerate(blocks) if expected not in " ".join(block.split())]
+    assert not missing, (
+        f"{filename}: GUI block(s) {missing} do not carry the picker-fallback "
+        f"clause (QS-367 S3). A raw model ID may not be in the desktop "
+        f"picker, so each block must route to the Preferred `--agent` line."
     )
 
 
@@ -516,11 +547,24 @@ def test_claude_capture_sentence_names_phase_model(filename: str) -> None:
 
 
 def test_setup_task_key_list_names_phase_model() -> None:
-    """``qs-setup-task`` has no capture sentence; its payload key list names it."""
+    """``qs-setup-task`` has no capture sentence; its payload key list names it.
+
+    QS-367 S1: the old assertion was ``"phase_model" in body`` of the whole
+    rendered file, which the GUI block's ``{{phase_model}}`` alone satisfied
+    — so it passed even if the payload key-list paragraph (the one starting
+    ``Capture `worktree_path```) dropped ``phase_model``. Scope the check to
+    that paragraph so it tests what its name claims.
+    """
     body = (AGENTS_DIR / "qs-setup-task.md").read_text()
-    assert "phase_model" in body, (
-        "qs-setup-task.md: the payload key list must name `phase_model` "
-        "(QS-367 E7)."
+    paras = re.split(r"\n[ \t]*\n", body)
+    key_list = [p for p in paras if p.lstrip().startswith("Capture `worktree_path`")]
+    assert len(key_list) == 1, (
+        f"qs-setup-task.md: expected exactly one payload key-list paragraph "
+        f"starting 'Capture `worktree_path`', found {len(key_list)}."
+    )
+    assert "phase_model" in key_list[0], (
+        "qs-setup-task.md: the payload key-list paragraph must name "
+        "`phase_model` (QS-367 E7/S1)."
     )
 
 

@@ -8,7 +8,7 @@ the Claude launcher's GUI pin writes the phase's ``effortLevel`` from
 here. This module imports nothing from the renderer (one-way
 dependency).
 
-Vocabulary (D18): the policy speaks four harness-agnostic **classes**;
+Vocabulary (D18): the policy speaks five harness-agnostic **classes**;
 each harness owns one complete ``class → model`` row in
 ``HARNESS_MODELS``, in its own vocabulary. Both rows name exact
 versions — no alias floats anywhere in the policy (D14/D20).
@@ -42,7 +42,8 @@ LANES: tuple[str, ...] = tuple(f"{k}-{t}" for k in targets.KINDS for t in target
 # aliases would float to the provider default because the settings ``env``
 # pin is not applied). ``claude-opus-5-5`` requires Claude Code ≥ 2.1.280
 # (QS-367 E8). OpenCode takes provider/model literals from ``opencode models``.
-# Bumping ``deep``? Also bump ``opencode.json`` (the lockstep test names it).
+# Bumping ``deep``? Also bump ``opencode.json`` (the lockstep test names it;
+# ``build`` does not affect ``opencode.json``).
 HARNESS_MODELS: dict[str, dict[str, str]] = {
     "claude": {  # Claude Code ≥ 2.1.280 (required by ``claude-opus-5-5``), first-party API
         "build": "claude-opus-4-8",  # QS-367 E1: footprint — D3 reason still standing
@@ -59,6 +60,14 @@ HARNESS_MODELS: dict[str, dict[str, str]] = {
         "fast": "github-copilot/claude-haiku-4.5",
     },
 }
+
+# --- Claude Code CLI floor (QS-367 S4) -------------------------------------
+# ``HARNESS_MODELS["claude"]["deep"] == "claude-opus-5-5"`` needs Claude Code
+# ≥ 2.1.280 (QS-367 E8); older builds 400 on it. Named here, next to the
+# ``claude`` row it constrains, and consumed by
+# ``launchers.claude.check_cli_floor`` so the version and the model that
+# requires it cannot drift apart.
+CLAUDE_CLI_FLOOR: tuple[int, int, int] = (2, 1, 280)
 
 # --- thinking effort per class (D19) ---------------------------------------
 # Claude Code frontmatter ``effort`` / settings ``effortLevel`` vocabulary

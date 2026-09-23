@@ -353,10 +353,11 @@ whether that write happened — it is always skipped on a main checkout).
 The GUI displays the active agent nowhere, so if the phase looks wrong,
 use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
-  • **Pick model `{{phase_model}}`** in the model picker (the GUI ignores
-    the agent's model — see harness.md)
   • Select directory `{{worktree}}`
   • Name it `QS_{{issue}} {{NEXT_PHASE}}`
+  • **Pick model `{{phase_model}}`** in the model picker (the GUI ignores
+    the agent's model — see harness.md); if the picker does not offer it,
+    use the Preferred `--agent` line above (its frontmatter pins the model)
   • See `docs/workflow/harness.md` →
     "GUI launch surface (Claude Code Desktop)".
 ```

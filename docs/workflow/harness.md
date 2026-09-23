@@ -249,11 +249,12 @@ One GUI session per phase, exactly as on the CLI:
 1. **New session** — this is mandatory, not stylistic. The GUI reopens
    the previous session by default, and a restored session keeps the
    agent it was created with (the key is read at *session* start).
-2. **Pick the model the handoff names** (the payload's `phase_model`) in
+2. Select the worktree directory.
+3. Name it something like `QS_<N> implement-task`.
+4. **Pick the model the handoff names** (the payload's `phase_model`) in
    the model picker — the picker, not the frontmatter, decides the main
-   session's model (QS-367 E7).
-3. Select the worktree directory.
-4. Name it something like `QS_<N> implement-task`.
+   session's model (QS-367 E7). If the picker does not offer it, use the
+   Preferred `--agent` line (its frontmatter pins the model).
 5. Work the phase; at the handoff, repeat from step 1 for the next one.
 
 `/setup-task` seeds the loop: it creates the worktree, pins
@@ -406,7 +407,10 @@ hand-sets a model.
   the process, so aliases float to the provider default, while full IDs
   in frontmatter work for **sub-agents and `--agent` CLI sessions**.
   `claude-opus-5-5` needs Claude Code **≥ 2.1.280** (QS-367 E8; earlier
-  builds 400 on it). Consequence: a hand-typed `/model opus` or
+  builds 400 on it). The Claude launcher checks this floor best-effort at
+  handoff time (`claude --version`) and prints a stderr warning when the
+  CLI is older — it never blocks or alters the payload (QS-367 S4).
+  Consequence: a hand-typed `/model opus` or
   `--model opus` means the provider default (Opus 5 today); the
   pipeline's agents are pinned by their frontmatter, not by the repo. A
   test keeps the dead `env` keys out of `.claude/settings.json`. (An
