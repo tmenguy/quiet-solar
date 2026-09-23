@@ -79,15 +79,19 @@ def check_cli_floor(
 ) -> str | None:
     """Warn if the Claude Code CLI ``version_text`` is below ``floor``.
 
-    Parses the first ``MAJOR.MINOR.PATCH`` triple out of ``claude
-    --version`` output (e.g. ``"2.1.278 (Claude Code)"`` — deliberately
-    below the floor) into a tuple and compares it to ``floor`` — default
+    Parses a ``MAJOR.MINOR.PATCH`` triple out of ``claude --version`` output
+    (e.g. ``"2.1.278 (Claude Code)"`` — deliberately below the floor) into a
+    tuple and compares it to ``floor`` — default
     :data:`models.CLAUDE_CLI_FLOOR`, the build ``claude-opus-5-5`` requires
     (QS-367 S4/E8), referenced from there so the floor and the model
-    needing it cannot drift. The scan tolerates a leading ``v``, a banner
-    line before the version, and a ``"Claude Code 2.1.278"`` prefix (QS-367
-    N1). Returns a one-line warning string when strictly below the floor,
-    else ``None``.
+    needing it cannot drift. A triple immediately followed by
+    ``(Claude Code)`` wins over any earlier bare triple, so an
+    ``"Update available: 2.1.290"`` banner cannot mask the real build
+    version printed as ``"2.1.278 (Claude Code)"`` (QS-367 S2); absent that
+    tag the first bare triple is used. The scan tolerates a leading ``v``, a
+    banner line before the version, and a ``"Claude Code 2.1.278"`` prefix
+    (QS-367 N1). Returns a one-line warning string when strictly below the
+    floor, else ``None``.
 
     Pure and total: unparseable input (no dotted triple) returns ``None``
     rather than raising — a best-effort guard must never itself break a
@@ -95,7 +99,9 @@ def check_cli_floor(
     :data:`models.HARNESS_MODELS` (QS-367 S4) so a future bump cannot leave
     the message naming the wrong build.
     """
-    match = re.search(r"(?<![\d.])(\d+)\.(\d+)\.(\d+)", version_text)
+    match = re.search(
+        r"(?<![\d.])(\d+)\.(\d+)\.(\d+)\s*\(Claude Code\)", version_text,
+    ) or re.search(r"(?<![\d.])(\d+)\.(\d+)\.(\d+)", version_text)
     if match is None:
         return None
     version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
@@ -122,10 +128,12 @@ def _warn_if_cli_below_floor() -> None:
     ``errors="replace"``), or any other ``OSError`` / ``SubprocessError`` —
     is swallowed silently; the guard must never block or alter the payload.
     ``stdin`` is closed (``DEVNULL``) so the child cannot inherit the
-    caller's stdin, and both streams are scanned (some builds print the
-    version to ``stderr``). Only a successfully parsed, below-floor version
-    prints, and only to ``sys.stderr`` (``stdout`` carries the JSON
-    payload), matching how the render warnings behave.
+    caller's stdin, and both streams are concatenated and scanned (some
+    builds print the version to ``stderr``, or a banner to ``stdout`` ahead
+    of it, so scanning only the first non-empty stream would miss it —
+    QS-367 S2). Only a successfully parsed, below-floor version prints, and
+    only to ``sys.stderr`` (``stdout`` carries the JSON payload), matching
+    how the render warnings behave.
     """
     try:
         proc = subprocess.run(
@@ -140,7 +148,7 @@ def _warn_if_cli_below_floor() -> None:
         )
     except (OSError, ValueError, subprocess.SubprocessError):
         return
-    warning = check_cli_floor(proc.stdout or proc.stderr)
+    warning = check_cli_floor(f"{proc.stdout or ''}\n{proc.stderr or ''}")
     if warning is not None:
         print(warning, file=sys.stderr)
 

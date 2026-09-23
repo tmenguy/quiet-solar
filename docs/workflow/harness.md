@@ -255,7 +255,8 @@ One GUI session per phase, exactly as on the CLI:
 4. **Pick the model the handoff names** (the payload's `phase_model`) in
    the model picker — the picker, not the frontmatter, decides the main
    session's model (QS-367 E7). If the picker does not offer it, use the
-   Preferred `--agent` line (its frontmatter pins the model).
+   Preferred `--agent` line (the handoff's Preferred block; its frontmatter
+   pins the model).
 5. Work the phase; at the handoff, repeat from step 1 for the next one.
 
 `/setup-task` seeds the loop: it creates the worktree, pins
@@ -415,7 +416,8 @@ hand-sets a model.
   what it inspects.
   Consequence: a hand-typed `/model opus` or
   `--model opus` means the provider default (Opus 5 today); the
-  pipeline's agents are pinned by their frontmatter, not by the repo. A
+  pipeline's agents are pinned by their frontmatter, not by the repo (CLI
+  and sub-agents; the GUI main session follows the picker). A
   test keeps the dead `env` keys out of `.claude/settings.json`. (An
   `ANTHROPIC_MODEL` exported in your shell would beat every settings
   `model` — not set by the pipeline.)

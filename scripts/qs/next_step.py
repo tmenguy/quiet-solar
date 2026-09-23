@@ -216,9 +216,12 @@ def main() -> None:
     # now degrades ``phase_model`` too, not just effort — ``deep`` and
     # ``frontier`` no longer share a model, so a feature-lane ``create-plan``
     # handoff on a failed render would name ``claude-opus-5-5`` instead of
-    # ``claude-fable-5-1``. Latent: no template routes
-    # ``create-plan``/``diagnose-task`` through ``next_step.py`` today, and
-    # the warning below already tells the user to re-render.
+    # ``claude-fable-5-1``. Reachable, not latent: when the render at
+    # worktree birth fails, ``setup_task._fail_render`` tells the user to run
+    # ``next_step.py --next-cmd create-plan`` by hand; that manual run
+    # resolves ``lane`` via a ``gh`` issue lookup that returns ``None`` when
+    # ``gh`` is offline, so a feature lane can reach the no-lane row here. The
+    # warning below already tells the user to re-render.
     lane: str | None = None
     try:
         import render_agents  # noqa: PLC0415 — local so a missing jinja2 is caught here

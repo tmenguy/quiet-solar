@@ -88,12 +88,13 @@ def real_cli_floor_guard(
 ) -> None:
     """Undo the autouse no-op so a test exercises the real floor guard.
 
-    The three QS-367 S4 end-to-end tests
-    (``test_build_payload_warns_on_old_cli`` and its silent siblings) route
-    ``build_payload`` through the real ``_warn_if_cli_below_floor`` and
-    intercept only ``claude --version`` via ``_patch_claude_version``. This
-    fixture reinstalls the real function (captured by the autouse fixture)
-    before they install their own ``subprocess.run`` fake.
+    The QS-367 S4 end-to-end tests
+    (``test_build_payload_warns_on_old_cli``, its silent siblings, the
+    stream-scanning and ordering tests) route ``build_payload`` through the
+    real ``_warn_if_cli_below_floor`` and intercept only ``claude --version``
+    via ``_patch_claude_version``. This fixture reinstalls the real function
+    (captured by the autouse fixture) before they install their own
+    ``subprocess.run`` fake.
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 

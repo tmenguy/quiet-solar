@@ -1538,6 +1538,20 @@ def test_check_cli_floor_tolerates_prefixed_and_banner_output(version_text: str)
     assert "2.1.280" in result
 
 
+def test_check_cli_floor_prefers_claude_code_tagged_triple() -> None:
+    """S2: an ``Update available`` banner's higher triple is ignored for the
+    ``(Claude Code)``-tagged build version below it — which decides the floor."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    # The first bare triple (2.1.290) is above the floor; the real build
+    # version (2.1.278, tagged) is below. The tag must win, so this warns.
+    result = claude_launcher.check_cli_floor(
+        "Update available: 2.1.290\n2.1.278 (Claude Code)",
+    )
+    assert result is not None
+    assert "2.1.280" in result
+
+
 def test_check_cli_floor_message_follows_deep_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1552,7 +1566,7 @@ def test_check_cli_floor_message_follows_deep_row(
 
 
 def test_check_cli_floor_respects_custom_floor() -> None:
-    """The floor is a parameter defaulting to ``models.CLAUDE_CLI_FLOOR``."""
+    """The floor is an overridable parameter — a custom floor decides warn/no-warn."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     assert claude_launcher.check_cli_floor("2.1.280", floor=(2, 1, 281)) is not None
@@ -1560,15 +1574,32 @@ def test_check_cli_floor_respects_custom_floor() -> None:
 
 
 def test_check_cli_floor_default_is_models_constant() -> None:
-    """The default floor is sourced from ``models.CLAUDE_CLI_FLOOR`` (no drift)."""
+    """The ``floor`` parameter default *is* ``models.CLAUDE_CLI_FLOOR`` — no drift.
+
+    Asserts the signature default is the very object (a hard-coded copy would
+    pass a value check but silently drift), then derives "just below" and "at"
+    the floor from the constant so warn / no-warn stay pinned across a bump.
+    """
+    import inspect
+
     import models  # type: ignore[import-not-found]
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
-    assert models.CLAUDE_CLI_FLOOR == (2, 1, 280)
-    # A clearly-below version must warn. N4: a fixed low version avoids the
-    # ``X.Y.-1`` string an ``X.Y.0`` floor would produce from ``patch - 1``
-    # (which the regex would then reject for the wrong reason).
-    assert claude_launcher.check_cli_floor("0.0.1") is not None
+    default = (
+        inspect.signature(claude_launcher.check_cli_floor)
+        .parameters["floor"]
+        .default
+    )
+    assert default is models.CLAUDE_CLI_FLOOR
+    # Derive the boundary strings from the constant itself. When the patch is
+    # 0, borrow from the minor rather than emitting an ``X.Y.-1`` string the
+    # regex would reject for the wrong reason.
+    major, minor, patch = models.CLAUDE_CLI_FLOOR
+    just_below = (major, minor, patch - 1) if patch > 0 else (major, minor - 1, 999)
+    below_s = ".".join(str(part) for part in just_below)
+    at_s = ".".join(str(part) for part in models.CLAUDE_CLI_FLOOR)
+    assert claude_launcher.check_cli_floor(below_s) is not None
+    assert claude_launcher.check_cli_floor(at_s) is None
 
 
 class _FakeProc:
@@ -1579,26 +1610,35 @@ class _FakeProc:
 
 def _patch_claude_version(
     monkeypatch: pytest.MonkeyPatch, result: object,
-) -> None:
+) -> dict:
     """Intercept only ``claude --version``; delegate every other command real.
 
     ``build_payload`` also shells out to ``git`` (worktree detection), and
     those calls share the same ``subprocess.run`` symbol, so a blanket
     monkeypatch would break them. ``result`` is either a ``_FakeProc`` (the
     fake stdout) or an ``Exception`` instance to raise.
+
+    Returns a ``recorded`` dict, updated on each intercepted call: ``calls``
+    (an int count, so a "silent" test can prove the real guard actually ran
+    it — N5) plus the last intercepted call's ``kwargs`` flattened in (so an
+    e2e test can assert ``stdin``/``encoding``/``errors`` — N4).
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     real_run = claude_launcher.subprocess.run
+    recorded: dict = {"calls": 0}
 
     def fake_run(cmd: object, *args: object, **kwargs: object) -> object:
         if isinstance(cmd, (list, tuple)) and list(cmd[:2]) == ["claude", "--version"]:
+            recorded["calls"] += 1
+            recorded.update(kwargs)
             if isinstance(result, BaseException):
                 raise result
             return result
         return real_run(cmd, *args, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(claude_launcher.subprocess, "run", fake_run)
+    return recorded
 
 
 def test_build_payload_warns_on_old_cli(
@@ -1608,10 +1648,12 @@ def test_build_payload_warns_on_old_cli(
     real_cli_floor_guard: None,
 ) -> None:
     """An old ``claude`` triggers a stderr warning; the payload is unchanged."""
+    import subprocess
+
     import models  # type: ignore[import-not-found]
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
-    _patch_claude_version(monkeypatch, _FakeProc("2.1.278 (Claude Code)"))
+    recorded = _patch_claude_version(monkeypatch, _FakeProc("2.1.278 (Claude Code)"))
     work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
     payload = claude_launcher.build_payload(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
@@ -1620,6 +1662,12 @@ def test_build_payload_warns_on_old_cli(
     assert "2.1.280" in err
     # S4: the warning names the ``deep`` model from the policy, not a literal.
     assert models.model_for("claude", "deep") in err
+    # N4: the guard closes stdin and decodes leniently — pin the kwargs so a
+    # regression that drops them (re-inheriting the caller's stdin, or a
+    # strict decode that could raise) is caught.
+    assert recorded["stdin"] is subprocess.DEVNULL
+    assert recorded["encoding"] == "utf-8"
+    assert recorded["errors"] == "replace"
     # Payload is intact — the guard neither blocks nor alters it.
     assert payload["phase_model"] == "claude-fable-5-1"
     assert payload["agent"] == "qs-create-plan"
@@ -1635,13 +1683,16 @@ def test_build_payload_silent_when_cli_missing(
     """A missing ``claude`` binary is swallowed — no warning, payload intact."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
-    _patch_claude_version(monkeypatch, FileNotFoundError("claude"))
+    recorded = _patch_claude_version(monkeypatch, FileNotFoundError("claude"))
     work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
     payload = claude_launcher.build_payload(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
     assert payload["phase_model"] == "claude-fable-5-1"
+    # N5: prove the silence is the real guard swallowing the error, not the
+    # guard being a no-op — it must have spawned ``claude --version`` once.
+    assert recorded["calls"] == 1
 
 
 def test_build_payload_silent_on_cli_timeout(
@@ -1655,7 +1706,7 @@ def test_build_payload_silent_on_cli_timeout(
 
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
-    _patch_claude_version(
+    recorded = _patch_claude_version(
         monkeypatch, subprocess.TimeoutExpired(cmd="claude", timeout=5),
     )
     work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
@@ -1664,6 +1715,8 @@ def test_build_payload_silent_on_cli_timeout(
     )
     assert capsys.readouterr().err == ""
     assert payload["phase_model"] == "claude-fable-5-1"
+    # N5: the guard really ran and swallowed the timeout (not a silent no-op).
+    assert recorded["calls"] == 1
 
 
 def test_build_payload_silent_on_unicode_decode_error(
@@ -1681,7 +1734,7 @@ def test_build_payload_silent_on_unicode_decode_error(
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
-    _patch_claude_version(
+    recorded = _patch_claude_version(
         monkeypatch,
         UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
     )
@@ -1691,6 +1744,8 @@ def test_build_payload_silent_on_unicode_decode_error(
     )
     assert capsys.readouterr().err == ""
     assert payload["phase_model"] == "claude-fable-5-1"
+    # N5: the guard really ran and swallowed the decode error (not a no-op).
+    assert recorded["calls"] == 1
 
 
 @pytest.mark.parametrize(
@@ -1711,13 +1766,15 @@ def test_build_payload_silent_on_unhelpful_cli(
     """N6: a PermissionError, empty output, or garbage output all stay silent."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
-    _patch_claude_version(monkeypatch, result)
+    recorded = _patch_claude_version(monkeypatch, result)
     work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
     payload = claude_launcher.build_payload(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert capsys.readouterr().err == ""
     assert payload["phase_model"] == "claude-fable-5-1"
+    # N5: each unhelpful case still runs the real guard exactly once.
+    assert recorded["calls"] == 1
 
 
 def test_build_payload_reads_stderr_version(
@@ -1735,6 +1792,56 @@ def test_build_payload_reads_stderr_version(
         str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
     )
     assert "2.1.280" in capsys.readouterr().err
+
+
+def test_build_payload_scans_stderr_behind_nonempty_stdout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
+) -> None:
+    """S2: a version on ``stderr`` is found even when ``stdout`` is non-empty.
+
+    A build that prints a version-less banner to ``stdout`` and the real
+    version to ``stderr`` must still warn — scanning only the first non-empty
+    stream (the old ``stdout or stderr``) would read the banner and stay
+    silent.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    _patch_claude_version(
+        monkeypatch, _FakeProc("Update available\n", stderr="2.1.278 (Claude Code)"),
+    )
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+    claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
+    )
+    assert "2.1.280" in capsys.readouterr().err
+
+
+def test_unknown_next_cmd_raises_before_floor_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_cli_floor_guard: None,
+) -> None:
+    """N3: an unknown ``next_cmd`` raises before the floor guard can spawn.
+
+    Pins the plan #02 N2 ordering: ``resolve_agent_for_next_cmd`` runs first,
+    so a bad phase raises ``ValueError`` and ``claude --version`` never runs.
+    The rigged guard raises ``AssertionError`` if reached — which would not be
+    caught by ``pytest.raises(ValueError)`` and would fail the test.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    _patch_claude_version(
+        monkeypatch, AssertionError("floor guard must not run before phase resolves"),
+    )
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+    with pytest.raises(ValueError):
+        claude_launcher.build_payload(
+            str(work_dir), 367, "Title", next_cmd="not-a-phase",
+            lane="feature-factory",
+        )
 
 
 def test_old_cli_payload_equals_stubbed_payload(
