@@ -71,9 +71,9 @@ def _neutralize_cli_floor_guard(
     (QS-367 S1).
 
     Returns the real function so the ``real_cli_floor_guard`` fixture can
-    restore it for the three S4 end-to-end tests that must exercise the
-    guard. Depends on ``_add_scripts_qs_to_syspath`` so ``launchers.claude``
-    is importable when this runs.
+    restore it for the S4 end-to-end tests that must exercise the guard
+    (see ``real_cli_floor_guard``). Depends on ``_add_scripts_qs_to_syspath``
+    so ``launchers.claude`` is importable when this runs.
     """
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 

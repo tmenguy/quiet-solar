@@ -82,16 +82,18 @@ def check_cli_floor(
     Parses a ``MAJOR.MINOR.PATCH`` triple out of ``claude --version`` output
     (e.g. ``"2.1.278 (Claude Code)"`` — deliberately below the floor) into a
     tuple and compares it to ``floor`` — default
-    :data:`models.CLAUDE_CLI_FLOOR`, the build ``claude-opus-5-5`` requires
-    (QS-367 S4/E8), referenced from there so the floor and the model
-    needing it cannot drift. A triple immediately followed by
-    ``(Claude Code)`` wins over any earlier bare triple, so an
-    ``"Update available: 2.1.290"`` banner cannot mask the real build
-    version printed as ``"2.1.278 (Claude Code)"`` (QS-367 S2); absent that
-    tag the first bare triple is used. The scan tolerates a leading ``v``, a
-    banner line before the version, and a ``"Claude Code 2.1.278"`` prefix
-    (QS-367 N1). Returns a one-line warning string when strictly below the
-    floor, else ``None``.
+    :data:`models.CLAUDE_CLI_FLOOR`, the ``deep`` ``claude-opus-5-5``
+    requires (QS-367 S4/E8), referenced from there so the floor and the
+    model needing it cannot drift. A triple *tagged* as the build version —
+    either suffixed ``(Claude Code)`` or prefixed ``Claude Code`` — wins
+    over any earlier bare triple, so an ``"Update available: 2.1.290"``
+    banner cannot mask the real build version printed as
+    ``"2.1.278 (Claude Code)"`` or ``"Claude Code 2.1.278"``
+    (QS-367 S2/N8); absent any tag the first bare triple is used. The scan
+    tolerates a leading ``v`` and a banner line before the version. Each
+    digit group is bounded to nine digits so a pathological run cannot
+    overflow ``int`` (QS-367 N1). Returns a one-line warning string when
+    strictly below the floor, else ``None``.
 
     Pure and total: unparseable input (no dotted triple) returns ``None``
     rather than raising — a best-effort guard must never itself break a
@@ -100,11 +102,17 @@ def check_cli_floor(
     the message naming the wrong build.
     """
     match = re.search(
-        r"(?<![\d.])(\d+)\.(\d+)\.(\d+)\s*\(Claude Code\)", version_text,
-    ) or re.search(r"(?<![\d.])(\d+)\.(\d+)\.(\d+)", version_text)
+        r"(?<![\d.])(\d{1,9})\.(\d{1,9})\.(\d{1,9})\s*\(Claude Code\)"
+        r"|Claude Code\s+v?(\d{1,9})\.(\d{1,9})\.(\d{1,9})",
+        version_text,
+    ) or re.search(r"(?<![\d.])(\d{1,9})\.(\d{1,9})\.(\d{1,9})", version_text)
     if match is None:
         return None
-    version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    # The tagged alternation yields six groups (the unmatched branch is all
+    # ``None``); the bare fallback yields three. Filter to the three that
+    # matched, whichever branch won.
+    digits = [g for g in match.groups() if g is not None]
+    version = (int(digits[0]), int(digits[1]), int(digits[2]))
     if version >= floor:
         return None
     floor_s = ".".join(str(part) for part in floor)
@@ -123,8 +131,8 @@ def _warn_if_cli_below_floor() -> None:
 
     Runs ``claude --version`` with a short timeout and hands the output to
     :func:`check_cli_floor`. Any failure — binary missing
-    (``FileNotFoundError``), a timeout, a non-UTF-8 shim writing a
-    ``ValueError`` (``UnicodeDecodeError``; guarded belt-and-braces despite
+    (``FileNotFoundError``), a timeout, a non-UTF-8 shim whose output raises
+    ``UnicodeDecodeError`` (a ``ValueError``; guarded belt-and-braces despite
     ``errors="replace"``), or any other ``OSError`` / ``SubprocessError`` —
     is swallowed silently; the guard must never block or alter the payload.
     ``stdin`` is closed (``DEVNULL``) so the child cannot inherit the
@@ -146,9 +154,13 @@ def _warn_if_cli_below_floor() -> None:
             timeout=5,
             check=False,
         )
+        # Inside the ``try`` on purpose: ``check_cli_floor`` is pure and total
+        # for sane input, but a pathological version string could still make
+        # ``int()`` raise — the widened ``except`` keeps even that from
+        # breaking the handoff (QS-367 N1).
+        warning = check_cli_floor(f"{proc.stdout or ''}\n{proc.stderr or ''}")
     except (OSError, ValueError, subprocess.SubprocessError):
         return
-    warning = check_cli_floor(f"{proc.stdout or ''}\n{proc.stderr or ''}")
     if warning is not None:
         print(warning, file=sys.stderr)
 

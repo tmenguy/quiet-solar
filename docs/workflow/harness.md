@@ -406,7 +406,8 @@ hand-sets a model.
   the pin's `effortLevel`; `fast` (Haiku 4.5) sets none.
 - **Why full IDs, and no repo-wide alias pin.** The documented settings
   `env` pins (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) are **not applied** to
-  the process, so aliases float to the provider default, while full IDs
+  the process (observed on 2.1.278), so aliases float to the provider
+  default, while full IDs
   in frontmatter work for **sub-agents and `--agent` CLI sessions**.
   `claude-opus-5-5` needs Claude Code **≥ 2.1.280** (QS-367 E8; earlier
   builds 400 on it). The Claude launcher checks this floor best-effort at
