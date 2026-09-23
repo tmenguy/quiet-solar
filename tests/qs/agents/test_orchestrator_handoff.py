@@ -294,6 +294,10 @@ _GUI_BLOCK_REQUIRED_TOKENS = (
     # place only if the handoff prose actually consults it, so that is
     # pinned here rather than left to review (review-fix #01 M3).
     "`phase_agent_pinned`",
+    # QS-367 E7: the GUI ignores the agent's model, so each block must tell
+    # the user which model to pick. ``{{phase_model}}`` is the runtime
+    # placeholder the launcher payload fills.
+    "{{phase_model}}",
 )
 
 # ``qs-review-task`` hands off twice — the zero-findings → finish-task
@@ -470,6 +474,67 @@ def test_handoff_orchestrators_carry_the_stale_pin_hazard_at_both_handoffs(
     assert body.count(expected) == 2, (
         f"{filename}: expected the stale-pin sentence at both handoff "
         f"sites, found {body.count(expected)}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# QS-367 E7 — the Claude handoff names the model the GUI user must pick.
+#
+# The GUI model picker decides the main session's model; neither frontmatter
+# nor a settings ``model`` key overrides it. So every Claude capture sentence
+# names ``phase_model`` (setup-task names it in its payload key list), and no
+# OpenCode agent carries the GUI-only ``phase_model`` / ``model picker`` prose.
+# --------------------------------------------------------------------------- #
+
+_CAPTURE_SENTENCE_PREFIX = "Parse the JSON; capture"
+
+
+def _capture_paragraphs(body: str) -> list[str]:
+    """Every blank-line-delimited paragraph beginning ``Parse the JSON; capture``."""
+    paras = re.split(r"\n[ \t]*\n", body)
+    return [p for p in paras if p.lstrip().startswith(_CAPTURE_SENTENCE_PREFIX)]
+
+
+@pytest.mark.parametrize(
+    "filename", [f for f in _GUI_BLOCK_ORCHESTRATORS if f != "qs-setup-task.md"]
+)
+def test_claude_capture_sentence_names_phase_model(filename: str) -> None:
+    """Every Claude capture sentence names ``phase_model`` — one per handoff."""
+    body = (AGENTS_DIR / filename).read_text()
+    paras = _capture_paragraphs(body)
+    expected = _GUI_BLOCK_COUNTS[filename]
+    assert len(paras) == expected, (
+        f"{filename}: expected {expected} 'Parse the JSON; capture' "
+        f"paragraph(s), found {len(paras)} (QS-367 E7)."
+    )
+    for i, para in enumerate(paras):
+        assert "phase_model" in para, (
+            f"{filename}: capture paragraph {i} does not name `phase_model` — "
+            f"the GUI ignores the agent's model, so the handoff must name the "
+            f"model to pick (QS-367 E7)."
+        )
+
+
+def test_setup_task_key_list_names_phase_model() -> None:
+    """``qs-setup-task`` has no capture sentence; its payload key list names it."""
+    body = (AGENTS_DIR / "qs-setup-task.md").read_text()
+    assert "phase_model" in body, (
+        "qs-setup-task.md: the payload key list must name `phase_model` "
+        "(QS-367 E7)."
+    )
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_opencode_agents_omit_gui_model_prose(filename: str) -> None:
+    """No OpenCode agent carries the GUI-only ``phase_model`` / ``model picker`` prose."""
+    body = (agents_dir("opencode") / filename).read_text()
+    assert "phase_model" not in body, (
+        f"opencode/agents/{filename}: OpenCode has no GUI model picker — "
+        f"`phase_model` must not appear (QS-367 E7)."
+    )
+    assert "model picker" not in body, (
+        f"opencode/agents/{filename}: OpenCode has no GUI model picker — "
+        f"`model picker` must not appear (QS-367 E7)."
     )
 
 

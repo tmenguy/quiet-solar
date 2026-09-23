@@ -23,12 +23,13 @@ from __future__ import annotations
 import targets  # type: ignore[import-not-found]
 
 # --- classes (D18): the policy's own, harness-agnostic vocabulary ----------
-# deep     — the best code-grounded model: implement, concrete-planner, hunters, root-cause
+# build    — runs the implementer's model: contained, small-footprint code changes (QS-367 E1)
+# deep     — the best code-grounded analyst: critique, concrete planning, hunting, root cause
 # frontier — the best general reasoner: planning conversation, consolidation, judgment
 # light    — checklists: delta-auditor, setup-task
 # fast     — mechanical: finish, CodeRabbit wrapper, release
 # ("inherit" is a renderer/template concern and never appears here.)
-CLASSES: frozenset[str] = frozenset({"deep", "frontier", "light", "fast"})
+CLASSES: frozenset[str] = frozenset({"build", "deep", "frontier", "light", "fast"})
 
 # Every lane, derived from targets.py (tuples → stable order).
 LANES: tuple[str, ...] = tuple(f"{k}-{t}" for k in targets.KINDS for t in targets.TARGETS) + tuple(
@@ -37,20 +38,22 @@ LANES: tuple[str, ...] = tuple(f"{k}-{t}" for k in targets.KINDS for t in target
 
 # --- one complete class → model row per harness (D4/D17/D18/D20) ------------
 # Keys mirror render_agents._HARNESSES (test-enforced). Claude Code takes
-# full model IDs in frontmatter (proven on 2.1.278 for sub-agents, --agent
-# sessions and settings-pinned sessions — spike Run 2; aliases would float
-# to the provider default because the settings ``env`` pin is not applied).
-# OpenCode takes provider/model literals from ``opencode models``.
+# full model IDs in frontmatter (honoured by the CLI and by sub-agents —
+# aliases would float to the provider default because the settings ``env``
+# pin is not applied). ``claude-opus-5-5`` requires Claude Code ≥ 2.1.280
+# (QS-367 E8). OpenCode takes provider/model literals from ``opencode models``.
 # Bumping ``deep``? Also bump ``opencode.json`` (the lockstep test names it).
 HARNESS_MODELS: dict[str, dict[str, str]] = {
-    "claude": {  # Claude Code 2.1.278, first-party API
-        "deep": "claude-opus-4-8",  # D3: Opus 5 over-reaches against our prompts
+    "claude": {  # Claude Code ≥ 2.1.280 (required by ``claude-opus-5-5``), first-party API
+        "build": "claude-opus-4-8",  # QS-367 E1: footprint — D3 reason still standing
+        "deep": "claude-opus-5-5",  # QS-367 E2: analysis/review
         "frontier": "claude-fable-5-1",
         "light": "claude-sonnet-5",
         "fast": "claude-haiku-4-5",
     },
     "opencode": {  # OpenCode v2.0.14, github-copilot
-        "deep": "github-copilot/claude-opus-4.8",
+        "build": "github-copilot/claude-opus-4.8",  # QS-367 E1
+        "deep": "github-copilot/claude-opus-5.5",  # QS-367 E2
         "frontier": "github-copilot/gpt-6-astra",  # no Claude Fable on this provider (D17)
         "light": "github-copilot/claude-sonnet-5",
         "fast": "github-copilot/claude-haiku-4.5",
@@ -62,6 +65,7 @@ HARNESS_MODELS: dict[str, dict[str, str]] = {
 # (low | medium | high | xhigh | max). None = do not set (Haiku 4.5 does
 # not take the parameter). Claude-only: OpenCode documents no per-agent effort.
 CLASS_EFFORT: dict[str, str | None] = {
+    "build": "high",
     "deep": "high",
     "frontier": "high",
     "light": "medium",
@@ -76,13 +80,13 @@ _PLANNING: frozenset[str] = frozenset({"qs-create-plan", "qs-diagnose-task"})
 _FLAT: dict[str, str] = {
     "qs-plan-critic": "deep",
     "qs-plan-concrete-planner": "deep",
-    "qs-plan-dev-proxy": "frontier",
+    "qs-plan-dev-proxy": "build",
     "qs-plan-scope-guardian": "frontier",
     "qs-plan-delta-auditor": "light",
     "qs-diag-root-cause-skeptic": "deep",
     "qs-diag-fix-minimalist": "frontier",
-    "qs-implement-task": "deep",
-    "qs-implement-setup-task": "deep",
+    "qs-implement-task": "build",
+    "qs-implement-setup-task": "build",
     "qs-review-task": "frontier",
     "qs-verify-task": "frontier",
     "qs-review-blind-hunter": "deep",

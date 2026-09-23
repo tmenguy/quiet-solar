@@ -249,9 +249,12 @@ One GUI session per phase, exactly as on the CLI:
 1. **New session** — this is mandatory, not stylistic. The GUI reopens
    the previous session by default, and a restored session keeps the
    agent it was created with (the key is read at *session* start).
-2. Select the worktree directory.
-3. Name it something like `QS_<N> implement-task`.
-4. Work the phase; at the handoff, repeat from step 1 for the next one.
+2. **Pick the model the handoff names** (the payload's `phase_model`) in
+   the model picker — the picker, not the frontmatter, decides the main
+   session's model (QS-367 E7).
+3. Select the worktree directory.
+4. Name it something like `QS_<N> implement-task`.
+5. Work the phase; at the handoff, repeat from step 1 for the next one.
 
 `/setup-task` seeds the loop: it creates the worktree, pins
 `qs-create-plan` into it (unless `--no-worktree`, see Traps), and prints
@@ -366,28 +369,32 @@ decided by **one policy**, `scripts/qs/models.py` (QS-358), and rendered
 into every agent's frontmatter on both harnesses. Nothing in a template
 hand-sets a model.
 
-- **Four classes, harness-agnostic:** `deep` (the best code-grounded
-  model — implement, concrete-planner, the hunters, root-cause),
-  `frontier` (the best general reasoner — planning conversation,
-  review consolidation, judgment reviewers), `light` (checklists —
-  delta-auditor, setup-task), `fast` (mechanical — finish, the
-  CodeRabbit wrapper, release). `_FLAT` maps each agent to a class;
-  only the two planning orchestrators depend on the lane (`bug-*` →
-  `deep`, other lanes → `frontier`, no lane → `deep`). Reviewers are
-  deliberately spread across classes so one fan-out does not share one
-  set of blind spots.
+- **Five classes, harness-agnostic:** `build` (the implementer's model —
+  the implementers and their plan dev-proxy, contained small-footprint
+  code changes), `deep` (the best code-grounded analyst — critique,
+  concrete planning, the hunters, root-cause), `frontier` (the best
+  general reasoner — planning conversation, review consolidation,
+  judgment reviewers), `light` (checklists — delta-auditor, setup-task),
+  `fast` (mechanical — finish, the CodeRabbit wrapper, release). `_FLAT`
+  maps each agent to a class; only the two planning orchestrators depend
+  on the lane (`bug-*` → `deep`, other lanes → `frontier`, no lane →
+  `deep`). Reviewers are deliberately spread across classes so one
+  fan-out does not share one set of blind spots.
 - **One complete row per harness** in `HARNESS_MODELS`, in that
   harness's own vocabulary, **both in exact versions**:
 
   | class | Claude (frontmatter, full ID) | OpenCode (`github-copilot/…`) | effort |
   |---|---|---|---|
-  | `deep` | `claude-opus-4-8` | `claude-opus-4.8` | `high` |
+  | `build` | `claude-opus-4-8` | `claude-opus-4.8` | `high` |
+  | `deep` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
   | `frontier` | `claude-fable-5-1` | `gpt-6-astra` | `high` |
   | `light` | `claude-sonnet-5` | `claude-sonnet-5` | `medium` |
   | `fast` | `claude-haiku-4-5` | `claude-haiku-4.5` | — |
 
-  To add a harness, add a row (a test refuses a harness the renderer
-  knows but the policy does not).
+  `deep` → Opus 5.5 for analysis/review; `build` keeps Opus 4.8 for
+  implementer footprint; the plan dev-proxy runs the implementer's model —
+  see QS-367. To add a harness, add a row (a test refuses a harness the
+  renderer knows but the policy does not).
 - **Declared asymmetries.** On OpenCode the `frontier` class runs GPT-6
   Astra because the `github-copilot` provider offers no Claude Fable —
   one `HARNESS_MODELS` cell to revert when it does. **Effort is
@@ -396,17 +403,22 @@ hand-sets a model.
   the pin's `effortLevel`; `fast` (Haiku 4.5) sets none.
 - **Why full IDs, and no repo-wide alias pin.** The documented settings
   `env` pins (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) are **not applied** to
-  the process on Claude Code 2.1.278, so aliases float to the provider
-  default, while full IDs in frontmatter work for sub-agents, `--agent`
-  sessions and settings-pinned (GUI) sessions. Consequence: a hand-typed
-  `/model opus` or `--model opus` means the provider default (Opus 5
-  today); the pipeline's agents are pinned by their frontmatter, not by
-  the repo. A test keeps the dead `env` keys out of
-  `.claude/settings.json`. (An `ANTHROPIC_MODEL` exported in your shell
-  would beat every settings `model` — not set by the pipeline.)
+  the process, so aliases float to the provider default, while full IDs
+  in frontmatter work for **sub-agents and `--agent` CLI sessions**.
+  `claude-opus-5-5` needs Claude Code **≥ 2.1.280** (QS-367 E8; earlier
+  builds 400 on it). Consequence: a hand-typed `/model opus` or
+  `--model opus` means the provider default (Opus 5 today); the
+  pipeline's agents are pinned by their frontmatter, not by the repo. A
+  test keeps the dead `env` keys out of `.claude/settings.json`. (An
+  `ANTHROPIC_MODEL` exported in your shell would beat every settings
+  `model` — not set by the pipeline.)
 - **Overrides, per surface.** Claude CLI: `claude --model <id>` beats
-  the frontmatter (the launcher passes no `--model`). Claude GUI:
-  `/model <x>` mid-session. OpenCode: edit the agent's `model:` or
+  the frontmatter (the launcher passes no `--model`). Claude GUI: **the
+  model picker decides the main session's model** — neither frontmatter
+  nor a settings `model` key overrides it (observed 2026-09-23), so the
+  handoff names the model to pick (the payload's `phase_model`, QS-367
+  E7); the pin's `effortLevel` *is* honoured, and sub-agents follow
+  their frontmatter. OpenCode: edit the agent's `model:` or
   `opencode.json`. `render_all`'s explicit `model=` override takes a
   **class** (translated per harness) or a harness-valid literal (emitted
   verbatim on both harnesses — never pass a bare alias).

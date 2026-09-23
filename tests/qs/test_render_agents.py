@@ -461,8 +461,8 @@ def test_render_model_scalar_and_mapping(tmp_path: Path) -> None:
         tmp_path, context=_synthetic_context(tmp_path, model="deep"),
         out_root=out3, templates_dir=tdir,
     )
-    assert "model=claude-opus-4-8" in (out3 / ".claude" / "agents" / "qs-synthetic.md").read_text()
-    assert "model=github-copilot/claude-opus-4.8" in (
+    assert "model=claude-opus-5-5" in (out3 / ".claude" / "agents" / "qs-synthetic.md").read_text()
+    assert "model=github-copilot/claude-opus-5.5" in (
         out3 / ".opencode" / "agents" / "qs-synthetic.md"
     ).read_text()
     # A bare alias or a full ID is emitted verbatim on both harnesses (the
@@ -645,7 +645,7 @@ def test_claude_frontmatter_contract(tmp_path: Path) -> None:
     ("labels", "stem", "expected"),
     [
         (["kind:feature", "target:factory", "scale:task"], "qs-create-plan", "claude-fable-5-1"),
-        (["kind:bug", "target:product", "scale:task"], "qs-diagnose-task", "claude-opus-4-8"),
+        (["kind:bug", "target:product", "scale:task"], "qs-diagnose-task", "claude-opus-5-5"),
         (["target:factory", "scale:epic"], "qs-create-plan", "claude-fable-5-1"),
     ],
 )

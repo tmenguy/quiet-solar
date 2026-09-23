@@ -27,13 +27,13 @@ _CLAUDE_ALIASES = {"opus", "fable", "sonnet", "haiku"}
 _FLAT_TABLE = [
     ("qs-plan-critic", "deep"),
     ("qs-plan-concrete-planner", "deep"),
-    ("qs-plan-dev-proxy", "frontier"),
+    ("qs-plan-dev-proxy", "build"),
     ("qs-plan-scope-guardian", "frontier"),
     ("qs-plan-delta-auditor", "light"),
     ("qs-diag-root-cause-skeptic", "deep"),
     ("qs-diag-fix-minimalist", "frontier"),
-    ("qs-implement-task", "deep"),
-    ("qs-implement-setup-task", "deep"),
+    ("qs-implement-task", "build"),
+    ("qs-implement-setup-task", "build"),
     ("qs-review-task", "frontier"),
     ("qs-verify-task", "frontier"),
     ("qs-review-blind-hunter", "deep"),
@@ -47,11 +47,13 @@ _FLAT_TABLE = [
 ]
 
 _ROW_LITERALS = [
-    ("claude", "deep", "claude-opus-4-8"),
+    ("claude", "build", "claude-opus-4-8"),
+    ("claude", "deep", "claude-opus-5-5"),
     ("claude", "frontier", "claude-fable-5-1"),
     ("claude", "light", "claude-sonnet-5"),
     ("claude", "fast", "claude-haiku-4-5"),
-    ("opencode", "deep", "github-copilot/claude-opus-4.8"),
+    ("opencode", "build", "github-copilot/claude-opus-4.8"),
+    ("opencode", "deep", "github-copilot/claude-opus-5.5"),
     ("opencode", "frontier", "github-copilot/gpt-6-astra"),
     ("opencode", "light", "github-copilot/claude-sonnet-5"),
     ("opencode", "fast", "github-copilot/claude-haiku-4.5"),
@@ -68,7 +70,7 @@ def test_every_stem_resolves_to_a_class(lane: str | None) -> None:
 
 
 def test_classes_exact() -> None:
-    assert {"deep", "frontier", "light", "fast"} == models.CLASSES
+    assert {"build", "deep", "frontier", "light", "fast"} == models.CLASSES
     assert "inherit" not in models.CLASSES
 
 
@@ -170,6 +172,7 @@ def test_class_effort_complete_and_valid() -> None:
 
 def test_class_effort_literals() -> None:
     assert models.CLASS_EFFORT == {
+        "build": "high",
         "deep": "high",
         "frontier": "high",
         "light": "medium",

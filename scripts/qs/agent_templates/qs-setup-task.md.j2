@@ -211,8 +211,8 @@ For `--no-worktree`, pass `--no-worktree`. The script:
 
 Capture `worktree_path`, `branch`, and the launcher payload
 [% if harness == "claude" %]
-(`new_context`, `same_context`, `phase_agent_pinned`, plus optional
-`pycharm_context`).
+(`new_context`, `same_context`, `phase_agent_pinned`, `phase_model` (the
+model the GUI user must pick — QS-367 E7), plus optional `pycharm_context`).
 [% else %]
 (`new_context`, `same_context`, plus optional `pycharm_context`).
 [% endif %]
@@ -283,6 +283,8 @@ whether that write happened — it is always skipped on a main checkout).
 The GUI displays the active agent nowhere, so if the phase looks wrong,
 use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
+  • **Pick model `{{phase_model}}`** in the model picker (the GUI ignores
+    the agent's model — see harness.md)
   • Select directory `{{worktree_path}}`
   • Name it `QS_{{issue_number}} {{NEXT_PHASE}}`
   • See `docs/workflow/harness.md` →

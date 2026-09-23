@@ -59,8 +59,11 @@ Caller = Literal["setup_task", "next_step"]
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose.
 # No ``--model`` (QS-358 D9): the model comes from the policy in
 # ``scripts/qs/models.py``, rendered as a full model ID into each agent's
-# frontmatter (D20); the GUI pin carries the phase's ``effortLevel`` (D19).
-# A one-off ``claude --model <id>`` still overrides the frontmatter.
+# frontmatter (D20). Frontmatter decides the model on the CLI and for
+# sub-agents; the Claude GUI's model picker decides the main session's, so
+# the payload names it as ``phase_model`` (QS-367 E7). The GUI pin carries
+# the phase's ``effortLevel`` (D19). A one-off ``claude --model <id>`` still
+# overrides the frontmatter.
 CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions"
 
 # Mode for a freshly created pin file. Owner-only because this file can
@@ -482,8 +485,11 @@ def build_payload(
     guarded to real worktrees that already contain the agent file, and is
     inert for CLI sessions because ``--agent`` takes precedence. The pin
     also carries the phase's effort level (QS-358), resolved from
-    ``scripts/qs/models.py`` for ``lane``; the model is not pinned because
-    the agent's frontmatter already decides it on every surface.
+    ``scripts/qs/models.py`` for ``lane``. The model is not *pinned*:
+    frontmatter decides it on the CLI and for sub-agents, while the Claude
+    GUI's model picker decides the main session's (a settings ``model`` key
+    loses to it), so the payload instead *names* it as ``phase_model`` for
+    the GUI handoff to surface (QS-367 E7).
 
     Args:
         work_dir: Worktree directory the new session should open in.
@@ -511,7 +517,8 @@ def build_payload(
 
     Returns:
         A dict with ``tool``, ``agent``, ``phase_agent_pinned``,
-        ``same_context``, ``new_context``, optionally
+        ``phase_model`` (the Claude model the GUI user must pick — QS-367
+        E7), ``same_context``, ``new_context``, optionally
         ``existing_session_prompt``, and (on macOS with PyCharm installed)
         ``pycharm_context`` / ``pycharm_applescript_context`` keys.
         ``phase_agent_pinned`` is ``False`` whenever the GUI pin was
@@ -528,7 +535,8 @@ def build_payload(
     agent = resolve_agent_for_next_cmd(next_cmd)
     # ``agent`` is a PHASE_TO_AGENT value here (an unknown phase raised
     # above), and every one has a policy row (tests/qs/test_models.py).
-    effort = models.effort_for(models.resolve(lane, agent))
+    cls = models.resolve(lane, agent)
+    effort = models.effort_for(cls)
     # Side effect (QS-311): pin the phase agent into the worktree's local
     # settings so a GUI session there boots as this orchestrator. Guarded
     # and best-effort — see ``_write_phase_agent``. The result is surfaced
@@ -544,6 +552,10 @@ def build_payload(
         "tool": "claude-code",
         "agent": agent,
         "phase_agent_pinned": pinned,
+        # QS-367 E7: the Claude GUI's model picker decides the main
+        # session's model — frontmatter and a settings ``model`` key both
+        # lose to it — so the handoff names the model the user must pick.
+        "phase_model": models.model_for("claude", cls),
         "same_context": next_cmd,
         "new_context": new_context,
     }

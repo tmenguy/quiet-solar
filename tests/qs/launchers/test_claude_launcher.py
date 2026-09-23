@@ -1410,3 +1410,37 @@ def test_fast_phase_without_prior_effort_level(tmp_path: Path) -> None:
     work_dir = _fake_worktree(tmp_path, agent="qs-finish-task")
     claude_launcher.build_payload(str(work_dir), 358, "Title", next_cmd="finish-task")
     assert _settings(work_dir) == {"agent": "qs-finish-task"}
+
+
+# --------------------------------------------------------------------------- #
+# QS-367 E7 (AC6) — the payload names the Claude model the GUI user must pick.
+#
+# The GUI model picker decides the main session's model; neither frontmatter
+# nor a settings ``model`` key overrides it. So the payload emits
+# ``phase_model`` = ``models.model_for("claude", resolve(lane, agent))``
+# unconditionally, and the handoff prose names it in each GUI block.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    ("next_cmd", "lane", "expected"),
+    [
+        ("implement-setup-task", None, "claude-opus-4-8"),
+        ("create-plan", "feature-factory", "claude-fable-5-1"),
+        ("create-plan", "bug-product", "claude-opus-5-5"),
+        ("create-plan", None, "claude-opus-5-5"),
+        ("review-task", None, "claude-fable-5-1"),
+        ("finish-task", None, "claude-haiku-4-5"),
+    ],
+)
+def test_payload_names_phase_model(
+    tmp_path: Path, next_cmd: str, lane: str | None, expected: str,
+) -> None:
+    """``build_payload`` emits ``phase_model`` = the phase's resolved Claude model."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path)
+    payload = claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd=next_cmd, lane=lane,
+    )
+    assert payload["phase_model"] == expected
