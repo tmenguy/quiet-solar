@@ -207,5 +207,6 @@ def test_settings_json_has_no_alias_env_pins() -> None:
         key = f"ANTHROPIC_DEFAULT_{family}_MODEL"
         assert key not in env, (
             f"D20 — alias pins via settings env ({key}) are dead on Claude Code "
-            "2.1.280 and the policy pins full IDs; do not re-add"
+            "2.1.278 (floor is now 2.1.280) and the policy pins full IDs; "
+            "do not re-add"
         )

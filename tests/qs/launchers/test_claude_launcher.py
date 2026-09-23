@@ -1508,14 +1508,47 @@ def test_phase_model_emitted_when_pin_skipped(tmp_path: Path) -> None:
 )
 def test_check_cli_floor(version_text: str, below: bool) -> None:
     """Pure parser: warn string below the floor, ``None`` at/above or on garbage."""
+    import models  # type: ignore[import-not-found]
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     result = claude_launcher.check_cli_floor(version_text)
     if below:
         assert result is not None
         assert "2.1.280" in result
+        # S4: the model name is interpolated from the policy, not hardcoded.
+        assert models.model_for("claude", "deep") in result
     else:
         assert result is None
+
+
+@pytest.mark.parametrize(
+    "version_text",
+    [
+        "v2.1.279",                          # leading ``v``
+        "Update available\n2.1.278 (Claude Code)",  # banner line first
+        "Claude Code 2.1.278",               # name prefix
+    ],
+)
+def test_check_cli_floor_tolerates_prefixed_and_banner_output(version_text: str) -> None:
+    """N1: the scan finds a below-floor triple past a ``v``/banner/name prefix."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    result = claude_launcher.check_cli_floor(version_text)
+    assert result is not None
+    assert "2.1.280" in result
+
+
+def test_check_cli_floor_message_follows_deep_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """S4: monkeypatching the ``deep`` model makes the warning name it too."""
+    import models  # type: ignore[import-not-found]
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    monkeypatch.setitem(models.HARNESS_MODELS["claude"], "deep", "claude-opus-9-9")
+    result = claude_launcher.check_cli_floor("2.1.279")
+    assert result is not None
+    assert "claude-opus-9-9" in result
 
 
 def test_check_cli_floor_respects_custom_floor() -> None:
@@ -1532,14 +1565,16 @@ def test_check_cli_floor_default_is_models_constant() -> None:
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     assert models.CLAUDE_CLI_FLOOR == (2, 1, 280)
-    # A version exactly one patch below the shared constant must warn.
-    below = (models.CLAUDE_CLI_FLOOR[0], models.CLAUDE_CLI_FLOOR[1], models.CLAUDE_CLI_FLOOR[2] - 1)
-    assert claude_launcher.check_cli_floor(".".join(map(str, below))) is not None
+    # A clearly-below version must warn. N4: a fixed low version avoids the
+    # ``X.Y.-1`` string an ``X.Y.0`` floor would produce from ``patch - 1``
+    # (which the regex would then reject for the wrong reason).
+    assert claude_launcher.check_cli_floor("0.0.1") is not None
 
 
 class _FakeProc:
-    def __init__(self, stdout: str) -> None:
+    def __init__(self, stdout: str, stderr: str = "") -> None:
         self.stdout = stdout
+        self.stderr = stderr
 
 
 def _patch_claude_version(
@@ -1567,9 +1602,13 @@ def _patch_claude_version(
 
 
 def test_build_payload_warns_on_old_cli(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
 ) -> None:
     """An old ``claude`` triggers a stderr warning; the payload is unchanged."""
+    import models  # type: ignore[import-not-found]
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     _patch_claude_version(monkeypatch, _FakeProc("2.1.278 (Claude Code)"))
@@ -1579,6 +1618,8 @@ def test_build_payload_warns_on_old_cli(
     )
     err = capsys.readouterr().err
     assert "2.1.280" in err
+    # S4: the warning names the ``deep`` model from the policy, not a literal.
+    assert models.model_for("claude", "deep") in err
     # Payload is intact — the guard neither blocks nor alters it.
     assert payload["phase_model"] == "claude-fable-5-1"
     assert payload["agent"] == "qs-create-plan"
@@ -1586,7 +1627,10 @@ def test_build_payload_warns_on_old_cli(
 
 
 def test_build_payload_silent_when_cli_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
 ) -> None:
     """A missing ``claude`` binary is swallowed — no warning, payload intact."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
@@ -1601,7 +1645,10 @@ def test_build_payload_silent_when_cli_missing(
 
 
 def test_build_payload_silent_on_cli_timeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
 ) -> None:
     """A ``claude --version`` timeout is swallowed — no warning, payload intact."""
     import subprocess
@@ -1617,3 +1664,128 @@ def test_build_payload_silent_on_cli_timeout(
     )
     assert capsys.readouterr().err == ""
     assert payload["phase_model"] == "claude-fable-5-1"
+
+
+def test_build_payload_silent_on_unicode_decode_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
+) -> None:
+    """S2: a non-UTF-8 shim (``UnicodeDecodeError``) is swallowed — payload intact.
+
+    ``subprocess.run(..., text=True)`` decodes strictly; a shim writing a
+    non-UTF-8 byte raises ``UnicodeDecodeError`` (a ``ValueError``). The
+    widened ``except`` (and ``errors="replace"``) keeps the guard from
+    breaking the handoff.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    _patch_claude_version(
+        monkeypatch,
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    )
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+    payload = claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
+    )
+    assert capsys.readouterr().err == ""
+    assert payload["phase_model"] == "claude-fable-5-1"
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        PermissionError("claude"),        # non-FileNotFound OSError
+        _FakeProc(""),                    # non-zero exit / empty stdout+stderr
+        _FakeProc("garbage no version"),  # unparseable end-to-end
+    ],
+)
+def test_build_payload_silent_on_unhelpful_cli(
+    result: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
+) -> None:
+    """N6: a PermissionError, empty output, or garbage output all stay silent."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    _patch_claude_version(monkeypatch, result)
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+    payload = claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
+    )
+    assert capsys.readouterr().err == ""
+    assert payload["phase_model"] == "claude-fable-5-1"
+
+
+def test_build_payload_reads_stderr_version(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
+) -> None:
+    """N1: a build that prints the version to ``stderr`` still warns."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    _patch_claude_version(monkeypatch, _FakeProc("", stderr="2.1.278 (Claude Code)"))
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+    claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
+    )
+    assert "2.1.280" in capsys.readouterr().err
+
+
+def test_old_cli_payload_equals_stubbed_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    real_cli_floor_guard: None,
+) -> None:
+    """N6: the warning touches stderr only — the full payload dict is identical."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+
+    _patch_claude_version(monkeypatch, _FakeProc("2.1.278 (Claude Code)"))
+    warned = claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
+    )
+    assert "2.1.280" in capsys.readouterr().err
+
+    # Now stub the guard to a no-op and rebuild the exact same handoff.
+    monkeypatch.setattr(claude_launcher, "_warn_if_cli_below_floor", lambda: None)
+    stubbed = claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
+    )
+    assert capsys.readouterr().err == ""
+    assert warned == stubbed
+
+
+def test_autouse_guard_prevents_claude_subprocess(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """S1 hermeticity: the autouse no-op means ``claude --version`` never spawns.
+
+    No ``real_cli_floor_guard`` here, so the conftest autouse no-op is
+    active. ``claude --version`` is rigged to raise ``AssertionError`` so any
+    spawn would fail loudly; a plain ``build_payload`` over a BOM'd settings
+    file must still pin cleanly and leave stderr empty.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    _patch_claude_version(
+        monkeypatch, AssertionError("claude --version must not be called"),
+    )
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+    (work_dir / SETTINGS_REL).write_text('﻿{"model": "opus"}', encoding="utf-8")
+
+    payload = claude_launcher.build_payload(
+        str(work_dir), 367, "Title", next_cmd="create-plan", lane="feature-factory",
+    )
+    assert payload["phase_agent_pinned"] is True
+    assert _settings(work_dir)["model"] == "opus"
+    assert "warning:" not in capsys.readouterr().err

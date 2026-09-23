@@ -79,18 +79,23 @@ def check_cli_floor(
 ) -> str | None:
     """Warn if the Claude Code CLI ``version_text`` is below ``floor``.
 
-    Parses the leading ``MAJOR.MINOR.PATCH`` out of ``claude --version``
-    output (e.g. ``"2.1.278 (Claude Code)"``) into a tuple and compares it
-    to ``floor`` — default :data:`models.CLAUDE_CLI_FLOOR`, the build
-    ``claude-opus-5-5`` requires (QS-367 S4/E8), referenced from there so
-    the floor and the model needing it cannot drift. Returns a one-line
-    warning string when strictly below the floor, else ``None``.
+    Parses the first ``MAJOR.MINOR.PATCH`` triple out of ``claude
+    --version`` output (e.g. ``"2.1.278 (Claude Code)"`` — deliberately
+    below the floor) into a tuple and compares it to ``floor`` — default
+    :data:`models.CLAUDE_CLI_FLOOR`, the build ``claude-opus-5-5`` requires
+    (QS-367 S4/E8), referenced from there so the floor and the model
+    needing it cannot drift. The scan tolerates a leading ``v``, a banner
+    line before the version, and a ``"Claude Code 2.1.278"`` prefix (QS-367
+    N1). Returns a one-line warning string when strictly below the floor,
+    else ``None``.
 
-    Pure and total: unparseable input (no leading dotted triple) returns
-    ``None`` rather than raising — a best-effort guard must never itself
-    break a handoff.
+    Pure and total: unparseable input (no dotted triple) returns ``None``
+    rather than raising — a best-effort guard must never itself break a
+    handoff. The warning names the ``deep`` model from
+    :data:`models.HARNESS_MODELS` (QS-367 S4) so a future bump cannot leave
+    the message naming the wrong build.
     """
-    match = re.match(r"\s*(\d+)\.(\d+)\.(\d+)", version_text)
+    match = re.search(r"(?<![\d.])(\d+)\.(\d+)\.(\d+)", version_text)
     if match is None:
         return None
     version = (int(match.group(1)), int(match.group(2)), int(match.group(3)))
@@ -98,11 +103,12 @@ def check_cli_floor(
         return None
     floor_s = ".".join(str(part) for part in floor)
     version_s = ".".join(str(part) for part in version)
+    deep_model = models.model_for("claude", "deep")
     return (
-        f"warning: Claude Code {version_s} is below {floor_s}; the `deep` "
-        f"agents pin `claude-opus-5-5`, which needs ≥ {floor_s} (older builds "
-        f"400 on it). Upgrade the CLI (`claude` will fail mid-fan-out until "
-        f"you do)."
+        f"warning: the `claude` on PATH is Claude Code {version_s}, below "
+        f"{floor_s}; the `deep` agents pin `{deep_model}`, which needs ≥ "
+        f"{floor_s} (older builds 400 on it). Upgrade the CLI (`claude` will "
+        f"fail mid-fan-out until you do)."
     )
 
 
@@ -111,9 +117,13 @@ def _warn_if_cli_below_floor() -> None:
 
     Runs ``claude --version`` with a short timeout and hands the output to
     :func:`check_cli_floor`. Any failure — binary missing
-    (``FileNotFoundError``), a timeout, or any other ``OSError`` /
-    ``SubprocessError`` — is swallowed silently; the guard must never block
-    or alter the payload. Only a successfully parsed, below-floor version
+    (``FileNotFoundError``), a timeout, a non-UTF-8 shim writing a
+    ``ValueError`` (``UnicodeDecodeError``; guarded belt-and-braces despite
+    ``errors="replace"``), or any other ``OSError`` / ``SubprocessError`` —
+    is swallowed silently; the guard must never block or alter the payload.
+    ``stdin`` is closed (``DEVNULL``) so the child cannot inherit the
+    caller's stdin, and both streams are scanned (some builds print the
+    version to ``stderr``). Only a successfully parsed, below-floor version
     prints, and only to ``sys.stderr`` (``stdout`` carries the JSON
     payload), matching how the render warnings behave.
     """
@@ -122,12 +132,15 @@ def _warn_if_cli_below_floor() -> None:
             ["claude", "--version"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdin=subprocess.DEVNULL,
             timeout=5,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         return
-    warning = check_cli_floor(proc.stdout)
+    warning = check_cli_floor(proc.stdout or proc.stderr)
     if warning is not None:
         print(warning, file=sys.stderr)
 
@@ -595,11 +608,12 @@ def build_payload(
             fallback — free-form prompts go through ``--next-prompt``.
     """
     del caller  # reserved for harness-specific bifurcation; not used here
+    agent = resolve_agent_for_next_cmd(next_cmd)
     # Best-effort CLI floor check (QS-367 S4): warn to stderr if the local
     # ``claude`` predates the build ``claude-opus-5-5`` needs. Never blocks
-    # or alters the payload.
+    # or alters the payload. Runs AFTER ``resolve_agent_for_next_cmd`` so an
+    # unknown phase raises first and never spawns ``claude`` (QS-367 N2).
     _warn_if_cli_below_floor()
-    agent = resolve_agent_for_next_cmd(next_cmd)
     # ``agent`` is a PHASE_TO_AGENT value here (an unknown phase raised
     # above), and every one has a policy row (tests/qs/test_models.py).
     model_class = models.resolve(lane, agent)

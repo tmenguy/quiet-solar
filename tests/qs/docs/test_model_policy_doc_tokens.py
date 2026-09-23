@@ -31,6 +31,11 @@ def test_harness_md_omits_settings_pinned_model_claim() -> None:
         "harness.md must not describe the GUI model as `settings-pinned` — "
         "the picker decides it, not the settings file (QS-367 E7)."
     )
+    assert "on every surface" not in body, (
+        "harness.md must not claim frontmatter decides the model `on every "
+        "surface` — the GUI main session's model comes from the picker, not "
+        "frontmatter (QS-367 S3)."
+    )
 
 
 def test_class_count_docs_say_five_not_four() -> None:

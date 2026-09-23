@@ -330,12 +330,41 @@ def _gui_blocks(body: str) -> list[str]:
     one; truncating at the next ``\\n``-anchored triple fence keeps it from
     absorbing the rest of the file. Both bounds are structural, unlike the
     fixed character window this replaces (review-fix #01 N4).
+
+    The fence match allows leading indentation (``\\n[ \\t]*```
+    ``): in the
+    rendered ``qs-create-plan.md`` and ``qs-diagnose-task.md`` the GUI block
+    is nested under a list item, so its closing fence is indented. A plain
+    ``"\\n```"`` scan missed it and let the block run to end-of-file, so the
+    fallback-clause and required-token checks scanned the whole tail rather
+    than the block (review-fix #02 S5).
     """
     blocks: list[str] = []
     for chunk in body.split(_GUI_BLOCK_MARKER)[1:]:
-        end = chunk.find("\n```")
-        blocks.append(chunk if end == -1 else chunk[:end])
+        fence = re.search(r"\n[ \t]*```", chunk)
+        blocks.append(chunk if fence is None else chunk[: fence.start()])
     return blocks
+
+
+def test_gui_blocks_stops_at_indented_fence() -> None:
+    """``_gui_blocks`` bounds a block at an INDENTED closing fence (S5).
+
+    Regression for review-fix #02 S5: with a plain ``"\\n```"`` scan an
+    indented fence (as rendered in ``qs-create-plan``/``qs-diagnose-task``)
+    was missed and the block absorbed the rest of the file, so a later
+    stray token would satisfy the per-block checks.
+    """
+    body = (
+        "intro\n"
+        f"{_GUI_BLOCK_MARKER} do the thing\n"
+        "   inside the block\n"
+        "   ```\n"
+        "OUTSIDE the block — must not be scanned\n"
+    )
+    blocks = _gui_blocks(body)
+    assert len(blocks) == 1
+    assert "inside the block" in blocks[0]
+    assert "OUTSIDE the block" not in blocks[0]
 
 
 def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:

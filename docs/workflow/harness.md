@@ -192,13 +192,14 @@ not fully understand:
   owns exactly **two** keys (QS-358): `agent` is replaced, and
   `effortLevel` is set to the phase's class effort — or **removed** for a
   `fast` phase, so it never inherits the previous phase's level. Every
-  other top-level key is kept. It does **not** pin `model`: the agent's
-  frontmatter decides the model on every surface and beats a user-level
-  settings `model` (QS-358 spike Run 2), so a `/model` choice — which
-  Claude Code persists at user level — is effectively session-scoped for
-  a pipeline agent. A `model` already in this file is the user's and is
-  left alone. Frontmatter `effort:` reaches sub-agents but **not** the
-  main session, which is why the pin carries `effortLevel`.
+  other top-level key is kept. It does **not** pin `model`: the settings
+  pin fixes the **agent**, not the model. Frontmatter decides the model on
+  the CLI (`--agent`) surface and for sub-agents, and beats a user-level
+  settings `model` there (QS-358 spike Run 2); the GUI main session's model
+  comes from the desktop **picker** (QS-367 E7), which is why the handoff
+  names `phase_model` for the user to pick. A `model` already in this file
+  is the user's and is left alone. Frontmatter `effort:` reaches sub-agents
+  but **not** the main session, which is why the pin carries `effortLevel`.
 - **Anything else is left exactly as it is, and the pin is skipped** — an
   unreadable file, one that does not parse, or one that parses to something
   other than an object (`null`, `[1, 2]`, `"x"`, empty, NUL-filled). Always
@@ -408,8 +409,10 @@ hand-sets a model.
   in frontmatter work for **sub-agents and `--agent` CLI sessions**.
   `claude-opus-5-5` needs Claude Code **≥ 2.1.280** (QS-367 E8; earlier
   builds 400 on it). The Claude launcher checks this floor best-effort at
-  handoff time (`claude --version`) and prints a stderr warning when the
-  CLI is older — it never blocks or alters the payload (QS-367 S4).
+  handoff time by running the `claude` on PATH (`claude --version`) and
+  prints a stderr warning when that CLI is older — it never blocks or
+  alters the payload (QS-367 S4). A Desktop-bundled CLI off PATH is not
+  what it inspects.
   Consequence: a hand-typed `/model opus` or
   `--model opus` means the provider default (Opus 5 today); the
   pipeline's agents are pinned by their frontmatter, not by the repo. A
