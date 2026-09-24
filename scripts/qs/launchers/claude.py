@@ -29,8 +29,10 @@ import contextlib
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -59,14 +61,108 @@ Caller = Literal["setup_task", "next_step"]
 # Extra flags appended to ``claude`` invocations. Kept narrow on purpose.
 # No ``--model`` (QS-358 D9): the model comes from the policy in
 # ``scripts/qs/models.py``, rendered as a full model ID into each agent's
-# frontmatter (D20); the GUI pin carries the phase's ``effortLevel`` (D19).
-# A one-off ``claude --model <id>`` still overrides the frontmatter.
+# frontmatter (D20). Frontmatter decides the model on the CLI and for
+# sub-agents; the Claude GUI's model picker decides the main session's, so
+# the payload names it as ``phase_model`` (QS-367 E7). The GUI pin carries
+# the phase's ``effortLevel`` (D19). A one-off ``claude --model <id>`` still
+# overrides the frontmatter.
 CLAUDE_LAUNCH_OPTS = "--dangerously-skip-permissions"
 
 # Mode for a freshly created pin file. Owner-only because this file can
 # carry an ``env`` block with a token, and because a fresh worktree has no
 # existing mode to honour. An existing file's mode is copied, not replaced.
 _PRIVATE_MODE = 0o600
+
+
+def check_cli_floor(
+    version_text: str, floor: tuple[int, int, int] = models.CLAUDE_CLI_FLOOR,
+) -> str | None:
+    """Warn if the Claude Code CLI ``version_text`` is below ``floor``.
+
+    Parses a ``MAJOR.MINOR.PATCH`` triple out of ``claude --version`` output
+    (e.g. ``"2.1.278 (Claude Code)"`` — deliberately below the floor) into a
+    tuple and compares it to ``floor`` — default
+    :data:`models.CLAUDE_CLI_FLOOR`, the ``deep`` ``claude-opus-5-5``
+    requires (QS-367 S4/E8), referenced from there so the floor and the
+    model needing it cannot drift. A triple *tagged* as the build version —
+    either suffixed ``(Claude Code)`` or prefixed ``Claude Code`` — wins
+    over any earlier bare triple, so an ``"Update available: 2.1.290"``
+    banner cannot mask the real build version printed as
+    ``"2.1.278 (Claude Code)"`` or ``"Claude Code 2.1.278"``
+    (QS-367 S2/N8); absent any tag the first bare triple is used. The scan
+    tolerates a leading ``v`` and a banner line before the version. Each
+    digit group is bounded to nine digits so a pathological run cannot
+    overflow ``int`` (QS-367 N1). Returns a one-line warning string when
+    strictly below the floor, else ``None``.
+
+    Pure and total: unparseable input (no dotted triple) returns ``None``
+    rather than raising — a best-effort guard must never itself break a
+    handoff. The warning names the ``deep`` model from
+    :data:`models.HARNESS_MODELS` (QS-367 S4) so a future bump cannot leave
+    the message naming the wrong build.
+    """
+    match = re.search(
+        r"(?<![\d.])(\d{1,9})\.(\d{1,9})\.(\d{1,9})\s*\(Claude Code\)"
+        r"|Claude Code\s+v?(\d{1,9})\.(\d{1,9})\.(\d{1,9})",
+        version_text,
+    ) or re.search(r"(?<![\d.])(\d{1,9})\.(\d{1,9})\.(\d{1,9})", version_text)
+    if match is None:
+        return None
+    # The tagged alternation yields six groups (the unmatched branch is all
+    # ``None``); the bare fallback yields three. Filter to the three that
+    # matched, whichever branch won.
+    digits = [g for g in match.groups() if g is not None]
+    version = (int(digits[0]), int(digits[1]), int(digits[2]))
+    if version >= floor:
+        return None
+    floor_s = ".".join(str(part) for part in floor)
+    version_s = ".".join(str(part) for part in version)
+    deep_model = models.model_for("claude", "deep")
+    return (
+        f"warning: the `claude` on PATH is Claude Code {version_s}, below "
+        f"{floor_s}; the `deep` agents pin `{deep_model}`, which needs ≥ "
+        f"{floor_s} (older builds 400 on it). Upgrade the CLI (`claude` will "
+        f"fail mid-fan-out until you do)."
+    )
+
+
+def _warn_if_cli_below_floor() -> None:
+    """Best-effort: warn on stderr if the local ``claude`` CLI predates the floor.
+
+    Runs ``claude --version`` with a short timeout and hands the output to
+    :func:`check_cli_floor`. Any failure — binary missing
+    (``FileNotFoundError``), a timeout, a non-UTF-8 shim whose output raises
+    ``UnicodeDecodeError`` (a ``ValueError``; guarded belt-and-braces despite
+    ``errors="replace"``), or any other ``OSError`` / ``SubprocessError`` —
+    is swallowed silently; the guard must never block or alter the payload.
+    ``stdin`` is closed (``DEVNULL``) so the child cannot inherit the
+    caller's stdin, and both streams are concatenated and scanned (some
+    builds print the version to ``stderr``, or a banner to ``stdout`` ahead
+    of it, so scanning only the first non-empty stream would miss it —
+    QS-367 S2). Only a successfully parsed, below-floor version prints, and
+    only to ``sys.stderr`` (``stdout`` carries the JSON payload), matching
+    how the render warnings behave.
+    """
+    try:
+        proc = subprocess.run(
+            ["claude", "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdin=subprocess.DEVNULL,
+            timeout=5,
+            check=False,
+        )
+        # Inside the ``try`` on purpose: ``check_cli_floor`` is pure and total
+        # for sane input, but a pathological version string could still make
+        # ``int()`` raise — the widened ``except`` keeps even that from
+        # breaking the handoff (QS-367 N1).
+        warning = check_cli_floor(f"{proc.stdout or ''}\n{proc.stderr or ''}")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return
+    if warning is not None:
+        print(warning, file=sys.stderr)
 
 
 def _pycharm_bin() -> str | None:
@@ -315,8 +411,11 @@ def _write_phase_agent(work_dir: str, agent: str, effort: str | None) -> bool:
     QS-358: the pin also carries the phase's ``effortLevel`` (``effort``;
     removed when ``None``). Frontmatter ``effort:`` reaches sub-agents but
     not the main session, so this key is the main session's only path. The
-    model is *not* pinned: the agent's frontmatter already decides it on
-    every surface and beats a settings ``model``.
+    settings pin fixes the **agent**, not the model: frontmatter decides the
+    model on the CLI surface (and for sub-agents), while the Claude GUI's
+    model picker decides the main session's and must be set by hand — the
+    handoff names it as ``phase_model`` (QS-367 E7). A settings ``model``
+    key loses to the GUI picker, so this writer never sets one.
 
     The Claude Code **GUI** has no ``--agent`` flag, so the only way to
     boot a GUI session as a phase orchestrator is the ``agent`` settings
@@ -482,8 +581,11 @@ def build_payload(
     guarded to real worktrees that already contain the agent file, and is
     inert for CLI sessions because ``--agent`` takes precedence. The pin
     also carries the phase's effort level (QS-358), resolved from
-    ``scripts/qs/models.py`` for ``lane``; the model is not pinned because
-    the agent's frontmatter already decides it on every surface.
+    ``scripts/qs/models.py`` for ``lane``. The model is not *pinned*:
+    frontmatter decides it on the CLI and for sub-agents, while the Claude
+    GUI's model picker decides the main session's (a settings ``model`` key
+    loses to it), so the payload instead *names* it as ``phase_model`` for
+    the GUI handoff to surface (QS-367 E7).
 
     Args:
         work_dir: Worktree directory the new session should open in.
@@ -511,7 +613,8 @@ def build_payload(
 
     Returns:
         A dict with ``tool``, ``agent``, ``phase_agent_pinned``,
-        ``same_context``, ``new_context``, optionally
+        ``phase_model`` (the Claude model the GUI user must pick — QS-367
+        E7), ``same_context``, ``new_context``, optionally
         ``existing_session_prompt``, and (on macOS with PyCharm installed)
         ``pycharm_context`` / ``pycharm_applescript_context`` keys.
         ``phase_agent_pinned`` is ``False`` whenever the GUI pin was
@@ -526,9 +629,21 @@ def build_payload(
     """
     del caller  # reserved for harness-specific bifurcation; not used here
     agent = resolve_agent_for_next_cmd(next_cmd)
+    # Best-effort CLI floor check (QS-367 S4): warn to stderr if the local
+    # ``claude`` predates the build ``claude-opus-5-5`` needs. Never blocks
+    # or alters the payload. Runs AFTER ``resolve_agent_for_next_cmd`` so an
+    # unknown phase raises first and never spawns ``claude`` (QS-367 N2).
+    _warn_if_cli_below_floor()
     # ``agent`` is a PHASE_TO_AGENT value here (an unknown phase raised
     # above), and every one has a policy row (tests/qs/test_models.py).
-    effort = models.effort_for(models.resolve(lane, agent))
+    model_class = models.resolve(lane, agent)
+    effort = models.effort_for(model_class)
+    # QS-367 N7: resolve the Claude model BEFORE the settings write. A class
+    # lacking a Claude row would otherwise leave the pin written and then
+    # raise a bare ``KeyError`` from the payload dict below. Unreachable while
+    # ``test_harness_rows_complete`` holds — defence in depth, and it reads
+    # in the same place as ``effort``.
+    phase_model = models.model_for("claude", model_class)
     # Side effect (QS-311): pin the phase agent into the worktree's local
     # settings so a GUI session there boots as this orchestrator. Guarded
     # and best-effort — see ``_write_phase_agent``. The result is surfaced
@@ -544,6 +659,10 @@ def build_payload(
         "tool": "claude-code",
         "agent": agent,
         "phase_agent_pinned": pinned,
+        # QS-367 E7: the Claude GUI's model picker decides the main
+        # session's model — frontmatter and a settings ``model`` key both
+        # lose to it — so the handoff names the model the user must pick.
+        "phase_model": phase_model,
         "same_context": next_cmd,
         "new_context": new_context,
     }

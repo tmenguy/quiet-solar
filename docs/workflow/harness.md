@@ -192,13 +192,14 @@ not fully understand:
   owns exactly **two** keys (QS-358): `agent` is replaced, and
   `effortLevel` is set to the phase's class effort — or **removed** for a
   `fast` phase, so it never inherits the previous phase's level. Every
-  other top-level key is kept. It does **not** pin `model`: the agent's
-  frontmatter decides the model on every surface and beats a user-level
-  settings `model` (QS-358 spike Run 2), so a `/model` choice — which
-  Claude Code persists at user level — is effectively session-scoped for
-  a pipeline agent. A `model` already in this file is the user's and is
-  left alone. Frontmatter `effort:` reaches sub-agents but **not** the
-  main session, which is why the pin carries `effortLevel`.
+  other top-level key is kept. It does **not** pin `model`: the settings
+  pin fixes the **agent**, not the model. Frontmatter decides the model on
+  the CLI (`--agent`) surface and for sub-agents, and beats a user-level
+  settings `model` there (QS-358 spike Run 2); the GUI main session's model
+  comes from the desktop **picker** (QS-367 E7), which is why the handoff
+  names `phase_model` for the user to pick. A `model` already in this file
+  is the user's and is left alone. Frontmatter `effort:` reaches sub-agents
+  but **not** the main session, which is why the pin carries `effortLevel`.
 - **Anything else is left exactly as it is, and the pin is skipped** — an
   unreadable file, one that does not parse, or one that parses to something
   other than an object (`null`, `[1, 2]`, `"x"`, empty, NUL-filled). Always
@@ -251,7 +252,12 @@ One GUI session per phase, exactly as on the CLI:
    agent it was created with (the key is read at *session* start).
 2. Select the worktree directory.
 3. Name it something like `QS_<N> implement-task`.
-4. Work the phase; at the handoff, repeat from step 1 for the next one.
+4. **Pick the model the handoff names** (the payload's `phase_model`) in
+   the model picker — the picker, not the frontmatter, decides the main
+   session's model (QS-367 E7). If the picker does not offer it, use the
+   Preferred `--agent` line (the handoff's Preferred block; its frontmatter
+   pins the model).
+5. Work the phase; at the handoff, repeat from step 1 for the next one.
 
 `/setup-task` seeds the loop: it creates the worktree, pins
 `qs-create-plan` into it (unless `--no-worktree`, see Traps), and prints
@@ -366,28 +372,32 @@ decided by **one policy**, `scripts/qs/models.py` (QS-358), and rendered
 into every agent's frontmatter on both harnesses. Nothing in a template
 hand-sets a model.
 
-- **Four classes, harness-agnostic:** `deep` (the best code-grounded
-  model — implement, concrete-planner, the hunters, root-cause),
-  `frontier` (the best general reasoner — planning conversation,
-  review consolidation, judgment reviewers), `light` (checklists —
-  delta-auditor, setup-task), `fast` (mechanical — finish, the
-  CodeRabbit wrapper, release). `_FLAT` maps each agent to a class;
-  only the two planning orchestrators depend on the lane (`bug-*` →
-  `deep`, other lanes → `frontier`, no lane → `deep`). Reviewers are
-  deliberately spread across classes so one fan-out does not share one
-  set of blind spots.
+- **Five classes, harness-agnostic:** `build` (the implementer's model —
+  the implementers and their plan dev-proxy, contained small-footprint
+  code changes), `deep` (the best code-grounded analyst — critique,
+  concrete planning, the hunters, root-cause), `frontier` (the best
+  general reasoner — planning conversation, review consolidation,
+  judgment reviewers), `light` (checklists — delta-auditor, setup-task),
+  `fast` (mechanical — finish, the CodeRabbit wrapper, release). `_FLAT`
+  maps each agent to a class; only the two planning orchestrators depend
+  on the lane (`bug-*` → `deep`, other lanes → `frontier`, no lane →
+  `deep`). Reviewers are deliberately spread across classes so one
+  fan-out does not share one set of blind spots.
 - **One complete row per harness** in `HARNESS_MODELS`, in that
   harness's own vocabulary, **both in exact versions**:
 
   | class | Claude (frontmatter, full ID) | OpenCode (`github-copilot/…`) | effort |
   |---|---|---|---|
-  | `deep` | `claude-opus-4-8` | `claude-opus-4.8` | `high` |
+  | `build` | `claude-opus-4-8` | `claude-opus-4.8` | `high` |
+  | `deep` | `claude-opus-5-5` | `claude-opus-5.5` | `high` |
   | `frontier` | `claude-fable-5-1` | `gpt-6-astra` | `high` |
   | `light` | `claude-sonnet-5` | `claude-sonnet-5` | `medium` |
   | `fast` | `claude-haiku-4-5` | `claude-haiku-4.5` | — |
 
-  To add a harness, add a row (a test refuses a harness the renderer
-  knows but the policy does not).
+  `deep` → Opus 5.5 for analysis/review; `build` keeps Opus 4.8 for
+  implementer footprint; the plan dev-proxy runs the implementer's model —
+  see QS-367. To add a harness, add a row (a test refuses a harness the
+  renderer knows but the policy does not).
 - **Declared asymmetries.** On OpenCode the `frontier` class runs GPT-6
   Astra because the `github-copilot` provider offers no Claude Fable —
   one `HARNESS_MODELS` cell to revert when it does. **Effort is
@@ -396,17 +406,29 @@ hand-sets a model.
   the pin's `effortLevel`; `fast` (Haiku 4.5) sets none.
 - **Why full IDs, and no repo-wide alias pin.** The documented settings
   `env` pins (`ANTHROPIC_DEFAULT_OPUS_MODEL`, …) are **not applied** to
-  the process on Claude Code 2.1.278, so aliases float to the provider
-  default, while full IDs in frontmatter work for sub-agents, `--agent`
-  sessions and settings-pinned (GUI) sessions. Consequence: a hand-typed
-  `/model opus` or `--model opus` means the provider default (Opus 5
-  today); the pipeline's agents are pinned by their frontmatter, not by
-  the repo. A test keeps the dead `env` keys out of
-  `.claude/settings.json`. (An `ANTHROPIC_MODEL` exported in your shell
-  would beat every settings `model` — not set by the pipeline.)
+  the process (observed on 2.1.278), so aliases float to the provider
+  default, while full IDs
+  in frontmatter work for **sub-agents and `--agent` CLI sessions**.
+  `claude-opus-5-5` needs Claude Code **≥ 2.1.280** (QS-367 E8; earlier
+  builds 400 on it). The Claude launcher checks this floor best-effort at
+  handoff time by running the `claude` on PATH (`claude --version`) and
+  prints a stderr warning when that CLI is older — it never blocks or
+  alters the payload (QS-367 S4). A Desktop-bundled CLI off PATH is not
+  what it inspects.
+  Consequence: a hand-typed `/model opus` or
+  `--model opus` means the provider default (Opus 5 today); the
+  pipeline's agents are pinned by their frontmatter, not by the repo (CLI
+  and sub-agents; the GUI main session follows the picker). A
+  test keeps the dead `env` keys out of `.claude/settings.json`. (An
+  `ANTHROPIC_MODEL` exported in your shell would beat every settings
+  `model` — not set by the pipeline.)
 - **Overrides, per surface.** Claude CLI: `claude --model <id>` beats
-  the frontmatter (the launcher passes no `--model`). Claude GUI:
-  `/model <x>` mid-session. OpenCode: edit the agent's `model:` or
+  the frontmatter (the launcher passes no `--model`). Claude GUI: **the
+  model picker decides the main session's model** — neither frontmatter
+  nor a settings `model` key overrides it (observed 2026-09-23), so the
+  handoff names the model to pick (the payload's `phase_model`, QS-367
+  E7); the pin's `effortLevel` *is* honoured, and sub-agents follow
+  their frontmatter. OpenCode: edit the agent's `model:` or
   `opencode.json`. `render_all`'s explicit `model=` override takes a
   **class** (translated per harness) or a harness-valid literal (emitted
   verbatim on both harnesses — never pass a bare alias).

@@ -177,8 +177,8 @@ def build_render_context(
     ``model=None`` (the default) means "the policy": :func:`render_all`
     resolves each agent's model from ``scripts/qs/models.py``. An explicit
     ``str`` / ``Mapping`` (stem → value) is an override: a value that is a
-    model **class** (``deep`` / ``frontier`` / ``light`` / ``fast``) is
-    translated per harness; any other value (a full Claude ID, a
+    model **class** (``build`` / ``deep`` / ``frontier`` / ``light`` /
+    ``fast``) is translated per harness; any other value (a full Claude ID, a
     ``provider/model`` literal, ``"inherit"``, a bare alias) is emitted
     verbatim on both harnesses — the caller owns its harness validity.
 

@@ -212,8 +212,9 @@ python scripts/qs/next_step.py \
 ```
 
 [% if harness == "claude" %]
-Parse the JSON; capture `new_context` and `phase_agent_pinned` (a `false`
-there means the GUI pin was skipped). Then present both blocks:
+Parse the JSON; capture `new_context`, `phase_agent_pinned` (a `false`
+there means the GUI pin was skipped), and `phase_model` (the model the GUI
+user must pick — QS-367 E7). Then present both blocks:
 [% else %]
 Parse the JSON output of ``next_step.py``.
 [% endif %]
@@ -277,6 +278,9 @@ use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
   • Select directory `{{worktree}}`
   • Name it `QS_{{issue}} finish-task`
+  • **Pick model `{{phase_model}}`** in the model picker (the GUI ignores
+    the agent's model — see harness.md); if the picker does not offer it,
+    use the Preferred `--agent` line above (its frontmatter pins the model)
   • See `docs/workflow/harness.md` →
     "GUI launch surface (Claude Code Desktop)".
 ```
@@ -409,8 +413,9 @@ python scripts/qs/next_step.py \
 ```
 
 [% if harness == "claude" %]
-Parse the JSON; capture `new_context`, `existing_session_prompt`, and
-`phase_agent_pinned` (a `false` there means the GUI pin was skipped).
+Parse the JSON; capture `new_context`, `existing_session_prompt`,
+`phase_agent_pinned` (a `false` there means the GUI pin was skipped), and
+`phase_model` (the model the GUI user must pick — QS-367 E7).
 [% else %]
 Parse the JSON output of ``next_step.py``.
 [% endif %]
@@ -502,6 +507,9 @@ use the Preferred line above, where `--agent` always wins.
   • **New session** (not a restored one — the GUI reopens the last session)
   • Select directory `{{worktree}}`
   • Name it `QS_{{issue}} implement-task`
+  • **Pick model `{{phase_model}}`** in the model picker (the GUI ignores
+    the agent's model — see harness.md); if the picker does not offer it,
+    use the Preferred `--agent` line above (its frontmatter pins the model)
   • See `docs/workflow/harness.md` →
     "GUI launch surface (Claude Code Desktop)".
 [% else %]

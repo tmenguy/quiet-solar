@@ -54,3 +54,50 @@ def _add_scripts_qs_to_syspath() -> Iterator[None]:
                 sys.modules.pop(name, None)
         if added:
             sys.path.remove(path_str)
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_cli_floor_guard(
+    _add_scripts_qs_to_syspath: None, monkeypatch: pytest.MonkeyPatch,
+) -> object:
+    """Stop every ``build_payload`` call spawning the real ``claude --version``.
+
+    ``build_payload`` calls ``_warn_if_cli_below_floor`` unconditionally
+    (QS-367 S4), so without this ~55 launcher tests would each spawn the
+    host CLI: slow on every host, and on one whose ``claude`` is below the
+    floor an unrelated stderr ``warning:`` would break assertions that
+    demand a clean stderr (e.g. the BOM test). Patch the **module
+    attribute** to a no-op so ``build_payload``'s own lookup sees it
+    (QS-367 S1).
+
+    Returns the real function so the ``real_cli_floor_guard`` fixture can
+    restore it for the S4 end-to-end tests that must exercise the guard
+    (see ``real_cli_floor_guard``). Depends on ``_add_scripts_qs_to_syspath``
+    so ``launchers.claude`` is importable when this runs.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    original = claude_launcher._warn_if_cli_below_floor
+    monkeypatch.setattr(claude_launcher, "_warn_if_cli_below_floor", lambda: None)
+    return original
+
+
+@pytest.fixture
+def real_cli_floor_guard(
+    _neutralize_cli_floor_guard: object, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Undo the autouse no-op so a test exercises the real floor guard.
+
+    The QS-367 S4 end-to-end tests
+    (``test_build_payload_warns_on_old_cli``, its silent siblings, the
+    stream-scanning and ordering tests) route ``build_payload`` through the
+    real ``_warn_if_cli_below_floor`` and intercept only ``claude --version``
+    via ``_patch_claude_version``. This fixture reinstalls the real function
+    (captured by the autouse fixture) before they install their own
+    ``subprocess.run`` fake.
+    """
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    monkeypatch.setattr(
+        claude_launcher, "_warn_if_cli_below_floor", _neutralize_cli_floor_guard,
+    )

@@ -294,6 +294,15 @@ _GUI_BLOCK_REQUIRED_TOKENS = (
     # place only if the handoff prose actually consults it, so that is
     # pinned here rather than left to review (review-fix #01 M3).
     "`phase_agent_pinned`",
+    # QS-367 E7: the GUI ignores the agent's model, so each block must tell
+    # the user which model to pick. ``{{phase_model}}`` is the runtime
+    # placeholder the launcher payload fills.
+    "{{phase_model}}",
+    # QS-367 S2: AC7 requires both the placeholder AND the gesture that
+    # sets it. ``model picker`` was asserted ABSENT on OpenCode
+    # (``test_opencode_agents_omit_gui_model_prose``) but never asserted
+    # PRESENT on Claude until now.
+    "model picker",
 )
 
 # ``qs-review-task`` hands off twice — the zero-findings → finish-task
@@ -321,12 +330,41 @@ def _gui_blocks(body: str) -> list[str]:
     one; truncating at the next ``\\n``-anchored triple fence keeps it from
     absorbing the rest of the file. Both bounds are structural, unlike the
     fixed character window this replaces (review-fix #01 N4).
+
+    The fence match allows leading indentation (``\\n[ \\t]*```
+    ``): in the
+    rendered ``qs-create-plan.md`` and ``qs-diagnose-task.md`` the GUI block
+    is nested under a list item, so its closing fence is indented. A plain
+    ``"\\n```"`` scan missed it and let the block run to end-of-file, so the
+    fallback-clause and required-token checks scanned the whole tail rather
+    than the block (review-fix #02 S5).
     """
     blocks: list[str] = []
     for chunk in body.split(_GUI_BLOCK_MARKER)[1:]:
-        end = chunk.find("\n```")
-        blocks.append(chunk if end == -1 else chunk[:end])
+        fence = re.search(r"\n[ \t]*```", chunk)
+        blocks.append(chunk if fence is None else chunk[: fence.start()])
     return blocks
+
+
+def test_gui_blocks_stops_at_indented_fence() -> None:
+    """``_gui_blocks`` bounds a block at an INDENTED closing fence (S5).
+
+    Regression for review-fix #02 S5: with a plain ``"\\n```"`` scan an
+    indented fence (as rendered in ``qs-create-plan``/``qs-diagnose-task``)
+    was missed and the block absorbed the rest of the file, so a later
+    stray token would satisfy the per-block checks.
+    """
+    body = (
+        "intro\n"
+        f"{_GUI_BLOCK_MARKER} do the thing\n"
+        "   inside the block\n"
+        "   ```\n"
+        "OUTSIDE the block — must not be scanned\n"
+    )
+    blocks = _gui_blocks(body)
+    assert len(blocks) == 1
+    assert "inside the block" in blocks[0]
+    assert "OUTSIDE the block" not in blocks[0]
 
 
 def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:
@@ -377,6 +415,32 @@ def test_gui_block_names_required_tokens(filename: str, token: str) -> None:
         f"{filename}: GUI block(s) {missing} do not mention {token!r} "
         f"(QS-311 AC5). Each block must stand alone — a reader of one "
         f"handoff never sees the others."
+    )
+
+
+# QS-367 S3: a raw model ID may not appear in the desktop picker (which
+# shows display names and may not list every model). Every GUI block's
+# ``Pick model`` bullet must therefore carry a fallback to the Preferred
+# ``--agent`` line, whose frontmatter pins the model. Whitespace-normalised
+# because the clause line-wraps differently in the indented
+# (``qs-create-plan``/``qs-diagnose-task``) and unindented sites.
+_PICKER_FALLBACK_CLAUSE = (
+    "if the picker does not offer it, use the Preferred `--agent` line above "
+    "(its frontmatter pins the model)"
+)
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_gui_block_carries_picker_fallback_clause(filename: str) -> None:
+    """Every GUI block tells the user what to do when the picker lacks the model."""
+    blocks = _gui_blocks((AGENTS_DIR / filename).read_text())
+    assert blocks, f"{filename}: no '[Claude Code GUI]' block at all"
+    expected = " ".join(_PICKER_FALLBACK_CLAUSE.split())
+    missing = [i for i, block in enumerate(blocks) if expected not in " ".join(block.split())]
+    assert not missing, (
+        f"{filename}: GUI block(s) {missing} do not carry the picker-fallback "
+        f"clause (QS-367 S3). A raw model ID may not be in the desktop "
+        f"picker, so each block must route to the Preferred `--agent` line."
     )
 
 
@@ -470,6 +534,80 @@ def test_handoff_orchestrators_carry_the_stale_pin_hazard_at_both_handoffs(
     assert body.count(expected) == 2, (
         f"{filename}: expected the stale-pin sentence at both handoff "
         f"sites, found {body.count(expected)}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# QS-367 E7 — the Claude handoff names the model the GUI user must pick.
+#
+# The GUI model picker decides the main session's model; neither frontmatter
+# nor a settings ``model`` key overrides it. So every Claude capture sentence
+# names ``phase_model`` (setup-task names it in its payload key list), and no
+# OpenCode agent carries the GUI-only ``phase_model`` / ``model picker`` prose.
+# --------------------------------------------------------------------------- #
+
+_CAPTURE_SENTENCE_PREFIX = "Parse the JSON; capture"
+
+
+def _capture_paragraphs(body: str) -> list[str]:
+    """Every blank-line-delimited paragraph beginning ``Parse the JSON; capture``."""
+    paras = re.split(r"\n[ \t]*\n", body)
+    return [p for p in paras if p.lstrip().startswith(_CAPTURE_SENTENCE_PREFIX)]
+
+
+@pytest.mark.parametrize(
+    "filename", [f for f in _GUI_BLOCK_ORCHESTRATORS if f != "qs-setup-task.md"]
+)
+def test_claude_capture_sentence_names_phase_model(filename: str) -> None:
+    """Every Claude capture sentence names ``phase_model`` — one per handoff."""
+    body = (AGENTS_DIR / filename).read_text()
+    paras = _capture_paragraphs(body)
+    expected = _GUI_BLOCK_COUNTS[filename]
+    assert len(paras) == expected, (
+        f"{filename}: expected {expected} 'Parse the JSON; capture' "
+        f"paragraph(s), found {len(paras)} (QS-367 E7)."
+    )
+    for i, para in enumerate(paras):
+        assert "phase_model" in para, (
+            f"{filename}: capture paragraph {i} does not name `phase_model` — "
+            f"the GUI ignores the agent's model, so the handoff must name the "
+            f"model to pick (QS-367 E7)."
+        )
+
+
+def test_setup_task_key_list_names_phase_model() -> None:
+    """``qs-setup-task`` has no capture sentence; its payload key list names it.
+
+    QS-367 S1: the old assertion was ``"phase_model" in body`` of the whole
+    rendered file, which the GUI block's ``{{phase_model}}`` alone satisfied
+    — so it passed even if the payload key-list paragraph (the one starting
+    ``Capture `worktree_path```) dropped ``phase_model``. Scope the check to
+    that paragraph so it tests what its name claims.
+    """
+    body = (AGENTS_DIR / "qs-setup-task.md").read_text()
+    paras = re.split(r"\n[ \t]*\n", body)
+    key_list = [p for p in paras if p.lstrip().startswith("Capture `worktree_path`")]
+    assert len(key_list) == 1, (
+        f"qs-setup-task.md: expected exactly one payload key-list paragraph "
+        f"starting 'Capture `worktree_path`', found {len(key_list)}."
+    )
+    assert "phase_model" in key_list[0], (
+        "qs-setup-task.md: the payload key-list paragraph must name "
+        "`phase_model` (QS-367 E7/S1)."
+    )
+
+
+@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+def test_opencode_agents_omit_gui_model_prose(filename: str) -> None:
+    """No OpenCode agent carries the GUI-only ``phase_model`` / ``model picker`` prose."""
+    body = (agents_dir("opencode") / filename).read_text()
+    assert "phase_model" not in body, (
+        f"opencode/agents/{filename}: OpenCode has no GUI model picker — "
+        f"`phase_model` must not appear (QS-367 E7)."
+    )
+    assert "model picker" not in body, (
+        f"opencode/agents/{filename}: OpenCode has no GUI model picker — "
+        f"`model picker` must not appear (QS-367 E7)."
     )
 
 

@@ -273,8 +273,9 @@ name you determined above (one of: `implement-task`,
 [% endif %]
 
 [% if harness == "claude" %]
-   Parse the JSON; capture `new_context` and `phase_agent_pinned` (a
-   `false` there means the GUI pin was skipped). Then print both blocks:
+   Parse the JSON; capture `new_context`, `phase_agent_pinned` (a
+   `false` there means the GUI pin was skipped), and `phase_model` (the
+   model the GUI user must pick — QS-367 E7). Then print both blocks:
 [% else %]
 ```bash
 python scripts/qs/next_step.py \
@@ -344,6 +345,9 @@ Bash tool's error message verbatim. Do not attempt to parse JSON.
      • **New session** (not a restored one — the GUI reopens the last session)
      • Select directory `{{worktree}}`
      • Name it `QS_{{issue}} {{NEXT_PHASE}}`
+     • **Pick model `{{phase_model}}`** in the model picker (the GUI ignores
+       the agent's model — see harness.md); if the picker does not offer it,
+       use the Preferred `--agent` line above (its frontmatter pins the model)
      • See `docs/workflow/harness.md` →
        "GUI launch surface (Claude Code Desktop)".
    ```
