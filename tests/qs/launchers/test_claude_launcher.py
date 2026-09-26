@@ -2008,7 +2008,8 @@ def test_handoff_text_golden_pinned_without_fix_plan(tmp_path: Path) -> None:
 
 
 def test_handoff_text_golden_pinned_with_fix_plan(tmp_path: Path) -> None:
-    """Pinned × fix plan + PR: the existing-session block, every prompt line indented."""
+    """Pinned × fix plan + PR: the existing-session block, every non-empty
+    prompt line indented two spaces; blank lines stay empty."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]
 
     work_dir = _fake_worktree(tmp_path, agent="qs-implement-task")
@@ -2020,7 +2021,7 @@ def test_handoff_text_golden_pinned_with_fix_plan(tmp_path: Path) -> None:
     assert payload["phase_agent_pinned"] is True
     prompt = payload["existing_session_prompt"]
     assert "\n" in prompt, "the golden must exercise a multi-line prompt"
-    indented = "\n".join(f"  {line}" for line in prompt.split("\n"))
+    indented = "\n".join(f"  {line}" if line else "" for line in prompt.split("\n"))
     fill = {
         "phase": "implement-task",
         "new_context": payload["new_context"],

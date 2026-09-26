@@ -23,10 +23,13 @@ exits non-zero / prints no JSON, or returns empty `labels` **and**
 `title`, the `gh` lookup failed: **STOP** and print:
 
 ```text
-Cannot pick the implement variant: the issue lookup failed (gh) — retry, or tell me which variant to run.
+Cannot pick the implement variant: the context.py / gh lookup failed — retry, or tell me which variant to run.
 ```
 
-Do **not** print the label message or commands below. Otherwise take
+(If `issue` is null — the branch carries no `QS_<N>` issue number — say
+so instead of suggesting a retry.) Do **not** print the label message or
+commands below; then wait for the user as described in the last
+paragraph. Otherwise take
 `target`. `factory` → `[[ var ]] = implement-setup-task`; `product` →
 `[[ var ]] = implement-task`. For any other value (empty — no or
 ambiguous `target:*` label), **STOP** and print (substitute `{{issue}}`
@@ -54,11 +57,12 @@ remove the wrong one — `gh issue edit {{issue}} --remove-label target:factory`
 or `gh issue edit {{issue}} --remove-label target:product` (the one that
 is wrong; concrete labels only).
 
-After printing, wait for the user: if they report adding a label, re-run
-`context.py` and route again; if they name `implement-task` /
-`implement-setup-task` (with or without a leading `/`), or `factory` /
-`product` (map `factory` → `implement-setup-task`, `product` →
-`implement-task`), use it; any other answer → ask again.
+After printing (either STOP), wait for the user: if they say to retry or
+report adding a label, re-run `context.py` and route again; if they name
+`implement-task` / `implement-setup-task` (with or without a leading
+`/`), or `factory` / `product` (map `factory` → `implement-setup-task`,
+`product` → `implement-task`), use it (assign the bare name — drop any
+leading `/`); any other answer → ask again.
 [%- endmacro -%]
 {#- QS-372: the phase handoff, written once for both harnesses. Call it as
     `[% call(prefix) m.handoff("<next_cmd>") %]` with banner lines

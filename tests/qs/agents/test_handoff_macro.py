@@ -289,11 +289,22 @@ def test_implement_variant_routes_by_declared_target(
     assert f"`product` → `{var} = implement-task`" in text
     # S1 (#03): the gh-lookup-failure STOP is checked FIRST, before the
     # label STOP, and carries the stable prefix.
+    # N1 (#04): the message blames context.py / gh (not the issue lookup alone).
     lookup_stop = (
-        f"{_STOP_PREFIX} the issue lookup failed (gh) — retry, or tell me "
+        f"{_STOP_PREFIX} the context.py / gh lookup failed — retry, or tell me "
         "which variant to run."
     )
     assert lookup_stop in text
+    # N1 (#04): if issue is null, say so instead of suggesting a retry.
+    assert (
+        "(If `issue` is null — the branch carries no `QS_<N>` issue number — "
+        "say so instead of suggesting a retry.)"
+    ) in text
+    # S1 (#04): the lookup STOP defers routing/wait to the wait paragraph.
+    assert (
+        "Do **not** print the label message or commands below; then wait for "
+        "the user as described in the last paragraph."
+    ) in text
     # S2: the label STOP message literal (still carrying the stable prefix).
     label_stop = (
         f"{_STOP_PREFIX} issue #{{{{issue}}}} has no single target:* label. "
@@ -332,15 +343,20 @@ def test_implement_variant_routes_by_declared_target(
     # M1: a hard context.py failure (non-zero exit / no JSON) is now covered.
     assert "If `context.py` exits non-zero / prints no JSON" in text
     assert "the `gh` lookup" in text
-    # N2 (#03): the wait loop accepts slash-prefixed variants and the
-    # factory/product aliases, not just the bare variant names.
+    # N2 (#03) + S2 (#04): the wait loop accepts slash-prefixed variants and
+    # the factory/product aliases, and assigns the bare name (drops any `/`).
     assert (
         "if they name `implement-task` / `implement-setup-task` (with or "
         "without a leading `/`), or `factory` / `product` (map `factory` → "
-        "`implement-setup-task`, `product` → `implement-task`), use it; any "
-        "other answer → ask again"
+        "`implement-setup-task`, `product` → `implement-task`), use it "
+        "(assign the bare name — drop any leading `/`); any other answer → "
+        "ask again"
     ) in text
-    assert "if they report adding a label, re-run `context.py` and route again" in text
+    # S1 (#04): the wait loop covers both STOPs and an explicit "retry".
+    assert (
+        "After printing (either STOP), wait for the user: if they say to "
+        "retry or report adding a label, re-run `context.py` and route again"
+    ) in text
     # Bare phase names only — never a slash-form assignment.
     assert f"`{var} = /implement" not in text
 

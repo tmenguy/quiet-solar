@@ -610,8 +610,9 @@ def _handoff_text(
 
     Blocks are separated by one blank line; there is no trailing newline.
     The existing-session block appears only for a non-empty
-    ``existing_session_prompt`` (every prompt line indented two spaces);
-    the GUI block depends on ``pinned`` (see ``_GUI_UNPINNED_BLOCK``).
+    ``existing_session_prompt`` (every non-empty prompt line indented two
+    spaces; blank lines stay empty); the GUI block depends on ``pinned``
+    (see ``_GUI_UNPINNED_BLOCK``).
     """
     phase = agent.removeprefix("qs-")
     blocks = [

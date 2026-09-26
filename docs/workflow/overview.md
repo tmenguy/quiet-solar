@@ -159,8 +159,9 @@ an attempt to automate the GUI with brittle clipboard tricks.
 implement-phase variants by the task's **declared target** — the
 `target:*` label that `python scripts/qs/context.py` returns as
 `target` (QS-321 — never inferred from the files a task touches). An
-empty target (no or ambiguous label, or a degraded `gh` lookup) STOPs
-the orchestrator, which asks the user:
+empty target (no or ambiguous label) STOPs the orchestrator, which asks
+the user to label the issue; a failed `context.py` / `gh` lookup STOPs
+first with its own message. The two variants:
 
 - **`implement-setup-task`** — `target:factory` (the dev pipeline
   itself: `scripts/`, `.claude/`, `.opencode/`, `legacy/`, `docs/`,
