@@ -303,7 +303,8 @@ the directory to open.
   Those are the states the writer refuses (above), and like every other
   bad-pin case the GUI shows you nothing. The signals are
   `phase_agent_pinned: false` in the handoff payload — the launcher's
-  `handoff_text` (in `launchers/claude.py`) then drops the GUI bullets
+  `handoff_text` (mid-pipeline handoffs; setup-task's inline block applies
+  the same rule) then drops the GUI bullets
   and points to the Preferred `--agent` line instead — and a stderr
   warning naming the file. **The skip is terminal, not transient:** nothing
   repairs the file, so every later handoff in that worktree refuses it too.

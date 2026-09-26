@@ -185,6 +185,8 @@ def _clauses(next_cmd: str, fix_plan: bool, rerun: str) -> list[str]:
         _BEFORE_RUNNING,
         "--harness opencode",
         "Parse the JSON output of ``next_step.py``.",
+        "**If `next_step.py` exits non-zero or prints no JSON, or its JSON "
+        "has no `new_context`**, STOP",
         "**If the `next_step.py` JSON contains an `error` key**, STOP",
         "Otherwise capture the ``new_context`` string",
     ]
@@ -279,7 +281,8 @@ _STOP_PREFIX = "Cannot pick the implement variant:"
 def test_implement_variant_routes_by_declared_target(
     harness: str, filename: str, var: str,
 ) -> None:
-    text = _norm(_body(harness, filename))
+    raw = _body(harness, filename)
+    text = _norm(raw)
     assert "Route by the **declared target** (QS-321" in text
     assert "re-run `python scripts/qs/context.py` and take `target`" in text
     assert f"`factory` → `{var} = implement-setup-task`" in text
@@ -290,12 +293,26 @@ def test_implement_variant_routes_by_declared_target(
         "Label it with exactly one of target:factory or target:product "
         "(see the commands below), or tell me which variant to run."
     ) in text
-    # S2: two separate, concrete, runnable commands — not one non-runnable arg.
+    # M1: the agent prints the commands to the user but must not run them —
+    # picking a label itself is the QS-321-forbidden inference.
+    assert "Do NOT run any of them yourself" in text
+    assert "Then apply exactly one" not in text
+    # S2/M1: two separate, concrete, runnable add-label commands, each in its
+    # own bash fence — copying one fence never applies both labels.
     assert "gh issue edit {{issue}} --add-label target:factory" in text
     assert "gh issue edit {{issue}} --add-label target:product" in text
     assert " or target:product)" not in text
-    # S2: the both-labels remedy and the gh-failure fallback.
-    assert "gh issue edit {{issue}} --remove-label target:<wrong>" in text
+    add_fences = [f for f in _BASH_FENCE_RE.findall(raw) if "--add-label" in f]
+    assert len(add_fences) == 2
+    for fence in add_fences:
+        assert not ("target:factory" in fence and "target:product" in fence)
+    # M1: both --remove-label remedies are concrete labels; the non-pasteable
+    # `target:<wrong>` placeholder (a shell redirect) is gone.
+    assert "gh issue edit {{issue}} --remove-label target:factory" in text
+    assert "gh issue edit {{issue}} --remove-label target:product" in text
+    assert "target:<wrong>" not in text
+    # M1: a hard context.py failure (non-zero exit / no JSON) is now covered.
+    assert "If `context.py` exits non-zero / prints no JSON" in text
     assert "the `gh` lookup" in text
     # S2: only the two implement variants are accepted, not any phase name.
     assert (
@@ -305,6 +322,22 @@ def test_implement_variant_routes_by_declared_target(
     assert "if they report adding a label, re-run `context.py` and route again" in text
     # Bare phase names only — never a slash-form assignment.
     assert f"`{var} = /implement" not in text
+
+
+@pytest.mark.parametrize(
+    ("harness", "expected"),
+    [
+        ("claude", "review-task → `/{{next_implement}}` is the"),
+        ("opencode", "review-task → `{{next_implement}}` is the"),
+    ],
+)
+def test_review_task_loop_prose_uses_slash_on_claude_only(
+    harness: str, expected: str,
+) -> None:
+    """N3: the loop-describing prose renders the slash form on Claude only —
+    it is prose, not a `= implement-…` assignment, so AC4's no-slash rule
+    (which targets assignments) still holds."""
+    assert expected in _body(harness, "qs-review-task.md")
 
 
 # --------------------------------------------------------------------------- #

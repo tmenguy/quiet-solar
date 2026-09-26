@@ -27,19 +27,28 @@ ambiguous label, or a degraded `gh` lookup), **STOP** and print:
 Cannot pick the implement variant: issue #{{issue}} has no single target:* label. Label it with exactly one of target:factory or target:product (see the commands below), or tell me which variant to run.
 ```
 
-Then apply exactly one of these concrete, runnable commands:
+Print the commands below to the user as well. **Do NOT run any of them
+yourself** — the target label is the user's declaration (QS-321). The
+user runs exactly one:
 
 ```bash
 gh issue edit {{issue}} --add-label target:factory
+```
+
+```bash
 gh issue edit {{issue}} --add-label target:product
 ```
 
-If the issue already carries **both** target labels, remove the wrong
-one (`gh issue edit {{issue}} --remove-label target:<wrong>`). If
-`context.py` returned empty `labels` and `title` too, the `gh` lookup
-itself failed — say so and ask the user to retry or name a variant.
+If `labels` already carries **both** target labels, tell the user to
+remove the wrong one — `gh issue edit {{issue}} --remove-label target:factory`
+or `gh issue edit {{issue}} --remove-label target:product` (the one that
+is wrong; concrete labels only).
 
-Then wait for the user: if they report adding a label, re-run
+If `context.py` exits non-zero / prints no JSON, or returned empty
+`labels` and `title`, the `gh` lookup itself failed — say so and ask the
+user to retry or name a variant.
+
+After printing, wait for the user: if they report adding a label, re-run
 `context.py` and route again; if they name `implement-task` or
 `implement-setup-task`, use it; any other answer → ask again.
 [%- endmacro -%]
@@ -89,6 +98,9 @@ session) to verify.
 ```
 [% else %]
 Parse the JSON output of ``next_step.py``.
+
+**If `next_step.py` exits non-zero or prints no JSON, or its JSON has no
+`new_context`**, STOP and print the raw output verbatim.
 
 **If the `next_step.py` JSON contains an `error` key**, STOP and print
 the raw JSON to the user. Do not proceed to run `new_context`.

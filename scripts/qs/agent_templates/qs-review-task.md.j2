@@ -244,7 +244,7 @@ phase (use the bare phase name — `implement-task` or
 `implement-setup-task` — never the slash form, never hardcoded). Pass
 `--fix-plan-path` and `--pr-number` so the payload also carries an
 `existing_session_prompt` for the user's already-running
-implementation session (review-task → `{{next_implement}}` is the
+implementation session (review-task → `[[ "/" if harness == "claude" else "" ]]{{next_implement}}` is the
 most common loop; pasting a prompt into the existing terminal is
 faster than opening a new one):
 

@@ -85,9 +85,8 @@ the living document:
   (`target:factory` → `implement-setup-task`, `target:product` →
   `implement-task`; QS-321 — never inferred from paths; an unusable
   target STOPs and asks the user), commit + push, then emit the
-  launcher payload (preferred,
-  `claude --agent qs-implement-task` / `qs-implement-setup-task`) plus
-  the slash-command fallback.
+  launcher payload (preferred, `claude --agent qs-implement-task` /
+  `qs-implement-setup-task`) plus the slash-command fallback.
 
 **Hard rules**:
 - Do not write code in this phase.
