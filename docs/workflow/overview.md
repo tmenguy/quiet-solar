@@ -155,15 +155,19 @@ an attempt to automate the GUI with brittle clipboard tricks.
 
 ## Phase routing
 
-`create-plan` chooses between two implement-phase variants based on the
-files it expects to touch:
+`create-plan` (and `review-task`, for a fix plan) chooses between two
+implement-phase variants by the task's **declared target** — the
+`target:*` label that `python scripts/qs/context.py` returns as
+`target` (QS-321 — never inferred from the files a task touches). An
+empty target (no or ambiguous label, or a degraded `gh` lookup) STOPs
+the orchestrator, which asks the user:
 
-- **`implement-setup-task`** — all touched files are in dev-environment
-  paths (`scripts/`, `.claude/`, `.opencode/`,
-  `legacy/`, `docs/`, `.github/`, top-level config). Narrower
-  edit scope; the quality gate runs the dev-only fast path.
-- **`implement-task`** — production code under
-  `custom_components/quiet_solar/` is touched. Full quality gate
+- **`implement-setup-task`** — `target:factory` (the dev pipeline
+  itself: `scripts/`, `.claude/`, `.opencode/`, `legacy/`, `docs/`,
+  `.github/`, top-level config). Narrower edit scope; the quality gate
+  runs the dev-only fast path.
+- **`implement-task`** — `target:product` (production code under
+  `custom_components/quiet_solar/`). Full quality gate
   (pytest 100% + ruff + mypy + translations).
 
 **Lanes (QS-332).** Every task is born in exactly one of 6 lanes —

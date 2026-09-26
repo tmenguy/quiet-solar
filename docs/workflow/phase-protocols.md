@@ -52,8 +52,9 @@ adversarial review notes appended.
 **Next phase**: `claude --agent qs-implement-task` or
 `claude --agent qs-implement-setup-task` in the worktree (preferred —
 fresh interactive session), or `/implement-task` /
-`/implement-setup-task` as fallback. The agent decides which based on
-the file paths in its task breakdown.
+`/implement-setup-task` as fallback, chosen by the task's declared target
+(`target:factory` → `implement-setup-task`, `target:product` →
+`implement-task`; QS-321 — never inferred from paths).
 
 **Phase protocol** — a **user-driven mode loop** (DISCUSS / REVIEW /
 TRIAGE / FINALIZE), not a linear pipeline. DISCUSS is the durable
@@ -80,10 +81,10 @@ the living document:
 - **FINALIZE (on confirmed intent)**: an **advisory** gate (never
   hard-blocks) — if the plan changed since the last review, or open
   criticals remain, the agent asks but the user decides. Determine
-  `NEXT_PHASE` (`implement-setup-task` if all touched files are in
-  `scripts/`, `.claude/`, `.opencode/`, `legacy/`,
-  `docs/`, `.github/`, or top-level config; otherwise `implement-task`),
-  commit + push, then emit the launcher payload (preferred,
+  `NEXT_PHASE`, chosen by the task's declared target
+  (`target:factory` → `implement-setup-task`, `target:product` →
+  `implement-task`; QS-321 — never inferred from paths; an unusable
+  target STOPs and asks the user), commit + push, then emit the launcher payload (preferred,
   `claude --agent qs-implement-task` / `qs-implement-setup-task`) plus
   the slash-command fallback.
 
@@ -157,8 +158,10 @@ plan + instructions for the user to apply fixes.
 **Next phase**: `claude --agent qs-finish-task` in the worktree
 (preferred — fresh interactive session), or `/finish-task` as fallback.
 When fixes are needed, re-run `claude --agent qs-implement-task` or
-`claude --agent qs-implement-setup-task` (chosen by file scope of the
-findings, same rule as `/create-plan`) — with `/implement-task` or
+`claude --agent qs-implement-setup-task` — chosen by the task's declared
+target (`target:factory` → `implement-setup-task`, `target:product` →
+`implement-task`; QS-321 — never inferred from paths), same rule as
+`/create-plan` — with `/implement-task` or
 `/implement-setup-task` as the slash-command fallback — then re-run
 `claude --agent qs-review-task` (or `/review-task`).
 
@@ -179,7 +182,10 @@ findings, same rule as `/create-plan`) — with `/implement-task` or
 6. If fixes needed, write fix-plan file (auto-incremented suffix
    `#01`, `#02`, …) and emit the launcher payload (`claude --agent
    qs-implement-task` or `claude --agent qs-implement-setup-task`,
-   chosen by file scope of the findings — same rule as `/create-plan`)
+   chosen by the task's declared target
+   (`target:factory` → `implement-setup-task`, `target:product` →
+   `implement-task`; QS-321 — never inferred from paths) — same
+   rule as `/create-plan`)
    plus the matching slash-command fallback (`/implement-task` or
    `/implement-setup-task`) for the user to apply the fix plan.
 7. When fixes pushed, the user re-runs `claude --agent qs-review-task`

@@ -347,136 +347,30 @@ the handoff the genuine Case A no-PR cleanup.
    git commit -m "QS-{{issue}}: diagnose" -- docs/stories/QS-{{issue}}.story.md
    git push -u origin {{branch}}
    ```
-2. Build the launcher payload for the next phase so the user has a
+
+Build the launcher payload for the next phase so the user has a
 [% if harness == "claude" %]
-   copy/paste command to open a fresh interactive `claude --agent`
-   session:
+copy/paste command to open a fresh interactive `claude --agent`
+session:
 [% else %]
-   copy/paste command to open a fresh session bound to the next agent.
+copy/paste command to open a fresh session bound to the next agent.
 [% endif %]
 
-**Before running** — substitute `{{NEXT_PHASE}}` with the exit you
-resolved above (one of: `implement-task`, `finish-task`). Run the bash
-block with the resolved value:
+`NEXT_PHASE` is the exit you resolved above (one of: `implement-task`,
+`finish-task`).
 
 [% if harness == "claude" %]
-   ```bash
-   python scripts/qs/next_step.py \
-       --next-cmd "{{NEXT_PHASE}}" \
-       --work-dir "{{worktree}}" \
-       --issue {{issue}} \
-       --title "{{title}}" \
-       --harness claude-code
-   ```
-[% else %]
-```bash
-python scripts/qs/next_step.py \
-    --next-cmd "{{NEXT_PHASE}}" \
-    --work-dir "{{worktree}}" \
-    --issue {{issue}} \
-    --title "{{title}}" \
-    --harness opencode
-```
+If step 1 was skipped (early exit 2/3 — no story file was written),
+replace the first banner line with
+`✅ Diagnosis posted to the issue (no story file — early exit).`
+
 [% endif %]
-
+[% call(prefix) m.handoff("{{NEXT_PHASE}}") %]
 [% if harness == "claude" %]
-   If step 1 was skipped (early exit 2/3 — no story file was written),
-   replace the first banner line with
-   `✅ Diagnosis posted to the issue (no story file — early exit).`
-[% else %]
-Parse the JSON output of ``next_step.py``.
+[[ prefix ]] Diagnosis committed and pushed to {{branch}}.
 [% endif %]
-
-[% if harness == "claude" %]
-   Parse the JSON; capture `new_context`, `phase_agent_pinned` (a
-   `false` there means the GUI pin was skipped), and `phase_model` (the
-   model the GUI user must pick — QS-367 E7). Then print both blocks:
-[% else %]
-**If the `next_step.py` JSON contains an `error` key**, STOP and print
-the raw JSON to the user. Do not proceed to run `new_context`.
-[% endif %]
-
-[% if harness == "claude" %]
-   On `false` the worktree may still carry the **previous** phase's pin,
-   which `false` cannot distinguish from no pin at all — so drop the GUI
-   block entirely (pin sentence and bullets) and route the user to the
-   Preferred `--agent` line, which is correct either way.
-[% else %]
-Otherwise capture the ``new_context`` string.
-[% endif %]
-
-[% if harness == "claude" %]
-   ```text
-   ✅ Diagnosis committed and pushed to {{branch}}.
-[% else %]
-**Run `new_context` via the Bash tool**. The string is a
-``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
-<wd> --title ... --prompt ...`` invocation — already inside the
-allow-listed ``python scripts/qs/*`` pattern. Do NOT extract only the
-prompt and send it to the current session. Do NOT strip
-``--agent qs-<phase>``. The ``--agent`` flag is what binds the
-next-phase orchestrator to the new session via OpenCode's HTTP API
-``POST /session/<id>/prompt_async`` body — strip it and the prompt
-lands on the default agent, breaking the pipeline silently.
-[% endif %]
-
-[% if harness == "claude" %]
-   Next phase: {{NEXT_PHASE}}.
-[% else %]
-**If the Bash tool returns an error before producing any JSON output**
-(e.g., permission denied, missing interpreter), STOP and print the
-Bash tool's error message verbatim. Do not attempt to parse JSON.
-[% endif %]
-
-[% if harness == "claude" %]
-   Preferred (opens a fresh interactive `claude --agent qs-{{NEXT_PHASE}}` session):
-     {{new_context}}
-[% else %]
-Parse the stdout of that command as JSON. The success contract is
-**binary**:
-[% endif %]
-
-[% if harness == "claude" %]
-   Fallback (stay in this session, degraded one-shot UX via the Agent tool —
-   kept for any chat without a CLI launcher; the GUI can instead run the
-   phase agent directly, see `docs/workflow/harness.md`):
-     /{{NEXT_PHASE}}
-[% else %]
-- ``status == "session_created"`` AND ``agent`` equals `qs-` followed
-  by the phase name passed to `--next-cmd` (e.g., `qs-implement-task`
-  when `--next-cmd "implement-task"` was passed) → success; report
-  to the user:
-[% endif %]
-
-[% if harness == "claude" %]
-   [Claude Code GUI] the worktree should now be pinned to `qs-{{NEXT_PHASE}}`
-   in `.claude/settings.local.json` (the payload's `phase_agent_pinned`
-   reports whether that write happened — it is always skipped on a main
-   checkout). The GUI displays the active agent nowhere, so if the phase
-   looks wrong, use the Preferred line above, where `--agent` always wins.
-     • **New session** (not a restored one — the GUI reopens the last session)
-     • Select directory `{{worktree}}`
-     • Name it `QS_{{issue}} {{NEXT_PHASE}}`
-     • **Pick model `{{phase_model}}`** in the model picker (the GUI ignores
-       the agent's model — see harness.md); if the picker does not offer it,
-       use the Preferred `--agent` line above (its frontmatter pins the model)
-     • See `docs/workflow/harness.md` →
-       "GUI launch surface (Claude Code Desktop)".
-   ```
-[% else %]
-  ```text
-  [OK] Next phase session created: qs-<phase>
-       (visible in the OpenCode session list on the left)
-  ```
-
-- **Anything else** (any other ``status`` value, missing or mismatched
-  ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
-  the raw JSON output verbatim to the user. Do NOT claim the next
-  phase started. The user inspects the JSON and acts on the specific
-  failure mode (``agent_file_missing``, ``agent_file_unreadable``,
-  ``agent_file_empty``, ``worktree_invalid``, ``fallback_cli``,
-  ``fallback_unavailable``, ``session_orphaned`` — each documented in
-  ``scripts/qs/spawn_session.py``).
+[% endcall %]
+[% if harness == "opencode" %]
 
 ## Code intelligence (LSP)
 

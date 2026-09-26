@@ -557,6 +557,86 @@ def _write_phase_agent(work_dir: str, agent: str, effort: str | None) -> bool:
     return True
 
 
+# QS-372: the Claude user-facing handoff block, produced here once instead of
+# being re-typed (and drifting) at every phase template's handoff site. The
+# wording is byte-for-byte the pre-QS-372 rendered review-task block; the
+# templates now print ``handoff_text`` verbatim. ``_FALLBACK_PREAMBLE`` and the
+# GUI blocks are fixed text; only the values in braces vary.
+_FALLBACK_PREAMBLE = (
+    "Fallback (stay in this session, degraded one-shot UX via the Agent tool \u2014\n"
+    "kept for any chat without a CLI launcher; the GUI can instead run the phase\n"
+    "agent directly, see `docs/workflow/harness.md`):"
+)
+
+_GUI_PINNED_BLOCK = (
+    "[Claude Code GUI] the worktree should now be pinned to `{agent}` in\n"
+    "`.claude/settings.local.json` (the payload's `phase_agent_pinned` reports\n"
+    "whether that write happened \u2014 it is always skipped on a main checkout).\n"
+    "The GUI displays the active agent nowhere, so if the phase looks wrong,\n"
+    "use the Preferred line above, where `--agent` always wins.\n"
+    "  \u2022 **New session** (not a restored one \u2014 the GUI reopens the last session)\n"
+    "  \u2022 Select directory `{work_dir}`\n"
+    "  \u2022 Name it `QS_{issue} {phase}`\n"
+    "  \u2022 **Pick model `{phase_model}`** in the model picker (the GUI ignores\n"
+    "    the agent's model \u2014 see harness.md); if the picker does not offer it,\n"
+    "    use the Preferred `--agent` line above (its frontmatter pins the model)\n"
+    "  \u2022 See `docs/workflow/harness.md` \u2192\n"
+    '    "GUI launch surface (Claude Code Desktop)".'
+)
+
+# ``phase_agent_pinned: false`` cannot tell "no pin" from a **stale** pin left
+# by the previous phase, so the GUI bullets are dropped entirely and the user
+# is routed to the ``--agent`` line (the pre-QS-372 templates asked the LLM to
+# make this cut; it is now deterministic).
+_GUI_UNPINNED_BLOCK = (
+    "[Claude Code GUI] the phase pin was not written (`phase_agent_pinned`\n"
+    "is false), and the worktree may still carry the previous phase's pin \u2014\n"
+    "use the Preferred `--agent` line above, which is correct either way."
+)
+
+
+def _handoff_text(
+    *,
+    agent: str,
+    new_context: str,
+    work_dir: str,
+    issue: int | str,
+    phase_model: str,
+    pinned: bool,
+    existing_session_prompt: str | None,
+) -> str:
+    """Return the ready-to-print Claude handoff block (QS-372).
+
+    Blocks are separated by one blank line; there is no trailing newline.
+    The existing-session block appears only for a non-empty
+    ``existing_session_prompt`` (every prompt line indented two spaces);
+    the GUI block depends on ``pinned`` (see ``_GUI_UNPINNED_BLOCK``).
+    """
+    phase = agent.removeprefix("qs-")
+    blocks = [
+        f"Next phase: {phase}.",
+        f"Preferred (opens a fresh interactive `claude --agent {agent}` session):\n"
+        f"  {new_context}",
+    ]
+    if existing_session_prompt:
+        prompt = "\n".join(f"  {line}" for line in existing_session_prompt.split("\n"))
+        blocks.append(
+            "Already running an implementation session?\n"
+            f"Paste this prompt into it:\n{prompt}"
+        )
+    blocks.append(f"{_FALLBACK_PREAMBLE}\n  /{phase}")
+    if pinned:
+        blocks.append(
+            _GUI_PINNED_BLOCK.format(
+                agent=agent, work_dir=work_dir, issue=issue, phase=phase,
+                phase_model=phase_model,
+            )
+        )
+    else:
+        blocks.append(_GUI_UNPINNED_BLOCK)
+    return "\n\n".join(blocks)
+
+
 def build_payload(
     work_dir: str,
     issue: int | str,
@@ -596,9 +676,10 @@ def build_payload(
             the agent can suggest the user run it in the current session
             if they prefer.
         next_prompt: Optional preload prompt for the new session.
-        caller: Reserved for harness-specific bifurcation (used by the
-            OpenCode launcher). Claude's behaviour is identical for
-            both call sites, so the value is accepted and ignored.
+        caller: Which script is handing off. ``"next_step"`` (a
+            mid-pipeline phase handoff) additionally gets ``handoff_text``;
+            ``"setup_task"`` keeps its own inline block in the setup-task
+            agent, so its payload gains no unread key (QS-372 D2).
         fix_plan_path: Optional path to a review-fix plan markdown
             file. When both ``fix_plan_path`` and ``pr_number`` are
             provided, the payload gains an ``existing_session_prompt``
@@ -615,7 +696,9 @@ def build_payload(
         A dict with ``tool``, ``agent``, ``phase_agent_pinned``,
         ``phase_model`` (the Claude model the GUI user must pick — QS-367
         E7), ``same_context``, ``new_context``, optionally
-        ``existing_session_prompt``, and (on macOS with PyCharm installed)
+        ``existing_session_prompt``, for ``caller == "next_step"`` a
+        ``handoff_text`` (the ready-to-print user-facing handoff block —
+        see ``_handoff_text``, QS-372), and (on macOS with PyCharm installed)
         ``pycharm_context`` / ``pycharm_applescript_context`` keys.
         ``phase_agent_pinned`` is ``False`` whenever the GUI pin was
         skipped or failed — the orchestrator must not claim the pin as fact
@@ -627,7 +710,6 @@ def build_payload(
         ValueError: if ``next_cmd`` is not a known phase. No silent
             fallback — free-form prompts go through ``--next-prompt``.
     """
-    del caller  # reserved for harness-specific bifurcation; not used here
     agent = resolve_agent_for_next_cmd(next_cmd)
     # Best-effort CLI floor check (QS-367 S4): warn to stderr if the local
     # ``claude`` predates the build ``claude-opus-5-5`` needs. Never blocks
@@ -672,6 +754,17 @@ def build_payload(
     )
     if existing_prompt is not None:
         payload["existing_session_prompt"] = existing_prompt
+
+    if caller == "next_step":
+        payload["handoff_text"] = _handoff_text(
+            agent=agent,
+            new_context=new_context,
+            work_dir=work_dir,
+            issue=issue,
+            phase_model=phase_model,
+            pinned=pinned,
+            existing_session_prompt=existing_prompt,
+        )
 
     pycharm_bin = _pycharm_bin()
     if pycharm_bin:

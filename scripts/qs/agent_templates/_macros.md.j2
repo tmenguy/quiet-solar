@@ -11,3 +11,138 @@ and surface the backfill guidance: the issue still needs its axis
 labels (`gh issue edit <N> --add-label ...`). [[ "This phase is read-only\nwith respect to the gate, so it may proceed on the fallback." if tail == "readonly" else "In this implement\nphase the labels must be resolved **before the first commit** — the\nfirst `--impacted` run fails otherwise (the gate is the backstop, not\na parallel path)." ]]
 [%- endif -%]
 [%- endmacro -%]
+{#- QS-372: the implement-variant rule, owned here once (create-plan's
+    "Determine NEXT_PHASE", review-task step 6). `var` is `NEXT_PHASE` or
+    `{{next_implement}}`, always assigned the bare phase name. The STOP
+    message's prefix is stable so the autonomous build loop (#369) can
+    detect it. -#}
+[%- macro implement_routing(var) -%]
+Route by the **declared target** (QS-321 — never inferred from the
+files you touch): re-run `python scripts/qs/context.py` and take
+`target`. `factory` → `[[ var ]] = implement-setup-task`; `product` →
+`[[ var ]] = implement-task`. For any other value (empty — no or
+ambiguous label, or a degraded `gh` lookup), **STOP** and print:
+
+```text
+Cannot pick the implement variant: issue #{{issue}} has no single target:* label. Add one (gh issue edit {{issue}} --add-label target:factory or target:product) or tell me which variant to run.
+```
+
+Then wait for the user: if they report adding a label, re-run
+`context.py` and route again; if they name a variant, use it.
+[%- endmacro -%]
+{#- QS-372: the phase handoff, written once for both harnesses. Call it as
+    `[% call(prefix) m.handoff("<next_cmd>") %]` with banner lines
+    (`[[ prefix ]] ...`) as the body. On Claude the user-facing block is the
+    launcher's `handoff_text` (scripts/qs/launchers/claude.py), printed
+    verbatim; on OpenCode the agent itself runs `new_context`, so its
+    contract stays prose. `fix_plan` adds the review-fix flags and the
+    existing-session block; `rerun` is the phase re-run after the fix. -#}
+[% macro handoff(next_cmd, fix_plan=false, rerun="") %]
+[% set banner = caller("✅" if harness == "claude" else "[OK]") | trim %]
+**Before running** — substitute `{{worktree}}`, `{{issue}}`, `{{title}}`[[ ",\n`{{fix_plan_path}}`, `{{pr_number}}`" if fix_plan else "" ]]
+with the values you captured earlier[[ (";\nsubstitute `" ~ next_cmd ~ "` with the value you resolved above") if next_cmd.startswith("{{") else "" ]].
+
+```bash
+python scripts/qs/next_step.py \
+    --next-cmd "[[ next_cmd ]]" \
+    --work-dir "{{worktree}}" \
+    --issue {{issue}} \
+    --title "{{title}}" \
+[% if fix_plan %]
+    --fix-plan-path "{{fix_plan_path}}" \
+    --pr-number {{pr_number}} \
+[% endif %]
+    --harness [[ "claude-code" if harness == "claude" else "opencode" ]]
+```
+
+[% if harness == "claude" %]
+Parse the JSON. If it contains an `error` key, STOP and print the raw
+JSON. Otherwise print the report below, replacing `<handoff_text>` with
+the payload's `handoff_text` **verbatim** (do not rephrase, reorder or
+drop any part of it):
+
+```text
+[% if banner %]
+[[ banner ]]
+
+[% endif %]
+<handoff_text>
+[% if rerun %]
+
+Then re-run /[[ rerun ]] (or open a fresh `claude --agent qs-[[ rerun ]]`
+session) to verify.
+[% endif %]
+```
+[% else %]
+Parse the JSON output of ``next_step.py``.
+
+**If the `next_step.py` JSON contains an `error` key**, STOP and print
+the raw JSON to the user. Do not proceed to run `new_context`.
+
+[% if fix_plan %]
+Otherwise capture the ``new_context`` string and the
+``existing_session_prompt`` value. The ``existing_session_prompt`` is
+a paste-into-already-running-session prompt — it is NOT a
+session-spawn command. Do NOT execute it. **If
+`existing_session_prompt` is missing or null, omit the "Already
+running an implementation session?" block from the user report;
+only emit it when the field is a non-empty string**.
+[% else %]
+Otherwise capture the ``new_context`` string.
+[% endif %]
+
+**Run `new_context` via the Bash tool**. The string is a
+``python scripts/qs/spawn_session.py --agent qs-<phase> --directory
+<wd> --title ... --prompt ...`` invocation — already inside the
+allow-listed ``python scripts/qs/*`` pattern. Do NOT extract only the
+prompt and send it to the current session. Do NOT strip
+``--agent qs-<phase>``. The ``--agent`` flag is what binds the
+next-phase orchestrator to the new session via OpenCode's HTTP API
+``POST /session/<id>/prompt_async`` body — strip it and the prompt
+lands on the default agent, breaking the pipeline silently.
+
+**If the Bash tool returns an error before producing any JSON output**
+(e.g., permission denied, missing interpreter), STOP and print the
+Bash tool's error message verbatim. Do not attempt to parse JSON.
+
+Parse the stdout of that command as JSON. The success contract is
+**binary**:
+
+- ``status == "session_created"`` AND ``agent`` equals `qs-` followed
+  by the phase name passed to `--next-cmd` (here: `qs-[[ next_cmd ]]`)
+  → success; report to the user:
+
+  ```text
+[% if banner %]
+[[ banner | indent(2, first=true) ]]
+[% endif %]
+  [OK] Next phase session created: qs-[[ next_cmd ]]
+       (visible in the OpenCode session list on the left)
+[% if fix_plan %]
+
+  Already running an implementation session?
+  Paste this prompt into it:
+    {{existing_session_prompt}}
+[% endif %]
+[% if rerun %]
+
+  Then re-activate `qs-[[ rerun ]]` (or open a fresh session bound to
+  it) to verify.
+[% endif %]
+  ```
+[% if fix_plan %]
+
+  (Omit the "Already running an implementation session?" block when
+  `existing_session_prompt` is missing or null.)
+[% endif %]
+
+- **Anything else** (any other ``status`` value, missing or mismatched
+  ``agent`` field, non-zero exit code, malformed JSON) → STOP. Print
+  the raw JSON output verbatim to the user. Do NOT claim the next
+  phase started. The user inspects the JSON and acts on the specific
+  failure mode (``agent_file_missing``, ``agent_file_unreadable``,
+  ``agent_file_empty``, ``worktree_invalid``, ``fallback_cli``,
+  ``fallback_unavailable``, ``session_orphaned`` — each documented in
+  ``scripts/qs/spawn_session.py``).
+[% endif %]
+[% endmacro %]
