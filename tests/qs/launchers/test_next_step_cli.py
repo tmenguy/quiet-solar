@@ -49,6 +49,26 @@ def test_valid_phase_emits_payload_and_exits_zero(tmp_path: Path) -> None:
     assert payload["new_context"].startswith("sh ")
 
 
+def test_claude_payload_carries_handoff_text(tmp_path: Path) -> None:
+    """QS-372 AC1: the ``--harness claude-code`` JSON carries ``handoff_text``."""
+    result = _run(
+        [
+            "--next-cmd", "review-task",
+            "--work-dir", "/tmp/work",
+            "--issue", "372",
+            "--title", "Fix bug",
+            "--harness", "claude-code",
+        ],
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    text = payload["handoff_text"]
+    assert text.startswith("Next phase: review-task.\n")
+    assert payload["new_context"] in text
+    assert "  /review-task" in text
+
+
 def test_slash_form_accepted_for_back_compat(tmp_path: Path) -> None:
     """Slash form continues to work — old callers pass ``/create-plan``."""
     result = _run(

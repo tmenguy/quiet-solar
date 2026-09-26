@@ -3,13 +3,16 @@ BOTH a launcher block (``claude --agent qs-<phase>``) AND a slash-command
 fallback block (``/<phase>``).
 
 This is the regression catch for QS-175 review-fix #07 — without it the
-two-block pattern is enforced only by manual review.
+two-block pattern is enforced only by manual review. QS-372: for the six
+mid-pipeline orchestrators the block is now produced by the Claude
+launcher (``handoff_text``, golden-tested in ``test_claude_launcher.py``);
+the inline-block pins below cover ``qs-setup-task`` only.
 
 Round-2 review-fix #03 / #04 / #05 / #06 cleanups:
-- ``qs-create-plan`` is split out into a dedicated test because its
-  ``NEXT_PHASE`` is dynamic (the orchestrator picks
-  ``implement-task`` vs ``implement-setup-task`` at runtime) and a
-  hardcoded slash form isn't possible there.
+- ``qs-create-plan`` was split out into a dedicated test because its
+  ``NEXT_PHASE`` is dynamic; QS-372 removed it (the launcher now
+  resolves the fallback line, and ``--next-cmd`` per site is pinned in
+  ``test_handoff_macro.py``).
 - The parametrise lists are split so unused ``expected_slash`` params
   don't trigger ruff ``ARG001``.
 - The ``Fallback`` line scan is now a line-by-line walk rather than a
@@ -44,14 +47,35 @@ _FORBIDDEN_RELEASE_INVOCATION = re.compile(
 )
 
 
-# The 7 two-block orchestrators — every phase orchestrator that ships
-# the strict ``Preferred`` / ``Fallback`` pattern. ``qs-finish-task``
-# deliberately does NOT ship it (its follow-up is text-only — see
-# QS-175 OUT OF SCOPE) and gets its own dedicated tests below;
-# ``qs-release`` has no follow-up phase at all. QS-335 added the bug ×
-# product lane's ``qs-diagnose-task`` (lifted from create-plan) and
-# ``qs-verify-task`` (lifted from review-task).
+# The orchestrators whose agent body still spells out the strict
+# ``Preferred`` / ``Fallback`` pattern inline. QS-372 moved the six
+# mid-pipeline orchestrators' Claude handoff block into the launcher
+# (``launchers/claude.py::_handoff_text``, golden-tested in
+# ``tests/qs/launchers/test_claude_launcher.py``) — their agents now print
+# the payload's ``handoff_text`` verbatim, so only ``qs-setup-task`` (out
+# of QS-372's scope, D2) keeps the inline block pinned here.
+# ``qs-finish-task`` deliberately does NOT ship it (its follow-up is
+# text-only — see QS-175 OUT OF SCOPE) and gets its own dedicated tests
+# below; ``qs-release`` has no follow-up phase at all.
 _TWO_BLOCK_ORCHESTRATORS = [
+    "qs-setup-task.md",
+]
+
+# The six orchestrators whose Claude handoff prints ``handoff_text``
+# (QS-372). Their per-site shape is pinned in ``test_handoff_macro.py``.
+_HANDOFF_TEXT_ORCHESTRATORS = [
+    "qs-create-plan.md",
+    "qs-diagnose-task.md",
+    "qs-implement-task.md",
+    "qs-implement-setup-task.md",
+    "qs-review-task.md",
+    "qs-verify-task.md",
+]
+
+# Every orchestrator that hands off into a worktree — the inline-block one
+# plus the six ``handoff_text`` ones. The OpenCode counterparts of all
+# seven carry the harness.md pointer block.
+_POINTER_ORCHESTRATORS = [
     "qs-setup-task.md",
     "qs-create-plan.md",
     "qs-diagnose-task.md",
@@ -61,21 +85,10 @@ _TWO_BLOCK_ORCHESTRATORS = [
     "qs-verify-task.md",
 ]
 
-# Those orchestrators whose fallback block names a fixed ``/<phase>``
-# token. ``qs-create-plan`` is dynamic (the NEXT_PHASE depends on the
-# diff) and gets its own dedicated test asserting it uses a placeholder
-# of the right SHAPE, but explicitly NOT ``{{same_context}}``.
-# QS-335: ``qs-diagnose-task`` is likewise dynamic (fix / finish exits)
-# but its fallback line carries the literal ``/{{NEXT_PHASE}}`` token, so
-# the concrete-slash assertion still holds against that literal;
-# ``qs-verify-task``'s clean-path fallback is the fixed ``/finish-task``.
+# Those orchestrators whose inline fallback block names a fixed
+# ``/<phase>`` token.
 _HARDCODED_FALLBACK = [
     ("qs-setup-task.md", "/create-plan"),
-    ("qs-implement-task.md", "/review-task"),
-    ("qs-implement-setup-task.md", "/review-task"),
-    ("qs-review-task.md", "/finish-task"),
-    ("qs-diagnose-task.md", "/{{NEXT_PHASE}}"),
-    ("qs-verify-task.md", "/finish-task"),
 ]
 
 
@@ -118,33 +131,6 @@ def test_orchestrator_fallback_uses_concrete_slash_form(
         f"this catches the qs-setup-task-style regression where "
         f"{{{{same_context}}}} or another verbatim template variable "
         f"would be emitted instead of a hardcoded slash form."
-    )
-
-
-# --------------------------------------------------------------------------- #
-# qs-create-plan is the dynamic-next-phase exception. The fallback line
-# can't be a single hardcoded ``/<phase>`` because the orchestrator picks
-# ``implement-task`` vs ``implement-setup-task`` based on its task
-# breakdown. The fallback uses a ``/{{NEXT_PHASE}}`` placeholder that
-# the persona substitutes at runtime — what we forbid is the
-# ``{{same_context}}`` shape that caused the qs-setup-task regression.
-# --------------------------------------------------------------------------- #
-
-
-def test_create_plan_fallback_uses_next_phase_placeholder_not_same_context() -> None:
-    """qs-create-plan fallback uses ``/<NEXT_PHASE>`` placeholder, not ``{{same_context}}``."""
-    body = (AGENTS_DIR / "qs-create-plan.md").read_text()
-    fallback_line = _find_fallback_line(body)
-    assert fallback_line is not None, "qs-create-plan: 'Fallback' block not found"
-    assert "{{same_context}}" not in fallback_line, (
-        f"qs-create-plan fallback uses {{{{same_context}}}} — that's the "
-        f"verbatim template variable that caused the qs-setup-task "
-        f"regression; use a slash-form placeholder like /{{{{NEXT_PHASE}}}} "
-        f"instead. Got: {fallback_line!r}"
-    )
-    assert fallback_line.lstrip().startswith("/"), (
-        f"qs-create-plan fallback should start with '/' (slash form). "
-        f"Got: {fallback_line!r}"
     )
 
 
@@ -257,8 +243,9 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 # The Claude Code GUI has no ``--agent`` flag, so the launcher pins the
 # next phase into ``<worktree>/.claude/settings.local.json`` and each
 # handoff must print the GUI gesture (New session → select directory →
-# name it). The set of orchestrators is exactly the two-block set — the
-# 7 GUI-block handoffs — and the equality is asserted below.
+# name it). The set of orchestrators is exactly the two-block set — since
+# QS-372 just ``qs-setup-task``; the other six get the block from the
+# launcher's ``handoff_text`` — and the equality is asserted below.
 #
 # Review-fix #01 S3: this list used to be a bare ALIAS of
 # ``_TWO_BLOCK_ORCHESTRATORS``, which made that equality assertion an
@@ -269,12 +256,6 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 
 _GUI_BLOCK_ORCHESTRATORS = [
     "qs-setup-task.md",
-    "qs-create-plan.md",
-    "qs-diagnose-task.md",
-    "qs-implement-task.md",
-    "qs-implement-setup-task.md",
-    "qs-review-task.md",
-    "qs-verify-task.md",
 ]
 
 _GUI_BLOCK_MARKER = "[Claude Code GUI]"
@@ -305,22 +286,11 @@ _GUI_BLOCK_REQUIRED_TOKENS = (
     "model picker",
 )
 
-# ``qs-review-task`` hands off twice — the zero-findings → finish-task
-# path and the fix-plan loop back to the implement phase. A single block
-# would leave the review-found-problems hop with no GUI instructions.
 _GUI_BLOCK_COUNTS = {name: 1 for name in _GUI_BLOCK_ORCHESTRATORS}
-_GUI_BLOCK_COUNTS["qs-review-task.md"] = 2
-# QS-335: qs-verify-task lifts review-task's two handoffs (clean →
-# finish-task, fixes → implement-task then re-run verify-task).
-_GUI_BLOCK_COUNTS["qs-verify-task.md"] = 2
 
-# The fallback line each orchestrator's handoff must still expose after
-# the GUI block was inserted. ``qs-create-plan`` is the dynamic-next-phase
-# exception, so its expectation is the placeholder rather than a concrete
-# slash form — review-fix #01 S9: AC5 says "for each" of the five, and
-# leaving create-plan out of the shadow check covered only 4 of 5.
+# The fallback line each inline-block orchestrator's handoff must still
+# expose after the GUI block was inserted.
 _FALLBACK_LINE_EXPECTATION = dict(_HARDCODED_FALLBACK)
-_FALLBACK_LINE_EXPECTATION["qs-create-plan.md"] = "/{{NEXT_PHASE}}"
 
 
 def _gui_blocks(body: str) -> list[str]:
@@ -388,6 +358,21 @@ def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:
         "alias makes the equality above compare an object with itself, so "
         "it can never fail and pins nothing."
     )
+    # QS-372: every worktree handoff is covered by exactly one of the two
+    # mechanisms — the inline GUI block or the launcher's ``handoff_text``.
+    assert set(_GUI_BLOCK_ORCHESTRATORS) | set(_HANDOFF_TEXT_ORCHESTRATORS) == set(
+        _POINTER_ORCHESTRATORS
+    )
+    assert not set(_GUI_BLOCK_ORCHESTRATORS) & set(_HANDOFF_TEXT_ORCHESTRATORS)
+    assert len(_POINTER_ORCHESTRATORS) == 7
+
+
+@pytest.mark.parametrize("filename", _HANDOFF_TEXT_ORCHESTRATORS)
+def test_handoff_text_orchestrator_prints_the_launcher_block(filename: str) -> None:
+    """QS-372: the six orchestrators delegate the GUI block to ``handoff_text``."""
+    body = (AGENTS_DIR / filename).read_text()
+    assert "`handoff_text` **verbatim**" in body
+    assert _GUI_BLOCK_MARKER not in body
 
 
 @pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
@@ -517,63 +502,15 @@ def test_false_branch_carries_the_stale_pin_hazard(filename: str) -> None:
     )
 
 
-@pytest.mark.parametrize("filename", ["qs-review-task.md", "qs-verify-task.md"])
-def test_handoff_orchestrators_carry_the_stale_pin_hazard_at_both_handoffs(
-    filename: str,
-) -> None:
-    """``qs-review-task`` / ``qs-verify-task`` hand off twice, so each needs
-    the sentence twice.
-
-    The per-file test above is satisfied by one occurrence; this is the same
-    two-handoff asymmetry ``_GUI_BLOCK_COUNTS`` exists for. Without it the
-    fix-plan loop back to the implement phase keeps the old wording. QS-335:
-    qs-verify-task is the bug × product lane's two-handoff review-variant.
-    """
-    body = " ".join((AGENTS_DIR / filename).read_text().split())
-    expected = " ".join(_STALE_PIN_SENTENCE.split())
-    assert body.count(expected) == 2, (
-        f"{filename}: expected the stale-pin sentence at both handoff "
-        f"sites, found {body.count(expected)}"
-    )
-
-
 # --------------------------------------------------------------------------- #
 # QS-367 E7 — the Claude handoff names the model the GUI user must pick.
 #
 # The GUI model picker decides the main session's model; neither frontmatter
-# nor a settings ``model`` key overrides it. So every Claude capture sentence
-# names ``phase_model`` (setup-task names it in its payload key list), and no
-# OpenCode agent carries the GUI-only ``phase_model`` / ``model picker`` prose.
+# nor a settings ``model`` key overrides it. setup-task names ``phase_model``
+# in its payload key list (the six ``handoff_text`` orchestrators get it from
+# the launcher — see the AC1 goldens), and no OpenCode agent carries the
+# GUI-only ``phase_model`` / ``model picker`` prose.
 # --------------------------------------------------------------------------- #
-
-_CAPTURE_SENTENCE_PREFIX = "Parse the JSON; capture"
-
-
-def _capture_paragraphs(body: str) -> list[str]:
-    """Every blank-line-delimited paragraph beginning ``Parse the JSON; capture``."""
-    paras = re.split(r"\n[ \t]*\n", body)
-    return [p for p in paras if p.lstrip().startswith(_CAPTURE_SENTENCE_PREFIX)]
-
-
-@pytest.mark.parametrize(
-    "filename", [f for f in _GUI_BLOCK_ORCHESTRATORS if f != "qs-setup-task.md"]
-)
-def test_claude_capture_sentence_names_phase_model(filename: str) -> None:
-    """Every Claude capture sentence names ``phase_model`` — one per handoff."""
-    body = (AGENTS_DIR / filename).read_text()
-    paras = _capture_paragraphs(body)
-    expected = _GUI_BLOCK_COUNTS[filename]
-    assert len(paras) == expected, (
-        f"{filename}: expected {expected} 'Parse the JSON; capture' "
-        f"paragraph(s), found {len(paras)} (QS-367 E7)."
-    )
-    for i, para in enumerate(paras):
-        assert "phase_model" in para, (
-            f"{filename}: capture paragraph {i} does not name `phase_model` — "
-            f"the GUI ignores the agent's model, so the handoff must name the "
-            f"model to pick (QS-367 E7)."
-        )
-
 
 def test_setup_task_key_list_names_phase_model() -> None:
     """``qs-setup-task`` has no capture sentence; its payload key list names it.
@@ -597,7 +534,7 @@ def test_setup_task_key_list_names_phase_model() -> None:
     )
 
 
-@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+@pytest.mark.parametrize("filename", _POINTER_ORCHESTRATORS)
 def test_opencode_agents_omit_gui_model_prose(filename: str) -> None:
     """No OpenCode agent carries the GUI-only ``phase_model`` / ``model picker`` prose."""
     body = (agents_dir("opencode") / filename).read_text()
@@ -621,11 +558,9 @@ def test_gui_block_does_not_shadow_fallback_line(filename: str) -> None:
     or ``{{worktree}}`` on its own line would hijack the scan and break
     the fallback assertions above.
 
-    Review-fix #01 S9: parametrized over all five orchestrators, not just
-    the four with a hardcoded fallback. ``qs-create-plan``'s expectation is
-    its ``/{{NEXT_PHASE}}`` placeholder — the same shape
-    ``test_create_plan_fallback_uses_next_phase_placeholder_not_same_context``
-    checks from the other direction.
+    QS-372: only the inline-block orchestrator (``qs-setup-task``) is left;
+    the others' fallback line is produced by the launcher's
+    ``handoff_text``.
     """
     body = (AGENTS_DIR / filename).read_text()
     expected = _FALLBACK_LINE_EXPECTATION[filename]
@@ -667,7 +602,7 @@ _POINTER_BLOCK = "\n".join([
 
 
 @pytest.mark.parametrize("harness_dir", _COUNTERPART_DIRS)
-@pytest.mark.parametrize("filename", _GUI_BLOCK_ORCHESTRATORS)
+@pytest.mark.parametrize("filename", _POINTER_ORCHESTRATORS)
 def test_counterpart_agents_point_at_harness_doc(
     harness_dir: str, filename: str,
 ) -> None:
@@ -702,9 +637,10 @@ def test_pointer_block_stays_within_the_doc_line_width() -> None:
 # ``diagnose-task`` when the lane is ``bug-product``; ``qs-implement-task``
 # routes ``review-task`` by default and ``verify-task`` for ``bug-product``.
 # Both branches must appear in every one of the 2 harness copies. Pattern
-# of ``test_lane_steps_parity.py`` (HARNESS_DIRS-parametrized). The
-# fallback line keeps its literal default as the first slash token with
-# the bug-product branch appended mid-sentence (D3 pin compatibility).
+# of ``test_lane_steps_parity.py`` (HARNESS_DIRS-parametrized). QS-372:
+# for ``qs-implement-task`` both slash forms now come from the
+# resolution paragraph itself ("routes to `/verify-task` instead of
+# `/review-task`") — the fallback line is resolved by the launcher.
 # ``qs-create-plan``, ``qs-review-task``, ``qs-implement-setup-task`` stay
 # byte-unchanged — verified at review time by ``git diff`` against main
 # (AC-4), no parity test built.
@@ -746,10 +682,9 @@ def test_shared_orchestrator_carries_both_lane_branches(
         f"{path}: the lane-resolved handoff must name the `bug-product` lane "
         f"that selects the alternate next phase (QS-335 D3)."
     )
-    # Discriminating pin (review-fix #05): the fallback line alone carries
-    # both phase tokens and "bug-product", so without this assertion the
+    # Discriminating pin (review-fix #05): without this assertion the
     # resolution paragraph — the definition of ``{{NEXT_PHASE}}`` — could
-    # be deleted while the test stays green.
+    # be reworded away while stray tokens elsewhere keep the test green.
     assert "Resolve the next phase from the lane" in body, (
         f"{path}: missing the lane-resolution paragraph that defines "
         f"{{{{NEXT_PHASE}}}} (QS-335 D3)."

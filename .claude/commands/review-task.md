@@ -24,7 +24,7 @@ Expected outcome:
   `docs/stories/QS-<N>.story_review_fix_#NN.md`, plus THREE
   presentation options: (a) the launcher form (`claude --agent
   qs-implement-task` or `claude --agent qs-implement-setup-task`,
-  chosen by the file scope of the findings — same rule as
+  chosen by the task's declared target — same rule as
   `/create-plan`) for a fresh terminal, (b) an
   `existing_session_prompt` to paste into an already-running
   implementation session (the most common loop), and (c) the matching
