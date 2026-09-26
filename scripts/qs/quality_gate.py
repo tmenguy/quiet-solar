@@ -1088,29 +1088,46 @@ def check_mypy() -> dict:
 def check_translations() -> dict:
     """Check if translations need regeneration."""
     _emit("translations", "checking")
+    # QS-371 (S1): both paths are in `_CHEAP_TRANSLATIONS_PATHS`, so deleting
+    # either one triggers the gate. CI then runs `bash generate-translations.sh`,
+    # which fails when either file is absent — so a missing file must FAIL here,
+    # not SKIP, or local and CI disagree.
     if not STRINGS_JSON.exists():
-        _emit("translations", "SKIP (no strings.json)")
-        return {"name": "translations", "passed": True, "detail": "no strings.json"}
+        _emit("translations", "FAIL (no strings.json)")
+        return {
+            "name": "translations",
+            "passed": False,
+            "detail": "custom_components/quiet_solar/strings.json is missing — "
+            "CI's translations step will fail",
+        }
 
     gen_script = REPO_ROOT / "scripts" / "generate-translations.sh"
     if not gen_script.exists():
-        _emit("translations", "SKIP (no generate script)")
-        return {"name": "translations", "passed": True, "detail": "no generate script"}
+        _emit("translations", "FAIL (no generate script)")
+        return {
+            "name": "translations",
+            "passed": False,
+            "detail": "scripts/generate-translations.sh is missing — "
+            "CI's translations step will fail",
+        }
 
     # Capture current en.json content
     en_before = TRANSLATIONS_EN.read_text() if TRANSLATIONS_EN.exists() else ""
 
-    # QS-371 (D1b): a generator failure (e.g. an unresolvable `[%key:...%]`
-    # reference) exits non-zero BEFORE writing, leaving en.json unchanged —
-    # CI fails on the exit code, so the local check must too.
+    # QS-371 (D1b): a generator failure exits non-zero BEFORE writing, leaving
+    # en.json unchanged — CI fails on the exit code, so the local check must too.
+    # QS-371 (S3): invalid JSON, a missing HA strings file, or no `python3` on
+    # PATH all land here too, so the headline reports the exit code rather than
+    # blaming a `[%key:...%]` reference every time.
     gen = _run(["bash", str(gen_script)])
     if gen.returncode != 0:
         _emit("translations", "FAIL (generator failed)")
         return {
             "name": "translations",
             "passed": False,
-            "detail": "scripts/generate-translations.sh failed — check strings.json "
-            "for an unresolvable [%key:...%] reference",
+            "detail": f"scripts/generate-translations.sh exited {gen.returncode} — "
+            "see stderr below (e.g. invalid JSON or an unresolvable "
+            "[%key:...%] reference in strings.json)",
             "stderr": gen.stderr.strip()[-500:],
         }
 
@@ -1211,9 +1228,14 @@ def _output_results(
             for r in results:
                 status = "PASS" if r["passed"] else "FAIL"
                 print(f"  [{status}] {r['name']}")
-                if not r["passed"] and r.get("detail"):
-                    for line in r["detail"].split("\n")[:5]:
-                        print(f"         {line}")
+                # QS-371 (S5): fall back to stderr so a stderr-only failure
+                # (missing venv/bin/ruff, broken pyproject.toml, generator
+                # failure) shows a reason instead of a bare `[FAIL] <gate>`.
+                if not r["passed"]:
+                    reason = r.get("detail") or r.get("stderr")
+                    if reason:
+                        for line in reason.split("\n")[:5]:
+                            print(f"         {line}")
             print()
             if all_passed:
                 print("All quality gates passed.")
@@ -1711,14 +1733,41 @@ _IMPACTED_NON_PY_LINES = (
 )
 
 
-
 # ---------------------------------------------------------------------------
 # QS-371: the CI-mirrored cheap checks under `--impacted`
 # ---------------------------------------------------------------------------
 
-# Config / pin files that can move the ruff or mypy verdict on the package
-# (verified: no mypy.ini / ruff.toml / .ruff.toml / setup.cfg / tox.ini exists).
+# Config / pin files that can move the ruff or mypy verdict on the package.
+# `pyproject.toml` and the two requirements files matter wherever they are the
+# repo-root copies (matched by exact path below).
 _CHEAP_TOOL_CONFIG_PATHS = frozenset({"pyproject.toml", "requirements.txt", "requirements_test.txt"})
+
+# Basenames that, if ADDED at the repo root or under `custom_components/`, would
+# OVERRIDE the root ruff/mypy config and so can flip the CI verdict (QS-371 S2).
+# None exist today; the trigger fires the moment one is added.
+_CHEAP_TOOL_CONFIG_BASENAMES = frozenset(
+    {"pyproject.toml", "ruff.toml", ".ruff.toml", "mypy.ini", ".mypy.ini", "setup.cfg"}
+)
+
+
+def _path_moves_tool_verdict(p: str) -> bool:
+    """True iff path `p` can change the ruff/mypy verdict on the package (S2)."""
+    # (a) any `.py` / `.pyi` under the package (a stub overrides its module).
+    if p.startswith(_CHEAP_PACKAGE_PREFIX) and (p.endswith(".py") or p.endswith(".pyi")):
+        return True
+    # (b) the package's parent __init__ (import-path shape).
+    if p == "custom_components/__init__.py":
+        return True
+    # (c) the repo-root dependency / config files (exact paths).
+    if p in _CHEAP_TOOL_CONFIG_PATHS:
+        return True
+    # (d) a config basename that would override the root config, added at the
+    # repo root (no `/`) or anywhere under `custom_components/`.
+    basename = p.rsplit("/", 1)[-1]
+    if basename in _CHEAP_TOOL_CONFIG_BASENAMES and ("/" not in p or p.startswith(_CHEAP_PACKAGE_PREFIX)):
+        return True
+    return False
+
 
 # The translations generator's inputs (`generate_translations.py` reads only
 # strings.json and the HA strings file) plus the generator itself.
@@ -1742,10 +1791,7 @@ def _impacted_cheap_gate_names(paths: list[str] | None) -> list[str]:
     """
     if paths is None:
         return list(_CHEAP_GATE_ORDER)
-    tools = any(
-        (p.startswith(_CHEAP_PACKAGE_PREFIX) and p.endswith(".py")) or p in _CHEAP_TOOL_CONFIG_PATHS
-        for p in paths
-    )
+    tools = any(_path_moves_tool_verdict(p) for p in paths)
     translations = any(
         p in _CHEAP_TRANSLATIONS_PATHS or p.startswith(_CHEAP_TRANSLATIONS_PREFIX) for p in paths
     )
@@ -2519,9 +2565,13 @@ def check_impacted() -> int:
     `_impacted_early_exit_paths` union — the canonical statement; other docs
     refer here):
 
-    - `ruff_format`, `ruff_lint`, `mypy` iff any path is a `.py` under
-      `custom_components/quiet_solar/`, or exactly `pyproject.toml`,
-      `requirements.txt` or `requirements_test.txt`. Deliberately NOT
+    - `ruff_format`, `ruff_lint`, `mypy` iff any path (a) is a `.py`/`.pyi`
+      under `custom_components/quiet_solar/`, or (b) is
+      `custom_components/__init__.py`, or (c) is exactly `pyproject.toml`,
+      `requirements.txt` or `requirements_test.txt`, or (d) has a basename in
+      `{pyproject.toml, ruff.toml, .ruff.toml, mypy.ini, .mypy.ini, setup.cfg}`
+      at the repo root or under `custom_components/` — such a file would
+      OVERRIDE the root ruff/mypy config (none exists today). Deliberately NOT
       `.github/workflows/pr-quality.yml` or `scripts/qs/quality_gate.py`:
       neither can change the package verdict (changes to the gate's own
       commands are proven by `tests/test_quality_gate.py`).

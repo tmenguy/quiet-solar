@@ -551,6 +551,22 @@ class TestCacheCliIntegration:
         output = capsys.readouterr().out
         assert "cached" in output.lower()
 
+    def test_stderr_only_failure_shown_in_text_output(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """QS-371 (S5): a failure with empty `detail` but non-empty `stderr`
+        (broken config, missing tool) shows the stderr in human-readable mode,
+        not a bare `[FAIL] <gate>`."""
+        results = [
+            {"name": "ruff_lint", "passed": False, "detail": "", "stderr": "pyproject.toml: invalid"},
+        ]
+        quality_gate._output_results(
+            results, all_passed=False, cached=False, json_mode=False
+        )
+        out = capsys.readouterr().out
+        assert "[FAIL] ruff_lint" in out
+        assert "pyproject.toml: invalid" in out
+
     def test_dev_only_scope_skips_lint_gates_and_runs_pytest_only(
         self,
         tmp_path: Path,
@@ -4715,9 +4731,17 @@ class TestImpactedEarlyExitPaths:
     def test_staged_rename_lists_the_source_path(self, repo: Path) -> None:
         (repo / "legacy").mkdir()
         self._git(repo, "mv", "mod.py", "legacy/mod.py")
-        # Premise: plain (rename-detecting) git lists only the destination.
-        assert "mod.py" not in self._git(repo, "diff", "--name-only", "--cached", "main").splitlines()
-        assert "mod.py" not in self._git(repo, "diff", "--name-only", "main").splitlines()
+        # Premise: rename-detecting git lists only the destination. Force
+        # `diff.renames=true` so the premise holds under a global
+        # `diff.renames=false` (QS-371 S4).
+        assert (
+            "mod.py"
+            not in self._git(repo, "-c", "diff.renames=true", "diff", "--name-only", "--cached", "main").splitlines()
+        )
+        assert (
+            "mod.py"
+            not in self._git(repo, "-c", "diff.renames=true", "diff", "--name-only", "main").splitlines()
+        )
         paths = self._paths(repo)
         assert paths is not None
         assert "mod.py" in paths, paths
@@ -4727,8 +4751,13 @@ class TestImpactedEarlyExitPaths:
         (repo / "legacy").mkdir()
         self._git(repo, "mv", "mod.py", "legacy/mod.py")
         self._git(repo, "commit", "-qm", "move")
-        # Premise: plain (rename-detecting) git lists only the destination.
-        assert "mod.py" not in self._git(repo, "diff", "--name-only", "main...HEAD").splitlines()
+        # Premise: rename-detecting git lists only the destination. Force
+        # `diff.renames=true` so the premise holds under a global
+        # `diff.renames=false` (QS-371 S4).
+        assert (
+            "mod.py"
+            not in self._git(repo, "-c", "diff.renames=true", "diff", "--name-only", "main...HEAD").splitlines()
+        )
         paths = self._paths(repo)
         assert paths is not None
         assert "mod.py" in paths, paths
@@ -5127,6 +5156,14 @@ class TestImpactedCheapChecks:
             (["pyproject.toml"], TOOLS),
             (["requirements.txt"], TOOLS),
             (["requirements_test.txt"], TOOLS),
+            # QS-371 (S2): override-config files + .pyi stubs move the verdict.
+            (["mypy.ini"], TOOLS),
+            ([".ruff.toml"], TOOLS),
+            (["setup.cfg"], TOOLS),
+            (["custom_components/quiet_solar/ruff.toml"], TOOLS),
+            (["custom_components/quiet_solar/foo.pyi"], TOOLS),
+            (["custom_components/__init__.py"], TOOLS),
+            (["docs/ruff.toml"], []),
             ([".github/workflows/pr-quality.yml"], []),
             (["scripts/qs/quality_gate.py"], []),
             (["custom_components/quiet_solar/strings.json"], ["translations"]),
@@ -5146,17 +5183,22 @@ class TestImpactedCheapChecks:
             ),
         ],
         ids=[
-            "package-py", "pyproject", "requirements", "requirements_test", "pr-quality-yml",
-            "quality-gate-py", "strings-json", "translations-dir", "ha-strings", "generator-py",
-            "generator-sh", "docs", "other-scripts-py", "tests", "ui-asset", "empty",
-            "unknown-fails-closed", "py-and-strings-ordered",
+            "package-py", "pyproject", "requirements", "requirements_test",
+            "mypy-ini", "ruff-toml-root", "setup-cfg", "package-ruff-toml",
+            "package-pyi", "package-parent-init", "docs-ruff-toml",
+            "pr-quality-yml", "quality-gate-py", "strings-json", "translations-dir",
+            "ha-strings", "generator-py", "generator-sh", "docs", "other-scripts-py",
+            "tests", "ui-asset", "empty", "unknown-fails-closed", "py-and-strings-ordered",
         ],
     )
     def test_trigger_table(self, paths: list[str] | None, expected: list[str]) -> None:
         """AC6 / AC7 / AC8."""
         assert quality_gate._impacted_cheap_gate_names(paths) == expected
 
-    def test_main_uses_the_shared_order(self) -> None:
+    def test_cheap_gate_order_is_pinned(self) -> None:
+        """The canonical cheap-gate order is the single source both the full
+        gate (`main`) and `--impacted` read — `main` has no other order
+        source — so pinning it here keeps the two from drifting (QS-371 N3)."""
         assert quality_gate._CHEAP_GATE_ORDER == ("ruff_format", "ruff_lint", "mypy", "translations")
 
     # --- D2: the step ---
@@ -5278,7 +5320,8 @@ class TestImpactedCheapChecks:
             result = quality_gate.check_translations()
         assert result["name"] == "translations"
         assert result["passed"] is False
-        assert "generate-translations.sh failed" in result["detail"]
+        # QS-371 (S3): the headline reports the exit code, not a specific cause.
+        assert "generate-translations.sh exited 1" in result["detail"]
         assert result["stderr"] == "ERROR: missing reference [%key:x%]"
 
     def test_translations_generator_success_unchanged_passes(self, tmp_path: Path) -> None:
@@ -5292,6 +5335,29 @@ class TestImpactedCheapChecks:
             patch.object(quality_gate, "_run", return_value=_cp(0)),
         ):
             assert quality_gate.check_translations()["passed"] is True
+
+    def test_missing_strings_json_fails(self, tmp_path: Path) -> None:
+        """QS-371 (S1): a deleted strings.json triggers the gate, and CI's
+        generator step fails on it, so the local check must FAIL, not SKIP."""
+        with patch.object(quality_gate, "STRINGS_JSON", tmp_path / "absent.json"):
+            result = quality_gate.check_translations()
+        assert result["name"] == "translations"
+        assert result["passed"] is False
+        assert "custom_components/quiet_solar/strings.json is missing" in result["detail"]
+
+    def test_missing_generate_script_fails(self, tmp_path: Path) -> None:
+        """QS-371 (S1): a deleted generate-translations.sh triggers the gate,
+        and CI's generator step fails on it, so the local check must FAIL."""
+        strings = tmp_path / "strings.json"
+        strings.write_text("{}")
+        with (
+            patch.object(quality_gate, "STRINGS_JSON", strings),
+            patch.object(quality_gate, "REPO_ROOT", tmp_path),
+        ):
+            result = quality_gate.check_translations()
+        assert result["name"] == "translations"
+        assert result["passed"] is False
+        assert "scripts/generate-translations.sh is missing" in result["detail"]
 
     # --- D4: wiring into check_impacted ---
 

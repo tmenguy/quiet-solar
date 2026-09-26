@@ -83,12 +83,12 @@ surface, so `.opencode/commands/` is intentionally absent.
 `python scripts/qs/quality_gate.py --impacted` is the mandatory
 pre-commit gate — testmon-selected tests + changed-line 100% coverage +
 the CI-mirrored cheap checks (ruff lint, ruff format, mypy,
-translations when relevant) — (for change sets touching `tests/qs`-pinned non-Python
-files — agent files, commands, workflow docs, `.claude/settings.json` —
-`--quick tests/qs` is a required supplement even when Python files
-changed too; testmon cannot see non-Python files); `--quick PATH` is the fast TDD inner loop; the
-bare full gate runs authoritatively in CI (local runs only on
-explicit user request) —
+translations when relevant). For change sets touching `tests/qs`-pinned
+non-Python files — agent files, commands, workflow docs,
+`.claude/settings.json` — `--quick tests/qs` is a required supplement
+even when Python files changed too; testmon cannot see non-Python
+files. `--quick PATH` is the fast TDD inner loop; the bare full gate
+runs authoritatively in CI (local runs only on explicit user request) —
 see the Commands section above for the full grammar.
 
 ## Legacy

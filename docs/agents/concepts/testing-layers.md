@@ -70,7 +70,8 @@ the dev loop: `python scripts/qs/quality_gate.py --impacted`. It uses
 100% covered. It also runs the CI-mirrored cheap checks (ruff lint,
 ruff format, mypy, translations when relevant) — it mirrors CI's lint /
 typecheck / translations steps (QS-371). On a small diff this is seconds
-instead of minutes. The
+instead of minutes (the first run in a fresh worktree is slower — mypy
+starts with a cold `.mypy_cache`). The
 implement phase ALWAYS runs it before commit/PR and never substitutes
 the full gate locally — the only local full-gate run is an explicit
 user request.
