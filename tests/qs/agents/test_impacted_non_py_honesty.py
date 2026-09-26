@@ -205,3 +205,19 @@ def test_staging_command_includes_dev_tooling_tests(harness_dir: Path) -> None:
             f"{harness_dir / f'{AGENT_NAME}.md'}: staging command omits the "
             f"quality-gate self-tests:\n{line}"
         )
+
+
+@pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
+def test_states_cheap_checks_exception(harness_dir: Path) -> None:
+    """QS-371: "checks nothing" is no longer unconditional.
+
+    A non-`.py` change set touching a lint/type-config or translations-source
+    path still runs the CI-mirrored cheap checks, so BOTH body sites that say a
+    non-`.py` run checks nothing must carry the exception sentence (the unique
+    literal `Exception (QS-371)` — the frontmatter's short variant omits it).
+    """
+    count = _flat(harness_dir).count("Exception (QS-371)")
+    assert count == 2, (
+        f"{harness_dir / f'{AGENT_NAME}.md'}: expected the QS-371 exception "
+        f"sentence at both 'checks nothing' body sites, found {count}."
+    )

@@ -64,8 +64,9 @@ frontmatter on both harnesses, the thinking effort into Claude's only;
 `python scripts/qs/quality_gate.py` — pytest 100% cov + ruff + mypy +
 translations. Smart scope detection skips the full suite when only
 dev-infrastructure files changed. The mandatory pre-commit form is
-`python scripts/qs/quality_gate.py --impacted` (testmon-selected tests
-plus changed-line 100% coverage, self-healing); the whole-suite gate
+`python scripts/qs/quality_gate.py --impacted` (testmon-selected tests +
+changed-line 100% coverage + the CI-mirrored cheap checks (ruff lint,
+ruff format, mypy, translations when relevant), self-healing); the whole-suite gate
 runs authoritatively in CI on every PR (including the translations
 value-check since QS-292). For change sets touching
 `tests/qs`-pinned non-Python files (agent files, commands, workflow

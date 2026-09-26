@@ -25,6 +25,9 @@ Options:
                              diff-cover --fail-under=100 against the resolved diff
                              base. Guarantees the lines YOU changed are 100% covered
                              (the whole-repo 100% gate stays authoritative in CI).
+                             QS-371: also runs the CI-mirrored cheap checks (ruff
+                             lint / ruff format / mypy / translations) when the
+                             change set can move them — see `check_impacted`.
                              Mutex with --quick/--cache/--no-cache/--full/--fix.
     --seed-testmon           Sanctioned non-gate subcommand: refresh .testmondata via
                              `pytest --testmon` (no coverage, no pass/fail verdict).
@@ -44,7 +47,9 @@ Smart scope detection:
 
 Exit codes:
     0 = all gates pass
-    1 = one or more gates failed (incl. --impacted changed-lines <100%;
+    1 = one or more gates failed (incl. --impacted changed-lines <100% OR a
+        CI-mirrored cheap check (ruff lint / ruff format / mypy / translations)
+        failed;
         --seed-testmon-follow: baseline incomplete/interrupted/skipped — rerun)
     2 = argument parsing error (e.g., --quick with no paths, or mutex violation)
     3 = required tooling missing (--impacted: testmon / diff-cover not importable;
@@ -1040,6 +1045,8 @@ def check_ruff_lint(fix: bool = False) -> dict:
         "name": "ruff_lint",
         "passed": passed,
         "detail": result.stdout.strip()[-500:] if not passed else "",
+        # QS-371 (D1b): a broken config / missing tool reports on stderr only.
+        "stderr": result.stderr.strip()[-500:] if not passed else "",
     }
 
 
@@ -1057,6 +1064,8 @@ def check_ruff_format(fix: bool = False) -> dict:
         "name": "ruff_format",
         "passed": passed,
         "detail": result.stdout.strip()[-500:] if not passed else "",
+        # QS-371 (D1b): a broken config / missing tool reports on stderr only.
+        "stderr": result.stderr.strip()[-500:] if not passed else "",
     }
 
 
@@ -1071,6 +1080,8 @@ def check_mypy() -> dict:
         "name": "mypy",
         "passed": passed,
         "detail": result.stdout.strip()[-500:] if not passed else "",
+        # QS-371 (D1b): a broken config / missing tool reports on stderr only.
+        "stderr": result.stderr.strip()[-500:] if not passed else "",
     }
 
 
@@ -1089,8 +1100,19 @@ def check_translations() -> dict:
     # Capture current en.json content
     en_before = TRANSLATIONS_EN.read_text() if TRANSLATIONS_EN.exists() else ""
 
-    # Run generation — ignore exit code (may fail for unrelated integrations)
-    _run(["bash", str(gen_script)])
+    # QS-371 (D1b): a generator failure (e.g. an unresolvable `[%key:...%]`
+    # reference) exits non-zero BEFORE writing, leaving en.json unchanged —
+    # CI fails on the exit code, so the local check must too.
+    gen = _run(["bash", str(gen_script)])
+    if gen.returncode != 0:
+        _emit("translations", "FAIL (generator failed)")
+        return {
+            "name": "translations",
+            "passed": False,
+            "detail": "scripts/generate-translations.sh failed — check strings.json "
+            "for an unresolvable [%key:...%] reference",
+            "stderr": gen.stderr.strip()[-500:],
+        }
 
     # Check if our translations file changed (the only thing that matters)
     en_after = TRANSLATIONS_EN.read_text() if TRANSLATIONS_EN.exists() else ""
@@ -1104,6 +1126,20 @@ def check_translations() -> dict:
 
     _emit("translations", "PASS")
     return {"name": "translations", "passed": True, "detail": ""}
+
+
+# The cheap gates' canonical output order — shared by the full gate (`main`)
+# and `--impacted` (QS-371) so the two cannot drift.
+_CHEAP_GATE_ORDER = ("ruff_format", "ruff_lint", "mypy", "translations")
+
+# QS-371 (D2.4): the one-line reproduce / fix command `--impacted` prints under
+# a failing cheap gate. `translations` has none — its `detail` already says
+# what to do.
+_CHEAP_GATE_HINTS: dict[str, str] = {
+    "ruff_format": "fix: venv/bin/ruff format custom_components/quiet_solar/",
+    "ruff_lint": "rerun: venv/bin/ruff check custom_components/quiet_solar/ (add --fix to auto-fix)",
+    "mypy": "rerun: venv/bin/python -m mypy custom_components/quiet_solar/",
+}
 
 
 def _run_cheap_gates_parallel(
@@ -1617,6 +1653,14 @@ def _impacted_early_exit_paths() -> list[str] | None:
     `-z` field is already exact, and stripping would corrupt a path with leading
     or trailing spaces.
 
+    **`--no-renames` on every `git diff` rung (QS-371, D3b).** Rename detection
+    is on by default, so `git mv custom_components/quiet_solar/x.py legacy/x.py`
+    listed only `legacy/x.py` — the cheap-check trigger skipped while CI mypy
+    could fail on the broken imports. With `--no-renames` a rename lists BOTH
+    sides. This only ADDS paths to the union, whose two consumers (the non-`.py`
+    early exit and `_impacted_cheap_gate_names`) can therefore only get stricter
+    — consistent with the fail-closed contract.
+
     **Zero-arg and total** so ONE `patch.object` in a test silences every git
     call at this seat. If the base resolve lived in `check_impacted`, its `_run`
     call would sit outside the seam and still fire wherever `_run` is patched
@@ -1643,9 +1687,9 @@ def _impacted_early_exit_paths() -> list[str] | None:
         return None
     paths: set[str] = set()
     for cmd in (
-        ["git", "diff", "--name-only", "-z", merge_base],
-        ["git", "diff", "--name-only", "-z", merge_base, "HEAD"],
-        ["git", "diff", "--name-only", "-z", "--cached", merge_base],
+        ["git", "diff", "--name-only", "-z", "--no-renames", merge_base],
+        ["git", "diff", "--name-only", "-z", "--no-renames", merge_base, "HEAD"],
+        ["git", "diff", "--name-only", "-z", "--no-renames", "--cached", merge_base],
         ["git", "ls-files", "--others", "--exclude-standard", "-z"],
     ):
         listing = _run(cmd)
@@ -1665,6 +1709,111 @@ _IMPACTED_NON_PY_LINES = (
     "select a test. For non-Python changes run `--quick tests/qs`",
     "(or `--quick tests/test_dashboard_rendering.py` for ui assets).",
 )
+
+
+
+# ---------------------------------------------------------------------------
+# QS-371: the CI-mirrored cheap checks under `--impacted`
+# ---------------------------------------------------------------------------
+
+# Config / pin files that can move the ruff or mypy verdict on the package
+# (verified: no mypy.ini / ruff.toml / .ruff.toml / setup.cfg / tox.ini exists).
+_CHEAP_TOOL_CONFIG_PATHS = frozenset({"pyproject.toml", "requirements.txt", "requirements_test.txt"})
+
+# The translations generator's inputs (`generate_translations.py` reads only
+# strings.json and the HA strings file) plus the generator itself.
+_CHEAP_TRANSLATIONS_PATHS = frozenset(
+    {
+        "custom_components/quiet_solar/strings.json",
+        "scripts/strings_from_homeassistant.json",
+        "scripts/generate_translations.py",
+        "scripts/generate-translations.sh",
+    }
+)
+_CHEAP_TRANSLATIONS_PREFIX = "custom_components/quiet_solar/translations/"
+_CHEAP_PACKAGE_PREFIX = "custom_components/quiet_solar/"
+
+
+def _impacted_cheap_gate_names(paths: list[str] | None) -> list[str]:
+    """The cheap gates a change set can move, in `_CHEAP_GATE_ORDER` (QS-371, D3).
+
+    Pure — no I/O. The trigger rules are documented in `check_impacted`'s
+    docstring. `None` (the path listing failed) selects every gate: fail-closed.
+    """
+    if paths is None:
+        return list(_CHEAP_GATE_ORDER)
+    tools = any(
+        (p.startswith(_CHEAP_PACKAGE_PREFIX) and p.endswith(".py")) or p in _CHEAP_TOOL_CONFIG_PATHS
+        for p in paths
+    )
+    translations = any(
+        p in _CHEAP_TRANSLATIONS_PATHS or p.startswith(_CHEAP_TRANSLATIONS_PREFIX) for p in paths
+    )
+    names: list[str] = []
+    if tools:
+        names.extend(("ruff_format", "ruff_lint", "mypy"))
+    if translations:
+        names.append("translations")
+    return names
+
+
+def _impacted_cheap_checks(paths: list[str] | None) -> list[str]:
+    """Run the triggered CI-mirrored cheap checks; return the FAILED gate names.
+
+    QS-371 (D2). Names are ordered by `_CHEAP_GATE_ORDER`; `[]` means every
+    selected gate passed or none was selected. The check functions are looked
+    up as module globals on every call (as `main` does), so a test's
+    `patch.object` applies. With `fix=False` both ruff gates are read-only, so
+    running them concurrently is safe. The only side effect beyond the tools
+    themselves is `check_translations` regenerating a stale `en.json` (D6).
+    """
+    names = _impacted_cheap_gate_names(paths)
+    if not names:
+        # Hard guard: `ThreadPoolExecutor(max_workers=0)` raises ValueError.
+        _emit("cheap-checks", "SKIP (no package .py / lint-config / translations-source change)")
+        return []
+    spec_for: dict[str, tuple[Callable[..., Any], dict[str, Any]]] = {
+        "ruff_format": (check_ruff_format, {"fix": False}),
+        "ruff_lint": (check_ruff_lint, {"fix": False}),
+        "mypy": (check_mypy, {}),
+        "translations": (check_translations, {}),
+    }
+    specs = [(spec_for[name][0], spec_for[name][1], [name]) for name in names]
+    results = sorted(_run_cheap_gates_parallel(specs), key=lambda r: _CHEAP_GATE_ORDER.index(r["name"]))
+    failed: list[str] = []
+    for result in results:
+        if result["passed"]:
+            continue
+        name = result["name"]
+        failed.append(name)
+        for text in (result.get("detail", ""), result.get("stderr", "")):
+            for ln in text.splitlines():
+                _emit(name, ln)
+        if name in _CHEAP_GATE_HINTS:
+            _emit(name, _CHEAP_GATE_HINTS[name])
+    if failed:
+        _emit("cheap-checks", f"FAIL ({', '.join(failed)})")
+    else:
+        _emit("cheap-checks", "PASS")
+    return failed
+
+
+def _with_cheap(rc: int, cheap_failed: list[str]) -> int:
+    """Fold the cheap-check verdict into the tail's exit code (QS-371, D4).
+
+    A cheap failure turns a 0 into 1; a non-zero tail code keeps its meaning
+    (1 test/coverage fail, 4 no base in CI). Either way the verdict is the LAST
+    line of the output, so it is not lost above the testmon output or after the
+    non-`.py` exit's PASS lines.
+    """
+    if not cheap_failed:
+        return rc
+    joined = ", ".join(cheap_failed)
+    if rc == 0:
+        _emit("impacted", f"FAIL (cheap checks failed: {joined})")
+        return 1
+    _emit("impacted", f"note: cheap checks also failed: {joined}")
+    return rc
 
 
 # ---------------------------------------------------------------------------
@@ -2354,20 +2503,59 @@ def _run_impacted_pass(base: str) -> tuple[str, bool]:
 def check_impacted() -> int:
     """Run the `--impacted` inner-loop gate; return the process exit code.
 
-    Pipeline: tooling probe → orphan-shard hygiene → non-`.py` early exit
+    Pipeline: tooling probe → orphan-shard hygiene → testmon DB hygiene →
+    lane check → CI-mirrored cheap checks (QS-371) → non-`.py` early exit
     (QS-290 S-4) → diff-base ladder → one `_run_impacted_pass` → (on an
     incremental changed-line FAIL) exactly one self-heal rebuild + retry.
+    Everything from the early exit on lives in `_check_impacted_tail`; its exit
+    code is folded with the cheap-check verdict by `_with_cheap`.
 
-    Ordering consequence worth knowing: because the early exit is evaluated
+    **CI-mirrored cheap checks (QS-371).** CI runs `ruff check`,
+    `ruff format --check`, `mypy` on `custom_components/quiet_solar/` and the
+    translations value-check on every PR; `--impacted` runs the SAME check
+    functions as the full gate (same command, target and pinned versions) on
+    the whole package, but only on a change set that can move their verdict.
+    Trigger rules (`_impacted_cheap_gate_names`, over the
+    `_impacted_early_exit_paths` union — the canonical statement; other docs
+    refer here):
+
+    - `ruff_format`, `ruff_lint`, `mypy` iff any path is a `.py` under
+      `custom_components/quiet_solar/`, or exactly `pyproject.toml`,
+      `requirements.txt` or `requirements_test.txt`. Deliberately NOT
+      `.github/workflows/pr-quality.yml` or `scripts/qs/quality_gate.py`:
+      neither can change the package verdict (changes to the gate's own
+      commands are proven by `tests/test_quality_gate.py`).
+    - `translations` iff any path is a generator input:
+      `custom_components/quiet_solar/strings.json`, anything under
+      `custom_components/quiet_solar/translations/`,
+      `scripts/strings_from_homeassistant.json`,
+      `scripts/generate_translations.py`, `scripts/generate-translations.sh`.
+    - A `None` path listing (git failure) selects all four — fail-closed.
+    - Everything else (docs, other `scripts/`, `tests/`, agent files, UI
+      assets) selects nothing and prints `[cheap-checks] SKIP`.
+
+    A cheap failure never short-circuits: the tail still runs, then a 0 becomes
+    1 (`[impacted] FAIL (cheap checks failed: …)` as the last line) and a
+    non-zero tail code is kept (with a `note:` line). There is no `--fix`
+    under `--impacted`; each failing gate prints its fix / rerun command.
+    Before the cheap checks, unchanged: exit 3 (tooling) and the lane-check
+    failure (exit 1, an out-of-band declaration problem).
+
+    Ordering consequences worth knowing: because the early exit is evaluated
     BEFORE `_resolve_diff_base`, a non-`.py` change set in CI whose base cannot
     be resolved now returns 0 rather than the diagnostic exit 4. That is
-    deliberate — the verdict genuinely is vacuous either way, and there is
-    nothing for a resolvable base to add — but it IS a behaviour change on the
-    CI branch, so it is recorded here rather than left to be rediscovered.
+    deliberate — the diff-coverage verdict genuinely is vacuous either way, and
+    there is nothing for a resolvable base to add — but it IS a behaviour
+    change on the CI branch, so it is recorded here rather than left to be
+    rediscovered. And because the cheap checks run BEFORE the early exit
+    (QS-371), a non-`.py` change set that triggers them (a lint-config or
+    translations-source path) can now return 1.
 
-    Exit codes: 0 pass · 1 selected-test failure OR diff-coverage <100% ·
-    3 testmon / diff-cover not importable · 4 no diff base resolvable in
-    CI (warn-and-skip → 0 locally so an offline dev isn't blocked).
+    Exit codes: 0 pass · 1 selected-test failure OR diff-coverage <100% OR a
+    CI-mirrored cheap check (ruff lint / ruff format / mypy / translations)
+    failed OR lane-check failure · 3 testmon / diff-cover not importable ·
+    4 no diff base resolvable in CI (warn-and-skip → 0 locally so an offline
+    dev isn't blocked).
 
     Fail-safe: a corrupt / schema-incompatible `.testmondata` makes
     testmon select *all* tests (its native recovery), never silently
@@ -2420,6 +2608,36 @@ def check_impacted() -> int:
     # would keep getting 0 back in milliseconds while the DB stayed broken.
     _ensure_testmon_db_safe()
 
+    # QS-332 (B1), call site 1: after `_ensure_testmon_db_safe()` and
+    # BEFORE the warm-baseline early-exit block — the hook must run on a
+    # pure-docs change set too (a missing declaration fails and a
+    # cross-target diff warns there as well). The check computes its own
+    # tracked-only, fail-closed change set (review-fix #01) —
+    # `_impacted_early_exit_paths`'s union stays the early-exit input
+    # ONLY, because its untracked rung would banner local scratch files
+    # CI never sees; a git failure inside the check gets gh-failure
+    # semantics (local warn + skip, CI fail closed).
+    if _emit_lane_check(_check_lane_targets()):
+        return 1
+
+    early_exit_paths = _impacted_early_exit_paths()
+    # QS-371 (D4): the CI-mirrored cheap checks run BEFORE the non-`.py` early
+    # exit (a `pyproject.toml`-only change set is still linted/type-checked)
+    # and never fail fast — the tail still runs, so one run surfaces every
+    # problem, and `_with_cheap` folds both verdicts into the exit code.
+    cheap_failed = _impacted_cheap_checks(early_exit_paths)
+    rc = _check_impacted_tail(early_exit_paths=early_exit_paths, was_incremental=was_incremental)
+    return _with_cheap(rc, cheap_failed)
+
+
+def _check_impacted_tail(*, early_exit_paths: list[str] | None, was_incremental: bool) -> int:
+    """`check_impacted` after the lane and cheap checks (QS-371, D4).
+
+    The warm-baseline non-`.py` early exit, the diff-base ladder, one
+    `_run_impacted_pass` and the self-heal retry — moved verbatim so
+    `check_impacted` can fold the cheap-check verdict into ONE exit code
+    (`_with_cheap`) instead of wrapping every `return`.
+    """
     # QS-290 (S-4): a change set with no `.py` file at all makes this whole
     # gate structurally vacuous — testmon fingerprints only `.py`, so it could
     # never select a test, and diff-cover has no Python lines to score. Exit
@@ -2442,19 +2660,6 @@ def check_impacted() -> int:
     # probe must be the POST-hygiene one — a corrupt DB looks warm but has just
     # been purged, after which testmon select-alls too. Cold falls through to
     # the full pass, exactly as before this feature existed.
-    # QS-332 (B1), call site 1: after `_ensure_testmon_db_safe()` and
-    # BEFORE the warm-baseline early-exit block — the hook must run on a
-    # pure-docs change set too (a missing declaration fails and a
-    # cross-target diff warns there as well). The check computes its own
-    # tracked-only, fail-closed change set (review-fix #01) —
-    # `_impacted_early_exit_paths`'s union stays the early-exit input
-    # ONLY, because its untracked rung would banner local scratch files
-    # CI never sees; a git failure inside the check gets gh-failure
-    # semantics (local warn + skip, CI fail closed).
-    if _emit_lane_check(_check_lane_targets()):
-        return 1
-
-    early_exit_paths = _impacted_early_exit_paths()
     if _testmon_baseline_warm():
         if early_exit_paths is not None and not any(p.endswith(".py") for p in early_exit_paths):
             for line in _IMPACTED_NON_PY_LINES:
@@ -3587,8 +3792,6 @@ def main() -> None:
         # (lost edits, truncated writes, non-deterministic results). Serialize
         # them inside one composite future while the read-only gates (mypy,
         # translations) keep running concurrently.
-        gate_order = ["ruff_format", "ruff_lint", "mypy", "translations"]
-
         if args.fix:
 
             def _ruff_pair_serial() -> list[dict]:
@@ -3612,7 +3815,7 @@ def main() -> None:
             ]
 
         cheap_results = _run_cheap_gates_parallel(specs)
-        results = sorted(cheap_results, key=lambda r: gate_order.index(r["name"]))
+        results = sorted(cheap_results, key=lambda r: _CHEAP_GATE_ORDER.index(r["name"]))
         results.append(check_pytest())
 
     all_passed = all(r["passed"] for r in results)

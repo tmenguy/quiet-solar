@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -112,6 +113,25 @@ def _lane_check_isolated(tmp_path_factory: pytest.TempPathFactory):
         patch.object(quality_gate, "LANE_CACHE_FILE", root / ".lane_check_cache"),
     ):
         yield
+
+
+# QS-371: the REAL cheap-check step, captured at import time — the autouse
+# `_cheap_checks_isolated` fixture below stubs the module attribute for every
+# test, so `TestImpactedCheapChecks` calls (or re-patches with) this reference.
+_REAL_IMPACTED_CHEAP_CHECKS = quality_gate._impacted_cheap_checks
+
+
+@pytest.fixture(autouse=True)
+def _cheap_checks_isolated():
+    """QS-371 existing-test audit: `check_impacted()` now runs the CI-mirrored
+    cheap checks (ruff / mypy / translations) on a triggering change set. The
+    many `check_impacted` tests in this module patch `_run` wholesale (and
+    assert it is never called) or would otherwise spawn a real mypy — stub the
+    step to "all passed" by default. `TestImpactedCheapChecks` re-patches it.
+    """
+    with patch.object(quality_gate, "_impacted_cheap_checks", return_value=[]):
+        yield
+
 
 # A real sentinel object, so the default is not a
 # `str` masquerading as a `list[str] | None` behind a blanket `type: ignore`.
@@ -4671,6 +4691,48 @@ class TestImpactedEarlyExitPaths:
         for cmd in listing:
             assert "-z" in cmd, f"path-listing call without -z: {cmd!r}"
 
+    # --- QS-371 (D3b): renames list BOTH sides ---
+
+    def test_all_diff_rungs_disable_rename_detection(self) -> None:
+        """Every `git diff` rung passes `--no-renames` right after `-z`, or a
+        `git mv` out of the package hides the source path from the union (and
+        from the cheap-check trigger that consumes it)."""
+        seen: list[list[str]] = []
+
+        def _side_effect(cmd: list[str], *_a, **_k) -> subprocess.CompletedProcess[str]:
+            seen.append(cmd)
+            if cmd[:2] == ["git", "merge-base"]:
+                return _cp(0, stdout="deadbeef\n")
+            return _cp(0, stdout="")
+
+        with patch.object(quality_gate, "_run", side_effect=_side_effect):
+            quality_gate._impacted_early_exit_paths()
+        diffs = [c for c in seen if c[:2] == ["git", "diff"]]
+        assert len(diffs) == 3, diffs
+        for cmd in diffs:
+            assert cmd[:5] == ["git", "diff", "--name-only", "-z", "--no-renames"], cmd
+
+    def test_staged_rename_lists_the_source_path(self, repo: Path) -> None:
+        (repo / "legacy").mkdir()
+        self._git(repo, "mv", "mod.py", "legacy/mod.py")
+        # Premise: plain (rename-detecting) git lists only the destination.
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", "--cached", "main").splitlines()
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", "main").splitlines()
+        paths = self._paths(repo)
+        assert paths is not None
+        assert "mod.py" in paths, paths
+        assert "legacy/mod.py" in paths, paths
+
+    def test_committed_rename_lists_the_source_path(self, repo: Path) -> None:
+        (repo / "legacy").mkdir()
+        self._git(repo, "mv", "mod.py", "legacy/mod.py")
+        self._git(repo, "commit", "-qm", "move")
+        # Premise: plain (rename-detecting) git lists only the destination.
+        assert "mod.py" not in self._git(repo, "diff", "--name-only", "main...HEAD").splitlines()
+        paths = self._paths(repo)
+        assert paths is not None
+        assert "mod.py" in paths, paths
+
     def test_empty_merge_base_stdout_fails_closed(self) -> None:
         """A zero-rc `merge-base` with no sha is unusable — do NOT early-exit."""
 
@@ -4992,6 +5054,426 @@ class TestImpactedNonPyEarlyExit:
             assert quality_gate.check_impacted() == 0
         assert len(fake.calls) == 1, f"expected exactly the testmon pass, got {fake.calls!r}"
         assert not any("--collect-only" in c for c in fake.calls), fake.calls
+
+
+class TestImpactedCheapChecks:
+    """QS-371: `--impacted` runs the CI-mirrored cheap checks.
+
+    CI's "Ruff Lint & Format" / mypy / translations steps run on every PR, but
+    `--impacted` short-circuited before the full gate's cheap-gate block — a
+    green pre-commit gate did not predict a green CI (QS-349 round 9). The
+    step now runs on change sets that can move those verdicts, and its
+    failures are aggregated with the testmon / diff-cover tail.
+    """
+
+    TOOLS = ["ruff_format", "ruff_lint", "mypy"]
+    ALL = ["ruff_format", "ruff_lint", "mypy", "translations"]
+
+    @pytest.fixture(autouse=True)
+    def _testmon_db_present(self, tmp_path_factory: pytest.TempPathFactory):
+        """Same isolation as `TestCheckImpacted`'s fixture: a present (warm)
+        `.testmondata` and a tmp `COVERAGE_DATA`, so no test touches the
+        repo's real testmon DB or `.coverage.*` shards."""
+        root = tmp_path_factory.mktemp("tmdb")
+        db = root / ".testmondata"
+        db.write_bytes(b"x")
+        with (
+            patch.object(quality_gate, "TESTMON_DATA", db),
+            patch.object(quality_gate, "COVERAGE_DATA", root / ".coverage"),
+        ):
+            yield
+
+    @staticmethod
+    def _res(name: str, passed: bool = True, detail: str = "", stderr: str = "") -> dict:
+        return {"name": name, "passed": passed, "detail": detail, "stderr": stderr}
+
+    @contextlib.contextmanager
+    def _checks(self, **results: dict | Exception) -> Iterator[dict[str, MagicMock]]:
+        """Patch the four check functions; unspecified ones pass. A value that
+        is an Exception is raised by that check (the executor synthesizes)."""
+        funcs = {
+            "ruff_format": "check_ruff_format",
+            "ruff_lint": "check_ruff_lint",
+            "mypy": "check_mypy",
+            "translations": "check_translations",
+        }
+        with contextlib.ExitStack() as stack:
+            mocks: dict[str, MagicMock] = {}
+            for name, attr in funcs.items():
+                value = results.get(name, self._res(name))
+                if isinstance(value, Exception):
+                    mocks[name] = stack.enter_context(patch.object(quality_gate, attr, side_effect=value))
+                else:
+                    mocks[name] = stack.enter_context(patch.object(quality_gate, attr, return_value=value))
+            yield mocks
+
+    @staticmethod
+    def _seams(**overrides: Any) -> contextlib.ExitStack:
+        """The `check_impacted` seam pattern of `TestCheckImpacted`."""
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch.object(quality_gate, "_impacted_tooling_available", return_value=True))
+        stack.enter_context(patch.object(quality_gate, "_clean_orphan_cov_shards"))
+        stack.enter_context(patch.object(quality_gate, "_ensure_testmon_db_safe"))
+        for name, value in overrides.items():
+            stack.enter_context(patch.object(quality_gate, name, value))
+        return stack
+
+    # --- D3: the trigger ---
+
+    @pytest.mark.parametrize(
+        ("paths", "expected"),
+        [
+            (["custom_components/quiet_solar/home_model/load.py"], TOOLS),
+            (["pyproject.toml"], TOOLS),
+            (["requirements.txt"], TOOLS),
+            (["requirements_test.txt"], TOOLS),
+            ([".github/workflows/pr-quality.yml"], []),
+            (["scripts/qs/quality_gate.py"], []),
+            (["custom_components/quiet_solar/strings.json"], ["translations"]),
+            (["custom_components/quiet_solar/translations/en.json"], ["translations"]),
+            (["scripts/strings_from_homeassistant.json"], ["translations"]),
+            (["scripts/generate_translations.py"], ["translations"]),
+            (["scripts/generate-translations.sh"], ["translations"]),
+            (["docs/x.md"], []),
+            (["scripts/qs/foo.py"], []),
+            (["tests/test_x.py"], []),
+            (["custom_components/quiet_solar/ui/resources/x.js"], []),
+            ([], []),
+            (None, ALL),
+            (
+                ["custom_components/quiet_solar/strings.json", "custom_components/quiet_solar/const.py"],
+                ALL,
+            ),
+        ],
+        ids=[
+            "package-py", "pyproject", "requirements", "requirements_test", "pr-quality-yml",
+            "quality-gate-py", "strings-json", "translations-dir", "ha-strings", "generator-py",
+            "generator-sh", "docs", "other-scripts-py", "tests", "ui-asset", "empty",
+            "unknown-fails-closed", "py-and-strings-ordered",
+        ],
+    )
+    def test_trigger_table(self, paths: list[str] | None, expected: list[str]) -> None:
+        """AC6 / AC7 / AC8."""
+        assert quality_gate._impacted_cheap_gate_names(paths) == expected
+
+    def test_main_uses_the_shared_order(self) -> None:
+        assert quality_gate._CHEAP_GATE_ORDER == ("ruff_format", "ruff_lint", "mypy", "translations")
+
+    # --- D2: the step ---
+
+    @pytest.mark.parametrize("paths", [["docs/x.md", "tests/test_x.py"], []], ids=["doc-only", "empty"])
+    def test_no_trigger_skips_without_running_anything(
+        self, paths: list[str], capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC6: never reaches the executor (`max_workers=0` would raise)."""
+        with patch.object(quality_gate, "_run_cheap_gates_parallel") as mock_par:
+            assert _REAL_IMPACTED_CHEAP_CHECKS(paths) == []
+        mock_par.assert_not_called()
+        assert "[cheap-checks] SKIP (" in capsys.readouterr().err
+
+    def test_only_selected_gates_run(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with self._checks() as mocks:
+            assert _REAL_IMPACTED_CHEAP_CHECKS(["pyproject.toml"]) == []
+        mocks["ruff_format"].assert_called_once_with(fix=False)
+        mocks["ruff_lint"].assert_called_once_with(fix=False)
+        mocks["mypy"].assert_called_once_with()
+        mocks["translations"].assert_not_called()
+        assert "[cheap-checks] PASS" in capsys.readouterr().err
+
+    def test_translations_only_change_set(self) -> None:
+        with self._checks() as mocks:
+            assert _REAL_IMPACTED_CHEAP_CHECKS(["custom_components/quiet_solar/strings.json"]) == []
+        mocks["translations"].assert_called_once_with()
+        for name in self.TOOLS:
+            mocks[name].assert_not_called()
+
+    def test_failure_detail_and_stderr_each_line_prefixed_with_hint(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC1 / AC10: multi-line tool output is split so every line carries
+        the gate prefix; the reproduce/fix command follows."""
+        bad = self._res("ruff_format", False, detail="Would reformat: a.py\nWould reformat: b.py", stderr="warn: x")
+        with self._checks(ruff_format=bad):
+            assert _REAL_IMPACTED_CHEAP_CHECKS(["pyproject.toml"]) == ["ruff_format"]
+        err = capsys.readouterr().err
+        assert "[ruff_format] Would reformat: a.py" in err
+        assert "[ruff_format] Would reformat: b.py" in err
+        assert "[ruff_format] warn: x" in err
+        assert "[ruff_format] fix: venv/bin/ruff format custom_components/quiet_solar/" in err
+        assert "[cheap-checks] FAIL (ruff_format)" in err
+
+    def test_stderr_only_failure_is_shown(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """AC10: a tool that fails with stdout empty (broken config, rc 127)
+        still prints a reason."""
+        bad = self._res("mypy", False, detail="", stderr="pyproject.toml: invalid")
+        with self._checks(mypy=bad):
+            assert _REAL_IMPACTED_CHEAP_CHECKS(["pyproject.toml"]) == ["mypy"]
+        err = capsys.readouterr().err
+        assert "[mypy] pyproject.toml: invalid" in err
+        assert "[mypy] rerun: venv/bin/python -m mypy custom_components/quiet_solar/" in err
+
+    def test_synthesized_exception_prints_its_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
+        with self._checks(ruff_lint=RuntimeError("boom")):
+            assert _REAL_IMPACTED_CHEAP_CHECKS(["pyproject.toml"]) == ["ruff_lint"]
+        err = capsys.readouterr().err
+        assert "[ruff_lint] <exception>: boom" in err
+        assert "[ruff_lint] rerun: venv/bin/ruff check custom_components/quiet_solar/ (add --fix to auto-fix)" in err
+
+    def test_translations_failure_prints_detail_and_no_hint(self, capsys: pytest.CaptureFixture[str]) -> None:
+        bad = {"name": "translations", "passed": False, "detail": "en.json was outdated"}
+        with self._checks(translations=bad):
+            assert _REAL_IMPACTED_CHEAP_CHECKS(["custom_components/quiet_solar/strings.json"]) == ["translations"]
+        err_lines = [ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("[translations]")]
+        assert err_lines == ["[translations] en.json was outdated"], err_lines
+
+    def test_failures_are_ordered_whatever_the_completion_order(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC2: `_run_cheap_gates_parallel` returns in completion order."""
+        unordered = [
+            self._res("translations", False, detail="t"),
+            self._res("mypy", False, detail="m"),
+            self._res("ruff_lint"),
+            self._res("ruff_format", False, detail="f"),
+        ]
+        with patch.object(quality_gate, "_run_cheap_gates_parallel", return_value=unordered):
+            assert _REAL_IMPACTED_CHEAP_CHECKS(None) == ["ruff_format", "mypy", "translations"]
+        assert "[cheap-checks] FAIL (ruff_format, mypy, translations)" in capsys.readouterr().err
+
+    # --- D1b: failure dicts carry stderr; generator failure FAILs ---
+
+    @pytest.mark.parametrize(
+        ("fn", "kwargs", "name"),
+        [
+            ("check_ruff_format", {"fix": False}, "ruff_format"),
+            ("check_ruff_lint", {"fix": False}, "ruff_lint"),
+            ("check_mypy", {}, "mypy"),
+        ],
+        ids=["ruff_format", "ruff_lint", "mypy"],
+    )
+    @pytest.mark.parametrize("rc", [2, 0], ids=["fail", "pass"])
+    def test_tool_check_carries_stderr(self, fn: str, kwargs: dict, name: str, rc: int) -> None:
+        """AC10: stderr in the failure dict; both empty on a pass."""
+        with patch.object(quality_gate, "_run", return_value=_cp(rc, stdout="", stderr="  config broken  ")):
+            result = getattr(quality_gate, fn)(**kwargs)
+        assert result["name"] == name
+        assert result["passed"] is (rc == 0)
+        assert result["detail"] == ""
+        assert result["stderr"] == ("config broken" if rc else "")
+
+    def test_translations_generator_failure_fails(self, tmp_path: Path) -> None:
+        """AC11: the generator exits 1 before writing, so `en.json` is
+        unchanged — CI fails on the exit code, and so must the local check."""
+        strings = tmp_path / "strings.json"
+        strings.write_text("{}")
+        en = tmp_path / "en.json"
+        en.write_text("{}")
+        with (
+            patch.object(quality_gate, "STRINGS_JSON", strings),
+            patch.object(quality_gate, "TRANSLATIONS_EN", en),
+            patch.object(
+                quality_gate, "_run", return_value=_cp(1, stderr="ERROR: missing reference [%key:x%]\n")
+            ),
+        ):
+            result = quality_gate.check_translations()
+        assert result["name"] == "translations"
+        assert result["passed"] is False
+        assert "generate-translations.sh failed" in result["detail"]
+        assert result["stderr"] == "ERROR: missing reference [%key:x%]"
+
+    def test_translations_generator_success_unchanged_passes(self, tmp_path: Path) -> None:
+        strings = tmp_path / "strings.json"
+        strings.write_text("{}")
+        en = tmp_path / "en.json"
+        en.write_text("{}")
+        with (
+            patch.object(quality_gate, "STRINGS_JSON", strings),
+            patch.object(quality_gate, "TRANSLATIONS_EN", en),
+            patch.object(quality_gate, "_run", return_value=_cp(0)),
+        ):
+            assert quality_gate.check_translations()["passed"] is True
+
+    # --- D4: wiring into check_impacted ---
+
+    @pytest.mark.parametrize(
+        ("failing", "expected", "hints"),
+        [
+            (["ruff_format"], "ruff_format", ["fix: venv/bin/ruff format"]),
+            (["ruff_lint"], "ruff_lint", ["rerun: venv/bin/ruff check"]),
+            (["mypy"], "mypy", ["rerun: venv/bin/python -m mypy"]),
+            (["mypy", "ruff_format"], "ruff_format, mypy", ["fix: venv/bin/ruff format", "-m mypy"]),
+        ],
+        ids=["format", "lint", "mypy", "two-ordered"],
+    )
+    def test_cheap_failure_fails_a_passing_tail(
+        self,
+        failing: list[str],
+        expected: str,
+        hints: list[str],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """AC1 / AC2: tail would return 0 → exit 1, and the verdict is the
+        LAST line of the output."""
+        bad = {name: self._res(name, False, detail=f"{name} line 1\n{name} line 2") for name in failing}
+        with (
+            self._seams(
+                _impacted_cheap_checks=_REAL_IMPACTED_CHEAP_CHECKS,
+                _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+                _check_impacted_tail=MagicMock(return_value=0),
+            ),
+            self._checks(**bad),
+        ):
+            assert quality_gate.check_impacted() == 1
+        err = capsys.readouterr().err
+        for name in failing:
+            assert f"[{name}] {name} line 1" in err
+            assert f"[{name}] {name} line 2" in err
+        for hint in hints:
+            assert hint in err
+        assert f"[cheap-checks] FAIL ({expected})" in err
+        assert err.splitlines()[-1] == f"[impacted] FAIL (cheap checks failed: {expected})"
+
+    def test_step_receives_the_early_exit_paths(self) -> None:
+        tail = MagicMock(return_value=0)
+        with self._seams(
+            _impacted_early_exit_paths=MagicMock(return_value=["pyproject.toml"]),
+            _check_impacted_tail=tail,
+        ):
+            assert quality_gate.check_impacted() == 0
+        quality_gate._impacted_cheap_checks.assert_called_once_with(["pyproject.toml"])
+        tail.assert_called_once_with(early_exit_paths=["pyproject.toml"], was_incremental=True)
+
+    def test_lane_failure_short_circuits_before_the_cheap_checks(self) -> None:
+        with self._seams(
+            _check_lane_targets=MagicMock(return_value=quality_gate.LaneCheckResult(declaration_missing="x")),
+            _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+        ):
+            assert quality_gate.check_impacted() == 1
+        quality_gate._impacted_cheap_checks.assert_not_called()
+
+    @pytest.mark.parametrize("tail_rc", [0, 1, 4])
+    @pytest.mark.parametrize("cheap", [["mypy"], []], ids=["cheap-fail", "cheap-pass"])
+    def test_verdict_matrix(self, tail_rc: int, cheap: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+        """AC4: cheap failures turn a 0 into 1, never mask a non-zero code."""
+        with self._seams(
+            _impacted_cheap_checks=MagicMock(return_value=cheap),
+            _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+            _check_impacted_tail=MagicMock(return_value=tail_rc),
+        ):
+            rc = quality_gate.check_impacted()
+        err = capsys.readouterr().err
+        if not cheap:
+            assert rc == tail_rc
+            assert "[impacted] FAIL (cheap" not in err
+            assert "note: cheap checks also failed" not in err
+        elif tail_rc == 0:
+            assert rc == 1
+            assert err.splitlines()[-1] == "[impacted] FAIL (cheap checks failed: mypy)"
+        else:
+            assert rc == tail_rc
+            assert err.splitlines()[-1] == "[impacted] note: cheap checks also failed: mypy"
+
+    def _through_real_tail(self, **overrides: Any) -> int:
+        with self._seams(_impacted_cheap_checks=MagicMock(return_value=["mypy"]), **overrides):
+            return quality_gate.check_impacted()
+
+    def test_real_tail_early_exit_becomes_1(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """AC4 end-to-end: the non-`.py` early exit prints its PASS lines, yet
+        the run exits 1 and ends on the cheap-check verdict."""
+        rc = self._through_real_tail(
+            _impacted_early_exit_paths=MagicMock(return_value=["pyproject.toml"]),
+            _resolve_diff_base=MagicMock(side_effect=AssertionError("early exit expected")),
+        )
+        assert rc == 1
+        err = capsys.readouterr().err
+        assert "no Python files changed" in err
+        assert err.splitlines()[-1] == "[impacted] FAIL (cheap checks failed: mypy)"
+
+    def test_real_tail_local_no_base_becomes_1(self) -> None:
+        rc = self._through_real_tail(
+            _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+            _resolve_diff_base=MagicMock(return_value=None),
+            _is_ci=MagicMock(return_value=False),
+        )
+        assert rc == 1
+
+    def test_real_tail_ci_no_base_keeps_4(self) -> None:
+        rc = self._through_real_tail(
+            _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+            _resolve_diff_base=MagicMock(return_value=None),
+            _is_ci=MagicMock(return_value=True),
+        )
+        assert rc == 4
+
+    def test_real_tail_pass_becomes_1(self) -> None:
+        run_pass = MagicMock(return_value=(quality_gate._IMPACTED_PASS, False))
+        rc = self._through_real_tail(
+            _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+            _resolve_diff_base=MagicMock(return_value="origin/main"),
+            _run_impacted_pass=run_pass,
+        )
+        assert rc == 1
+        run_pass.assert_called_once_with("origin/main")
+
+    def test_real_tail_self_heal_retry_pass_becomes_1(self) -> None:
+        run_pass = MagicMock(
+            side_effect=[
+                (quality_gate._IMPACTED_CHANGED_LINES_UNCOVERED, False),
+                (quality_gate._IMPACTED_PASS, True),
+            ]
+        )
+        rebuild = MagicMock()
+        rc = self._through_real_tail(
+            _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+            _resolve_diff_base=MagicMock(return_value="origin/main"),
+            _run_impacted_pass=run_pass,
+            _rebuild_testmon_baseline=rebuild,
+        )
+        assert rc == 1
+        assert run_pass.call_count == 2
+        rebuild.assert_called_once_with()
+
+    def test_cheap_failure_does_not_skip_the_tail(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """AC3: aggregate, don't fail fast — the testmon pass still runs and a
+        simultaneous test failure keeps its exit code, with the note line."""
+        run_pass = MagicMock(return_value=(quality_gate._IMPACTED_TESTS_FAILED, False))
+        rc = self._through_real_tail(
+            _impacted_early_exit_paths=MagicMock(return_value=_DEFAULT_EARLY_EXIT_PATHS),
+            _resolve_diff_base=MagicMock(return_value="origin/main"),
+            _run_impacted_pass=run_pass,
+        )
+        assert rc == 1
+        run_pass.assert_called_once_with("origin/main")
+        assert capsys.readouterr().err.splitlines()[-1] == "[impacted] note: cheap checks also failed: mypy"
+
+    @pytest.mark.parametrize("mypy_passes", [False, True], ids=["mypy-fails", "all-pass"])
+    def test_config_only_change_set_is_checked(
+        self, mypy_passes: bool, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """AC5: `pyproject.toml` only, warm baseline — the tool gates run
+        BEFORE the non-`.py` early exit."""
+        mypy = self._res("mypy", mypy_passes, detail="" if mypy_passes else "error: x")
+        with (
+            self._seams(
+                _impacted_cheap_checks=_REAL_IMPACTED_CHEAP_CHECKS,
+                _impacted_early_exit_paths=MagicMock(return_value=["pyproject.toml"]),
+                _testmon_baseline_warm=MagicMock(return_value=True),
+                _resolve_diff_base=MagicMock(side_effect=AssertionError("early exit expected")),
+            ),
+            self._checks(mypy=mypy) as mocks,
+        ):
+            rc = quality_gate.check_impacted()
+        for name in self.TOOLS:
+            mocks[name].assert_called_once()
+        mocks["translations"].assert_not_called()
+        err = capsys.readouterr().err
+        assert "no Python files changed" in err
+        if mypy_passes:
+            assert rc == 0
+            assert "[cheap-checks] PASS" in err
+        else:
+            assert rc == 1
+            assert err.splitlines()[-1] == "[impacted] FAIL (cheap checks failed: mypy)"
 
 
 class TestTestmonSchemaVersion:
@@ -6929,6 +7411,12 @@ class TestProjectRulesDocGuards:
         assert "Non-Python change sets" in flat
         assert "exits early and checks **nothing**" in flat
         assert "is not a supplement there, it is **the** verification" in flat
+        # QS-371: a non-`.py` change set touching a lint/type-config or
+        # translations-source path still runs the CI-mirrored cheap checks, so
+        # the "checks nothing" statement must carry the exception — inside the
+        # section itself, not somewhere else in the file.
+        section = flat.split("**Non-Python change sets", 1)[1].split("*Cold baselines do not take the exit.*", 1)[0]
+        assert "Exception (QS-371)" in section
         # nice-to-have 18: the doc's UI hint must agree with `_IMPACTED_NON_PY_LINES`.
         for hint in quality_gate._IMPACTED_NON_PY_LINES:
             for target in re.findall(r"--quick [\w./]+", hint):

@@ -67,7 +67,10 @@ the dev loop: `python scripts/qs/quality_gate.py --impacted`. It uses
 `pytest-testmon` to run **only the tests impacted by your change set**
 (across both layers), under `--cov=custom_components/quiet_solar`, then
 `diff-cover --fail-under=100` asserts the **lines you changed** are
-100% covered. On a small diff this is seconds instead of minutes. The
+100% covered. It also runs the CI-mirrored cheap checks (ruff lint,
+ruff format, mypy, translations when relevant) — it mirrors CI's lint /
+typecheck / translations steps (QS-371). On a small diff this is seconds
+instead of minutes. The
 implement phase ALWAYS runs it before commit/PR and never substitutes
 the full gate locally — the only local full-gate run is an explicit
 user request.
@@ -81,6 +84,9 @@ guarantee is split: `--impacted` proves *changed lines* locally; the
 `.py` file exits early and verifies nothing — see
 [project-rules.md](../../workflow/project-rules.md) "Non-Python change
 sets" for the canonical statement and what to run instead.
+Exception (QS-371): a change set touching a lint/type-config or
+translations-source path still runs the CI-mirrored cheap checks — see
+the `check_impacted` docstring.
 
 **Hard limitation — read this.** `--impacted` guarantees the lines you
 *changed* are covered. It does **not** detect coverage lost in
