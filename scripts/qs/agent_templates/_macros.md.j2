@@ -18,10 +18,20 @@ labels (`gh issue edit <N> --add-label ...`). [[ "This phase is read-only\nwith 
     detect it. -#}
 [%- macro implement_routing(var) -%]
 Route by the **declared target** (QS-321 — never inferred from the
-files you touch): re-run `python scripts/qs/context.py` and take
+files you touch): re-run `python scripts/qs/context.py`. If `context.py`
+exits non-zero / prints no JSON, or returns empty `labels` **and**
+`title`, the `gh` lookup failed: **STOP** and print:
+
+```text
+Cannot pick the implement variant: the issue lookup failed (gh) — retry, or tell me which variant to run.
+```
+
+Do **not** print the label message or commands below. Otherwise take
 `target`. `factory` → `[[ var ]] = implement-setup-task`; `product` →
 `[[ var ]] = implement-task`. For any other value (empty — no or
-ambiguous label, or a degraded `gh` lookup), **STOP** and print:
+ambiguous `target:*` label), **STOP** and print (substitute `{{issue}}`
+with the issue number from `context.py` in the messages and commands
+below):
 
 ```text
 Cannot pick the implement variant: issue #{{issue}} has no single target:* label. Label it with exactly one of target:factory or target:product (see the commands below), or tell me which variant to run.
@@ -44,13 +54,11 @@ remove the wrong one — `gh issue edit {{issue}} --remove-label target:factory`
 or `gh issue edit {{issue}} --remove-label target:product` (the one that
 is wrong; concrete labels only).
 
-If `context.py` exits non-zero / prints no JSON, or returned empty
-`labels` and `title`, the `gh` lookup itself failed — say so and ask the
-user to retry or name a variant.
-
 After printing, wait for the user: if they report adding a label, re-run
-`context.py` and route again; if they name `implement-task` or
-`implement-setup-task`, use it; any other answer → ask again.
+`context.py` and route again; if they name `implement-task` /
+`implement-setup-task` (with or without a leading `/`), or `factory` /
+`product` (map `factory` → `implement-setup-task`, `product` →
+`implement-task`), use it; any other answer → ask again.
 [%- endmacro -%]
 {#- QS-372: the phase handoff, written once for both harnesses. Call it as
     `[% call(prefix) m.handoff("<next_cmd>") %]` with banner lines

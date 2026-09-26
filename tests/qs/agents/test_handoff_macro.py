@@ -284,14 +284,32 @@ def test_implement_variant_routes_by_declared_target(
     raw = _body(harness, filename)
     text = _norm(raw)
     assert "Route by the **declared target** (QS-321" in text
-    assert "re-run `python scripts/qs/context.py` and take `target`" in text
+    assert "re-run `python scripts/qs/context.py`" in text
     assert f"`factory` → `{var} = implement-setup-task`" in text
     assert f"`product` → `{var} = implement-task`" in text
-    # S2: the new STOP message literal (still carrying the stable prefix).
-    assert (
+    # S1 (#03): the gh-lookup-failure STOP is checked FIRST, before the
+    # label STOP, and carries the stable prefix.
+    lookup_stop = (
+        f"{_STOP_PREFIX} the issue lookup failed (gh) — retry, or tell me "
+        "which variant to run."
+    )
+    assert lookup_stop in text
+    # S2: the label STOP message literal (still carrying the stable prefix).
+    label_stop = (
         f"{_STOP_PREFIX} issue #{{{{issue}}}} has no single target:* label. "
         "Label it with exactly one of target:factory or target:product "
         "(see the commands below), or tell me which variant to run."
+    )
+    assert label_stop in text
+    # S1 (#03): the lookup-failure STOP precedes the label STOP.
+    assert text.index(lookup_stop) < text.index(label_stop)
+    # S1 (#03): the "degraded gh lookup" wording no longer routes into the
+    # label STOP.
+    assert "or a degraded `gh` lookup" not in text
+    # N1 (#03): the reader is told to substitute the issue number.
+    assert (
+        "(substitute `{{issue}}` with the issue number from `context.py` in "
+        "the messages and commands below)"
     ) in text
     # M1: the agent prints the commands to the user but must not run them —
     # picking a label itself is the QS-321-forbidden inference.
@@ -314,10 +332,13 @@ def test_implement_variant_routes_by_declared_target(
     # M1: a hard context.py failure (non-zero exit / no JSON) is now covered.
     assert "If `context.py` exits non-zero / prints no JSON" in text
     assert "the `gh` lookup" in text
-    # S2: only the two implement variants are accepted, not any phase name.
+    # N2 (#03): the wait loop accepts slash-prefixed variants and the
+    # factory/product aliases, not just the bare variant names.
     assert (
-        "if they name `implement-task` or `implement-setup-task`, use it; "
-        "any other answer → ask again"
+        "if they name `implement-task` / `implement-setup-task` (with or "
+        "without a leading `/`), or `factory` / `product` (map `factory` → "
+        "`implement-setup-task`, `product` → `implement-task`), use it; any "
+        "other answer → ask again"
     ) in text
     assert "if they report adding a label, re-run `context.py` and route again" in text
     # Bare phase names only — never a slash-form assignment.

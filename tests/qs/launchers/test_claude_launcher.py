@@ -2067,6 +2067,25 @@ def test_handoff_text_empty_existing_session_prompt_omits_block() -> None:
     assert text.startswith("Next phase: implement-task.\n")
 
 
+def test_handoff_text_blank_prompt_line_has_no_trailing_whitespace() -> None:
+    """N4 (#03): a blank line in the existing-session prompt renders as an
+    empty line, not two trailing spaces."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    text = claude_launcher._handoff_text(
+        agent="qs-implement-task",
+        new_context="sh /tmp/qs_launch_372.sh",
+        work_dir="/tmp/wt",
+        issue=372,
+        phase_model="claude-opus-4-8",
+        pinned=False,
+        existing_session_prompt="first line\n\nthird line",
+    )
+    assert "  first line\n\n  third line" in text
+    for line in text.split("\n"):
+        assert line == line.rstrip(), f"trailing whitespace: {line!r}"
+
+
 def test_handoff_text_absent_for_setup_task_caller(tmp_path: Path) -> None:
     """D2: setup-task keeps its inline block, so its payload gains no unread key."""
     from launchers import claude as claude_launcher  # type: ignore[import-not-found]

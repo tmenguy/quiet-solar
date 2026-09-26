@@ -620,7 +620,9 @@ def _handoff_text(
         f"  {new_context}",
     ]
     if existing_session_prompt:
-        prompt = "\n".join(f"  {line}" for line in existing_session_prompt.split("\n"))
+        prompt = "\n".join(
+            f"  {line}" if line else "" for line in existing_session_prompt.split("\n")
+        )
         blocks.append(
             "Already running an implementation session?\n"
             f"Paste this prompt into it:\n{prompt}"
