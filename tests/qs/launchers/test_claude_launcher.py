@@ -1940,7 +1940,8 @@ def test_autouse_guard_prevents_claude_subprocess(
 # produced by the launcher, ready to print, instead of being re-typed in
 # every phase template. The goldens below are literal templates copied from
 # the pre-QS-372 rendered review-task step-6 block (the story's Task-0
-# extract), filled only with payload/test values so they depend on neither
+# extract), except the new unpinned notice (``_GUI_UNPINNED_BLOCK``, QS-372
+# AC6 (3)), filled only with payload/test values so they depend on neither
 # the temp dir nor the model policy table.
 # --------------------------------------------------------------------------- #
 
@@ -1991,7 +1992,7 @@ def test_handoff_text_golden_pinned_without_fix_plan(tmp_path: Path) -> None:
 
     work_dir = _fake_worktree(tmp_path, agent="qs-review-task")
     payload = claude_launcher.build_payload(
-        str(work_dir), 372, "Title", next_cmd="review-task",
+        str(work_dir), 372, "Title", next_cmd="review-task", caller="next_step",
     )
     assert payload["phase_agent_pinned"] is True
     fill = {
@@ -2014,7 +2015,7 @@ def test_handoff_text_golden_pinned_with_fix_plan(tmp_path: Path) -> None:
     payload = claude_launcher.build_payload(
         str(work_dir), 372, "Title", next_cmd="implement-task",
         fix_plan_path=str(work_dir / "docs/stories/QS-372.story_review_fix_#01.md"),
-        pr_number=380,
+        pr_number=380, caller="next_step",
     )
     assert payload["phase_agent_pinned"] is True
     prompt = payload["existing_session_prompt"]
@@ -2040,7 +2041,7 @@ def test_handoff_text_golden_unpinned(tmp_path: Path) -> None:
 
     # No agent file / no linked-worktree marker → guard skips the pin.
     payload = claude_launcher.build_payload(
-        str(tmp_path), 372, "Title", next_cmd="finish-task",
+        str(tmp_path), 372, "Title", next_cmd="finish-task", caller="next_step",
     )
     assert payload["phase_agent_pinned"] is False
     fill = {"phase": "finish-task", "new_context": payload["new_context"]}

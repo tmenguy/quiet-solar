@@ -120,10 +120,19 @@ def test_claude_sites_carry_no_gui_prose(filename: str) -> None:
 
 @pytest.mark.parametrize("filename", sorted(_SITES))
 def test_claude_sites_stop_on_launcher_error(filename: str) -> None:
-    """AC6 (4): an ``error`` payload makes the Claude agent STOP (OpenCode parity)."""
+    """AC6 (4) + S1: a non-zero exit, no JSON, an ``error`` key, or a missing
+    ``handoff_text`` all make the Claude agent STOP (OpenCode parity)."""
     text = _norm(_body("claude", filename))
-    expected = "If it contains an `error` key, STOP and print the raw JSON."
+    expected = (
+        "If the command exits non-zero or prints no JSON, if the JSON "
+        "contains an `error` key, or if it has no `handoff_text`, STOP and "
+        "print the raw output verbatim."
+    )
     assert text.count(expected) == len(_SITES[filename])
+    # S1: the error-key STOP is still semantically present at every site.
+    assert text.count("contains an `error` key") == len(_SITES[filename])
+    # S1: every Claude site carries the ``handoff_text``-missing STOP.
+    assert text.count("or if it has no `handoff_text`, STOP") == len(_SITES[filename])
 
 
 def test_claude_fix_plan_sites_carry_the_rerun_trailer() -> None:
@@ -240,7 +249,7 @@ def test_opencode_omit_note_sits_after_the_report_fence(filename: str, index: in
 def test_opencode_banner_lines_are_indented_inside_the_report(filename: str) -> None:
     """``[OK]`` banner lines sit inside the list-item report (2-space indent)."""
     body = _body("opencode", filename)
-    ok_lines = [line for line in body.splitlines() if "[OK]" in line and "Next phase session" not in line]
+    ok_lines = [line for line in body.splitlines() if "[OK]" in line]
     for line in ok_lines:
         if line.lstrip().startswith("[OK]"):
             assert line.startswith("  [OK]"), line
@@ -275,10 +284,23 @@ def test_implement_variant_routes_by_declared_target(
     assert "re-run `python scripts/qs/context.py` and take `target`" in text
     assert f"`factory` → `{var} = implement-setup-task`" in text
     assert f"`product` → `{var} = implement-task`" in text
+    # S2: the new STOP message literal (still carrying the stable prefix).
     assert (
-        f"{_STOP_PREFIX} issue #{{{{issue}}}} has no single target:* label. Add one "
-        "(gh issue edit {{issue}} --add-label target:factory or target:product) "
-        "or tell me which variant to run."
+        f"{_STOP_PREFIX} issue #{{{{issue}}}} has no single target:* label. "
+        "Label it with exactly one of target:factory or target:product "
+        "(see the commands below), or tell me which variant to run."
+    ) in text
+    # S2: two separate, concrete, runnable commands — not one non-runnable arg.
+    assert "gh issue edit {{issue}} --add-label target:factory" in text
+    assert "gh issue edit {{issue}} --add-label target:product" in text
+    assert " or target:product)" not in text
+    # S2: the both-labels remedy and the gh-failure fallback.
+    assert "gh issue edit {{issue}} --remove-label target:<wrong>" in text
+    assert "the `gh` lookup" in text
+    # S2: only the two implement variants are accepted, not any phase name.
+    assert (
+        "if they name `implement-task` or `implement-setup-task`, use it; "
+        "any other answer → ask again"
     ) in text
     assert "if they report adding a label, re-run `context.py` and route again" in text
     # Bare phase names only — never a slash-form assignment.

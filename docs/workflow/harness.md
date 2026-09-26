@@ -302,9 +302,9 @@ the directory to open.
 - **A corrupt or symlinked pin file produces no pin — and stays that way.**
   Those are the states the writer refuses (above), and like every other
   bad-pin case the GUI shows you nothing. The signals are
-  `phase_agent_pinned: false` in the handoff payload (the launcher's
-  `handoff_text` (`launchers/claude.py`) omits the GUI block when it
-  sees that) and a stderr
+  `phase_agent_pinned: false` in the handoff payload — the launcher's
+  `handoff_text` (in `launchers/claude.py`) then drops the GUI bullets
+  and points to the Preferred `--agent` line instead — and a stderr
   warning naming the file. **The skip is terminal, not transient:** nothing
   repairs the file, so every later handoff in that worktree refuses it too.
   The remedy is `rm .claude/settings.local.json` — the next handoff

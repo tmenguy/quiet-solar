@@ -24,11 +24,24 @@ files you touch): re-run `python scripts/qs/context.py` and take
 ambiguous label, or a degraded `gh` lookup), **STOP** and print:
 
 ```text
-Cannot pick the implement variant: issue #{{issue}} has no single target:* label. Add one (gh issue edit {{issue}} --add-label target:factory or target:product) or tell me which variant to run.
+Cannot pick the implement variant: issue #{{issue}} has no single target:* label. Label it with exactly one of target:factory or target:product (see the commands below), or tell me which variant to run.
 ```
 
+Then apply exactly one of these concrete, runnable commands:
+
+```bash
+gh issue edit {{issue}} --add-label target:factory
+gh issue edit {{issue}} --add-label target:product
+```
+
+If the issue already carries **both** target labels, remove the wrong
+one (`gh issue edit {{issue}} --remove-label target:<wrong>`). If
+`context.py` returned empty `labels` and `title` too, the `gh` lookup
+itself failed — say so and ask the user to retry or name a variant.
+
 Then wait for the user: if they report adding a label, re-run
-`context.py` and route again; if they name a variant, use it.
+`context.py` and route again; if they name `implement-task` or
+`implement-setup-task`, use it; any other answer → ask again.
 [%- endmacro -%]
 {#- QS-372: the phase handoff, written once for both harnesses. Call it as
     `[% call(prefix) m.handoff("<next_cmd>") %]` with banner lines
@@ -56,10 +69,11 @@ python scripts/qs/next_step.py \
 ```
 
 [% if harness == "claude" %]
-Parse the JSON. If it contains an `error` key, STOP and print the raw
-JSON. Otherwise print the report below, replacing `<handoff_text>` with
-the payload's `handoff_text` **verbatim** (do not rephrase, reorder or
-drop any part of it):
+Parse the JSON. If the command exits non-zero or prints no JSON, if the
+JSON contains an `error` key, or if it has no `handoff_text`, STOP and
+print the raw output verbatim. Otherwise print the report below,
+replacing `<handoff_text>` with the payload's `handoff_text` **verbatim**
+(do not rephrase, reorder or drop any part of it):
 
 ```text
 [% if banner %]

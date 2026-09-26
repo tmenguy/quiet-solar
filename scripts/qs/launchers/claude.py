@@ -559,7 +559,8 @@ def _write_phase_agent(work_dir: str, agent: str, effort: str | None) -> bool:
 
 # QS-372: the Claude user-facing handoff block, produced here once instead of
 # being re-typed (and drifting) at every phase template's handoff site. The
-# wording is byte-for-byte the pre-QS-372 rendered review-task block; the
+# wording is byte-for-byte the pre-QS-372 rendered review-task block, except
+# the new unpinned notice (``_GUI_UNPINNED_BLOCK``, QS-372 AC6 (3)); the
 # templates now print ``handoff_text`` verbatim. ``_FALLBACK_PREAMBLE`` and the
 # GUI blocks are fixed text; only the values in braces vary.
 _FALLBACK_PREAMBLE = (
