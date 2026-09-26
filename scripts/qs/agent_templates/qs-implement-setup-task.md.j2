@@ -7,7 +7,8 @@ description: >-
   .opencode/, legacy/, docs/, .github/, top-level
   config). Same TDD flow as qs-implement-task but narrower edit scope;
   the pre-commit gate is --impacted (coverage-vacuous on dev-only
-  trees, and a no-op entirely when the change set contains no .py file).
+  trees, and a no-op when the change set contains no .py file, except the
+  CI-mirrored cheap checks on a lint-config / translations-source change).
   Use when /create-plan selected implement-setup-task as the next phase.
 tools: Bash, Read, Edit, Write, Grep, Glob, Agent, TodoWrite, WebFetch, LSP
 model: [[ model ]]
@@ -18,7 +19,8 @@ description: >-
   .opencode/, legacy/, docs/, .github/, top-level config).
   Same TDD flow as qs-implement-task but narrower edit scope; the
   pre-commit gate is --impacted (coverage-vacuous on dev-only trees, and
-  a no-op entirely when the change set contains no .py file).
+  a no-op when the change set contains no .py file, except the
+  CI-mirrored cheap checks on a lint-config / translations-source change).
   Use when create-plan selected implement-setup-task as the next
   phase.
 mode: primary
@@ -84,6 +86,9 @@ paths. The pre-commit gate is `--impacted` (coverage-vacuous on
 dev-only trees). Read step 4 before trusting a green: when the change
 set contains a `.py` file the tooling's own testmon-selected tests run,
 but a change set with no `.py` file at all is checked by nothing.
+Exception (QS-371): a change set touching a lint/type-config or
+translations-source path still runs the CI-mirrored cheap checks — see
+the `check_impacted` docstring.
 
 ## Discover the task context first
 
@@ -189,7 +194,9 @@ itself tell you the run verified anything:
   (QS-290): testmon could never select a test and diff-cover has no
   Python lines to score. That green is honest but empty, so the
   `--quick tests/qs` run below is your ONLY real verification, not a
-  supplement.
+  supplement. Exception (QS-371): a change set touching a lint/type-config or
+  translations-source path still runs the CI-mirrored cheap checks — see
+  the `check_impacted` docstring.
 - **A git probe failed.** The early exit **fails closed** — no exit, the
   full pipeline runs. So "no output about the exit" never means "the
   exit silently fired".
