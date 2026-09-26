@@ -1228,14 +1228,17 @@ def _output_results(
             for r in results:
                 status = "PASS" if r["passed"] else "FAIL"
                 print(f"  [{status}] {r['name']}")
-                # QS-371 (S5): fall back to stderr so a stderr-only failure
-                # (missing venv/bin/ruff, broken pyproject.toml, generator
-                # failure) shows a reason instead of a bare `[FAIL] <gate>`.
+                # QS-371 (R2): print detail AND stderr (each first 5 lines,
+                # skipping whichever is empty), detail first. Mirrors
+                # `_impacted_cheap_checks`. A generator failure's detail says
+                # "see stderr below", and ruff/mypy can populate both — showing
+                # only one (the old `detail or stderr`) hid the other.
                 if not r["passed"]:
-                    reason = r.get("detail") or r.get("stderr")
-                    if reason:
-                        for line in reason.split("\n")[:5]:
-                            print(f"         {line}")
+                    for field in ("detail", "stderr"):
+                        reason = r.get(field)
+                        if reason:
+                            for line in reason.split("\n")[:5]:
+                                print(f"         {line}")
             print()
             if all_passed:
                 print("All quality gates passed.")
@@ -1737,9 +1740,12 @@ _IMPACTED_NON_PY_LINES = (
 # QS-371: the CI-mirrored cheap checks under `--impacted`
 # ---------------------------------------------------------------------------
 
-# Config / pin files that can move the ruff or mypy verdict on the package.
-# `pyproject.toml` and the two requirements files matter wherever they are the
-# repo-root copies (matched by exact path below).
+# The repo-root dependency pins (and the primary root config) matched by exact
+# path in rule (c). These are the repo-root copies: a same-named file elsewhere
+# is not a dependency pin and does not belong here. `pyproject.toml` is ALSO
+# covered by rule (d)'s basename set (as an override-config basename), and is
+# kept here explicitly as the primary root config so rule (c) stays a complete
+# statement of the root pins on its own.
 _CHEAP_TOOL_CONFIG_PATHS = frozenset({"pyproject.toml", "requirements.txt", "requirements_test.txt"})
 
 # Basenames that, if ADDED at the repo root or under `custom_components/`, would
@@ -1755,16 +1761,18 @@ def _path_moves_tool_verdict(p: str) -> bool:
     # (a) any `.py` / `.pyi` under the package (a stub overrides its module).
     if p.startswith(_CHEAP_PACKAGE_PREFIX) and (p.endswith(".py") or p.endswith(".pyi")):
         return True
-    # (b) the package's parent __init__ (import-path shape).
-    if p == "custom_components/__init__.py":
+    # (b) the package's parent __init__ / its stub (import-path shape).
+    if p in {"custom_components/__init__.py", "custom_components/__init__.pyi"}:
         return True
     # (c) the repo-root dependency / config files (exact paths).
     if p in _CHEAP_TOOL_CONFIG_PATHS:
         return True
     # (d) a config basename that would override the root config, added at the
-    # repo root (no `/`) or anywhere under `custom_components/`.
+    # repo root (no `/`) or anywhere under `custom_components/`. Ruff/mypy pick
+    # the closest config walking up from the target, so a config anywhere in
+    # `custom_components/` (not just the package dir) can flip CI's verdict.
     basename = p.rsplit("/", 1)[-1]
-    if basename in _CHEAP_TOOL_CONFIG_BASENAMES and ("/" not in p or p.startswith(_CHEAP_PACKAGE_PREFIX)):
+    if basename in _CHEAP_TOOL_CONFIG_BASENAMES and ("/" not in p or p.startswith(_CHEAP_COMPONENTS_PREFIX)):
         return True
     return False
 
@@ -1781,6 +1789,10 @@ _CHEAP_TRANSLATIONS_PATHS = frozenset(
 )
 _CHEAP_TRANSLATIONS_PREFIX = "custom_components/quiet_solar/translations/"
 _CHEAP_PACKAGE_PREFIX = "custom_components/quiet_solar/"
+# The `custom_components/` tree (broader than the package dir): an override
+# ruff/mypy config anywhere under it — not just the package dir — flips CI's
+# verdict, because the tools walk up from the target to the closest config.
+_CHEAP_COMPONENTS_PREFIX = "custom_components/"
 
 
 def _impacted_cheap_gate_names(paths: list[str] | None) -> list[str]:
@@ -2567,11 +2579,13 @@ def check_impacted() -> int:
 
     - `ruff_format`, `ruff_lint`, `mypy` iff any path (a) is a `.py`/`.pyi`
       under `custom_components/quiet_solar/`, or (b) is
-      `custom_components/__init__.py`, or (c) is exactly `pyproject.toml`,
-      `requirements.txt` or `requirements_test.txt`, or (d) has a basename in
+      `custom_components/__init__.py` or `custom_components/__init__.pyi`, or
+      (c) is exactly `pyproject.toml`, `requirements.txt` or
+      `requirements_test.txt`, or (d) has a basename in
       `{pyproject.toml, ruff.toml, .ruff.toml, mypy.ini, .mypy.ini, setup.cfg}`
-      at the repo root or under `custom_components/` — such a file would
-      OVERRIDE the root ruff/mypy config (none exists today). Deliberately NOT
+      at the repo root or anywhere under `custom_components/` — such a file
+      would OVERRIDE the root ruff/mypy config (none exists today).
+      Deliberately NOT
       `.github/workflows/pr-quality.yml` or `scripts/qs/quality_gate.py`:
       neither can change the package verdict (changes to the gate's own
       commands are proven by `tests/test_quality_gate.py`).

@@ -567,6 +567,28 @@ class TestCacheCliIntegration:
         assert "[FAIL] ruff_lint" in out
         assert "pyproject.toml: invalid" in out
 
+    def test_detail_and_stderr_both_shown_detail_first(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """QS-371 (R2): when a failure carries BOTH detail and stderr (e.g. the
+        generator's "see stderr below", or ruff/mypy with both streams), both
+        appear and detail comes before stderr — not just the first non-empty."""
+        results = [
+            {
+                "name": "translations",
+                "passed": False,
+                "detail": "generate-translations.sh exited 1 — see stderr below",
+                "stderr": "ERROR: missing reference [%key:x%]",
+            },
+        ]
+        quality_gate._output_results(
+            results, all_passed=False, cached=False, json_mode=False
+        )
+        out = capsys.readouterr().out
+        assert "see stderr below" in out
+        assert "ERROR: missing reference [%key:x%]" in out
+        assert out.index("see stderr below") < out.index("ERROR: missing reference")
+
     def test_dev_only_scope_skips_lint_gates_and_runs_pytest_only(
         self,
         tmp_path: Path,
@@ -5158,11 +5180,18 @@ class TestImpactedCheapChecks:
             (["requirements_test.txt"], TOOLS),
             # QS-371 (S2): override-config files + .pyi stubs move the verdict.
             (["mypy.ini"], TOOLS),
+            ([".mypy.ini"], TOOLS),
+            (["ruff.toml"], TOOLS),
             ([".ruff.toml"], TOOLS),
             (["setup.cfg"], TOOLS),
             (["custom_components/quiet_solar/ruff.toml"], TOOLS),
+            # QS-371 (R1): a config ANYWHERE under `custom_components/` (not just
+            # the package dir) overrides the root config and flips CI's verdict.
+            (["custom_components/ruff.toml"], TOOLS),
+            (["custom_components/pyproject.toml"], TOOLS),
             (["custom_components/quiet_solar/foo.pyi"], TOOLS),
             (["custom_components/__init__.py"], TOOLS),
+            (["custom_components/__init__.pyi"], TOOLS),
             (["docs/ruff.toml"], []),
             ([".github/workflows/pr-quality.yml"], []),
             (["scripts/qs/quality_gate.py"], []),
@@ -5184,8 +5213,10 @@ class TestImpactedCheapChecks:
         ],
         ids=[
             "package-py", "pyproject", "requirements", "requirements_test",
-            "mypy-ini", "ruff-toml-root", "setup-cfg", "package-ruff-toml",
-            "package-pyi", "package-parent-init", "docs-ruff-toml",
+            "mypy-ini", "dot-mypy-ini-root", "ruff-toml-root", "dot-ruff-toml-root",
+            "setup-cfg", "package-ruff-toml", "components-ruff-toml",
+            "components-pyproject", "package-pyi", "package-parent-init",
+            "package-parent-init-pyi", "docs-ruff-toml",
             "pr-quality-yml", "quality-gate-py", "strings-json", "translations-dir",
             "ha-strings", "generator-py", "generator-sh", "docs", "other-scripts-py",
             "tests", "ui-asset", "empty", "unknown-fails-closed", "py-and-strings-ordered",
@@ -5336,7 +5367,9 @@ class TestImpactedCheapChecks:
         ):
             assert quality_gate.check_translations()["passed"] is True
 
-    def test_missing_strings_json_fails(self, tmp_path: Path) -> None:
+    def test_missing_strings_json_fails(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """QS-371 (S1): a deleted strings.json triggers the gate, and CI's
         generator step fails on it, so the local check must FAIL, not SKIP."""
         with patch.object(quality_gate, "STRINGS_JSON", tmp_path / "absent.json"):
@@ -5344,8 +5377,12 @@ class TestImpactedCheapChecks:
         assert result["name"] == "translations"
         assert result["passed"] is False
         assert "custom_components/quiet_solar/strings.json is missing" in result["detail"]
+        # QS-371 (R3): pin the emitted status line (via `_emit`, to stderr).
+        assert "[translations] FAIL (no strings.json)" in capsys.readouterr().err
 
-    def test_missing_generate_script_fails(self, tmp_path: Path) -> None:
+    def test_missing_generate_script_fails(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """QS-371 (S1): a deleted generate-translations.sh triggers the gate,
         and CI's generator step fails on it, so the local check must FAIL."""
         strings = tmp_path / "strings.json"
@@ -5358,6 +5395,8 @@ class TestImpactedCheapChecks:
         assert result["name"] == "translations"
         assert result["passed"] is False
         assert "scripts/generate-translations.sh is missing" in result["detail"]
+        # QS-371 (R3): pin the emitted status line (via `_emit`, to stderr).
+        assert "[translations] FAIL (no generate script)" in capsys.readouterr().err
 
     # --- D4: wiring into check_impacted ---
 
