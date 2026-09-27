@@ -228,6 +228,13 @@ TIME_OK_SHOULD_BUDGET_RESET_S = min(
 
 TIME_OK_BETWEEN_CHANGING_CHARGER_PHASES = 60 * 30
 CHARGER_START_STOP_RETRY_S = 90
+# QS-376: once a charger has exhausted its start retries (`QSStateCmd.can_launch`),
+# wait this long before re-arming it through the budgeting group (target reset to
+# idle; the group decides when to start again, with a fresh retry counter).
+CHARGER_START_RETRY_REARM_S = 15 * 60
+# QS-376: minimum spacing of the OCPP StatusNotification nudge sent while an OCPP
+# charger holds `charge_control` unavailable on a plugged, not-charging connector.
+CHARGER_OCPP_STATUS_NUDGE_S = 5 * 60
 
 
 # Log-tuning values. Module-private: not operator configuration, and deliberately
@@ -795,6 +802,9 @@ class QSChargerGroup(LogOnChangeMixin):
         self.know_reduced_state_real_power = None
         self._last_time_reset_budget_done: datetime | None = None
         self._last_time_should_reset_budget_received: datetime | None = None
+        # QS-376: amps still reserved for members isolated because their start is stuck
+        # (recomputed on every `ensure_correct_state`), added to every group current check.
+        self._isolated_reserved_amps: list[float | int] = [0.0, 0.0, 0.0]
 
         self.charger_consumption_W = 0.0
         for device in dynamic_group._childrens:
@@ -815,12 +825,42 @@ class QSChargerGroup(LogOnChangeMixin):
         else:
             return value
 
+    def _with_isolated_reserved_amps(self, amps: list[float | int] | None) -> list[float | int] | None:
+        if amps is None or self._isolated_reserved_amps == [0.0, 0.0, 0.0]:
+            return amps
+        return add_amps(amps, self._isolated_reserved_amps)
+
+    def _is_current_acceptable_and_diff(
+        self, new_amps: list[float | int], estimated_current_amps: list[float | int] | None, time: datetime
+    ) -> tuple[bool, list[float | int]]:
+        # QS-376: an isolated (start-stuck) member may still draw its expected amps if its
+        # latched start takes effect late: keep them reserved in every group current check.
+        return self.dynamic_group.is_current_acceptable_and_diff(
+            new_amps=self._with_isolated_reserved_amps(new_amps),
+            estimated_current_amps=self._with_isolated_reserved_amps(estimated_current_amps),
+            time=time,
+        )
+
+    def _is_current_acceptable(
+        self, new_amps: list[float | int], estimated_current_amps: list[float | int] | None, time: datetime
+    ) -> bool:
+        return self.dynamic_group.is_current_acceptable(
+            new_amps=self._with_isolated_reserved_amps(new_amps),
+            estimated_current_amps=self._with_isolated_reserved_amps(estimated_current_amps),
+            time=time,
+        )
+
+    def _evict_start_stuck_log(self, charger: QSChargerGeneric) -> None:
+        if self._log_on_change_state is not None:
+            self._log_on_change_state.pop(f"start_stuck:{charger.name}", None)
+
     async def ensure_correct_state(
         self, time: datetime, probe_only=False
     ) -> tuple[list[QSChargerStatus], datetime | None]:
 
         verified_correct_state_time = None
         actionable_chargers = []
+        self._isolated_reserved_amps = [0.0, 0.0, 0.0]
         for charger in self._chargers:
             # QS-346: a faulted charger drops out of the budgeting group entirely, so it
             # is never handed an amp budget while a human has to go unplug/replug it.
@@ -830,6 +870,7 @@ class QSChargerGroup(LogOnChangeMixin):
                 # the log needs a marker that the charger is back under management.
                 if self._log_on_change_state is not None:
                     self._log_on_change_state.pop(f"ensure_correct_state:{charger.name}", None)
+                self._evict_start_stuck_log(charger)
                 continue
 
             res, handled_static, vcst = await charger.ensure_correct_state(time, probe_only=probe_only)
@@ -853,6 +894,29 @@ class QSChargerGroup(LogOnChangeMixin):
                     res,
                     handled_static,
                 )
+
+            if handled_static is False and res is False and charger.is_start_stuck(time):
+                # QS-376: a charger whose start retries are exhausted without the charge
+                # ever being enabled must not block the whole group: isolate it (its
+                # target is re-armed through the group later, see `_ensure_correct_state`)
+                # and keep its expected amps reserved for the other members' budget.
+                if probe_only:
+                    _LOGGER.debug("ensure_correct_state dyn group: %s start is stuck, isolated", charger.name)
+                else:
+                    self.log_info_on_change(
+                        f"start_stuck:{charger.name}",
+                        True,
+                        time,
+                        "ensure_correct_state dyn group: %s start is stuck, isolated from the group budget",
+                        charger.name,
+                    )
+                reserved = QSChargerStatus(charger).get_amps_from_values(
+                    charger._expected_amperage.value, charger._expected_num_active_phases.value
+                )
+                self._isolated_reserved_amps = add_amps(self._isolated_reserved_amps, reserved)
+                continue
+
+            self._evict_start_stuck_log(charger)
 
             if handled_static:
                 continue
@@ -1216,14 +1280,14 @@ class QSChargerGroup(LogOnChangeMixin):
         self, old_amps, new_amps, estimated_current_amps, time
     ) -> tuple[bool, bool]:
 
-        old_res, prev_diff_amps = self.dynamic_group.is_current_acceptable_and_diff(
+        old_res, prev_diff_amps = self._is_current_acceptable_and_diff(
             new_amps=old_amps, estimated_current_amps=estimated_current_amps, time=time
         )
 
         if old_res:
             return True, False
 
-        new_res, diff_amps = self.dynamic_group.is_current_acceptable_and_diff(
+        new_res, diff_amps = self._is_current_acceptable_and_diff(
             new_amps=new_amps, estimated_current_amps=estimated_current_amps, time=time
         )
         # if the reduction went in the right direction
@@ -1703,7 +1767,7 @@ class QSChargerGroup(LogOnChangeMixin):
 
                                 if next_possible_budgeted_amp is not None:
                                     if (
-                                        self.dynamic_group.is_current_acceptable(
+                                        self._is_current_acceptable(
                                             new_amps=new_alloted_amps, estimated_current_amps=current_amps, time=time
                                         )
                                         is False
@@ -1772,7 +1836,7 @@ class QSChargerGroup(LogOnChangeMixin):
                 # electricity rate we may have
 
                 # check we have room to expand, and allocate amps
-                if self.dynamic_group.is_current_acceptable(
+                if self._is_current_acceptable(
                     new_amps=add_amps(allotted_amps, [1, 1, 1]), estimated_current_amps=current_amps, time=time
                 ):
                     _LOGGER.info("dyn_handle: auto-price case")
@@ -1810,7 +1874,7 @@ class QSChargerGroup(LogOnChangeMixin):
                             )
 
                             if (
-                                self.dynamic_group.is_current_acceptable(
+                                self._is_current_acceptable(
                                     new_amps=new_alloted_amps, estimated_current_amps=current_amps, time=time
                                 )
                                 and diff_power > 0
@@ -1849,6 +1913,24 @@ class QSChargerGroup(LogOnChangeMixin):
         current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(
             actionable_chargers, do_reset_allocation
         )
+
+        if (
+            self._isolated_reserved_amps != [0.0, 0.0, 0.0]
+            and self._is_current_acceptable(new_amps=mandatory_amps, estimated_current_amps=current_amps, time=time)
+            is False
+        ):
+            # QS-376: the amps reserved for isolated (start-stuck) members only limit the
+            # growth of the others; they must never force a member below its minimum. Release
+            # them for this cycle before anything is shaved.
+            self.log_info_on_change(
+                f"reservation_release:{self.name}",
+                True,
+                time,
+                "_do_prepare_and_shave_budgets: %s releasing %s A reserved for isolated chargers (minimums do not fit)",
+                self.name,
+                self._isolated_reserved_amps,
+            )
+            self._isolated_reserved_amps = [0.0, 0.0, 0.0]
 
         # first bad case of amps overly booked by the solver for example...
         new_mandatory_amps = await self._shave_mandatory_budgets(
@@ -1905,12 +1987,7 @@ class QSChargerGroup(LogOnChangeMixin):
         current_ok = True
         diff_power_budget, alloted_amps, current_amps = self.get_budget_diffs(actionable_chargers)
         # check first if we are not already in a bad amps situation with the current amps
-        if (
-            self.dynamic_group.is_current_acceptable(
-                new_amps=alloted_amps, estimated_current_amps=current_amps, time=time
-            )
-            is False
-        ):
+        if self._is_current_acceptable(new_amps=alloted_amps, estimated_current_amps=current_amps, time=time) is False:
             # ok we know it is possible to shave to reach the max phase current, due to the preparation before
             _LOGGER.info(
                 f"_shave_current_budgets: group too much {self.name} {alloted_amps} > {self.dynamic_group.dyn_group_max_phase_current}"
@@ -1960,7 +2037,7 @@ class QSChargerGroup(LogOnChangeMixin):
                                 alloted_amps = add_amps(alloted_amps, cs.get_budget_amps())
                                 has_shaved = True
 
-                            if self.dynamic_group.is_current_acceptable(
+                            if self._is_current_acceptable(
                                 new_amps=alloted_amps, estimated_current_amps=current_amps, time=time
                             ):
                                 current_ok = True
@@ -1978,9 +2055,7 @@ class QSChargerGroup(LogOnChangeMixin):
     async def _shave_mandatory_budgets(self, actionable_chargers, current_amps, mandatory_amps, time):
 
         if (
-            self.dynamic_group.is_current_acceptable(
-                new_amps=mandatory_amps, estimated_current_amps=current_amps, time=time
-            )
+            self._is_current_acceptable(new_amps=mandatory_amps, estimated_current_amps=current_amps, time=time)
             is False
         ):
             # ouch ... we have to lower the charge of some cars
@@ -2080,7 +2155,7 @@ class QSChargerGroup(LogOnChangeMixin):
             max_amps_in_worst_case_scenario = add_amps(max_amps_in_worst_case_scenario, max_curr_amps)
 
         if (
-            self.dynamic_group.is_current_acceptable(
+            self._is_current_acceptable(
                 new_amps=max_amps_in_worst_case_scenario, estimated_current_amps=current_amps, time=time
             )
             is False
@@ -2190,12 +2265,7 @@ class QSChargerGroup(LogOnChangeMixin):
                 do_apply = False
 
             # check now that the new power won't be higher than the amp limit
-            if (
-                self.dynamic_group.is_current_acceptable(
-                    new_amps=new_amps, estimated_current_amps=current_amps, time=time
-                )
-                is False
-            ):
+            if self._is_current_acceptable(new_amps=new_amps, estimated_current_amps=current_amps, time=time) is False:
                 do_apply = False
 
             if do_apply is False:
@@ -3703,6 +3773,8 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             await self._notify_charger_fault(time)
             self._charger_fault_notified = True
 
+        await self._on_charger_fault_cycle(time)
+
         if self.is_not_plugged(time, for_duration=CHARGER_CHECK_STATE_WINDOW_S):
             if self.car:
                 _LOGGER.warning(
@@ -5012,6 +5084,16 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             and self._expected_num_active_phases.value is not None
         )
 
+    def is_start_stuck(self, time: datetime) -> bool:
+        # QS-376: the charger wants to charge, is not charging, and its start retries
+        # are exhausted: nothing will change until its target is re-armed.
+        return (
+            not self.is_in_state_reset()
+            and self._expected_charge_state.value is True
+            and self.is_charge_enabled(time) is not True
+            and not self._expected_charge_state.can_launch()
+        )
+
     def is_charger_faulted(self, time: datetime) -> bool:
 
         contiguous_status = self.get_last_state_value_duration(
@@ -5025,6 +5107,19 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             return False
 
         return contiguous_status > 0
+
+    def _charger_fault_message(self, time: datetime, status: str | float | None, car: QSCar | None) -> str:
+        if car is not None:
+            return (
+                f"{self.name} is in error ({status}) and cannot charge. "
+                f"Please go unplug and replug {car.name} on {self.name}."
+            )
+        return f"{self.name} is in error ({status}) and cannot charge. Please check the charger."
+
+    async def _on_charger_fault_cycle(self, time: datetime) -> None:
+        # QS-376: per-cycle hook run right after the QS-346 fault machine, for automatic
+        # remedies of a charger-specific fault. No-op by default.
+        return
 
     async def _notify_charger_fault(self, time: datetime) -> None:
         # QS-346: alert both the attached car's person (via the charger override, which
@@ -5043,13 +5138,7 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
             if self._last_attached_car is not None and self._last_attached_car.charger is None
             else None
         )
-        if car is not None:
-            message = (
-                f"{self.name} is in error ({status}) and cannot charge. "
-                f"Please go unplug and replug {car.name} on {self.name}."
-            )
-        else:
-            message = f"{self.name} is in error ({status}) and cannot charge. Please check the charger."
+        message = self._charger_fault_message(time, status, car)
 
         # QS-346: isolate the two channels. If either raises, the other must still run
         # and the method must return normally so the caller latches `_charger_fault_notified`
@@ -5260,6 +5349,25 @@ class QSChargerGeneric(LogOnChangeMixin, HADeviceMixin, AbstractLoad):
                     if self._expected_charge_state.is_ok_to_launch(value=True, time=time):
                         _LOGGER.info("Ensure State:%s start_charge", self.name)
                         await self.start_charge(time=time)
+                    elif (
+                        not self._expected_charge_state.can_launch()
+                        and self._expected_charge_state.last_time_set is not None
+                        and (time - self._expected_charge_state.last_time_set).total_seconds()
+                        >= CHARGER_START_RETRY_REARM_S
+                    ):
+                        # QS-376: the start never took effect and its retries are exhausted.
+                        # Re-arm through the group: go back to an idle target (settled in this
+                        # very call, so the group is not blocked one more cycle); only the group
+                        # budget (`apply_budgets` -> `set(True)`) can start it again, with a
+                        # fresh retry counter and after the usual off->on spacing.
+                        _LOGGER.info(
+                            "Ensure State: re-arming start of %s through the group after %d launches",
+                            self.name,
+                            self._expected_charge_state._num_launched,
+                        )
+                        self._expected_charge_state.set(False, time)
+                        await self._expected_charge_state.success(time=time)
+                        one_bad = False
                     else:
                         _LOGGER.debug("Ensure State:%s NOT OK TO LAUNCH start", self.name)
 
@@ -6185,9 +6293,66 @@ class QSChargerOCPP(QSChargerGeneric):
         # self.attach_power_to_probe(self.charger_ocpp_current_import, transform_fn=self.convert_ocpp_current_import_amps_to_W)
         self.attach_power_to_probe(self.secondary_power_sensor, transform_fn=self._secondary_power_transform)
 
+        # QS-376: last StatusNotification nudge sent while charge_control is held
+        # unavailable (None when not in that condition). Not touched by reset().
+        self._last_status_nudge_time: datetime | None = None
+
     def can_set_amps_when_not_charging(self) -> bool:
         """OCPP chargers reset to max amps when receiving amp commands while idle."""
         return False
+
+    def _is_charge_control_unavailable_while_plugged(self, time: datetime) -> bool:
+        # QS-376: lbbrhzn/ocpp holds the transaction-bound `charge_control` switch
+        # unavailable while it cannot tell which connector a stop ended; the car is
+        # plugged but can never be started. Raw HA states on purpose: the probe cache
+        # would keep the last plugged status during a websocket drop.
+        if self.charger_pause_resume_switch is None:
+            return False
+        switch_state = self.hass.states.get(self.charger_pause_resume_switch)
+        if switch_state is None or switch_state.state != STATE_UNAVAILABLE or self.charger_status_sensor is None:
+            return False
+        status_state = self.hass.states.get(self.charger_status_sensor)
+        return status_state is not None and status_state.state in (
+            QSOCPPv16v201ChargePointStatus.preparing,
+            QSOCPPv16v201ChargePointStatus.finishing,
+            QSOCPPv16v201ChargePointStatus.ev_connected,
+            QSOCPPv16v201ChargePointStatus.reserved,
+        )
+
+    def is_charger_faulted(self, time: datetime) -> bool:
+        return super().is_charger_faulted(time) or self._is_charge_control_unavailable_while_plugged(time)
+
+    def _charger_fault_message(self, time: datetime, status: str | float | None, car: QSCar | None) -> str:
+        if status in self._unknown_state_vals or not self._is_charge_control_unavailable_while_plugged(time):
+            return super()._charger_fault_message(time, status, car)
+        if car is not None:
+            return f"{self.name}: charge control unavailable, {car.name} cannot be started — unplug and replug the car"
+        return f"{self.name}: charge control unavailable — please unplug and replug the car"
+
+    async def _on_charger_fault_cycle(self, time: datetime) -> None:
+        # QS-376: a connector-less StatusNotification trigger makes the charger report
+        # every connector, which releases the OCPP hold. Sent on the first detection
+        # (before the QS-346 alert debounce) and then at most every
+        # CHARGER_OCPP_STATUS_NUDGE_S while the condition holds.
+        if not self._is_charge_control_unavailable_while_plugged(time):
+            self._last_status_nudge_time = None
+            return
+        if (
+            self._last_status_nudge_time is not None
+            and (time - self._last_status_nudge_time).total_seconds() < CHARGER_OCPP_STATUS_NUDGE_S
+        ):
+            return
+        self._last_status_nudge_time = time
+        _LOGGER.info("%s: charge control unavailable while plugged, requesting a StatusNotification", self.name)
+        try:
+            await self.hass.services.async_call(
+                "ocpp",
+                "trigger_custom_message",
+                {"devid": self.devid, "requested_message": "StatusNotification"},
+                blocking=False,
+            )
+        except Exception as e:
+            _LOGGER.warning("status nudge OCPP: Error %s", e, exc_info=True, stack_info=True)
 
     async def handle_ocpp_notification(self, message: str, title: str = "OCPP Charger Notification"):
         """Handle notifications from the OCPP integration and take automated actions."""

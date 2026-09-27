@@ -4,7 +4,7 @@ slug: charger-budgeting
 kind: concept
 covers:
   - custom_components/quiet_solar/ha_model/charger.py
-last_verified: 2026-08-12
+last_verified: 2026-09-27
 ---
 
 # Charger Dynamic Budgeting — the tactical layer
@@ -303,6 +303,61 @@ the fault, so resuming is correct — no stale-constraint handling).
 loop issues `CMD_IDLE`, and on a faulted charger `check_charge_state`
 returns `None`, so `_ensure_correct_state` lands in the *not charging /
 don't want to charge → do nothing* branch — zero low-level commands.
+
+**OCPP addition (QS-376).** `QSChargerOCPP.is_charger_faulted` also
+returns `True` when `_is_charge_control_unavailable_while_plugged(time)`
+holds: the raw HA state of the `charge_control` switch is `unavailable`
+while the raw status is a plugged, **not-charging** value (`Preparing`,
+`Finishing`, `EVConnected`, `Reserved` — a charging charger never leaves
+the group). lbbrhzn/ocpp v0.12.0 holds that transaction-bound switch
+unavailable when it cannot attribute a `StopTransaction`. In that case
+the status itself is valid, so `check_charge_state` answers `False` (not
+`None`); the `CMD_IDLE` probe (`probe_if_command_set`) sets the target to
+`False`, and `_ensure_correct_state` again reaches the *do nothing*
+branch. The QS-346 alert uses an OCPP-specific text
+(`_charger_fault_message`, overridable per charger type).
+
+### A start-stuck charger does not starve the group (QS-376)
+
+`QSChargerGroup.ensure_correct_state` returns no actionable charger as
+soon as one member is not in its expected state. A charger whose start
+never takes effect (retries exhausted, never reports enabled) used to
+block the whole group forever. Three pieces now contain it:
+
+- **Isolation (F1)** — `QSChargerGeneric.is_start_stuck(time)` = target
+  `True`, `is_charge_enabled` not `True`, and
+  `_expected_charge_state.can_launch()` `False`. Such a member is skipped
+  (logged once under `start_stuck:<name>`) instead of returning `[]`, and
+  its expected amps are accumulated into `_isolated_reserved_amps`.
+  Every group current check goes through
+  `_is_current_acceptable[_and_diff]`, which adds that reservation to
+  both the new and the estimated amps, so the others are never given
+  amps the isolated charger may still draw if its start lands late. The
+  reservation only limits the growth of the others and never forces a
+  member below its minimum: if the members' floor amps plus the
+  reservation do not fit, `_do_prepare_and_shave_budgets` releases it
+  for that cycle before anything is shaved. It only covers the
+  charger-group budget: a non-charger load in the same dynamic group
+  checks `is_delta_current_acceptable` directly.
+  The *want to stop but still charging* direction keeps blocking the
+  group.
+- **Re-arm through the group (F2)** — in the start branch of
+  `_ensure_correct_state`, once `CHARGER_START_RETRY_REARM_S` (15 min)
+  has passed since the last launch, the target goes back to `False` and
+  is settled in the same call. The charger rejoins as an idle member; a
+  new start comes only from `apply_budgets` (`set(True)` resets the retry
+  counter). For green commands this waits for the usual 10 min off→on
+  spacing. A forced command (consign / `CMD_ON` / price) never offers 0 A,
+  so its next budget pass restarts it: ~20:20 rounds instead of ~30:20.
+  In both cases ~5:20 of a round blocks the group (the launch window plus
+  the adaptation window).
+- **OCPP nudge (F4)** — `_on_charger_fault_cycle(time)` runs in
+  `check_load_activity_and_constraints` right after the QS-346 machine
+  (no-op by default). `QSChargerOCPP` sends a connector-less
+  `ocpp.trigger_custom_message StatusNotification` while the charge
+  control is held unavailable: on the first detection, then at most every
+  `CHARGER_OCPP_STATUS_NUDGE_S` (5 min). The charger answers for every
+  connector, which releases the OCPP hold.
 
 ### The plug-state rescue no longer needs a currently-attached car (QS-346)
 
