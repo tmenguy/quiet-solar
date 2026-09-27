@@ -1191,6 +1191,20 @@ def test_new_children_anchor_inside_children_not_a_sketch_list() -> None:
     assert epic_doc.sync_body(new, rows, link=None)[0] == new
 
 
+def test_owned_block_before_task_block_decides_ownership_for_the_section() -> None:
+    """S1: a ``(not filed)`` block first and the task-line anchor second — ownership
+    is a property of the whole ## Children section, so a just-filed child is not
+    left listed as unfiled too, and a second run is a no-op."""
+    body = "Intro\n\n## Children\n\n- (not filed) B\n- (not filed) C\n\n- [ ] #371 — A\n"
+    rows = [R("A", 371), R("B", 380), R("C", None)]
+    new, added, owned = epic_doc.sync_body(body, rows, link=None)
+    assert added == [380] and owned == ["C"]
+    assert new.count("(not filed) B") == 0  # B is filed now, not re-listed as unfiled
+    assert new.count("#380") == 1
+    assert new.count("(not filed) C") == 1
+    assert epic_doc.sync_body(new, rows, link=None)[0] == new
+
+
 def test_owned_lines_split_across_blocks_do_not_duplicate() -> None:
     """S7(b): a not-filed list split by a blank line regenerates once, no stale dupes."""
     body = (
