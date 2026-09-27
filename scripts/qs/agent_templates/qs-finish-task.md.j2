@@ -129,16 +129,23 @@ the epic document is on `main`. Differences from the task path below:
     branch both gone.
   - `status: "removed-branch-kept"` → the worktree is gone but the local
     branch was **kept** (read `branch_delete_error`); report that honestly
-    and do NOT claim the branch was removed. To retry the branch delete,
-    re-run from the main checkout.
+    and do NOT claim the branch was removed. An unknown or **detached HEAD**
+    also lands here (N5) — the worktree WAS removed, so this is not a
+    nothing-touched error. A re-run only helps if the worktree directory was
+    deleted out-of-band while still registered (S2); otherwise a re-run just
+    finds the registration gone and keeps the branch again. Instead:
+    - if `branch_delete_error` is a transient git error (e.g. a ref lock),
+      clear the cause and run `git -C <main checkout> branch -D QS_{{issue}}`
+      yourself;
+    - if the branch was kept because HEAD was detached or unknown, leave the
+      decision to the user.
   - `status: "branch-checked-out-elsewhere"` → the worktree is gone but the
     local branch is still checked out in another worktree, so it was kept
     (read `branch_delete_error`); report that honestly and do NOT claim the
     branch was removed.
   - `status: "error"` → STOP and surface `message` plus
     `worktree_remove_error` / `branch_delete_error`, whichever is set. On a
-    refusal (mismatch, unknown HEAD, unregistered / main checkout), nothing
-    was touched.
+    refusal (mismatch, unregistered / main checkout), nothing was touched.
 - Step 5 (remote-branch delete) is unchanged.
 - Step 6 reports according to the cleanup JSON:
   ```text

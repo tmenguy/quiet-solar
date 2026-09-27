@@ -507,6 +507,14 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     # shortcut above already returned when its bytes equalled main, so the built
     # tree always differs from ``origin/main``'s.
     sha = _build_commit(root, changed, message)
+    if sha is None:
+        # N6: defensive — the already-landed shortcut above already returned when
+        # the built tree equalled main, so ``None`` here can only mean an internal
+        # invariant broke. Refuse loudly rather than push a ``None`` ref to main.
+        raise Refusal(
+            "git-error",
+            detail="internal: tree equals main after the already-landed shortcut",
+        )
     push = _git(root, ["push", "origin", f"{sha}:refs/heads/main"])
     if push.returncode != 0:
         detail = (push.stderr or push.stdout or "").strip()
@@ -524,9 +532,9 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
             # N3: only a genuine non-fast-forward (main moved) is fixed by a re-run.
             hint = "main moved — re-run to rebuild on the new origin/main"
         else:
-            # N3: any other failure (auth, network, …) is not "main moved" —
+            # N3/N7: any other failure (auth, network, …) is not "main moved" —
             # don't send the user in a re-run loop; surface the raw detail.
-            hint = "push failed for another reason — inspect the detail above and resolve it"
+            hint = "push failed for another reason — inspect `detail` and resolve it"
         raise Refusal("push-rejected", sha=sha, detail=detail, hint=hint)
 
     _fetch_main(root)
@@ -763,8 +771,16 @@ def sync_body(body: str, rows: list[Row], *, link: str | None) -> tuple[str, lis
             # and the task-line block (the anchor) follows after a blank line,
             # ``_owned_by_heading(anchor)`` is False even though the section is
             # owned — leaving the unfiled lines unstripped and re-listing a
-            # just-filed child both as filed and as ``(not filed)``.
-            is_owned = any(_owned_by_heading(content, s) for s, _ in section_blocks)
+            # just-filed child both as filed and as ``(not filed)``. A prose
+            # line (a wave label) between ``## Children`` and the list blocks
+            # makes ``_owned_by_heading`` False for every block, so a section
+            # that already carries ``(not filed)`` lines is also owned — else
+            # filing a child there would list it both ways forever.
+            is_owned = any(
+                _owned_by_heading(content, s)
+                or any(_OWNED_RE.match(content[k]) for k in range(s, e))
+                for s, e in section_blocks
+            )
         else:
             is_owned = _owned_by_heading(content, start)
         owned = unfiled if is_owned else []

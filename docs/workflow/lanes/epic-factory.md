@@ -246,7 +246,12 @@ re-entry starts fresh from `origin/main`; the remote `QS_<N>` branch is
 deleted as for any task. Branch on the cleanup JSON `status`:
 `removed-branch-kept` or `branch-checked-out-elsewhere` mean the local
 branch was **kept** (read `branch_delete_error`) — report that honestly,
-never claim it was removed.
+never claim it was removed. An unknown or detached HEAD lands in
+`removed-branch-kept` after the worktree is removed, so it is not a
+nothing-touched error; a re-run only helps if the worktree directory was
+deleted out-of-band while still registered — otherwise clear a transient
+git error and run `git -C <main checkout> branch -D QS_<N>` by hand, or
+leave a detached/unknown-HEAD branch for the user to decide.
 **Output**: "epic session closed — doc on `main`, issue #N stays open".
 **Next phase**: terminal until the next re-entry.
 

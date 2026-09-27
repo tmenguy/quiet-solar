@@ -93,6 +93,8 @@ EPIC_FACTORY_SENTINELS: tuple[str, ...] = (
     "**File children just in time**",
     # the landing rule
     "never through `create_pr.py`",
+    # S2 (fix plan #04): the honest kept-branch re-run hint in finish-task
+    "deleted out-of-band while still registered",
 )
 
 

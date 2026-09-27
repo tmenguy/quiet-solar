@@ -287,3 +287,10 @@ def test_finish_task_case_a_has_the_epic_variant(harness_dir: Path) -> None:
     # nothing.
     assert "STOP and surface `message`" in body
     assert "On a refusal" in body
+    # S2/N5 (fix plan #04): removed-branch-kept absorbs an unknown/detached HEAD,
+    # and the re-run hint is honest about the one case a re-run can fix.
+    assert "deleted out-of-band while still registered" in body
+    assert "git -C <main checkout> branch -D QS_{{issue}}" in body
+    assert "leave the decision to the user" in body
+    # N5: the nothing-touched error bullet no longer lists "unknown HEAD".
+    assert "refusal (mismatch, unregistered / main checkout)" in body

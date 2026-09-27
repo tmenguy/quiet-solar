@@ -616,6 +616,21 @@ def test_push_accepted_but_reset_failed_then_rerun(repos, runner, clean_drift, c
     assert out["safe_to_discard"] is True and out["local_modified"] is False
 
 
+def test_land_refuses_loudly_when_build_commit_returns_none(
+    repos, runner, clean_drift, monkeypatch, capsys
+) -> None:
+    """N6: past the already-landed shortcut ``_build_commit`` can only be ``None``
+    on a broken internal invariant — land must refuse loudly, never push ``None``."""
+    repos.write(DOC, _epic("# Epic\n"))
+    monkeypatch.setattr(epic_doc, "_build_commit", lambda *a, **k: None)
+    before = repos.snapshot()
+    rc, out = _land(capsys)
+    assert rc == 1 and out["status"] == "git-error"
+    assert "internal" in out["detail"]
+    assert not runner.git_calls("push", "origin")
+    assert repos.snapshot() == before
+
+
 def test_build_commit_returns_none_for_a_tree_equal_to_main(repos, runner) -> None:
     root = str(repos.work)
     _git(repos.work, "fetch", "-q", "origin", "main")
@@ -989,6 +1004,9 @@ def test_push_rejected_by_an_unrelated_failure_gives_a_neutral_hint(
     assert rc == 1 and out["status"] == "push-rejected"
     assert "re-run" not in out["hint"]
     assert "PR" not in out["hint"]
+    # N7: the neutral hint points at the JSON ``detail`` field, not "detail above".
+    assert "inspect `detail`" in out["hint"]
+    assert "detail above" not in out["hint"]
 
 
 def test_push_rejected_by_a_moved_main_then_rerun(repos, runner, clean_drift, capsys) -> None:
@@ -1256,6 +1274,42 @@ def test_s2_owned_lines_under_heading_survive_a_later_anchor() -> None:
 
     # Run 3: no-op.
     assert epic_doc.sync_body(new2, rows2, link=None)[0] == new2
+
+
+_S1_04_BODIES = [
+    "## Children\n\nWave 1:\n\n- [ ] #371 — A\n\nWave 2:\n\n- (not filed) B\n",
+    "## Children\n\nRemaining:\n\n- (not filed) B\n\n- [ ] #371 — A\n",
+    "## Children\n\nWave 1 (filed first):\n\n- (not filed) B\n- [ ] #371 — A\n",
+]
+
+
+@pytest.mark.parametrize("body", _S1_04_BODIES)
+def test_s1_prose_label_between_heading_and_blocks_owns_the_section(body: str) -> None:
+    """S1 (#04): a wave/prose label between ``## Children`` and its list blocks
+    makes ``_owned_by_heading`` False for every block, yet the section still owns
+    its ``(not filed)`` lines. Before the fix, filing a child there left it listed
+    both as ``- [ ] #N`` and ``- (not filed)`` and never self-corrected."""
+    # Run 1: the table is unchanged (A filed #371, B not filed). The canonical
+    # form (a task line before its ``(not filed)`` siblings) is stable, so a
+    # re-run is a no-op and B keeps exactly one unfiled listing.
+    rows1 = [R("A", 371), R("B", None)]
+    once, added1, _owned1 = epic_doc.sync_body(body, rows1, link=None)
+    assert added1 == []
+    assert once.count("(not filed) B") == 1
+    assert epic_doc.sync_body(once, rows1, link=None)[0] == once
+
+    # Run 2: B is filed as #380 — the ``(not filed) B`` line is stripped, so B is
+    # never listed both ways (the bug this fix closes).
+    rows2 = [R("A", 371), R("B", 380)]
+    filed, added2, owned2 = epic_doc.sync_body(once, rows2, link=None)
+    assert added2 == [380] and owned2 == []
+    assert filed.count("(not filed) B") == 0
+    assert filed.count("#380") == 1
+    assert "- [ ] #380 — B" in filed
+    assert "#371 — A" in filed
+
+    # Run 3: a no-op.
+    assert epic_doc.sync_body(filed, rows2, link=None)[0] == filed
 
 
 def test_owned_lines_split_across_blocks_do_not_duplicate() -> None:
