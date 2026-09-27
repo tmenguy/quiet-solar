@@ -745,43 +745,45 @@ def test_detached_registration_mismatched_dir_name_refuses(
 # --- S4 (#04): leftover dir from a partially failed remove is retryable --------
 
 
-@pytest.mark.skipif(
-    hasattr(os, "geteuid") and os.geteuid() == 0,
-    reason="root can rmtree a 555 dir, so the git-remove failure can't be provoked",
-)
 def test_leftover_dir_after_failed_remove_is_cleaned_on_retry(
     main_and_worktree, monkeypatch, capsys
 ) -> None:
-    """S4 (#04): git dropped the registration but a permission-locked subdir left
-    the dir behind. Once the lock clears, a re-run recognises the leftover via its
-    ``.git`` file's gitdir and removes it (no ``git worktree remove``)."""
+    """S4 (#04): a partially failed ``git worktree remove`` can drop the
+    registration (and its admin dir) yet leave the worktree directory — with its
+    ``.git`` file — behind. A re-run recognises that leftover via its ``.git``
+    file's gitdir and removes it (no ``git worktree remove``).
+
+    The leftover state is built deterministically (M1 #06): relying on git's
+    partial-failure order — which subdir it deletes before hitting a locked one —
+    is platform- and version-dependent (macOS kept ``.git``, the Linux CI runner
+    deleted it first), so instead we save the ``.git`` file, run a real successful
+    ``git worktree remove --force``, then recreate exactly the surviving state."""
     import cleanup_worktree
 
     main, work = main_and_worktree
     monkeypatch.chdir(main)
-    locked = work / "locked"
-    locked.mkdir()
-    (locked / "f").write_text("x\n")
-    os.chmod(locked, 0o555)
-    # First run: git worktree remove fails on the locked subdir (dropping the
-    # registration); a simulated rmtree failure keeps the dir + its .git intact.
-    real_rmtree = cleanup_worktree.shutil.rmtree
-
-    def failing_rmtree(*_a, **_k):
-        raise OSError("simulated: locked subtree")
-
-    try:
-        monkeypatch.setattr(cleanup_worktree.shutil, "rmtree", failing_rmtree)
-        out1 = _run_main(monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force"])
-        assert out1["status"] == "error"
-        assert work.exists() and (work / ".git").is_file()
-        assert cleanup_worktree._registered_branch(main, work)[0] == "absent"
-    finally:
-        monkeypatch.setattr(cleanup_worktree.shutil, "rmtree", real_rmtree)
-        os.chmod(locked, 0o755)
-    # Second run: the lock is gone; the leftover is proven ours and removed.
-    out2 = _run_main(monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force"])
-    assert out2["status"] == "removed", out2
+    # Save the worktree's .git file, then remove the worktree for real. This
+    # succeeds and prunes both the admin dir and the directory itself.
+    saved_dotgit = (work / ".git").read_text()
+    subprocess.run(
+        ["git", "-C", str(main), "worktree", "remove", str(work), "--force"],
+        check=True,
+        capture_output=True,
+    )
+    common = cleanup_worktree._git_common_dir(main)
+    assert common is not None
+    admin = Path(common) / "worktrees" / "QS_77"
+    # Recreate exactly the leftover a partial failure would leave: the directory
+    # with its original .git file plus a content file, registration dropped and
+    # admin dir gone.
+    work.mkdir(parents=True, exist_ok=True)
+    (work / ".git").write_text(saved_dotgit)
+    (work / "leftover.txt").write_text("x\n")
+    assert cleanup_worktree._registered_branch(main, work)[0] == "absent"
+    assert not admin.exists()
+    # The re-run proves the leftover is ours and removes it (no git worktree remove).
+    out = _run_main(monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force"])
+    assert out["status"] == "removed", out
     assert not work.exists()
 
 
