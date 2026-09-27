@@ -248,3 +248,48 @@ def test_issue_view_failure_degrades_to_todays_body(
     )
     _run_main(monkeypatch, fake_run)
     assert _created_body(seen) == _expected_plain_body()
+
+
+# ---------------------------------------------------------------------------
+# QS-340: an epic never gets a PR — `Fixes #<epic>` would close it
+# ---------------------------------------------------------------------------
+
+
+def test_epic_issue_is_refused_before_any_pr_lookup_or_push(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The epic × factory lane lands its doc through ``epic_doc.py land``;
+    ``create_pr.py`` refuses a ``scale:epic`` issue before it looks up an
+    existing PR or pushes anything."""
+    fake_run, seen = _make_fake_run(
+        issue_body="",
+        issue_labels=["target:factory", "scale:epic"],
+        changed_files=["docs/epics/QS-42.md"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        _run_main(monkeypatch, fake_run)
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert "epic" in out["error"]
+    assert "epic_doc.py land" in out["detail"]
+    assert not [c for c in seen if c[:3] == GH_PR_LIST]
+    assert not [c for c in seen if c[:3] == GIT_PUSH]
+    assert not [c for c in seen if c[:3] == GH_PR_CREATE]
+    # Still exactly one issue lookup.
+    assert len([c for c in seen if c[:3] == GH_ISSUE_VIEW]) == 1
+
+
+def test_issue_lookup_happens_once_even_for_a_task(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_run, seen = _make_fake_run(
+        issue_body="Refs #321\n",
+        issue_labels=["kind:feature", "target:factory", "scale:task"],
+        changed_files=["scripts/qs/x.py"],
+    )
+    _run_main(monkeypatch, fake_run)
+    assert len([c for c in seen if c[:3] == GH_ISSUE_VIEW]) == 1
+    # The lookup precedes the PR lookup and the push.
+    heads = [c[:3] for c in seen]
+    assert heads.index(GH_ISSUE_VIEW) < heads.index(GH_PR_LIST) < heads.index(GIT_PUSH)
+    assert "\nFixes #42\nRefs #321\n" in _created_body(seen)

@@ -57,6 +57,7 @@ agent activated (via the agent picker in the OpenCode UI):
 | -------------------- | ------------------------- | ------------- |
 | Setup task           | `qs-setup-task`           | main checkout |
 | Create plan          | `qs-create-plan`          | worktree      |
+| Decompose epic       | `qs-decompose-epic`       | worktree      |
 | Implement (product)  | `qs-implement-task`       | worktree      |
 | Implement (dev-env)  | `qs-implement-setup-task` | worktree      |
 | Review task          | `qs-review-task`          | worktree      |

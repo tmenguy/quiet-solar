@@ -113,7 +113,9 @@ python scripts/qs/create_issue.py --title "{{title}}" --body "{{body}}" --labels
 ```
 
 e.g. `--labels "kind:bug,target:product,scale:task"`. If a parent epic
-was declared, include a `Refs #{{epic}}` line in the issue body.
+was declared, end the issue body with a `### Parent epic` section whose
+next line is `#{{epic}}` — never a bare `Refs #…` line, which the parser
+fallback would read as the parent epic (QS-340).
 
 Capture `issue_number` from the JSON output.
 
@@ -136,9 +138,18 @@ the full label set onto the issue before proceeding:
 gh issue edit {{N}} --add-label "{{missing labels}}"
 ```
 
-(plus a `Refs #{{epic}}` body line via `gh issue edit {{N}} --body ...`
-if an epic was given). The issue on GitHub always ends up fully
-declared — `setup_task.py` refuses to proceed otherwise.
+If an epic was given, also append a `### Parent epic` section — but
+**never** with `gh issue edit --body`, which replaces the whole body and
+would wipe the issue text. Append, don't overwrite:
+
+1. Read the current body: `gh issue view {{N}} --json body --jq .body`.
+2. Append `\n\n### Parent epic\n#{{epic}}\n` to it.
+3. Write the result to a temp file **outside** the worktree.
+4. `gh issue edit {{N}} --body-file <tmp>`.
+5. Remove the temp file.
+
+The issue on GitHub always ends up fully declared — `setup_task.py`
+refuses to proceed otherwise.
 
 **New issue (free text / plan file):** ask ONE question for the lane —
 the 6 options: `bug` / `feature` (product), `harness bug` /
@@ -150,34 +161,40 @@ values** ("bug", "harness feature", "kind:bug target:factory",
 means ask. This is a bright line, not text analysis, so the "do NOT
 analyze the input" rule stands.
 
-### 1c. Epic lanes stop here (no branch, no worktree)
+### 1c. Epic lanes (QS-340)
 
-If the resolved lane is `epic-product` or `epic-factory`, the issue is
-the deliverable: an epic has **no implement phase and no branch,
-worktree, or PR** (see
-[docs/epics/QS-321.md](../../docs/epics/QS-321.md)). Its output is a
-rationale document on `main` plus **child issues**.
+An epic has **no implement phase and no PR**: its output is a rationale
+document `docs/epics/QS-<N>.md` on `main` plus **child issues**.
 
-So for an epic: create/label the issue as above, then **skip step 2
-entirely** — do NOT run `setup_task.py`. Report the epic issue number
-and tell the user the next move is to decompose it into child tasks
-(each child is its own task lane, carrying `Refs #<epic>`; run
-setup-task on those). `setup_task.py` refuses an epic outright, so a
-slip here fails loudly rather than silently cutting a worktree.
+- **`epic-factory`** — run step 2 like a task, with
+  `NEXT_PHASE = decompose-epic`: `setup_task.py` cuts a
+  **short-lived docs-only worktree** for the `decompose-epic` session,
+  which drafts the document, files the children and lands the document
+  (see `docs/workflow/lanes/epic-factory.md`). `--no-worktree` is
+  refused for an epic. Re-entry (filing the next wave, amending the
+  document) is the same command on the existing epic: `--issue N`.
+- **`epic-product`** — not codified yet (#339): **stop here** — no
+  branch, worktree, or PR; do NOT run `setup_task.py` (it refuses a
+  product epic). Report the epic issue number and tell the user the
+  next move is to decompose it by hand into child tasks, each declaring
+  its parent with a `### Parent epic` section.
 
-### 2. Set up branch and worktree + emit launcher (tasks only)
+### 2. Set up branch and worktree + emit launcher
 
 **Resolve the next phase from the lane (QS-335).** The next phase is
 `create-plan` for every lane **except** `bug-product`, whose
-diagnose-first flow replaces it with `diagnose-task`. Set
-`NEXT_PHASE = create-plan`, or `NEXT_PHASE = diagnose-task` when the
-resolved lane (step 1b) is `bug-product`, and substitute that value in
-the `--next-cmd` flag below and in every handoff site in step 3 —
+diagnose-first flow replaces it with `diagnose-task`, and
+`epic-factory`, whose flow replaces it with `decompose-epic` (QS-340).
+Set `NEXT_PHASE = create-plan`, or `NEXT_PHASE = diagnose-task` when the
+resolved lane (step 1b) is `bug-product`, or
+`NEXT_PHASE = decompose-epic` when the lane is `epic-factory`, and
+substitute that value in the `--next-cmd` flag below and in every
+handoff site in step 3 —
 [% if harness == "claude" %]
-except the fallback line, which carries both branches literally.
+except the fallback line, which carries all three branches literally.
 [% else %]
 except the routing parenthetical after the print block, which carries
-both branches literally.
+all three branches literally.
 [% endif %]
 
 One command does it all (**substitute `{{NEXT_PHASE}}`** with the value
@@ -199,9 +216,9 @@ generated script runs ``opencode <worktree> --agent <name>`` against
 the new workspace's OpenCode instance. We cannot ``spawn_session.py``
 across workspaces — the HTTP API only knows about the current
 workspace. Sibling OpenCode agents (``qs-create-plan``,
-``qs-diagnose-task``, ``qs-implement-task``, ``qs-implement-setup-task``,
-``qs-review-task``, ``qs-verify-task``) execute ``new_context`` in-band
-because they stay in the same worktree.
+``qs-decompose-epic``, ``qs-diagnose-task``, ``qs-implement-task``,
+``qs-implement-setup-task``, ``qs-review-task``, ``qs-verify-task``)
+execute ``new_context`` in-band because they stay in the same worktree.
 [% endif %]
 
 For `--no-worktree`, pass `--no-worktree`. The script:
@@ -275,7 +292,7 @@ or paste the spawn-session one-liner below into a fresh terminal):
 Fallback (stay in this session, degraded one-shot UX via the Agent tool —
 kept for any chat without a CLI launcher; the GUI can instead run the phase
 agent directly, see `docs/workflow/harness.md`):
-  /create-plan — or `/diagnose-task` when the lane is `bug-product`
+  /create-plan — or `/diagnose-task` when the lane is `bug-product`, `/decompose-epic` when it is `epic-factory`
 
 [Claude Code GUI] the worktree should now be pinned to `qs-{{NEXT_PHASE}}` in
 `.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
@@ -293,7 +310,8 @@ use the Preferred line above, where `--agent` always wins.
 ```
 [% else %]
 (For the `bug-product` lane this routes to `/diagnose-task` instead of
-`/create-plan`; every other lane routes to `/create-plan`.)
+`/create-plan`, and for the `epic-factory` lane to `/decompose-epic`;
+every other lane routes to `/create-plan`.)
 [% endif %]
 
 If `pycharm_context` is present in the payload, mention it as a bridge

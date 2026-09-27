@@ -44,6 +44,7 @@ _FLAT_TABLE = [
     ("qs-finish-task", "fast"),
     ("qs-setup-task", "light"),
     ("qs-release", "fast"),
+    ("qs-decompose-epic", "frontier"),
 ]
 
 _ROW_LITERALS = [
@@ -75,7 +76,7 @@ def test_classes_exact() -> None:
 
 
 def test_stems_match_registry_and_templates() -> None:
-    assert len(models.STEMS) == 21
+    assert len(models.STEMS) == 22
     assert models.STEMS == render_agents.ORCHESTRATORS | render_agents.SUBAGENTS
     assert set(render_agents._discover_stems(TEMPLATES_DIR)) == models.STEMS
 

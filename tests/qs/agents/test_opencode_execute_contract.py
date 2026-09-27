@@ -60,6 +60,7 @@ SUBSTITUTION_REMINDER = "**Before running** — substitute"
 
 OPENCODE_EXECUTE_AGENTS = (
     "qs-create-plan",
+    "qs-decompose-epic",
     "qs-diagnose-task",
     "qs-implement-task",
     "qs-implement-setup-task",

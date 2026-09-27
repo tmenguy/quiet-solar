@@ -94,6 +94,7 @@ _FLAT: dict[str, str] = {
     "qs-plan-delta-auditor": "light",
     "qs-diag-root-cause-skeptic": "deep",
     "qs-diag-fix-minimalist": "frontier",
+    "qs-decompose-epic": "frontier",  # QS-340: a planning conversation, like create-plan
     "qs-implement-task": "build",
     "qs-implement-setup-task": "build",
     "qs-review-task": "frontier",

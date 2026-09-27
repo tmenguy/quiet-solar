@@ -58,14 +58,15 @@ class RenderError(RuntimeError):
 
 # Orchestrators are exactly the agents a phase maps to (single source of
 # truth: ``launchers/phases.py`` — which imports nothing from here, so no
-# cycle). 9 stems.
+# cycle). 10 stems.
 ORCHESTRATORS: frozenset[str] = frozenset(PHASE_TO_AGENT.values())
 
-# The six orchestrators whose phase protocol varies by lane; they carry
+# The seven orchestrators whose phase protocol varies by lane; they carry
 # the lane file inlined and the ``lane_paragraph`` macro.
 LANE_AWARE: frozenset[str] = frozenset(
     {
         "qs-create-plan",
+        "qs-decompose-epic",
         "qs-diagnose-task",
         "qs-implement-task",
         "qs-implement-setup-task",

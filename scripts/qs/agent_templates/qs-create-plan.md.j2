@@ -109,6 +109,9 @@ move between four modes; DISCUSS is the durable default.
 
 ### DISCUSS (default)
 
+- **Parent epic.** If `parent_epic_doc` from `context.py` is non-empty,
+  read that epic document before scoping — it may be older than `main`;
+  `git show origin/main:docs/epics/QS-<parent_epic>.md` gives the latest.
 - Gather: `gh issue view {{issue}}`, glob the relevant code areas, build
   an analysis. Discuss scope, risks, and acceptance with the user and
   iterate **indefinitely** — discussion is a durable state, not a

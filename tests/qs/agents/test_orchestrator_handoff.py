@@ -56,9 +56,11 @@ _FORBIDDEN_RELEASE_INVOCATION = re.compile(
 # of QS-372's scope, D2) keeps the inline block pinned here.
 # ``qs-finish-task`` deliberately does NOT ship it (its follow-up is
 # text-only — see QS-175 OUT OF SCOPE) and gets its own dedicated tests
-# below; ``qs-release`` has no follow-up phase at all.
+# below; ``qs-release`` has no follow-up phase at all. QS-340: the epic ×
+# factory lane's ``qs-decompose-epic`` also keeps the inline block.
 _TWO_BLOCK_ORCHESTRATORS = [
     "qs-setup-task.md",
+    "qs-decompose-epic.md",
 ]
 
 # The six orchestrators whose Claude handoff prints ``handoff_text``
@@ -78,6 +80,7 @@ _HANDOFF_TEXT_ORCHESTRATORS = [
 _POINTER_ORCHESTRATORS = [
     "qs-setup-task.md",
     "qs-create-plan.md",
+    "qs-decompose-epic.md",
     "qs-diagnose-task.md",
     "qs-implement-task.md",
     "qs-implement-setup-task.md",
@@ -89,6 +92,11 @@ _POINTER_ORCHESTRATORS = [
 # ``/<phase>`` token.
 _HARDCODED_FALLBACK = [
     ("qs-setup-task.md", "/create-plan"),
+    # QS-340: the epic × factory lane hands off straight to finish-task.
+    # ``qs-decompose-epic`` keeps the inline two-block handoff (like
+    # ``qs-setup-task``), so it is pinned here rather than via the QS-372
+    # launcher ``handoff_text`` path.
+    ("qs-decompose-epic.md", "/finish-task"),
 ]
 
 
@@ -256,6 +264,10 @@ def test_forbidden_release_regex_ignores_prose_mention() -> None:
 
 _GUI_BLOCK_ORCHESTRATORS = [
     "qs-setup-task.md",
+    # QS-340: the epic × factory lane's decompose-epic keeps the inline GUI
+    # block (the six mid-pipeline orchestrators moved to the launcher's
+    # ``handoff_text`` in QS-372, but decompose-epic did not).
+    "qs-decompose-epic.md",
 ]
 
 _GUI_BLOCK_MARKER = "[Claude Code GUI]"
@@ -364,7 +376,8 @@ def test_gui_block_orchestrator_set_tracks_two_block_set() -> None:
         _POINTER_ORCHESTRATORS
     )
     assert not set(_GUI_BLOCK_ORCHESTRATORS) & set(_HANDOFF_TEXT_ORCHESTRATORS)
-    assert len(_POINTER_ORCHESTRATORS) == 7
+    # QS-340: the epic × factory lane adds ``qs-decompose-epic`` (8th).
+    assert len(_POINTER_ORCHESTRATORS) == 8
 
 
 @pytest.mark.parametrize("filename", _HANDOFF_TEXT_ORCHESTRATORS)
@@ -694,6 +707,29 @@ def test_shared_orchestrator_carries_both_lane_branches(
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
+
+
+# QS-340: qs-setup-task routes the epic × factory lane to decompose-epic.
+# Routing-specific tokens: `epic-factory` alone already appears in step 1c.
+# The OpenCode routing parenthetical spells `/decompose-epic`.
+_EPIC_ROUTING = {
+    "qs-setup-task.md": ("/decompose-epic", "NEXT_PHASE = decompose-epic"),
+}
+
+
+@pytest.mark.parametrize(
+    "harness_dir", _ROUTING_HARNESS_DIRS, ids=lambda p: p.parent.name.lstrip(".")
+)
+@pytest.mark.parametrize("filename", sorted(_EPIC_ROUTING))
+def test_setup_task_carries_the_epic_factory_routing_branch(
+    harness_dir: Path, filename: str,
+) -> None:
+    body = (harness_dir / filename).read_text(encoding="utf-8")
+    for token in _EPIC_ROUTING[filename]:
+        assert token in body, (
+            f"{harness_dir / filename}: missing the epic-factory routing "
+            f"token {token!r} (QS-340)."
+        )
 
 
 def _find_fallback_line(body: str) -> str | None:

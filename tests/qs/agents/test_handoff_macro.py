@@ -396,7 +396,8 @@ _ORCHESTRATOR_FILES = sorted(f"{stem}.md" for stem in render_agents.ORCHESTRATOR
 
 
 def test_orchestrator_file_list_is_populated() -> None:
-    assert len(_ORCHESTRATOR_FILES) == 9
+    # QS-340: the epic × factory lane's qs-decompose-epic is the 10th.
+    assert len(_ORCHESTRATOR_FILES) == 10
 
 
 @pytest.mark.parametrize("mode", ["unbound", "bound"])

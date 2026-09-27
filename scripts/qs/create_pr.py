@@ -7,7 +7,8 @@ Usage:
 Output: JSON with PR number and URL.
 
 QS-332 (B5) — two machine-owned additions, both fed by ONE
-``gh issue view N --json body,labels`` call:
+``gh issue view N --json body,labels`` call (issued before the PR
+lookup and the push, so the QS-340 epic refusal below runs first):
 
 - **auto-``Refs``**: a parent epic declared in the issue body
   (``targets.parse_parent_epic`` — explicit, never guessed) is appended
@@ -23,6 +24,11 @@ QS-332 (B5) — two machine-owned additions, both fed by ONE
 
 A failing/unparseable issue lookup degrades to today's body (no Refs,
 no note) rather than blocking the PR.
+
+QS-340 — a ``scale:epic`` issue is refused (exit 1) before any PR
+lookup or push: ``Fixes #<epic>`` would close the epic, whose document
+lands through ``epic_doc.py land`` instead. A lookup failure keeps the
+fail-open behaviour above.
 """
 
 from __future__ import annotations
@@ -45,16 +51,15 @@ from utils import (
 )
 
 
-def _epic_and_lane_note(issue: int, changed: list[str]) -> tuple[int | None, str]:
-    """Return ``(parent_epic, lane_note_section)`` for the PR body.
+def _fetch_issue(issue: int) -> tuple[str, list[str]] | None:
+    """Return ``(body, label_names)`` from ONE ``gh issue view`` call.
 
-    One ``gh issue view --json body,labels`` call feeds both. Any failure
-    (non-zero exit, bad JSON) degrades to ``(None, "")`` — the PR body
-    stays byte-identical to today's.
+    Any failure (non-zero exit, bad JSON) degrades to ``None`` — the PR
+    body stays byte-identical to today's (fail-open, QS-332 B5).
     """
     result = run_gh(["issue", "view", str(issue), "--json", "body,labels"], check=False)
     if result.returncode != 0:
-        return None, ""
+        return None
     try:
         data = json.loads(result.stdout)
         issue_body = data.get("body") or ""
@@ -68,8 +73,14 @@ def _epic_and_lane_note(issue: int, changed: list[str]) -> tuple[int | None, str
         # `AttributeError` (QS-332 review-fix #04): a non-dict top-level
         # value (`null`, `[]`, `42`) makes `.get` raise, which used to
         # escape this guard as a raw traceback.
-        return None, ""
+        return None
+    return issue_body, labels
 
+
+def _epic_and_lane_note(
+    issue_body: str, labels: list[str], changed: list[str]
+) -> tuple[int | None, str]:
+    """Return ``(parent_epic, lane_note_section)`` for the PR body."""
     epic = targets.parse_parent_epic(issue_body)
 
     declared = targets.parse_axes(labels)["target"]
@@ -102,6 +113,21 @@ def main() -> None:
 
     branch = get_current_branch()
     issue = args.issue or get_issue_from_branch(branch)
+
+    # QS-340: fetched BEFORE the PR lookup and the push — an epic must be
+    # refused before anything is pushed. Still the one `gh issue view`
+    # call that also feeds the parent-epic Refs and the Lane note.
+    issue_info = _fetch_issue(issue) if issue else None
+    if issue_info is not None and targets.parse_axes(issue_info[1])["scale"] == "epic":
+        output_json({
+            "error": f"issue #{issue} is scale:epic — refusing to open a PR",
+            "detail": (
+                "An epic never has a PR: `Fixes #<epic>` would close it. Its "
+                "document lands on main through `python scripts/qs/epic_doc.py "
+                "land` (see docs/workflow/lanes/epic-factory.md)."
+            ),
+        })
+        sys.exit(1)
 
     # Check for existing PR to prevent duplicates
     existing = find_pr_for_branch(branch)
@@ -140,8 +166,8 @@ def main() -> None:
     # Build PR body
     fixes_line = f"\nFixes #{issue}\n" if issue else ""
     lane_section = ""
-    if issue:
-        epic, lane_section = _epic_and_lane_note(issue, changed)
+    if issue_info is not None:
+        epic, lane_section = _epic_and_lane_note(*issue_info, changed)
         if epic is not None:
             fixes_line = f"\nFixes #{issue}\nRefs #{epic}\n"
     body = f"""## Summary

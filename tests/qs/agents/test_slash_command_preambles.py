@@ -37,6 +37,7 @@ COMMANDS_DIR = REPO_ROOT / ".claude" / "commands"
 _SLASH_COMMAND_FILES = [
     "setup-task.md",
     "create-plan.md",
+    "decompose-epic.md",
     "diagnose-task.md",
     "implement-task.md",
     "implement-setup-task.md",

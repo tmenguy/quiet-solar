@@ -69,6 +69,7 @@ OPENCODE_AGENTS_DIR = agents_dir("opencode")
 PHASE_AGENT_NAMES: tuple[str, ...] = (
     "qs-setup-task",
     "qs-create-plan",
+    "qs-decompose-epic",
     "qs-diagnose-task",
     "qs-implement-task",
     "qs-implement-setup-task",

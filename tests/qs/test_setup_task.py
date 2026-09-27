@@ -37,6 +37,22 @@ def _make_fake_run(labels: list[str] | None, *, gh_rc: int = 0):
     return fake_run, seen
 
 
+@pytest.mark.parametrize(
+    ("next_cmd", "expected"),
+    [
+        ("create-plan", "create-plan"),
+        ("/create-plan", "create-plan"),
+        ("/decompose-epic", "decompose-epic"),
+        ("//decompose-epic", "/decompose-epic"),  # stays refused
+    ],
+)
+def test_phase_strips_exactly_one_leading_slash(next_cmd: str, expected: str) -> None:
+    """N7: one shared normaliser for the three former inline slices."""
+    import setup_task
+
+    assert setup_task._phase(next_cmd) == expected
+
+
 def test_complete_task_declaration_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     import setup_task
 
@@ -351,3 +367,142 @@ def test_setup_task_passes_labels_lane(
     setup_task.main()
     assert seen["lane"] == targets.parse_axes(labels)["lane"] == "bug-product"
     assert json.loads(capsys.readouterr().out)["tool"] == "fake"
+
+
+# ---------------------------------------------------------------------------
+# QS-340: the epic × factory lane gets a short-lived docs-only worktree
+# ---------------------------------------------------------------------------
+
+_EPIC_FACTORY = ["target:factory", "scale:epic"]
+
+
+@pytest.mark.parametrize("next_cmd", ["/decompose-epic", "decompose-epic"])
+def test_epic_factory_with_decompose_epic_is_allowed(next_cmd: str) -> None:
+    import setup_task
+
+    setup_task.refuse_if_epic(340, _EPIC_FACTORY, next_cmd)  # returns without exiting
+
+
+@pytest.mark.parametrize(
+    ("labels", "next_cmd", "no_worktree"),
+    [
+        (_EPIC_FACTORY, "/create-plan", False),
+        (_EPIC_FACTORY, "//decompose-epic", False),
+        (["target:product", "scale:epic"], "/decompose-epic", False),
+        (_EPIC_FACTORY, "/decompose-epic", True),
+    ],
+    ids=["wrong-next-cmd", "double-slash", "product-epic", "no-worktree"],
+)
+def test_epic_refusals(
+    capsys: pytest.CaptureFixture[str],
+    labels: list[str],
+    next_cmd: str,
+    no_worktree: bool,
+) -> None:
+    import setup_task
+
+    with pytest.raises(SystemExit) as exc:
+        setup_task.refuse_if_epic(340, labels, next_cmd, no_worktree=no_worktree)
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["scale"] == "epic"
+    assert "worktree" in out["error"]
+    assert "child" in out["detail"]
+    assert "### Parent epic" in out["detail"]
+    assert "#339" in out["detail"]
+
+
+@pytest.mark.parametrize("next_cmd", ["/decompose-epic", "decompose-epic"])
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ["kind:feature", "target:factory", "scale:task"],
+        ["kind:bug", "target:product", "scale:task"],
+    ],
+    ids=["feature-factory", "bug-product"],
+)
+def test_decompose_epic_refused_for_a_non_epic_issue(
+    capsys: pytest.CaptureFixture[str], labels: list[str], next_cmd: str
+) -> None:
+    """S6: a non-epic task routed to decompose-epic is refused before any git work."""
+    import setup_task
+
+    with pytest.raises(SystemExit) as exc:
+        setup_task.refuse_decompose_epic_for_wrong_lane(42, labels, next_cmd)
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert "decompose-epic" in out["error"]
+    assert out["lane"] != "epic-factory"
+    assert "epic × factory" in out["detail"]
+
+
+@pytest.mark.parametrize("next_cmd", ["/decompose-epic", "decompose-epic"])
+def test_decompose_epic_allowed_for_epic_factory(next_cmd: str) -> None:
+    """S6: the epic × factory lane still passes the non-epic guard."""
+    import setup_task
+
+    setup_task.refuse_decompose_epic_for_wrong_lane(340, _EPIC_FACTORY, next_cmd)
+
+
+@pytest.mark.parametrize("next_cmd", ["/create-plan", "create-plan", "/implement-task"])
+def test_non_decompose_next_cmd_is_never_touched_by_the_guard(next_cmd: str) -> None:
+    """S6: the guard only concerns ``decompose-epic``; other phases pass through."""
+    import setup_task
+
+    setup_task.refuse_decompose_epic_for_wrong_lane(
+        42, ["kind:feature", "target:factory", "scale:task"], next_cmd
+    )
+
+
+def test_epic_default_next_cmd_is_refused_through_main(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``main`` forwards ``--next-cmd`` / ``--no-worktree`` to the guard."""
+    import setup_task
+
+    import utils
+
+    fake_run, seen = _make_fake_run(_EPIC_FACTORY)
+    monkeypatch.setattr(utils, "run", fake_run)
+    monkeypatch.setattr(
+        "sys.argv", ["setup_task.py", "340", "--next-cmd", "/decompose-epic", "--no-worktree"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        setup_task.main()
+    assert exc.value.code == 1
+    assert all(cmd[0] == "gh" for cmd in seen)
+
+
+@pytest.mark.parametrize("next_cmd", ["/decompose-epic", "decompose-epic"])
+def test_fail_render_remedy_carries_the_real_next_cmd(
+    capsys: pytest.CaptureFixture[str], next_cmd: str
+) -> None:
+    import setup_task
+
+    with pytest.raises(SystemExit) as exc:
+        setup_task._fail_render(ImportError("no jinja2"), "/wd", 340, "T", next_cmd)
+    assert exc.value.code == 1
+    detail = json.loads(capsys.readouterr().out)["detail"]
+    assert "next_step.py --next-cmd decompose-epic --work-dir /wd" in detail
+    assert "--next-cmd /decompose-epic" not in detail
+
+
+def test_render_failure_remedy_uses_the_passed_next_cmd(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    import sys
+
+    import setup_task
+
+    import utils
+
+    monkeypatch.setattr(utils, "run", _fake_run_success(["kind:bug", "target:product", "scale:task"]))
+    monkeypatch.setattr(setup_task, "get_main_worktree", lambda: tmp_path)
+    monkeypatch.setitem(sys.modules, "render_agents", None)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["setup_task.py", "42", "--no-worktree", "--title", "T", "--next-cmd", "/diagnose-task"],
+    )
+    with pytest.raises(SystemExit):
+        setup_task.main()
+    assert "next_step.py --next-cmd diagnose-task" in json.loads(capsys.readouterr().out)["detail"]

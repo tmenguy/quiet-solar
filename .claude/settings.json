@@ -23,6 +23,8 @@
       "Bash(python **/scripts/qs/render_agents.py:*)",
       "Bash(python scripts/qs/cleanup_worktree.py:*)",
       "Bash(python **/scripts/qs/cleanup_worktree.py:*)",
+      "Bash(python scripts/qs/epic_doc.py:*)",
+      "Bash(python **/scripts/qs/epic_doc.py:*)",
       "Bash(python scripts/qs/create_pr.py:*)",
       "Bash(python **/scripts/qs/create_pr.py:*)",
       "Bash(python scripts/qs/quality_gate.py:*)",

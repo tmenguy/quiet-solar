@@ -351,3 +351,20 @@ def test_main_classifies_paths(targets, capsys: pytest.CaptureFixture[str]) -> N
 def test_main_no_args_errors(targets) -> None:
     with pytest.raises(SystemExit):
         targets.main([])
+
+
+def test_setup_task_parent_epic_section_round_trips(targets) -> None:
+    """QS-340: the body form ``qs-setup-task`` now writes — a ``### Parent
+    epic`` section — parses to the declared epic even when the child's
+    scope text carries a stray ``Refs #M`` (the fallback that attached
+    #370 to #369)."""
+    body = (
+        "**Epic document:** [docs/epics/QS-340.md](https://x/blob/main/docs/epics/QS-340.md)\n"
+        "\n"
+        "Scope of the child. For history, Refs #369.\n"
+        "\n"
+        "### Parent epic\n"
+        "\n"
+        "#340\n"
+    )
+    assert targets.parse_parent_epic(body) == 340
