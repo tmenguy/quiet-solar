@@ -191,11 +191,12 @@ jobs:
       # (`bash scripts/generate-translations.sh`), so the two cannot
       # disagree on the STALENESS verdict — the whole point of D-14.
       #
-      # One deliberate asymmetry: the local gate ignores the generator's
-      # exit code ("may fail for unrelated integrations"), whereas a
-      # hard generator failure — absent strings.json, unresolvable
-      # `[%key:…%]` — is red here. CI is intentionally the stricter of
-      # the two, and says so instead of dying on a bare traceback.
+      # QS-371: the two also agree on generator FAILURES. A hard
+      # generator failure — absent strings.json, unresolvable
+      # `[%key:…%]` — is red here, and the local `check_translations`
+      # (full gate and `--impacted`) now fails on the generator's exit
+      # code too, instead of ignoring it. This step says so instead of
+      # dying on a bare traceback.
       #
       # `git add -A` before diffing: `git diff` alone cannot see
       # UNTRACKED files, so a PR that DELETES en.json would have the

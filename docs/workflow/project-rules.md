@@ -25,7 +25,11 @@ all four; use it only for ad-hoc single-node debugging.
 # substitutes the full gate locally. Runs only the testmon-selected
 # tests under --cov=<package>, then diff-cover --fail-under=100 on the
 # CHANGED lines. Guarantees the lines YOU changed are 100% covered in
-# ~seconds. QS-278: coverage ACCUMULATES across runs (--cov-append), so
+# ~seconds. QS-371: it also runs the CI-mirrored cheap checks (ruff
+# lint, ruff format, mypy, translations when relevant) on change sets
+# that can move them — trigger rules in the `check_impacted` docstring;
+# a failure never short-circuits the rest of the run.
+# QS-278: coverage ACCUMULATES across runs (--cov-append), so
 # a no-op re-run (testmon selects 0 tests) or a single-file edit (small
 # subset) still has every changed-vs-origin line covered — no spurious
 # FAIL, and the run stays fast. The accumulated data is reset only on a
@@ -127,8 +131,9 @@ Python files changed too — also run
 `python scripts/qs/quality_gate.py --quick tests/qs` before commit
 (testmon cannot see non-Python files). The
 three iteration commands relate as: `--impacted` is the mandatory
-pre-commit gate (finds + runs the impacted tests, checks changed-line
-coverage, self-heals a drifted baseline); `--quick` is for hammering
+pre-commit gate (testmon-selected tests + changed-line 100% coverage +
+the CI-mirrored cheap checks (ruff lint, ruff format, mypy,
+translations when relevant), self-heals a drifted baseline); `--quick` is for hammering
 an explicit test path you already know; `--cache` accelerates repeated
 *full*-gate runs. `--impacted` is mutually exclusive with
 `--quick`/`--cache`/`--no-cache`/`--full`/`--fix`.
@@ -150,6 +155,10 @@ changed — matching the hint the gate itself prints:
 
 (A failed git probe does **not** take the early exit — it fails closed
 and the full pipeline runs.)
+
+Exception (QS-371): a change set touching a lint/type-config or
+translations-source path still runs the CI-mirrored cheap checks — see
+the `check_impacted` docstring.
 
 *Cold baselines do not take the exit.* The exit requires a **warm**
 `.testmondata`, because "testmon could never select a test" is only true

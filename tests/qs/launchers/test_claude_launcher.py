@@ -1933,3 +1933,166 @@ def test_autouse_guard_prevents_claude_subprocess(
     # never spawned ``claude --version`` at all (a widened ``except`` could
     # otherwise swallow the rigged ``AssertionError`` and pass vacuously).
     assert recorded["calls"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# QS-372 AC1 — ``handoff_text``: the Claude user-facing handoff block is
+# produced by the launcher, ready to print, instead of being re-typed in
+# every phase template. The goldens below are literal templates copied from
+# the pre-QS-372 rendered review-task step-6 block (the story's Task-0
+# extract), except the new unpinned notice (``_GUI_UNPINNED_BLOCK``, QS-372
+# AC6 (3)), filled only with payload/test values so they depend on neither
+# the temp dir nor the model policy table.
+# --------------------------------------------------------------------------- #
+
+_GOLDEN_HEAD = """\
+Next phase: {phase}.
+
+Preferred (opens a fresh interactive `claude --agent qs-{phase}` session):
+  {new_context}
+"""
+
+_GOLDEN_EXISTING_SESSION = """
+Already running an implementation session?
+Paste this prompt into it:
+{prompt}
+"""
+
+_GOLDEN_FALLBACK = """
+Fallback (stay in this session, degraded one-shot UX via the Agent tool —
+kept for any chat without a CLI launcher; the GUI can instead run the phase
+agent directly, see `docs/workflow/harness.md`):
+  /{phase}
+"""
+
+_GOLDEN_GUI_PINNED = """
+[Claude Code GUI] the worktree should now be pinned to `qs-{phase}` in
+`.claude/settings.local.json` (the payload's `phase_agent_pinned` reports
+whether that write happened — it is always skipped on a main checkout).
+The GUI displays the active agent nowhere, so if the phase looks wrong,
+use the Preferred line above, where `--agent` always wins.
+  • **New session** (not a restored one — the GUI reopens the last session)
+  • Select directory `{work_dir}`
+  • Name it `QS_{issue} {phase}`
+  • **Pick model `{phase_model}`** in the model picker (the GUI ignores
+    the agent's model — see harness.md); if the picker does not offer it,
+    use the Preferred `--agent` line above (its frontmatter pins the model)
+  • See `docs/workflow/harness.md` →
+    "GUI launch surface (Claude Code Desktop)"."""
+
+_GOLDEN_GUI_UNPINNED = """
+[Claude Code GUI] the phase pin was not written (`phase_agent_pinned`
+is false), and the worktree may still carry the previous phase's pin —
+use the Preferred `--agent` line above, which is correct either way."""
+
+
+def test_handoff_text_golden_pinned_without_fix_plan(tmp_path: Path) -> None:
+    """Pinned × no fix plan: head, fallback, full GUI block — no existing-session block."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path, agent="qs-review-task")
+    payload = claude_launcher.build_payload(
+        str(work_dir), 372, "Title", next_cmd="review-task", caller="next_step",
+    )
+    assert payload["phase_agent_pinned"] is True
+    fill = {
+        "phase": "review-task",
+        "new_context": payload["new_context"],
+        "work_dir": str(work_dir),
+        "issue": 372,
+        "phase_model": payload["phase_model"],
+    }
+    expected = (_GOLDEN_HEAD + _GOLDEN_FALLBACK + _GOLDEN_GUI_PINNED).format(**fill)
+    assert payload["handoff_text"] == expected
+    assert not payload["handoff_text"].endswith("\n")
+
+
+def test_handoff_text_golden_pinned_with_fix_plan(tmp_path: Path) -> None:
+    """Pinned × fix plan + PR: the existing-session block, every non-empty
+    prompt line indented two spaces; blank lines stay empty."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path, agent="qs-implement-task")
+    payload = claude_launcher.build_payload(
+        str(work_dir), 372, "Title", next_cmd="implement-task",
+        fix_plan_path=str(work_dir / "docs/stories/QS-372.story_review_fix_#01.md"),
+        pr_number=380, caller="next_step",
+    )
+    assert payload["phase_agent_pinned"] is True
+    prompt = payload["existing_session_prompt"]
+    assert "\n" in prompt, "the golden must exercise a multi-line prompt"
+    indented = "\n".join(f"  {line}" if line else "" for line in prompt.split("\n"))
+    fill = {
+        "phase": "implement-task",
+        "new_context": payload["new_context"],
+        "work_dir": str(work_dir),
+        "issue": 372,
+        "phase_model": payload["phase_model"],
+        "prompt": indented,
+    }
+    expected = (
+        _GOLDEN_HEAD + _GOLDEN_EXISTING_SESSION + _GOLDEN_FALLBACK + _GOLDEN_GUI_PINNED
+    ).format(**fill)
+    assert payload["handoff_text"] == expected
+
+
+def test_handoff_text_golden_unpinned(tmp_path: Path) -> None:
+    """Pin skipped: no GUI bullets, the one-line stale-pin notice instead."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    # No agent file / no linked-worktree marker → guard skips the pin.
+    payload = claude_launcher.build_payload(
+        str(tmp_path), 372, "Title", next_cmd="finish-task", caller="next_step",
+    )
+    assert payload["phase_agent_pinned"] is False
+    fill = {"phase": "finish-task", "new_context": payload["new_context"]}
+    expected = (_GOLDEN_HEAD + _GOLDEN_FALLBACK).format(**fill) + _GOLDEN_GUI_UNPINNED
+    assert payload["handoff_text"] == expected
+    assert "New session" not in payload["handoff_text"]
+
+
+def test_handoff_text_empty_existing_session_prompt_omits_block() -> None:
+    """An empty-string prompt is treated like ``None`` — the block is omitted."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    text = claude_launcher._handoff_text(
+        agent="qs-implement-task",
+        new_context="sh /tmp/qs_launch_372.sh",
+        work_dir="/tmp/wt",
+        issue=372,
+        phase_model="claude-opus-4-8",
+        pinned=False,
+        existing_session_prompt="",
+    )
+    assert "Already running an implementation session?" not in text
+    assert text.startswith("Next phase: implement-task.\n")
+
+
+def test_handoff_text_blank_prompt_line_has_no_trailing_whitespace() -> None:
+    """N4 (#03): a blank line in the existing-session prompt renders as an
+    empty line, not two trailing spaces."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    text = claude_launcher._handoff_text(
+        agent="qs-implement-task",
+        new_context="sh /tmp/qs_launch_372.sh",
+        work_dir="/tmp/wt",
+        issue=372,
+        phase_model="claude-opus-4-8",
+        pinned=False,
+        existing_session_prompt="first line\n\nthird line",
+    )
+    assert "  first line\n\n  third line" in text
+    for line in text.split("\n"):
+        assert line == line.rstrip(), f"trailing whitespace: {line!r}"
+
+
+def test_handoff_text_absent_for_setup_task_caller(tmp_path: Path) -> None:
+    """D2: setup-task keeps its inline block, so its payload gains no unread key."""
+    from launchers import claude as claude_launcher  # type: ignore[import-not-found]
+
+    work_dir = _fake_worktree(tmp_path, agent="qs-create-plan")
+    payload = claude_launcher.build_payload(
+        str(work_dir), 372, "Title", next_cmd="create-plan", caller="setup_task",
+    )
+    assert "handoff_text" not in payload
