@@ -130,6 +130,40 @@ def refuse_if_epic(
     sys.exit(1)
 
 
+def refuse_decompose_epic_for_wrong_lane(
+    issue: int, labels: list[str], next_cmd: str = "/create-plan"
+) -> None:
+    """S6: ``--next-cmd decompose-epic`` is valid only for the epic × factory lane.
+
+    ``refuse_if_epic`` returns early for a non-epic issue, so without this a
+    feature or bug task routed to ``decompose-epic`` would still get a branch
+    and worktree cut for an agent that refuses at once. Refuse up front. The
+    phase is normalised exactly like :func:`refuse_if_epic` (one leading
+    ``/`` stripped). Consumes ``check_declaration``'s labels — no extra
+    ``gh`` call.
+    """
+    phase = next_cmd[1:] if next_cmd.startswith("/") else next_cmd
+    if phase != "decompose-epic":
+        return
+    axes = targets.parse_axes(labels)
+    if axes["lane"] == "epic-factory":
+        return
+    output_json({
+        "error": (
+            f"issue #{issue} is not an epic × factory issue — refusing "
+            "`--next-cmd decompose-epic`"
+        ),
+        "lane": axes["lane"],
+        "detail": (
+            "`decompose-epic` runs only in the epic × factory lane "
+            "(scale:epic × target:factory). This issue's lane is "
+            f"{axes['lane'] or 'undeclared'!r}; route it to its own phase "
+            "(e.g. `--next-cmd create-plan` for a task)."
+        ),
+    })
+    sys.exit(1)
+
+
 # Public mapping (review-fix #04 SF1) — promoted to match the
 # round-3 SF1 rename of next_step.LAUNCHERS. The two dispatch tables
 # are conceptually the same configuration; keeping the naming
@@ -202,6 +236,7 @@ def main() -> None:
     # costs no extra `gh` call.
     labels = check_declaration(issue)
     refuse_if_epic(issue, labels, args.next_cmd, no_worktree=args.no_worktree)
+    refuse_decompose_epic_for_wrong_lane(issue, labels, args.next_cmd)
 
     main_dir = get_main_worktree()
 

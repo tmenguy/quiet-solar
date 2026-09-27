@@ -396,6 +396,48 @@ def test_epic_refusals(
     assert "#339" in out["detail"]
 
 
+@pytest.mark.parametrize("next_cmd", ["/decompose-epic", "decompose-epic"])
+@pytest.mark.parametrize(
+    "labels",
+    [
+        ["kind:feature", "target:factory", "scale:task"],
+        ["kind:bug", "target:product", "scale:task"],
+    ],
+    ids=["feature-factory", "bug-product"],
+)
+def test_decompose_epic_refused_for_a_non_epic_issue(
+    capsys: pytest.CaptureFixture[str], labels: list[str], next_cmd: str
+) -> None:
+    """S6: a non-epic task routed to decompose-epic is refused before any git work."""
+    import setup_task
+
+    with pytest.raises(SystemExit) as exc:
+        setup_task.refuse_decompose_epic_for_wrong_lane(42, labels, next_cmd)
+    assert exc.value.code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert "decompose-epic" in out["error"]
+    assert out["lane"] != "epic-factory"
+    assert "epic × factory" in out["detail"]
+
+
+@pytest.mark.parametrize("next_cmd", ["/decompose-epic", "decompose-epic"])
+def test_decompose_epic_allowed_for_epic_factory(next_cmd: str) -> None:
+    """S6: the epic × factory lane still passes the non-epic guard."""
+    import setup_task
+
+    setup_task.refuse_decompose_epic_for_wrong_lane(340, _EPIC_FACTORY, next_cmd)
+
+
+@pytest.mark.parametrize("next_cmd", ["/create-plan", "create-plan", "/implement-task"])
+def test_non_decompose_next_cmd_is_never_touched_by_the_guard(next_cmd: str) -> None:
+    """S6: the guard only concerns ``decompose-epic``; other phases pass through."""
+    import setup_task
+
+    setup_task.refuse_decompose_epic_for_wrong_lane(
+        42, ["kind:feature", "target:factory", "scale:task"], next_cmd
+    )
+
+
 def test_epic_default_next_cmd_is_refused_through_main(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

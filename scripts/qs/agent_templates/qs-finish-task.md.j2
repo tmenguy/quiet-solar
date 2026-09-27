@@ -114,12 +114,24 @@ the epic document is on `main`. Differences from the task path below:
       --issue {{issue}} \
       --force --delete-branch
   ```
+  Parse the JSON and branch on `status` — do not assume the branch was
+  deleted:
+  - `status: "removed"` with `branch_deleted: true` → worktree and local
+    branch both gone.
+  - `status: "removed-branch-kept"` → the worktree is gone but the local
+    branch was **kept** (read `branch_delete_error`); report that honestly
+    and do NOT claim the branch was removed.
+  - `status: "error"` → worktree removal failed (`worktree_remove_error`);
+    STOP and surface it — the branch was left untouched on purpose.
 - Step 5 (remote-branch delete) is unchanged.
-- Step 6 reports instead:
+- Step 6 reports according to the cleanup JSON:
   ```text
   ✅ epic session closed — doc on `main`, issue #{{issue}} stays open.
-  ✅ Worktree and branch {{branch}} removed (local + remote).
+  ✅ Worktree {{branch}} removed; local branch removed (remote deleted too).
   ```
+  When `branch_deleted` is false, replace the second line with the kept
+  local branch and its `branch_delete_error` — never report a branch as
+  removed when it was not.
 - Never close the epic issue.
 
 For a task:

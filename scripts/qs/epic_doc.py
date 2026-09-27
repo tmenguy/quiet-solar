@@ -61,6 +61,11 @@ import utils  # type: ignore[import-not-found]
 
 DOC_PREFIX = "docs/epics/"
 
+# M3: a landable path is exactly ``docs/epics/QS-<N>.md`` — nothing else
+# under docs/epics/ (editor swap files, ``*.orig`` / ``*.bak`` from a merge
+# tool, ``QS-N.md~`` backups) may ride a direct commit to main.
+_LANDABLE_RE = re.compile(r"docs/epics/QS-\d+\.md$")
+
 _OK_STATUSES = frozenset({"ok", "landed", "already-landed", "ok-dry-run", "synced", "unchanged"})
 
 
@@ -174,7 +179,18 @@ def _worktree_blob(root: str, path: str) -> str | None:
 def _blob_content(root: str, sha: str | None) -> str | None:
     if sha is None:
         return None
-    return _git_ok(root, ["cat-file", "blob", sha])
+    try:
+        return _git_ok(root, ["cat-file", "blob", sha])
+    except UnicodeDecodeError:  # N2: a non-UTF-8 blob is a refusal, not a traceback
+        raise Refusal("undecodable", detail=sha) from None
+
+
+def _read_doc(root: str, path: str) -> str:
+    """Read a worktree file as UTF-8; a non-UTF-8 file is a refusal (N2)."""
+    try:
+        return (Path(root) / path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise Refusal("undecodable", detail=path) from None
 
 
 def _reset_to_main(root: str) -> None:
@@ -229,27 +245,52 @@ def _repo_url() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _all_blobs_on_main(
+    changed: list[str], main_blobs: dict[str, str | None], local_blobs: dict[str, str | None]
+) -> bool:
+    """S4: every changed path's worktree blob already equals its origin/main blob.
+
+    The single predicate ``cmd_land`` uses for its already-landed shortcut and
+    ``cmd_status`` uses to report ``landed_not_reset`` — a land whose local
+    ``reset --hard`` never ran leaves the worktree byte-equal to main.
+    """
+    return bool(changed) and all(local_blobs[p] == main_blobs[p] for p in changed)
+
+
 def cmd_status(issue: int, *, sync: bool) -> dict:
     root = _toplevel()
     _fetch_main(root)
     doc = doc_path(issue)
     _base, changed = _changed_paths(root)
     local_modified = doc in changed
-    behind = not _git_flag(root, ["diff", "--quiet", "HEAD", "origin/main", "--", doc])
+    # ``doc_differs`` is the HEAD-vs-origin/main delta on the doc alone (either
+    # direction); ``behind`` is whether HEAD trails origin/main on ANY path, so
+    # ``--sync`` fast-forwards a clean worktree stale only on lane files /
+    # docs/agents/ / templates (S4).
+    doc_differs = not _git_flag(root, ["diff", "--quiet", "HEAD", "origin/main", "--", doc])
+    behind = int(_git_ok(root, ["rev-list", "--count", "HEAD..origin/main"]).strip()) > 0
     ancestor = _git_flag(root, ["merge-base", "--is-ancestor", "HEAD", "origin/main"])
-    safe_to_discard = not changed and ancestor
+    main_blobs = {p: _main_blob(root, p) for p in changed}
+    local_blobs = {p: _worktree_blob(root, p) for p in changed}
+    landed_not_reset = _all_blobs_on_main(changed, main_blobs, local_blobs)
+    safe_to_discard = (not changed and ancestor) or landed_not_reset
     synced = False
     if sync and behind and safe_to_discard:
-        _git_ok(root, ["merge", "--ff-only", "origin/main"])
+        if changed:
+            # landed-not-reset: the bytes are already on main, so reset instead
+            # of a ff-merge that would refuse to clobber the untracked doc.
+            _reset_to_main(root)
+        else:
+            _git_ok(root, ["merge", "--ff-only", "origin/main"])
         synced = True
         behind = False
     main_sha = _main_blob(root, doc)
     on_main = main_sha is not None
     local = (Path(root) / doc).is_file()
     diff = ""
-    if local_modified:
+    if local_modified and not synced:
         before = _blob_content(root, main_sha) or ""
-        after = (Path(root) / doc).read_text(encoding="utf-8") if local else ""
+        after = _read_doc(root, doc) if local else ""
         diff = "".join(
             difflib.unified_diff(
                 before.splitlines(keepends=True),
@@ -266,6 +307,8 @@ def cmd_status(issue: int, *, sync: bool) -> dict:
         "on_main": on_main,
         "local_modified": local_modified,
         "behind": behind,
+        "doc_differs": doc_differs,
+        "landed_not_reset": landed_not_reset,
         "safe_to_discard": safe_to_discard,
         "synced": synced,
         "mode": "RESUME" if on_main else "DECOMPOSE",
@@ -291,8 +334,16 @@ def _parse_merged(values: list[str]) -> dict[str, str]:
 def _drift(root: str, changed: list[str]) -> tuple[dict, list[str]]:
     """Run the doc-drift checker in-process; decide on the parsed report."""
     buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        check_doc_drift.main(["--repo-root", root, "--json", "--paths", *changed])
+    # S5: the module contract is "JSON refusal, never a traceback". argparse
+    # raises SystemExit (a BaseException, not caught by ``except Exception``),
+    # and check_doc_drift.main could raise anything — turn both into a refusal.
+    try:
+        with contextlib.redirect_stdout(buf):
+            check_doc_drift.main(["--repo-root", root, "--json", "--paths", *changed])
+    except SystemExit as exc:
+        raise Refusal("drift", detail=f"check_doc_drift.py exited: {exc}", output=buf.getvalue()) from None
+    except Exception as exc:  # noqa: BLE001 — any failure becomes a JSON refusal
+        raise Refusal("drift", detail=str(exc), output=buf.getvalue()) from None
     try:
         report = json.loads(buf.getvalue())
     except json.JSONDecodeError:
@@ -332,10 +383,34 @@ def _build_commit(root: str, changed: list[str], message: str) -> str | None:
     return _git_ok(root, ["commit-tree", tree, "-p", "origin/main", "-m", message]).strip()
 
 
+def _validate_decompositions(root: str, changed: list[str]) -> None:
+    """S2: refuse before plumbing when a landing doc's Decomposition is unreadable.
+
+    Only docs that carry a ``## Decomposition`` heading are checked — a
+    still-skeletal draft without the section lands as before; the concern is
+    a *present but malformed* table (``TBD`` cells, ``#N (merged)``) that
+    ``sync-issue`` would later refuse.
+    """
+    for path in changed:
+        file = Path(root) / path
+        if not file.is_file():
+            continue
+        text = _read_doc(root, path)
+        if not any(_DECOMPOSITION_RE.match(ln) for ln in text.splitlines()):
+            continue
+        try:
+            parse_decomposition(text)
+        except UnparseableDecomposition as exc:
+            raise Refusal("unparseable-decomposition", doc=path, detail=str(exc)) from None
+
+
 def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     issue: int, *, message: str, merged: list[str], dry_run: bool
 ) -> dict:
     merged_map = _parse_merged(merged)
+    if not message.strip():
+        # S8: commit-tree would happily write an empty-message commit to main.
+        raise Refusal("bad-arguments", detail="--message must not be empty or whitespace-only")
     root = _toplevel()
     labels, _state, _body = _issue_info(issue)
     _require_epic(issue, labels)
@@ -343,12 +418,15 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     doc = doc_path(issue)
     base, changed = _changed_paths(root)
 
-    offenders = [p for p in changed if not p.startswith(DOC_PREFIX)]
+    offenders = [p for p in changed if not _LANDABLE_RE.fullmatch(p)]
     if offenders:
         raise Refusal(
             "out-of-scope",
             offenders=offenders,
-            detail="an epic document lands alone: every changed path must be under docs/epics/",
+            detail=(
+                "an epic document lands alone: every changed path must match "
+                "docs/epics/QS-<N>.md (no swap files, *.orig/*.bak or backups)"
+            ),
         )
 
     if not changed:
@@ -358,11 +436,20 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     if not (Path(root) / doc).is_file():
         raise Refusal("missing-doc", doc=doc, detail=f"{doc} does not exist in the worktree")
 
+    # S2: validate the Decomposition table before any plumbing, dry-run and
+    # real alike. A malformed cell (``TBD``, ``#371 (merged)``) would pass an
+    # unchecked land and only surface later as sync-issue's
+    # ``unparseable-decomposition`` — leaving FINALIZE half-done.
+    _validate_decompositions(root, changed)
+
     main_blobs = {p: _main_blob(root, p) for p in changed}
     local_blobs = {p: _worktree_blob(root, p) for p in changed}
-    if all(local_blobs[p] == main_blobs[p] for p in changed):
+    if _all_blobs_on_main(changed, main_blobs, local_blobs):
         # The bytes are already on main (e.g. a push that landed while the
         # local reset never ran): the reset loses nothing.
+        if dry_run:
+            # S1: dry-run stops before building the commit — it never resets.
+            return {"status": "ok-dry-run", "already_landed": True, "paths": changed, "reset": False}
         _reset_to_main(root)
         return {"status": "already-landed", "paths": changed, "reset": True}
 
@@ -408,12 +495,18 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
 
     push = _git(root, ["push", "origin", f"{sha}:refs/heads/main"])
     if push.returncode != 0:
-        raise Refusal(
-            "push-rejected",
-            sha=sha,
-            detail=(push.stderr or push.stdout or "").strip(),
-            hint="main moved or is protected — re-run to rebuild on the new origin/main",
-        )
+        detail = (push.stderr or push.stdout or "").strip()
+        if "GH006" in detail or "protected branch" in detail:
+            # N2: a protected main will reject every re-run — direct the user
+            # to the documented hand-opened-PR fallback instead.
+            hint = (
+                "main is a protected branch: land cannot push directly. Open the "
+                "documented hand-opened PR carrying `Refs #<N>` (never create_pr.py, "
+                "whose `Fixes #<N>` would close the epic) — see the epic-factory lane doc."
+            )
+        else:
+            hint = "main moved — re-run to rebuild on the new origin/main"
+        raise Refusal("push-rejected", sha=sha, detail=detail, hint=hint)
 
     _fetch_main(root)
     if not _git_flag(root, ["merge-base", "--is-ancestor", sha, "origin/main"]):
@@ -460,7 +553,10 @@ def _issue_cell(cell: str) -> int | None:
     for regex in _ISSUE_CELL_RES:
         match = regex.match(cell)
         if match:
-            return int(match.group(1))
+            number = int(match.group(1))
+            if number < 1:  # N1: #0 (and below) is never a real issue number
+                raise UnparseableDecomposition(f"issue number must be >= 1, got {cell!r}")
+            return number
     if _NOT_FILED_RE.match(cell):
         return None
     raise UnparseableDecomposition(f"issue cell {cell!r} is not #N, [#N](url) or 'not filed'")
@@ -504,7 +600,10 @@ def parse_decomposition(text: str) -> list[Row]:
             cells = _cells(line)
             if len(cells) != len(header):
                 raise UnparseableDecomposition(f"ragged decomposition row: {line!r}")
-            rows.append(Row(child=cells[child_col], issue=_issue_cell(cells[issue_col])))
+            child = cells[child_col]
+            if not child:  # N1: an empty child cell is not a real child
+                raise UnparseableDecomposition(f"empty child cell: {line!r}")
+            rows.append(Row(child=child, issue=_issue_cell(cells[issue_col])))
     return rows
 
 
@@ -610,14 +709,6 @@ def sync_body(body: str, rows: list[Row], *, link: str | None) -> tuple[str, lis
     unfiled = [r.child for r in rows if r.issue is None]
 
     spans = _blocks(content)
-    anchor = next(
-        (
-            (s, e)
-            for s, e in spans
-            if any((m := _TASK_RE.match(content[k])) and int(m.group(1)) in table_numbers for k in range(s, e))
-        ),
-        None,
-    )
     heading = next((k for k, c in enumerate(content) if _CHILDREN_RE.match(c)), None)
     section_end = len(content)
     if heading is not None:
@@ -625,17 +716,46 @@ def sync_body(body: str, rows: list[Row], *, link: str | None) -> tuple[str, lis
             (k for k in range(heading + 1, len(content)) if _SECTION_END_RE.match(content[k])),
             len(content),
         )
+
+    def _mentions_table_number(span: tuple[int, int]) -> bool:
+        s, e = span
+        return any((m := _TASK_RE.match(content[k])) and int(m.group(1)) in table_numbers for k in range(s, e))
+
+    section_blocks = [(s, e) for s, e in spans if heading is not None and heading < s < section_end]
+    if heading is not None:
+        # S7(a): the ## Children section owns its anchor — prefer a block inside
+        # the section over an earlier body block (e.g. a "Decomposition sketch"
+        # list) that merely mentions a filed number and would otherwise capture
+        # the new children while ## Children goes stale.
+        anchor = next((sp for sp in section_blocks if _mentions_table_number(sp)), None)
         if anchor is None:
-            anchor = next(((s, e) for s, e in spans if heading < s < section_end), None)
+            anchor = next(iter(section_blocks), None)
+    else:
+        anchor = next((sp for sp in spans if _mentions_table_number(sp)), None)
 
     owned: list[str] = []
     if anchor is not None:
         start, end = anchor
         is_owned = _owned_by_heading(content, start)
         owned = unfiled if is_owned else []
-        kept = [ln for ln in lines[start:end] if not (is_owned and _OWNED_RE.match(ln[0]))]
         extra = task_lines + [f"- (not filed) {c}" for c in owned]
-        _splice(lines, start, end, kept + [(t, nl) for t in extra])
+        if is_owned and anchor in section_blocks:
+            # S7(b): owned (not filed) lines can be spread across several blocks
+            # of the section (a list split by a blank line). Strip them from
+            # every block and append the regenerated block once to the anchor.
+            # Splices run back-to-front so an earlier edit can't shift a later
+            # block's indices.
+            edits: list[tuple[int, int, list[Line]]] = []
+            for s, e in section_blocks:
+                kept = [ln for ln in lines[s:e] if not _OWNED_RE.match(ln[0])]
+                if (s, e) == anchor:
+                    kept = kept + [(t, nl) for t in extra]
+                edits.append((s, e, kept))
+            for s, e, new_lines in sorted(edits, key=lambda x: x[0], reverse=True):
+                _splice(lines, s, e, new_lines)
+        else:
+            kept = [ln for ln in lines[start:end] if not (is_owned and _OWNED_RE.match(ln[0]))]
+            _splice(lines, start, end, kept + [(t, nl) for t in extra])
     elif heading is not None:
         last = _last_text_line(content, heading + 1, section_end)
         if last is None:  # an empty ``## Children`` section: the block goes directly under it
@@ -682,7 +802,7 @@ def cmd_sync_issue(issue: int) -> dict:
     if not doc_file.is_file():
         raise Refusal("missing-doc", doc=doc, detail=f"{doc} does not exist in the worktree")
     try:
-        rows = parse_decomposition(doc_file.read_text(encoding="utf-8"))
+        rows = parse_decomposition(_read_doc(root, doc))
     except UnparseableDecomposition as exc:
         raise Refusal("unparseable-decomposition", doc=doc, detail=str(exc)) from None
 

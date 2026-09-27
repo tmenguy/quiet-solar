@@ -92,14 +92,69 @@ def test_launched_from_inside_the_worktree_still_deletes_the_branch(main_and_wor
     assert "QS_77" not in _branches(main)
 
 
-def test_git_failure_is_reported(main_and_worktree, monkeypatch, capsys) -> None:
-    main, work = main_and_worktree
+def test_mismatched_issue_does_not_delete_an_unrelated_branch(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """S3(d): --force with a wrong --issue must not force-delete another QS_<N> branch."""
+    main, work = main_and_worktree  # worktree is on QS_77
     monkeypatch.chdir(main)
     out = _run_main(
         monkeypatch, capsys, ["--work-dir", str(work), "--issue", "78", "--force", "--delete-branch"]
     )
+    assert out["status"] == "removed-branch-kept"
     assert out["branch_deleted"] is False
     assert "QS_78" in out["branch_delete_error"]
+    assert "QS_77" in out["branch_delete_error"]
+    assert "QS_77" in _branches(main)  # the real branch is preserved
+    assert not work.exists()
+
+
+def test_worktree_removal_failure_keeps_the_branch(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """S3(a): a failed worktree removal must not proceed to delete the branch."""
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    monkeypatch.setattr(cleanup_worktree, "remove_worktree", lambda wd: "boom removing")
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force", "--delete-branch"]
+    )
+    assert out["status"] == "error"
+    assert out["branch_deleted"] is False
+    assert "QS_77" in _branches(main)  # branch preserved because removal failed
+
+
+def test_delete_branch_when_worktree_dir_already_gone(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """S3(c): a failed first run left the dir gone but the branch behind — retry works."""
+    import shutil
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    shutil.rmtree(work)  # the dir is gone, but the worktree registration is stale
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force", "--delete-branch"]
+    )
+    assert out["status"] == "removed"
+    assert out["branch_deleted"] is True
+    assert "QS_77" not in _branches(main)
+
+
+def test_dir_gone_without_delete_branch_still_errors(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """S3(c): without --delete-branch a missing dir still reports the old error."""
+    import shutil
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    shutil.rmtree(work)
+    out = _run_main(monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force"])
+    assert out["status"] == "error"
+    assert "does not exist" in out["message"]
 
 
 def test_main_worktree_lookup_failure_is_reported(main_and_worktree, monkeypatch, capsys) -> None:

@@ -131,6 +131,52 @@ def delete_local_branch(main_wt: Path, branch: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def _current_branch(work_dir: Path) -> str | None:
+    """The worktree's checked-out branch, or ``None`` if it can't be read (S3d)."""
+    result = subprocess.run(
+        ["git", "-C", str(work_dir), "rev-parse", "--abbrev-ref", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def _retry_branch_delete(work_dir: Path, branch_name: str, issue: int) -> None:
+    """S3(c): the worktree dir is already gone — prune the stale registration and
+    delete the local branch so a failed first run can be retried."""
+    branch_error: str | None = None
+    branch_deleted = False
+    try:
+        main_wt: Path | None = get_main_worktree()
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+        main_wt = None
+        branch_error = f"Could not determine main worktree: {exc}"
+    if main_wt is not None:
+        subprocess.run(
+            ["git", "-C", str(main_wt), "worktree", "prune"],
+            capture_output=True,
+            text=True,
+            cwd=str(main_wt),
+            check=False,
+        )
+        branch_deleted, branch_error = delete_local_branch(main_wt, branch_name)
+    status = "removed" if branch_deleted else "removed-branch-kept"
+    message = (
+        f"Worktree directory was already gone; branch {branch_name} deleted."
+        if branch_deleted
+        else f"Worktree directory was already gone; branch {branch_name} kept: {branch_error}"
+    )
+    output_json({
+        "status": status,
+        "worktree_path": str(work_dir),
+        "worktree_remove_error": None,
+        "branch_deleted": branch_deleted,
+        "branch_delete_error": branch_error,
+        "message": message,
+    })
+
+
 def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(description="Clean up a git worktree.")
     parser.add_argument("--work-dir", required=True)
@@ -148,13 +194,6 @@ def main() -> None:  # noqa: C901
 
     work_dir = Path(args.work_dir).resolve()
 
-    if not work_dir.exists():
-        output_json({
-            "status": "error",
-            "message": f"Worktree directory does not exist: {work_dir}",
-        })
-        return
-
     if args.dry_run:
         output_json({
             "status": "dry_run",
@@ -162,6 +201,18 @@ def main() -> None:  # noqa: C901
             "would_push": bool(args.push_first),
             "would_delete_branch": branch_name if args.delete_branch else None,
             "issue": args.issue,
+        })
+        return
+
+    if not work_dir.exists():
+        if args.delete_branch:
+            # S3(c): a failed first run left the dir gone but the branch behind
+            # — prune and delete so cleanup can be retried instead of dead-ending.
+            _retry_branch_delete(work_dir, branch_name, args.issue)
+            return
+        output_json({
+            "status": "error",
+            "message": f"Worktree directory does not exist: {work_dir}",
         })
         return
 
@@ -207,27 +258,45 @@ def main() -> None:  # noqa: C901
             })
             return
 
-    # Resolve the main worktree BEFORE the removal: afterwards the process
-    # cwd may be gone and `git worktree list` dies (QS-340).
+    # S3(d): read the worktree's checked-out branch BEFORE removal so a
+    # mismatched --issue can't force-delete an unrelated QS_<N> branch.
     main_wt: Path | None = None
     branch_error: str | None = None
+    mismatch = False
     if args.delete_branch:
-        try:
-            main_wt = get_main_worktree()
-        except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
-            branch_error = f"Could not determine main worktree: {exc}"
+        checked_out = _current_branch(work_dir)
+        if checked_out is not None and checked_out != branch_name:
+            mismatch = True
+            branch_error = (
+                f"refusing to delete {branch_name}: worktree is checked out on "
+                f"{checked_out!r} (mismatched --issue)"
+            )
+        else:
+            # Resolve the main worktree BEFORE the removal: afterwards the
+            # process cwd may be gone and `git worktree list` dies (QS-340).
+            try:
+                main_wt = get_main_worktree()
+            except (RuntimeError, subprocess.CalledProcessError, OSError) as exc:
+                branch_error = f"Could not determine main worktree: {exc}"
 
     wt_error = remove_worktree(work_dir)
 
     branch_deleted = False
-    if main_wt is not None:
+    # S3(a): a failed worktree removal masks its own error if we press on to the
+    # branch — only delete when removal succeeded and the branch is safe.
+    if args.delete_branch and not wt_error and not mismatch and main_wt is not None:
         branch_deleted, branch_error = delete_local_branch(main_wt, branch_name)
-    status = "error" if wt_error else "removed"
-    message = (
-        f"Worktree removal failed: {wt_error}"
-        if wt_error
-        else f"Worktree QS_{args.issue} fully cleaned up."
-    )
+
+    if wt_error:
+        status = "error"
+        message = f"Worktree removal failed: {wt_error}"
+    elif args.delete_branch and not branch_deleted:
+        # S3(b): the branch was requested but kept — a distinct, honest status.
+        status = "removed-branch-kept"
+        message = f"Worktree QS_{args.issue} removed; branch {branch_name} kept: {branch_error}"
+    else:
+        status = "removed"
+        message = f"Worktree QS_{args.issue} fully cleaned up."
     output_json({
         "status": status,
         "worktree_path": str(work_dir),

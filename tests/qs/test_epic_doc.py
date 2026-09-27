@@ -306,6 +306,51 @@ def test_status_sync_never_touches_unsafe_worktree(repos, runner, capsys) -> Non
     assert repos.snapshot() == before
 
 
+def test_status_sync_fast_forwards_when_stale_only_on_other_paths(repos, runner, capsys) -> None:
+    """S4: --sync fast-forwards a clean worktree that is behind on non-doc paths."""
+    repos.push_from_seed("README.md", "updated readme\n")
+    rc, out = _status(capsys, "--sync")
+    assert rc == 0
+    assert out["doc_differs"] is False
+    assert out["synced"] is True and out["behind"] is False
+    assert runner.git_calls("merge", "--ff-only")
+    assert (repos.work / "README.md").read_text() == "updated readme\n"
+
+
+def test_status_landed_but_unreset_is_safe_to_discard(repos, runner, capsys) -> None:
+    """S4: after a land whose reset never ran, every changed byte is already on main."""
+    repos.push_from_seed(DOC, "# landed\n")
+    repos.write(DOC, "# landed\n")  # identical bytes, never pulled → in the change set
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert out["safe_to_discard"] is True
+    assert out["landed_not_reset"] is True
+    assert out["local_modified"] is True
+
+
+def test_status_sync_resets_a_landed_but_unreset_worktree(repos, runner, capsys) -> None:
+    """S4: --sync in a landed-not-reset state resets instead of a clobbering ff-merge."""
+    repos.push_from_seed(DOC, "# landed\n")
+    repos.write(DOC, "# landed\n")
+    rc, out = _status(capsys, "--sync")
+    assert rc == 0
+    assert out["synced"] is True and out["behind"] is False
+    assert not runner.git_calls("merge", "--ff-only")
+    assert runner.git_calls("reset", "--hard")
+    assert _git(repos.work, "status", "--porcelain") == ""
+
+
+def test_status_doc_differs_when_head_diverges_from_main(repos, runner, capsys) -> None:
+    """S4: doc_differs is the HEAD-vs-origin/main doc delta, separate from behind."""
+    repos.write(DOC, "# committed draft\n")
+    _git(repos.work, "add", DOC)
+    _git(repos.work, "commit", "-q", "-m", "wip doc")
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert out["doc_differs"] is True
+    assert out["behind"] is False  # HEAD is ahead of origin/main, not behind
+
+
 def test_status_local_edit_of_landed_doc_shows_diff(repos, runner, capsys) -> None:
     repos.push_from_seed(DOC, "line one\n")
     _status(capsys, "--sync")
@@ -428,6 +473,21 @@ def test_dry_run_stops_before_plumbing(repos, runner, clean_drift, capsys) -> No
     assert out["warnings"] == []
     for token in ("read-tree", "commit-tree", "push", "reset"):
         assert not runner.git_calls(token), token
+    assert repos.snapshot() == before
+    assert repos.main_sha() == main_before
+
+
+def test_dry_run_does_not_reset_a_landed_but_unreset_worktree(repos, runner, capsys) -> None:
+    """S1: --dry-run in a landed-but-not-reset state leaves HEAD and the tree unchanged."""
+    repos.push_from_seed(DOC, "# landed\n")
+    repos.write(DOC, "# landed\n")  # identical bytes, never pulled → in the change set
+    before = repos.snapshot()
+    main_before = repos.main_sha()
+    rc, out = _land(capsys, "--dry-run")
+    assert rc == 0, out
+    assert out["status"] == "ok-dry-run"
+    assert out["already_landed"] is True and out["reset"] is False
+    assert not runner.git_calls("reset")
     assert repos.snapshot() == before
     assert repos.main_sha() == main_before
 
@@ -576,14 +636,57 @@ def test_out_of_scope_unstaged_modification(repos, runner, capsys) -> None:
 def test_out_of_scope_porcelain_rename_contributes_both_paths(repos, runner, capsys) -> None:
     repos.write(DOC, "x\n")
     _git(repos.work, "mv", "scripts/tool.py", "docs/epics/tool.py")
-    assert _refused(repos, capsys, "out-of-scope")["offenders"] == ["scripts/tool.py"]
+    # M3: docs/epics/tool.py is not a QS-<N>.md, so both paths are offenders.
+    assert _refused(repos, capsys, "out-of-scope")["offenders"] == [
+        "docs/epics/tool.py", "scripts/tool.py",
+    ]
 
 
 def test_out_of_scope_committed_rename_into_docs_epics(repos, runner, capsys) -> None:
     repos.write(DOC, "x\n")
     _git(repos.work, "mv", "scripts/tool.py", "docs/epics/tool.py")
     _git(repos.work, "commit", "-q", "-m", "sneaky rename")
-    assert _refused(repos, capsys, "out-of-scope")["offenders"] == ["scripts/tool.py"]
+    # M3: the renamed-in file is not a valid epic doc, so it is refused too.
+    assert _refused(repos, capsys, "out-of-scope")["offenders"] == [
+        "docs/epics/tool.py", "scripts/tool.py",
+    ]
+
+
+def test_out_of_scope_untracked_swap_file_under_docs_epics(repos, runner, capsys) -> None:
+    """M3: an editor swap file under docs/epics/ is refused, not landed."""
+    repos.write(DOC, "x\n")
+    repos.write("docs/epics/.QS-900.md.swp", "vim junk\n")
+    assert _refused(repos, capsys, "out-of-scope")["offenders"] == ["docs/epics/.QS-900.md.swp"]
+
+
+def test_out_of_scope_merge_orig_file_under_docs_epics(repos, runner, capsys) -> None:
+    """M3: a merge-tool ``*.orig`` under docs/epics/ is refused, not landed."""
+    repos.write(DOC, "x\n")
+    repos.write("docs/epics/QS-900.md.orig", "conflict junk\n")
+    assert _refused(repos, capsys, "out-of-scope")["offenders"] == ["docs/epics/QS-900.md.orig"]
+
+
+_BAD_DECOMP_DOC = (
+    "# Epic QS-900\n\n## Decomposition\n\n"
+    "| # | child | issue |\n|---|---|---|\n| 1 | a child | TBD |\n"
+)
+
+
+def test_land_refuses_an_unparseable_decomposition_before_plumbing(repos, runner, capsys) -> None:
+    """S2: a malformed Decomposition cell is caught at land, not later at sync-issue."""
+    repos.write(DOC, _BAD_DECOMP_DOC)
+    out = _refused(repos, capsys, "unparseable-decomposition")
+    assert out["doc"] == DOC
+
+
+def test_land_dry_run_also_validates_the_decomposition(repos, runner, capsys) -> None:
+    """S2: dry-run validates the table too, and touches nothing."""
+    repos.write(DOC, _BAD_DECOMP_DOC)
+    before = repos.snapshot()
+    rc, out = _land(capsys, "--dry-run")
+    assert rc == 1 and out["status"] == "unparseable-decomposition"
+    assert not runner.git_calls("read-tree")
+    assert repos.snapshot() == before
 
 
 def test_missing_doc_with_empty_change_set_not_on_main(repos, runner, capsys) -> None:
@@ -617,6 +720,27 @@ def test_drift_without_json_refuses(repos, runner, monkeypatch, capsys) -> None:
     monkeypatch.setattr(epic_doc.check_doc_drift, "main", lambda argv: 2)
     repos.write(DOC, "x\n")
     _refused(repos, capsys, "drift")
+
+
+def test_drift_systemexit_is_a_refusal_not_a_traceback(repos, runner, monkeypatch, capsys) -> None:
+    """S5: argparse-style SystemExit from the drift checker becomes a JSON refusal."""
+    def boom(argv: list[str]) -> int:
+        raise SystemExit(2)
+
+    monkeypatch.setattr(epic_doc.check_doc_drift, "main", boom)
+    repos.write(DOC, "x\n")
+    _refused(repos, capsys, "drift")
+
+
+def test_drift_unexpected_exception_is_a_refusal(repos, runner, monkeypatch, capsys) -> None:
+    """S5: any other exception inside the drift checker becomes a JSON refusal."""
+    def boom(argv: list[str]) -> int:
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(epic_doc.check_doc_drift, "main", boom)
+    repos.write(DOC, "x\n")
+    out = _refused(repos, capsys, "drift")
+    assert "kaboom" in out["detail"]
 
 
 def test_conflict_carries_fresh_main_content(repos, runner, clean_drift, capsys) -> None:
@@ -674,6 +798,42 @@ def test_conflict_check_git_error(repos, runner, clean_drift, capsys) -> None:
 def test_bad_merged_argument(repos, runner, capsys) -> None:
     out = _refused(repos, capsys, "bad-arguments", "--merged", "no-equals-sign")
     assert "PATH=<blob>" in out["detail"]
+
+
+@pytest.mark.parametrize("message", ["", "   ", "\n\t "])
+def test_blank_message_is_refused_before_plumbing(repos, runner, capsys, message: str) -> None:
+    """S8: an empty / whitespace-only --message never reaches commit-tree."""
+    repos.write(DOC, "# draft\n")
+    before = repos.snapshot()
+    main_before = repos.main_sha()
+    rc, out = _land(capsys, message=message)
+    assert rc == 1 and out["status"] == "bad-arguments"
+    assert not runner.git_calls("commit-tree")
+    assert repos.snapshot() == before
+    assert repos.main_sha() == main_before
+
+
+def test_land_refuses_an_undecodable_doc(repos, runner, capsys) -> None:
+    """N2: a non-UTF-8 landing doc is a refusal, not a traceback."""
+    (repos.work / DOC).parent.mkdir(parents=True, exist_ok=True)
+    (repos.work / DOC).write_bytes(b"\xff\xfe not utf-8\n")
+    out = _refused(repos, capsys, "undecodable")
+    assert out["detail"] == DOC
+
+
+def test_push_rejected_by_protected_branch_points_to_hand_opened_pr(
+    repos, runner, clean_drift, capsys
+) -> None:
+    """N2: a protected-branch (GH006) push points at the hand-opened-PR fallback."""
+    repos.write(DOC, "# Epic\n")
+    runner.on(
+        _is("push", "origin"),
+        lambda cmd: _done(cmd, 1, "", "remote: error: GH006: Protected branch update failed"),
+    )
+    rc, out = _land(capsys)
+    assert rc == 1 and out["status"] == "push-rejected"
+    assert "PR" in out["hint"] and "Refs #" in out["hint"]
+    assert "re-run" not in out["hint"]
 
 
 def test_push_rejected_by_a_moved_main_then_rerun(repos, runner, clean_drift, capsys) -> None:
@@ -740,10 +900,37 @@ def test_plumbing_failure_is_git_error_and_cleans_the_temp_index(
 # ---------------------------------------------------------------------------
 
 
+# The live doc evolves: every child filed through ``epic_doc.py land``
+# (which runs no pytest) rewrites its ``not filed`` cell with the new
+# number. So the live-file test asserts only invariants that never change
+# — filed numbers stay filed — and the exact shape is frozen on the inline
+# fixture below, copied from the current table (M2).
+_369_TABLE_FIXTURE = (
+    "# Epic\n\n## Decomposition\n\n"
+    "### Shared (lane-agnostic)\n\n"
+    "| # | child | kind | issue |\n"
+    "|---|---|---|---|\n"
+    "| 1 | Make `--impacted` match what CI checks | bug | "
+    "[#371](https://github.com/tmenguy/quiet-solar/issues/371) |\n"
+    "| 2 | Extract the handoff plumbing into a macro | feature | "
+    "[#372](https://github.com/tmenguy/quiet-solar/issues/372) |\n"
+    "| 3 | The loop engine | feature | not filed |\n"
+)
+
+
 def test_the_real_qs369_doc_parses_as_is() -> None:
+    """The live doc parses; assert only invariants (filed numbers never change)."""
     rows = epic_doc.parse_decomposition((REPO_ROOT / "docs/epics/QS-369.md").read_text())
-    assert len(rows) == 7
-    assert [r.issue for r in rows[:3]] == [371, 372, None]
+    assert rows, "the live doc's Decomposition section must be non-empty"
+    assert all(r.child for r in rows), "every row must carry a non-empty child cell"
+    assert {371, 372} <= {r.issue for r in rows if r.issue is not None}
+
+
+def test_369_table_fixture_parses_to_the_expected_shape() -> None:
+    """Exact-shape assertion is frozen on the inline fixture, not the live file."""
+    rows = epic_doc.parse_decomposition(_369_TABLE_FIXTURE)
+    assert len(rows) == 3
+    assert [r.issue for r in rows] == [371, 372, None]
     assert rows[0].child.startswith("Make `--impacted` match")
 
 
@@ -778,6 +965,21 @@ def test_parse_refuses_unreadable_tables(table: str) -> None:
 def test_parse_refuses_a_missing_section() -> None:
     with pytest.raises(epic_doc.UnparseableDecomposition):
         epic_doc.parse_decomposition("# no decomposition here\n")
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        "| child | issue |\n|---|---|\n|  | #1 |\n",
+        "| child | issue |\n|---|---|\n| a | #0 |\n",
+        "| child | issue |\n|---|---|\n| a | [#0](https://x/0) |\n",
+    ],
+    ids=["empty-child", "zero-issue", "zero-issue-link"],
+)
+def test_parse_refuses_empty_child_and_sub_one_issue(table: str) -> None:
+    """N1: an empty child cell or an issue number below 1 is unparseable."""
+    with pytest.raises(epic_doc.UnparseableDecomposition):
+        epic_doc.parse_decomposition(f"## Decomposition\n\n{table}")
 
 
 # ---------------------------------------------------------------------------
@@ -831,6 +1033,45 @@ def test_unrelated_checklist_is_never_the_anchor() -> None:
     new, added, owned = epic_doc.sync_body(body, [R("c", 5), R("d", None)], link=None)
     assert new == body + "\n## Children\n\n- [ ] #5 — c\n- (not filed) d\n"
     assert added == [5] and owned == ["d"]
+
+
+def test_new_children_anchor_inside_children_not_a_sketch_list() -> None:
+    """S7(a): a sketch list mentioning a filed number must not capture new children."""
+    body = (
+        "## Decomposition sketch\n\n"
+        "- [ ] #371 — sketch reference\n"
+        "\n"
+        "## Children\n\n"
+        "- [ ] #371 — child one\n"
+    )
+    rows = [R("child one", 371), R("child two", 372)]
+    new, added, owned = epic_doc.sync_body(body, rows, link=None)
+    assert added == [372] and owned == []
+    # #372 lands under ## Children, not appended to the sketch block.
+    children_idx = new.index("## Children")
+    sketch_idx = new.index("## Decomposition sketch")
+    assert new.index("#372") > children_idx
+    assert new.count("#372") == 1
+    # the sketch block keeps its single #371 reference
+    assert new[sketch_idx:children_idx].count("#371") == 1
+    assert epic_doc.sync_body(new, rows, link=None)[0] == new
+
+
+def test_owned_lines_split_across_blocks_do_not_duplicate() -> None:
+    """S7(b): a not-filed list split by a blank line regenerates once, no stale dupes."""
+    body = (
+        "## Children\n\n"
+        "- (not filed) alpha\n"
+        "- (not filed) beta\n"
+        "\n"
+        "- (not filed) gamma\n"
+    )
+    rows = [R("alpha", None), R("beta", None), R("gamma", None)]
+    new, added, owned = epic_doc.sync_body(body, rows, link=None)
+    assert added == [] and owned == ["alpha", "beta", "gamma"]
+    assert new.count("(not filed) alpha") == 1
+    assert new.count("(not filed) gamma") == 1
+    assert epic_doc.sync_body(new, rows, link=None)[0] == new
 
 
 def test_no_block_body_gets_a_children_section_with_owned_lines() -> None:
