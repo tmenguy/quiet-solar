@@ -825,13 +825,185 @@ def test_abandoned_gitdir_rejects_a_missing_and_a_directory_dotgit(
     clone.mkdir()
     (clone / ".git").mkdir()
     assert cleanup_worktree._abandoned_worktree_gitdir(main, clone) is False
-    # a matching gitdir file resolves into this repo's worktrees dir
+    # a matching gitdir file resolves into this repo's worktrees dir AND its
+    # admin dir is gone (a genuine leftover, S1 #05) → accepted
     common = cleanup_worktree._git_common_dir(main)
     assert common is not None
     ours = tmp_path / "ours"
     ours.mkdir()
-    (ours / ".git").write_text(f"gitdir: {common}/worktrees/QS_77\n")
+    (ours / ".git").write_text(f"gitdir: {common}/worktrees/QS_gone\n")  # admin dir pruned
     assert cleanup_worktree._abandoned_worktree_gitdir(main, ours) is True
+
+
+# --- S1 (#05): a plain-``mv``'d worktree keeps a live admin dir → refuse -------
+
+
+def test_mvd_worktree_with_live_admin_dir_is_refused(
+    main_and_worktree, monkeypatch, capsys
+) -> None:
+    """S1 (#05): a worktree relocated with plain ``mv`` (not ``git worktree move``)
+    keeps a *live* admin dir registered under its old path. Its new path looks
+    unregistered ('absent') and its ``.git`` gitdir still resolves under this
+    repo's ``worktrees/``, so the #04 proof passed and would rmtree it. The admin
+    dir still existing must now refuse it, preserving its uncommitted work."""
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    (work / "wip.txt").write_text("precious\n")  # uncommitted work we must not lose
+    moved = work.parent / "QS_77_moved"
+    work.rename(moved)  # plain mv: <common>/worktrees/QS_77 admin dir stays live
+    # sanity: the moved path is unregistered, its .git still points into our repo
+    assert cleanup_worktree_module()._registered_branch(main, moved)[0] == "absent"
+    out = _run_main(
+        monkeypatch, capsys, ["--work-dir", str(moved), "--issue", "77", "--force"]
+    )
+    assert out["status"] == "error"
+    assert moved.exists() and (moved / "wip.txt").read_text() == "precious\n"
+
+
+def cleanup_worktree_module():
+    import cleanup_worktree
+
+    return cleanup_worktree
+
+
+def test_abandoned_gitdir_rejects_a_live_admin_dir(main_and_worktree, tmp_path) -> None:
+    """S1 (#05): a matching gitdir whose admin dir still EXISTS (a moved/copied
+    worktree, not a leftover) is refused — only a leftover whose admin dir git
+    already deleted is accepted."""
+    import cleanup_worktree
+
+    main, _work = main_and_worktree
+    common = cleanup_worktree._git_common_dir(main)
+    assert common is not None
+    live = tmp_path / "live"
+    live.mkdir()
+    (live / ".git").write_text(f"gitdir: {common}/worktrees/QS_77\n")  # QS_77 admin dir is live
+    assert cleanup_worktree._abandoned_worktree_gitdir(main, live) is False
+
+
+# --- S2 (#05): unit tests for the #04 defensive branches ----------------------
+
+
+def test_leftover_rmtree_failure_is_reported(main_and_worktree, monkeypatch) -> None:
+    """S2 (#05): the S4 leftover path reports an rmtree failure instead of
+    swallowing it (``remove_worktree`` lines ~128-132)."""
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+    monkeypatch.setattr(cleanup_worktree, "_registered_branch", lambda mw, wd: ("absent", None))
+    monkeypatch.setattr(cleanup_worktree, "_abandoned_worktree_gitdir", lambda mw, wd: True)
+    monkeypatch.setattr(cleanup_worktree, "_prune_worktrees", lambda mw: None)
+
+    def boom(*_a, **_k):
+        raise OSError("locked subtree")
+
+    monkeypatch.setattr(cleanup_worktree.shutil, "rmtree", boom)
+    error = cleanup_worktree.remove_worktree(work)
+    assert error is not None and "shutil.rmtree failed" in error and "locked subtree" in error
+    assert work.exists()
+
+
+def test_git_common_dir_is_none_on_failure(main_and_worktree, monkeypatch) -> None:
+    """S2 (#05): ``_git_common_dir`` returns None when rev-parse exits non-zero
+    (line ~327)."""
+    import cleanup_worktree
+
+    main, _work = main_and_worktree
+    real_run = subprocess.run
+
+    def fake_run(cmd, *a, **k):
+        if cmd[:1] == ["git"] and "rev-parse" in cmd and "--git-common-dir" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="fatal")
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(cleanup_worktree.subprocess, "run", fake_run)
+    assert cleanup_worktree._git_common_dir(main) is None
+
+
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root can read a 000 file, so the unreadable-.git branch can't be provoked",
+)
+def test_abandoned_gitdir_rejects_an_unreadable_dotgit(main_and_worktree, tmp_path) -> None:
+    """S2 (#05): an unreadable ``.git`` file returns False (lines ~347-349)."""
+    import cleanup_worktree
+
+    main, _work = main_and_worktree
+    d = tmp_path / "unreadable"
+    d.mkdir()
+    dotgit = d / ".git"
+    dotgit.write_text("gitdir: /somewhere\n")
+    os.chmod(dotgit, 0o000)
+    try:
+        assert cleanup_worktree._abandoned_worktree_gitdir(main, d) is False
+    finally:
+        os.chmod(dotgit, 0o644)
+
+
+def test_abandoned_gitdir_rejects_missing_empty_and_relative_gitdir(
+    main_and_worktree, tmp_path
+) -> None:
+    """S2 (#05): a ``.git`` file with no ``gitdir:`` line (line ~353), an empty
+    value (line ~356) and a relative gitdir resolved against work_dir (line ~359)
+    all return False."""
+    import cleanup_worktree
+
+    main, _work = main_and_worktree
+    no_line = tmp_path / "no_line"
+    no_line.mkdir()
+    (no_line / ".git").write_text("something: else\n")
+    assert cleanup_worktree._abandoned_worktree_gitdir(main, no_line) is False
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    (empty / ".git").write_text("gitdir:   \n")
+    assert cleanup_worktree._abandoned_worktree_gitdir(main, empty) is False
+
+    relative = tmp_path / "relative"
+    relative.mkdir()
+    (relative / ".git").write_text("gitdir: ../elsewhere/.git/worktrees/QS_1\n")
+    assert cleanup_worktree._abandoned_worktree_gitdir(main, relative) is False
+
+
+def test_abandoned_gitdir_false_when_common_dir_is_none(
+    main_and_worktree, tmp_path, monkeypatch
+) -> None:
+    """S2 (#05): with a valid absolute gitdir but no resolvable common dir, the
+    proof returns False (line ~362)."""
+    import cleanup_worktree
+
+    main, _work = main_and_worktree
+    d = tmp_path / "ok"
+    d.mkdir()
+    (d / ".git").write_text("gitdir: /abs/repo/.git/worktrees/QS_1\n")
+    monkeypatch.setattr(cleanup_worktree, "_git_common_dir", lambda mw: None)
+    assert cleanup_worktree._abandoned_worktree_gitdir(main, d) is False
+
+
+def test_task_path_prune_exception_is_swallowed(main_and_worktree, monkeypatch, capsys) -> None:
+    """S2 (#05): the N2 task-path prune swallows a main-worktree resolution error
+    and still reports ``removed`` (lines ~587-588)."""
+    import shutil
+
+    import cleanup_worktree
+
+    main, work = main_and_worktree
+    monkeypatch.chdir(main)
+
+    def fake_remove(wd):
+        shutil.rmtree(wd)  # dir really gone; registration left stale
+        return "git worktree remove hiccup"
+
+    monkeypatch.setattr(cleanup_worktree, "remove_worktree", fake_remove)
+
+    def boom():
+        raise RuntimeError("no main worktree")
+
+    monkeypatch.setattr(cleanup_worktree, "_main_worktree_or_fallback", boom)
+    out = _run_main(monkeypatch, capsys, ["--work-dir", str(work), "--issue", "77", "--force"])
+    assert out["status"] == "removed"
+    assert out["worktree_remove_error"] == "git worktree remove hiccup"
 
 
 # --- S5 (#04): coverage for the newly reachable branches ----------------------

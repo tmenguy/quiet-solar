@@ -362,7 +362,16 @@ def _abandoned_worktree_gitdir(main_wt: Path, work_dir: Path) -> bool:
         return False
     expected = common / "worktrees"
     # realpath resolves the existing prefix even when the leaf is already pruned.
-    return Path(os.path.realpath(gitdir)).parent == Path(os.path.realpath(expected))
+    resolved = Path(os.path.realpath(gitdir))
+    if resolved.parent != Path(os.path.realpath(expected)):
+        return False
+    # S1 (#05): a genuine leftover from a partially-failed ``git worktree remove``
+    # has had its admin dir deleted by git already. A worktree relocated with plain
+    # ``mv`` (not ``git worktree move``) or copied keeps a *live* admin dir
+    # registered under its old path; its new path looks 'absent' yet its gitdir
+    # still resolves here. Require the admin dir to be gone so such a live,
+    # uncommitted-work-bearing directory is never rmtree'd.
+    return not resolved.exists()
 
 
 def _prune_worktrees(main_wt: Path) -> None:
