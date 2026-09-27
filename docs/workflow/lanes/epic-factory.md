@@ -219,7 +219,8 @@ To file the next wave, or to amend the document: `setup-task --issue
 **Hard rules**:
 - Refuse unless the task is `scale:epic` × `target:factory`.
 - The only file written is `docs/epics/QS-<N>.md`.
-- Never skip the adversarial review for a document you intend to land.
+- Always offer, and recommend, at least one REVIEW round before the first
+  land; the FINALIZE gate is advisory (never a hard block).
 - Sub-agents are spawned in parallel (one message).
 - Hand off to `finish-task` only after `epic_doc.py land` succeeded.
 
@@ -229,12 +230,18 @@ To file the next wave, or to amend the document: `setup-task --issue
 
 **Runs on**: the epic's worktree. An epic never has a PR, so Case A
 (no PR) is always the path. `python scripts/qs/epic_doc.py status
---issue <N>` decides: `safe_to_discard: true` → the landed document is
-not "unpushed work", clean up; otherwise show what would be lost
-(notably an unlanded `docs/epics/QS-<N>.md`) and ask. Cleanup runs
-`cleanup_worktree.py … --force --delete-branch` so a re-entry starts
-fresh from `origin/main`; the remote `QS_<N>` branch is deleted as for
-any task.
+--issue <N>` decides, branching on the probe `status`: if it is **not
+`ok`** (offline `git-error`, `undecodable`, `lookup-failed`) → STOP,
+show the JSON, and never offer force-delete without a successful probe;
+`status: ok` with `safe_to_discard: true` → the landed document is not
+"unpushed work", clean up; `status: ok` with `safe_to_discard: false` →
+show what would be lost (notably an unlanded `docs/epics/QS-<N>.md`) and
+ask. Cleanup runs `cleanup_worktree.py … --force --delete-branch` so a
+re-entry starts fresh from `origin/main`; the remote `QS_<N>` branch is
+deleted as for any task. Branch on the cleanup JSON `status`:
+`removed-branch-kept` or `branch-checked-out-elsewhere` mean the local
+branch was **kept** (read `branch_delete_error`) — report that honestly,
+never claim it was removed.
 **Output**: "epic session closed — doc on `main`, issue #N stays open".
 **Next phase**: terminal until the next re-entry.
 

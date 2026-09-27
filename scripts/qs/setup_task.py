@@ -35,6 +35,19 @@ from utils import (  # type: ignore[import-not-found]
 )
 
 
+def _phase(next_cmd: str) -> str:
+    """Normalise a next-command to its phase name (N7).
+
+    Exactly one leading ``/`` is stripped — so ``/create-plan`` and
+    ``create-plan`` both give ``create-plan`` while ``//decompose-epic`` stays
+    ``/decompose-epic`` (still refused). One shared helper for the three call
+    sites (:func:`refuse_if_epic`, :func:`refuse_decompose_epic_for_wrong_lane`,
+    :func:`_fail_render`) that previously each inlined the same slice, matching
+    ``launchers.phases.resolve_agent_for_next_cmd``.
+    """
+    return next_cmd[1:] if next_cmd.startswith("/") else next_cmd
+
+
 def check_declaration(issue: int) -> list[str]:
     """Refuse to proceed unless ``issue`` carries a complete lane declaration.
 
@@ -109,7 +122,7 @@ def refuse_if_epic(
     axes = targets.parse_axes(labels)
     if axes["scale"] != "epic":
         return
-    phase = next_cmd[1:] if next_cmd.startswith("/") else next_cmd
+    phase = _phase(next_cmd)
     if phase == "decompose-epic" and axes["target"] == "factory" and not no_worktree:
         return
     output_json({
@@ -142,7 +155,7 @@ def refuse_decompose_epic_for_wrong_lane(
     ``/`` stripped). Consumes ``check_declaration``'s labels — no extra
     ``gh`` call.
     """
-    phase = next_cmd[1:] if next_cmd.startswith("/") else next_cmd
+    phase = _phase(next_cmd)
     if phase != "decompose-epic":
         return
     axes = targets.parse_axes(labels)
@@ -186,7 +199,7 @@ def _fail_render(exc: Exception, work_dir: str, issue: int, title: str, next_cmd
     ``detail`` names both commands verbatim, with the real next phase
     (QS-340: one leading ``/`` stripped, as ``next_step.py`` expects).
     """
-    phase = next_cmd[1:] if next_cmd.startswith("/") else next_cmd
+    phase = _phase(next_cmd)
     output_json({
         "error": "agent render failed",
         "detail": (

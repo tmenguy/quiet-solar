@@ -101,11 +101,18 @@ the epic document is on `main`. Differences from the task path below:
   ```bash
   python scripts/qs/epic_doc.py status --issue {{issue}}
   ```
-  `safe_to_discard: true` → safe to remove (the landed document is not
-  "unpushed work", even though the branch never pushed it). Otherwise
-  show what would be lost — notably an unlanded `docs/epics/QS-{{issue}}.md`
-  (`local_modified`, `diff`) — and ask
-  `"Force-delete and lose this work? (yes / no)"`, as for a task.
+  Branch on the probe JSON `status`:
+  - **`status` is not `ok`** (e.g. `git-error` when offline, `undecodable`,
+    `lookup-failed`) → STOP, show the JSON, and do **not** offer
+    force-delete: without a successful probe you cannot know whether an
+    unlanded draft would be lost.
+  - **`status: ok` with `safe_to_discard: true`** → safe to remove (the
+    landed document is not "unpushed work", even though the branch never
+    pushed it).
+  - **`status: ok` with `safe_to_discard: false`** → show what would be
+    lost — notably an unlanded `docs/epics/QS-{{issue}}.md`
+    (`local_modified`, `diff`) — and ask
+    `"Force-delete and lose this work? (yes / no)"`, as for a task.
 - Step 4 also deletes the local branch, so a re-entry starts fresh from
   `origin/main`:
   ```bash
@@ -121,6 +128,10 @@ the epic document is on `main`. Differences from the task path below:
   - `status: "removed-branch-kept"` → the worktree is gone but the local
     branch was **kept** (read `branch_delete_error`); report that honestly
     and do NOT claim the branch was removed.
+  - `status: "branch-checked-out-elsewhere"` → the worktree is gone but the
+    local branch is still checked out in another worktree, so it was kept
+    (read `branch_delete_error`); report that honestly and do NOT claim the
+    branch was removed.
   - `status: "error"` → worktree removal failed (`worktree_remove_error`);
     STOP and surface it — the branch was left untouched on purpose.
 - Step 5 (remote-branch delete) is unchanged.

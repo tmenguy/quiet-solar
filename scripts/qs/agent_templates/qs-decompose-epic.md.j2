@@ -347,7 +347,8 @@ tool.
   (its `Fixes #<N>` would close the epic).
 - The epic issue body is written by `epic_doc.py sync-issue` only; never
   close the epic issue.
-- Never skip the adversarial review for a document you intend to land.
+- Always offer, and recommend, at least one REVIEW round before the first
+  land; the FINALIZE gate is advisory (never a hard block).
 - Sub-agents are spawned in **parallel** (one message, N calls).
 - Hand off to `finish-task` only after `epic_doc.py land` succeeded.
 [% endblock %]

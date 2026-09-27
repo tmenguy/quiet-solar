@@ -134,6 +134,10 @@ def test_setup_task_declares_the_parent_epic_as_a_section(harness_dir: Path) -> 
     body = _body(harness_dir, "qs-setup-task")
     assert "### Parent epic" in body
     assert "Refs #{{epic}}" not in body
+    # S6: the parent-epic backfill must append via --body-file, never replace the
+    # whole body with --body (which would wipe the issue text).
+    assert "--body-file" in body
+    assert "gh issue view {{N}} --json body --jq .body" in body
 
 
 @pytest.mark.parametrize("harness_dir", HARNESS_DIRS, ids=_harness_id)
@@ -269,3 +273,9 @@ def test_finish_task_case_a_has_the_epic_variant(harness_dir: Path) -> None:
     assert "epic session closed — doc on `main`, issue #{{issue}} stays open" in body
     assert "Never close the epic issue" in body
     assert "`scale`" in body
+    # S5: a non-ok probe must STOP, not silently offer a force-delete, and the
+    # kept-branch cleanup statuses must be handled honestly.
+    assert "is not `ok`" in body
+    assert "without a successful probe" in body
+    assert '`status: "branch-checked-out-elsewhere"`' in body
+    assert '`status: "removed-branch-kept"`' in body

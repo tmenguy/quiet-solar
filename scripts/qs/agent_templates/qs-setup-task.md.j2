@@ -138,9 +138,18 @@ the full label set onto the issue before proceeding:
 gh issue edit {{N}} --add-label "{{missing labels}}"
 ```
 
-(plus a `### Parent epic` section with `#{{epic}}` appended to the body
-via `gh issue edit {{N}} --body ...` if an epic was given). The issue on GitHub always ends up fully
-declared — `setup_task.py` refuses to proceed otherwise.
+If an epic was given, also append a `### Parent epic` section — but
+**never** with `gh issue edit --body`, which replaces the whole body and
+would wipe the issue text. Append, don't overwrite:
+
+1. Read the current body: `gh issue view {{N}} --json body --jq .body`.
+2. Append `\n\n### Parent epic\n#{{epic}}\n` to it.
+3. Write the result to a temp file **outside** the worktree.
+4. `gh issue edit {{N}} --body-file <tmp>`.
+5. Remove the temp file.
+
+The issue on GitHub always ends up fully declared — `setup_task.py`
+refuses to proceed otherwise.
 
 **New issue (free text / plan file):** ask ONE question for the lane —
 the 6 options: `bug` / `feature` (product), `harness bug` /

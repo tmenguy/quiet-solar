@@ -61,11 +61,6 @@ import utils  # type: ignore[import-not-found]
 
 DOC_PREFIX = "docs/epics/"
 
-# M3: a landable path is exactly ``docs/epics/QS-<N>.md`` — nothing else
-# under docs/epics/ (editor swap files, ``*.orig`` / ``*.bak`` from a merge
-# tool, ``QS-N.md~`` backups) may ride a direct commit to main.
-_LANDABLE_RE = re.compile(r"docs/epics/QS-\d+\.md$")
-
 _OK_STATUSES = frozenset({"ok", "landed", "already-landed", "ok-dry-run", "synced", "unchanged"})
 
 
@@ -253,8 +248,18 @@ def _all_blobs_on_main(
     The single predicate ``cmd_land`` uses for its already-landed shortcut and
     ``cmd_status`` uses to report ``landed_not_reset`` — a land whose local
     ``reset --hard`` never ran leaves the worktree byte-equal to main.
+
+    N2: requires at least one changed path with a non-``None`` local blob. A
+    doc committed on the branch and then deleted from the working tree is
+    absent both locally and on main (``None == None``); without this guard
+    that reads as "already landed" and ``--sync`` would reset-drop the only
+    commit that still holds the doc.
     """
-    return bool(changed) and all(local_blobs[p] == main_blobs[p] for p in changed)
+    return (
+        bool(changed)
+        and any(local_blobs[p] is not None for p in changed)
+        and all(local_blobs[p] == main_blobs[p] for p in changed)
+    )
 
 
 def cmd_status(issue: int, *, sync: bool) -> dict:
@@ -287,8 +292,13 @@ def cmd_status(issue: int, *, sync: bool) -> dict:
     main_sha = _main_blob(root, doc)
     on_main = main_sha is not None
     local = (Path(root) / doc).is_file()
+    if synced:
+        # N1: the sync mutated the worktree to match origin/main exactly, so the
+        # snapshot fields computed above are stale — report the post-sync truth.
+        local_modified = doc_differs = landed_not_reset = False
+        safe_to_discard = True
     diff = ""
-    if local_modified and not synced:
+    if local_modified:
         before = _blob_content(root, main_sha) or ""
         after = _read_doc(root, doc) if local else ""
         diff = "".join(
@@ -383,25 +393,20 @@ def _build_commit(root: str, changed: list[str], message: str) -> str | None:
     return _git_ok(root, ["commit-tree", tree, "-p", "origin/main", "-m", message]).strip()
 
 
-def _validate_decompositions(root: str, changed: list[str]) -> None:
-    """S2: refuse before plumbing when a landing doc's Decomposition is unreadable.
+def _validate_decomposition(root: str, doc: str) -> None:
+    """S2: refuse before pushing when the issue's own doc has no readable Decomposition.
 
-    Only docs that carry a ``## Decomposition`` heading are checked — a
-    still-skeletal draft without the section lands as before; the concern is
-    a *present but malformed* table (``TBD`` cells, ``#N (merged)``) that
-    ``sync-issue`` would later refuse.
+    ``sync-issue`` reads the ``## Decomposition`` table right after a land; a
+    doc with no section, a numbered heading (``## 5. Decomposition``) or a
+    malformed cell (``TBD``, ``#371 (merged)``) would pass an unchecked land
+    and only surface as sync-issue's ``unparseable-decomposition`` after the
+    push — leaving FINALIZE half-done. So the issue's own doc is always parsed,
+    a missing section included.
     """
-    for path in changed:
-        file = Path(root) / path
-        if not file.is_file():
-            continue
-        text = _read_doc(root, path)
-        if not any(_DECOMPOSITION_RE.match(ln) for ln in text.splitlines()):
-            continue
-        try:
-            parse_decomposition(text)
-        except UnparseableDecomposition as exc:
-            raise Refusal("unparseable-decomposition", doc=path, detail=str(exc)) from None
+    try:
+        parse_decomposition(_read_doc(root, doc))
+    except UnparseableDecomposition as exc:
+        raise Refusal("unparseable-decomposition", doc=doc, detail=str(exc)) from None
 
 
 def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
@@ -418,14 +423,17 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     doc = doc_path(issue)
     base, changed = _changed_paths(root)
 
-    offenders = [p for p in changed if not _LANDABLE_RE.fullmatch(p)]
+    # N6: an epic session lands its OWN document and nothing else — not another
+    # epic's docs/epics/QS-M.md, not swap files, not *.orig/*.bak backups. The
+    # single landable path is exactly ``docs/epics/QS-<issue>.md``.
+    offenders = [p for p in changed if p != doc]
     if offenders:
         raise Refusal(
             "out-of-scope",
             offenders=offenders,
             detail=(
-                "an epic document lands alone: every changed path must match "
-                "docs/epics/QS-<N>.md (no swap files, *.orig/*.bak or backups)"
+                f"an epic document lands alone: the only landable path is {doc} "
+                "(no other epic's doc, swap files, *.orig/*.bak or backups)"
             ),
         )
 
@@ -436,22 +444,22 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     if not (Path(root) / doc).is_file():
         raise Refusal("missing-doc", doc=doc, detail=f"{doc} does not exist in the worktree")
 
-    # S2: validate the Decomposition table before any plumbing, dry-run and
-    # real alike. A malformed cell (``TBD``, ``#371 (merged)``) would pass an
-    # unchecked land and only surface later as sync-issue's
-    # ``unparseable-decomposition`` — leaving FINALIZE half-done.
-    _validate_decompositions(root, changed)
-
     main_blobs = {p: _main_blob(root, p) for p in changed}
     local_blobs = {p: _worktree_blob(root, p) for p in changed}
     if _all_blobs_on_main(changed, main_blobs, local_blobs):
         # The bytes are already on main (e.g. a push that landed while the
-        # local reset never ran): the reset loses nothing.
+        # local reset never ran): the reset loses nothing, and the doc on main
+        # was already validated when it first landed — no need to re-check.
         if dry_run:
             # S1: dry-run stops before building the commit — it never resets.
             return {"status": "ok-dry-run", "already_landed": True, "paths": changed, "reset": False}
         _reset_to_main(root)
         return {"status": "already-landed", "paths": changed, "reset": True}
+
+    # S2: validate the Decomposition table before any plumbing, dry-run and
+    # real alike (but after the already-landed shortcut, so cleaning up a
+    # landed worktree never re-validates).
+    _validate_decomposition(root, doc)
 
     report, warnings = _drift(root, changed)
     if report.get("stale_docs"):
@@ -463,8 +471,6 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     for path in changed:
         if _git_flag(root, ["diff", "--quiet", base, "origin/main", "--", path]):
             continue  # main did not touch this path since the worktree's base
-        if local_blobs[path] == main_blobs[path]:
-            continue
         if main_blobs[path] is not None and merged_map.get(path) == main_blobs[path]:
             continue
         conflicts.append(
@@ -496,16 +502,23 @@ def cmd_land(  # noqa: C901 — the nine steps read best as one sequence
     push = _git(root, ["push", "origin", f"{sha}:refs/heads/main"])
     if push.returncode != 0:
         detail = (push.stderr or push.stdout or "").strip()
-        if "GH006" in detail or "protected branch" in detail:
-            # N2: a protected main will reject every re-run — direct the user
-            # to the documented hand-opened-PR fallback instead.
+        low = detail.lower()
+        if re.search(r"gh006|gh013|protected branch|rule violation", low):
+            # N3: a protected branch or a repository ruleset rejects every
+            # re-run — direct the user to the documented hand-opened-PR fallback.
             hint = (
-                "main is a protected branch: land cannot push directly. Open the "
-                "documented hand-opened PR carrying `Refs #<N>` (never create_pr.py, "
-                "whose `Fixes #<N>` would close the epic) — see the epic-factory lane doc."
+                "main is protected (branch protection or a repository ruleset): "
+                "land cannot push directly. Open the documented hand-opened PR "
+                "carrying `Refs #<N>` (never create_pr.py, whose `Fixes #<N>` "
+                "would close the epic) — see the epic-factory lane doc."
             )
-        else:
+        elif re.search(r"non-fast-forward|fetch first", low):
+            # N3: only a genuine non-fast-forward (main moved) is fixed by a re-run.
             hint = "main moved — re-run to rebuild on the new origin/main"
+        else:
+            # N3: any other failure (auth, network, …) is not "main moved" —
+            # don't send the user in a re-run loop; surface the raw detail.
+            hint = "push failed for another reason — inspect the detail above and resolve it"
         raise Refusal("push-rejected", sha=sha, detail=detail, hint=hint)
 
     _fetch_main(root)
@@ -736,7 +749,16 @@ def sync_body(body: str, rows: list[Row], *, link: str | None) -> tuple[str, lis
     owned: list[str] = []
     if anchor is not None:
         start, end = anchor
-        is_owned = _owned_by_heading(content, start)
+        if anchor in section_blocks:
+            # S1: ownership is a property of the whole ## Children section, not
+            # of the anchor block alone. When a ``(not filed)`` block sits first
+            # and the task-line block (the anchor) follows after a blank line,
+            # ``_owned_by_heading(anchor)`` is False even though the section is
+            # owned — leaving the unfiled lines unstripped and re-listing a
+            # just-filed child both as filed and as ``(not filed)``.
+            is_owned = any(_owned_by_heading(content, s) for s, _ in section_blocks)
+        else:
+            is_owned = _owned_by_heading(content, start)
         owned = unfiled if is_owned else []
         extra = task_lines + [f"- (not filed) {c}" for c in owned]
         if is_owned and anchor in section_blocks:

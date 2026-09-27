@@ -243,6 +243,16 @@ def _run(argv: list[str], capsys) -> tuple[int, dict]:
     return rc, json.loads(capsys.readouterr().out)
 
 
+# S2: land now requires a parseable ``## Decomposition`` on the issue's own
+# doc, so every doc that reaches a real land carries this minimal valid table.
+_DECOMP = "\n## Decomposition\n\n| child | issue |\n|---|---|\n| a child | not filed |\n"
+
+
+def _epic(intro: str) -> str:
+    """An epic doc body with a valid Decomposition table appended (S2)."""
+    return intro + _DECOMP
+
+
 def _land(capsys, *extra: str, message: str = "QS-900: land the epic doc") -> tuple[int, dict]:
     return _run(["land", "--issue", str(ISSUE), "--message", message, *extra], capsys)
 
@@ -340,6 +350,32 @@ def test_status_sync_resets_a_landed_but_unreset_worktree(repos, runner, capsys)
     assert _git(repos.work, "status", "--porcelain") == ""
 
 
+def test_status_sync_reports_post_sync_fields(repos, runner, capsys) -> None:
+    """N1: --sync mutates the tree, so the reported fields are post-sync, not stale."""
+    repos.push_from_seed(DOC, "# landed\n")
+    repos.write(DOC, "# landed\n")  # landed-not-reset: local_modified is True pre-sync
+    rc, out = _status(capsys, "--sync")
+    assert rc == 0 and out["synced"] is True
+    assert out["local_modified"] is False
+    assert out["landed_not_reset"] is False
+    assert out["doc_differs"] is False
+    assert out["safe_to_discard"] is True
+    assert out["diff"] == ""
+
+
+def test_status_committed_then_deleted_doc_is_not_safe_to_discard(repos, runner, capsys) -> None:
+    """N2: a doc committed on the branch and then deleted from the worktree is not
+    'already landed' — dropping the commit would lose the only copy of the doc."""
+    repos.write(DOC, "# draft only on the branch\n")
+    _git(repos.work, "add", DOC)
+    _git(repos.work, "commit", "-q", "-m", "wip doc")
+    (repos.work / DOC).unlink()  # absent locally AND absent on main
+    rc, out = _status(capsys)
+    assert rc == 0
+    assert out["landed_not_reset"] is False
+    assert out["safe_to_discard"] is False
+
+
 def test_status_doc_differs_when_head_diverges_from_main(repos, runner, capsys) -> None:
     """S4: doc_differs is the HEAD-vs-origin/main doc delta, separate from behind."""
     repos.write(DOC, "# committed draft\n")
@@ -426,12 +462,12 @@ def test_first_landing_builds_on_main_pushes_verifies_then_resets(
     repos, runner, clean_drift, capsys
 ) -> None:
     base = repos.main_sha()
-    repos.write(DOC, "# Epic QS-900\n")
+    repos.write(DOC, _epic("# Epic QS-900\n"))
     rc, out = _land(capsys, message="QS-900: land\n\nCo-Authored-By: x")
     assert rc == 0, out
     assert out["status"] == "landed"
     assert out["paths"] == [DOC]
-    assert repos.main_file(DOC) == "# Epic QS-900\n"
+    assert repos.main_file(DOC) == _epic("# Epic QS-900\n")
     landed = repos.main_sha()
     assert landed == out["sha"]
     assert _git(repos.origin, "rev-parse", f"{landed}^").strip() == base
@@ -447,24 +483,33 @@ def test_first_landing_builds_on_main_pushes_verifies_then_resets(
     assert runner.git_calls("read-tree", "origin/main")
 
 
-def test_landing_a_committed_doc_and_a_deletion(repos, runner, clean_drift, capsys) -> None:
-    """Committed paths count too; a deleted path is removed from main's tree."""
-    repos.push_from_seed("docs/epics/QS-2.md", "old\n")
-    _git(repos.work, "pull", "-q", "--ff-only", "origin", "main")
-    repos.write(DOC, "# committed\n")
+def test_landing_a_committed_doc(repos, runner, clean_drift, capsys) -> None:
+    """Committed changes to the issue's own doc count as landable (N6)."""
+    repos.write(DOC, _epic("# committed\n"))
     _git(repos.work, "add", DOC)
     _git(repos.work, "commit", "-q", "-m", "wip")
-    (repos.work / "docs/epics/QS-2.md").unlink()
     rc, out = _land(capsys)
     assert rc == 0, out
-    assert sorted(out["paths"]) == ["docs/epics/QS-2.md", DOC]
-    assert repos.main_file(DOC) == "# committed\n"
-    assert repos.main_file("docs/epics/QS-2.md") is None
+    assert out["paths"] == [DOC]
+    assert repos.main_file(DOC) == _epic("# committed\n")
     assert repos.main_file("README.md") == "readme\n"
 
 
+def test_build_commit_removes_a_deleted_path_from_the_tree(repos, runner) -> None:
+    """_build_commit's force-remove branch: a path absent from the worktree is
+    dropped from the landing tree (exercised directly since N6 keeps cmd_land
+    to a single always-present doc)."""
+    root = str(repos.work)
+    _git(repos.work, "fetch", "-q", "origin", "main")
+    (repos.work / "docs/epics/QS-1.md").unlink()  # absent locally, present on main
+    sha = epic_doc._build_commit(root, ["docs/epics/QS-1.md"], "drop QS-1")
+    assert sha is not None
+    tree = _git(repos.work, "ls-tree", "-r", "--name-only", sha)
+    assert "docs/epics/QS-1.md" not in tree.split()
+
+
 def test_dry_run_stops_before_plumbing(repos, runner, clean_drift, capsys) -> None:
-    repos.write(DOC, "# draft\n")
+    repos.write(DOC, _epic("# draft\n"))
     before = repos.snapshot()
     main_before = repos.main_sha()
     rc, out = _land(capsys, "--dry-run")
@@ -502,7 +547,7 @@ def test_malformed_drift_entries_are_warnings(repos, runner, monkeypatch, capsys
         return 2
 
     monkeypatch.setattr(epic_doc.check_doc_drift, "main", fake_main)
-    repos.write(DOC, "# draft\n")
+    repos.write(DOC, _epic("# draft\n"))
     rc, out = _land(capsys, "--dry-run")
     assert rc == 0, out
     assert out["warnings"] == [
@@ -522,7 +567,7 @@ def test_empty_change_set_with_doc_on_main_is_already_landed(repos, runner, caps
 def test_push_accepted_but_reset_failed_then_rerun(repos, runner, clean_drift, capsys) -> None:
     """The push reached main, the local reset never ran: a re-run resets and
     reports ``already-landed``; ``status`` then reports safe to discard."""
-    repos.write(DOC, "# Epic\n")
+    repos.write(DOC, _epic("# Epic\n"))
     fired: list[bool] = []
 
     def fail_first_reset(cmd: list[str]):
@@ -534,7 +579,7 @@ def test_push_accepted_but_reset_failed_then_rerun(repos, runner, clean_drift, c
     runner.on(_is("reset", "--hard"), fail_first_reset)
     rc, out = _land(capsys)
     assert rc == 1 and out["status"] == "git-error"
-    assert repos.main_file(DOC) == "# Epic\n"
+    assert repos.main_file(DOC) == _epic("# Epic\n")
 
     rc, out = _land(capsys)
     assert rc == 0
@@ -546,7 +591,7 @@ def test_push_accepted_but_reset_failed_then_rerun(repos, runner, clean_drift, c
 
 
 def test_tree_equal_to_main_is_already_landed(repos, runner, clean_drift, monkeypatch, capsys) -> None:
-    repos.write(DOC, "# x\n")
+    repos.write(DOC, _epic("# x\n"))
     monkeypatch.setattr(epic_doc, "_build_commit", lambda root, changed, message: None)
     rc, out = _land(capsys)
     assert rc == 0 and out["status"] == "already-landed" and out["reset"] is True
@@ -563,7 +608,7 @@ def test_verify_accepts_the_landed_commit_as_an_ancestor(
     repos, runner, clean_drift, capsys
 ) -> None:
     """Someone pushed on top of the landing commit before the verify fetch."""
-    repos.write(DOC, "# Epic\n")
+    repos.write(DOC, _epic("# Epic\n"))
 
     def push_on_top(cmd: list[str]):
         if cmd[1:2] == ["fetch"] and runner.git_calls("push"):
@@ -574,7 +619,7 @@ def test_verify_accepts_the_landed_commit_as_an_ancestor(
     rc, out = _land(capsys)
     assert rc == 0 and out["status"] == "landed"
     assert repos.main_file("README.md") == "later\n"
-    assert repos.main_file(DOC) == "# Epic\n"
+    assert repos.main_file(DOC) == _epic("# Epic\n")
 
 
 # ---------------------------------------------------------------------------
@@ -689,14 +734,54 @@ def test_land_dry_run_also_validates_the_decomposition(repos, runner, capsys) ->
     assert repos.snapshot() == before
 
 
+def test_land_refuses_a_numbered_decomposition_heading(repos, runner, capsys) -> None:
+    """S2: '## 5. Decomposition' is not the exact heading sync-issue reads."""
+    repos.write(
+        DOC,
+        "# Epic QS-900\n\n## 5. Decomposition\n\n| child | issue |\n|---|---|\n| a | not filed |\n",
+    )
+    out = _refused(repos, capsys, "unparseable-decomposition")
+    assert out["doc"] == DOC
+
+
+def test_land_refuses_a_doc_without_a_decomposition_section(repos, runner, capsys) -> None:
+    """S2: a doc with no ## Decomposition section is refused, not landed
+    half-way (sync-issue would refuse it after the push)."""
+    repos.write(DOC, "# Epic QS-900\n\njust prose, no table yet\n")
+    out = _refused(repos, capsys, "unparseable-decomposition")
+    assert out["doc"] == DOC
+
+
+def test_land_skips_revalidation_when_already_landed(repos, runner, capsys) -> None:
+    """S2: an already-landed worktree (bytes on main) is cleaned up without
+    re-parsing the doc — even a doc that predates the Decomposition rule."""
+    repos.push_from_seed(DOC, "# landed long ago, no table\n")
+    repos.write(DOC, "# landed long ago, no table\n")  # identical bytes → already-landed
+    rc, out = _land(capsys)
+    assert rc == 0, out
+    assert out["status"] == "already-landed" and out["reset"] is True
+
+
 def test_missing_doc_with_empty_change_set_not_on_main(repos, runner, capsys) -> None:
     out = _refused(repos, capsys, "missing-doc")
     assert out["doc"] == DOC
 
 
-def test_missing_doc_when_only_another_epic_doc_changed(repos, runner, capsys) -> None:
+def test_land_refuses_a_locally_deleted_doc(repos, runner, capsys) -> None:
+    """The doc is in the change set (a deletion) but absent from the worktree."""
+    repos.push_from_seed(DOC, "# on main\n")
+    _git(repos.work, "pull", "-q", "--ff-only", "origin", "main")
+    (repos.work / DOC).unlink()
+    out = _refused(repos, capsys, "missing-doc")
+    assert out["doc"] == DOC
+    assert "does not exist" in out["detail"]
+
+
+def test_only_another_epic_doc_changed_is_out_of_scope(repos, runner, capsys) -> None:
+    """N6: editing only another epic's doc is out-of-scope (was missing-doc)."""
     repos.write("docs/epics/QS-1.md", "# edited\n")
-    _refused(repos, capsys, "missing-doc")
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == ["docs/epics/QS-1.md"]
 
 
 def test_stale_docs_refuse_with_the_report(repos, runner, monkeypatch, capsys) -> None:
@@ -711,14 +796,14 @@ def test_stale_docs_refuse_with_the_report(repos, runner, monkeypatch, capsys) -
         return 1
 
     monkeypatch.setattr(epic_doc.check_doc_drift, "main", fake_main)
-    repos.write(DOC, "x\n")
+    repos.write(DOC, _epic("x\n"))
     out = _refused(repos, capsys, "drift")
     assert out["drift"] == report
 
 
 def test_drift_without_json_refuses(repos, runner, monkeypatch, capsys) -> None:
     monkeypatch.setattr(epic_doc.check_doc_drift, "main", lambda argv: 2)
-    repos.write(DOC, "x\n")
+    repos.write(DOC, _epic("x\n"))
     _refused(repos, capsys, "drift")
 
 
@@ -728,7 +813,7 @@ def test_drift_systemexit_is_a_refusal_not_a_traceback(repos, runner, monkeypatc
         raise SystemExit(2)
 
     monkeypatch.setattr(epic_doc.check_doc_drift, "main", boom)
-    repos.write(DOC, "x\n")
+    repos.write(DOC, _epic("x\n"))
     _refused(repos, capsys, "drift")
 
 
@@ -738,7 +823,7 @@ def test_drift_unexpected_exception_is_a_refusal(repos, runner, monkeypatch, cap
         raise RuntimeError("kaboom")
 
     monkeypatch.setattr(epic_doc.check_doc_drift, "main", boom)
-    repos.write(DOC, "x\n")
+    repos.write(DOC, _epic("x\n"))
     out = _refused(repos, capsys, "drift")
     assert "kaboom" in out["detail"]
 
@@ -746,7 +831,7 @@ def test_drift_unexpected_exception_is_a_refusal(repos, runner, monkeypatch, cap
 def test_conflict_carries_fresh_main_content(repos, runner, clean_drift, capsys) -> None:
     repos.push_from_seed(DOC, "v1\n")
     _git(repos.work, "pull", "-q", "--ff-only", "origin", "main")
-    repos.write(DOC, "v1\nlocal edit\n")
+    repos.write(DOC, _epic("v1\nlocal edit\n"))
     main_blob = repos.push_from_seed(DOC, "v1\nmain edit\n", "child PR amends the doc")
     del main_blob
     out = _refused(repos, capsys, "conflict")
@@ -757,11 +842,11 @@ def test_conflict_carries_fresh_main_content(repos, runner, clean_drift, capsys)
     assert _git(repos.origin, "rev-parse", f"main:{DOC}").strip() == blob
 
     # The agent merges main's content into the local file and re-runs.
-    repos.write(DOC, "v1\nmain edit\nlocal edit\n")
+    repos.write(DOC, _epic("v1\nmain edit\nlocal edit\n"))
     rc, out = _land(capsys, "--merged", f"{DOC}={blob}")
     assert rc == 0, out
     assert out["status"] == "landed"
-    assert repos.main_file(DOC) == "v1\nmain edit\nlocal edit\n"
+    assert repos.main_file(DOC) == _epic("v1\nmain edit\nlocal edit\n")
 
 
 def test_conflict_refused_again_when_main_moves_after_the_refusal(
@@ -770,27 +855,25 @@ def test_conflict_refused_again_when_main_moves_after_the_refusal(
     repos.push_from_seed(DOC, "v1\n")
     _git(repos.work, "pull", "-q", "--ff-only", "origin", "main")
     repos.push_from_seed(DOC, "v2\n")
-    repos.write(DOC, "v1\nlocal\n")
+    repos.write(DOC, _epic("v1\nlocal\n"))
     stale_blob = _refused(repos, capsys, "conflict")["conflicts"][0]["main_blob"]
-    repos.write(DOC, "v2\nlocal\n")
+    repos.write(DOC, _epic("v2\nlocal\n"))
     repos.push_from_seed(DOC, "v3\n")
     out = _refused(repos, capsys, "conflict", "--merged", f"{DOC}={stale_blob}")
     assert out["conflicts"][0]["main_content"] == "v3\n"
     assert out["conflicts"][0]["main_blob"] != stale_blob
 
 
-def test_content_equal_to_main_is_not_a_conflict(repos, runner, clean_drift, capsys) -> None:
-    """Main touched a path since the base, but the local bytes already match it."""
-    repos.write(DOC, "new doc\n")
-    repos.push_from_seed("docs/epics/QS-1.md", "# amended on main\n")
-    repos.write("docs/epics/QS-1.md", "# amended on main\n")
-    rc, out = _land(capsys)
-    assert rc == 0, out
-    assert out["status"] == "landed"
+def test_land_refuses_another_epics_doc(repos, runner, capsys) -> None:
+    """N6: land pushes only the issue's own doc — another epic's doc is out-of-scope."""
+    repos.write(DOC, _epic("# Epic QS-900\n"))
+    repos.write("docs/epics/QS-1.md", "# edited other epic\n")
+    out = _refused(repos, capsys, "out-of-scope")
+    assert out["offenders"] == ["docs/epics/QS-1.md"]
 
 
 def test_conflict_check_git_error(repos, runner, clean_drift, capsys) -> None:
-    repos.write(DOC, "x\n")
+    repos.write(DOC, _epic("x\n"))
     runner.on(_is("diff", "--quiet"), lambda cmd: _done(cmd, 128, "", "fatal"))
     _refused(repos, capsys, "git-error")
 
@@ -821,11 +904,30 @@ def test_land_refuses_an_undecodable_doc(repos, runner, capsys) -> None:
     assert out["detail"] == DOC
 
 
+def test_land_conflict_with_an_undecodable_main_blob(repos, runner, clean_drift, capsys) -> None:
+    """S8: reading a non-UTF-8 main blob during a conflict is a refusal, not a crash."""
+    # main gets a non-UTF-8 version of the doc, pushed from the seed clone.
+    _git(repos.seed, "pull", "--ff-only", "-q")
+    (repos.seed / DOC).parent.mkdir(parents=True, exist_ok=True)
+    (repos.seed / DOC).write_bytes(b"\xff\xfe not utf-8 on main\n")
+    _git(repos.seed, "add", DOC)
+    _git(repos.seed, "commit", "-q", "-m", "binary doc on main")
+    _git(repos.seed, "push", "-q", "origin", "main")
+    # local: a valid UTF-8 doc that differs → conflict → read of the main blob.
+    repos.write(DOC, _epic("# local text\n"))
+    before = repos.snapshot()
+    main_before = repos.main_sha()
+    rc, out = _land(capsys)
+    assert rc == 1 and out["status"] == "undecodable"
+    assert repos.snapshot() == before
+    assert repos.main_sha() == main_before
+
+
 def test_push_rejected_by_protected_branch_points_to_hand_opened_pr(
     repos, runner, clean_drift, capsys
 ) -> None:
-    """N2: a protected-branch (GH006) push points at the hand-opened-PR fallback."""
-    repos.write(DOC, "# Epic\n")
+    """N3: a protected-branch (GH006) push points at the hand-opened-PR fallback."""
+    repos.write(DOC, _epic("# Epic\n"))
     runner.on(
         _is("push", "origin"),
         lambda cmd: _done(cmd, 1, "", "remote: error: GH006: Protected branch update failed"),
@@ -836,8 +938,40 @@ def test_push_rejected_by_protected_branch_points_to_hand_opened_pr(
     assert "re-run" not in out["hint"]
 
 
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "remote: error: GH013: Repository rule violations found for refs/heads/main",
+        "remote: error: rule violations found",
+    ],
+    ids=["GH013", "rule-violation"],
+)
+def test_push_rejected_by_a_ruleset_points_to_hand_opened_pr(
+    repos, runner, clean_drift, capsys, stderr: str
+) -> None:
+    """N3: a repository ruleset (GH013 / rule violation) also routes to the PR fallback."""
+    repos.write(DOC, _epic("# Epic\n"))
+    runner.on(_is("push", "origin"), lambda cmd: _done(cmd, 1, "", stderr))
+    rc, out = _land(capsys)
+    assert rc == 1 and out["status"] == "push-rejected"
+    assert "PR" in out["hint"] and "Refs #" in out["hint"]
+    assert "re-run" not in out["hint"]
+
+
+def test_push_rejected_by_an_unrelated_failure_gives_a_neutral_hint(
+    repos, runner, clean_drift, capsys
+) -> None:
+    """N3: a non-fast-forward-unrelated failure is not 'main moved' — no re-run loop."""
+    repos.write(DOC, _epic("# Epic\n"))
+    runner.on(_is("push", "origin"), lambda cmd: _done(cmd, 1, "", "fatal: Authentication failed"))
+    rc, out = _land(capsys)
+    assert rc == 1 and out["status"] == "push-rejected"
+    assert "re-run" not in out["hint"]
+    assert "PR" not in out["hint"]
+
+
 def test_push_rejected_by_a_moved_main_then_rerun(repos, runner, clean_drift, capsys) -> None:
-    repos.write(DOC, "# Epic\n")
+    repos.write(DOC, _epic("# Epic\n"))
     moved: list[bool] = []
 
     def move_main(cmd: list[str]):
@@ -856,12 +990,12 @@ def test_push_rejected_by_a_moved_main_then_rerun(repos, runner, clean_drift, ca
     rc, out = _land(capsys)
     assert rc == 0, out
     assert out["status"] == "landed"
-    assert repos.main_file(DOC) == "# Epic\n"
+    assert repos.main_file(DOC) == _epic("# Epic\n")
     assert repos.main_file("README.md") == "moved\n"
 
 
 def test_verify_failed_when_the_commit_is_not_on_main(repos, runner, clean_drift, capsys) -> None:
-    repos.write(DOC, "# Epic\n")
+    repos.write(DOC, _epic("# Epic\n"))
     runner.on(
         lambda cmd: cmd[0] == "git" and "--is-ancestor" in cmd and "HEAD" not in cmd,
         lambda cmd: _done(cmd, 1),
@@ -875,7 +1009,7 @@ def test_verify_failed_when_the_commit_is_not_on_main(repos, runner, clean_drift
 def test_plumbing_failure_is_git_error_and_cleans_the_temp_index(
     repos, runner, clean_drift, monkeypatch, capsys
 ) -> None:
-    repos.write(DOC, "# Epic\n")
+    repos.write(DOC, _epic("# Epic\n"))
     seen_index: list[str] = []
 
     def fail(cmd: list[str]):

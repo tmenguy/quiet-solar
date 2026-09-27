@@ -37,6 +37,22 @@ def _make_fake_run(labels: list[str] | None, *, gh_rc: int = 0):
     return fake_run, seen
 
 
+@pytest.mark.parametrize(
+    ("next_cmd", "expected"),
+    [
+        ("create-plan", "create-plan"),
+        ("/create-plan", "create-plan"),
+        ("/decompose-epic", "decompose-epic"),
+        ("//decompose-epic", "/decompose-epic"),  # stays refused
+    ],
+)
+def test_phase_strips_exactly_one_leading_slash(next_cmd: str, expected: str) -> None:
+    """N7: one shared normaliser for the three former inline slices."""
+    import setup_task
+
+    assert setup_task._phase(next_cmd) == expected
+
+
 def test_complete_task_declaration_passes(monkeypatch: pytest.MonkeyPatch) -> None:
     import setup_task
 
