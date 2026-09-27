@@ -333,9 +333,10 @@ block the whole group forever. Three pieces now contain it:
   `_is_current_acceptable[_and_diff]`, which adds that reservation to
   both the new and the estimated amps, so the others are never given
   amps the isolated charger may still draw if its start lands late. The
-  reservation never prevents a reduction: if shaving cannot fit with it,
-  `budgeting_algorithm_minimize_diffs` drops it for that cycle and shaves
-  again. It only covers the charger-group budget: a non-charger load in
+  reservation only limits the growth of the others and never forces a
+  member below its minimum: if the members' floor amps plus the
+  reservation do not fit, `_do_prepare_and_shave_budgets` releases it
+  for that cycle before anything is shaved. It only covers the charger-group budget: a non-charger load in
   the same dynamic group checks `is_delta_current_acceptable` directly.
   The *want to stop but still charging* direction keeps blocking the
   group.

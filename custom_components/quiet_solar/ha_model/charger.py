@@ -1477,17 +1477,6 @@ class QSChargerGroup(LogOnChangeMixin):
             _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(
                 actionable_chargers, do_reset_allocation, time
             )
-        if current_ok is False and self._isolated_reserved_amps != [0.0, 0.0, 0.0]:
-            # QS-376: reducing the members over the limit always wins over the amps reserved
-            # for isolated (start-stuck) members: drop the reservation for this cycle.
-            _LOGGER.warning(
-                "budgeting_algorithm_minimize_diffs: can't shave with %s A reserved for isolated chargers, releasing it",
-                self._isolated_reserved_amps,
-            )
-            self._isolated_reserved_amps = [0.0, 0.0, 0.0]
-            _, current_ok, has_phase_changes = await self._do_prepare_and_shave_budgets(
-                actionable_chargers, do_reset_allocation, time
-            )
         if current_ok is False:
             _LOGGER.error("budgeting_algorithm_minimize_diffs: CAN'T SHAVE BUDGETS !!!!")
             return False, should_do_reset_allocation, False
@@ -1924,6 +1913,24 @@ class QSChargerGroup(LogOnChangeMixin):
         current_amps, has_phase_changes, mandatory_amps = await self._do_prepare_budgets_for_algo(
             actionable_chargers, do_reset_allocation
         )
+
+        if (
+            self._isolated_reserved_amps != [0.0, 0.0, 0.0]
+            and self._is_current_acceptable(new_amps=mandatory_amps, estimated_current_amps=current_amps, time=time)
+            is False
+        ):
+            # QS-376: the amps reserved for isolated (start-stuck) members only limit the
+            # growth of the others; they must never force a member below its minimum. Release
+            # them for this cycle before anything is shaved.
+            self.log_info_on_change(
+                f"reservation_release:{self.name}",
+                True,
+                time,
+                "_do_prepare_and_shave_budgets: %s releasing %s A reserved for isolated chargers (minimums do not fit)",
+                self.name,
+                self._isolated_reserved_amps,
+            )
+            self._isolated_reserved_amps = [0.0, 0.0, 0.0]
 
         # first bad case of amps overly booked by the solver for example...
         new_mandatory_amps = await self._shave_mandatory_budgets(

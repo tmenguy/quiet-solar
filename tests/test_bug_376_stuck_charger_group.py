@@ -25,7 +25,11 @@ from custom_components.quiet_solar.ha_model.charger import (
     TIME_OK_BETWEEN_CHANGING_CHARGER_STATE_FROM_OFF_TO_ON_S,
     QSChargerStatus,
 )
-from custom_components.quiet_solar.home_model.commands import CMD_AUTO_GREEN_ONLY, copy_command
+from custom_components.quiet_solar.home_model.commands import (
+    CMD_AUTO_FROM_CONSIGN,
+    CMD_AUTO_GREEN_ONLY,
+    copy_command,
+)
 from tests.test_charger_coverage_deep import (
     _create_charger,
     _create_ocpp_charger,
@@ -400,36 +404,60 @@ async def _isolate_stuck_in_group():
     return hass, home, states, stuck, group, cs_healthy, t
 
 
-@pytest.mark.asyncio
-async def test_reservation_never_prevents_a_current_reduction():
-    """QS-376 review EC1: if shaving cannot fit with the reservation, reductions win."""
-    _hass, _home, _states, _stuck, group, cs_healthy, t = await _isolate_stuck_in_group()
+_GROUP_LIMIT_A = 10.0
 
-    seen_reserved = []
 
-    async def _shave(actionable, do_reset_allocation, time):
-        seen_reserved.append(list(group._isolated_reserved_amps))
-        return actionable, group._isolated_reserved_amps == [0.0, 0.0, 0.0], False
+def _limit_checking_group(home, members):
+    group = _make_charger_group(home, members, max_amps=[_GROUP_LIMIT_A] * 3)
 
-    group._do_prepare_and_shave_budgets = AsyncMock(side_effect=_shave)
-    group.get_budget_diffs = MagicMock(return_value=(0.0, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]))
-    res = await group.budgeting_algorithm_minimize_diffs([], 0.0, 0.0, False, t)
+    def _acc_diff(new_amps, estimated_current_amps, time):
+        return max(new_amps) <= _GROUP_LIMIT_A, [a - _GROUP_LIMIT_A for a in new_amps]
 
-    assert res[0] is not False
-    assert len(seen_reserved) == 3
-    assert seen_reserved[0] == seen_reserved[1] != [0.0, 0.0, 0.0]
-    assert seen_reserved[2] == [0.0, 0.0, 0.0]
+    group.dynamic_group.is_current_acceptable_and_diff = MagicMock(side_effect=_acc_diff)
+    group.dynamic_group.is_current_acceptable = MagicMock(side_effect=lambda **kw: _acc_diff(**kw)[0])
+    return group
 
 
 @pytest.mark.asyncio
-async def test_shave_failure_without_reservation_still_fails():
-    """QS-376 review EC1: with nothing reserved the failure path is unchanged (no extra retry)."""
-    hass, home, _states, _stuck = _build_stuck_charger(switch_state="off")
-    group = _make_charger_group(home, [])
-    group._do_prepare_and_shave_budgets = AsyncMock(return_value=([], False, False))
-    res = await group.budgeting_algorithm_minimize_diffs([], None, None, False, T0)
-    assert res[0] is False
-    assert group._do_prepare_and_shave_budgets.await_count == 2
+@pytest.mark.parametrize(
+    ("reserved", "released"),
+    [
+        ([12.0, 0.0, 0.0], True),  # larger than the group max on its own
+        ([6.0, 0.0, 0.0], True),  # fits alone, but not with the healthy member's floor
+        ([3.0, 0.0, 0.0], False),  # fits with the floor: kept
+    ],
+)
+async def test_reservation_never_forces_a_member_below_its_minimum(reserved, released):
+    """QS-376 review EC2-1/EC2-2: the reservation limits growth, never shaves a forced member to 0."""
+    hass, home = _make_hass(), _make_home()
+    healthy = _create_charger(hass, home, name="healthy")
+    healthy.attach_car(_make_real_car(hass, home, name="Zoe"), T0)
+    group = _limit_checking_group(home, [healthy])
+
+    cs = QSChargerStatus(healthy)
+    cs.command = copy_command(CMD_AUTO_FROM_CONSIGN, power_consign=1500)
+    cs.possible_amps = [6, 7, 8, 9, 10]
+    cs.possible_num_phases = [1]
+    cs.current_real_max_charging_amp = 6
+    cs.current_active_phase_number = 1
+    cs.budgeted_amp = 6
+    cs.budgeted_num_phases = 1
+    cs.charge_score = 1
+    cs.can_be_started_and_stopped = False
+
+    reserved_phase = [0.0, 0.0, 0.0]
+    reserved_phase[healthy.mono_phase_index] = reserved[0]
+    group._isolated_reserved_amps = list(reserved_phase)
+
+    for do_reset_allocation in (False, True):
+        _, ok, _ = await group._do_prepare_and_shave_budgets([cs], do_reset_allocation, T0)
+        assert ok is True
+        assert cs.budgeted_amp == 6
+        assert cs.possible_amps[0] == 6
+    if released:
+        assert group._isolated_reserved_amps == [0.0, 0.0, 0.0]
+    else:
+        assert group._isolated_reserved_amps == reserved_phase
 
 
 def test_start_stuck_is_false_in_state_reset():
