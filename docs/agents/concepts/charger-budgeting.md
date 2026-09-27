@@ -336,8 +336,9 @@ block the whole group forever. Three pieces now contain it:
   reservation only limits the growth of the others and never forces a
   member below its minimum: if the members' floor amps plus the
   reservation do not fit, `_do_prepare_and_shave_budgets` releases it
-  for that cycle before anything is shaved. It only covers the charger-group budget: a non-charger load in
-  the same dynamic group checks `is_delta_current_acceptable` directly.
+  for that cycle before anything is shaved. It only covers the
+  charger-group budget: a non-charger load in the same dynamic group
+  checks `is_delta_current_acceptable` directly.
   The *want to stop but still charging* direction keeps blocking the
   group.
 - **Re-arm through the group (F2)** — in the start branch of
@@ -347,8 +348,9 @@ block the whole group forever. Three pieces now contain it:
   new start comes only from `apply_budgets` (`set(True)` resets the retry
   counter). For green commands this waits for the usual 10 min off→on
   spacing. A forced command (consign / `CMD_ON` / price) never offers 0 A,
-  so its next budget pass restarts it (rounds of ~20 min instead of
-  ~30 min).
+  so its next budget pass restarts it: ~20:20 rounds instead of ~30:20.
+  In both cases ~5:20 of a round blocks the group (the launch window plus
+  the adaptation window).
 - **OCPP nudge (F4)** — `_on_charger_fault_cycle(time)` runs in
   `check_load_activity_and_constraints` right after the QS-346 machine
   (no-op by default). `QSChargerOCPP` sends a connector-less
